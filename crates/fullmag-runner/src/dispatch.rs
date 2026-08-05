@@ -2163,7 +2163,7 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
-    let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    let mut normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
     #[cfg(feature = "fem-gpu")]
     let transport_artifact_writer = artifact_writer.clone();
@@ -2178,6 +2178,31 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         }
         crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?
     };
+    #[cfg(feature = "fem-gpu")]
+    if let Some(field) = transport_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.oersted_field_xyz.as_ref())
+    {
+        if normalized_plan.has_oersted_cylinder {
+            return Err(RunError {
+                message: "FEM solved-current Oersted cannot be combined with an analytical cylinder in the bounded runtime".into(),
+            });
+        }
+        if let Some(existing) = normalized_plan.oersted_field_xyz.as_mut() {
+            if existing.len() != field.len() {
+                return Err(RunError {
+                    message: "FEM solved-current Oersted field length conflicts with the planned field".into(),
+                });
+            }
+            for (planned, solved) in existing.iter_mut().zip(field) {
+                *planned += *solved;
+            }
+        } else {
+            normalized_plan.oersted_field_xyz = Some(field.clone());
+        }
+        normalized_plan.oersted_realization =
+            Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+    }
     #[cfg(not(feature = "fem-gpu"))]
     if !normalized_plan.spin_transport_plans.is_empty() {
         return Err(RunError {

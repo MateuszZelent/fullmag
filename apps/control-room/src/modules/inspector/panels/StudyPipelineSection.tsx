@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -130,6 +131,7 @@ export function StudySolverPolicyFields({
 
 export function StudyPipelineSection({
   activeStageIndex,
+  activeLane,
   algorithmsAvailable = EMPTY_ALGORITHMS,
   authoringBusy = false,
   authoringFeedback,
@@ -150,6 +152,7 @@ export function StudyPipelineSection({
   commandDisabledReason,
 }: {
   activeStageIndex: number | null;
+  activeLane?: ActiveLaneCapabilitySnapshot | null;
   algorithmsAvailable?: readonly string[];
   authoringBusy?: boolean;
   authoringFeedback: { kind: "success" | "danger" | "error" | "warning"; message: string } | null;
@@ -171,6 +174,7 @@ export function StudyPipelineSection({
 }) {
   const localValidation = draft
     ? validateStudyStageDraft(draft, {
+        activeLane,
         algorithmsAvailable,
         backend: model.requested.backend,
         demagEnabled,

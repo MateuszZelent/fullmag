@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  hasExplicitFdmUniverseOutsideMagneticSupportRole,
+  resolveFdmUniverseOutsideSupportOverlayFromPresentation,
   resolveFdmUniverseOutsideSupportOverlayModel,
 } from "./fdmUniverseOverlay";
+import type {
+  FdmDomainPresentation,
+  FdmMagneticSupportPresentation,
+} from "@/shared/domain/mesh/domainPresentation";
 
 const support = {
   center: [0, 0, 0] as [number, number, number],
@@ -11,18 +15,46 @@ const support = {
   size: [2, 2, 2] as [number, number, number],
 };
 
-describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
-  it("requires an explicit universe semantic role instead of inferring from config presence", () => {
-    expect(
-      hasExplicitFdmUniverseOutsideMagneticSupportRole({ size: [4, 4, 4] }),
-    ).toBe(false);
-    expect(
-      hasExplicitFdmUniverseOutsideMagneticSupportRole({
-        semantic_role: "universe-outside-magnetic-support",
-      }),
-    ).toBe(true);
-  });
+function fdmPresentation({
+  magneticSupport,
+  resourceStatus = "realized",
+}: {
+  magneticSupport: FdmMagneticSupportPresentation | null;
+  resourceStatus?: FdmDomainPresentation["resourceStatus"];
+}): FdmDomainPresentation {
+  return {
+    airbox: null,
+    bounds: { min: [-2, -2, -2], max: [2, 2, 2] },
+    discretization: "fdm",
+    domainId: "domain:fdm",
+    fdmGrid: {
+      declaredCellCount: 8,
+      descriptor: {
+        origin: [-2, -2, -2],
+        shape: [2, 2, 2],
+        spacing: [2, 2, 2],
+      },
+      descriptorCellCountCompatible: true,
+      gridFingerprint: "grid:1",
+      membership: null,
+      membershipStatus: resourceStatus,
+      origin: [-2, -2, -2],
+      shape: [2, 2, 2],
+      spacing: [2, 2, 2],
+      totalCells: 8,
+    },
+    femTopology: null,
+    fingerprint: "grid:1",
+    generationId: "generation:1",
+    magneticSupport,
+    resourceStatus,
+    revision: "generation:1:1:1",
+    units: { length: "m" },
+    universeOutsideMagneticSupport: null,
+  };
+}
 
+describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
   it("creates a separate universe overlay only for an explicit outside-support role", () => {
     const universe = {
       center: [0, 0, 0] as [number, number, number],
@@ -32,20 +64,79 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
 
     expect(
       resolveFdmUniverseOutsideSupportOverlayModel({
+        activeCellCount: 6,
+        inactiveCellCount: 2,
         magneticSupportBounds: support,
         semanticRole: "universe-outside-magnetic-support",
         universeBounds: universe,
       }),
     ).toEqual({
       kind: "fdm-universe-outside-magnetic-support",
+      legend: {
+        magneticSupport: "Magnetic support · 6 active cells",
+        outsideSupport: "Universe outside support · 2 inactive cells",
+      },
       magneticSupportBounds: support,
+      target: {
+        id: "fdm-universe-outside-support",
+        kind: "fdm-domain",
+        label: "Universe outside magnetic support",
+      },
       universeBounds: universe,
     });
+  });
+
+  it("builds the overlay from a validated current DomainPresentation support summary", () => {
+    const presentation = fdmPresentation({
+      magneticSupport: {
+        activeCellCount: 6,
+        activeUnassignedCellCount: 1,
+        bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+        inactiveCellCount: 2,
+        kind: "magnetic-support",
+      },
+    });
+
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(presentation),
+    ).toMatchObject({
+      kind: "fdm-universe-outside-magnetic-support",
+      legend: {
+        magneticSupport: "Magnetic support · 6 active cells",
+        outsideSupport: "Universe outside support · 2 inactive cells",
+      },
+      magneticSupportBounds: { center: [0, 0, 0], size: [2, 2, 2] },
+      universeBounds: { center: [0, 0, 0], size: [4, 4, 4] },
+    });
+  });
+
+  it("fails closed for stale presentation identity or absent outside-support cells", () => {
+    const presentation = fdmPresentation({
+      magneticSupport: {
+        activeCellCount: 8,
+        activeUnassignedCellCount: 0,
+        bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+        inactiveCellCount: 0,
+        kind: "magnetic-support",
+      },
+      resourceStatus: "stale",
+    });
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(presentation),
+    ).toBeNull();
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(fdmPresentation({
+        magneticSupport: presentation.magneticSupport,
+        resourceStatus: "realized",
+      })),
+    ).toBeNull();
   });
 
   it("does not infer air or void from a mask without the semantic role", () => {
     expect(
       resolveFdmUniverseOutsideSupportOverlayModel({
+        activeCellCount: 8,
+        inactiveCellCount: 0,
         magneticSupportBounds: support,
         semanticRole: null,
         universeBounds: {
@@ -60,6 +151,8 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
   it("does not create an overlay when universe and magnetic support coincide", () => {
     expect(
       resolveFdmUniverseOutsideSupportOverlayModel({
+        activeCellCount: 8,
+        inactiveCellCount: 0,
         magneticSupportBounds: support,
         semanticRole: "universe-outside-magnetic-support",
         universeBounds: support,
@@ -70,6 +163,8 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
   it("rejects a partially overlapping universe envelope", () => {
     expect(
       resolveFdmUniverseOutsideSupportOverlayModel({
+        activeCellCount: 8,
+        inactiveCellCount: 0,
         magneticSupportBounds: support,
         semanticRole: "universe-outside-magnetic-support",
         universeBounds: {

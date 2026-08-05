@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-07-16
+- Last updated: 2026-08-05
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula version: `current_transport.fullmag.v1`
@@ -1035,6 +1035,47 @@ Inspector nodes show source, signed current, closure, method, refresh, SI units,
 regime, freshness, residual, and capability scope. UI Apply shares canonical
 validation and export emits canonical Python.
 
+### 4.5 Bounded executable solved-current FEM slice (2026-08-05)
+
+The current implementation contains one deliberately bounded reference slice
+for `OerstedField(model=from_current_solution)` on FEM.  It is legal only for
+strict, double-precision, steady, one-way `OhmicPoisson` transport on the
+native FEM CPU lane.  The planner records the binding in
+`ResolvedFemSpinTransportIR.oersted_source_bound`; a reciprocal FEM M2 request
+with the same Oersted source is rejected because the existing one-shot FEM
+transport solve is not stage-consistent with `J_c(m_stage)`.
+
+The runtime ordering is explicit:
+
+1. solve the named native FEM charge/spin transport problem to convergence;
+2. read the converged nodal `J_c [A/m^2]` from that exact result;
+3. verify the source mask, finite values and affine `tet4` support, average the
+   four nodal values to each active element, and evaluate the regularized
+   midpoint Biot--Savart sum
+
+   ```text
+   H_oe(x_i) = sum_e (1/(4 pi)) V_e
+               [J_e x (x_i-r_e)] /
+               (|x_i-r_e|^2 + r_reg,e^2)^(3/2),
+   r_reg,e = (3 V_e/(4 pi))^(1/3);
+   ```
+
+4. inject that field into the cloned FEM plan before constructing the LLG
+   backend, while preserving any independently planned field by componentwise
+   addition.
+
+This is a **bounded reference realization**, not the canonical OE-T0/OE-F1 or
+OE-F2 implementation.  The H1 nodal current projection does not provide an
+immutable RT0/H(div) conservative-current view, a closure certificate, a
+weak-Ampere residual, an airbox vector-potential solve, or a singularity-free
+tetrahedral quadrature proof.  Consequently it does not promote the general
+FEM dynamic-Oersted capability, does not claim closed-circuit physical
+validity, and remains unavailable on FEM GPU.  The separate FDM stage workflow
+continues to derive its field from the same accepted charge solution.  The
+planner and runtime tests cover source identity, FEM M2 fail-closed behavior,
+finite/sign-reversing midpoint fields, and injection length/cylinder guards;
+managed FEM execution is still required before any qualification promotion.
+
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
@@ -1081,6 +1122,7 @@ at least nominal minus `0.25` in the asymptotic range.
 
 ## 6. Completeness checklist
 
+- [x] Bounded FEM steady one-way solved-current midpoint reference slice (not OE-T0/F1/F2)
 - [ ] Python current/Oersted model and complete envelope export
 - [ ] ProblemIR, planner, migration, and scoped capabilities
 - [ ] Conservative FDM charge and face-to-cell publication

@@ -1,0 +1,41 @@
+{
+  "document": {"path": "docs/physics/absorbing-boundary-layer.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference executable"},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "Native CUDA rejects cellwise damping fields before launch."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented"},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The native material-field lane carries alpha_field; managed qualification is separate."}
+  ],
+  "equations": [
+    {"id": "eq-alpha-additive", "symbols": ["alpha", "alpha0", "alpha_max", "w"], "sources": ["planner-profile"]},
+    {"id": "eq-profile-coordinate", "symbols": ["t", "W", "d", "R"], "sources": ["planner-profile"]},
+    {"id": "eq-smootherstep", "symbols": ["p"], "sources": ["planner-profile"]}
+  ],
+  "symbols": [
+    {"id": "alpha", "latex": "\\alpha(\\mathbf r)", "meaning": "local Gilbert damping supplied to LLG", "si_unit": "1"},
+    {"id": "alpha0", "latex": "\\alpha_0", "meaning": "base Gilbert damping", "si_unit": "1"},
+    {"id": "alpha_max", "latex": "\\alpha_{\\max}", "meaning": "additive damping at the selected face", "si_unit": "1"},
+    {"id": "w", "latex": "w_f(\\mathbf r)", "meaning": "selected-face profile weight", "si_unit": "1"},
+    {"id": "t", "latex": "t_f", "meaning": "profile coordinate", "si_unit": "1"},
+    {"id": "W", "latex": "W", "meaning": "full inward extent of the layer", "si_unit": "\\mathrm{m}"},
+    {"id": "d", "latex": "d_f", "meaning": "inward distance from face $f$", "si_unit": "\\mathrm{m}"},
+    {"id": "R", "latex": "R", "meaning": "taper extent", "si_unit": "\\mathrm{m}"},
+    {"id": "p", "latex": "p(t)", "meaning": "scalar taper profile", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "python-module", "path": "packages/fullmag-py/src/fullmag/model/absorbing_boundary.py", "symbol": "class AbsorbingBoundaryLayer", "responsibility": "Validate parameters, serialize the object module, and expose the analytic profile utility."},
+    {"id": "python-object-api", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "absorbing_boundary", "responsibility": "Attach one absorbing-boundary configuration to a per-object alpha control."},
+    {"id": "python-lowering", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class Problem", "responsibility": "Lower the object-owned configuration into MagnetIR payloads."},
+    {"id": "ir-validation", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "validate_absorbing_boundary", "responsibility": "Store and validate the optional typed absorbing-boundary module and its face/profile/frame enums."},
+    {"id": "planner-profile", "path": "crates/fullmag-plan/src/material.rs", "symbol": "apply_absorbing_boundary_layer", "responsibility": "Evaluate the profile at FDM cells or FEM nodes and add it to resolved alpha."},
+    {"id": "fem-materialization", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "build_region_material_fields", "responsibility": "Carry the resolved FEM alpha field into the material plan."},
+    {"id": "cuda-gate", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_region_owned_planning", "responsibility": "Fail closed for FDM CUDA cellwise damping before native launch."},
+    {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "film.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "finite and >= 0", "meaning": "Base Gilbert damping", "backend_support": "FDM CPU/FEM CPU/FEM GPU; FDM CUDA only when no cellwise field is produced", "problem_ir": "magnets[].material.damping"},
+      {"python": "film.alpha.absorbing_boundary(total_width=...)", "type": "module", "default": "disabled", "si_unit": "m and 1 by parameter", "validation": "positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame", "meaning": "Per-object additive damping layer", "backend_support": "FDM CPU/FEM CPU/FEM GPU; FDM CUDA rejects cellwise alpha", "problem_ir": "magnets[].absorbing_boundary"}
+    ]
+  }
+}

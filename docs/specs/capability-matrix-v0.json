@@ -656,6 +656,18 @@
       "notes": "The current prescribed_zeeman_mask path executes on CPU-reference FDM. CUDA FDM rejects or explicitly falls back. FEM planning can materialize nodal masks, but current native FEM time evolution does not yet prove consumption, so FEM remains non-executable. The target canonical name is RegionalFieldDrive; the existing payload remains a compatibility form."
     },
     {
+      "id": "object_absorbing_boundary_layer",
+      "label": "Per-object alpha.absorbing_boundary damping layer",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "implemented"
+      },
+      "validated_workloads": [],
+      "notes": "The Python/ProblemIR module resolves additive cell/nodewise Gilbert damping with selected faces, object/universe frame, and linear/quadratic/smootherstep profiles. FDM CPU and FEM planner/native material-field lanes carry alpha_field. Native FDM CUDA rejects before launch because cellwise Ms/Aex/alpha fields are unsupported. No managed spin-wave reflection qualification is implied."
+    },
+    {
       "id": "antenna_variable_width_layout",
       "label": "Variable-width 3D microstrip and CPW layout",
       "lanes": {

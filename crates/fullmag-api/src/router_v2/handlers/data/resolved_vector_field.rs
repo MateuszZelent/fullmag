@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::{
     fem_magnetic_node_indices, field_values_match_current_domain, flatten_json_field_values,
-    json_field_grid, live_magnetization_values,
+    is_fdm_snapshot, json_field_grid, live_magnetization_values,
 };
 use crate::router_v2::handlers::data::fields::{
     persisted_hysteresis_magnetization_values, validate_hysteresis_snapshot_stage_scope,
@@ -82,7 +82,7 @@ pub(crate) async fn resolve_topological_charge_magnetization(
         values,
         grid: Some(grid),
         field_revision: field_quantity_revision(snapshot, "m").max(1),
-        field_storage_domain: if snapshot.fem_mesh.is_some() {
+        field_storage_domain: if snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot) {
             "fem_nodal".to_string()
         } else {
             "fdm_cell_centered".to_string()
@@ -102,6 +102,9 @@ fn resolve_global_node_ids(
     snapshot: &SessionStateResponse,
     point_count: usize,
 ) -> Result<Option<Vec<u32>>, ApiError> {
+    if is_fdm_snapshot(snapshot) {
+        return Ok(None);
+    }
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(None);
     };

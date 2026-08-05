@@ -477,6 +477,8 @@ use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedSessionRuntime {
+    /// Effective device request after managed-launcher/environment overrides.
+    pub requested_device: String,
     pub requested_cpu_threads: Option<usize>,
     pub resolved_cpu_threads: usize,
     pub resolved_backend: String,
@@ -3813,6 +3815,12 @@ pub fn resolve_session_runtime_with_registry_and_preview(
     let plan = fullmag_plan::plan(problem)?;
     let resolved_cpu_threads = configured_cpu_threads(problem);
     let requested_cpu_threads = requested_cpu_threads(problem).map(|threads| threads as usize);
+    let effective_requested_device = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
+            dispatch::requested_registry_device_for_fdm(problem)
+        }
+        _ => dispatch::effective_fem_device_request(problem),
+    };
     let requested_mode = match problem.validation_profile.execution_mode {
         fullmag_ir::ExecutionMode::Strict => "strict".to_string(),
         fullmag_ir::ExecutionMode::Extended => "extended".to_string(),
@@ -3838,6 +3846,7 @@ pub fn resolve_session_runtime_with_registry_and_preview(
                 }
             };
             Ok(ResolvedSessionRuntime {
+                requested_device: effective_requested_device,
                 requested_cpu_threads,
                 resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
@@ -3873,6 +3882,7 @@ pub fn resolve_session_runtime_with_registry_and_preview(
                 ),
             };
             Ok(ResolvedSessionRuntime {
+                requested_device: effective_requested_device,
                 requested_cpu_threads,
                 resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
@@ -3897,6 +3907,7 @@ pub fn resolve_session_runtime_with_registry_and_preview(
         (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine)) => {
             let (default_family, engine_id, default_worker) = fem_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
+                requested_device: effective_requested_device,
                 requested_cpu_threads,
                 resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
@@ -3922,6 +3933,7 @@ pub fn resolve_session_runtime_with_registry_and_preview(
             let (default_family, engine_id, default_worker) =
                 fem_eigen_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
+                requested_device: effective_requested_device,
                 requested_cpu_threads,
                 resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
@@ -3947,6 +3959,7 @@ pub fn resolve_session_runtime_with_registry_and_preview(
             let (default_family, engine_id, default_worker) =
                 fem_frequency_response_session_runtime_defaults(engine);
             Ok(ResolvedSessionRuntime {
+                requested_device: effective_requested_device,
                 requested_cpu_threads,
                 resolved_cpu_threads,
                 resolved_backend: dispatch_resolution.resolved_backend,
@@ -4189,6 +4202,30 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn managed_fdm_gpu_override_is_the_effective_request_without_erasing_authored_cpu_intent() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "cpu", "source": "problem_ir"}),
+        );
+
+        unsafe {
+            std::env::set_var("FULLMAG_FDM_EXECUTION", "gpu");
+        }
+        let effective = dispatch::requested_registry_device_for_fdm(&problem);
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["runtime_selection"]["device"],
+            "cpu"
+        );
+        assert_eq!(effective, "gpu");
+    }
 
     #[test]
     fn fdm_auto_integrator_provenance_round_trips_for_cpu_and_cuda_execution_records() {

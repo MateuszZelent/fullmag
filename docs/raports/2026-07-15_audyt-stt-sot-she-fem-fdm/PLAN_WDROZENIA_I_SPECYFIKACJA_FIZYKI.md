@@ -3,8 +3,8 @@
 **Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; implementacja częściowa i niegotowa do integracji  \
 **Wariant:** 3 — pełny model docelowy wdrażany przez niezależnie walidowane kamienie milowe M0–M3  \
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
-**Aktualny baseline audytu:** `master@0c95b9a2711226e32845f00259c4ce0a8abbdcd6`  \
-**Dedykowany worktree:** `/tmp/fullmag-spin-transport`, `codex/spin-transport-m0-m3@ab2f686afe0aaa60d269966bd87388c0e59e14c6`  \
+**Aktualny baseline audytu:** `master@d1b851633eebf7becdd8adf25abca0fd47b15da1`  \
+**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, `master@d1b851633eebf7becdd8adf25abca0fd47b15da1`  \
 **Merge-base:** `0612941f3b99137cbb171c183452368cc0f71029`; gałąź ma `109` własnych commitów i jest `271` commitów za aktualnym `master`  \
 **Data pierwotna:** 2026-07-15  \
 **Ostatnia aktualizacja:** 2026-08-05  \
@@ -84,7 +84,8 @@ oznacza ani pełnego milestone, ani walidacji continuum.
 | M0 torque | FDM/FEM CPU i część GPU istnieją | co najwyżej `reference_executable` | korekta Slonczewskiego, niezależny SI oracle, cross-backend parity |
 | M1 FDM CPU steady | `f867cda3913509ebbc455296302e40b1500fc349` | `reference_executable` | pełne interfejsy, Oersted FFT, zbieżność, native production owner |
 | M1 FEM CPU steady | `b91df882c7fc049ce82f359a0fa4ab8dfa0b9595`; bounded managed `steady-transport: pass` | `reference_executable` dla conforming H1/P1 subset | broken/subdomain spaces, mortar/mixing/SML, contrast i h-convergence |
-| OE-T0 FEM | `ab2f686afe0aaa60d269966bd87388c0e59e14c6`; managed result `fail` | `semantic_only` | RT0/KKT, rank semantics, prawdziwe MPI, certyfikat i czysty gate |
+| FEM solved-current Oersted | planner/runtime midpoint slice dodany 2026-08-05; managed transport prerequisite `pass` | `development_executable` tylko dla steady one-way Ohmic CPU | RT0/H(div), closure, OE-F1/F2, direct-oracle, source digest, GPU i M2 |
+| OE-T0 FEM | `ab2f686afe0aaa60d269966bd87388c0e59e14c6`; managed serial/MPI + TSan `pass` | `reference_executable` dla bounded certificate slice | distributed sparse KKT, skalowanie i pełna zależna OE-F1/F2 kwalifikacja |
 | OE-F1 FEM direct | kontrakt/receptura; managed result `fail` | `semantic_only` | singular/near quadrature, projection, convergence |
 | OE-F2 FEM mixed | kontrakt/receptura; managed result `fail` | `semantic_only` | exact-sequence solve, topology, AMS, airbox convergence |
 | FDM FFT Oersted | wpis capability bez produkcyjnego wykonania | `semantic_only` | zamknięty obwód, kernel/direct oracle, native CPU/CUDA |
@@ -8495,3 +8496,79 @@ kontenerze MFEM/HYPRE. Nie zamyka to jednak:
 
 Statusy z §32.79 i §32.86 pozostają bez zmian: FEM CPU M1/M2 jest
 `reference_executable`, a `FEM↔FDM equivalence_established=false`.
+
+## 32.88. Bounded FEM solved-current → dynamic Oersted slice (2026-08-05)
+
+### 32.88.1. Co zostało zaimplementowane
+
+Uzupełniono brakujący, ale wyraźnie ograniczony odcinek łańcucha FEM:
+
+```text
+CurrentTransport(OhmicPoisson, one_way, steady)
+  → native FEM charge/spin solve
+  → nodal J_charge [A/m²]
+  → regularized tet4 midpoint Biot–Savart H_oe [A/m]
+  → FEM plan
+  → native LLG RHS
+```
+
+W `ProblemIR` descriptor FEM ma teraz jawny bit
+`oersted_source_bound`. Planner rozpoznaje `OerstedField` wskazujące na
+rozwiązany `CurrentTransport`, nie próbuje już obniżać go do prescribed
+density i ustawia realizację `BiotSavartMidpoint`. Dla FEM wymuszone są
+`steady + one_way + CPU double + strict`; próba FEM M2/reciprocal z tym samym
+źródłem jest odrzucana przed uruchomieniem, ponieważ jeden solve transportu nie
+zapewnia jeszcze `J_c(m_stage)` dla każdego stage LLG.
+
+Po zakończeniu transportu runtime sprawdza maskę źródła, skończoność danych i
+typ `tet4`, uśrednia cztery wartości nodalne `J_charge` na element, liczy
+objętość i środek ciężkości oraz dodaje do każdego węzła wkład:
+
+```text
+H_e(x_i) = (1/(4π)) V_e [J_e × (x_i-r_e)]
+           / (|x_i-r_e|²+r_reg,e²)^(3/2),
+r_reg,e = (3V_e/(4π))^(1/3).
+```
+
+Pole jest wstrzykiwane do sklonowanego planu przed zbudowaniem natywnego
+backendu FEM. Istniejące niezależne pole planowane jest sumowane komponentowo;
+konflikt długości oraz jednoczesny analityczny cylinder są odrzucane.
+
+### 32.88.2. Dowód testowy i granica fizyczna
+
+Dodano testy planisty dla wiązania źródła oraz fail-closed FEM M2, a także test
+referencji numerycznej sprawdzający skończoność i odwrócenie znaku pola po
+odwróceniu całego `J`. Lokalny test planisty uruchomiony na bieżącym checkoutcie
+zakończył się `9 passed`. Następnie nowa recepta repozytoryjna
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-solved-current-oersted-reference`
+wykonała managed CMake/MFEM/HYPRE build oraz:
+
+```text
+fullmag-plan Oersted/planner tests ............ 9 passed
+solved_current_midpoint_biot_savart ... ok
+```
+
+Jest to dowód wykonywalności bounded reference slice w kontenerze, nie dowód
+OE-T0/F1/F2 ani produkcyjnej kwalifikacji continuum.
+
+Ta implementacja **nie jest** jeszcze OE-T0/OE-F1/OE-F2: nodalny rzut prądu H1
+nie daje certyfikowanego RT0/H(div), bilansu powierzchniowego, zamknięcia
+obwodu, digestu źródła, słabego residuum Ampère’a, airboxa ani zbieżności
+singularnej kwadratury. Nie wolno na jej podstawie awansować ogólnej
+capability `field.oersted.fem_direct_quadrature.fullmag.v1`, twierdzić zgodności
+FEM↔FDM ani uruchamiać FEM GPU. Status zakresu to
+`development_executable`/`reference slice`, a nie `production_executable`.
+
+### 32.88.3. Następne bramy wdrożeniowe
+
+1. Zastąpić nodalny rzut immutable `ConservativeCurrentView` OE-T0 i podać do
+   OE-F1/F2 z tym samym `source_state_revision`, mesh digest i stage identity.
+2. Dodać analityczny/direct-tetra oracle, trzy poziomy `h`, test zamknięcia
+   obwodu i kontrolę znaku/energii `-μ₀∫M·H_oe dV`.
+3. Dopiero po 1–2 propagować status przez capability matrix, artifact
+   provenance, Python/UI inspector i wspólny benchmark FEM↔FDM.
+
+Globalny stan celu pozostaje niezamknięty: FEM CPU M1/M2 transport jest
+`reference_executable`, FEM solved-current Oersted ma tylko bounded slice,
+FEM GPU transport/Oersted pozostaje `semantic_only`, a równoważność FEM↔FDM
+nie została ustanowiona.

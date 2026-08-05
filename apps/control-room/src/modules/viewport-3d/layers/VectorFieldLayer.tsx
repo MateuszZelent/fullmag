@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type RefObject,
 } from "react";
@@ -379,6 +380,17 @@ export function resolveVectorFieldLayerStyle({
   };
 }
 
+export function resolveVectorGlyphDepthPolicy(renderOnTop = false): {
+  depthTest: boolean;
+  depthWrite: boolean;
+} {
+  const policy = RENDER_POLICIES.glyphs;
+  return {
+    depthTest: renderOnTop ? false : policy.depthTest,
+    depthWrite: renderOnTop ? false : policy.depthWrite,
+  };
+}
+
 export function syncVectorGlyphColorState({
   hasInstanceColors,
   head,
@@ -462,11 +474,14 @@ function resolveVectorGlyphCapacity(glyphCount: number): number {
 }
 
 function useTrackedVectorGlyphResources({
+  renderOnTop,
   tracker,
 }: {
+  renderOnTop: boolean;
   tracker: Viewport3DResourceTracker;
 }) {
   const glyphPolicy = RENDER_POLICIES.glyphs;
+  const depthPolicy = resolveVectorGlyphDepthPolicy(renderOnTop);
   const shaftGeometry = useMemo(
     () =>
       tracker.track(
@@ -490,12 +505,12 @@ function useTrackedVectorGlyphResources({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          depthWrite: glyphPolicy.depthWrite,
-          depthTest: glyphPolicy.depthTest,
+          depthWrite: depthPolicy.depthWrite,
+          depthTest: depthPolicy.depthTest,
           side: glyphPolicy.side,
         }),
       ),
-    [glyphPolicy, tracker],
+    [depthPolicy.depthTest, depthPolicy.depthWrite, glyphPolicy, tracker],
   );
 
   useEffect(
@@ -558,8 +573,10 @@ function useVectorGlyphMaterialSync({
 
 function useVectorGlyphInstanceColorAttribute(
   capacity: number,
-): RefObject<InstancedBufferAttribute | null> {
+): InstancedBufferAttribute | null {
   const instanceColorAttrRef = useRef<InstancedBufferAttribute | null>(null);
+  const [instanceColorAttr, setInstanceColorAttr] =
+    useState<InstancedBufferAttribute | null>(null);
   useEffect(() => {
     const attr = new InstancedBufferAttribute(
       new Float32Array(capacity * 3),
@@ -567,14 +584,16 @@ function useVectorGlyphInstanceColorAttribute(
     );
     attr.setUsage(DynamicDrawUsage);
     instanceColorAttrRef.current = attr;
+    setInstanceColorAttr(attr);
     return () => {
       if (instanceColorAttrRef.current === attr) {
         instanceColorAttrRef.current = null;
+        setInstanceColorAttr(null);
       }
     };
   }, [capacity]);
 
-  return instanceColorAttrRef;
+  return instanceColorAttr;
 }
 
 function useVectorGlyphBuild({
@@ -623,6 +642,10 @@ function useVectorGlyphBuild({
     store.getSnapshot,
     store.getSnapshot,
   );
+  // Unkeyed FDM vector builds do not have a cache key. Keep the store's explicit
+  // `null` sentinel aligned with the optional prop's `undefined` value so a
+  // completed worker result can become visible without a cache reference.
+  const normalizedBuildKey = buildKey ?? null;
 
   useEffect(() => {
     if (!request) return;
@@ -649,7 +672,6 @@ function useVectorGlyphBuild({
     const abortController = new AbortController();
     const startMark = markVectorGlyphWork(VECTOR_GLYPH_BUILD_MEASURE);
     let measured = false;
-
     void buildViewport3DVectorGlyphsOffMainThread(request, {
       buildKey: buildKey,
       groupKey: buildReference?.groupKey,
@@ -706,7 +728,10 @@ function useVectorGlyphBuild({
   let visibleCacheKey: string | null = null;
   let visibleResult: VectorGlyphBuildResult | null = null;
   if (request) {
-    if (snapshot.request === request && snapshot.buildKey === buildKey) {
+    if (
+      snapshot.request === request &&
+      snapshot.buildKey === normalizedBuildKey
+    ) {
       visibleResult = snapshot.result;
       visibleCacheKey =
         snapshot.result && snapshot.buildKey ? snapshot.buildKey : null;
@@ -761,7 +786,7 @@ function useVectorGlyphBuild({
   }, [buildReference, cache, visibleCacheKey]);
 
   return visibleResult
-    ? { buildKey: visibleCacheKey ?? buildKey ?? null, result: visibleResult }
+    ? { buildKey: visibleCacheKey ?? normalizedBuildKey, result: visibleResult }
     : null;
 }
 
@@ -797,7 +822,7 @@ function useVectorGlyphUpload({
   glyphCount,
   glyphTransforms,
   headRef,
-  instanceColorAttrRef,
+  instanceColorAttr,
   invalidate,
   material,
   materialColor,
@@ -812,7 +837,7 @@ function useVectorGlyphUpload({
   glyphCount: number;
   glyphTransforms: VectorGlyphTransforms | null;
   headRef: RefObject<InstancedMesh | null>;
-  instanceColorAttrRef: RefObject<InstancedBufferAttribute | null>;
+  instanceColorAttr: InstancedBufferAttribute | null;
   invalidate: () => void;
   material: MeshBasicMaterial;
   materialColor: string;
@@ -837,7 +862,6 @@ function useVectorGlyphUpload({
   useEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
-    const instanceColorAttr = instanceColorAttrRef.current;
     if (!shaft || !head || !instanceColorAttr) return;
 
     if (!glyphColors) {
@@ -934,7 +958,7 @@ function useVectorGlyphUpload({
     glyphColors,
     glyphCount,
     headRef,
-    instanceColorAttrRef,
+    instanceColorAttr,
     invalidate,
     material,
     materialColor,
@@ -1096,6 +1120,7 @@ export function VectorFieldLayer({
   fieldBufferId,
   style,
   materialProfile,
+  renderOnTop = false,
   tracker,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -1105,6 +1130,7 @@ export function VectorFieldLayer({
   colorMode?: string;
   materialProfile?: Viewport3DMaterialProfile["glyphs"];
   opacity?: number;
+  renderOnTop?: boolean;
   segments: Float32Array | null;
   fieldBufferId?: string | null;
   style?: VectorFieldLayerVectorStyle;
@@ -1158,8 +1184,8 @@ export function VectorFieldLayer({
     [glyphCount],
   );
   const { glyphPolicy, headGeometry, material, shaftGeometry } =
-    useTrackedVectorGlyphResources({ tracker });
-  const instanceColorAttrRef = useVectorGlyphInstanceColorAttribute(capacity);
+    useTrackedVectorGlyphResources({ renderOnTop, tracker });
+  const instanceColorAttr = useVectorGlyphInstanceColorAttribute(capacity);
   const lastAdoptionRef = useRef<{
     buildKey: string;
     byteLength: number;
@@ -1239,7 +1265,7 @@ export function VectorFieldLayer({
     glyphCount,
     glyphTransforms,
     headRef,
-    instanceColorAttrRef,
+    instanceColorAttr,
     invalidate,
     material,
     materialColor: resolvedStyle.materialColor,
@@ -1249,7 +1275,6 @@ export function VectorFieldLayer({
     tracker,
     transformScratch,
   });
-
   if (!glyphTransforms || glyphTransforms.count === 0) return null;
 
   return (

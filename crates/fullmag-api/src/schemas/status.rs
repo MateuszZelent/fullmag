@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 use crate::schemas::relaxation::RelaxationAlgorithm;
@@ -160,8 +161,91 @@ pub struct CapabilityMap {
     pub preview_2d: bool,
     pub preview_3d: bool,
     pub algorithms_available: Vec<String>,
+    /// Planner-owned operation gating for the currently resolved execution lane.
+    pub active_lane: ActiveLaneCapabilitySnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport_authoring: Option<TransportAuthoringCapabilityMap>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveLaneCapabilityState {
+    Supported,
+    SemanticOnly,
+    Deferred,
+    Unsupported,
+    Stale,
+}
+
+/// Stable machine-readable classification for an active-lane operation reason.
+/// Human-readable `reason` text may evolve without changing UI behavior.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveLaneCapabilityReasonCode {
+    CapabilitySupported,
+    CapabilitySemanticOnly,
+    CapabilityDeferred,
+    CapabilityUnsupported,
+    CapabilityStale,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ActiveLaneOperationCapability {
+    pub state: ActiveLaneCapabilityState,
+    pub reason_code: ActiveLaneCapabilityReasonCode,
+    pub reason: String,
+    pub requires: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ActiveLaneIdentity {
+    pub backend: String,
+    pub discretization: String,
+    pub device: String,
+    pub precision: String,
+    pub mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ActiveLaneCapabilitySource {
+    /// `planner` when the snapshot is backed by resolved planner capabilities;
+    /// `unavailable` when status must fail closed.
+    pub kind: String,
+    pub capability_profile_version: Option<String>,
+    pub engine_id: Option<String>,
+    /// Provenance of `authored`: canonical ProblemIR runtime selection.
+    pub authored_intent: String,
+    /// Provenance of `requested`: runtime resolution after launch overrides.
+    pub effective_request: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ActiveLaneQualification {
+    /// Capability availability does not imply scientific qualification.
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ActiveLaneFallback {
+    pub occurred: bool,
+    pub original_engine: String,
+    pub fallback_engine: String,
+    pub reason: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ActiveLaneCapabilitySnapshot {
+    pub schema_version: String,
+    pub authored: ActiveLaneIdentity,
+    /// Effective execution request after launcher/environment overrides.
+    pub requested: ActiveLaneIdentity,
+    pub resolved: Option<ActiveLaneIdentity>,
+    pub fallback: Option<ActiveLaneFallback>,
+    pub source: ActiveLaneCapabilitySource,
+    pub qualification: ActiveLaneQualification,
+    pub operations: BTreeMap<String, ActiveLaneOperationCapability>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

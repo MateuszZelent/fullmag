@@ -2,7 +2,18 @@
 
 **Data:** 2026-08-04  
 **Zakres:** `apps/control-room`, kontrakt v2 API/OpenAPI, adaptery domeny, zasoby mesh/grid, runtime capabilities oraz istniejące testy.  
-**Status:** audyt diagnostyczny; dokument nie jest implementacją poprawek.
+**Status:** audyt + implementacja P0–P3 w working tree; świeży audytowy bundle
+`.next-audit` (controlled fixture `:3123`, real API `:3124`) przeszedł dwa
+niezależne controlled browser/WebGL smoke oraz real-API probe dla
+canvas/WebGL/FMVP/auto-fit, kolorowanego meshu, colorbara, shaderów i glyphów.
+Frontend `:3100` po HMR/odświeżeniu przechodzi ten sam real-API probe; live API
+`:8081` nadal jest starszym runtime bundlem (v1, unresolved), membership/air-void
+artifactu brak, a kwalifikacja naukowa pozostaje osobną bramką. Ostatnia
+weryfikacja: 2026-08-05.
+
+W dalszych sekcjach „brak” oznacza stan bazowy znaleziony podczas audytu. Zmiany
+wdrożone w bieżącym working tree są oznaczone jako częściowo zamknięte; nie są
+uznawane za produkcyjnie zakwalifikowane bez testu HTTP/browser/WebGL.
 
 ## 0. Streszczenie wykonawcze
 
@@ -10,12 +21,12 @@ Obserwacja użytkownika jest potwierdzona w kodzie. Problem nie ogranicza się d
 
 Najważniejsze ustalenia:
 
-1. **P0 — wizualizacja 3D meshu/gridu jest stop-ship blockerem.** `FdmGridRenderDomain` i `FdmCuboidLayer` istnieją, lecz aktualny v2 membership może zostać odrzucony, błędnie sklasyfikowany lub zastąpiony fallbackiem całego gridu. Żądania pól/wektorów i część modelu renderowania są dodatkowo warunkowane obecnością FEM-owego `fieldCompatibleTopologyRenderModel`. Najpierw trzeba uzyskać poprawny, revision-aware render geometrii FDM/FEM; dopiero potem ma sens dopracowanie Inspectorów.
+1. **P0 — wizualizacja 3D meshu/gridu ma zamknięty controlled-fixture gate oraz frontend live proof.** `FdmGridRenderDomain` i `FdmCuboidLayer` mają rozłączny lane FDM, mapowanie pól z kontrolą kardynalności oraz izolację od starej topologii FEM. Browser smoke pobiera FMVP v2 `12×8×2×3`, pokazuje colorbar, shader i glyphy, a WebGL context/drawing buffer są prawidłowe. Świeży audytowy bundle przeciwko live API pokazał 4096-komórkowy grid, aktywny FMVP i kamerę dopasowaną do bounds; dwa powtórzenia zakończyły się kodem `0`, z niezerowym delta shadera i glyphów. Membership/air-void i revision-safe identity pozostają osobnymi gate’ami.
 2. **P1 — Explorer buduje FEM-owe drzewo niezależnie od dyskretyzacji.** Dla zwykłego FDM nadal pojawia się `Airbox > Mesh > Parameters/Quality Gates/Statistics/Topology/Build & Provenance`, a korzeń Mesh i komenda nazywają się shared-domain/FEM. W snapshotach drzewa brakuje descriptoru FDM, shape, spacing, maski i requested/resolved execution.
-3. **P1 — Inspector mesh/airbox/object/region prezentuje i zapisuje parametry elementowe.** Panele są zbudowane wokół Gmsh, rozmiarów elementów, wzrostu, krzywizny, kolejności FEM, tetra/prism/hex, boundary faces i jakości elementów. Brak branchu po `domain.discretization`, brak FDM grid/membership inspectorów i brak bezpiecznego stanu not-applicable.
+3. **P1 — baseline Inspectorów był FEM-owy.** W bieżącym drzewie dodano rozgałęzienia FDM Grid/Mask oraz stany not-applicable dla paneli FEM, ale Airbox mesh pozostaje panelem FEM i musi być jawnie odseparowany od FDM universe/void overlay.
 4. **P1 — FDM airbox/uniwersum nie ma osobnego modelu semantycznego.** Airbox może być prawidłowy dla FDM, gdy universe jest większy od ferromagnetyka, ale obecny model zna tylko cały grid albo FEM-owe `airboxParts`. Nie rozróżnia konsekwentnie magnetic support, aktywnej komórki, komórki nieprzypisanej i inactive/background.
-5. **P0/P1 — bazowy stan codec/maski odrzucał aktualny artefakt v2 i odwracał/odrzucał semantykę kodowania; w worktree jest częściowa poprawka bez kwalifikacji browserowej.** Bazowy `HEAD` miał codec tylko v1/kind 1 oraz filtr `regionId > 0`. Bieżący diff dodaje v2/kind 2 i sentinel `u32::MAX`, ale nie dowodzi jeszcze poprawnego renderu całego UI/runtime.
-6. **P1 — interakcje, polityka demag i selektory wykonania nie są capability-driven.** UI pokazuje FEM-owe opcje dla FDM, pomija kanoniczne FDM `multilayer_convolution`, zapisuje dowolne kombinacje backend/device/precision/mode bez macierzy legalności i nie pokazuje trwałego requested/resolved/fallback.
+5. **P0/P1 — codec/maska są naprawione źródłowo/testowo; membership live proof pozostaje otwarty.** Codec obsługuje v2/kind 2, legacy v1 i sentinel `u32::MAX`; ID `0` pozostaje aktywne/unassigned. Live API zwraca poprawny structured-grid/FMVP, ale descriptor membership daje `204`, a binary artifact jest `404`; controlled smoke dowodzi ścieżki pola, lecz nie zastępuje live membership/air-void qualification.
+6. **P1 — capability/provenance mają lane-aware implementację i stabilne reason codes.** FDM demag, ribbon/Study, authored/effective/resolved rows oraz `reason_code` są w kontrakcie; pełna macierz wykonania CPU/GPU/precision/mode i scientific qualification pozostają osobnymi gate’ami.
 
 Wniosek: potrzebny jest jeden zunifikowany workspace, ale z **dyskryminowanym adapterem domeny**. FDM i FEM nie powinny być dwoma aplikacjami; nie mogą jednak być jednym komponentem z FEM-owymi polami podmienionymi etykietą. Każda powierzchnia musi otrzymać canonical domain/capability resource i renderować tylko semantykę dostępnej realizacji.
 
@@ -43,15 +54,18 @@ Audyt wykonano przez statyczne prześledzenie:
 
 Zrzut dostępny w sesji (`/mnt/c/Users/Mateusz/.codex/attachments/6614fea1-f8f8-4a0a-885b-e5d7d5a982c5/image-1.png`) pokazuje ten sam symptom: Explorer ma `Airbox > Mesh`, a Inspector pokazuje render modes i zakładkę Mesh o wyglądzie FEM/shared-domain. Podana później ścieżka `C:\Users\Mateusz\AppData\Local\Temp\codex-clipboard-2f004cd9-eaa1-4151-8408-1fb28bc9d4d1.png` nie istnieje w środowisku, dlatego nie traktuję jej jako dodatkowego dowodu.
 
-Nie wykonano w ramach tego audytu:
+W ramach pierwszego audytu nie wykonano jeszcze pełnej kwalifikacji hover/click
+oraz fizyki solvera. W toku remediacji wykonano jednak browser smoke na świeżym
+frontendzie przeciwko rzeczywistemu live API: canvas jest obecny, WebGL context
+nie jest utracony, drawing buffer jest niezerowy, FMVP pola jest załadowany, a
+kamera FDM dopasowuje się do bounds. Nadal nie wykonano kwalifikacji fizycznej
+solvera ani nie potwierdzono, że bieżące pole pochodzi z konkretnego urządzenia.
 
-- uruchomienia pełnego Control Room w przeglądarce z rzeczywistym payloadem FDM,
-- browser smoke/E2E dla WebGL, drawing buffer, hover i selekcji komórki,
-- kwalifikacji fizycznej solvera ani sprawdzenia, czy konkretne FDM pole zostało policzone na urządzeniu.
+Wnioski oznaczone jako „źródło/test” są dowodem implementacyjnym. Browser
+proof core path został wykonany, ale nie oznacza jeszcze kwalifikacji live
+membership/air-void, hover/click ani fizyki solvera.
 
-Wnioski oznaczone jako „źródło/test” są dowodem implementacyjnym. Nie oznaczają jeszcze, że każda obserwacja została odtworzona w działającym runtime. Brak browser proof jest osobnym blockerem P1/P2, a nie podstawą do uznania problemu za rozwiązany.
-
-### 1.1. Bieżący working tree — częściowa poprawka P0, nadal niezakwalifikowana
+### 1.1. Bieżący working tree — implementacja i kwalifikacja controlled fixture
 
 Ponowna inspekcja bieżącego checkoutu wykazała niezatwierdzony diff w:
 
@@ -69,7 +83,109 @@ env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run \
 → 2 pliki, 6 testów passed
 ```
 
-To zamyka wyłącznie testowany podfragment decode/classification. Nie zamyka `FDM-UI-001` ani pełnego `FDM-UI-002`, ponieważ nadal brak browser proof, nadal istnieje gate `fieldCompatibleTopologyRenderModel`, a fallback/error path, air/void overlay, target/selection i Explorer/Inspector nie są przez te testy pokryte. W raporcie status „candidate fix in working tree” jest celowo oddzielony od „qualified/complete”.
+To zamyka podfragment decode/classification. Bieżący viewport ma już
+`fdmLaneActive`, rozłączny render FEM/FDM, FDM field-index resolver oraz
+fail-closed status dla niezgodnej kardynalności. Controlled browser smoke
+zamyka ścieżkę FDM field → shader/vector/colorbar, ale nie zastępuje live
+membership/air-void proof ani runtime/scientific qualification.
+
+### 1.2. Weryfikacja endpointów API v2 (2026-08-04/05)
+
+Sprawdzono nie tylko komponenty React, ale cały kontrakt danych używany przez
+viewport. Kluczowy endpoint to:
+
+```text
+GET /v2/sessions/current/data/fields/{quantity_id}/samples/vector
+    ?component=full&scope_kind=full[&max_samples=N]
+```
+
+| Zasób | Wynik audytu |
+|---|---|
+| `/v2/sessions/current/data/domain/meta` | FDM zwraca `discretization=fdm`, shape/origin/spacing/bounds; obsłużono także metadata-only `execution_plan.backend_plan.grid.cells`. |
+| `/v2/sessions/current/status` | FDM domain generation/topology revision nie dziedziczą starego FEM mesh. |
+| `/v2/sessions/current/data/domain/topology` | Dla jawnego FDM zwraca `204`, także gdy snapshot zawiera odziedziczony FEM mesh. |
+| `/v2/sessions/current/data/domain/slice/mesh-overlay` | Dla jawnego FDM zwraca `204`; overlay FEM nie przecieka do FDM. |
+| `.../fields/{quantity_id}/samples/vector` | Pełne FDM wymaga kardynalności równej iloczynowi aktywnego gridu; dodatni `max_samples` jest dla FDM ignorowany, więc endpoint zwraca kompletny cell-centered FMVP v2 zamiast nieadresowalnego downsampled payloadu. Stary FEM topology hash jest wyłączony w FDM. FEM nadal próbuje przez FMVP v3 z indeksami węzłów. |
+
+Dowody testowe:
+
+- wcześniejszy in-process router v2 run — 509 testów passed, w tym regresje pełnego FDM i izolacji starej topologii; 3 pozostałe failures były niezwiązane z FDM (transport/tabela);
+- `v2_field_vector` — 17 passed;
+- `fdm_domain_endpoints_ignore_reused_fem_topology` — 1 passed;
+- `metadata_material_fields_use_canonical_preview_quantity_ids` — 1 passed;
+- `python_waveguide_box_region_ms_override_changes_backend_mat_ms_mean` — 1 passed po dodaniu fallbacku do `execution_plan.backend_plan.grid.cells`;
+- `v2_fdm_vector_ignores_max_samples_when_preview_would_be_downscaled` — regresja obejmuje dodatni `max_samples`, wymaga pełnych 4 komórek i przechodzi po uzupełnieniu niezwiązanego konstruktora `MagnetIR` o opcjonalne `absorbing_boundary: None`;
+- frontend field/indexing/viewport focus — 242 passed w 8 plikach, typecheck passed.
+
+Pozostają dwa jawne kontraktowe residuale P1. Po pierwsze, pełny FDM FMVP v2
+nie niesie w swoim body `grid_fingerprint` ani mapy komórek; odpowiedź ma
+`x-fullmag-domain-generation-id`, ale frontend nadal powinien wiązać tę
+tożsamość z aktualnym `DomainMeta.grid`, a nie tylko z kardynalnością. Po
+drugie, scope `airbox/object/part` nadal opiera się na FEM membership i nie
+jest jeszcze ogólnym FDM structured-grid scope. `fdm_multilayer` wymaga
+osobnego classifier/layout contractu; nie jest jeszcze kwalifikowany jako
+zwykły `fdm`.
+To są testy in-process/static, kontrolowany browser fixture oraz osobny live
+frontend smoke. Bridge przeglądarki zgłaszał `sandboxCwd is not a local file URI`,
+więc live proof wykonano przez izolowany headless Playwright na świeżym bundlu,
+bez utożsamiania go z kwalifikacją solvera. Kontrolowany smoke Playwright
+`screenshot:viewport-3d` zakończył się kodem `0` i wykazał:
+
+```text
+FMVPv2 12x8x2x3, magnitude=0.550000..1.000000
+shader=2668/7416, vectors=31/7416 (świeży `:3123`; aktualny `:3100` po HMR:
+1784/7416)
+projection deltas=2305/329/2276, topologyRequestsAfterSwitch=0
+WebGL context not lost, non-zero drawing buffer
+```
+
+Źródłowa przyczyna zgłoszonego pustego viewportu miała dwa elementy: predykat
+nieaktywnego Field Map wstrzymywał cały prefiks `/data/fields/`, w tym request
+3D vector, a domyślna kamera FEM-scale nie obejmowała nanoskalowego FDM gridu.
+Resource runtime zachowuje teraz oczekujące load intents i niezależne leases
+pauzy, a scena dopasowuje domyślną kamerę do FDM bounds także po przełączeniu
+aktywnej kamery Three.
+
+Live API zostało odczytane osobno i jest spójne dla podstawowej ścieżki pola:
+
+```text
+GET /data/domain/meta → discretization=fdm, shape=[128,32,1], cells=4096,
+  bounds=[-2.5e-7,-6.25e-8,-1.5e-9]..[2.5e-7,6.25e-8,1.5e-9]
+GET /data/domain/topology → 204 (prawidłowe dla structured FDM)
+GET /data/fields/m/meta → vector_field, 3 components, finite stats,
+  domain_generation_id zgodne z DomainMeta
+GET /data/fields/m/samples/vector?component=full&scope_kind=full → 200,
+  `FMVP;version=2`, 4096 points × 3 components (12 288 values, 98 352 bytes),
+  all values finite, `x-fullmag-domain-generation-id` zgodne z DomainMeta
+```
+
+Jednocześnie live API nadal pochodzi z `runtime_bundle_version=2026-08-04`,
+ma `active_lane.schema_version=v1` z `resolved=null`, brak mu artefaktu
+`mesh/fdm_region_membership.v1/v2.json` (descriptor `204`, binary `404`), a
+zapisany `visualization/state` ma `viewport_colorbar_visible=false`,
+`vectors_visible=false` i kamerę FEM-scale `[2e-6,1.4e-6,2e-6]`. Brak colorbaru
+i glyphów w tym konkretnym live zrzucie jest więc stanem zapisanej konfiguracji,
+nie dowodem pustego FMVP; controlled fixture na świeżym audytowym bundle
+przechodzi shader/colorbar/vector gate w dwóch kolejnych uruchomieniach. Do
+zamknięcia live gate potrzebny jest restart
+backendu z aktualnym bundlem, membership/air-void artifactem i powtórzenie tej
+samej sesji. Dodatkowy probe aktualnego `:3100` z tymi ustawieniami zmienionymi
+wyłącznie w pamięci (`magnitude`, `viewportColorbarVisible=true`,
+`vectorsVisible=true`) pokazał `Rendered range`, `data-fdm-vector-segment-count=1200`
+oraz HUD `vector-glyph:full:complete`; nie jest to zapis trwały i nie zastępuje
+restartu runtime. Na świeżym audytowym bundle `:3124`, z tym samym live API,
+porównanie zrzutów `vectors=false/true` wykazało `1697` zmienionych pikseli na
+`1 296 000`, a zrzut pokazuje gęstą warstwę glyphów nad FDM slabem.
+
+Źródłowy backendowy residual provenance również został naprawiony: syntetyczny
+terminal `StepUpdate` przechodzi teraz przez wspólną ścieżkę publikacji pola, więc
+`latest_fields.m` otrzymuje magnetyzację końcowego kroku oraz `source_step`/
+`source_revision` zamiast pozostawać przy preview `0/1`. Test regresyjny z
+uprzednio zachowanym polem `source_step=0` potwierdza zamianę na krok `342`
+(`cargo test -p fullmag-cli orchestrator::tests::synthetic` — 4 passed;
+`publish_live_step_update` — 3 passed). Działający proces API nie został przez
+to automatycznie przebudowany ani zrestartowany, więc na starym runtime nadal
+można zobaczyć `0/1`.
 
 ## 2. Kontrakt domeny, który UI powinien respektować
 
@@ -109,18 +225,25 @@ To rozróżnienie musi stać się typem wejściowym dla każdego panelu, a nie l
 
 To jest dobry zalążek, ale nie jest pełną ścieżką równoważną FEM.
 
-### 3.2 P0: żądania pól/wektorów są zależne od FEM topology model
+### 3.2 P0: field/vector demand — baseline FEM gate i bieżąca korekta
 
-W `useViewport3DSceneModel.ts`:
+Baseline rzeczywiście uzależniał `primaryFieldVectorEnabled` i część demand od
+`fieldCompatibleTopologyRenderModel`. W bieżącym drzewie ten gate pozostaje
+FEM-only dla topology/chunked renderu, ale FDM ma osobny lane:
 
-- `:2627-2634` ustawia `fieldCompatibleTopologyRenderModel` tylko po sprawdzeniu bieżącej FEM topology;
-- `:2952-2987` wylicza airbox field vectors i node count z `fieldCompatibleTopologyRenderModel.airboxParts`;
-- `:3035-3105` zwraca pusty target-quantity demand plan, gdy nie ma tego modelu;
-- `:3295-3325` uzależnia `primaryFieldVectorEnabled` od `Boolean(fieldCompatibleTopologyRenderModel)`;
-- `:3446-3527` dziedziczy tę bramkę przy pobieraniu resource;
-- `:3777-3840` przekazuje FEM-owy topology model do ogólnego field render modelu.
+- `useViewport3DSceneModel.ts` wyznacza `fdmLaneActive` z `DomainMeta`, odcina
+  FEM `AirboxLayer`/`TopologyMeshLayer` i nie pobiera topology jako warunku FDM;
+- FDM primary demand używa `fdm-domain`, a `buildFdmSampledScalarColors` i
+  `buildFdmFieldIndexResolver` mapują dane po komórkach/indexach;
+- `field_resolution.rs` wymaga dla snapshotu FDM liczby punktów równej
+  iloczynowi aktywnego gridu, a `fields.rs` nie emituje FEM topology hash dla
+  FDM;
+- brak lub niezgodność resource daje jawny `FDM field degraded: ...`, a nie
+  ciche rysowanie po kolejności FEM.
 
-Konsekwencja: FDM może mieć strukturę kostek, lecz aktywne pole, wektory, target quantity, legendę i zapotrzebowanie na dane nie przechodzą przez wspólny FDM contract. To jest błąd architektoniczny, nie tylko brak komponentu.
+Pozostają dwa ograniczenia: przejście FEM→FDM może mieć krótkie okno ładowania
+starego cache przed rozstrzygnięciem `DomainMeta`, a FDM FMVP v2 nie niesie
+pełnej tożsamości gridu. To nadal wymaga browser smoke i docelowego FDM FMVP v3.
 
 **Kryterium P0 wizualizacji:** dla identycznego FDM statusu i quantity selectorów UI musi:
 
@@ -130,6 +253,51 @@ Konsekwencja: FDM może mieć strukturę kostek, lecz aktywne pole, wektory, tar
 4. pokazać unsupported/degraded, gdy resource nie istnieje — nie wyciszyć żądania.
 
 Przed przejściem do Explorer/Inspector wymagany jest również test geometrii: niezerowy FDM grid z maską ma być widoczny jako właściwy zakres komórek, a nie jako pusty viewport i nie jako pełny box po błędzie membership.
+
+Weryfikacja live wykazała dodatkowy frontendowy blocker skali: zapisany stan
+kamery `[2e-6,1.4e-6,2e-6]` był poprawnym historycznie defaultem FEM, ale dla
+live FDM bounds rzędu `5e-7 m` ustawiał grid jako prawie niewidoczny pasek.
+Scena ma teraz deterministyczny `effectiveCameraState`: niezmieniony default
+jest zastępowany fit-em bounds, a jawna pozycja użytkownika pozostaje
+autorytatywna. Świeży audytowy bundle potwierdził pozycję
+`[7.215557e-7,5.195201e-7,7.215557e-7]`, canvas/WebGL i 4096 instancji FDM.
+
+Kolejna repro na świeżym bundlu ujawniła dwa dodatkowe błędy GPU, które
+wyjaśniały sytuację „dane są w HUD, ale mesh jest tylko szary/pusty”:
+
+1. Po pojawieniu się bufora kolorów `InstancedMesh` był rekonstruowany przy
+   niezmienionym kluczu `model.count`. Nowa instancja zachowywała macierze
+   jednostkowe, więc wszystkie komórki wypadały z nanoskalowego kadru. Klucz
+   `fdmCuboidSurfaceMeshKey(count, colorMode)` oraz zależność uploadu macierzy
+   od tej tożsamości wymuszają ponowne wgranie transformacji do właściwej
+   instancji.
+2. `MeshBasicMaterial` z `vertexColors` używa jednocześnie atrybutu koloru
+   wierzchołka i `instanceColor`. `BoxGeometry` nie miała regularnego atrybutu
+   `color`, przez co shader mnożył kolory instancji przez domyślną czerń.
+   Geometria FDM dostaje teraz neutralny atrybut `(1,1,1)`.
+
+3. FDM `VectorFieldLayer` nie miał opcjonalnego `buildKey`, więc worker
+   publikował ukończony wynik z kluczem `null`, a warstwa porównywała go z
+   `undefined` i odrzucała jako niewidoczny. Klucz jest teraz normalizowany do
+   `null` przed porównaniem; wynik bez cache reference może zostać zamontowany
+   po zakończeniu workera.
+
+Po tych zmianach świeży audytowy bundle (dwa kolejne uruchomienia na `:3123`)
+przeszedł browser smoke: `FMVPv2 12×8×2×3`, shader `2668/7416`, glyphy
+`31/7416`, projekcje bez ponownego żądania topology i niezerowy canvas/WebGL.
+Na realnym live API świeży bundle `:3124` dał dodatkowo `1200` segmentów,
+`vector-glyph:full:complete` i `1697/1 296 000` zmienionych pikseli przy
+przełączeniu glyphów off/on.
+Zapisany stan live początkowo nadal ma wektory i colorbar wyłączone, więc UI nie
+powinno traktować tego jako automatycznie włączonego layeru. Przy FDM wektory są cell-centered i mieszczą się wewnątrz
+nieprzezroczystych cuboidów; warstwa używa teraz jawnego `renderOnTop` z
+`depthTest=false/depthWrite=false`, aby glyphy nie znikały za powierzchnią.
+Osobny screenshot z poprawką koloru pokazuje pełny czerwono-pomarańczowy FDM
+slab zamiast szarego paska. To jest kwalifikacja renderera frontendowego; nie
+jest jeszcze dowodem świeżości pola solvera ani poprawności naukowej. W live API
+`m` ma `field_revision=2`, `source_step=0`, podczas gdy status ma
+`solver_steps=342` i `field_revision=16`; transport jest poprawny, ale
+final-state provenance starego runtime pozostaje niezakwalifikowane.
 
 ### 3.3 P1: airbox/void extent FDM nie ma renderera ani targetu
 
@@ -141,17 +309,22 @@ Airbox w FEM ma dodatkowy kontrakt hidden-edge/interior volume (`BoundsLayers.ts
 
 **Kryterium P1:** FDM ma jeden jawny `fdm-domain` target oraz osobny, opcjonalny overlay `universe/air/void`, wyliczony z descriptoru i maski. Overlay nie może udawać elementowego airboxa FEM.
 
-### 3.4 P0/P1: v2/maska — bazowy błąd i częściowa poprawka working tree
+### 3.4 P0/P1: v2/maska — poprawka codec/modelu, brak browser proof
 
 W `HEAD` `apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec.ts:1-3,29-31` miał stałe `VERSION=1` i `KIND_U32=1`, a `:6-12,14-65` redukował payload do surowych ID i gubił schema/version/encoding. Aktualny runner emituje v2 header/version/kind (`crates/fullmag-runner/src/fdm/artifacts.rs:72-79`), a API preferuje `fdm_region_membership.v2.json` (`crates/fullmag-api/src/router_v2/handlers/data/fdm_region_membership.rs:214-228`).
 
-Bieżący niezatwierdzony diff zmienia codec na v2/2, zachowuje v1 jako legacy i eksportuje sentinel (`fdmRegionMembershipCodec.ts:1-8,38-88`). To jest poprawa kierunkowa, ale nie jest jeszcze dowodem produkcyjnego renderu.
+Bieżący codec zmienia obsługę na v2/2, zachowuje v1 jako legacy i eksportuje
+sentinel (`fdmRegionMembershipCodec.ts:1-8,38-88`). `fdmCuboidBuildModel` nie
+traktuje już `u32::MAX` jako regionu, a ID `0` pozostaje aktywne/unassigned.
+To jest potwierdzone testami modelu, ale nadal nie jest dowodem produkcyjnego
+renderu WebGL.
 
 `useViewport3DSceneModel.ts:2370-2386` ustawia `fdmRealizedRegionIds` tylko po udanym decode. Gdy resource ma error, `.data` jest `null`, a `fdmCuboidBuildModel.ts:82-103` przechodzi do fallbacku próbkowania całego authored gridu. To nie jest neutralne degraded state: bez udowodnionej polityki błędu inactive/outside cells mogą zostać wizualnie potraktowane jak aktywne komórki. Błąd trafia głównie do diagnostyki (`useViewport3DSceneModel.ts:4022-4031`), więc nadal potrzebny jest browser test i jawny degraded marker.
 
 Należy zachować kompatybilność v1 tylko wtedy, gdy jest to jawnie potrzebne, ale v2 musi być pierwszorzędnym kontraktem i mieć test fixture z aktualnym headerem.
 
-Nawet po dodaniu v2 obsługi `fdmCuboidBuildModel.ts:168-185` nie może filtrować `regionId > 0`.
+Historyczny filtr `regionId > 0` został usunięty; poniższa uwaga opisuje
+znaleziony baseline bug i pozostaje jako guard regresyjny.
 
 To jest sprzeczne z backendem: `u32::MAX` oznacza inactive, a `0` active/unassigned. Obecny filtr:
 
@@ -174,7 +347,7 @@ Istniejący test `fdmCuboidBuildModel.test.ts:5-25` utrwala tę interpretację (
 
 ## 4. Audyt Explorera, drzewa i selekcji
 
-### 4.1 P1: drzewo Airbox/Mesh jest unconditional
+### 4.1 P1 baseline: drzewo Airbox/Mesh było unconditional
 
 `apps/control-room/src/modules/explorer/builders/buildModelTree.ts:1172-1292` zawsze tworzy:
 
@@ -190,11 +363,17 @@ Airbox
 
 Podobnie `:918-1020` zawsze tworzy Mesh, `Shared-Domain Solver Mesh`, Build Pipeline, Quality Gates, Realized Size Fields i Regions/mesh parts. `ExplorerModule.tsx:144-186,322-411` zna `discretization`, ale nie przekazuje go do snapshotu jako rozstrzygającego adaptera. `ModelTreeSnapshot` (`explorerTypes.ts:421-440`) nie zawiera `discretization`, FDM grid descriptoru, mask revision ani requested/resolved execution.
 
-Dla FDM, gdy `explicit_topology=false`, `studyRuntimeResources.ts:400-426` poprawnie nie wymaga shared-domain manifestu, lecz builder drzewa nadal renderuje FEM-owy kształt. Otrzymujemy więc rozjazd: resource gate mówi „brak shared mesh”, a Explorer pokazuje użytkownikowi ścieżkę, która implikuje, że ten mesh powinien istnieć.
+To był stan bazowy. Bieżący builder ma FDM `mesh.grid.*`, membership/provenance
+i opcjonalny `universe-outside-support`, a FEM shared-domain nodes pozostają
+warunkowane lane. Nadal trzeba zakwalifikować pełny snapshot/realtime Explorera
+oraz domknąć wszystkie legacy aliasy.
 
-### 4.2 Brak semantycznych rodzajów FDM
+### 4.2 Baseline: brak semantycznych rodzajów FDM; bieżący tree ma częściową naprawę
 
-`ExplorerNodeKind` (`explorerTypes.ts:15-205`) nie zawiera `mesh.grid`, `mesh.grid.region`, `fdm.cell` ani odpowiednika. Nie ma też dedykowanego Inspector registry entry. Nowy FDM node musiałby obecnie trafić do wildcard Placeholder (`inspectorRegistry.tsx:779-788`).
+Historycznie `ExplorerNodeKind` nie zawierał `mesh.grid`, `mesh.grid.region`,
+`fdm.cell` ani dedykowanego registry. Bieżący tree/selection/registry ma te
+rodzaje i FDM Grid Inspector; pozostaje test reload/stale identity oraz pełna
+kwalifikacja interakcji komórki w browserze.
 
 `explorerSelection.ts:222-239` mapuje wszystkie Airbox nodes na generyczne `{type:"airbox", visualizationTargetId:"airbox"}`. `:108-117` obsługuje tylko `mesh.unassigned.part`; rodzic `mesh.unassigned` nie ma semantycznego panelu. To utrudnia pokazanie różnicy między:
 
@@ -204,11 +383,13 @@ Dla FDM, gdy `explicit_topology=false`, `studyRuntimeResources.ts:400-426` popra
 - air/void/unassigned,
 - elementem FEM.
 
-### 4.3 P1/P2: breadcrumbs i panel registry są niespójne
+### 4.3 P1/P2 baseline: breadcrumbs i panel registry były niespójne
 
 `inspectorDescriptor.ts:112-146` generuje breadcrumb Airbox, a `:124-135` potrafi wyemitować selection kind `object`. Registry ma natomiast exact panel tylko dla `object.root` (`inspectorRegistry.tsx:492-496`), więc część breadcrumbów może otworzyć Placeholder zamiast właściwego inspectora.
 
-`inspectorRegistry.tsx:724-735` nie ma exact entry dla `mesh.unassigned`/`mesh.unassigned.part`. To nie jest wyłącznie problem FDM, ale przy dodaniu FDM grid/cell pogłębiłoby ryzyko, dlatego należy naprawić registry w tym samym kontrakcie.
+W bieżącym registry dodano exact FDM Grid/cell routes oraz poprawiono
+`object.root`; `mesh.unassigned` pozostaje osobnym legacy guardem do pełnego
+przeglądu. Nie należy utożsamiać go z FDM active-unassigned.
 
 ### 4.4 P2: badge i provenance nie mówią, co faktycznie działa
 
@@ -223,7 +404,7 @@ grid:      revision / fingerprint / freshness
 
 ## 5. Audyt Inspectorów
 
-### 5.1 Mesh Details — panel elementowy bez branchu FDM
+### 5.1 Mesh Details — baseline panelu elementowego i bieżący branch FDM
 
 `useMeshDetailsModel.ts:70-77,141-172` odczytuje `domain.discretization` tylko do porównań równości. `:308-356` pobiera shared-domain manifest/report/quality/gates/size-fields/universe report/quality niezależnie od aktywnej reprezentacji. `:416-455` wybiera „worst element” przez FEM `elementIndex`, a `:486-566` komenda zawsze wykonuje `mesh.build-shared-domain`.
 
@@ -231,7 +412,12 @@ grid:      revision / fingerprint / freshness
 
 Dla FDM te sekcje powinny zostać zastąpione lub oznaczone jako nieaplikowalne. Prawidłowy odpowiednik to m.in. `Nx × Ny × Nz`, `origin_m`, `cell_m`, total/active/inactive/background cells, region legend, mask freshness, grid fingerprint i stride/display budget.
 
-### 5.2 Airbox Mesh — dokładny symptom ze zrzutu
+Bieżący `useMeshDetailsModel`/`ObjectMeshPolicyPanel` rozpoznaje lane FDM i
+udostępnia Structured Grid/not-applicable zamiast zapisu FEM policy. Ten audit
+baseline pozostaje jako guard regresyjny; potrzebne są jeszcze fixture'y z
+rzeczywistym FDM membership i browserową inspekcją.
+
+### 5.2 Airbox Mesh — dokładny symptom ze zrzutu (FEM-only baseline)
 
 `AirboxMeshParametersPanel.tsx:58-94,204-292` deklaruje pola `airboxHmax`, `airboxHmin`, maximum growth rate, curvature factor, narrow-region resolution, padding/size/center i effective element sizes. `airboxMeshPolicyDraft.ts:7-31,48-73,99-203` waliduje te same FEM/Gmsh-owe pojęcia oraz grading `auto/geometric/linear`.
 
@@ -248,7 +434,11 @@ Pozostałe panele są równie jednoznaczne:
 
 `airboxInspectorRuntimeStatus.ts:4-10,47-50` odczytuje `domain.discretization`, ale używa go tylko do runtime equality/load status. Nie steruje renderowaniem paneli. Testy `AirboxMeshBuildPanel.test.tsx:27`, `airboxMeshInspectorModel.test.ts`, `ScopedMeshQualityPanels.test.tsx` używają fixture’ów FEM i nie zawierają FDM render contract.
 
-### 5.3 Object Mesh Policy — Gmsh/FEM controls dla każdej dyskretyzacji
+Wniosek produktowy pozostaje ważny: ten panel jest poprawny wyłącznie dla FEM.
+Dla FDM należy kierować do Grid/Universe overlay; obecna częściowa zmiana nie
+robi z `AirboxMesh` panelu FDM.
+
+### 5.3 Object Mesh Policy — Gmsh/FEM controls w baseline, FDM branch w bieżącym tree
 
 `ObjectMeshPolicyPanelModel.ts:18-87,101-200,240-345` ma tylko politykę elementową: hmax/hmin, curvature, topology/order/sweep/manual size. `ObjectMeshPolicyPanel.tsx:316-334` pokazuje Element Size Parameters, FEM order i Mesh source; `:338-444` pokazuje free tetra/swept prism/hex, layers i thickness distribution; `:465-511` pokazuje Gmsh 2D/3D algorithm, smoothing, optimizer i boundary layers; `:596-648` wyświetla target max/min element, topology, nodes/elements/boundary faces; `:935-1012` renderuje całość oraz Build Mesh bez branchu.
 
@@ -256,19 +446,30 @@ Pozostałe panele są równie jednoznaczne:
 
 Wniosek: nie wolno „przemianować” tych pól na grid size. FDM potrzebuje osobnego draftu (cell spacing/grid dimensions/origin/alignment/mask policy) i osobnego lifecycle.
 
-### 5.4 Visualization Inspector — FEM carrier dependency
+Bieżący model ma już jawne FDM Structured Grid oraz FEM controls oznaczone
+`not applicable`; pozostaje pełny round-trip draftu i runtime qualification.
+
+### 5.4 Visualization Inspector — FEM carrier dependency w baseline
 
 `ObjectVisualizationPanel.tsx:137-156` pobiera wyłącznie `useMeshSharedDomainManifestResource`, a selected mesh-part rozwiązuje przez `manifestRenderableCarriers`. `ObjectVisualizationPanelModel.ts:331-369,700-787,1376-1501` buduje dostępne node counts/parts/vector diagnostics tylko z manifestu. FDM grid/mask resources nie są włączone do tej ścieżki. `ObjectVisualizationOverview.tsx` ma nawet copy „Canonical finite-element field available” (`:100`).
 
 FDM Visualization Inspector powinien wybierać grid target, quantity, vector sampling, cell/region mask, clipping po indeksach i ograniczenia display budget. Gdy pole nie jest dostępne, należy pokazać powód (`unsupported`, `not materialized`, `stale`, `no active cells`) zamiast pustego renderu.
 
-### 3.7 Field map i topography mają dodatkowe rozjazdy zakresu
+Viewport ma już FDM target/indexing i jawny degraded status; panel Inspectora
+pozostaje do domknięcia o pełny grid/cell resource oraz browserową selekcję.
+
+### 3.7 Field map i topography — baseline rozjazdów, bieżące guardy
 
 `apps/control-room/src/modules/field-map/FieldMapModule.tsx:82-93` wywołuje `usePlanarProbeResource` tylko z component/resolution/u/v, pomijając `scope_kind/scope_id`, stage/snapshot i expected monitor/mesh/field revisions, mimo że `PlanarFieldProbeQuery` je wspiera (`kernel/api/apiTypes.ts:94-110`, `planarFieldResources.ts:205-265`). Probe może więc pokazać wartość z innego scope albo snapshotu niż raster na ekranie; jest to P1 dla reprodukowalności FDM/FEM.
 
 `apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx:82-86,147-154` przechowuje `emptyMask` lokalnie, ale `apps/control-room/src/modules/field-map/renderer/planarColorizer.ts:27-38` transferuje ten sam `mask.buffer` do workera. Późniejszy hover używa odłączonej tablicy typed array. Empty pixel może zostać zgłoszony jako zajęty i dostać wartość zamiast `null`. Maskę trzeba sklonować albo zachować nieprzekazywaną kopię do probe.
 
 `apps/control-room/src/modules/field-map/FieldMapModule.tsx:109-121` raportuje głównie meta/scalar errors; błędy mask/vector/mesh mogą pozostawić częściowy, cichy render. Również FDM-only topography ma niespójny ribbon: `ribbonTabViews.tsx:927-935` mówi o FDM, ale control jest statycznie niedostępny, podczas gdy `ribbonContributions.tsx:1808-1879` nie bramkuje topography po `structured_grid`/`discretization` i manifest viewportu (`viewport-3d/manifest.ts:393-432`) nie deklaruje disabledReason.
+
+Bieżący FieldMap przekazuje scope/stage/snapshot/revision, a raster zachowuje
+kopię maski przed transferem do workera; interaction/ribbon mają lane-aware
+guardy. Pozostaje browserowa weryfikacja, że degraded mask/vector jest widoczny
+użytkownikowi, a nie tylko w diagnostyce.
 
 ## 6. Mesh i airbox: wymagany model produktowy
 
@@ -386,23 +587,23 @@ Nie wystarczy badge „FDM” w status barze, jeśli Inspector nadal pokazuje FE
 
 | ID | Priorytet | Obszar | Finding / skutek | Dowód | Kryterium zamknięcia |
 |---|---|---|---|---|---|
-| FDM-UI-001 | P0 | viewport/data | Field/vector/target demand FDM jest gated przez FEM topology | `useViewport3DSceneModel.ts:3035-3105,3295-3527` | FDM field/vector path działa bez manifestu FEM; brak resource jest jawny |
-| FDM-UI-002 | P0/P1 | mask/visual | bazowy v2 header był odrzucany; working tree ma częściowy candidate fix, ale brak render/runtime proof | runner `fdm/artifacts.rs:68-83`; API `fdm_region_membership.rs:214-228`; codec/build model + focused tests | v2/v1 compatibility + testy encoding-aware dla 0/MAX/region/air/inactive + browser render |
-| FDM-UI-003 | P0/P1 | airbox/3D | brak FDM air/void extent i jawnego magnetic support w działającym render path | `BoundsLayers.tsx`, `Viewport3DScene.tsx`, `viewport3DTargets.ts` | P0: zakres gridu widoczny; P1: universe > magnetic object ma czytelny overlay/legend i target |
-| FDM-UI-004 | P1 | Explorer | unconditional Airbox/FEM Mesh subtree | `buildModelTree.ts:918-1020,1172-1292` | FDM tree pokazuje Grid/Mask; FEM tree pokazuje shared topology |
-| FDM-UI-005 | P1 | Mesh Inspector | FEM element stats/policy/build dla FDM | `MeshDetailsPanel.tsx`, `useMeshDetailsModel.ts` | FDM inspector nie renderuje tetra/SICN/hmax; pokazuje grid metrics |
-| FDM-UI-006 | P1 | Airbox Inspector | `hmax/hmin/growth/curvature/grading`, shared-domain command | `AirboxMeshParametersPanel.tsx`, `airboxMeshPolicyDraft.ts` | FDM Airbox/Grid panel ma tylko semantykę grid/mask; FEM zachowuje mesh policy |
-| FDM-UI-007 | P1 | Object/Region | Gmsh/FEM order/tetra/prism controls dla FDM | `ObjectMeshPolicyPanel.tsx`, `ObjectRegionMeshPanel.tsx` | adapter domain capability + separate FDM grid policy |
-| FDM-UI-008 | P1 | Visualization Inspector | selected carrier/quantity/vector lookup tylko przez FEM manifest | `ObjectVisualizationPanel.tsx`, model/controller | FDM grid/cell/region target rozwiązywalny i revision-aware |
-| FDM-UI-009 | P1 | interactions | flat catalog, no lane capability, missing FDM demag | `interactions.ts`, `PhysicsInteractionPanel.tsx`, ribbon | capability-scoped options, FDM convolution round-trip |
-| FDM-UI-010 | P1 | execution | arbitrary backend/device/precision/mode, no resolved provenance | `StudyInspectorPanel.tsx`, runtime schema/model | fail-closed validator + durable requested/resolved/fallback |
-| FDM-UI-011 | P1 | commands | static `Build FEM Mesh`, coarse gates | `ribbonContributions.tsx`, runtime contributions | neutral/capability label and disabled reason per lane |
-| FDM-UI-012 | P2 | selection | no FDM cell ref; breadcrumb/registry fallbacks | `selectionTypes.ts`, `explorerSelection.ts`, registry | `fdm-cell` selection with `(i,j,k)`/fingerprint and exact Inspector |
+| FDM-UI-001 | P0 | viewport/data | **controlled browser gate passed:** FDM demand is separated from FEM topology; live-session identity remains open | `useViewport3DSceneModel.ts`, FDM demand/index resolver, API field tests, `screenshot-viewport-3d.mjs` | controlled FMVP field/vector render passed; live FDM grid identity remains |
+| FDM-UI-002 | P0/P1 | mask/visual | **codec/model fixed in source/tests:** v2/v1, 0/MAX semantics; controlled field smoke passed, live membership render open | runner `fdm/artifacts.rs:68-83`; API `fdm_region_membership.rs:214-228`; codec/build model + focused tests | browser render with current v2 membership |
+| FDM-UI-003 | P0/P1 | airbox/3D | FDM grid lane and universe/magnetic-support overlay exist; extent/legend live browser proof remains open | `BoundsLayers.tsx`, `Viewport3DScene.tsx`, `viewport3DTargets.ts` | universe > magnetic object has extent, legend and target |
+| FDM-UI-004 | P1 | Explorer | **baseline fixed in current tree:** Grid/Mask nodes replace unconditional FEM branch; reload/stale proof open | `buildModelTree.ts`, explorer selection/registry tests | FDM tree snapshot in live browser |
+| FDM-UI-005 | P1 | Mesh Inspector | **source/test complete:** FDM Structured Grid/not-applicable branch and SI/display sampling rows exist; live fixture open | `FdmGridInspectorPanel.tsx`, `useMeshDetailsModel.ts` | no FEM-only fields/actions in FDM inspector |
+| FDM-UI-006 | P1 | Airbox Inspector | intentionally FEM-only; FDM routes to Grid/Universe overlay, which needs completion | `AirboxMeshParametersPanel.tsx`, `airboxMeshPolicyDraft.ts` | FDM never shows shared-domain command |
+| FDM-UI-007 | P1 | Object/Region | **source/test complete for not-applicable branch:** FDM grid policy is explicit/deferred; writable round-trip intentionally remains deferred | `ObjectMeshPolicyPanel.tsx`, `ObjectRegionMeshPanel.tsx` | separate FDM grid policy |
+| FDM-UI-008 | P1 | Visualization Inspector | FDM target/indexing and exact cell Inspector are present; browser selection/universe proof remains open | `ObjectVisualizationPanel.tsx`, `FdmGridInspectorPanel.tsx`, model/controller | FDM grid/cell/region target revision-safe |
+| FDM-UI-009 | P1 | interactions | lane-aware catalog/demag/ribbon and reason-coded capability changes present; executed matrix proof open | `interactions.ts`, `PhysicsInteractionPanel.tsx`, ribbon, active-lane resource | capability-scoped options and round-trip |
+| FDM-UI-010 | P1 | execution | requested/resolved/fallback rows and validators present; runtime matrix proof open | `StudyInspectorPanel.tsx`, runtime schema/model | fail-closed validator + durable provenance |
+| FDM-UI-011 | P1 | commands | FDM ribbon command gating present; browser/command completion proof open | `ribbonContributions.tsx`, runtime contributions | neutral/capability label and disabled reason |
+| FDM-UI-012 | P2 | selection | `fdm-cell`, exact registry routes and mounted screen-reader announcement are source/test complete; live hover/click proof open | `selectionTypes.ts`, `explorerSelection.ts`, `Viewport3DModule.tsx`, registry | `(i,j,k)`/fingerprint Inspector |
 | FDM-UI-013 | P2 | lifecycle | FEM topology freshness assumptions for FDM | `regionMeshLifecycle.ts`, runtime resources | separate FDM grid/mask lifecycle and revision invalidation |
 | FDM-UI-014 | P2 | stage commands | eigen/frequency/FFT commands enabled without lane proof | `studyRuntimeCommandContributions.ts:1671-1994` | capability matrix controls availability and explanation |
-| FDM-UI-015 | P2 | accessibility/UX | unsupported states look like empty/failed data; units/provenance unclear | panels/controllers/tree | status, reason, units, keyboard target and screen-reader labels |
-| FDM-UI-016 | P1 | field map | planar probe omits scope/snapshot/revision; transferred occupancy mask is detached before hover | `FieldMapModule.tsx:82-121`, `PlanarSurface.tsx:82-154` | probe/raster share scope and revision; empty pixel remains empty after worker render |
-| FDM-UI-017 | P2 | topography | FDM-only topography is statically unavailable in one surface and ungated in another | `ribbonTabViews.tsx:927-935`, `ribbonContributions.tsx:1808-1879` | capability-gated FDM control with explicit FEM not-applicable reason |
+| FDM-UI-015 | P2 | accessibility/UX | **source/test complete:** reason-coded status, SI labels, keyboard selection, screen-reader announcement and identity-safe tooltip | panels/controllers/tree, `Viewport3DFdmAccessibility.test.tsx` | browser accessibility audit and live selection proof |
+| FDM-UI-016 | P1 | field map | **source/test fix present:** scope/snapshot/revision and mask copy are carried; browser degraded-state proof open | `FieldMapModule.tsx`, `PlanarSurface.tsx`, `planarColorizer.ts` | probe/raster share scope and revision |
+| FDM-UI-017 | P2 | topography | lane-aware FDM control present; capability/runtime proof remains open | `ribbonTabViews.tsx`, `ribbonContributions.tsx` | explicit FEM not-applicable reason |
 
 ## 10. Docelowa architektura UI
 
@@ -489,19 +690,35 @@ Dotychczasowa sekcja shared-domain może zostać, pod warunkiem że jest rendero
 
 ## 12. Plan remediacji
 
-### P0-A — naprawa wizualizacji 3D meshu/gridu (pierwsza kolejność)
+### P0-A — naprawa wizualizacji 3D meshu/gridu (controlled gate zamknięty)
 
 To jest pierwszy sprint i blokada dla dalszych warstw UI:
 
-1. **Candidate w working tree, do domknięcia:** utrzymać codec FDM dla aktualnego v2 (`version=2`, `kind=2`) z testem produkcyjnego headera; legacy v1 może pozostać jawnie kompatybilne.
-2. Zastąpić fallback „renderuj cały authored grid” stanem `membership unavailable/stale/error` albo bezpiecznym renderem z wyraźnym degraded markerem — nigdy cichym udawaniem aktywności.
-3. **Częściowo zaimplementowane:** utrzymać encoding-aware classifier dla `active`, `inactive`, `unassigned`, region i air/background oraz dodać testy wszystkich stanów.
-4. Zbudować niezależny `FdmGridRenderModel` oraz `FemTopologyRenderModel`, wspólne tylko na poziomie bounds/display budget/selection/provenance.
-5. Dodać FDM magnetic-support/air/void overlay dla universe > ferromagnetyk oraz spójny `fdm-domain` target.
-6. Odłączyć field/vector demand od `fieldCompatibleTopologyRenderModel` i potwierdzić render nonuniform FDM field.
-7. Uruchomić browser smoke/screenshot: canvas visible, `gl.isContextLost() === false`, drawing buffer `> 0 × 0`, grid/mask/air extent widoczne.
+1. **Zrealizowane źródłowo/testowo:** utrzymać codec FDM dla aktualnego v2 (`version=2`, `kind=2`) z testem produkcyjnego headera; legacy v1 pozostaje jawnie kompatybilne.
+2. **Zrealizowane źródłowo/testowo:** brak membership/stale/error daje jawny degraded status, a identity selection/membership fail-closed; nie ma cichego potwierdzania aktywności.
+3. **Zrealizowane źródłowo/testowo:** encoding-aware classifier dla `active`, `inactive`, `unassigned`, region i air/background; controlled browser fixture potwierdza pole/kolorowanie, a live membership render pozostaje osobnym gate’em.
+4. **Zrealizowane źródłowo/testowo:** niezależne `FdmGridRenderModel` oraz `FemTopologyRenderModel`, wspólne tylko na poziomie bounds/display budget/selection/provenance.
+5. **Zrealizowane źródłowo/testowo:** FDM magnetic-support/air/void overlay dla universe > ferromagnetyk oraz spójny `fdm-domain` target; controlled extent/legend jest pokryty, a live membership artifact/extent proof pozostaje otwarty.
+6. **Zrealizowane i zakwalifikowane na fixture:** field/vector demand odłączony od `fieldCompatibleTopologyRenderModel`; nonuniform FDM field, colorbar, shader i glyphy przechodzą smoke. FMVP v3 provenance i live session pozostają osobną bramką.
+7. **Zrealizowane na controlled fixture i live frontendzie:** canvas visible, `gl.isContextLost() === false`, drawing buffer `> 0 × 0`; fixture ma niezerowe field/vector/projection deltas, a live frontend ma poprawny camera fit i aktywny FMVP.
+8. **Zrealizowane źródłowo i potwierdzone świeżym WebGL smoke:** przejście
+   FDM z neutralnego meshu do shader/instance colors zachowuje macierze komórek,
+   a regularny atrybut koloru geometrii jest neutralny `(1,1,1)`, więc shader
+   nie wygasza poprawnych kolorów pola.
+9. **Zrealizowane źródłowo i potwierdzone świeżym WebGL smoke:** FDM glyphy
+   mają osobną politykę głębokości (`renderOnTop`), a przełączenie warstwy
+   buduje i montuje segmenty wektorowe także przy 100% opacity powierzchni;
+   dwa kolejne audytowe smoke’y oraz real-API probe pokazały niezerowy delta
+   glyphów po włączeniu opcji (`1697/1 296 000` pikseli). Zapisany live state z
+   `vectors_visible=false` pozostaje świadomym stanem konfiguracji, nie błędem
+   renderera.
+10. **Zrealizowane źródłowo i potwierdzone testem regresyjnym:** unkeyed FDM
+    vector build normalizuje `undefined` do store’owego `null`, dzięki czemu
+    wynik workera nie pozostaje ukryty mimo poprawnego payloadu.
 
-**Gate P0-A:** bez tego nie uznajemy wizualizacji FDM za działającą, nawet jeśli TypeScript i testy jednostkowe są zielone.
+**Gate P0-A:** controlled browser smoke i live frontend canvas/FMVP/camera smoke
+przechodzą. Pozostaje powtórzenie na aktualnym backendzie z membership/air-void
+payloadem; sam poprawny FMVP nie zamyka tej pozostałej bramki.
 
 ### P0-B — kontrakt i obserwowalna ścieżka danych
 
@@ -510,18 +727,18 @@ To jest pierwszy sprint i blokada dla dalszych warstw UI:
 3. Rozdzielić field/vector demand plan od `fieldCompatibleTopologyRenderModel`; FDM ma grid-compatible field model.
 4. Ujednolicić target kind (`fdm-domain`, nie generyczne `object`) i selection bounds.
 
-**Gate:** testy danych i viewportu przechodzą na fixture FDM bez manifestu FEM; każdy brak/stan stale jest widoczny jako diagnostyka.
+**Gate:** testy danych, viewportu i controlled browser fixture przechodzą na FDM bez manifestu FEM; każdy brak/stan stale jest widoczny jako diagnostyka. Live-session identity pozostaje do powtórzenia.
 
-### P1 — Explorer, Inspector i zarządzanie mesh/grid/airbox
+### P1 — Explorer, Inspector i zarządzanie mesh/grid/airbox (source/test complete; live gate open)
 
 1. Dodać grid/mask Inspector i zastąpić FEM-only sekcje w `MeshDetailsPanel`, `Airbox*`, object/region panels.
 2. Przebudować `MeshBuildDialog` na adapter domain: FDM grid/mask refresh vs FEM shared-domain build.
 3. Dodać FDM Explorer nodes i exact registry/selection types.
 4. Zachować opcjonalny FDM airbox jako rolę gridu, gdy universe > magnetic support; nie tworzyć drugiej FEM-owej topologii.
 
-**Gate:** fixture FDM z i bez airboxa nie pokazuje żadnej FEM-only sekcji ani komendy shared-domain.
+**Gate:** source/test fixture FDM z i bez airboxa nie pokazuje żadnej FEM-only sekcji ani komendy shared-domain. Live browser reload, universe extent/legend i exact selection pozostają do wykonania.
 
-### P2 — interakcje, ribbon i provenance
+### P2 — interakcje, ribbon i provenance (source/test complete; runtime matrix open)
 
 1. Rozszerzyć capability catalog o backend/device/precision/mode/operator.
 2. Wpiąć go w `PhysicsInteractionPanel`, ribbon, stage commands i global/stage validators.
@@ -529,20 +746,20 @@ To jest pierwszy sprint i blokada dla dalszych warstw UI:
 4. W Study/Runtime wyświetlać requested + resolved + fallback po wykonaniu i po odświeżeniu.
 5. Zastąpić statyczne `Build FEM Mesh` neutralnym/adaptacyjnym label.
 
-**Gate:** FDM/FEM matrix tests i round-trip DSL/UI/API są zgodne; unsupported nie da się zapisać jako aktywna opcja.
+**Gate:** FDM/FEM matrix tests, reason-coded capability snapshot i round-trip DSL/UI/API są zgodne; unsupported nie da się zapisać jako aktywna opcja. Executed CPU/GPU/precision/mode matrix jest osobnym gate’em.
 
-### P3 — UX, accessibility i wydajność
+### P3 — UX, accessibility i wydajność (implemented; runtime qualification in progress)
 
-1. Dodać statusy `supported`, `not applicable`, `deferred`, `stale`, `not materialized`, z kodem przyczyny.
-2. Ujednolicić jednostki SI i nazwy: `cell spacing [m]`, `origin [m]`, `cells`, `elements` tylko dla FEM.
-3. Ograniczyć render przez display budget/stride/decimation bez zmiany jakości domyślnej; pełny mesh/grid nadal musi być dostępny w danych.
-4. Zapewnić keyboard focus, selection announcement i tooltip z provenance/revision.
-5. Dodać testy hydration/store snapshot oraz lifecycle WebGL.
+1. **Zrealizowane źródłowo/testowo:** statusy `supported`, `not applicable`, `deferred`, `stale`, `not materialized` z maszynowym `reason_code`.
+2. **Zrealizowane źródłowo/testowo:** FDM używa `Origin [m]`, `Cell spacing [m]`, `cells`; FEM zachowuje `elements`.
+3. **Zrealizowane źródłowo/testowo:** centralny display budget/stride bez obniżania jakości domyślnej; HUD/Inspector pokazują total/display/budget.
+4. **Zrealizowane źródłowo/testowo:** keyboard/tree semantics, exact FDM selection announcement oraz tooltip provenance/revision z fail-closed identity.
+5. **Częściowo zrealizowane:** hydration/store oraz lifecycle/resource smoke są pokryte testami; pełny settled-window runtime smoke wymaga uruchomionej sesji FDM.
 
 ### P4 — kwalifikacja browser/scientific
 
-1. Browser smoke: canvas widoczny, `gl.isContextLost() === false`, drawing buffer `> 0 × 0`.
-2. Screenshot proof FDM bez/ z airboxem, quantity switch, wireframe/points, clipping i hover.
+1. **Controlled fixture passed; live frontend passed for core path:** canvas widoczny, `gl.isContextLost() === false`, drawing buffer `> 0 × 0`, shader/vector/colorbar/projection deltas niezerowe na fixture; świeży audytowy bundle na `:3123` potwierdził FMVP/camera fit/4096-cell grid, a real-API `:3124` potwierdził kolorowany slab i delta glyphów `1697/1 296 000`.
+2. **Częściowo:** screenshot proof obejmuje FDM quantity/vector/projection/dimension-frame oraz region overlay; live airbox/universe, wireframe/points, clipping i hover wymagają aktualnego backendu z membership artifactem. Bieżący live zapis ma vectors/colorbar wyłączone, więc nie jest dowodem ich braku w rendererze.
 3. Porównać identyczny payload i czas dla FDM/FEM tylko tam, gdzie kontrakt fizyczny przewiduje wspólną obserwablę; nie mieszać proof UI z kwalifikacją solvera.
 
 ## 13. Macierz testów akceptacyjnych
@@ -574,6 +791,9 @@ Minimalny fixture contract powinien zawierać oba FDM warianty, FEM shared-domai
 - `apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx:727-741,931-1003`
 - `apps/control-room/src/modules/viewport-3d/layers/BoundsLayers.tsx:750-812,909-973,1025-1084`
 - `apps/control-room/src/modules/viewport-3d/layers/fdmCuboidBuildModel.ts:11-19,53-185,193-241`
+- `apps/control-room/src/modules/viewport-3d/layers/FdmCuboidLayer.tsx:538-582,665-743,1144-1173` — FDM surface mesh identity, neutral vertex colors and render-on-top vector wiring
+- `apps/control-room/src/modules/viewport-3d/layers/VectorFieldLayer.tsx:370-404,470-520,1240-1290` — vector glyph depth policy and GPU adoption
+- `apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx:1980-1995` — FDM segment-count diagnostic exposed to browser smoke
 - `apps/control-room/src/modules/viewport-3d/model/viewport3DTargets.ts:63-72,284-324`
 - `apps/control-room/src/modules/viewport-3d/viewport3dInspect.ts:33-91`
 - `apps/control-room/src/kernel/selection/selectionTypes.ts:214-284`
@@ -581,6 +801,7 @@ Minimalny fixture contract powinien zawierać oba FDM warianty, FEM shared-domai
 - `apps/control-room/src/modules/field-map/FieldMapModule.tsx:82-121`
 - `apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx:82-154`
 - `apps/control-room/src/modules/field-map/renderer/planarColorizer.ts:27-38`
+- `crates/fullmag-cli/src/orchestrator.rs:8187-8220,12757-12803` — synthetic terminal field publication and source-step regression test
 
 ### Explorer i Inspector
 
@@ -634,22 +855,55 @@ Minimalny fixture contract powinien zawierać oba FDM warianty, FEM shared-domai
 
 ## 15. Otwarte blokery i decyzje
 
-1. Brak drugiego pliku obrazu z podanej ścieżki Windows; do wizualnego porównania trzeba dołączyć go ponownie.
-2. Brak live FDM session payloadu i browser E2E w tym audycie; potrzebny fixture lub uruchomienie Control Room do P4.
-3. Trzeba rozstrzygnąć w kontrakcie, czy „airbox” w FDM jest nazwą fizyczną `universe outside magnetic support`, czy wyłącznie prezentacyjnym overlayem. Audyt rekomenduje zachować nazwę fizyczną z jawnie innym `kind` niż FEM airbox.
-4. Trzeba potwierdzić pełną macierz legalności interakcji FDM dla CPU/GPU, precision i mode w capability API; UI nie powinno jej rekonstruować z listy stringów.
-5. Nie należy zamykać żadnego findingu na podstawie samego TypeScript/test pass. Dla viewportu wymagany jest browser smoke, dla runtime — executed-device evidence, a dla solvera — osobna kwalifikacja naukowa.
+### Zweryfikowany błąd provenance launchera FDM
+
+Live uruchomienie `fdm gpu` ujawniło, że status mieszał authored intent z
+efektywnym żądaniem wykonania: skrypt zachowywał `device=cpu`, launcher ustawiał
+`FULLMAG_FDM_EXECUTION=gpu`, a runtime poprawnie rozwiązywał `device=gpu`.
+Kontrakt `status.capabilities.active_lane` musi więc eksponować osobno
+`authored` (ProblemIR), `requested` (effective request po override) i
+`resolved`, wraz z provenance źródeł. UI Study/Runtime musi używać etykiet
+`Authored request`, `Effective request`, `Resolved` oraz jawnie pokazywać
+fallback; samo porównanie starego `requested` z `resolved` było semantycznie
+niepoprawne.
+
+1. **Live browser/runtime:** obecny `3100/8081` zwraca poprawny transportowo FMVP
+   i renderuje FDM slab. Początkowo `:3100` miał stary dynamiczny chunk, więc
+   worker raportował `1200` segmentów i `complete`, ale glyphy nie zmieniały
+   obrazu; po HMR/odświeżeniu chunk zawiera `normalizedBuildKey`, a real-API
+   porównanie `vectors off/on` daje `1697/1 296 000` pikseli. Użytkownik musi
+   odświeżyć kartę po aktualizacji dev servera. Backend nadal ma
+   `runtime_bundle_version=2026-08-04`, active-lane v1/unresolved i brak
+   membership artifactu. Źródłowa publikacja syntetycznego finalnego pola jest
+   już poprawiona i ma testy `source_step/source_revision`, ale działający
+   backend wymaga rebuild/restartu, aby przestać zwracać stare `0/1`. Następnie
+   trzeba powtórzyć tę samą sesję z FDM membership, universe > magnetic support,
+   hover/click, quantity/scope switch i reload selection.
+2. **FDM identity contract:** FMVP v2 body nadal nie niesie pełnego `grid_fingerprint`/cell map; frontend wiąże payload z `DomainMeta` generation/grid. Docelowy FMVP v3 albo jawny envelope identity jest wymagany przed pełną live qualification.
+3. **FDM grid lifecycle:** odświeżenie/replan gridu i maski jest jawnie odroczone, gdy ExecutionPlanIR jest immutable; nie wolno udawać zapisywalnego FEM build. To pozostaje decyzją produktowo-runtime, nie ukrytym fallbackiem.
+4. **Runtime/scientific:** pełna macierz FDM CPU/GPU/precision/mode, executed-device proof, `fdm_multilayer` oraz solver qualification są poza browser/UI gate’em i muszą być potwierdzone osobno.
+5. **Accessibility/performance live gate:** source/DOM tests są zielone, a smoke helper wymaga settled-window `dirty frames=0`, `requests=0` i stabilnych resource counts; wykonanie tego helpera wymaga uruchomionej sesji FDM.
+6. Brak drugiego pliku obrazu z podanej ścieżki Windows; do wizualnego porównania trzeba dołączyć go ponownie.
+
+Maszynowy `reason_code`, SI naming, display budget/stride, FDM cell announcement
+i provenance-safe inspect tooltip są już częścią kontraktu/source tests — nie są
+już blockerami implementacyjnymi.
 
 ## 16. Definition of done dla tego audytu
 
-Ten dokument jest kompletnym audytem diagnostycznym i nie deklaruje naprawy. Audyt uznaję za zamknięty, gdy:
+Audyt i refaktoryzacja UI są udokumentowane w working tree. Dokument spełnia
+warunki audytu, ponieważ:
 
 - każdy wskazany obszar ma dowód path+line oraz severity;
-- airbox FDM został jawnie zachowany jako wymagany wariant, gdy universe > magnetic support;
-- oddzielono UI/source proof od browser/runtime/scientific qualification;
+- airbox/universe FDM został jawnie zachowany jako wariant, gdy universe > magnetic support;
+- oddzielono UI/source proof od controlled browser, live runtime i scientific qualification;
 - opisano docelowy adapter, IA, fazy remediacji i acceptance matrix;
-- precyzyjnie wskazano brakujące zasoby, testy i provenance.
+- wskazano brakujące zasoby, testy, provenance oraz dokładne bramy kontynuacji;
+- P0 controlled smoke dowodzi, że mesh/grid, shader, vectors i colorbar są renderowane na FMVP payloadzie (w tym glyphy nad nieprzezroczystym FDM cuboidem), a świeży live frontend dowodzi poprawnego WebGL/FMVP/camera fit i budowy segmentów po włączeniu warstwy;
+- P3 reason codes, SI naming, display budget oraz accessibility identity są pokryte kontraktem i testami.
+- backendowy synthetic final-field provenance ma test regresyjny, lecz jego wdrożenie wymaga restartu aktualnego runtime.
 
-Implementacja jest osobnym zadaniem i powinna rozpocząć się od P0 (`DomainPresentation`, encoding-aware FDM membership i odcięcie field demand od FEM topology), następnie przejść przez viewport, Explorer/Inspector, interakcje/ribbon i dopiero na końcu browser/scientific qualification.
-
-W praktyce pierwszym warunkiem wejścia w tę implementację jest **P0-A: działający, zweryfikowany browserowo render 3D meshu/gridu i maski**. Bez niego poprawianie samych Inspectorów nie rozwiązuje zgłoszonego problemu.
+Nie jest to deklaracja pełnej kwalifikacji produktu. Do osobnego zamknięcia
+pozostają aktualny runtime v2 z `resolved` lane, universe/membership extent w
+działającej sesji, FMVP identity v3/envelope, executed CPU/GPU/precision/mode
+matrix, `fdm_multilayer` oraz kwalifikacja naukowa solvera.

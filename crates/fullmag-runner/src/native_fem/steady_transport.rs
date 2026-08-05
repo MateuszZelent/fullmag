@@ -1,8 +1,9 @@
 use crate::types::{AuxiliaryArtifact, FieldSnapshot, RunError, TransportExecutionProvenance};
 use fullmag_fem_sys as ffi;
-use fullmag_ir::{FemPlanIR, MeshIR};
+use fullmag_ir::{FemCellTypeIR, FemPlanIR, MeshIR};
 use serde_json::Value;
 use std::ffi::{CStr, CString};
+use std::f64::consts::PI;
 use std::ptr;
 
 const CONSTITUTIVE_VERSION: &str = "transport_constitutive.one_way.fullmag.v1";
@@ -106,6 +107,10 @@ pub(crate) struct NativeFemSteadyTransportBundle {
     pub artifacts: Vec<AuxiliaryArtifact>,
     pub field_snapshots: Vec<FieldSnapshot>,
     pub provenance: Vec<TransportExecutionProvenance>,
+    /// Optional field derived from the solved FEM charge current.  This is
+    /// kept outside `FemPlanIR` until charge has converged, so a stale or
+    /// prescribed current cannot be mistaken for the solved source.
+    pub oersted_field_xyz: Option<Vec<f64>>,
 }
 
 pub(crate) fn execute_native_fem_steady_transport_plans(
@@ -118,9 +123,23 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
     let mut records = Vec::with_capacity(plan.spin_transport_plans.len());
     let mut provenance = Vec::with_capacity(plan.spin_transport_plans.len());
     let mut field_snapshots = Vec::new();
+    let mut oersted_field_xyz: Option<Vec<f64>> = None;
     for prepared in prepared {
         let resolved = prepared.resolved;
         let result = solve_native_fem_steady_transport(&prepared.request)?;
+        if let Some(descriptor) = resolved.fem_cpu_double.as_ref() {
+            if descriptor.oersted_source_bound {
+                let field = solved_current_midpoint_biot_savart_field(
+                    &plan.mesh,
+                    &descriptor.charge_domain.element_mask,
+                    &result.charge_current_density_xyz_apm2,
+                )?;
+                add_flat_field(
+                    oersted_field_xyz.get_or_insert_with(|| vec![0.0; field.len()]),
+                    &field,
+                )?;
+            }
+        }
         field_snapshots.extend(transport_field_snapshots(
             resolved,
             &result,
@@ -184,7 +203,128 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
         artifacts,
         field_snapshots,
         provenance,
+        oersted_field_xyz,
     }))
+}
+
+fn add_flat_field(target: &mut [f64], source: &[f64]) -> Result<(), RunError> {
+    if target.len() != source.len() {
+        return Err(RunError {
+            message: "FEM solved-current Oersted fields have inconsistent node counts".into(),
+        });
+    }
+    for (left, right) in target.iter_mut().zip(source) {
+        *left += *right;
+    }
+    Ok(())
+}
+
+/// Bounded FEM reference realization used by the current transport lane.
+/// The charge solve publishes a nodal H1 current projection; this helper
+/// averages that field over each active tet4 and evaluates a regularized
+/// midpoint Biot--Savart quadrature at every mesh node.  It is intentionally
+/// separate from the future conservative RT0/H(curl) OE-F1/OE-F2 lanes.
+fn solved_current_midpoint_biot_savart_field(
+    mesh: &MeshIR,
+    source_element_mask: &[bool],
+    nodal_current_density: &[[f64; 3]],
+) -> Result<Vec<f64>, RunError> {
+    if source_element_mask.len() != mesh.cell_count() {
+        return Err(RunError {
+            message: "FEM solved-current Oersted source mask does not match mesh elements".into(),
+        });
+    }
+    if nodal_current_density.len() != mesh.nodes.len()
+        || nodal_current_density
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+    {
+        return Err(RunError {
+            message: "FEM solved-current Oersted nodal current is missing or non-finite".into(),
+        });
+    }
+
+    let mut field = vec![0.0; mesh.nodes.len() * 3];
+    let prefactor = 1.0 / (4.0 * PI);
+    for (element_index, active) in source_element_mask.iter().copied().enumerate() {
+        if !active {
+            continue;
+        }
+        if mesh.cells.types.get(element_index) != Some(&FemCellTypeIR::Tet4) {
+            return Err(RunError {
+                message: format!(
+                    "FEM solved-current midpoint Oersted requires tet4 source elements; element {element_index} is not tet4"
+                ),
+            });
+        }
+        let element = mesh.cells.item_nodes(element_index).ok_or_else(|| RunError {
+            message: format!(
+                "FEM solved-current midpoint Oersted referenced missing element {element_index}"
+            ),
+        })?;
+        if element.len() != 4 {
+            return Err(RunError {
+                message: format!(
+                    "FEM solved-current midpoint Oersted element {element_index} has {} nodes, expected 4",
+                    element.len()
+                ),
+            });
+        }
+        let mut current = [0.0; 3];
+        let mut centroid = [0.0; 3];
+        for node in element {
+            let node_index = *node as usize;
+            let position = mesh.nodes.get(node_index).ok_or_else(|| RunError {
+                message: format!(
+                    "FEM solved-current midpoint Oersted element {element_index} references missing node {node}"
+                ),
+            })?;
+            let current_node = nodal_current_density[node_index];
+            for axis in 0..3 {
+                current[axis] += current_node[axis] * 0.25;
+                centroid[axis] += position[axis] * 0.25;
+            }
+        }
+        let p0 = mesh.nodes[element[0] as usize];
+        let p1 = mesh.nodes[element[1] as usize];
+        let p2 = mesh.nodes[element[2] as usize];
+        let p3 = mesh.nodes[element[3] as usize];
+        let d1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let d2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+        let d3 = [p3[0] - p0[0], p3[1] - p0[1], p3[2] - p0[2]];
+        let cross = [
+            d2[1] * d3[2] - d2[2] * d3[1],
+            d2[2] * d3[0] - d2[0] * d3[2],
+            d2[0] * d3[1] - d2[1] * d3[0],
+        ];
+        let volume = (d1[0] * cross[0] + d1[1] * cross[1] + d1[2] * cross[2]).abs() / 6.0;
+        if !volume.is_finite() || volume <= 0.0 {
+            continue;
+        }
+        let regularization_radius = ((3.0 * volume) / (4.0 * PI)).cbrt();
+        let regularization_sq = regularization_radius * regularization_radius;
+        for (node_index, point) in mesh.nodes.iter().enumerate() {
+            let displacement = [
+                point[0] - centroid[0],
+                point[1] - centroid[1],
+                point[2] - centroid[2],
+            ];
+            let radius_sq = displacement.iter().map(|value| value * value).sum::<f64>();
+            let denominator = (radius_sq + regularization_sq).powf(1.5).max(1.0e-30);
+            let coefficient = prefactor * volume / denominator;
+            let contribution = [
+                coefficient * (current[1] * displacement[2] - current[2] * displacement[1]),
+                coefficient * (current[2] * displacement[0] - current[0] * displacement[2]),
+                coefficient * (current[0] * displacement[1] - current[1] * displacement[0]),
+            ];
+            let base = node_index * 3;
+            for axis in 0..3 {
+                field[base + axis] += contribution[axis];
+            }
+        }
+    }
+    Ok(field)
 }
 
 struct FlatBuffers {
@@ -721,6 +861,7 @@ mod tests {
                 implementation_state: "executable".into(),
                 validation_state: "algebra_validated".into(),
                 validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
+                oersted_source_bound: false,
             }),
         }
     }
@@ -2148,6 +2289,45 @@ mod tests {
         assert!(fields
             .iter()
             .all(|field| field.scope == "transport_module:spin:full_solve_domain"));
+    }
+
+    #[test]
+    fn solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current() {
+        let mesh = MeshIR::from_legacy_tet4(
+            "tet".into(),
+            vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            vec![[0, 1, 2, 3]],
+            vec![1],
+            vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+            vec![1, 1, 1, 1],
+            vec![],
+            vec![],
+            HashMap::new(),
+        );
+        let current = vec![[1.0, 0.0, 0.0]; 4];
+        let field = solved_current_midpoint_biot_savart_field(&mesh, &[true], &current)
+            .expect("tet4 midpoint field");
+        assert_eq!(field.len(), 12);
+        assert!(field.iter().all(|value| value.is_finite()));
+        assert!(field[7].abs() > 0.0);
+
+        let reversed = solved_current_midpoint_biot_savart_field(
+            &mesh,
+            &[true],
+            &current
+                .iter()
+                .map(|value| [-value[0], -value[1], -value[2]])
+                .collect::<Vec<_>>(),
+        )
+        .expect("reversed tet4 midpoint field");
+        for (left, right) in field.iter().zip(reversed) {
+            assert!((left + right).abs() < 1.0e-14);
+        }
     }
 }
 

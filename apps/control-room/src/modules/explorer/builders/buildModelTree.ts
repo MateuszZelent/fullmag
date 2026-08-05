@@ -36,7 +36,10 @@ import {
   resolveMeshBuildFreshness,
   type MeshFreshnessState,
 } from "@/shared/domain/mesh/meshBuildFreshness";
-import { isFdmDomain } from "@/shared/domain/mesh/domainPresentation";
+import {
+  isFdmDomain,
+  isFemDomain,
+} from "@/shared/domain/mesh/domainPresentation";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -1083,7 +1086,7 @@ function fdmMeshPolicyNodes(
     {
       id: "model:mesh:magnetic-support",
       kind: "mesh.grid.magnetic-support",
-      label: "Structured Grid Extent",
+      label: "Magnetic Support",
       parentId: "model:mesh",
       badge: `${grid.shape.join(" × ")} cells`,
       icon: "layers",
@@ -1139,6 +1142,36 @@ function fdmMeshPolicyNodes(
     status,
     contextCommands: ["workspace.focus-selection"],
     children,
+  };
+}
+
+type ExplorerDomainLane = "fdm" | "fem" | "unresolved";
+
+function resolveExplorerDomainLane(
+  snapshot: ModelTreeSnapshot | null,
+): ExplorerDomainLane {
+  if (isFdmDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fdm") {
+    return "fdm";
+  }
+  if (isFemDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fem") {
+    return "fem";
+  }
+  return "unresolved";
+}
+
+function unresolvedMeshPolicyNodes(
+  presentationStatus: ModelTreeSnapshot["domainPresentationStatus"],
+): ExplorerNode {
+  const loading = presentationStatus === "loading";
+  return {
+    id: "model:mesh",
+    kind: "mesh.root",
+    label: "Mesh",
+    parentId: "model:session",
+    badge: loading ? "lane loading" : "lane unresolved",
+    icon: "mesh",
+    status: loading ? "queued" : "unavailable",
+    children: [],
   };
 }
 
@@ -1304,8 +1337,9 @@ export function buildModelTree(
   const objects = (snapshot?.objects ?? []).filter(
     (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
   );
-  const fdmDomain =
-    isFdmDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fdm";
+  const domainLane = resolveExplorerDomainLane(snapshot);
+  const fdmDomain = domainLane === "fdm";
+  const femDomain = domainLane === "fem";
   const fdmPresentation = isFdmDomain(snapshot?.domainPresentation)
     ? snapshot.domainPresentation
     : null;
@@ -1361,7 +1395,7 @@ export function buildModelTree(
               }],
             }]
           : []),
-      ] : [
+      ] : femDomain ? [
         {
           id: "model:airbox",
           kind: "airbox.root",
@@ -1455,7 +1489,7 @@ export function buildModelTree(
           icon: "mesh",
           status: boundaryFacesStatus,
         },
-      ],
+      ] : [],
     },
     {
       id: "model:objects",
@@ -1487,9 +1521,11 @@ export function buildModelTree(
   sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
 
   sessionChildren.push(
-    fdmDomain
+    domainLane === "fdm"
       ? fdmMeshPolicyNodes(fdmPresentation, snapshot?.domainMeta, snapshot?.domainPresentationStatus)
-      : meshPolicyNodes(snapshot?.mesh ?? null),
+      : domainLane === "fem"
+        ? meshPolicyNodes(snapshot?.mesh ?? null)
+        : unresolvedMeshPolicyNodes(snapshot?.domainPresentationStatus),
     buildStudyNodes(snapshot?.study ?? null),
   );
 

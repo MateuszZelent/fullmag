@@ -1,5 +1,6 @@
 //! GET /v2/sessions/current/status — thin LiveStatus summary.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -7,7 +8,9 @@ use axum::Json;
 use serde_json::Value;
 
 use crate::error::ApiError;
-use crate::router_v2::handlers::data::field_resolution::live_magnetization_available;
+use crate::router_v2::handlers::data::field_resolution::{
+    is_fdm_snapshot, live_magnetization_available,
+};
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;
 use crate::schemas::relaxation::{canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm};
 use crate::schemas::status::*;
@@ -164,7 +167,7 @@ pub(crate) fn build_live_status(
 
     let display = build_display_selection_response(&display_sel, &display_presentation);
 
-    let is_fem = snapshot.fem_mesh.is_some();
+    let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot);
     let fdm_grid_shape = (!is_fem).then(|| fdm_grid_shape(snapshot, latest.map(|step| step.grid)));
     let cell_count = if is_fem {
         snapshot
@@ -237,6 +240,7 @@ pub(crate) fn build_live_status(
         preview_2d: true,
         preview_3d: true,
         algorithms_available: relaxation_algorithms_available(),
+        active_lane: active_lane_capability_snapshot(snapshot, is_fem),
         transport_authoring: Some(crate::schemas::status::TransportAuthoringCapabilityMap {
             contract_version: "transport-authoring-capabilities.v1".into(),
             m1_one_way_steady: crate::schemas::status::TransportAuthoringCapability {
@@ -294,6 +298,539 @@ pub(crate) fn build_live_status(
     }
 }
 
+pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 29] = [
+    "grid_build",
+    "shared_mesh_build",
+    "field_quantity",
+    "vectors",
+    "surface_coloring",
+    "air_void_overlay",
+    "region_membership",
+    "hover_select_cell",
+    "interaction.exchange",
+    "interaction.demag",
+    "interaction.dmi",
+    "interaction.zeeman",
+    "interaction.current_transport",
+    "interaction.spin_torque",
+    "interaction.sot",
+    "interaction.stt",
+    "interaction.interfacial_dmi",
+    "interaction.bulk_dmi",
+    "interaction.uniaxial_anisotropy",
+    "interaction.cubic_anisotropy",
+    "interaction.oersted",
+    "interaction.oersted_field",
+    "interaction.magnetoelastic",
+    "interaction.thermal",
+    "study.relaxation",
+    "study.time_integration",
+    "study.eigenmodes",
+    "study.frequency_response",
+    "study.fft",
+];
+
+fn active_lane_capability_snapshot(
+    snapshot: &SessionStateResponse,
+    is_fem: bool,
+) -> ActiveLaneCapabilitySnapshot {
+    let authored = ActiveLaneIdentity {
+        backend: snapshot.session.requested_backend.clone(),
+        discretization: normalize_lane_discretization(
+            &snapshot.session.requested_backend,
+            if is_fem { "fem" } else { "fdm" },
+        ),
+        device: snapshot.session.authored_requested_device.clone(),
+        precision: snapshot.session.requested_precision.clone(),
+        mode: snapshot.session.requested_mode.clone(),
+    };
+    let requested = ActiveLaneIdentity {
+        backend: snapshot.session.requested_backend.clone(),
+        discretization: normalize_lane_discretization(
+            &snapshot.session.requested_backend,
+            if is_fem { "fem" } else { "fdm" },
+        ),
+        device: snapshot.session.requested_device.clone(),
+        precision: snapshot.session.requested_precision.clone(),
+        mode: snapshot.session.requested_mode.clone(),
+    };
+    let resolved = match (
+        snapshot.session.resolved_backend.as_ref(),
+        snapshot.session.resolved_device.as_ref(),
+        snapshot.session.resolved_precision.as_ref(),
+        snapshot.session.resolved_mode.as_ref(),
+    ) {
+        (Some(backend), Some(device), Some(precision), Some(mode)) => Some(ActiveLaneIdentity {
+            discretization: normalize_lane_discretization(
+                backend,
+                if is_fem { "fem" } else { "fdm" },
+            ),
+            backend: backend.clone(),
+            device: device.clone(),
+            precision: precision.clone(),
+            mode: mode.clone(),
+        }),
+        _ => None,
+    };
+    let fallback = snapshot
+        .session
+        .resolved_fallback
+        .as_ref()
+        .map(|value| ActiveLaneFallback {
+            occurred: value.occurred,
+            original_engine: value.original_engine.clone(),
+            fallback_engine: value.fallback_engine.clone(),
+            reason: value.reason.clone(),
+            message: value.message.clone(),
+        });
+
+    let Some(planner) = snapshot.capabilities.as_ref() else {
+        return ActiveLaneCapabilitySnapshot {
+            schema_version: "active-lane-capabilities.v2".into(),
+            authored,
+            requested,
+            resolved: None,
+            fallback,
+            source: ActiveLaneCapabilitySource {
+                kind: "unavailable".into(),
+                capability_profile_version: None,
+                engine_id: None,
+                authored_intent: "problem_ir.runtime_selection".into(),
+                effective_request: "session.runtime_resolution".into(),
+            },
+            qualification: ActiveLaneQualification {
+                status: "not_asserted".into(),
+                reason: "Planner capability snapshot is unavailable; scientific qualification is not asserted.".into(),
+            },
+            operations: stale_active_lane_operations(
+                "Planner capability snapshot is unavailable; operation support is stale.",
+                "planner_capability_snapshot",
+            ),
+        };
+    };
+
+    if resolved.is_none() {
+        return ActiveLaneCapabilitySnapshot {
+            schema_version: "active-lane-capabilities.v2".into(),
+            authored,
+            requested,
+            resolved: None,
+            fallback,
+            source: ActiveLaneCapabilitySource {
+                kind: "planner".into(),
+                capability_profile_version: Some(planner.capability_profile_version.clone()),
+                engine_id: Some(planner.engine_id.as_str().to_string()),
+                authored_intent: "problem_ir.runtime_selection".into(),
+                effective_request: "session.runtime_resolution".into(),
+            },
+            qualification: ActiveLaneQualification {
+                status: "not_asserted".into(),
+                reason: "Execution lane is unresolved; scientific qualification is not asserted."
+                    .into(),
+            },
+            operations: stale_active_lane_operations(
+                "Execution lane is unresolved; operation support cannot be selected from requested intent.",
+                "resolved_lane_identity",
+            ),
+        };
+    }
+
+    let discretization = resolved
+        .as_ref()
+        .map(|lane| lane.discretization.as_str())
+        .expect("resolved lane checked above");
+    let operations = active_lane_operations(planner, discretization);
+    ActiveLaneCapabilitySnapshot {
+        schema_version: "active-lane-capabilities.v2".into(),
+        authored,
+        requested,
+        resolved,
+        fallback,
+        source: ActiveLaneCapabilitySource {
+            kind: "planner".into(),
+            capability_profile_version: Some(planner.capability_profile_version.clone()),
+            engine_id: Some(planner.engine_id.as_str().to_string()),
+            authored_intent: "problem_ir.runtime_selection".into(),
+            effective_request: "session.runtime_resolution".into(),
+        },
+        qualification: ActiveLaneQualification {
+            status: "not_asserted".into(),
+            reason: "Planner capability availability is separate from workload-scoped scientific qualification evidence.".into(),
+        },
+        operations,
+    }
+}
+
+fn stale_active_lane_operations(
+    reason: &str,
+    requirement: &str,
+) -> BTreeMap<String, ActiveLaneOperationCapability> {
+    ACTIVE_LANE_OPERATION_IDS
+        .into_iter()
+        .map(|id| {
+            (
+                id.to_string(),
+                operation(ActiveLaneCapabilityState::Stale, reason, [requirement]),
+            )
+        })
+        .collect()
+}
+
+fn active_lane_operations(
+    planner: &fullmag_runner::BackendCapabilities,
+    discretization: &str,
+) -> BTreeMap<String, ActiveLaneOperationCapability> {
+    let is_fdm = discretization == "fdm";
+    let is_fem = discretization == "fem";
+    let has_fields =
+        !planner.preview_quantities.is_empty() || !planner.snapshot_quantities.is_empty();
+    let has_term = |terms: &[&str]| {
+        planner
+            .supported_terms
+            .iter()
+            .any(|term| terms.iter().any(|candidate| term == candidate))
+    };
+    let has_prefixed_term = |prefixes: &[&str]| {
+        planner.supported_terms.iter().any(|term| {
+            prefixes
+                .iter()
+                .any(|prefix| term == prefix || term.starts_with(&format!("{prefix}_")))
+        })
+    };
+    let supported = |reason: &str, requires: &[&str]| {
+        operation(
+            ActiveLaneCapabilityState::Supported,
+            reason,
+            requires.iter().copied(),
+        )
+    };
+    let unsupported = |reason: &str, requires: &[&str]| {
+        operation(
+            ActiveLaneCapabilityState::Unsupported,
+            reason,
+            requires.iter().copied(),
+        )
+    };
+    let semantic_only = |reason: &str, requires: &[&str]| {
+        operation(
+            ActiveLaneCapabilityState::SemanticOnly,
+            reason,
+            requires.iter().copied(),
+        )
+    };
+    let deferred = |reason: &str, requires: &[&str]| {
+        operation(
+            ActiveLaneCapabilityState::Deferred,
+            reason,
+            requires.iter().copied(),
+        )
+    };
+    let term_operation = |available: bool, term: &str| {
+        if available {
+            supported(
+                "The resolved planner lane advertises this interaction as executable.",
+                &[term],
+            )
+        } else {
+            unsupported(
+                "The resolved planner lane does not advertise this interaction.",
+                &[term],
+            )
+        }
+    };
+    let eigen_engine = planner.engine_id.as_str().contains("eigen");
+    let frequency_engine = planner.engine_id.as_str().contains("frequency_response");
+    let time_domain_engine = !eigen_engine && !frequency_engine;
+
+    BTreeMap::from([
+        (
+            "grid_build".into(),
+            if is_fdm {
+                deferred(
+                    "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.",
+                    &["discretization:fdm", "safe_replanning_lifecycle"],
+                )
+            } else {
+                unsupported(
+                    "Structured-grid refresh is not applicable to the resolved lane.",
+                    &["discretization:fdm"],
+                )
+            },
+        ),
+        (
+            "shared_mesh_build".into(),
+            if is_fem {
+                supported(
+                    "Shared-domain mesh build is owned by the resolved FEM lane.",
+                    &["discretization:fem"],
+                )
+            } else {
+                unsupported(
+                    "Shared-domain mesh build is not applicable to the resolved lane.",
+                    &["discretization:fem"],
+                )
+            },
+        ),
+        (
+            "field_quantity".into(),
+            if has_fields {
+                supported(
+                    "The planner advertises field quantities for the resolved lane.",
+                    &["planner:field_quantities"],
+                )
+            } else {
+                unsupported(
+                    "The planner advertises no field quantities for the resolved lane.",
+                    &["planner:field_quantities"],
+                )
+            },
+        ),
+        (
+            "vectors".into(),
+            if has_fields {
+                supported(
+                    "Vector rendering can consume planner-advertised field quantities.",
+                    &["field_quantity"],
+                )
+            } else {
+                unsupported(
+                    "Vector rendering requires a planner-advertised field quantity.",
+                    &["field_quantity"],
+                )
+            },
+        ),
+        (
+            "surface_coloring".into(),
+            if has_fields {
+                supported(
+                    "Surface coloring can consume planner-advertised field quantities.",
+                    &["field_quantity"],
+                )
+            } else {
+                unsupported(
+                    "Surface coloring requires a planner-advertised field quantity.",
+                    &["field_quantity"],
+                )
+            },
+        ),
+        (
+            "air_void_overlay".into(),
+            semantic_only(
+                "Air/void presentation semantics exist, but the planner profile does not publish current domain-resource readiness.",
+                &["domain_metadata:compatible"],
+            ),
+        ),
+        (
+            "region_membership".into(),
+            semantic_only(
+                "Region-membership semantics exist, but the planner profile does not publish current membership-resource readiness.",
+                &["domain_metadata:compatible", "region_membership_resource:compatible"],
+            ),
+        ),
+        (
+            "hover_select_cell".into(),
+            if is_fdm {
+                supported(
+                    "Cell hover and selection are supported for structured FDM domains.",
+                    &["discretization:fdm", "region_membership"],
+                )
+            } else {
+                unsupported(
+                    "Cell hover and selection are specific to structured FDM domains.",
+                    &["discretization:fdm"],
+                )
+            },
+        ),
+        (
+            "interaction.exchange".into(),
+            term_operation(has_term(&["exchange"]), "interaction:exchange"),
+        ),
+        (
+            "interaction.demag".into(),
+            term_operation(
+                !planner.supported_demag_realizations.is_empty() || has_prefixed_term(&["demag"]),
+                "interaction:demag",
+            ),
+        ),
+        (
+            "interaction.dmi".into(),
+            term_operation(
+                has_term(&["interfacial_dmi", "bulk_dmi"]),
+                "interaction:dmi",
+            ),
+        ),
+        (
+            "interaction.zeeman".into(),
+            term_operation(has_term(&["zeeman"]), "interaction:zeeman"),
+        ),
+        (
+            "interaction.current_transport".into(),
+            term_operation(
+                has_term(&["current_transport", "stt", "sot", "oersted"]),
+                "interaction:current_transport",
+            ),
+        ),
+        (
+            "interaction.spin_torque".into(),
+            term_operation(has_term(&["stt", "sot"]), "interaction:spin_torque"),
+        ),
+        (
+            "interaction.sot".into(),
+            term_operation(has_term(&["sot"]), "interaction:sot"),
+        ),
+        (
+            "interaction.stt".into(),
+            term_operation(has_term(&["stt"]), "interaction:stt"),
+        ),
+        (
+            "interaction.interfacial_dmi".into(),
+            term_operation(
+                has_term(&["interfacial_dmi"]),
+                "interaction:interfacial_dmi",
+            ),
+        ),
+        (
+            "interaction.bulk_dmi".into(),
+            term_operation(has_term(&["bulk_dmi"]), "interaction:bulk_dmi"),
+        ),
+        (
+            "interaction.uniaxial_anisotropy".into(),
+            term_operation(
+                has_term(&["uniaxial_anisotropy"]),
+                "interaction:uniaxial_anisotropy",
+            ),
+        ),
+        (
+            "interaction.cubic_anisotropy".into(),
+            term_operation(
+                has_term(&["cubic_anisotropy"]),
+                "interaction:cubic_anisotropy",
+            ),
+        ),
+        (
+            "interaction.oersted".into(),
+            term_operation(has_term(&["oersted"]), "interaction:oersted"),
+        ),
+        (
+            "interaction.oersted_field".into(),
+            term_operation(has_term(&["oersted"]), "interaction:oersted_field"),
+        ),
+        (
+            "interaction.magnetoelastic".into(),
+            term_operation(has_term(&["magnetoelastic"]), "interaction:magnetoelastic"),
+        ),
+        (
+            "interaction.thermal".into(),
+            term_operation(has_term(&["thermal"]), "interaction:thermal"),
+        ),
+        (
+            "study.relaxation".into(),
+            if time_domain_engine {
+                supported(
+                    "The resolved planner capability profile is a time-domain lane.",
+                    &["planner:time_domain_lane"],
+                )
+            } else {
+                unsupported(
+                    "The resolved planner capability profile is not a time-domain lane.",
+                    &["planner:time_domain_lane"],
+                )
+            },
+        ),
+        (
+            "study.time_integration".into(),
+            if time_domain_engine {
+                supported(
+                    "The resolved planner capability profile is a time-domain lane.",
+                    &["planner:time_domain_lane"],
+                )
+            } else {
+                unsupported(
+                    "The resolved planner capability profile is not a time-domain lane.",
+                    &["planner:time_domain_lane"],
+                )
+            },
+        ),
+        (
+            "study.eigenmodes".into(),
+            if eigen_engine || planner.supports_coupled_eigenmodes {
+                supported(
+                    "The resolved planner lane advertises eigenmode execution.",
+                    &["planner:eigenmodes"],
+                )
+            } else {
+                semantic_only("Eigenmode authoring exists, but the resolved planner lane does not advertise executable support.", &["planner:eigenmodes"])
+            },
+        ),
+        (
+            "study.frequency_response".into(),
+            if frequency_engine || planner.supports_frequency_response {
+                supported(
+                    "The resolved planner lane advertises frequency-response execution.",
+                    &["planner:frequency_response"],
+                )
+            } else {
+                semantic_only("Frequency-response authoring exists, but the resolved planner lane does not advertise executable support.", &["planner:frequency_response"])
+            },
+        ),
+        (
+            "study.fft".into(),
+            if has_fields {
+                supported(
+                    "FFT post-processing can consume planner-advertised field quantities.",
+                    &["field_quantity"],
+                )
+            } else {
+                unsupported(
+                    "FFT post-processing requires planner-advertised field quantities.",
+                    &["field_quantity"],
+                )
+            },
+        ),
+    ])
+}
+
+fn operation(
+    state: ActiveLaneCapabilityState,
+    reason: &str,
+    requires: impl IntoIterator<Item = impl Into<String>>,
+) -> ActiveLaneOperationCapability {
+    use crate::schemas::status::ActiveLaneCapabilityReasonCode;
+
+    let reason_code = match state {
+        ActiveLaneCapabilityState::Supported => ActiveLaneCapabilityReasonCode::CapabilitySupported,
+        ActiveLaneCapabilityState::SemanticOnly => {
+            ActiveLaneCapabilityReasonCode::CapabilitySemanticOnly
+        }
+        ActiveLaneCapabilityState::Deferred => ActiveLaneCapabilityReasonCode::CapabilityDeferred,
+        ActiveLaneCapabilityState::Unsupported => {
+            ActiveLaneCapabilityReasonCode::CapabilityUnsupported
+        }
+        ActiveLaneCapabilityState::Stale => ActiveLaneCapabilityReasonCode::CapabilityStale,
+    };
+    ActiveLaneOperationCapability {
+        state,
+        reason_code,
+        reason: reason.into(),
+        requires: requires.into_iter().map(Into::into).collect(),
+    }
+}
+
+fn normalize_lane_discretization(value: &str, fallback: &str) -> String {
+    let normalized = value.to_ascii_lowercase();
+    if normalized == "auto" {
+        "auto".into()
+    } else if normalized.contains("hybrid") {
+        "hybrid".into()
+    } else if normalized.contains("fem") {
+        "fem".into()
+    } else if normalized.contains("fdm") {
+        "fdm".into()
+    } else {
+        fallback.into()
+    }
+}
+
 fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<RelaxationAlgorithm> {
     metadata
         .and_then(|value| value.get("relaxation_algorithm"))
@@ -309,7 +846,7 @@ fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<Relaxa
 }
 
 pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generation_id: u64) -> u64 {
-    if snapshot.fem_mesh.is_some() {
+    if snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot) {
         snapshot.mesh_revision
     } else {
         domain_generation_id
@@ -317,13 +854,15 @@ pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generati
 }
 
 pub(crate) fn domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
-    if let Some(generation_id) = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|m| m.generation_id.as_deref())
-        .and_then(|g| g.parse::<u64>().ok())
-    {
-        return generation_id;
+    if !is_fdm_snapshot(snapshot) {
+        if let Some(generation_id) = snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|m| m.generation_id.as_deref())
+            .and_then(|g| g.parse::<u64>().ok())
+        {
+            return generation_id;
+        }
     }
 
     fdm_domain_generation_id(snapshot)
@@ -337,12 +876,31 @@ pub(crate) fn fdm_grid_shape(
         return shape;
     }
 
-    fdm_artifact_layout(snapshot)
-        .and_then(|layout| {
-            layout
-                .get("grid_cells")
-                .or_else(|| layout.get("grid_shape"))
-                .or_else(|| layout.get("shape"))
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| {
+            metadata
+                .get("artifact_layout")
+                .filter(|layout| {
+                    layout
+                        .get("backend")
+                        .and_then(Value::as_str)
+                        .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"))
+                })
+                .and_then(|layout| {
+                    layout
+                        .get("grid_cells")
+                        .or_else(|| layout.get("grid_shape"))
+                        .or_else(|| layout.get("shape"))
+                })
+                .or_else(|| {
+                    metadata
+                        .get("execution_plan")
+                        .and_then(|plan| plan.get("backend_plan"))
+                        .and_then(|backend_plan| backend_plan.get("grid"))
+                        .and_then(|grid| grid.get("cells"))
+                })
         })
         .and_then(value_array3_u32_positive)
         .unwrap_or([0, 0, 0])

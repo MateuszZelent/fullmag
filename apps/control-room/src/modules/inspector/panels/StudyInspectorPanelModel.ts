@@ -7,6 +7,7 @@ import type {
   SolverStatusResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
+import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 import {
   apmFromTesla,
   formatScientific,
@@ -129,7 +130,13 @@ export interface StudyInspectorModel {
 }
 
 export interface StudyRuntimeProvenance {
-  requested: {
+  authored: {
+    backend: string;
+    device: string;
+    mode: string;
+    precision: string;
+  };
+  effective: {
     backend: string;
     device: string;
     mode: string;
@@ -150,9 +157,14 @@ export interface StudyRuntimeProvenance {
     reason: string;
     message: string;
   };
+  sources: {
+    authored: string;
+    effective: string;
+  };
 }
 
 interface ResolveStudyInspectorModelInput {
+  activeLane?: ActiveLaneCapabilitySnapshot | null;
   commandQueue?: CommandQueueStatusResource | null;
   currentRun: CurrentRunResource | null;
   energyHistory?: SolverEnergyHistoryResource | null;
@@ -196,6 +208,7 @@ export function studySnapshotFromScene(
 }
 
 export function resolveStudyInspectorModel({
+  activeLane,
   commandQueue,
   currentRun,
   energyHistory,
@@ -333,7 +346,7 @@ export function resolveStudyInspectorModel({
       relaxTimeStop,
       relaxTorqueStop,
       runId: currentRun?.run_id ?? "none",
-      runtimeProvenance: studyRuntimeProvenanceFromCurrentRun(currentRun),
+      runtimeProvenance: studyRuntimeProvenanceFromCurrentRun(currentRun, activeLane),
       state:
         solverStatus?.runtime_state ??
         currentRun?.status ??
@@ -346,17 +359,22 @@ export function resolveStudyInspectorModel({
 }
 
 /**
- * Projects the execution request and the runtime's resolved execution without
- * guessing when resolution is absent. `CurrentRunResource` is the sole source
- * for this read-only provenance surface; authoring defaults such as `auto` are
- * never promoted to resolved values.
+ * Projects authored intent, the effective request after launch overrides, and
+ * the resolved execution without inferring one axis from another.
  */
 export function studyRuntimeProvenanceFromCurrentRun(
   currentRun: CurrentRunResource | null | undefined,
+  activeLane?: ActiveLaneCapabilitySnapshot | null,
 ): StudyRuntimeProvenance {
-  if (!currentRun) {
+  if (!currentRun && !activeLane) {
     return {
-      requested: {
+      authored: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+      },
+      effective: {
         backend: "not loaded",
         device: "not loaded",
         mode: "not loaded",
@@ -377,37 +395,52 @@ export function studyRuntimeProvenanceFromCurrentRun(
         reason: "not loaded",
         message: "Current run provenance is not loaded.",
       },
+      sources: {
+        authored: "not loaded",
+        effective: "not loaded",
+      },
     };
   }
 
-  const fallback = currentRun.resolved_fallback;
+  const unavailable = currentRun ? "not available" : "not loaded";
+  const unresolved = currentRun ? "unresolved" : "not loaded";
+  const authored = activeLane?.authored;
+  const effective = activeLane?.requested;
+  const resolved = activeLane?.resolved;
+  const fallback = currentRun?.resolved_fallback;
   const fallbackOccurred = fallback?.occurred === true;
   return {
-    requested: {
-      backend: runtimeProvenanceValue(currentRun.requested_backend, "not available"),
-      device: runtimeProvenanceValue(currentRun.requested_device, "not available"),
-      mode: runtimeProvenanceValue(currentRun.requested_mode, "not available"),
+    authored: {
+      backend: runtimeProvenanceValue(authored?.backend, unavailable),
+      device: runtimeProvenanceValue(authored?.device, unavailable),
+      mode: runtimeProvenanceValue(authored?.mode, unavailable),
+      precision: runtimeProvenanceValue(authored?.precision, unavailable),
+    },
+    effective: {
+      backend: runtimeProvenanceValue(effective?.backend ?? currentRun?.requested_backend, unavailable),
+      device: runtimeProvenanceValue(effective?.device ?? currentRun?.requested_device, unavailable),
+      mode: runtimeProvenanceValue(effective?.mode ?? currentRun?.requested_mode, unavailable),
       precision: runtimeProvenanceValue(
-        currentRun.requested_precision,
-        "not available",
+        effective?.precision ?? currentRun?.requested_precision,
+        unavailable,
       ),
     },
     resolved: {
-      backend: runtimeProvenanceValue(currentRun.resolved_backend, "unresolved"),
-      device: runtimeProvenanceValue(currentRun.resolved_device, "unresolved"),
-      mode: runtimeProvenanceValue(currentRun.resolved_mode, "unresolved"),
+      backend: runtimeProvenanceValue(resolved?.backend ?? currentRun?.resolved_backend, unresolved),
+      device: runtimeProvenanceValue(resolved?.device ?? currentRun?.resolved_device, unresolved),
+      mode: runtimeProvenanceValue(resolved?.mode ?? currentRun?.resolved_mode, unresolved),
       precision: runtimeProvenanceValue(
-        currentRun.resolved_precision,
-        "unresolved",
+        resolved?.precision ?? currentRun?.resolved_precision,
+        unresolved,
       ),
       runtimeFamily: runtimeProvenanceValue(
-        currentRun.resolved_runtime_family,
-        "unresolved",
+        currentRun?.resolved_runtime_family,
+        unresolved,
       ),
-      engine: runtimeProvenanceValue(currentRun.resolved_engine_id, "unresolved"),
+      engine: runtimeProvenanceValue(currentRun?.resolved_engine_id, unresolved),
     },
     fallback: {
-      status: fallbackOccurred ? "occurred" : "none",
+      status: currentRun ? (fallbackOccurred ? "occurred" : "none") : "not loaded",
       originalEngine: runtimeProvenanceValue(
         fallback?.original_engine,
         fallback ? "not provided" : "not applicable",
@@ -424,6 +457,10 @@ export function studyRuntimeProvenanceFromCurrentRun(
         fallback?.message,
         fallback ? "not provided" : "No fallback reported.",
       ),
+    },
+    sources: {
+      authored: runtimeProvenanceValue(activeLane?.source.authored_intent, unavailable),
+      effective: runtimeProvenanceValue(activeLane?.source.effective_request, unavailable),
     },
   };
 }

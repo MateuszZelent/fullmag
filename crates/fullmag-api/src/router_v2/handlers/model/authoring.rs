@@ -3641,6 +3641,7 @@ fn apply_create_object_transaction(
         regions: Vec::new(),
         allocated_region_ids: Vec::new(),
         material_parameter_fields: Vec::new(),
+        absorbing_boundary: None,
         notes: None,
         visible: true,
         locked: false,
@@ -4358,6 +4359,16 @@ fn apply_object_patch(
         object.transform = serde_json::from_value(transform_value).map_err(|error| {
             ApiError::bad_request(format!("invalid object transform payload: {error}"))
         })?;
+        mesh_dirty = true;
+    }
+    if let Some(boundary_value) = req.absorbing_boundary {
+        object.absorbing_boundary = boundary_value
+            .map(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    ApiError::bad_request(format!("invalid absorbing boundary payload: {error}"))
+                })
+            })
+            .transpose()?;
         mesh_dirty = true;
     }
     if mesh_dirty {

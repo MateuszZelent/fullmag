@@ -74,6 +74,10 @@ import {
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import {
+  resolveActiveLaneOperation,
+  type ActiveLaneCapabilitySnapshot,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import type {
   Selection,
   VisualizationMeshPartLike,
@@ -202,6 +206,7 @@ const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
 
 function physicsInteractionMenu(
   discretization: InteractionDiscretization,
+  activeLane: ActiveLaneCapabilitySnapshot | null = null,
 ): RibbonMenuNode[] {
   const specs = interactionSpecsForDiscretization(discretization);
   if (specs.length === 0) {
@@ -218,13 +223,22 @@ function physicsInteractionMenu(
   }
   return [
     { type: "label", id: "physics-interactions:label", label: "Interactions" },
-    ...specs.map((spec) => ({
-      type: "item" as const,
-      id: `physics-interactions:${spec.id}`,
-      label: spec.label,
-      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
-      commandInput: { interactionId: spec.id },
-    })),
+    ...specs.map((spec) => {
+      const operation = resolveActiveLaneOperation(
+        activeLane,
+        `interaction.${spec.id}`,
+      );
+      return {
+        type: "item" as const,
+        id: `physics-interactions:${spec.id}`,
+        label: spec.label,
+        shortcut: operation.enabled ? undefined : operation.state,
+        tooltip: operation.enabled ? undefined : operation.reason,
+        disabled: !operation.enabled,
+        commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+        commandInput: { interactionId: spec.id },
+      };
+    }),
   ];
 }
 
@@ -319,7 +333,7 @@ const geometryTab: RibbonTabContent = {
       actions: [
         { id: "builder-build-geometry", icon: icon(Hammer),      label: "Geometry Synced", disabled: true, iconColor: "text-emerald-400" },
         { id: "geometry.commit-object-draft", icon: icon(Save),  label: "Apply Draft",                  iconColor: "text-emerald-400" },
-        { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build FEM Mesh",               iconColor: "text-amber-400" },
+        { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build Mesh",                   iconColor: "text-amber-400" },
         { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",      disabled: true, iconColor: "text-emerald-400" },
       ],
     },
@@ -689,6 +703,7 @@ const automationTab: RibbonTabContent = {
 };
 
 type RibbonSessionStatus = {
+  capabilities?: Pick<LiveStatusResource["capabilities"], "active_lane">;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -769,7 +784,13 @@ function buildPhysicsTabContent(
             ...group,
             actions: group.actions.map((action) =>
               action.id === "physics-interactions"
-                ? { ...action, menu: physicsInteractionMenu(discretization) }
+                ? {
+                    ...action,
+                    menu: physicsInteractionMenu(
+                      discretization,
+                      context.sessionStatus?.capabilities?.active_lane ?? null,
+                    ),
+                  }
                 : action,
             ),
           }
@@ -1396,12 +1417,24 @@ function applyCommandStateToMenuNode(
 
   if (node.type === "item") {
     const cmdId = node.commandId ?? node.id;
+    const nodeCommandContext = {
+      ...commandContext,
+      input: node.commandInput,
+    };
     const disabledByMissingCommand = shouldDisableMissingCommand(cmdId, context);
-    const disabledByCommand = isCommandDisabled(cmdId, context, commandContext);
+    const disabledByCommand = isCommandDisabled(
+      cmdId,
+      context,
+      nodeCommandContext,
+    );
+    const disabledReason = disabledByCommand
+      ? context.commands?.get(cmdId)?.disabledReason?.(nodeCommandContext)
+      : null;
 
     return {
       ...node,
       disabled: node.disabled || disabledByMissingCommand || disabledByCommand,
+      tooltip: node.tooltip ?? disabledReason ?? undefined,
     };
   }
 
@@ -1961,7 +1994,15 @@ function buildTopographyAction({
   commandContext = { source: "ribbon" },
   commands,
 }: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
-  const enabled = Boolean(
+  const commandId = "viewport-3d.fdm-topography-toggle";
+  const available = Boolean(
+    commands?.isEnabled(commandId, commandContext),
+  );
+  const disabledReason = available
+    ? null
+    : commands?.get(commandId)?.disabledReason?.(commandContext) ??
+      "Voxel topography is unavailable for this session.";
+  const enabled = available && Boolean(
     commands?.isActive("viewport-3d.fdm-topography-toggle", commandContext),
   );
   const component =
@@ -1977,7 +2018,9 @@ function buildTopographyAction({
     icon: icon(Sparkles),
     label: "Topography",
     active: enabled,
+    disabled: !available,
     iconColor: "text-amber-300",
+    tooltip: disabledReason ?? undefined,
     menu: [
       { type: "label", id: "topography:header", label: "Topography", badge: "FDM" },
       {

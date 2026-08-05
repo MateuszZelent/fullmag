@@ -15,10 +15,17 @@ interface ResourcePauseRuntimeStore {
 
 const VIEWPORT_3D_MODULE_ID = "viewport-3d";
 const FIELD_MAP_MODULE_ID = "field-map";
-const PLANAR_FIELD_PREFIX =
-  DATA_PLANAR_FIELD_META_PATH.split("{quantity_id}")[0];
+const PLANAR_FIELD_SEGMENT = "/planar-monitors/";
 const FIELD_VECTOR_PREFIX = DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[0];
 const FIELD_VECTOR_SUFFIX = DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[1];
+
+function isPlanarFieldResourceKey(resourceKey: ResourceKey): boolean {
+  const path = resourcePath(resourceKey);
+  return (
+    path.startsWith(DATA_PLANAR_FIELD_META_PATH.split("{quantity_id}")[0]) &&
+    path.includes(PLANAR_FIELD_SEGMENT)
+  );
+}
 
 function resourcePath(resourceKey: ResourceKey): string {
   return resourceKey.split("?")[0];
@@ -70,7 +77,7 @@ export function createViewport3DInactiveResourcePauseController({
       activeViewportMainModuleId !== FIELD_MAP_MODULE_ID;
     if (shouldPausePlanar && !releasePlanarPause) {
       releasePlanarPause = runtimeStore.beginPauseMatching((resourceKey) =>
-        resourceKey.startsWith(PLANAR_FIELD_PREFIX),
+        isPlanarFieldResourceKey(resourceKey),
       );
     } else if (!shouldPausePlanar && releasePlanarPause) {
       releasePlanarPause();

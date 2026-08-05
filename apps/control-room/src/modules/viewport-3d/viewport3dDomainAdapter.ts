@@ -3,7 +3,10 @@ import type {
   FdmRegionMembershipResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
-import type { DecodedTopology } from "@/kernel/api/codecs";
+import type {
+  DecodedFdmRegionMembership,
+  DecodedTopology,
+} from "@/kernel/api/codecs";
 import {
   normalizeManifestRenderableCarriers,
   type ManifestCarrierSourceKind,
@@ -27,6 +30,7 @@ import {
   type DomainResourceState,
   type FdmUniverseOutsideMagneticSupport,
 } from "@/shared/domain/mesh/domainPresentation";
+import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampling";
 
 export {
   buildDomainPresentation,
@@ -59,6 +63,25 @@ export function adaptDomainPresentation(
   input: Viewport3DDomainPresentationInput,
 ): DomainPresentation {
   return buildDomainPresentation(input);
+}
+
+export function resolveViewport3DFdmRealizedRegionIds(
+  presentation: DomainPresentation | null,
+  binary: DecodedFdmRegionMembership | null,
+): Uint32Array | null | undefined {
+  if (!presentation || presentation.discretization !== "fdm") return undefined;
+  if (presentation.resourceStatus === "authoring-grid") return undefined;
+  if (presentation.resourceStatus !== "realized" || !binary) return null;
+  const grid = presentation.fdmGrid;
+  if (
+    binary.semanticStatus !== "canonical" ||
+    binary.gridFingerprint !== grid.gridFingerprint ||
+    binary.cellCount !== grid.totalCells ||
+    binary.counts.some((count, axis) => count !== grid.shape[axis])
+  ) {
+    return null;
+  }
+  return binary.regionIds;
 }
 
 type MeshPart = NonNullable<
@@ -129,6 +152,13 @@ export function adaptFdmDomainMeta(
     Math.max(meta.grid.shape[1] ?? 1, 1),
     Math.max(meta.grid.shape[2] ?? 1, 1),
   ];
+  const shapeCellCount = shape[0] * shape[1] * shape[2];
+  if (
+    meta.counts.cells != null &&
+    meta.counts.cells !== shapeCellCount
+  ) {
+    return null;
+  }
   const bounds = resolveDomainBounds(meta);
   const fallbackSize = bounds?.size ?? [1, 1, 1];
   const fallbackOrigin: [number, number, number] = bounds
@@ -148,26 +178,60 @@ export function adaptFdmDomainMeta(
     Math.max(meta.grid.spacing[1] ?? fallbackSize[1] / shape[1], 1e-18),
     Math.max(meta.grid.spacing[2] ?? fallbackSize[2] / shape[2], 1e-18),
   ];
-  const totalCells = Math.max(
-    meta.counts.cells ?? shape[0] * shape[1] * shape[2],
-    0,
-  );
-  const safeBudget = Math.max(Math.floor(displayCellBudget), 1);
-  const displayCellCount = totalCells === 0 ? 0 : Math.min(totalCells, safeBudget);
+  const sampling = resolveFdmDisplaySampling(shapeCellCount, displayCellBudget);
 
   return {
     bounds,
-    displayCellBudget: safeBudget,
-    displayCellCount,
+    displayCellBudget: sampling.budget,
+    displayCellCount: sampling.displaySamples,
     kind: "fdm-grid",
     origin,
     shape,
     spacing,
-    stride:
-      displayCellCount === 0
-        ? 1
-        : Math.max(1, Math.ceil(totalCells / displayCellCount)),
-    totalCells,
+    stride: sampling.stride,
+    totalCells: sampling.total,
+  };
+}
+
+export function adaptFdmDomainPresentation(
+  presentation: DomainPresentation | null,
+  displayCellBudget: number,
+): FdmGridRenderDomain | null {
+  if (
+    !presentation ||
+    presentation.discretization !== "fdm" ||
+    !presentation.fdmGrid.descriptorCellCountCompatible
+  ) {
+    return null;
+  }
+  const grid = presentation.fdmGrid;
+  const min = presentation.bounds.min;
+  const max = presentation.bounds.max;
+  const size: [number, number, number] = [
+    Math.max((max[0] ?? 0) - (min[0] ?? 0), 0),
+    Math.max((max[1] ?? 0) - (min[1] ?? 0), 0),
+    Math.max((max[2] ?? 0) - (min[2] ?? 0), 0),
+  ];
+  const bounds: Viewport3DBounds = {
+    center: [
+      ((min[0] ?? 0) + (max[0] ?? 0)) / 2,
+      ((min[1] ?? 0) + (max[1] ?? 0)) / 2,
+      ((min[2] ?? 0) + (max[2] ?? 0)) / 2,
+    ],
+    radius: Math.hypot(...size) / 2,
+    size,
+  };
+  const sampling = resolveFdmDisplaySampling(grid.totalCells, displayCellBudget);
+  return {
+    bounds,
+    displayCellBudget: sampling.budget,
+    displayCellCount: sampling.displaySamples,
+    kind: "fdm-grid",
+    origin: [...grid.origin],
+    shape: [...grid.shape],
+    spacing: [...grid.spacing],
+    stride: sampling.stride,
+    totalCells: sampling.total,
   };
 }
 

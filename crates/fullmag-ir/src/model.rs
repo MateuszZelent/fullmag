@@ -459,6 +459,49 @@ pub struct MagnetIR {
     pub region: String,
     pub material: String,
     pub initial_magnetization: Option<InitialMagnetizationIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absorbing_boundary: Option<AbsorbingBoundaryLayerIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AbsorbingBoundaryLayerIR {
+    pub total_width_m: f64,
+    pub ramp_width_m: f64,
+    pub max_damping: f64,
+    pub faces: Vec<AbsorbingBoundaryFaceIR>,
+    pub profile: AbsorbingBoundaryProfileIR,
+    pub frame: AbsorbingBoundaryFrameIR,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AbsorbingBoundaryFaceIR {
+    #[serde(rename = "x+")]
+    XPlus,
+    #[serde(rename = "x-")]
+    XMinus,
+    #[serde(rename = "y+")]
+    YPlus,
+    #[serde(rename = "y-")]
+    YMinus,
+    #[serde(rename = "z+")]
+    ZPlus,
+    #[serde(rename = "z-")]
+    ZMinus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AbsorbingBoundaryProfileIR {
+    Linear,
+    Quadratic,
+    Smootherstep,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AbsorbingBoundaryFrameIR {
+    Object,
+    Universe,
 }
 
 // ── Initial magnetization / texture ──────────────────────────────────────────

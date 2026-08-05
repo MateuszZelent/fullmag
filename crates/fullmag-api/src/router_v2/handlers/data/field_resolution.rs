@@ -1,5 +1,6 @@
 use crate::field_slice::{FdmField, FemField};
 use crate::preview::quantity_spatial_domain;
+use crate::router_v2::handlers::sessions::status::fdm_grid_shape;
 use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::SessionStateResponse;
 use fullmag_runner::FemMeshPayload;
@@ -35,6 +36,11 @@ pub(super) fn field_point_count_matches_current_domain(
     quantity_id: &str,
     point_count: usize,
 ) -> bool {
+    if is_fdm_snapshot(snapshot) {
+        return fdm_grid_point_count(snapshot)
+            .is_some_and(|expected_count| point_count == expected_count);
+    }
+
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return true;
     };
@@ -46,6 +52,64 @@ pub(super) fn field_point_count_matches_current_domain(
     }
     quantity_spatial_domain(quantity_id) == "magnetic_only"
         && fem_magnetic_node_count(mesh).is_some_and(|count| point_count == count)
+}
+
+fn fdm_grid_point_count(snapshot: &SessionStateResponse) -> Option<usize> {
+    let latest_grid = snapshot
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.grid);
+    let grid = fdm_grid_shape(snapshot, latest_grid);
+    grid.iter()
+        .copied()
+        .try_fold(1u64, |count, dimension| {
+            (dimension > 0).then_some(count.saturating_mul(u64::from(dimension)))
+        })
+        .and_then(|count| usize::try_from(count).ok())
+}
+
+pub(crate) fn is_fdm_snapshot(snapshot: &SessionStateResponse) -> bool {
+    let backend_kind = snapshot.metadata.as_ref().and_then(|metadata| {
+        metadata
+            .get("execution_plan")
+            .and_then(|plan| plan.get("backend_plan"))
+            .and_then(|plan| plan.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                metadata
+                    .get("artifact_layout")
+                    .and_then(|layout| layout.get("backend"))
+                    .and_then(serde_json::Value::as_str)
+            })
+    });
+    if let Some(kind) = backend_kind {
+        return kind.eq_ignore_ascii_case("fdm");
+    }
+    // A present FEM solver mesh is authoritative until an explicit FDM plan
+    // replaces it. This keeps legacy FEM snapshots from being reclassified
+    // merely because their test/session manifest requested a CPU-FDM lane.
+    if snapshot.fem_mesh.is_some() {
+        return false;
+    }
+    if let Some(resolved_backend) = snapshot.session.resolved_backend.as_deref() {
+        if resolved_backend.to_ascii_lowercase().contains("fem") {
+            return false;
+        }
+        if resolved_backend.to_ascii_lowercase().contains("fdm") {
+            return fdm_grid_point_count(snapshot).is_some();
+        }
+    }
+    let backend_requested_fdm = snapshot
+        .session
+        .requested_backend
+        .to_ascii_lowercase()
+        .contains("fdm")
+        || snapshot
+            .session
+            .resolved_backend
+            .as_deref()
+            .is_some_and(|backend| backend.to_ascii_lowercase().contains("fdm"));
+    backend_requested_fdm && fdm_grid_point_count(snapshot).is_some()
 }
 
 fn visit_json_field_values(raw: &serde_json::Value, mut visit: impl FnMut(f64)) -> usize {

@@ -2267,6 +2267,7 @@ pub(crate) fn requested_runtime_selection(
     SessionRuntimeSelection {
         requested_backend: requested_backend.to_string(),
         explicit_selection,
+        authored_requested_device: requested_device.to_string(),
         requested_device: requested_device.to_string(),
         requested_precision: requested_precision.to_string(),
         requested_mode: requested_mode.to_string(),
@@ -2307,6 +2308,7 @@ fn session_runtime_selection_for_problem(
     );
     match fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n) {
         Ok(resolved) => {
+            selection.requested_device = resolved.requested_device;
             selection.requested_cpu_threads = resolved
                 .requested_cpu_threads
                 .and_then(|threads| u32::try_from(threads).ok())
@@ -5310,6 +5312,7 @@ pub(crate) fn build_session_manifest(
         problem_name: problem_name.to_string(),
         requested_backend: runtime.requested_backend.clone(),
         explicit_selection: runtime.explicit_selection,
+        authored_requested_device: runtime.authored_requested_device.clone(),
         requested_device: runtime.requested_device.clone(),
         requested_precision: runtime.requested_precision.clone(),
         requested_mode: runtime.requested_mode.clone(),
@@ -8184,18 +8187,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
             let synthetic_completed_at_unix_ms = unix_time_millis()?;
             live_workspace.update(|state| {
-                state.session.status = if final_update.finished {
-                    "completed".to_string()
-                } else {
-                    "running".to_string()
-                };
-                state.run = running_run_manifest_from_update(
+                // Synthetic stages still produce a real magnetization snapshot.  Route the
+                // terminal update through the same ingest path as solver callbacks so the
+                // field resource carries the synthetic stage's source step/revision instead of
+                // retaining an older preview (for example source_step=0 after a step-342 run).
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
                     &run_id,
                     &session_id,
                     &artifact_dir,
-                    &final_update,
+                    final_update,
+                    true,
                 );
-                state.live_state = live_state_manifest_from_update(final_update.clone());
                 state.stage_execution = Some(scripted_stage_execution_state(
                     stage_count,
                     stage_index,
@@ -8208,7 +8211,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     None,
                     stage.incoming_transition.as_ref(),
                 ));
-                set_latest_scalar_row_if_due(state, &final_update);
             });
 
             if matches!(action, ResolvedScriptStageAction::LoadState { .. }) {
@@ -10842,6 +10844,7 @@ mod tests {
             name: "film".to_string(),
             region: "film_region".to_string(),
             material: "mat".to_string(),
+            absorbing_boundary: None,
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
@@ -11141,6 +11144,7 @@ mod tests {
                 problem_name: "test".to_string(),
                 requested_backend: "fem".to_string(),
                 explicit_selection: true,
+                authored_requested_device: "cpu".to_string(),
                 requested_device: "cpu".to_string(),
                 requested_precision: "double".to_string(),
                 requested_mode: "strict".to_string(),
@@ -12754,6 +12758,46 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_final_magnetization_is_published_with_step_provenance() {
+        let mut state = test_workspace_state();
+        state.latest_fields.insert(
+            "m".to_string(),
+            serde_json::json!({
+                "quantity": "m",
+                "unit": "1",
+                "values": [1.0, 0.0, 0.0],
+                "source_step": 0,
+                "source_revision": 1,
+            }),
+        );
+        let mut update = test_step_update(342);
+        update.grid = [128, 32, 1];
+        update.magnetization = Some(vec![0.0, 1.0, 0.0]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            update,
+            true,
+        );
+
+        let field = state
+            .latest_fields
+            .0
+            .get("m")
+            .expect("magnetization must be published as a latest field");
+        assert_eq!(field["source_step"], serde_json::json!(342));
+        assert_eq!(field["source_revision"], serde_json::json!(342));
+        assert_eq!(
+            field["layout"]["grid_cells"],
+            serde_json::json!([128, 32, 1])
+        );
+        assert_eq!(field["values"], serde_json::json!([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
     fn publish_live_step_update_preserves_previous_magnetization_when_payload_is_thin() {
         let mut state = test_workspace_state();
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
@@ -14115,6 +14159,7 @@ mod tests {
                     name: "left_magnet".to_string(),
                     region: "left_region".to_string(),
                     material: "mat_left".to_string(),
+                    absorbing_boundary: None,
                     initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                         value: [1.0, 0.0, 0.0],
                     }),
@@ -14123,6 +14168,7 @@ mod tests {
                     name: "right_magnet".to_string(),
                     region: "right_region".to_string(),
                     material: "mat_right".to_string(),
+                    absorbing_boundary: None,
                     initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                         value: [0.0, 1.0, 0.0],
                     }),

@@ -1,8 +1,5 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
-import {
-  visualizationTargetIdForSceneObject,
-  type Selection,
-} from "@/kernel/selection/selectionTypes";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   type VisualizationTargetRef,
@@ -15,6 +12,10 @@ import {
   type Viewport3DMeshPart,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
+import {
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+  type FdmUniverseOutsideSupportOverlayModel,
+} from "./fdmUniverseOverlay";
 
 export const FULL_FIELD_QUERY: FieldVectorQuery = {
   component: "full",
@@ -70,6 +71,10 @@ export function targetForFdmDomain(
     kind: "fdm-domain",
     label: domainId,
   };
+}
+
+export function targetForFdmUniverseOutsideSupport(): VisualizationTargetRef {
+  return FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET;
 }
 
 /**
@@ -296,11 +301,12 @@ export function resolveViewport3DSelectionBounds(
   domain: FemManifestRenderDomain,
   fallbackBounds: Viewport3DBounds | null,
   fdmGrid: FdmSelectionGrid | null = null,
+  fdmUniverseOverlay: FdmUniverseOutsideSupportOverlayModel | null = null,
 ): Viewport3DBounds | null {
   if (!selection.kind) return null;
 
   if (isFdmSelection(selection, fdmGrid)) {
-    return resolveFdmSelectionBounds(selection, fdmGrid);
+    return resolveFdmSelectionBounds(selection, fdmGrid, fdmUniverseOverlay);
   }
 
   return (
@@ -344,14 +350,23 @@ function isFdmSelection(
 function resolveFdmSelectionBounds(
   selection: Selection,
   fdmGrid: FdmSelectionGrid | null,
+  fdmUniverseOverlay: FdmUniverseOutsideSupportOverlayModel | null,
 ): Viewport3DBounds | null {
   if (!fdmGrid) return null;
   if (selection.ref?.type === "fdm-cell") {
     return resolveFdmCellBounds(selection.ref, fdmGrid);
   }
 
-  // A grid node, including the optional universe-outside-support summary,
-  // focuses the canonical structured extent. It never consults FEM parts.
+  if (selection.ref?.type === "fdm-domain") {
+    if (selection.ref.scope === "universe-outside-support") {
+      return fdmUniverseOverlay?.universeBounds ?? null;
+    }
+    if (selection.ref.scope === "magnetic-support") {
+      return fdmUniverseOverlay?.magneticSupportBounds ?? null;
+    }
+  }
+
+  // Other grid nodes focus the canonical structured extent.
   return resolveFdmGridBounds(fdmGrid);
 }
 

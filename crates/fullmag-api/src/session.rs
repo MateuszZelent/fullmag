@@ -1029,6 +1029,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
             problem_name: "Local Live Workspace".to_string(),
             requested_backend: "auto".to_string(),
             explicit_selection: false,
+            authored_requested_device: "auto".to_string(),
             requested_device: "auto".to_string(),
             requested_precision: "double".to_string(),
             requested_mode: "strict".to_string(),
@@ -1116,6 +1117,25 @@ struct CurrentLiveApplyFlags {
 pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
     current.metadata = Some(metadata);
     if let Some(metadata) = current.metadata.as_ref() {
+        // A session can be reused while switching execution lanes.  The FEM
+        // mesh is solver-domain state, not scene authoring geometry; retain it
+        // only for a FEM execution plan so a stale FEM topology cannot make a
+        // new FDM domain look like FEM to domain/field endpoints.
+        let backend_is_fdm = metadata
+            .get("execution_plan")
+            .and_then(|plan| plan.get("backend_plan"))
+            .and_then(|plan| plan.get("kind"))
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("fdm"))
+            || metadata
+                .get("artifact_layout")
+                .and_then(|layout| layout.get("backend"))
+                .and_then(Value::as_str)
+                .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"));
+        if backend_is_fdm {
+            current.fem_mesh = None;
+        }
+
         current.solver_profile.timestep_qualification = metadata
             .get("timestep_qualification")
             .map(|value| serde_json::from_value(value.clone()).unwrap_or_default());
@@ -2299,6 +2319,7 @@ mod tests {
             fem_mesh: None,
         });
 
+        current.fem_mesh = Some(domain_fem_mesh("stale-fem-domain"));
         apply_current_live_metadata(
             &mut current,
             json!({
@@ -2318,6 +2339,7 @@ mod tests {
             }),
         );
 
+        assert!(current.fem_mesh.is_none());
         assert!(current.latest_fields.get("mat_ms").is_some());
         assert!(current.latest_fields.get("mat_aex").is_some());
         assert!(current.latest_fields.get("mat_alpha").is_some());

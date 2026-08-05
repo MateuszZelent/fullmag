@@ -62,6 +62,20 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("assertVisualizationDebugIdleBudgets");
   });
 
+  it("qualifies settled FDM viewport lifecycle across quantity, scope, and 3D/2D cycles", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("assertFdmViewportRuntimeQualification");
+    expect(smokeScript).toContain('name: "2D View"');
+    expect(smokeScript).toContain("FDM_VIEWPORT_QUALIFICATION_CYCLES");
+    expect(smokeScript).toContain("idleDirtyFrameDelta");
+    expect(smokeScript).toContain("idleRequestDelta");
+    expect(smokeScript).toContain("resourceCounts");
+    expect(smokeScript).toContain("drawingBufferWidth");
+    expect(smokeScript).toContain("isContextLost");
+    expect(smokeScript).toContain("resourceGrowth");
+  });
+
   it("proves Airbox, object, and real region Debug inspectors without renderer churn", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 

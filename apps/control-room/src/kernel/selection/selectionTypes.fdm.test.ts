@@ -39,6 +39,7 @@ describe("FDM cell selection identity", () => {
     const base: Extract<SelectionRef, { type: "fdm-domain" }> = {
       kind: "mesh.grid.mask",
       nodeId: "model:mesh:mask",
+      scope: "mask",
       type: "fdm-domain",
       visualizationTargetId: "fdm-domain",
     };
@@ -47,6 +48,25 @@ describe("FDM cell selection identity", () => {
       selectionRefEquals(base, {
         ...base,
         nodeId: "model:mesh:provenance",
+      }),
+    ).toBe(false);
+  });
+
+  it("includes the semantic FDM scope and region in equality", () => {
+    const region: Extract<SelectionRef, { type: "fdm-domain" }> = {
+      kind: "mesh.grid.region",
+      nodeId: "model:mesh:region:core",
+      regionId: "region:core",
+      scope: "region",
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-domain",
+    };
+    expect(selectionRefEquals(region, { ...region })).toBe(true);
+    expect(selectionRefEquals(region, { ...region, regionId: "region:shell" })).toBe(false);
+    expect(
+      selectionRefEquals(region, {
+        ...region,
+        scope: "magnetic-support",
       }),
     ).toBe(false);
   });

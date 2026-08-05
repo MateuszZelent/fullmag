@@ -1,6 +1,6 @@
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
@@ -41,7 +41,12 @@ type CommitFrame = (frame: {
 }) => void;
 
 describe("Visualization Debug integrated React lifecycle stress", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns every demand, scan, action, publisher, snapshot, subscription, and viewport resource to baseline", async () => {
+    vi.useFakeTimers();
     const dom = installInteractiveTestDom();
     const kernel = makeKernel();
     const controller = kernel.visualizationDebug;
@@ -103,8 +108,8 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
         }
       };
 
-      kernel.layout.setActiveViewportMainModule("viewport-3d");
       await act(async () => {
+        kernel.layout.setActiveViewportMainModule("viewport-3d");
         root.render(
           <KernelContext.Provider value={kernel}>
             <VisualizationDebugPanel
@@ -204,8 +209,8 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
       expect(counters.activeObjectUrls).toBe(0);
       expect(counters.timerSets).toBe(cycle + 1);
 
-      kernel.layout.setActiveViewportMainModule("results");
       await act(async () => {
+        kernel.layout.setActiveViewportMainModule("results");
         root.render(
           <KernelContext.Provider value={kernel}>
             <VisualizationDebugPanel
@@ -228,6 +233,7 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
       assertNoBinaryCarrier(observedModels);
 
       await act(async () => root.render(null));
+      await flushScheduledWork();
       accessibleSourceHandle = null;
       for (let turn = 0; turn < 3; turn += 1) await Promise.resolve();
       expect(controller.getLifecycleStats()).toEqual({
@@ -296,8 +302,8 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
         counters.activeScans -= 1;
       }
     };
-    kernel.layout.setActiveViewportMainModule("viewport-3d");
     await act(async () => {
+      kernel.layout.setActiveViewportMainModule("viewport-3d");
       root.render(
         <KernelContext.Provider value={kernel}>
           <VisualizationDebugPanel
@@ -321,6 +327,7 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
     });
     await actUntil(() => lateSignal !== null && counters.activeScans === 1);
     await act(async () => root.render(null));
+    await flushScheduledWork();
     expect((lateSignal as AbortSignal | null)?.aborted).toBe(true);
     expect(commitFrame).toBeNull();
     expect(controller.getSnapshots(lateTargetId)).toEqual([]);
@@ -526,6 +533,15 @@ function makeKernel(): KernelApi {
           }),
         },
       },
+      sessions: {
+        current: {
+          status: async () => ({
+            capabilities: { explicit_topology: true },
+            domain: { discretization: "fem" },
+            resources: {},
+          }),
+        },
+      },
       visualization: {
         acks: async () => ({ entries: [], revision: 0 }),
       },
@@ -602,12 +618,17 @@ async function settleReadyPanel(container: TestElement): Promise<void> {
 
 async function actUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
+    await flushScheduledWork();
     if (predicate()) return;
-    await act(async () => {
-      await Promise.resolve();
-    });
   }
   expect(predicate()).toBe(true);
+}
+
+async function flushScheduledWork(): Promise<void> {
+  await act(async () => {
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+  });
 }
 
 function findButton(container: TestElement, name: string): TestElement {

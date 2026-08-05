@@ -18,6 +18,8 @@ import {
 } from "react";
 
 import type {
+  FdmRegionMembershipResource,
+  ResourceRevision,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -37,13 +39,17 @@ import {
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  type SelectionRef,
+} from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   resolveSemanticTargetForMeshPart,
   type SemanticRenderTargetCatalog,
 } from "@/kernel/selection/semanticRenderTargetCatalog";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { ModuleProps } from "@/kernel/types";
 import {
   surfaceColorSourceToColorMode,
@@ -148,6 +154,7 @@ import {
   viewportSelectionForMeshPart,
   viewportSelectionForDomain,
   viewportSelectionForFdmCell,
+  viewportSelectionForFdmUniverseOutsideSupport,
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
@@ -916,18 +923,21 @@ export function shouldRetainViewport3DScalarColorbarLegends({
 }
 
 export function resolveViewport3DColorbarPlansForRender({
+  fieldIdentityCompatible = true,
   planned,
   renderSurfaceAvailable,
   retained,
   targetPlanAvailable,
   viewportColorbarRequested,
 }: {
+  fieldIdentityCompatible?: boolean;
   planned: readonly Viewport3DColorbarPlan[];
   renderSurfaceAvailable: boolean;
   retained: readonly Viewport3DColorbarPlan[];
   targetPlanAvailable: boolean;
   viewportColorbarRequested: boolean;
 }): readonly Viewport3DColorbarPlan[] {
+  if (!fieldIdentityCompatible) return EMPTY_VIEWPORT_3D_COLORBAR_PLANS;
   if (planned.length > 0) return planned;
   return viewportColorbarRequested || !renderSurfaceAvailable || !targetPlanAvailable
     ? retained
@@ -935,18 +945,21 @@ export function resolveViewport3DColorbarPlansForRender({
 }
 
 export function resolveRetainedViewport3DColorbarPlansForStore({
+  fieldIdentityCompatible = true,
   planned,
   renderSurfaceAvailable,
   retained,
   targetPlanAvailable,
   viewportColorbarRequested,
 }: {
+  fieldIdentityCompatible?: boolean;
   planned: readonly Viewport3DColorbarPlan[];
   renderSurfaceAvailable: boolean;
   retained: readonly Viewport3DColorbarPlan[];
   targetPlanAvailable: boolean;
   viewportColorbarRequested: boolean;
 }): readonly Viewport3DColorbarPlan[] {
+  if (!fieldIdentityCompatible) return EMPTY_VIEWPORT_3D_COLORBAR_PLANS;
   if (planned.length > 0) return planned;
   return viewportColorbarRequested || !renderSurfaceAvailable || !targetPlanAvailable
     ? retained
@@ -1122,6 +1135,10 @@ interface Viewport3DFrameProps
   domainSummary: string;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
   fieldRefresh: Viewport3DFieldRefreshState;
+  fdmFieldIdentityCompatible: boolean;
+  fdmSelectionCellOrdinal: number | null;
+  fdmSelectionAnnouncement: string | null;
+  fdmUniverseOverlayVisible: boolean;
   hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
   hysteresisReplayTarget: HysteresisStepViewportTarget | null;
   inspectRevision: number;
@@ -1132,6 +1149,7 @@ interface Viewport3DFrameProps
     patch: NonNullable<VisualizationStatePatch["camera"]>,
   ) => void;
   onClearSelection: () => void;
+  onFdmUniverseOverlayVisibilityChange: (visible: boolean) => void;
   onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
   onRegionOverlayVisibilityChange: (visible: boolean) => void;
   regionDiagnosticOverlayState: RegionDiagnosticOverlayState;
@@ -1165,12 +1183,23 @@ export default function Viewport3DModule({
   );
   useViewport3DWorkerRuntime(reportWorkerRuntimeCounts);
   const resourceCounts = useViewport3DResourceCounts(tracker);
+  useEffect(() => {
+    recordVisualizationDebugResourceCounts({
+      geometries: resourceCounts.geometries,
+      materials: resourceCounts.materials,
+      renderTargets: resourceCounts.renderTargets,
+      textures: resourceCounts.textures,
+      workers: resourceCounts.workers,
+    });
+  }, [resourceCounts]);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
   const [regionDiagnosticOverlayState, setRegionDiagnosticOverlayState] =
     useState<RegionDiagnosticOverlayState>(
       DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
     );
+  const [fdmUniverseOverlayVisible, setFdmUniverseOverlayVisible] =
+    useState(true);
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -1184,7 +1213,7 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
-  const { onSelectDomain, onSelectFdmCell, onSelectObject, onSelectPart, onSelectRegion } =
+  const { onSelectDomain, onSelectFdmCell, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
       fdmDomain: sceneModel.fdmDomain,
@@ -1194,6 +1223,38 @@ export default function Viewport3DModule({
       semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
   });
+  const fdmSelectionAnnouncement = useMemo(
+    () =>
+      resolveViewport3DFdmSelectionAnnouncement({
+        domainGenerationId:
+          sceneModel.visualizationDebugSource.fullFieldBufferIdentity
+            ?.currentDomainGenerationId ?? null,
+        fieldIdentityCompatible: sceneModel.fdmFieldIdentityCompatible,
+        fieldRevision:
+          sceneModel.fieldRefresh.status === "ready"
+            ? sceneModel.fieldRefresh.payloadRevision ??
+              sceneModel.fieldRefresh.revision
+            : null,
+        membership: sceneModel.fdmRegionMembership,
+        quantityId: sceneModel.quantityId,
+        selection:
+          selection.ref?.type === "fdm-cell" ? selection.ref : null,
+      }),
+    [
+      sceneModel.fdmFieldIdentityCompatible,
+      sceneModel.fdmRegionMembership,
+      sceneModel.fieldRefresh.payloadRevision,
+      sceneModel.fieldRefresh.revision,
+      sceneModel.fieldRefresh.status,
+      sceneModel.quantityId,
+      sceneModel.visualizationDebugSource.fullFieldBufferIdentity,
+      selection.ref,
+    ],
+  );
+  const fdmSelectionCellOrdinal =
+    fdmSelectionAnnouncement && selection.ref?.type === "fdm-cell"
+      ? Number(selection.ref.cellOrdinal)
+      : null;
   useViewport3DMeshCellAuditSelection({
     onSelectPart,
     topologyModel: currentViewport3DMeshCellAuditTopology(
@@ -1287,12 +1348,17 @@ export default function Viewport3DModule({
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
       fitRevision={commandState.fitRevision}
       kernel={kernel}
+      fdmUniverseOverlayVisible={fdmUniverseOverlayVisible}
+      fdmSelectionCellOrdinal={fdmSelectionCellOrdinal}
+      fdmSelectionAnnouncement={fdmSelectionAnnouncement}
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
+      onFdmUniverseOverlayVisibilityChange={setFdmUniverseOverlayVisible}
       onRegionOverlaySourceChange={changeRegionOverlaySource}
       onRegionOverlayVisibilityChange={changeRegionOverlayVisibility}
       onSelectDomain={onSelectDomain}
       onSelectFdmCell={onSelectFdmCell}
+      onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
       onSelectRegion={onSelectRegion}
@@ -1404,6 +1470,9 @@ function useViewport3DSelectionHandlers({
     },
     [fdmDomain?.shape, fdmInstanceModel, fdmRegionMembership, fdmRegionMembershipBinary, select],
   );
+  const onSelectFdmUniverseOutsideSupport = useCallback(() => {
+    select(viewportSelectionForFdmUniverseOutsideSupport());
+  }, [select]);
   const onSelectPart = useCallback(
     (partSelection: Viewport3DPartSelection) => {
       const address = resolveSemanticTargetForMeshPart(
@@ -1436,7 +1505,14 @@ function useViewport3DSelectionHandlers({
     [select],
   );
 
-  return { onSelectDomain, onSelectFdmCell, onSelectObject, onSelectPart, onSelectRegion };
+  return {
+    onSelectDomain,
+    onSelectFdmCell,
+    onSelectFdmUniverseOutsideSupport,
+    onSelectObject,
+    onSelectPart,
+    onSelectRegion,
+  };
 }
 
 const Viewport3DFrame = memo(function Viewport3DFrame({
@@ -1450,6 +1526,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   domainSummary,
   fieldDataIssue,
   fieldRefresh,
+  fdmSelectionCellOrdinal,
+  fdmSelectionAnnouncement,
+  fdmUniverseOverlayVisible,
   hysteresisReplayGlyphModel,
   hysteresisReplayTarget,
   inspectRevision,
@@ -1458,6 +1537,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   meshQualityRange,
   onCameraPatch,
   onClearSelection,
+  onFdmUniverseOverlayVisibilityChange,
   onRegionOverlaySourceChange,
   onRegionOverlayVisibilityChange,
   regionDiagnosticOverlayState,
@@ -1682,6 +1762,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     sceneProps.fdmDomain || colorbarTopologyModel,
   );
   const colorbarPlans = resolveViewport3DColorbarPlansForRender({
+    fieldIdentityCompatible: sceneProps.fdmFieldIdentityCompatible,
     planned: plannedColorbars,
     renderSurfaceAvailable,
     retained: retainedColorbarPlans,
@@ -1732,6 +1813,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     setRetainedViewport3DColorbarPlans(
       slotId,
       resolveRetainedViewport3DColorbarPlansForStore({
+        fieldIdentityCompatible: sceneProps.fdmFieldIdentityCompatible,
         planned: plannedColorbars,
         renderSurfaceAvailable,
         retained: retainedColorbarPlans,
@@ -1750,6 +1832,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     renderSurfaceAvailable,
     retainedColorbarPlans,
     renderedScalarRanges,
+    sceneProps.fdmFieldIdentityCompatible,
     slotId,
     viewportColorbarRequested,
   ]);
@@ -1882,6 +1965,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     inspectHover.sample.quantityId === quantityId
       ? inspectHover
       : null;
+  const visibleInspectProvenance = resolveViewport3DInspectSelectionProvenance({
+    announcement: fdmSelectionAnnouncement,
+    hover: visibleInspectHover,
+    selectedCellOrdinal: fdmSelectionCellOrdinal,
+  });
 
   return (
     <section
@@ -1891,6 +1979,15 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-camera-projection={sceneProps.cameraProjection}
       data-camera-target={sceneProps.cameraState.target.join(" ")}
       data-camera-up={sceneProps.cameraState.up.join(" ")}
+      data-fdm-domain-bounds={
+        sceneProps.fdmDomain?.bounds
+          ? JSON.stringify(sceneProps.fdmDomain.bounds)
+          : ""
+      }
+      data-fdm-model-count={String(sceneProps.fdmInstanceModel?.count ?? 0)}
+      data-fdm-vector-segment-count={String(
+        Math.floor((sceneProps.fdmVectorSegments?.length ?? 0) / 7),
+      )}
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
@@ -1903,6 +2000,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         hysteresisReplayGlyphModel?.measurementAxis?.vector,
       )}
       data-topology-freshness={sceneProps.topologyFreshness}
+      data-viewport-bounds={
+        sceneProps.bounds ? JSON.stringify(sceneProps.bounds) : ""
+      }
       data-visual-profile-id={sceneProps.visualProfileId}
       onPointerCancelCapture={releaseFieldUpdatePointerHold}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
@@ -1979,6 +2079,34 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             ))}
           </fieldset>
         ) : null}
+        {sceneProps.fdmUniverseOutsideSupport ? (
+          <fieldset
+            aria-label="FDM universe overlay"
+            className="fm-viewport-3d__region-modes"
+            data-target-id={sceneProps.fdmUniverseOutsideSupport.target.id}
+          >
+            <Button
+              aria-pressed={fdmUniverseOverlayVisible}
+              size="sm"
+              type="button"
+              variant={fdmUniverseOverlayVisible ? "primary" : "secondary"}
+              onClick={() =>
+                onFdmUniverseOverlayVisibilityChange(
+                  !fdmUniverseOverlayVisible,
+                )
+              }
+            >
+              Universe outside support
+            </Button>
+            {fdmUniverseOverlayVisible ? (
+              <span>
+                {sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport}
+                {" · "}
+                {sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}
+              </span>
+            ) : null}
+          </fieldset>
+        ) : null}
         <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
         <span>{diagnostics}</span>
       </div>
@@ -1998,6 +2126,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           <Viewport3DRendererProfile visualProfile={visualProfile} />
           <Viewport3DScene
             {...sceneProps}
+            fdmUniverseOutsideSupport={
+              fdmUniverseOverlayVisible
+                ? sceneProps.fdmUniverseOutsideSupport
+                : null
+            }
             adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
@@ -2032,8 +2165,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         </div>
       ) : null}
       {visibleInspectHover ? (
-        <Viewport3DInspectTooltip hover={visibleInspectHover} />
+        <Viewport3DInspectTooltip
+          hover={visibleInspectHover}
+          provenance={visibleInspectProvenance}
+        />
       ) : null}
+      <Viewport3DFdmSelectionAnnouncement
+        announcement={fdmSelectionAnnouncement}
+      />
       {orbitDebugEnabled && clientReady && colors ? (
         <Viewport3DOrbitDebugPanel
           angles={orbitDebugAngles}
@@ -2062,6 +2201,130 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
 });
 
 const INSPECT_TOOLTIP_OFFSET_PX = 14;
+
+type FdmCellSelectionRef = Extract<SelectionRef, { type: "fdm-cell" }>;
+
+export interface Viewport3DFdmSelectionAnnouncementInput {
+  domainGenerationId: string | null;
+  fieldIdentityCompatible: boolean;
+  fieldRevision: ResourceRevision | null;
+  membership: FdmRegionMembershipResource | null;
+  quantityId: string;
+  selection: FdmCellSelectionRef | null;
+}
+
+export function resolveViewport3DInspectSelectionProvenance({
+  announcement,
+  hover,
+  selectedCellOrdinal,
+}: {
+  announcement: string | null;
+  hover: Viewport3DInspectHover | null;
+  selectedCellOrdinal: number | null;
+}): string | null {
+  return hover?.sample.status === "ready" &&
+    hover.sample.pointIndex === selectedCellOrdinal
+    ? announcement
+    : null;
+}
+
+function nonEmptyAnnouncementText(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const text = String(value).trim();
+  return text.length > 0 ? text : null;
+}
+
+export function resolveViewport3DFdmSelectionAnnouncement({
+  domainGenerationId,
+  fieldIdentityCompatible,
+  fieldRevision,
+  membership,
+  quantityId,
+  selection,
+}: Viewport3DFdmSelectionAnnouncementInput): string | null {
+  if (!selection || !membership) return null;
+  const membershipRevision = `${membership.mesh_revision}:${membership.region_membership_revision}`;
+  if (
+    membership.freshness.toLowerCase() !== "current" ||
+    !membership.grid_fingerprint ||
+    selection.gridFingerprint !== membership.grid_fingerprint ||
+    selection.membershipRevision !== membershipRevision ||
+    !/^\d+$/.test(selection.cellOrdinal) ||
+    !selection.ijk.every((value) => Number.isSafeInteger(value) && value >= 0)
+  ) {
+    return null;
+  }
+
+  const ordinal = Number(selection.cellOrdinal);
+  if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= membership.cell_count) {
+    return null;
+  }
+
+  const maskParts: string[] = [];
+  if (selection.maskState === "region") {
+    const region = membership.region_legend.find(
+      (entry) =>
+        entry.numeric_id === selection.numericRegionId &&
+        entry.region_id === selection.regionId,
+    );
+    if (!region) return null;
+    maskParts.push(
+      "Mask region",
+      `Region ${region.region_id}, numeric region ${region.numeric_id}`,
+    );
+  } else if (
+    selection.maskState === "active-unassigned" &&
+    selection.numericRegionId === 0 &&
+    selection.regionId === null
+  ) {
+    maskParts.push("Mask active unassigned");
+  } else {
+    // Inactive cells are not rendered/pickable. Never announce an
+    // inconsistent synthetic ref as current scientific identity.
+    return null;
+  }
+
+  const parts = [
+    "FDM cell selected",
+    `Cell ${ordinal}`,
+    `Grid coordinates i ${selection.ijk[0]}, j ${selection.ijk[1]}, k ${selection.ijk[2]}`,
+    ...maskParts,
+    `Grid fingerprint ${membership.grid_fingerprint}`,
+    `Membership revision ${membershipRevision}`,
+  ];
+  const quantity = nonEmptyAnnouncementText(quantityId);
+  if (quantity) parts.push(`Quantity ${quantity}`);
+  if (fieldIdentityCompatible) {
+    const currentFieldRevision = nonEmptyAnnouncementText(fieldRevision);
+    const currentDomainGeneration = nonEmptyAnnouncementText(domainGenerationId);
+    if (currentFieldRevision) parts.push(`Field revision ${currentFieldRevision}`);
+    if (currentDomainGeneration) {
+      parts.push(`Domain generation ${currentDomainGeneration}`);
+    }
+  }
+  return `${parts.join(". ")}.`;
+}
+
+export const Viewport3DFdmSelectionAnnouncement = memo(
+  function Viewport3DFdmSelectionAnnouncement({
+    announcement,
+  }: {
+    announcement: string | null;
+  }) {
+    if (!announcement) return null;
+    return (
+      <span
+        aria-atomic="true"
+        aria-live="polite"
+        className="fm-visually-hidden"
+        role="status"
+        title={announcement}
+      >
+        {announcement}
+      </span>
+    );
+  },
+);
 
 function Viewport3DRendererProfile({
   visualProfile,
@@ -2207,10 +2470,12 @@ function viewport3DColorbarComponentLabel(
   }
 }
 
-const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
+export const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
   hover,
+  provenance,
 }: {
   hover: Viewport3DInspectHover;
+  provenance: string | null;
 }) {
   const { sample, screenPosition } = hover;
   const lines =
@@ -2222,6 +2487,7 @@ const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
       aria-live="polite"
       className="fm-viewport-3d__inspect-tooltip"
       role="status"
+      title={provenance ?? undefined}
       style={{
         left: screenPosition.x + INSPECT_TOOLTIP_OFFSET_PX,
         top: screenPosition.y + INSPECT_TOOLTIP_OFFSET_PX,
@@ -2236,6 +2502,11 @@ const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
           <span key={line}>{line}</span>
         ))}
       </div>
+      {provenance ? (
+        <div className="fm-viewport-3d__inspect-tooltip-values">
+          <span>{provenance}</span>
+        </div>
+      ) : null}
     </div>
   );
 });

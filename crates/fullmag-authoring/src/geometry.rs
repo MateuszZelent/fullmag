@@ -1433,6 +1433,7 @@ mod tests {
                 regions: Vec::new(),
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
+                absorbing_boundary: None,
                 notes: None,
                 visible: true,
                 locked: false,

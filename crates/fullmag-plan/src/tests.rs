@@ -2165,6 +2165,29 @@ fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
 }
 
 #[test]
+fn fdm_cuda_absorbing_boundary_fails_in_planner_before_native_start() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.magnets[0].absorbing_boundary = Some(fullmag_ir::AbsorbingBoundaryLayerIR {
+        total_width_m: 4.0e-7,
+        ramp_width_m: 3.0e-7,
+        max_damping: 0.5,
+        faces: vec![fullmag_ir::AbsorbingBoundaryFaceIR::XPlus],
+        profile: fullmag_ir::AbsorbingBoundaryProfileIR::Smootherstep,
+        frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+    });
+
+    let error = plan(&ir).expect_err("CUDA absorbing boundary must fail before native start");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("fdm_cuda_absorbing_boundary_unsupported")
+            && reason.contains("cellwise damping fields")
+    }));
+}
+
+#[test]
 fn disabled_object_region_policies_do_not_block_executable_planning() {
     let mut ir = ProblemIR::bootstrap_example();
     let mut region = default_test_object_region();
@@ -4540,6 +4563,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
             name: "ref".to_string(),
@@ -4548,6 +4572,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [0.0, 1.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
     ];
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
@@ -4682,6 +4707,7 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
         initial_magnetization: Some(InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
+        absorbing_boundary: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
@@ -4839,6 +4865,7 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
         initial_magnetization: Some(InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
+        absorbing_boundary: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
@@ -4962,6 +4989,7 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
         initial_magnetization: Some(InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
+        absorbing_boundary: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
@@ -5074,6 +5102,7 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
         initial_magnetization: Some(InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
+        absorbing_boundary: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
@@ -5156,6 +5185,7 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [0.0, 0.0, 1.0],
             }),
+            absorbing_boundary: None,
         });
     }
 
@@ -6405,6 +6435,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
             name: "ref".to_string(),
@@ -6413,6 +6444,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [0.0, 1.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
     ];
     ir.energy_terms = vec![
@@ -6487,6 +6519,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
             name: "ref".to_string(),
@@ -6495,6 +6528,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [0.0, 1.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
     ];
     ir.energy_terms = vec![
@@ -6578,6 +6612,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
             name: "ref".to_string(),
@@ -6586,6 +6621,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [0.0, 1.0, 0.0],
             }),
+            absorbing_boundary: None,
         },
     ];
     ir.energy_terms = vec![
@@ -7193,12 +7229,14 @@ fn multilayer_planner_rejects_xy_offset() {
             region: "free_region".to_string(),
             material: "Py".to_string(),
             initial_magnetization: None,
+            absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
             name: "ref".to_string(),
             region: "ref_region".to_string(),
             material: "Py".to_string(),
             initial_magnetization: None,
+            absorbing_boundary: None,
         },
     ];
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Demag {
@@ -10058,6 +10096,7 @@ fn fem_plan_homogeneous_multi_body_populates_region_materials() {
         initial_magnetization: Some(InitialMagnetizationIR::Uniform {
             value: [0.0, 1.0, 0.0],
         }),
+        absorbing_boundary: None,
     });
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![],
@@ -13391,6 +13430,7 @@ fn fem_cpu_relaxation_rejects_conflicting_nodal_and_element_ms_before_native_cre
         region: "second".to_string(),
         material: "Co".to_string(),
         initial_magnetization: None,
+        absorbing_boundary: None,
     });
     ir.object_regions.push(fullmag_ir::ObjectRegionIR {
         region_id: "second:conformal_material".to_string(),

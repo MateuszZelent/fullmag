@@ -1,0 +1,171 @@
+{
+  "document": {
+    "path": "docs/physics/0980-dynamic-current-and-oersted-coupling.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve; OE-T0/H(div) conservation, closure, OE-F1 singular quadrature and OE-F2 airbox qualification remain open."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "No device-resident solved-current Oersted realization is qualified; FEM transport/Oersted requests fail closed instead of falling back."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "semantic_only",
+      "reason": "The FDM stage workflow has a separate current/Oersted path, but this page does not promote the canonical FFT/closure contract."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "No cross-backend solved-current dynamic-Oersted qualification is asserted by this page."
+    }
+  ],
+  "equations": [
+    {
+      "id": "instantaneous-biot-savart-h",
+      "symbols": ["J_c", "H_oe", "r", "V_e", "r_reg"],
+      "sources": ["physics-biot-savart", "fem-midpoint-reference"]
+    },
+    {
+      "id": "accepted-stage-identity",
+      "symbols": ["t_stage", "m_stage", "J_c", "H_oe"],
+      "sources": ["physics-stage-contract", "fdm-stage-owner"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "J_c",
+      "latex": "J_c",
+      "meaning": "signed conventional charge-current density",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "H_oe",
+      "latex": "H_{\\mathrm{oe}}",
+      "meaning": "Oersted magnetic field consumed by the LLG RHS",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "target-source displacement",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "V_e",
+      "latex": "V_e",
+      "meaning": "active tetrahedron volume",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "r_reg",
+      "latex": "r_{\\mathrm{reg}}",
+      "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "mu_0",
+      "latex": "\\mu_0",
+      "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy",
+      "si_unit": "\\mathrm{H\\,m^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "physics-biot-savart",
+      "path": "docs/physics/0980-dynamic-current-and-oersted-coupling.md",
+      "symbol": "Section 2.3 and Section 4.5",
+      "responsibility": "Freeze the SI Biot-Savart H convention, energy semantics and the bounded FEM reference limits."
+    },
+    {
+      "id": "fem-solved-current-marker",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_solved_current_source",
+      "responsibility": "Bind FromCurrentSolution to a named solved Ohmic/M2 transport module and reject unsupported FEM cadence/coupling."
+    },
+    {
+      "id": "fem-transport-descriptor",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_m1_fem_spin_transport",
+      "responsibility": "Publish the resolved FEM transport descriptor bit and fail closed for reciprocal FEM Oersted stage coupling."
+    },
+    {
+      "id": "fem-midpoint-reference",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solved_current_midpoint_biot_savart_field",
+      "responsibility": "Derive a finite regularized midpoint field from the converged nodal current on affine tet4 source elements."
+    },
+    {
+      "id": "fem-dispatch-injection",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "responsibility": "Inject the post-transport field into the normalized FEM plan before native LLG construction and reject incompatible cylinders/lengths."
+    },
+    {
+      "id": "fdm-stage-owner",
+      "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
+      "symbol": "FdmSpinTransportModuleSnapshot::oersted_field_apm",
+      "responsibility": "Own the existing FDM stage-consistent solved-current field snapshot."
+    },
+    {
+      "id": "planner-regression",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "fem_ohmic_oersted_binds_the_solved_charge_field",
+      "responsibility": "Verify source binding and the FEM descriptor provenance bit."
+    },
+    {
+      "id": "runtime-regression",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current",
+      "responsibility": "Verify finite field values and exact linear sign reversal for the bounded tet4 reference."
+    },
+    {
+      "id": "managed-fem-transport-gate",
+      "path": "justfile",
+      "symbol": "verify-fem-steady-transport-native-contract",
+      "responsibility": "Build and test the native FEM transport lane in the managed MFEM/HYPRE container; this gate is required before promotion."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "CurrentTransport.model",
+        "type": "Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']",
+        "default": "prescribed_density",
+        "si_unit": "1",
+        "validation": "The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.",
+        "meaning": "charge solve producing the source current",
+        "backend_support": "FEM CPU bounded reference; other lanes remain capability-scoped",
+        "problem_ir": "current_modules[].model"
+      },
+      {
+        "python": "OerstedField.source",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.",
+        "meaning": "current-source identity",
+        "backend_support": "FEM/FDM authoring; executable status is planner-scoped",
+        "problem_ir": "energy_terms[].source"
+      },
+      {
+        "python": "OerstedField.model",
+        "type": "Literal['from_current_solution']",
+        "default": "from_current_solution",
+        "si_unit": "1",
+        "validation": "No alternate implicit model is accepted by the canonical IR.",
+        "meaning": "bind Oersted to the named solved current",
+        "backend_support": "FEM/FDM according to capability matrix",
+        "problem_ir": "energy_terms[].model"
+      }
+    ]
+  }
+}

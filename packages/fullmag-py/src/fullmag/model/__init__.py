@@ -1,4 +1,5 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
+from .absorbing_boundary import AbsorbingBoundaryLayer
 from .antenna import (
     AntennaFieldSource,
     CPWAntenna,
@@ -157,6 +158,7 @@ from .eigen import (
 )
 
 __all__ = [
+    "AbsorbingBoundaryLayer",
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",

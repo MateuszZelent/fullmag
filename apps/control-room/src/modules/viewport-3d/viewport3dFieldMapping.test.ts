@@ -4,6 +4,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
   buildSampledScalarColors,
+  buildFdmSampledScalarColors,
   buildSurfaceFaceScalarColors,
   buildThicknessAverageZScalarColors,
   buildVertexScalarColors,
@@ -134,6 +135,46 @@ describe("viewport3dFieldMapping", () => {
         ]),
       ),
     );
+  });
+
+  it("maps sampled FDM scalar colors through explicit cell indices", () => {
+    const result = buildFdmSampledScalarColors(
+      {
+        ...vectorField([
+          1, 0, 0, // field index 0 is cell ordinal 3
+          0.1, 0, 0, // field index 1 is cell ordinal 1
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([3, 1]),
+      },
+      Uint32Array.from([3, 1, 0]),
+      4,
+      "magnitude",
+      "viridis",
+    );
+
+    expect(result).not.toBeNull();
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([
+      expect.closeTo(1),
+      expect.closeTo(0.1),
+      expect.closeTo(0),
+    ]);
+    expect(Array.from(result?.colors ?? []).slice(0, 3)).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(1))),
+    );
+    expect(Array.from(result?.colors ?? []).slice(6, 9)).toEqual([
+      0.5, 0.5, 0.5,
+    ]);
+  });
+
+  it("rejects sampled FDM scalar colors when legacy payload count is not the domain count", () => {
+    expect(
+      buildFdmSampledScalarColors(
+        vectorField([1, 0, 0]),
+        Uint32Array.from([0, 1]),
+        4,
+      ),
+    ).toBeNull();
   });
 
   it("maps orientation mode through canonical physical XYZ", () => {

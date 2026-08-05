@@ -2,6 +2,10 @@ import type {
   AuthoringTransactionRequest,
   JsonObject,
 } from "@/kernel/api/apiTypes";
+import {
+  resolveActiveLaneOperation,
+  type ActiveLaneCapabilitySnapshot,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -71,20 +75,24 @@ export interface StudyExecutionDiscretizationContext {
 }
 
 /**
- * FDM-specific authoring is enabled only when the lane is explicit in the
- * request or in the current session. An `auto` value never becomes FDM by
- * inference; the current session may still report an explicit resolved lane.
+ * FDM-specific authoring follows the newest concrete discretization before
+ * falling back to the current resolved session. Only `fdm` and `fem` settle
+ * the lane; `auto`, `hybrid`, and unresolved values defer to the next source.
  */
 export function isExplicitFdmStudy({
   requestedBackend,
   requestedDiscretization,
   sessionDiscretization,
 }: StudyExecutionDiscretizationContext): boolean {
-  return [
-    requestedBackend,
-    requestedDiscretization,
-    sessionDiscretization,
-  ].some((value) => normalizeDiscretization(value) === "fdm");
+  const backend = normalizeDiscretization(requestedBackend);
+  if (backend === "fdm") return true;
+  if (backend === "fem") return false;
+
+  const requestedLane = normalizeDiscretization(requestedDiscretization);
+  if (requestedLane === "fdm") return true;
+  if (requestedLane === "fem") return false;
+
+  return normalizeDiscretization(sessionDiscretization) === "fdm";
 }
 
 const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
@@ -139,12 +147,35 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
 export function validateStudyGlobalDraft(
   draft: StudyGlobalDraft,
   capabilities?: {
+    activeLane?: ActiveLaneCapabilitySnapshot | null;
     algorithmsAvailable?: readonly string[];
     requestedDiscretization?: string | null;
     sessionDiscretization?: string | null;
   },
 ): StudyGlobalDraftValidation[] {
   const issues: StudyGlobalDraftValidation[] = [];
+  if (capabilities?.activeLane !== undefined) {
+    const operationReasons = new Set<string>();
+    for (const operationId of [
+      "study.relaxation",
+      "study.time_integration",
+    ] as const) {
+      const operation = resolveActiveLaneOperation(
+        capabilities.activeLane,
+        operationId,
+      );
+      if (!operation.enabled && !operationReasons.has(operation.reason)) {
+        operationReasons.add(operation.reason);
+        issues.push({
+          message: operation.reason,
+          severity:
+            operation.state === "semantic_only" || operation.state === "deferred"
+              ? "warning"
+              : "error",
+        });
+      }
+    }
+  }
   if (!draft.requestedBackend.trim()) {
     issues.push({ message: "Backend is required.", severity: "error" });
   }

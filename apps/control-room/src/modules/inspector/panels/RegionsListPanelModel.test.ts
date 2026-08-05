@@ -128,6 +128,7 @@ describe("RegionsListPanelModel", () => {
         ],
         scene_revision: 12,
       },
+      "fem",
     );
 
     expect(model).toMatchObject({
@@ -172,6 +173,101 @@ describe("RegionsListPanelModel", () => {
       warningCount: 1,
     });
   });
+
+  it.each(["fdm", "unknown"] as const)(
+    "withholds FEM-only diagnostics from the %s region list while preserving lane-neutral diagnostics",
+    (meshLane) => {
+      const model = resolveRegionsListPanelModel(
+        {
+          kind: "object.regions",
+          label: "Regions",
+          moduleSource: "explorer",
+          nodeId: "model:object:film:regions",
+          objectId: "film",
+          ref: {
+            kind: "object.regions",
+            nodeId: "model:object:film:regions",
+            objectId: "film",
+            type: "scene-object",
+            visualizationTargetId: "object:film",
+          },
+        },
+        {
+          objects: [
+            {
+              id: "film",
+              name: "Film",
+              geometry: {
+                geometry_kind: "Box",
+                geometry_params: { size: [100e-9, 100e-9, 10e-9] },
+              },
+            },
+          ],
+          revision: 7,
+        },
+        {
+          geometry_realization_revision: 0,
+          regions: [
+            {
+              bounds_max: [1, 1, 1],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_ref: "mat-film",
+              mesh_part_ids: [],
+              name: "Core",
+              owner_object_id: "film",
+              priority: 1,
+              region_id: "reg-core",
+              shape: { kind: "box" } as never,
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 7,
+        },
+        {
+          diagnostics: [
+            {
+              capability_gate: "regions.mesh_policy",
+              code: "region.mesh.deferred",
+              diagnostic_id: "diag-mesh",
+              message: "FEM mesh policy is deferred.",
+              owner_object_id: "film",
+              region_id: "reg-core",
+              severity: "warning",
+            },
+            {
+              capability_gate: null,
+              code: "region.material.conflict",
+              diagnostic_id: "diag-neutral",
+              message: "Material conflict requires attention.",
+              owner_object_id: "film",
+              region_id: "reg-core",
+              severity: "error",
+            },
+          ],
+          scene_revision: 7,
+        },
+        meshLane,
+      );
+
+      expect(model.items).toHaveLength(1);
+      expect(model.items[0]).toMatchObject({
+        conflictCount: 1,
+        diagnosticCount: 1,
+        errorCount: 1,
+        warningCount: 0,
+      });
+      expect(model).toMatchObject({
+        conflictCount: 1,
+        diagnosticCount: 1,
+        errorCount: 1,
+        warningCount: 0,
+      });
+    },
+  );
 
   it("builds default create payloads and node ids", () => {
     expect(defaultNewRegionDraft()).toEqual({

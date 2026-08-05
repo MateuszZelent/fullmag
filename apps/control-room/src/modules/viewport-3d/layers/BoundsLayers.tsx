@@ -1032,21 +1032,39 @@ export const FdmUniverseOutsideSupportLayer = memo(
   function FdmUniverseOutsideSupportLayer({
     colors,
     model,
+    onSelect,
     tracker,
   }: {
     colors: Viewport3DColors;
     model: FdmUniverseOutsideSupportOverlayModel | null;
+    onSelect: () => void;
     tracker: Viewport3DResourceTracker;
   }) {
     if (!model) return null;
     return (
-      <BoundsVolumeWireframe
-        bounds={model.universeBounds}
-        color={colors.accent}
-        opacity={0.55}
-        policySemantic="hiddenEdges"
-        tracker={tracker}
-      />
+      <group
+        name={model.target.id}
+        userData={{ semanticRole: model.kind }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        <BoundsVolumeWireframe
+          bounds={model.universeBounds}
+          color={colors.accent}
+          opacity={0.55}
+          policySemantic="hiddenEdges"
+          tracker={tracker}
+        />
+        <BoundsVolumeWireframe
+          bounds={model.magneticSupportBounds}
+          color={colors.field}
+          opacity={0.8}
+          policySemantic="featureEdges"
+          tracker={tracker}
+        />
+      </group>
     );
   },
 );

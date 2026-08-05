@@ -223,6 +223,16 @@ export type FdmDomainSelectionKind =
   | "mesh.grid.region"
   | "mesh.grid.universe-outside-support";
 
+export type FdmDomainSelectionScope =
+  | "domain"
+  | "descriptor"
+  | "magnetic-support"
+  | "active-unassigned"
+  | "mask"
+  | "provenance"
+  | "region"
+  | "universe-outside-support";
+
 export type SelectionRef =
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
@@ -236,8 +246,12 @@ export type SelectionRef =
   | {
       kind: FdmDomainSelectionKind;
       nodeId: string;
+      regionId?: string;
+      scope: FdmDomainSelectionScope;
       type: "fdm-domain";
-      visualizationTargetId: "fdm-domain";
+      visualizationTargetId:
+        | "fdm-domain"
+        | "fdm-universe-outside-support";
     }
   | {
       cellOrdinal: string;
@@ -611,6 +625,8 @@ export function selectionRefEquals(
         right.type === "fdm-domain" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.regionId, right.regionId) &&
+        left.scope === right.scope &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "fdm-cell":

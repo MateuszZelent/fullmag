@@ -158,8 +158,9 @@ describe("ObjectMeshPolicyPanel FDM lane", () => {
       "useMeshCapabilitiesResource({ enabled: femResourcesEnabled })",
     );
     expect(source).toContain("<FdmObjectMeshPolicySection");
-    expect(source).toContain("FEM Mesh Controls");
-    expect(source).toContain("Read-only: no FEM policy patch or mesh-build command");
+    expect(source).not.toContain("FEM Mesh Controls");
+    expect(source).toContain('label="Grid policy" value="execution-plan owned (read-only)"');
+    expect(source).toContain('label="Explorer role" value="FDM Grid / Magnetic Support"');
     expect(source).toContain("if (explicitFdm)");
     expect(source).toContain('if (meshLane !== "fem")');
     expect(source).toContain("Mesh policy lane is unresolved");

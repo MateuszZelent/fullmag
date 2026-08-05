@@ -156,7 +156,10 @@ function meshBuildDialogReducer(
 }
 
 type MeshBuildDialogRuntimeStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  capabilities: Pick<
+    LiveStatusResource["capabilities"],
+    "active_lane" | "explicit_topology"
+  >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -170,6 +173,7 @@ function selectMeshBuildDialogRuntimeStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
+      active_lane: status.data.capabilities.active_lane,
       explicit_topology: status.data.capabilities.explicit_topology,
     },
     domain: {
@@ -191,6 +195,10 @@ function meshBuildDialogRuntimeStatusEquals(
   return (
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
+    previous.capabilities.active_lane.operations.grid_build.reason ===
+      next.capabilities.active_lane.operations.grid_build.reason &&
+    previous.capabilities.active_lane.operations.grid_build.state ===
+      next.capabilities.active_lane.operations.grid_build.state &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
@@ -213,8 +221,14 @@ export function shouldLoadMeshBuildDialogFemResources(
 
 export function meshBuildDialogUnavailableMessage(
   lane: MeshCommandLane,
+  fdmGridRefreshReason?: string,
 ): string | null {
-  if (lane === "fdm") return FDM_MESH_COMMAND_NOT_APPLICABLE_REASON;
+  if (lane === "fdm") {
+    return (
+      fdmGridRefreshReason ??
+      "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists."
+    );
+  }
   if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
   return null;
 }
@@ -258,7 +272,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     resourceData,
     sourceDetail: state.sourceDetail,
   });
-  const unavailableMessage = meshBuildDialogUnavailableMessage(lane);
+  const unavailableMessage = meshBuildDialogUnavailableMessage(
+    lane,
+    runtimeStatus?.capabilities.active_lane.operations.grid_build.reason,
+  );
   const activeBuild = useMeshBuildCurrent({
     enabled:
       explicitFemLane &&
@@ -496,7 +513,9 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
         <DialogHeader>
           <DialogTitle>
             {!explicitFemLane
-              ? "FEM Mesh Controls Unavailable"
+              ? lane === "fdm"
+                ? "FDM Grid & Mask Refresh"
+                : "FEM Mesh Controls Unavailable"
               : state.phase === "post-build"
               ? "Mesh Build Complete"
               : state.phase === "error"
@@ -529,15 +548,33 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
             />
           ) : (
             <section
-              aria-label="FEM mesh controls unavailable"
-              className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner"
-            >
+               aria-label={
+                lane === "fdm"
+                  ? "FDM grid and mask refresh unavailable"
+                  : "FEM mesh controls unavailable"
+               }
+               className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner"
+               data-command-unavailable-reason={
+                 lane === "fdm"
+                   ? FDM_MESH_COMMAND_NOT_APPLICABLE_REASON
+                   : UNKNOWN_MESH_COMMAND_LANE_REASON
+               }
+             >
               <h3 className="fm-mesh-build-confirm__section-title">
-                Structured-grid lane
+                {lane === "fdm"
+                  ? "Structured-grid lifecycle"
+                  : "Structured-grid lane"}
               </h3>
               <p className="fm-mesh-build-confirm__empty">
                 {unavailableMessage}
               </p>
+              {lane === "fdm" ? (
+                <p className="fm-mesh-build-confirm__empty">
+                  Grid dimensions and membership masks are materialized by the
+                  resolved execution plan; this dialog never substitutes FEM
+                  mesh policy controls for them.
+                </p>
+              ) : null}
               <div className="fm-mesh-build-confirm__actions">
                 <Button
                   size="sm"

@@ -12,6 +12,7 @@ import {
   buildFdmCuboidInstanceModel,
   buildFdmCuboidUploadBatches,
   buildFdmVectorSegments,
+  fdmCuboidSurfaceMeshKey,
   hasAnyEffectiveFdmPass,
   resolveFdmCuboidPassPlan,
   resolveFdmVectorGlyphScale,
@@ -70,6 +71,15 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("reconstructs the surface mesh when field colors become available", () => {
+    expect(fdmCuboidSurfaceMeshKey(4096, false)).not.toBe(
+      fdmCuboidSurfaceMeshKey(4096, true),
+    );
+    expect(fdmCuboidSurfaceMeshKey(4096, true)).toBe(
+      "fdm-cuboids-surface-4096-field-colors",
+    );
+  });
+
   it("clears the exact FDM surface receipt when colors disappear or the pass unmounts", () => {
     const source = readFileSync(fdmCuboidLayerPath, "utf8");
 
@@ -386,6 +396,48 @@ describe("FdmCuboidLayer model", () => {
     ]);
   });
 
+  it("maps explicit FDM vector payload indices to cell ordinals", () => {
+    const model = buildFdmCuboidInstanceModel(
+      domainFixture({
+        displayCellBudget: 4,
+        displayCellCount: 4,
+        shape: [4, 1, 1],
+        stride: 1,
+        totalCells: 4,
+      }),
+    );
+    const segments = buildFdmVectorSegments(
+      model,
+      {
+        ...vectorField([
+          1, 0, 0, // field index 0 is cell ordinal 3
+          0, 1, 0, // field index 1 is cell ordinal 1
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([3, 1]),
+      },
+      2e-9,
+      2,
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      expect.closeTo(1.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      1,
+      expect.closeTo(2.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(2.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      1,
+    ]);
+  });
+
   it("bounds FDM vector segment cache entries when vector scale changes", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
     const fieldVector = vectorField([
@@ -452,29 +504,39 @@ describe("FdmCuboidLayer model", () => {
 
     expect(layerSource).toContain("MeshBasicMaterial");
     expect(layerSource).not.toContain("MeshStandardMaterial");
+    expect(layerSource).toContain("color.fill(1);");
+    expect(layerSource).toContain("new BufferAttribute(color, 3)");
   });
 
-  it("keeps FDM matrix uploads independent from scalar color changes", () => {
+  it("keeps instance colors neutral against the regular vertex-color channel", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(layerSource).toContain(
+      'next.setAttribute("color", new BufferAttribute(color, 3))',
+    );
+    expect(layerSource).toContain("color.fill(1)");
+  });
+
+  it("re-uploads FDM matrices when the surface mesh identity changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const matrixUploadBlock = layerSource.slice(
       layerSource.indexOf("interface FdmCuboidMatrixUploadOptions"),
       layerSource.indexOf("interface FdmCuboidColorUploadOptions"),
     );
 
-    expect(matrixUploadBlock).not.toContain("usesInstanceColors");
+    expect(matrixUploadBlock).toContain("surfaceMeshKey");
   });
 
-  it("keeps the FDM surface mesh mounted while scalar coloring changes", () => {
+  it("reconstructs the FDM surface mesh when scalar coloring changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const surfaceMeshBlock = layerSource.slice(
       layerSource.indexOf("<instancedMesh"),
       layerSource.indexOf("ref={surfaceRef}"),
     );
 
-    expect(surfaceMeshBlock).toContain('key={`fdm-cuboids-surface-${model.count}`}');
-    expect(surfaceMeshBlock).not.toContain("usesInstanceColors");
-    expect(surfaceMeshBlock).not.toContain('"field"');
-    expect(surfaceMeshBlock).not.toContain('"solid"');
+    expect(surfaceMeshBlock).toContain(
+      "key={surfaceMeshKey}",
+    );
   });
 
   it("does not recreate FDM materials for vector-only setting changes", () => {

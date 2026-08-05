@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import type {
+  DomainMetaResource,
+  FdmRegionMembershipResource,
+} from "@/kernel/api/apiTypes";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -29,7 +33,9 @@ import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryC
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
+import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
+import { buildModelTree, flattenExplorerNodes } from "./builders/buildModelTree";
 import { selectExplorerNode } from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
 
@@ -188,15 +194,15 @@ describe("selectExplorerNode", () => {
   });
 
   it.each([
-    ["mesh.grid", "model:mesh"],
-    ["mesh.grid.descriptor", "model:mesh:grid"],
-    ["mesh.grid.magnetic-support", "model:mesh:magnetic-support"],
-    ["mesh.grid.active-unassigned", "model:mesh:active-unassigned"],
-    ["mesh.grid.mask", "model:mesh:mask"],
-    ["mesh.grid.provenance", "model:mesh:provenance"],
-    ["mesh.grid.region", "model:mesh:region:core"],
-    ["mesh.grid.universe-outside-support", "model:mesh:outside-support"],
-  ] as const)("maps %s to the canonical FDM domain target", (kind, id) => {
+    ["mesh.grid", "model:mesh", "domain"],
+    ["mesh.grid.descriptor", "model:mesh:grid", "descriptor"],
+    ["mesh.grid.magnetic-support", "model:mesh:magnetic-support", "magnetic-support"],
+    ["mesh.grid.active-unassigned", "model:mesh:active-unassigned", "active-unassigned"],
+    ["mesh.grid.mask", "model:mesh:mask", "mask"],
+    ["mesh.grid.provenance", "model:mesh:provenance", "provenance"],
+    ["mesh.grid.region", "model:mesh:region:core", "region"],
+    ["mesh.grid.universe-outside-support", "model:mesh:outside-support", "universe-outside-support"],
+  ] as const)("maps %s to the canonical FDM domain target", (kind, id, scope) => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
       id,
@@ -211,8 +217,67 @@ describe("selectExplorerNode", () => {
     expect(kernel.selection.get().ref).toEqual({
       kind,
       nodeId: id,
+      ...(kind === "mesh.grid.region" ? { regionId: "region:core" } : {}),
+      scope,
       type: "fdm-domain",
-      visualizationTargetId: "fdm-domain",
+      visualizationTargetId:
+        scope === "universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : "fdm-domain",
+    });
+  });
+
+  it("preserves a region id from the realized FDM Explorer tree", () => {
+    const domainMeta: DomainMetaResource = {
+      bounds: { min: [0, 0, 0], max: [2, 1, 1] },
+      coordinate_system: "cartesian",
+      counts: { cells: 2 },
+      dimension: 3,
+      discretization: "fdm",
+      domain_id: "domain:fdm",
+      generation_id: "generation-1",
+      grid: { origin: [0, 0, 0], shape: [2, 1, 1], spacing: [1, 1, 1] },
+      units: { length: "m" },
+    };
+    const membership: FdmRegionMembershipResource = {
+      binary_path: "membership.bin",
+      cell_count: 2,
+      cell_m: [1, 1, 1],
+      counts: [2, 1, 1],
+      encoding: "u32le",
+      freshness: "current",
+      grid_fingerprint: "grid-1",
+      mesh_revision: 4,
+      origin_m: [0, 0, 0],
+      region_legend: [{
+        numeric_id: 7,
+        object_id: "object:core",
+        priority: 0,
+        region_id: "region:core",
+      }],
+      region_membership_revision: 5,
+      schema_version: "fdm_region_membership.v1",
+    };
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainPresentation: buildDomainPresentation({
+        domainMeta,
+        fdmMembership: membership,
+        fdmMembershipStatus: "ready",
+      }),
+    }));
+    const regionNode = nodes.find(
+      (node) => node.id === "model:mesh:region:region%3Acore",
+    );
+    expect(regionNode).toBeDefined();
+
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, regionNode!, "explorer");
+
+    expect(kernel.selection.get().ref).toMatchObject({
+      kind: "mesh.grid.region",
+      regionId: "region:core",
+      scope: "region",
+      type: "fdm-domain",
     });
   });
 

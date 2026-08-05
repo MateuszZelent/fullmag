@@ -593,6 +593,7 @@ describe("ObjectVisualizationController", () => {
         ref: {
           kind: "mesh.grid.descriptor",
           nodeId: "model:mesh:grid",
+          scope: "descriptor",
           type: "fdm-domain",
           visualizationTargetId: "fdm-domain",
         },

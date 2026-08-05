@@ -1237,6 +1237,14 @@ def _render_geometry_and_materials(
         lines.append(f"{var_name}.Ms = {_py_number(magnet.material.Ms)}")
         lines.append(f"{var_name}.Aex = {_py_number(magnet.material.A)}")
         lines.append(f"{var_name}.alpha = {_py_number(magnet.material.alpha)}")
+        lines.extend(
+            _render_absorbing_boundary(
+                var_name,
+                magnet.absorbing_boundary.to_ir()
+                if magnet.absorbing_boundary is not None
+                else None,
+            )
+        )
         if magnet.material.Ku1 is not None:
             lines.append(f"{var_name}.Ku1 = {_py_number(magnet.material.Ku1)}")
         if magnet.material.anisU is not None:
@@ -1799,6 +1807,7 @@ def _render_geometries_from_override(
         lines.append(f"{var_name}.Ms = {_py_number(float(str(mat.get('Ms', 800000))))}")
         lines.append(f"{var_name}.Aex = {_py_number(float(str(mat.get('Aex', 1.3e-11))))}")
         lines.append(f"{var_name}.alpha = {_py_number(float(str(mat.get('alpha', 0.02))))}")
+        lines.extend(_render_absorbing_boundary(var_name, g.get("absorbing_boundary")))
         physics_stack = _ensure_geometry_physics_stack(
             g.get("physics_stack"),
             material_dind=mat.get("Dind"),
@@ -1869,6 +1878,28 @@ def _render_geometries_from_override(
     if lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+def _render_absorbing_boundary(var_name: str, raw: object) -> list[str]:
+    config = _normalize_mapping(raw)
+    if not config:
+        return []
+    faces = config.get("faces")
+    if not isinstance(faces, list) or not faces:
+        return []
+    face_expr = "(" + ", ".join(_py_repr(str(face)) for face in faces)
+    if len(faces) == 1:
+        face_expr += ","
+    face_expr += ")"
+    return [
+        f"{var_name}.alpha.absorbing_boundary("
+        f"total_width={_py_number(float(config['total_width_m']))}, "
+        f"ramp_width={_py_number(float(config['ramp_width_m']))}, "
+        f"max_damping={_py_number(float(config['max_damping']))}, "
+        f"faces={face_expr}, "
+        f"profile={_py_repr(str(config.get('profile', 'smootherstep')))}, "
+        f"frame={_py_repr(str(config.get('frame', 'object')))})"
+    ]
 
 
 _GEOMETRY_INTERACTION_ORDER = (
@@ -6200,6 +6231,9 @@ def _export_geometry_entry(
         "material_parameter_fields": [
             assignment.to_ir() for assignment in magnet.material_parameter_fields
         ],
+        "absorbing_boundary": magnet.absorbing_boundary.to_ir()
+        if magnet.absorbing_boundary is not None
+        else None,
     }
 
 

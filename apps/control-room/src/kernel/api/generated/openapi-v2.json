@@ -1,6 +1,215 @@
 {
   "components": {
     "schemas": {
+      "ActiveLaneCapabilityReasonCode": {
+        "description": "Stable machine-readable classification for an active-lane operation reason.\nHuman-readable `reason` text may evolve without changing UI behavior.",
+        "enum": [
+          "capability_supported",
+          "capability_semantic_only",
+          "capability_deferred",
+          "capability_unsupported",
+          "capability_stale"
+        ],
+        "type": "string"
+      },
+      "ActiveLaneCapabilitySnapshot": {
+        "properties": {
+          "authored": {
+            "$ref": "#/components/schemas/ActiveLaneIdentity"
+          },
+          "fallback": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActiveLaneFallback"
+              }
+            ]
+          },
+          "operations": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ActiveLaneOperationCapability"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "qualification": {
+            "$ref": "#/components/schemas/ActiveLaneQualification"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/ActiveLaneIdentity",
+            "description": "Effective execution request after launcher/environment overrides."
+          },
+          "resolved": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActiveLaneIdentity"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilitySource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "authored",
+          "requested",
+          "source",
+          "qualification",
+          "operations"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneCapabilitySource": {
+        "properties": {
+          "authored_intent": {
+            "description": "Provenance of `authored`: canonical ProblemIR runtime selection.",
+            "type": "string"
+          },
+          "capability_profile_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_request": {
+            "description": "Provenance of `requested`: runtime resolution after launch overrides.",
+            "type": "string"
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`planner` when the snapshot is backed by resolved planner capabilities;\n`unavailable` when status must fail closed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "authored_intent",
+          "effective_request"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneCapabilityState": {
+        "enum": [
+          "supported",
+          "semantic_only",
+          "deferred",
+          "unsupported",
+          "stale"
+        ],
+        "type": "string"
+      },
+      "ActiveLaneFallback": {
+        "properties": {
+          "fallback_engine": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "occurred": {
+            "type": "boolean"
+          },
+          "original_engine": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurred",
+          "original_engine",
+          "fallback_engine",
+          "reason",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneIdentity": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "discretization": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "discretization",
+          "device",
+          "precision",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneOperationCapability": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilityReasonCode"
+          },
+          "requires": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilityState"
+          }
+        },
+        "required": [
+          "state",
+          "reason_code",
+          "reason",
+          "requires"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneQualification": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "description": "Capability availability does not imply scientific qualification.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "type": "object"
+      },
       "AdaptiveSolverIntegratorRequest": {
         "enum": [
           "rk23",
@@ -1054,6 +1263,10 @@
       },
       "CapabilityMap": {
         "properties": {
+          "active_lane": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilitySnapshot",
+            "description": "Planner-owned operation gating for the currently resolved execution lane."
+          },
           "algorithms_available": {
             "items": {
               "type": "string"
@@ -1112,7 +1325,8 @@
           "gpu_telemetry",
           "preview_2d",
           "preview_3d",
-          "algorithms_available"
+          "algorithms_available",
+          "active_lane"
         ],
         "type": "object"
       },
@@ -3389,6 +3603,64 @@
         ],
         "type": "object"
       },
+      "FdmMagneticSupportSemanticRole": {
+        "enum": [
+          "magnetic-support"
+        ],
+        "type": "string"
+      },
+      "FdmMagneticSupportSummaryResource": {
+        "properties": {
+          "active_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_unassigned_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bounds_max_m": {
+            "description": "Cell-edge AABB of the exact active-cell mask in meters.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min_m": {
+            "description": "Cell-edge AABB of the exact active-cell mask in meters.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "grid_fingerprint": {
+            "description": "Grid identity used to compute this exact support summary.",
+            "type": "string"
+          },
+          "inactive_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "semantic_role": {
+            "$ref": "#/components/schemas/FdmMagneticSupportSemanticRole"
+          }
+        },
+        "required": [
+          "semantic_role",
+          "grid_fingerprint",
+          "bounds_min_m",
+          "bounds_max_m",
+          "active_cell_count",
+          "inactive_cell_count",
+          "active_unassigned_cell_count"
+        ],
+        "type": "object"
+      },
       "FdmRegionLegendEntryResource": {
         "description": "Thin descriptor for realized FDM cell membership. The mask itself is kept\non the binary data plane under the companion FMRM resource.",
         "properties": {
@@ -3449,6 +3721,17 @@
           },
           "grid_fingerprint": {
             "type": "string"
+          },
+          "magnetic_support": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FdmMagneticSupportSummaryResource",
+                "description": "Exact realized magnetic-support summary. Missing on legacy artifacts;\nconsumers must then keep outside-support presentation fail-closed."
+              }
+            ]
           },
           "mesh_revision": {
             "format": "int64",
@@ -5400,7 +5683,7 @@
             ]
           },
           "max_samples": {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFDM responses always return the complete cell-centred field, even when\nthis cap is provided, because FMVP v2 has no cell-index mapping for a\ndownsampled payload.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -13389,6 +13672,12 @@
       },
       "ObjectPatchRequest": {
         "properties": {
+          "absorbing_boundary": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "base_revision": {
             "format": "int64",
             "minimum": 0,
@@ -18012,6 +18301,12 @@
       },
       "SceneObjectResource": {
         "properties": {
+          "absorbing_boundary": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "allocated_region_ids": {
             "items": {
               "type": "string"
@@ -21673,6 +21968,137 @@
         ],
         "type": "object"
       },
+      "SolverTraceClockDomainResource": {
+        "enum": [
+          "server_monotonic",
+          "browser_performance"
+        ],
+        "type": "string"
+      },
+      "SolverTraceCompletenessResource": {
+        "enum": [
+          "server_only",
+          "complete",
+          "partial"
+        ],
+        "type": "string"
+      },
+      "SolverTraceIdResource": {
+        "properties": {
+          "accepted_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_generation": {
+            "type": "string"
+          },
+          "sample_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "run_generation",
+          "stage_sequence",
+          "accepted_step",
+          "sample_sequence"
+        ],
+        "type": "object"
+      },
+      "SolverTraceResource": {
+        "properties": {
+          "api_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "completeness": {
+            "$ref": "#/components/schemas/SolverTraceCompletenessResource"
+          },
+          "format": {
+            "type": "string"
+          },
+          "segments": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SolverTraceSegmentResource"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/SolverTraceIdResource"
+          },
+          "unaccounted_browser_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unaccounted_server_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "format",
+          "trace_id",
+          "segments",
+          "completeness",
+          "unaccounted_server_ns",
+          "unaccounted_browser_ns"
+        ],
+        "type": "object"
+      },
+      "SolverTraceSegmentKindResource": {
+        "enum": [
+          "native_to_runner_callback",
+          "runner_callback_to_publisher_enqueue",
+          "publisher_queue",
+          "publisher_apply",
+          "api_revision_visibility",
+          "browser_fetch",
+          "browser_decode_to_commit",
+          "commit_to_animation_frame"
+        ],
+        "type": "string"
+      },
+      "SolverTraceSegmentResource": {
+        "properties": {
+          "clock_domain": {
+            "$ref": "#/components/schemas/SolverTraceClockDomainResource"
+          },
+          "duration_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SolverTraceSegmentKindResource"
+          }
+        },
+        "required": [
+          "kind",
+          "duration_ns",
+          "clock_domain"
+        ],
+        "type": "object"
+      },
       "SpinAuthoringDeleteRequest": {
         "properties": {
           "base_revision": {
@@ -21726,54 +22152,6 @@
           "owner_spin_transport_id",
           "known",
           "interface"
-        ],
-        "type": "object"
-      },
-      "SolverTraceClockDomainResource": {
-        "enum": [
-          "server_monotonic",
-          "browser_performance"
-        ],
-        "type": "string"
-      },
-      "SolverTraceCompletenessResource": {
-        "enum": [
-          "server_only",
-          "complete",
-          "partial"
-        ],
-        "type": "string"
-      },
-      "SolverTraceIdResource": {
-        "properties": {
-          "accepted_step": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "run_generation": {
-            "type": "string"
-          },
-          "sample_sequence": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "stage_sequence": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "value": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "value",
-          "run_generation",
-          "stage_sequence",
-          "accepted_step",
-          "sample_sequence"
         ],
         "type": "object"
       },
@@ -21890,89 +22268,6 @@
         "required": [
           "base_revision",
           "resource"
-        ],
-        "type": "object"
-      },
-      "SolverTraceResource": {
-        "properties": {
-          "api_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "completeness": {
-            "$ref": "#/components/schemas/SolverTraceCompletenessResource"
-          },
-          "format": {
-            "type": "string"
-          },
-          "segments": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/SolverTraceSegmentResource"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "trace_id": {
-            "$ref": "#/components/schemas/SolverTraceIdResource"
-          },
-          "unaccounted_browser_ns": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "unaccounted_server_ns": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "format",
-          "trace_id",
-          "segments",
-          "completeness",
-          "unaccounted_server_ns",
-          "unaccounted_browser_ns"
-        ],
-        "type": "object"
-      },
-      "SolverTraceSegmentKindResource": {
-        "enum": [
-          "native_to_runner_callback",
-          "runner_callback_to_publisher_enqueue",
-          "publisher_queue",
-          "publisher_apply",
-          "api_revision_visibility",
-          "browser_fetch",
-          "browser_decode_to_commit",
-          "commit_to_animation_frame"
-        ],
-        "type": "string"
-      },
-      "SolverTraceSegmentResource": {
-        "properties": {
-          "clock_domain": {
-            "$ref": "#/components/schemas/SolverTraceClockDomainResource"
-          },
-          "duration_ns": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/SolverTraceSegmentKindResource"
-          }
-        },
-        "required": [
-          "kind",
-          "duration_ns",
-          "clock_domain"
         ],
         "type": "object"
       },
@@ -23169,6 +23464,29 @@
                 "type": "object"
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data.",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "fdm_grid_refresh"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data."
           },
           {
             "allOf": [
@@ -31474,7 +31792,7 @@
             }
           },
           {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFDM responses always return the complete cell-centred field, even when\nthis cap is provided, because FMVP v2 has no cell-index mapping for a\ndownsampled payload.",
             "in": "query",
             "name": "max_samples",
             "required": false,

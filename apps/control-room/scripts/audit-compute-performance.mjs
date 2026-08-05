@@ -653,7 +653,7 @@ function checkRibbonModuleSessionStatusSelector() {
     "shouldLoadRuntimeMeshManifest(",
     "shouldLoadRuntimeMeshSummary(",
     "shouldLoadRuntimeStageExecution(",
-    "[SESSION_STATUS_RESOURCE_KEY]: needsRuntimeResources",
+    "[SESSION_STATUS_RESOURCE_KEY]: needsSessionStatusResources",
   ]);
   forbidTokens(source, "RibbonModule session status selector", [
     "import { useSessionStatus }",

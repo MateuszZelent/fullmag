@@ -79,6 +79,7 @@ import type {
   Viewport3DRotationMode,
   Viewport3DScaleUnitMode,
 } from "../viewport3dStore";
+import { DEFAULT_VIEWPORT_3D_CAMERA_STATE } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { DimensionFrameLayer } from "./DimensionFrameLayer";
@@ -138,7 +139,7 @@ import {
   type Viewport3DVisualProfileId,
 } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
-import { clampNumber } from "../viewport3dMath";
+import { clampNumber, sameTuple3 } from "../viewport3dMath";
 import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
@@ -158,6 +159,7 @@ interface Viewport3DSceneProps {
   planarMonitorFramePreview: PlanarMonitorFramePreview | null;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
+  fdmLaneActive: boolean;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
@@ -193,6 +195,7 @@ interface Viewport3DSceneProps {
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
+  onSelectFdmUniverseOutsideSupport: () => void;
   onSelectFdmCell?: (instanceId: number) => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
@@ -252,6 +255,38 @@ interface Viewport3DCameraClip {
 
 const FALLBACK_GRID_SIZE = 1e-6;
 const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
+
+/**
+ * Resolve the initial scene camera against the actual domain bounds.
+ *
+ * The persisted default camera is FEM-sized (micrometre scale). FDM domains
+ * are commonly nanometre-scale, so handing that default directly to the
+ * active Three camera leaves the structured grid effectively invisible. A
+ * real user camera remains authoritative; only the untouched application
+ * default is replaced by the bounds fit.
+ */
+export function resolveViewport3DEffectiveCameraState({
+  bounds,
+  cameraState,
+}: {
+  bounds: Viewport3DBounds | null;
+  cameraState: Viewport3DCameraState;
+}): Viewport3DCameraState {
+  if (
+    !bounds ||
+    !sameTuple3(cameraState.position, DEFAULT_VIEWPORT_3D_CAMERA_STATE.position) ||
+    !sameTuple3(cameraState.target, DEFAULT_VIEWPORT_3D_CAMERA_STATE.target)
+  ) {
+    return cameraState;
+  }
+
+  const fit = resolveViewport3DCameraFit(bounds);
+  return {
+    position: fit.position,
+    target: fit.target,
+    up: VIEWPORT_3D_WORLD_UP,
+  };
+}
 
 export function resolveViewport3DProjectionCameraClip(
   bounds: Viewport3DBounds | null,
@@ -668,6 +703,7 @@ function Viewport3DOverlayLayerStack({
   fdmSettings,
   materialProfile,
   onSelectDomain,
+  onSelectFdmUniverseOutsideSupport,
   scaleLabelsVisible,
   scaleUnitMode,
   selectionBounds,
@@ -690,6 +726,7 @@ function Viewport3DOverlayLayerStack({
   | "fdmUniverseOutsideSupport"
   | "fdmSettings"
   | "onSelectDomain"
+  | "onSelectFdmUniverseOutsideSupport"
   | "scaleLabelsVisible"
   | "scaleUnitMode"
   | "selectionBounds"
@@ -743,6 +780,7 @@ function Viewport3DOverlayLayerStack({
           <FdmUniverseOutsideSupportLayer
             colors={colors}
             model={fdmUniverseOutsideSupport}
+            onSelect={onSelectFdmUniverseOutsideSupport}
             tracker={tracker}
           />
           <SelectionHighlightLayer
@@ -786,6 +824,7 @@ function Viewport3DModelLayerStack({
   airboxSettings,
   bounds,
   colors,
+  fdmLaneActive,
   fdmInstanceModel,
   fdmSettings,
   fdmSurfaceColors,
@@ -833,6 +872,7 @@ function Viewport3DModelLayerStack({
   | "airboxSettings"
   | "bounds"
   | "colors"
+  | "fdmLaneActive"
   | "fdmInstanceModel"
   | "fdmSettings"
   | "fdmSurfaceColors"
@@ -969,7 +1009,8 @@ function Viewport3DModelLayerStack({
           vectorStyle={vectorStyle}
         />
       ) : null}
-      {stageVisibility.baseGeometry &&
+      {!fdmLaneActive &&
+      stageVisibility.baseGeometry &&
       viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
         <AirboxLayer
           adoptionRegistry={adoptionRegistry}
@@ -996,7 +1037,8 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
-      {stageVisibility.baseGeometry &&
+      {!fdmLaneActive &&
+      stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
         <TopologyMeshLayer
           adoptionRegistry={adoptionRegistry}
@@ -1115,6 +1157,7 @@ function RegionOverlayNativePickingLayer({
 }
 
 function Viewport3DInteractionAndHudStack({
+  bounds,
   cameraGestureRef,
   cameraOrthographicScale,
   cameraProjection,
@@ -1133,6 +1176,7 @@ function Viewport3DInteractionAndHudStack({
   viewCubeVisible,
 }: Pick<
   Viewport3DSceneProps,
+  | "bounds"
   | "cameraOrthographicScale"
   | "cameraProjection"
   | "cameraState"
@@ -1154,6 +1198,7 @@ function Viewport3DInteractionAndHudStack({
   return (
     <>
       <OrbitCameraControls
+        bounds={bounds}
         cameraGestureRef={cameraGestureRef}
         cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
@@ -1199,6 +1244,7 @@ export function Viewport3DScene({
   planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
+  fdmLaneActive,
   airboxSettings,
   fdmDomain,
   fdmUniverseOutsideSupport,
@@ -1228,6 +1274,7 @@ export function Viewport3DScene({
   onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
+  onSelectFdmUniverseOutsideSupport,
   onSelectFdmCell,
   onSelectPart,
   onSelectRegion,
@@ -1268,19 +1315,23 @@ export function Viewport3DScene({
   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
-  const cameraClip = useMemo(
-    () => resolveViewport3DProjectionCameraClip(bounds, cameraState),
+  const effectiveCameraState = useMemo(
+    () => resolveViewport3DEffectiveCameraState({ bounds, cameraState }),
     [bounds, cameraState],
+  );
+  const cameraClip = useMemo(
+    () => resolveViewport3DProjectionCameraClip(bounds, effectiveCameraState),
+    [bounds, effectiveCameraState],
   );
   const orthographicCameraFrame = useMemo(
     () =>
       resolveViewport3DOrthographicCameraFrame(
         bounds,
         viewportSize,
-        cameraState,
+        effectiveCameraState,
         cameraOrthographicScale,
       ),
-    [bounds, cameraOrthographicScale, cameraState, viewportSize],
+    [bounds, cameraOrthographicScale, effectiveCameraState, viewportSize],
   );
   const visualProfile = useMemo(
     () => getViewport3DVisualProfile(visualProfileId),
@@ -1292,17 +1343,37 @@ export function Viewport3DScene({
   );
 
   useLayoutEffect(() => {
-    const activeCamera =
-      cameraProjection === "orthographic"
-        ? orthographicCameraRef.current
-        : perspectiveCameraRef.current;
-    if (!activeCamera) return;
-
-    setThreeState({ camera: activeCamera });
-    activeCamera.updateProjectionMatrix();
-    activeCamera.updateMatrixWorld(true);
+    if (cameraProjection === "orthographic") {
+      const activeCamera = orthographicCameraRef.current;
+      if (!activeCamera) return;
+      setThreeState({ camera: activeCamera });
+      applyViewport3DOrthographicCameraPose(
+        activeCamera,
+        effectiveCameraState,
+        cameraClip.near,
+        cameraClip.far,
+      );
+    } else {
+      const activeCamera = perspectiveCameraRef.current;
+      if (!activeCamera) return;
+      setThreeState({ camera: activeCamera });
+      applyViewport3DPerspectiveCameraPose(
+        activeCamera,
+        effectiveCameraState,
+        cameraClip.near,
+        cameraClip.far,
+        PERSPECTIVE_CAMERA_FOV_DEGREES,
+      );
+    }
     return scheduleViewport3DProjectionRenderFrames({ invalidate, tracker });
-  }, [cameraProjection, invalidate, setThreeState, tracker]);
+  }, [
+    cameraClip,
+    cameraProjection,
+    effectiveCameraState,
+    invalidate,
+    setThreeState,
+    tracker,
+  ]);
 
   // Demand rendering needs an explicit frame when async resources settle.
   useEffect(() => {
@@ -1334,7 +1405,7 @@ export function Viewport3DScene({
         bounds={bounds}
         cameraClip={cameraClip}
         cameraGestureRef={cameraGestureRef}
-        cameraState={cameraState}
+        cameraState={effectiveCameraState}
         fitRevision={fitRevision}
         onCameraChange={onCameraChange}
         orthographicCameraFrame={orthographicCameraFrame}
@@ -1346,7 +1417,7 @@ export function Viewport3DScene({
       <Viewport3DOverlayLayerStack
         bounds={bounds}
         cameraProjection={cameraProjection}
-        cameraState={cameraState}
+        cameraState={effectiveCameraState}
         clip={clip}
         clipFrameRotationDegrees={clipFrameRotationDegrees}
         clipIntersectionMarkers={clipIntersectionMarkers}
@@ -1361,6 +1432,7 @@ export function Viewport3DScene({
         fdmSettings={fdmSettings}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
+        onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
         scaleLabelsVisible={scaleLabelsVisible}
         scaleUnitMode={scaleUnitMode}
         selectionBounds={selectionBounds}
@@ -1371,6 +1443,7 @@ export function Viewport3DScene({
         airboxSettings={airboxSettings}
         bounds={bounds}
         colors={colors}
+        fdmLaneActive={fdmLaneActive}
         fdmInstanceModel={fdmInstanceModel}
         fdmSettings={fdmSettings}
         fdmSurfaceColors={fdmSurfaceColors}
@@ -1414,10 +1487,11 @@ export function Viewport3DScene({
         visualizationRevision={visualizationRevision}
       />
       <Viewport3DInteractionAndHudStack
+        bounds={bounds}
         cameraGestureRef={cameraGestureRef}
         cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
-        cameraState={cameraState}
+        cameraState={effectiveCameraState}
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}
         orbitDebugAngles={orbitDebugAngles}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
   buildStudyGlobalMergePatch,
@@ -8,7 +9,93 @@ import {
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 
+function activeLaneSnapshot({
+  device,
+  mode,
+  operations,
+  precision,
+}: {
+  device: string;
+  mode: string;
+  operations: ActiveLaneCapabilitySnapshot["operations"];
+  precision: string;
+}): ActiveLaneCapabilitySnapshot {
+  const identity = {
+    backend: "fdm",
+    device,
+    discretization: "fdm",
+    mode,
+    precision,
+  };
+  return {
+    schema_version: "active-lane-capabilities.v2",
+    authored: identity,
+    requested: identity,
+    resolved: identity,
+    source: {
+      kind: "planner",
+      capability_profile_version: "test",
+      engine_id: "test-fdm",
+      authored_intent: "problem_ir.runtime_selection",
+      effective_request: "session.runtime_resolution",
+    },
+    qualification: { status: "not_asserted", reason: "Test fixture." },
+    operations,
+  };
+}
+
 describe("StudyGlobalAuthoringModel", () => {
+  it.each([
+    ["cpu", "double", "strict"],
+    ["gpu", "single", "extended"],
+  ])(
+    "trusts planner global-study operation state on %s/%s/%s",
+    (device, precision, mode) => {
+      const draft = createStudyGlobalDraft({
+        study: {
+          requested_backend: "fdm",
+          requested_device: device,
+          requested_mode: mode,
+          requested_precision: precision,
+        },
+      });
+      const activeLane = activeLaneSnapshot({
+        device,
+        mode,
+        precision,
+        operations: {
+          "study.relaxation": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Relaxation is supported for this resolved lane.",
+            requires: [],
+          },
+          "study.time_integration": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Time integration is supported for this resolved lane.",
+            requires: [],
+          },
+        },
+      });
+
+      expect(
+        validateStudyGlobalDraft(draft, { activeLane }).filter((issue) =>
+          issue.message.includes("resolved lane"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("fails closed when the global draft has no active-lane capability snapshot", () => {
+    const draft = createStudyGlobalDraft({ study: {} });
+
+    expect(validateStudyGlobalDraft(draft, { activeLane: null })).toContainEqual({
+      message: "Active-lane capability snapshot is unavailable.",
+      severity: "error",
+    });
+  });
+
   it("recognizes only an explicit FDM request or session discretization", () => {
     expect(
       isExplicitFdmStudy({
@@ -34,6 +121,78 @@ describe("StudyGlobalAuthoringModel", () => {
         sessionDiscretization: "fem",
       }),
     ).toBe(false);
+  });
+
+  it("prioritizes an explicit requested backend over stale resolved session state", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fem",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+  });
+
+  it("prioritizes an explicit requested discretization over stale resolved session state", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        requestedDiscretization: "fem",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        requestedDiscretization: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+  });
+
+  it("lets hybrid backend intent defer to requested or resolved discretization", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        requestedDiscretization: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        requestedDiscretization: "fem",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(false);
+  });
+
+  it("falls through auto and remains unresolved without any concrete lane", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        requestedDiscretization: undefined,
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(true);
+    expect(isExplicitFdmStudy({})).toBe(false);
   });
 
   it("does not serialize the FEM solver policy for an explicit FDM study", () => {

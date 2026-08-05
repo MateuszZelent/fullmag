@@ -133,6 +133,7 @@ pub(crate) struct SessionManifest {
     pub problem_name: String,
     pub requested_backend: String,
     pub explicit_selection: bool,
+    pub authored_requested_device: String,
     pub requested_device: String,
     pub requested_precision: String,
     pub requested_mode: String,
@@ -159,6 +160,7 @@ pub(crate) struct SessionManifest {
 pub(crate) struct SessionRuntimeSelection {
     pub requested_backend: String,
     pub explicit_selection: bool,
+    pub authored_requested_device: String,
     pub requested_device: String,
     pub requested_precision: String,
     pub requested_mode: String,

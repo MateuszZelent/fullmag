@@ -884,6 +884,7 @@ export function buildObjectRegionPatch(
   draft: ObjectRegionDraft,
   options: BuildObjectRegionPatchOptions = {},
 ): components["schemas"]["SceneObjectRegionPatch"] {
+  const meshPolicyLane = options.meshPolicyLane ?? "fem";
   const clampedShape = clampObjectRegionDraftShapeToOwnerBounds(
     draft.shape,
     draft.ownerBounds,
@@ -925,8 +926,14 @@ export function buildObjectRegionPatch(
     if (override.unit.trim().length > 0) {
       value.unit = override.unit.trim();
     }
+    const conflictPolicy = String(override.conflictPolicy);
     return {
-      conflict_policy: override.conflictPolicy,
+      ...(meshPolicyLane !== "fem" && conflictPolicy === "min_mesh_size_wins"
+        ? {}
+        : {
+            conflict_policy:
+              conflictPolicy as components["schemas"]["SceneRegionConflictPolicy"],
+          }),
       parameter: override.parameter,
       priority: Math.round(override.priority),
       value,
@@ -939,10 +946,11 @@ export function buildObjectRegionPatch(
     material_overrides: materialOverrides,
     name: draft.name.trim(),
     priority: draft.priority,
-    realization_policy: draft.realizationPolicy,
+    realization_policy:
+      meshPolicyLane === "fem" ? draft.realizationPolicy : null,
     shape,
   };
-  if ((options.meshPolicyLane ?? "fem") === "fem") {
+  if (meshPolicyLane === "fem") {
     patch.mesh_policy = meshPolicy;
   }
   return patch;

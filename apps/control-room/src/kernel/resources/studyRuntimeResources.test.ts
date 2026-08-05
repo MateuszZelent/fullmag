@@ -37,6 +37,7 @@ import {
   DATA_TABLES_PATH,
 } from "../api/apiPaths";
 import type { LiveStatusResource } from "../api/apiTypes";
+import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
@@ -200,6 +201,7 @@ function statusWith({
 > {
   return {
     capabilities: {
+      active_lane: activeLaneCapabilityFixture(),
       algorithms_available: [],
       binary_fields: true,
       cell_fields: true,

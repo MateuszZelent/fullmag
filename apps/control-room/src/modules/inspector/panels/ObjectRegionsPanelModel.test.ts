@@ -282,6 +282,87 @@ describe("ObjectRegionsPanelModel", () => {
     });
   });
 
+  it("clears stale FEM realization and mesh-size conflict fields from an FDM region patch", () => {
+    const patch = buildObjectRegionPatch(
+      {
+        enabled: true,
+        frame: "object",
+        materialOverrides: [
+          {
+            conflictPolicy: "min_mesh_size_wins" as never,
+            parameter: "ms",
+            priority: 2,
+            unit: "A/m",
+            value: 800e3,
+          },
+        ],
+        meshPolicy: {
+          enabled: true,
+          maximumElementSize: 2e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: "fdm-region",
+        ownerBounds: null,
+        priority: 2,
+        realizationPolicy: "project",
+        shape: {
+          axis: [0, 0, 1],
+          center: [0, 0, 0],
+          height: 5e-9,
+          kind: "box",
+          radius: 20e-9,
+          size: [10e-9, 8e-9, 5e-9],
+        },
+      },
+      { meshPolicyLane: "fdm" },
+    );
+
+    expect(patch.realization_policy).toBeNull();
+    expect(patch).not.toHaveProperty("mesh_policy");
+    expect(patch.material_overrides).toEqual([
+      {
+        parameter: "ms",
+        priority: 2,
+        value: { kind: "constant", unit: "A/m", value: 800e3 },
+      },
+    ]);
+  });
+
+  it("fails closed for an unresolved lane instead of serializing FEM region policy", () => {
+    const patch = buildObjectRegionPatch(
+      {
+        enabled: true,
+        frame: "object",
+        materialOverrides: [],
+        meshPolicy: {
+          enabled: true,
+          maximumElementSize: 2e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: "unresolved-region",
+        ownerBounds: null,
+        priority: 0,
+        realizationPolicy: "conformal",
+        shape: {
+          axis: [0, 0, 1],
+          center: [0, 0, 0],
+          height: 5e-9,
+          kind: "box",
+          radius: 20e-9,
+          size: [10e-9, 8e-9, 5e-9],
+        },
+      },
+      { meshPolicyLane: "unknown" },
+    );
+
+    expect(patch.realization_policy).toBeNull();
+    expect(patch).not.toHaveProperty("mesh_policy");
+  });
+
   it("omits non-box shape parameters from the canonical Box patch", () => {
     const patch = buildObjectRegionPatch({
       enabled: true,

@@ -286,6 +286,7 @@ export function buildViewport3DTargetRenderPlan({
 export function buildViewport3DPassDemands(
   plan: Viewport3DTargetRenderPlan,
   options: {
+    forceComplete?: boolean;
     maxSamples?: number | null;
     replayQuery?: Viewport3DReplayFieldQuery | null;
     scopeId?: string | null;
@@ -322,13 +323,14 @@ export function buildViewport3DPassDemands(
   }
 
   if (plan.vectors.visible) {
+    const forceComplete = options.forceComplete === true;
     demands.push({
       component: "full",
-      completeness: plan.shader.visible && plan.shader.scalarColorMode
+      completeness: forceComplete || (plan.shader.visible && plan.shader.scalarColorMode)
         ? "complete"
         : "sampled-ok",
       maxSamples:
-        plan.shader.visible && plan.shader.scalarColorMode
+        forceComplete || (plan.shader.visible && plan.shader.scalarColorMode)
           ? null
           : Math.max(0, Math.floor(options.maxSamples ?? plan.vectors.budget)),
       passId: `${plan.targetId}:vector-glyph`,
@@ -776,6 +778,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
           targetKind: "fdm-domain",
         }),
         {
+          forceComplete: true,
           maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
             fdmSettings.vectorBudget,
             maxVectorGlyphs,

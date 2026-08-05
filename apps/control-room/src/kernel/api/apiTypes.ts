@@ -486,6 +486,7 @@ export interface ObjectInteractionResource {
   present: boolean;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
+  absorbing_boundary?: JsonObject | null;
   geometry?: JsonObject | null;
   magnetization_ref?: string | null;
   material_ref?: string | null;

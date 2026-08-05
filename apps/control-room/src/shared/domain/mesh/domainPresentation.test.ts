@@ -120,7 +120,17 @@ describe("domain presentation boundary", () => {
     const presentation = buildDomainPresentation({
       domainMeta: fdmMeta(),
       expectedFdmGridFingerprint: "grid-fingerprint-7",
-      fdmMembership: membership(),
+      fdmMembership: membership({
+        magnetic_support: {
+          active_cell_count: 6,
+          active_unassigned_cell_count: 1,
+          bounds_max_m: [3, 2, 1],
+          bounds_min_m: [1, 0, 0],
+          grid_fingerprint: "grid-fingerprint-7",
+          inactive_cell_count: 2,
+          semantic_role: "magnetic-support",
+        },
+      }),
       fdmMembershipStatus: "ready",
     });
 
@@ -131,6 +141,52 @@ describe("domain presentation boundary", () => {
     expect(presentation.fdmGrid.membership?.region_legend[0]?.region_id).toBe(
       "region:core",
     );
+    expect(presentation.magneticSupport).toEqual({
+      activeCellCount: 6,
+      activeUnassignedCellCount: 1,
+      bounds: { min: [1, 0, 0], max: [3, 2, 1] },
+      inactiveCellCount: 2,
+      kind: "magnetic-support",
+    });
+    expect(presentation.universeOutsideMagneticSupport).toEqual({
+      bounds: { min: [0, 0, 0], max: [4, 2, 1] },
+      kind: "universe-outside-magnetic-support",
+      reason: "validated-magnetic-support-with-inactive-cells",
+    });
+  });
+
+  it("rejects a magnetic-support summary whose counts or bounds do not match the current domain", () => {
+    const invalidSupports: Array<
+      NonNullable<FdmRegionMembershipResource["magnetic_support"]>
+    > = [
+      {
+        active_cell_count: 7,
+        active_unassigned_cell_count: 0,
+        bounds_max_m: [3, 2, 1],
+        bounds_min_m: [1, 0, 0],
+        grid_fingerprint: "grid-fingerprint-7",
+        inactive_cell_count: 2,
+        semantic_role: "magnetic-support",
+      },
+      {
+        active_cell_count: 6,
+        active_unassigned_cell_count: 0,
+        bounds_max_m: [5, 2, 1],
+        bounds_min_m: [1, 0, 0],
+        grid_fingerprint: "grid-fingerprint-7",
+        inactive_cell_count: 2,
+        semantic_role: "magnetic-support",
+      },
+    ];
+    for (const magnetic_support of invalidSupports) {
+      const presentation = buildDomainPresentation({
+        domainMeta: fdmMeta(),
+        fdmMembership: membership({ magnetic_support }),
+        fdmMembershipStatus: "ready",
+      });
+      if (!isFdmDomain(presentation)) throw new Error("expected FDM presentation");
+      expect(presentation.magneticSupport).toBeNull();
+    }
   });
 
   it("keeps an explicitly supplied universe-outside-support role separate from membership", () => {

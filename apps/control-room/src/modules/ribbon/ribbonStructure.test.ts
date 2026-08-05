@@ -42,6 +42,7 @@ import type {
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
@@ -1495,6 +1496,23 @@ describe("ribbon structure", () => {
     const result = await registry.execute(
       RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
       {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.oersted_field": {
+                    state: "supported",
+                    reason: "Oersted authoring is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fem" },
+          },
+        },
         selection: {
           get: () => ({
             kind: "object.physics",
@@ -1520,6 +1538,57 @@ describe("ribbon structure", () => {
         objectId: "free-layer",
       }),
     ]);
+  });
+
+  it("keeps deferred interactions visible but disabled with planner reason", () => {
+    const content = buildRibbonTabContent("physics", {
+      commands: createRibbonCommandRegistry(),
+      sessionStatus: {
+        capabilities: {
+          active_lane: {
+            ...activeLaneCapabilityFixture(),
+            operations: {
+              "interaction.exchange": {
+                state: "supported",
+                reason_code: "capability_supported",
+                reason: "Exchange is supported.",
+                requires: [],
+              },
+              "interaction.demag": {
+                state: "deferred",
+                reason_code: "capability_deferred",
+                reason: "Demag is deferred until the lane provides a realization.",
+                requires: ["interaction:demag"],
+              },
+            },
+          },
+        },
+        domain: { discretization: "fem" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      selection: {
+        kind: "object.physics",
+        label: "Free layer physics",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:physics",
+        objectId: "free-layer",
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const nodes = content?.groups
+      .find((group) => group.id === "physics-core")
+      ?.actions.find((action) => action.id === "physics-interactions")?.menu;
+    const exchange = nodes?.find((node) => node.id === "physics-interactions:exchange");
+    const demag = nodes?.find((node) => node.id === "physics-interactions:demag");
+
+    expect(exchange).toMatchObject({ disabled: false });
+    expect(demag).toMatchObject({
+      disabled: true,
+      shortcut: "deferred",
+      tooltip: "Demag is deferred until the lane provides a realization.",
+    });
   });
 
   it("fails closed for unresolved physics lanes and hides FEM airbox controls from FDM", () => {
@@ -3297,8 +3366,9 @@ describe("ribbon structure", () => {
       label: "Camera parameters",
     });
     expect(topographyAction).toMatchObject({
-      disabled: false,
+      disabled: true,
       label: "Topography",
+      tooltip: "Voxel topography is unavailable for this session.",
     });
     expect(topographyEnabledNode).toMatchObject({
       commandId: "viewport-3d.fdm-topography-toggle",
@@ -3575,7 +3645,7 @@ describe("ribbon structure", () => {
     const geometryBuildAction = geometry?.groups
       .find((group) => group.id === "builder-lifecycle")
       ?.actions.find((action) => action.id === "mesh.build-selected");
-    expect(geometryBuildAction?.label).toBe("Build FEM Mesh");
+    expect(geometryBuildAction?.label).toBe("Build Mesh");
 
     const mesh = buildRibbonTabContent("mesh", context);
     const buildGroup = mesh?.groups.find((group) => group.id === "build");

@@ -205,6 +205,7 @@ pub fn scene_document_to_script_builder(
                 object_regions: object.regions.clone(),
                 allocated_region_ids: object.allocated_region_ids.clone(),
                 material_parameter_fields: object.material_parameter_fields.clone(),
+                absorbing_boundary: object.absorbing_boundary.clone(),
             })
         })
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
@@ -621,6 +622,10 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
         }),
     );
     map.insert(
+        "absorbing_boundary".to_string(),
+        serde_json::to_value(&geo.absorbing_boundary).unwrap_or(Value::Null),
+    );
+    map.insert(
         "magnetization".to_string(),
         serde_json::json!({
             "kind": geo.magnetization.kind,
@@ -1015,6 +1020,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         regions: geometry.object_regions.clone(),
         allocated_region_ids: geometry.allocated_region_ids.clone(),
         material_parameter_fields: geometry.material_parameter_fields.clone(),
+        absorbing_boundary: geometry.absorbing_boundary.clone(),
         notes: None,
         visible: true,
         locked: false,
@@ -2309,6 +2315,7 @@ mod tests {
                 }],
                 allocated_region_ids: vec!["flower:r1".to_string()],
                 material_parameter_fields: Vec::new(),
+                absorbing_boundary: None,
             }],
             mesh_interfaces: vec![ScriptBuilderMeshInterfaceState {
                 interface_id: "object:flower|air".to_string(),

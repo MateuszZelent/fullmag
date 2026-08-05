@@ -367,6 +367,12 @@ pub struct ResolvedFemSpinTransportIR {
     pub implementation_state: String,
     pub validation_state: String,
     pub validation_scope: String,
+    /// The named steady charge solution is consumed by a bounded FEM
+    /// midpoint-Biot--Savart Oersted realization.  This is deliberately a
+    /// descriptor bit rather than a copied current field: the runtime must
+    /// solve charge first and derive the magnetic field from that result.
+    #[serde(default)]
+    pub oersted_source_bound: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -4,6 +4,11 @@ import type {
   JsonValue,
   RegionalFieldDriveResource,
 } from "@/kernel/api/apiTypes";
+import {
+  resolveActiveLaneOperation,
+  type ActiveLaneCapabilitySnapshot,
+  type ActiveLaneOperationId,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
 import { validateFieldDriveDraft } from "@/shared/domain/physics/fieldDrive";
 import {
@@ -1572,6 +1577,7 @@ export function studyStageDraftToSceneStage(
 export function validateStudyStageDraft(
   draft: StudyStageDraft,
   execution?: {
+    activeLane?: ActiveLaneCapabilitySnapshot | null;
     algorithmsAvailable?: readonly string[];
     backend: string;
     demagEnabled?: boolean;
@@ -1590,6 +1596,19 @@ export function validateStudyStageDraft(
       severity: "warning",
     });
     return issues;
+  }
+  const operationId = stageOperationId(draft.kind);
+  if (operationId && execution?.activeLane !== undefined) {
+    const operation = resolveActiveLaneOperation(execution.activeLane, operationId);
+    if (!operation.enabled) {
+      issues.push({
+        message: operation.reason,
+        severity:
+          operation.state === "semantic_only" || operation.state === "deferred"
+            ? "warning"
+            : "error",
+      });
+    }
   }
   if (draft.kind === "add_field_drive") {
     for (const message of validateFieldDriveDraft(draft.fieldDrive)) {
@@ -1875,6 +1894,17 @@ export function validateStudyStageDraft(
     issues.push({ message, severity: "error" });
   }
   return issues;
+}
+
+function stageOperationId(
+  kind: StudyStageDraft["kind"],
+): ActiveLaneOperationId | null {
+  if (kind === "relax") return "study.relaxation";
+  if (kind === "run") return "study.time_integration";
+  if (kind === "eigenmodes") return "study.eigenmodes";
+  if (kind === "frequency_response") return "study.frequency_response";
+  if (kind === "fft_response") return "study.fft";
+  return null;
 }
 
 function validateStageAdaptiveController(

@@ -155,7 +155,7 @@ describe("resolveInspectorDescriptor", () => {
     expect(descriptor.tabs).toEqual([]);
   });
 
-  it("exposes FDM cell identity metadata instead of FEM element fields", () => {
+  it("labels unverified FDM cell header metadata as a selection snapshot", () => {
     const descriptor = resolveInspectorDescriptor({
       kind: "fdm.cell",
       label: "Cell 17",
@@ -179,10 +179,10 @@ describe("resolveInspectorDescriptor", () => {
 
     expect(descriptor.metadata).toEqual(
       expect.arrayContaining([
-        { label: "Cell IJK", value: "[1, 2, 3]" },
-        { label: "Mask", value: "active-unassigned" },
-        { label: "Grid fingerprint", value: "grid-fingerprint-7" },
-        { label: "Membership revision", value: "generation-7:11:12" },
+        { label: "Selected IJK snapshot", value: "[1, 2, 3]" },
+        { label: "Selected mask snapshot", value: "active-unassigned" },
+        { label: "Selected grid fingerprint", value: "grid-fingerprint-7" },
+        { label: "Selected membership revision", value: "generation-7:11:12" },
       ]),
     );
     expect(descriptor.metadata).not.toEqual(

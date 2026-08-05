@@ -53,6 +53,7 @@ from fullmag.model.antenna import (
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.current_transport import (
     ChargeBoundary,
@@ -421,6 +422,82 @@ class StudyRegionRegistry:
         raise TypeError("study.regions is read-only; edit regions through the owner object")
 
 
+class AlphaControl:
+    """Numeric-compatible damping handle with object-scoped modules."""
+
+    __slots__ = ("_owner",)
+
+    def __init__(self, owner: "MagnetHandle") -> None:
+        self._owner = owner
+
+    @property
+    def value(self) -> float:
+        return self._owner._alpha_value
+
+    def absorbing_boundary(
+        self,
+        parameters: AbsorbingBoundaryLayer | None = None,
+        *,
+        total_width: float | None = None,
+        ramp_width: float | None = None,
+        max_damping: float | None = None,
+        faces: Sequence[str] | None = None,
+        profile: str | None = None,
+        frame: str | None = None,
+    ) -> AbsorbingBoundaryLayer:
+        if parameters is not None:
+            if any(
+                value is not None
+                for value in (total_width, ramp_width, max_damping, faces, profile, frame)
+            ):
+                raise TypeError("absorbing_boundary accepts either parameters or keyword values, not both")
+            if not isinstance(parameters, AbsorbingBoundaryLayer):
+                raise TypeError("parameters must be an AbsorbingBoundaryLayer instance")
+            layer = parameters
+        else:
+            missing = [
+                name
+                for name, value in (
+                    ("total_width", total_width),
+                    ("ramp_width", ramp_width),
+                    ("max_damping", max_damping),
+                )
+                if value is None
+            ]
+            if missing:
+                raise TypeError(
+                    "absorbing_boundary missing required parameter(s): " + ", ".join(missing)
+                )
+            layer = AbsorbingBoundaryLayer(
+                total_width_m=total_width,
+                ramp_width_m=ramp_width,
+                max_damping=max_damping,
+                faces=tuple(faces) if faces is not None else ("x+",),
+                profile=profile or "smootherstep",
+                frame=frame or "object",
+            )
+        self._owner._absorbing_boundary = layer
+        return layer
+
+    def __float__(self) -> float:
+        return self.value
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        try:
+            return self.value == float(other)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+
+    def __format__(self, spec: str) -> str:
+        return format(self.value, spec)
+
+
 class MagnetHandle:
     """Per-magnet configuration handle.
 
@@ -439,7 +516,9 @@ class MagnetHandle:
         self.region_name: str | None = None
         self.Ms: float | None = None
         self.Aex: float | None = None
-        self.alpha: float = 0.01
+        self._alpha_value: float = 0.01
+        self._alpha_control = AlphaControl(self)
+        self._absorbing_boundary: AbsorbingBoundaryLayer | None = None
         self.Dind: float | None = None
         self.Dbulk: float | None = None
         self.Ku1: float | None = None
@@ -468,6 +547,17 @@ class MagnetHandle:
     @m.setter
     def m(self, value: Any) -> None:  # type: ignore[assignment]
         self._m_value = value
+
+    @property
+    def alpha(self) -> AlphaControl:
+        return self._alpha_control
+
+    @alpha.setter
+    def alpha(self, value: float) -> None:
+        numeric = float(value)
+        if not math.isfinite(numeric) or numeric < 0.0:
+            raise ValueError("alpha must be finite and non-negative")
+        self._alpha_value = numeric
 
     @property
     def dind(self) -> float | None:
@@ -506,7 +596,7 @@ class MagnetHandle:
             name=f"mat_{self._name}",
             Ms=self.Ms,
             A=self.Aex,
-            alpha=self.alpha,
+            alpha=self._alpha_value,
             Ku1=self.Ku1,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
             Kc1=self.Kc1,
@@ -537,6 +627,7 @@ class MagnetHandle:
             object_regions=tuple(self._object_regions),
             allocated_region_ids=tuple(self._allocated_region_ids),
             material_parameter_fields=tuple(self._material_parameter_assignments),
+            absorbing_boundary=self._absorbing_boundary,
         )
 
     def add_region(

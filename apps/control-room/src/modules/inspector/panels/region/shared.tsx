@@ -93,9 +93,11 @@ export function ObjectRegionMetadataSection({
       <FieldRow
         label="Realization"
         value={
-          meshLane === "fdm"
-            ? "Not applicable for FDM structured-grid regions"
-            : model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
+          meshLane === "fem"
+            ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
+            : meshLane === "fdm"
+              ? "Not applicable for FDM structured-grid regions"
+              : "Withheld until the session discretization is explicit"
         }
       />
     </InspectorGroup>

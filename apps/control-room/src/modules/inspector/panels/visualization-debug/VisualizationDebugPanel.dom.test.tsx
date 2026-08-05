@@ -80,6 +80,8 @@ describe("VisualizationDebugPanel mounted interaction", () => {
           />
         </KernelContext.Provider>,
       );
+    });
+    await act(async () => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         await vi.runOnlyPendingTimersAsync();
         await Promise.resolve();
@@ -317,6 +319,7 @@ function makeKernel(): KernelApi {
       sessions: {
         current: {
           status: async () => ({
+            capabilities: { explicit_topology: false },
             domain: { discretization: "fem" },
             resources: {},
           }),

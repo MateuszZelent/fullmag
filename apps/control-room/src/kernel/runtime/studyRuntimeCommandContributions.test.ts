@@ -36,6 +36,7 @@ import { LayoutController } from "../layout/LayoutController";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
 import {
   resolveViewport3DActiveQuantityId,
   resolveViewport3DPrimaryFieldQuery,
@@ -143,10 +144,38 @@ function selectionController() {
 
 function runtimeResourceData({
   activeStageIndex = null,
+  activeLaneOperations = {
+    "study.relaxation": {
+      state: "supported",
+      reason: "Relaxation is supported.",
+      requires: [],
+    },
+    "study.time_integration": {
+      state: "supported",
+      reason: "Time integration is supported.",
+      requires: [],
+    },
+    "study.eigenmodes": {
+      state: "supported",
+      reason: "Eigenmodes are supported.",
+      requires: [],
+    },
+    "study.frequency_response": {
+      state: "supported",
+      reason: "Frequency response is supported.",
+      requires: [],
+    },
+    "study.fft": {
+      state: "supported",
+      reason: "FFT is supported.",
+      requires: [],
+    },
+  },
   binaryFields = true,
   commands = null,
   commandCount = 0,
   discretization = "fdm",
+  eigenModes = false,
   explicitTopology = false,
   geometryValidation = { diagnostics: [] },
   regionDiagnostics = { diagnostics: [], scene_revision: 0 },
@@ -166,6 +195,10 @@ function runtimeResourceData({
   stageRevision = 7,
 }: {
   activeStageIndex?: number | null;
+  activeLaneOperations?: Record<
+    string,
+    { reason: string; requires: string[]; state: string }
+  >;
   binaryFields?: boolean;
   commands?: Array<{
     command_id?: string;
@@ -175,6 +208,7 @@ function runtimeResourceData({
   }> | null;
   commandCount?: number;
   discretization?: string;
+  eigenModes?: boolean;
   explicitTopology?: boolean;
   geometryValidation?: unknown;
   regionDiagnostics?: unknown;
@@ -219,10 +253,21 @@ function runtimeResourceData({
     [MODEL_REGION_DIAGNOSTICS_PATH]: regionDiagnostics,
     [SESSION_STATUS_RESOURCE_KEY]: {
       capabilities: {
+        active_lane: {
+          ...activeLaneCapabilityFixture(),
+          operations: activeLaneOperations,
+          resolved: {
+            backend: discretization,
+            device: "cpu",
+            discretization,
+            mode: "strict",
+            precision: "double",
+          },
+        },
         algorithms_available: [],
         binary_fields: binaryFields,
         cell_fields: true,
-        eigen_modes: false,
+        eigen_modes: eigenModes,
         explicit_topology: explicitTopology,
         gpu_telemetry: true,
         node_fields: explicitTopology,
@@ -340,6 +385,7 @@ describe("study runtime command contributions", () => {
       api: {
         model: { scene, commitTransaction },
       } as never,
+      resourceData: runtimeResourceData(),
       resources,
       source: "test",
     });
@@ -396,6 +442,10 @@ describe("study runtime command contributions", () => {
           api: {
             model: { scene, commitTransaction },
           } as never,
+          resourceData: runtimeResourceData({
+            discretization: "fem",
+            eigenModes: true,
+          }),
           resources,
           source: "test",
         }),
@@ -422,6 +472,122 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(5);
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(5);
   });
+
+  it("uses distinct active-lane operations for frequency-analysis stage authoring", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        discretization: "fem",
+        eigenModes: true,
+        activeLaneOperations: {
+          "study.eigenmodes": {
+            state: "semantic_only",
+            reason: "Eigenmode authoring is semantic-only on this lane.",
+            requires: ["planner:eigenmodes"],
+          },
+          "study.frequency_response": {
+            state: "unsupported",
+            reason: "Frequency response is unavailable on this lane.",
+            requires: ["planner:frequency_response"],
+          },
+          "study.fft": {
+            state: "supported",
+            reason: "FFT is supported from available field quantities.",
+            requires: ["field_quantity"],
+          },
+        },
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.add-eigenmodes-stage", context)).toBe(false);
+    expect(
+      registry.get("study.add-eigenmodes-stage")?.disabledReason?.(context),
+    ).toBe("Eigenmode authoring is semantic-only on this lane.");
+    expect(registry.isEnabled("study.add-frequency-response-stage", context)).toBe(false);
+    expect(
+      registry.get("study.add-frequency-response-stage")?.disabledReason?.(context),
+    ).toBe("Frequency response is unavailable on this lane.");
+    expect(registry.isEnabled("study.add-fft-response-stage", context)).toBe(true);
+  });
+
+  it("fails closed for frequency-analysis commands without active-lane status", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        discretization: "fem",
+        activeLaneOperations: {},
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.add-eigenmodes-stage", context)).toBe(false);
+    expect(
+      registry.get("study.add-eigenmodes-stage")?.disabledReason?.(context),
+    ).toBe("Active-lane capability snapshot is unavailable.");
+  });
+
+  it.each([
+    ["study.add-relax-stage", "study.relaxation"],
+    ["study.add-run-stage", "study.time_integration"],
+  ])(
+    "gates %s with the planner-owned %s operation",
+    (commandId, operationId) => {
+      const registry = registryWithStudyRuntimeCommands();
+      const unsupported = {
+        api: {} as never,
+        resourceData: runtimeResourceData({
+          activeLaneOperations: {
+            [operationId]: {
+              state: "unsupported",
+              reason: `${operationId} is unavailable for this resolved lane.`,
+              requires: ["planner:resolved_lane"],
+            },
+          },
+        }),
+        source: "test" as const,
+      };
+      const supported = {
+        api: {} as never,
+        resourceData: runtimeResourceData({
+          activeLaneOperations: {
+            [operationId]: {
+              state: "supported",
+              reason: `${operationId} is supported for this resolved lane.`,
+              requires: ["planner:resolved_lane"],
+            },
+          },
+        }),
+        source: "test" as const,
+      };
+
+      expect(registry.isEnabled(commandId, unsupported), commandId).toBe(false);
+      expect(registry.get(commandId)?.disabledReason?.(unsupported)).toBe(
+        `${operationId} is unavailable for this resolved lane.`,
+      );
+      expect(registry.isEnabled(commandId, supported), commandId).toBe(true);
+      expect(registry.get(commandId)?.disabledReason?.(supported)).toBeNull();
+    },
+  );
+
+  it.each(["study.add-relax-stage", "study.add-run-stage"])(
+    "fails closed for %s without its active-lane operation",
+    (commandId) => {
+      const registry = registryWithStudyRuntimeCommands();
+      const context = {
+        api: {} as never,
+        resourceData: runtimeResourceData({ activeLaneOperations: {} }),
+        source: "test" as const,
+      };
+
+      expect(registry.isEnabled(commandId, context), commandId).toBe(false);
+      expect(registry.get(commandId)?.disabledReason?.(context)).toBe(
+        "Active-lane capability snapshot is unavailable.",
+      );
+    },
+  );
 
   it("adds hysteresis stage visibly by selecting the new stage and opening Study", async () => {
     const registry = registryWithStudyRuntimeCommands();

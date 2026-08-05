@@ -2,6 +2,76 @@
 
 use crate::types::{AuxiliaryArtifact, ExecutionProvenance, RunError, StateObservables};
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+struct FdmMagneticSupportSummary<'a> {
+    semantic_role: &'static str,
+    grid_fingerprint: &'a str,
+    bounds_min_m: [f64; 3],
+    bounds_max_m: [f64; 3],
+    active_cell_count: u64,
+    inactive_cell_count: u64,
+    active_unassigned_cell_count: u64,
+}
+
+fn magnetic_support_summary<'a>(
+    origin_m: [f64; 3],
+    counts: [u32; 3],
+    cell_m: [f64; 3],
+    active_mask: Option<&[bool]>,
+    region_mask: &[u32],
+    grid_fingerprint: &'a str,
+) -> Result<FdmMagneticSupportSummary<'a>, String> {
+    let expected_cells = usize::try_from(
+        counts.into_iter().try_fold(1u64, |product, count| {
+            product.checked_mul(u64::from(count))
+        }).ok_or_else(|| "FDM region membership cell count overflows u64".to_string())?,
+    )
+    .map_err(|_| "FDM region membership cell count is not addressable".to_string())?;
+    if region_mask.len() != expected_cells || active_mask.is_some_and(|mask| mask.len() != expected_cells) {
+        return Err("FDM magnetic-support mask length disagrees with grid cell count".to_string());
+    }
+    let nx = usize::try_from(counts[0]).map_err(|_| "FDM grid x cell count is not addressable".to_string())?;
+    let ny = usize::try_from(counts[1]).map_err(|_| "FDM grid y cell count is not addressable".to_string())?;
+    let plane_stride = nx.checked_mul(ny).ok_or_else(|| "FDM grid xy plane size overflows usize".to_string())?;
+    let mut support_min = [u32::MAX; 3];
+    let mut support_max_exclusive = [0u32; 3];
+    let mut active_cell_count = 0u64;
+    let mut inactive_cell_count = 0u64;
+    let mut active_unassigned_cell_count = 0u64;
+    for (index, region_id) in region_mask.iter().enumerate() {
+        if active_mask.is_some_and(|mask| !mask[index]) {
+            inactive_cell_count = inactive_cell_count.checked_add(1).ok_or_else(|| "FDM inactive cell count overflows u64".to_string())?;
+            continue;
+        }
+        active_cell_count = active_cell_count.checked_add(1).ok_or_else(|| "FDM active cell count overflows u64".to_string())?;
+        if *region_id == 0 {
+            active_unassigned_cell_count = active_unassigned_cell_count.checked_add(1).ok_or_else(|| "FDM active-unassigned cell count overflows u64".to_string())?;
+        }
+        let coordinates = [
+            u32::try_from(index % nx).map_err(|_| "FDM support x index exceeds u32".to_string())?,
+            u32::try_from((index / nx) % ny).map_err(|_| "FDM support y index exceeds u32".to_string())?,
+            u32::try_from(index / plane_stride).map_err(|_| "FDM support z index exceeds u32".to_string())?,
+        ];
+        for (axis, coordinate) in coordinates.into_iter().enumerate() {
+            support_min[axis] = support_min[axis].min(coordinate);
+            support_max_exclusive[axis] = support_max_exclusive[axis].max(coordinate.checked_add(1).ok_or_else(|| "FDM support cell-edge index exceeds u32".to_string())?);
+        }
+    }
+    if active_cell_count == 0 {
+        return Err("FDM magnetic support contains no active cells".to_string());
+    }
+    Ok(FdmMagneticSupportSummary {
+        semantic_role: "magnetic-support",
+        grid_fingerprint,
+        bounds_min_m: std::array::from_fn(|axis| origin_m[axis] + f64::from(support_min[axis]) * cell_m[axis]),
+        bounds_max_m: std::array::from_fn(|axis| origin_m[axis] + f64::from(support_max_exclusive[axis]) * cell_m[axis]),
+        active_cell_count,
+        inactive_cell_count,
+        active_unassigned_cell_count,
+    })
+}
 
 /// Serialize the planner-owned FDM grid certificate as a standalone artifact.
 ///
@@ -62,6 +132,15 @@ pub(crate) fn region_membership_artifacts(
         ));
     }
 
+    let magnetic_support = magnetic_support_summary(
+        certificate.origin_m,
+        certificate.counts,
+        certificate.cell_m,
+        fdm.active_mask.as_deref(),
+        &fdm.region_mask,
+        &certificate.grid_fingerprint,
+    )?;
+
     let fingerprint = decode_grid_fingerprint(&certificate.grid_fingerprint)?;
     let mut binary = Vec::with_capacity(64 + fdm.region_mask.len() * std::mem::size_of::<u32>());
     binary.extend_from_slice(b"FMRM");
@@ -71,8 +150,12 @@ pub(crate) fn region_membership_artifacts(
     for count in fdm.grid.cells {
         binary.extend_from_slice(&count.to_le_bytes());
     }
-    binary.extend_from_slice(&(fdm.region_mask.len() as u32).to_le_bytes());
-    binary.extend_from_slice(&(certificate.region_legend.len() as u32).to_le_bytes());
+    let binary_cell_count = u32::try_from(fdm.region_mask.len())
+        .map_err(|_| "FDM membership cell count exceeds u32".to_string())?;
+    let binary_legend_count = u32::try_from(certificate.region_legend.len())
+        .map_err(|_| "FDM region legend count exceeds u32".to_string())?;
+    binary.extend_from_slice(&binary_cell_count.to_le_bytes());
+    binary.extend_from_slice(&binary_legend_count.to_le_bytes());
     binary.extend_from_slice(&fingerprint);
     binary.extend_from_slice(&[0u8; 4]);
     for (index, region_id) in fdm.region_mask.iter().enumerate() {
@@ -93,6 +176,7 @@ pub(crate) fn region_membership_artifacts(
         "counts": certificate.counts,
         "cell_m": certificate.cell_m,
         "cell_count": fdm.region_mask.len(),
+        "magnetic_support": magnetic_support,
         "object_ids": certificate.object_ids,
         "region_legend": certificate.region_legend,
         "encoding": "FMRM:u32_membership_le",
@@ -364,4 +448,23 @@ fn select_base_field(
             });
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::magnetic_support_summary;
+
+    #[test]
+    fn magnetic_support_rejects_a_grid_without_active_cells() {
+        let error = magnetic_support_summary(
+            [1.0e-9, -3.0e-9, 7.0e-9],
+            [2, 1, 1],
+            [2.0e-9, 3.0e-9, 4.0e-9],
+            Some(&[false, false]),
+            &[0, 0],
+            "grid-fingerprint",
+        )
+        .expect_err("zero-active support must reject");
+        assert!(error.contains("no active cells"));
+    }
 }

@@ -6,6 +6,7 @@ import {
   viewportSelectionForObject,
   viewportSelectionForRegion,
   viewportSelectionForFdmCell,
+  viewportSelectionForFdmUniverseOutsideSupport,
 } from "./viewport3dSelection";
 import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
 import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
@@ -58,6 +59,22 @@ describe("viewport3dSelection", () => {
       nodeId: "model:universe",
       objectId: null,
       ref: null,
+    });
+  });
+
+  it("maps the FDM universe overlay pick to its distinct visualization target", () => {
+    expect(viewportSelectionForFdmUniverseOutsideSupport()).toEqual({
+      kind: "mesh.grid.universe-outside-support",
+      label: "Universe Outside Magnetic Support",
+      nodeId: "model:mesh:outside-support",
+      objectId: null,
+      ref: {
+        kind: "mesh.grid.universe-outside-support",
+        nodeId: "model:mesh:outside-support",
+        scope: "universe-outside-support",
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-universe-outside-support",
+      },
     });
   });
 

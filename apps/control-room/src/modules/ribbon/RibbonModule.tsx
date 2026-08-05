@@ -92,7 +92,7 @@ import { RIBBON_TABS } from "./ribbonTypes";
 type RibbonRuntimeStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
-    "binary_fields" | "explicit_topology"
+    "active_lane" | "binary_fields" | "explicit_topology"
   >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
@@ -116,6 +116,7 @@ function selectRibbonRuntimeStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
+      active_lane: status.data.capabilities.active_lane,
       binary_fields: status.data.capabilities.binary_fields,
       explicit_topology: status.data.capabilities.explicit_topology,
     },
@@ -148,6 +149,7 @@ function ribbonRuntimeStatusEquals(
   if (!previous || !next) return previous === next;
   return (
     previous.capabilities.binary_fields === next.capabilities.binary_fields &&
+    previous.capabilities.active_lane === next.capabilities.active_lane &&
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&

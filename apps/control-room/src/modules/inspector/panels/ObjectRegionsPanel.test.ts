@@ -255,8 +255,9 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(parent).toContain('kernel.commands.execute("mesh.build-shared-domain"');
     expect(meshPanel).toContain('if (meshLane === "fdm")');
     expect(meshPanel).toContain('if (meshLane !== "fem")');
-    expect(meshPanel).toContain('title="FEM Mesh Controls"');
-    expect(meshPanel).toContain("Read-only: no FEM policy patch or mesh-build command");
+    expect(meshPanel).not.toContain('title="FEM Mesh Controls"');
+    expect(meshPanel).toContain('label="Grid policy" value="execution-plan owned (read-only)"');
+    expect(meshPanel).toContain('label="Explorer role" value="FDM Grid / Magnetic Support"');
     expect(shared).toContain("canWriteMeshRegion");
     expect(shared).toContain("FDM structured-grid membership is read-only");
 

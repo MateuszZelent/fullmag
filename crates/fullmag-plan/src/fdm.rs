@@ -1448,6 +1448,12 @@ pub(crate) fn plan_fdm(
                     fdm_plan.oersted_realization =
                         Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
                 }
+                ResolvedOerstedTerm::SolvedCurrent { .. } => {
+                    // FDM transport owns the stage-consistent current solve;
+                    // its workflow derives H_oe from the same charge field.
+                    fdm_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+                }
             }
             continue;
         }

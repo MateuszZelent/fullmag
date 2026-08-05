@@ -414,6 +414,8 @@ use utoipa::OpenApi;
         crate::schemas::mesh::MeshRegionMembershipListResource,
         crate::schemas::mesh::MeshRegionMembershipResource,
         crate::schemas::mesh::FdmRegionLegendEntryResource,
+        crate::schemas::mesh::FdmMagneticSupportSemanticRole,
+        crate::schemas::mesh::FdmMagneticSupportSummaryResource,
         crate::schemas::mesh::FdmRegionMembershipResource,
         crate::schemas::mesh::MeshSharedDomainManifestResource,
         crate::schemas::mesh::MeshObjectConfigResource,

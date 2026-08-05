@@ -1,4 +1,11 @@
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
+import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+
+export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET = {
+  id: "fdm-universe-outside-support",
+  kind: "fdm-domain",
+  label: "Universe outside magnetic support",
+} as const;
 
 /**
  * Render-only description of the portion of an FDM universe that surrounds
@@ -8,30 +15,24 @@ import type { Viewport3DBounds } from "../viewport3dRenderModel";
  */
 export interface FdmUniverseOutsideSupportOverlayModel {
   kind: "fdm-universe-outside-magnetic-support";
+  legend: {
+    magneticSupport: string;
+    outsideSupport: string;
+  };
   magneticSupportBounds: Viewport3DBounds;
+  target: typeof FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET;
   universeBounds: Viewport3DBounds;
 }
 
-export function hasExplicitFdmUniverseOutsideMagneticSupportRole(
-  ...configs: readonly unknown[]
-): boolean {
-  return configs.some((config) => {
-    if (!config || typeof config !== "object" || Array.isArray(config)) {
-      return false;
-    }
-    const record = config as Record<string, unknown>;
-    return (
-      record.role === "universe-outside-magnetic-support" ||
-      record.semantic_role === "universe-outside-magnetic-support"
-    );
-  });
-}
-
 export function resolveFdmUniverseOutsideSupportOverlayModel({
+  activeCellCount,
+  inactiveCellCount,
   magneticSupportBounds,
   universeBounds,
   semanticRole,
 }: {
+  activeCellCount: number;
+  inactiveCellCount: number;
   magneticSupportBounds: Viewport3DBounds | null;
   universeBounds: Viewport3DBounds | null;
   semanticRole: "universe-outside-magnetic-support" | null | undefined;
@@ -47,8 +48,78 @@ export function resolveFdmUniverseOutsideSupportOverlayModel({
 
   return {
     kind: "fdm-universe-outside-magnetic-support",
+    legend: {
+      magneticSupport: `Magnetic support · ${activeCellCount.toLocaleString("en-US")} active cells`,
+      outsideSupport: `Universe outside support · ${inactiveCellCount.toLocaleString("en-US")} inactive cells`,
+    },
     magneticSupportBounds,
+    target: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
     universeBounds,
+  };
+}
+
+export function resolveFdmUniverseOutsideSupportOverlayFromPresentation(
+  presentation: DomainPresentation | null,
+): FdmUniverseOutsideSupportOverlayModel | null {
+  const support =
+    presentation?.discretization === "fdm"
+      ? presentation.magneticSupport
+      : null;
+  const magneticSupportBounds = support
+    ? toViewportBounds(support.bounds)
+    : null;
+  const universeBounds = presentation
+    ? toViewportBounds(presentation.bounds)
+    : null;
+  if (
+    !presentation ||
+    presentation.discretization !== "fdm" ||
+    presentation.resourceStatus !== "realized" ||
+    !support ||
+    !magneticSupportBounds ||
+    !universeBounds ||
+    support.inactiveCellCount === 0
+  ) {
+    return null;
+  }
+  return resolveFdmUniverseOutsideSupportOverlayModel({
+    activeCellCount: support.activeCellCount,
+    inactiveCellCount: support.inactiveCellCount,
+    magneticSupportBounds,
+    semanticRole: "universe-outside-magnetic-support",
+    universeBounds,
+  });
+}
+
+function toViewportBounds({
+  max,
+  min,
+}: {
+  max: readonly number[];
+  min: readonly number[];
+}): Viewport3DBounds | null {
+  if (
+    max.length !== 3 ||
+    min.length !== 3 ||
+    !max.every(Number.isFinite) ||
+    !min.every(Number.isFinite)
+  ) {
+    return null;
+  }
+  const size: [number, number, number] = [
+    max[0]! - min[0]!,
+    max[1]! - min[1]!,
+    max[2]! - min[2]!,
+  ];
+  if (size.some((value) => value < 0)) return null;
+  return {
+    center: [
+      (min[0]! + max[0]!) / 2,
+      (min[1]! + max[1]!) / 2,
+      (min[2]! + max[2]!) / 2,
+    ],
+    radius: Math.hypot(...size) / 2,
+    size,
   };
 }
 

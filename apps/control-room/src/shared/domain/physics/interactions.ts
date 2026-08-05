@@ -107,6 +107,10 @@ const DEMAG_METHOD_VALUES_BY_LANE: Record<
   fem: FEM_DEMAG_METHOD_OPTIONS.map((option) => option.value),
 };
 
+const FDM_UNSUPPORTED_INTERACTIONS = new Set<PhysicsInteractionId>([
+  "magnetoelastic",
+]);
+
 const INTERACTION_SPECS: readonly InteractionSpec[] = [
   {
     availability: "study",
@@ -552,7 +556,11 @@ export function interactionSpecsForDiscretization(
   discretization: InteractionDiscretization,
 ): readonly InteractionSpec[] {
   if (discretization === "unknown") return [];
-  return INTERACTION_SPECS.map((spec) => {
+  return INTERACTION_SPECS.filter(
+    (spec) =>
+      interactionAvailabilityForDiscretization(spec.id, discretization).status !==
+      "unsupported",
+  ).map((spec) => {
     if (spec.id !== "demag") return spec;
     return {
       ...spec,
@@ -586,6 +594,13 @@ export function interactionAvailabilityForDiscretization(
   if (!spec) {
     return {
       reason: `Interaction '${id}' is not available for ${discretization.toUpperCase()}.`,
+      status: "unsupported",
+    };
+  }
+  if (discretization === "fdm" && FDM_UNSUPPORTED_INTERACTIONS.has(id)) {
+    return {
+      reason:
+        "Magnetoelastic coupling is not applicable to the executable FDM lane; use a qualified FEM lane.",
       status: "unsupported",
     };
   }

@@ -174,11 +174,11 @@ export function resolveInspectorDescriptor(
     return {
       breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
       metadata: [
-        { label: "Cell IJK", value: `[${fdmCellRef.ijk.join(", ")}]` },
-        { label: "Mask", value: fdmCellRef.maskState },
-        { label: "Grid fingerprint", value: fdmCellRef.gridFingerprint },
+        { label: "Selected IJK snapshot", value: `[${fdmCellRef.ijk.join(", ")}]` },
+        { label: "Selected mask snapshot", value: fdmCellRef.maskState },
+        { label: "Selected grid fingerprint", value: fdmCellRef.gridFingerprint },
         {
-          label: "Membership revision",
+          label: "Selected membership revision",
           value: fdmCellRef.membershipRevision,
         },
       ],

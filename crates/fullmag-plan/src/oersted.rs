@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 use std::f64::consts::PI;
 
 use fullmag_ir::{
-    EnergyTermIR, FemMeshPartIR, FemMeshPartSelector, FemObjectSegmentIR, GeometryEntryIR, MeshIR,
-    OerstedFieldModelIR, ProblemIR, TimeDependenceIR,
+    CurrentModuleIR, CurrentTransportModelIR, EnergyTermIR, FemMeshPartIR, FemMeshPartSelector,
+    FemObjectSegmentIR, GeometryEntryIR, MeshIR, OerstedFieldModelIR, ProblemIR,
+    SpinTransportModeIR, TimeDependenceIR, TransportCouplingIR,
 };
 
 use crate::current_transport::ResolvedCurrentTransport;
@@ -28,6 +29,9 @@ pub(crate) struct ResolvedOerstedField {
 pub(crate) enum ResolvedOerstedTerm {
     Cylinder(ResolvedOerstedCylinder),
     Field(ResolvedOerstedField),
+    /// The field is derived after the named Ohmic/M2 charge solve.  It must
+    /// never be materialized from a prescribed current during planning.
+    SolvedCurrent { source: String },
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -93,16 +97,26 @@ pub(crate) fn resolve_fem_oersted_term(
         EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,
             source,
-        } => resolve_fem_oersted_from_current_solution(
-            problem,
-            term_index,
-            source,
-            current_transports,
-            mesh,
-            object_segments,
-            mesh_parts,
-        )
-        .map(Some),
+        } => {
+            if let Some(dynamic) = resolve_solved_current_source(
+                problem,
+                term_index,
+                source,
+                true,
+            )? {
+                return Ok(Some(dynamic));
+            }
+            resolve_fem_oersted_from_current_solution(
+                problem,
+                term_index,
+                source,
+                current_transports,
+                mesh,
+                object_segments,
+                mesh_parts,
+            )
+            .map(Some)
+        }
         _ => Ok(None),
     }
 }
@@ -135,18 +149,98 @@ pub(crate) fn resolve_fdm_oersted_term(
         EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,
             source,
-        } => resolve_fdm_oersted_from_current_solution(
-            problem,
-            term_index,
-            source,
-            current_transports,
-            grid_cells,
-            cell_size,
-            active_mask,
-        )
-        .map(Some),
+        } => {
+            if let Some(dynamic) = resolve_solved_current_source(
+                problem,
+                term_index,
+                source,
+                false,
+            )? {
+                return Ok(Some(dynamic));
+            }
+            resolve_fdm_oersted_from_current_solution(
+                problem,
+                term_index,
+                source,
+                current_transports,
+                grid_cells,
+                cell_size,
+                active_mask,
+            )
+            .map(Some)
+        }
         _ => Ok(None),
     }
+}
+
+/// Resolve a current-solution Oersted term whose current is produced by the
+/// steady/transient transport solver rather than authored as a prescribed
+/// density.  The planner returns a marker and the runtime derives the field
+/// from the accepted charge solution, preserving the current/field identity.
+fn resolve_solved_current_source(
+    problem: &ProblemIR,
+    term_index: usize,
+    source: &str,
+    fem: bool,
+) -> Result<Option<ResolvedOerstedTerm>, PlanError> {
+    let Some((model, coupling)) = problem.current_modules.iter().find_map(|module| {
+        let CurrentModuleIR::CurrentTransport {
+            name,
+            model,
+            coupling,
+            ..
+        } = module
+        else {
+            return None;
+        };
+        (name == source).then_some((*model, *coupling))
+    }) else {
+        return Ok(None);
+    };
+
+    if model == CurrentTransportModelIR::PrescribedDensity {
+        return Ok(None);
+    }
+
+    let Some(spin_module) = problem
+        .spin_transport_modules
+        .iter()
+        .find(|module| module.current_source_id == source)
+    else {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' uses a solved current but has no bound SpinDriftDiffusion transport module"
+            )],
+        });
+    };
+
+    let expected_model = if coupling == TransportCouplingIR::Bidirectional {
+        CurrentTransportModelIR::MagnetoresistivePoisson
+    } else {
+        CurrentTransportModelIR::OhmicPoisson
+    };
+    if model != expected_model {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' has a current model/coupling mismatch"
+            )],
+        });
+    }
+
+    if fem
+        && (spin_module.mode != SpinTransportModeIR::Steady
+            || coupling != TransportCouplingIR::OneWay)
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' requires FEM steady one-way transport; reciprocal or transient FEM stage coupling is not implemented"
+            )],
+        });
+    }
+
+    Ok(Some(ResolvedOerstedTerm::SolvedCurrent {
+        source: source.to_string(),
+    }))
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

@@ -55,12 +55,17 @@ export function VisualizationDebugPanel({
 }) {
   const lane = useSessionStatusSelector(
     (status) =>
-      resolveVisualizationDebugLane(status.data?.domain.discretization),
+      resolveVisualizationDebugLane(status.data?.domain?.discretization),
   );
-  if (lane === "fdm") {
+  if (lane !== "fem") {
     return (
-      <div className="fm-visualization-debug-panel" data-state="unsupported-target">
-        Visualization debug is not applicable for the FDM structured-grid lane.
+      <div
+        className="fm-visualization-debug-panel"
+        data-state={lane === "fdm" ? "unsupported-target" : "unresolved-lane"}
+      >
+        {lane === "fdm"
+          ? "Visualization debug is not applicable for the FDM structured-grid lane."
+          : "Visualization debug is unavailable until the session discretization is explicit."}
       </div>
     );
   }

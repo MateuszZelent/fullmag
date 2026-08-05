@@ -75,7 +75,7 @@ interface MutableObservation {
 /**
  * Creates a bounded, event-driven browser half of the solver trace.
  *
- * The observer does not poll.  A fetch observation is accepted only when the
+ * The observer is request-driven. A fetch observation is accepted only when the
  * response contains a sampled server trace ID; commit and animation-frame
  * observations are then scheduled for that same ID.  The scheduler and clock
  * are injected so tests can be deterministic without a browser runtime.

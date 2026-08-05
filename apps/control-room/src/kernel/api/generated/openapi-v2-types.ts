@@ -3288,6 +3288,65 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Stable machine-readable classification for an active-lane operation reason.
+         *     Human-readable `reason` text may evolve without changing UI behavior.
+         * @enum {string}
+         */
+        ActiveLaneCapabilityReasonCode: "capability_supported" | "capability_semantic_only" | "capability_deferred" | "capability_unsupported" | "capability_stale";
+        ActiveLaneCapabilitySnapshot: {
+            authored: components["schemas"]["ActiveLaneIdentity"];
+            fallback?: null | components["schemas"]["ActiveLaneFallback"];
+            operations: {
+                [key: string]: components["schemas"]["ActiveLaneOperationCapability"];
+            };
+            qualification: components["schemas"]["ActiveLaneQualification"];
+            /** @description Effective execution request after launcher/environment overrides. */
+            requested: components["schemas"]["ActiveLaneIdentity"];
+            resolved?: null | components["schemas"]["ActiveLaneIdentity"];
+            schema_version: string;
+            source: components["schemas"]["ActiveLaneCapabilitySource"];
+        };
+        ActiveLaneCapabilitySource: {
+            /** @description Provenance of `authored`: canonical ProblemIR runtime selection. */
+            authored_intent: string;
+            capability_profile_version?: string | null;
+            /** @description Provenance of `requested`: runtime resolution after launch overrides. */
+            effective_request: string;
+            engine_id?: string | null;
+            /**
+             * @description `planner` when the snapshot is backed by resolved planner capabilities;
+             *     `unavailable` when status must fail closed.
+             */
+            kind: string;
+        };
+        /** @enum {string} */
+        ActiveLaneCapabilityState: "supported" | "semantic_only" | "deferred" | "unsupported" | "stale";
+        ActiveLaneFallback: {
+            fallback_engine: string;
+            message: string;
+            occurred: boolean;
+            original_engine: string;
+            reason: string;
+        };
+        ActiveLaneIdentity: {
+            backend: string;
+            device: string;
+            discretization: string;
+            mode: string;
+            precision: string;
+        };
+        ActiveLaneOperationCapability: {
+            reason: string;
+            reason_code: components["schemas"]["ActiveLaneCapabilityReasonCode"];
+            requires: string[];
+            state: components["schemas"]["ActiveLaneCapabilityState"];
+        };
+        ActiveLaneQualification: {
+            reason: string;
+            /** @description Capability availability does not imply scientific qualification. */
+            status: string;
+        };
         /** @enum {string} */
         AdaptiveSolverIntegratorRequest: "rk23" | "rk45";
         AirboxLayerPatch: {
@@ -3526,6 +3585,8 @@ export interface components {
             size: number[];
         };
         CapabilityMap: {
+            /** @description Planner-owned operation gating for the currently resolved execution lane. */
+            active_lane: components["schemas"]["ActiveLaneCapabilitySnapshot"];
             algorithms_available: string[];
             binary_fields: boolean;
             cell_fields: boolean;
@@ -4072,6 +4133,23 @@ export interface components {
             revision: number;
             total: number;
         };
+        /** @enum {string} */
+        FdmMagneticSupportSemanticRole: "magnetic-support";
+        FdmMagneticSupportSummaryResource: {
+            /** Format: int64 */
+            active_cell_count: number;
+            /** Format: int64 */
+            active_unassigned_cell_count: number;
+            /** @description Cell-edge AABB of the exact active-cell mask in meters. */
+            bounds_max_m: number[];
+            /** @description Cell-edge AABB of the exact active-cell mask in meters. */
+            bounds_min_m: number[];
+            /** @description Grid identity used to compute this exact support summary. */
+            grid_fingerprint: string;
+            /** Format: int64 */
+            inactive_cell_count: number;
+            semantic_role: components["schemas"]["FdmMagneticSupportSemanticRole"];
+        };
         /**
          * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
          *     on the binary data plane under the companion FMRM resource.
@@ -4093,6 +4171,7 @@ export interface components {
             encoding: string;
             freshness: string;
             grid_fingerprint: string;
+            magnetic_support?: null | components["schemas"]["FdmMagneticSupportSummaryResource"];
             /** Format: int64 */
             mesh_revision: number;
             object_ids?: string[];
@@ -4647,6 +4726,9 @@ export interface components {
              *     mesh topology are valid for vector glyph placement and surface projection
              *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
              *     requires complete field coverage.
+             *     FDM responses always return the complete cell-centred field, even when
+             *     this cap is provided, because FMVP v2 has no cell-index mapping for a
+             *     downsampled payload.
              */
             max_samples?: number | null;
             /**
@@ -6628,6 +6710,7 @@ export interface components {
             time_seconds: number;
         };
         ObjectPatchRequest: {
+            absorbing_boundary?: Record<string, never> | null;
             /** Format: int64 */
             base_revision?: number | null;
             geometry?: Record<string, never> | null;
@@ -7740,6 +7823,7 @@ export interface components {
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         SceneObjectResource: {
+            absorbing_boundary?: Record<string, never> | null;
             allocated_region_ids?: string[];
             geometry?: {
                 [key: string]: unknown;
@@ -8718,6 +8802,42 @@ export interface components {
             /** @description idle | running | paused | finished | error */
             state: string;
         };
+        /** @enum {string} */
+        SolverTraceClockDomainResource: "server_monotonic" | "browser_performance";
+        /** @enum {string} */
+        SolverTraceCompletenessResource: "server_only" | "complete" | "partial";
+        SolverTraceIdResource: {
+            /** Format: int64 */
+            accepted_step: number;
+            run_generation: string;
+            /** Format: int64 */
+            sample_sequence: number;
+            /** Format: int64 */
+            stage_sequence: number;
+            value: string;
+        };
+        SolverTraceResource: {
+            /** Format: int64 */
+            api_revision?: number | null;
+            completeness: components["schemas"]["SolverTraceCompletenessResource"];
+            format: string;
+            segments: {
+                [key: string]: components["schemas"]["SolverTraceSegmentResource"];
+            };
+            trace_id: components["schemas"]["SolverTraceIdResource"];
+            /** Format: int64 */
+            unaccounted_browser_ns: number;
+            /** Format: int64 */
+            unaccounted_server_ns: number;
+        };
+        /** @enum {string} */
+        SolverTraceSegmentKindResource: "native_to_runner_callback" | "runner_callback_to_publisher_enqueue" | "publisher_queue" | "publisher_apply" | "api_revision_visibility" | "browser_fetch" | "browser_decode_to_commit" | "commit_to_animation_frame";
+        SolverTraceSegmentResource: {
+            clock_domain: components["schemas"]["SolverTraceClockDomainResource"];
+            /** Format: int64 */
+            duration_ns: number;
+            kind: components["schemas"]["SolverTraceSegmentKindResource"];
+        };
         SpinAuthoringDeleteRequest: {
             /** Format: int64 */
             base_revision: number;
@@ -8764,42 +8884,6 @@ export interface components {
             /** Format: int64 */
             base_revision: number;
             resource: components["schemas"]["SceneSpinTransport"];
-        };
-        /** @enum {string} */
-        SolverTraceClockDomainResource: "server_monotonic" | "browser_performance";
-        /** @enum {string} */
-        SolverTraceCompletenessResource: "server_only" | "complete" | "partial";
-        SolverTraceIdResource: {
-            /** Format: int64 */
-            accepted_step: number;
-            run_generation: string;
-            /** Format: int64 */
-            sample_sequence: number;
-            /** Format: int64 */
-            stage_sequence: number;
-            value: string;
-        };
-        SolverTraceResource: {
-            /** Format: int64 */
-            api_revision?: number | null;
-            completeness: components["schemas"]["SolverTraceCompletenessResource"];
-            format: string;
-            segments: {
-                [key: string]: components["schemas"]["SolverTraceSegmentResource"];
-            };
-            trace_id: components["schemas"]["SolverTraceIdResource"];
-            /** Format: int64 */
-            unaccounted_browser_ns: number;
-            /** Format: int64 */
-            unaccounted_server_ns: number;
-        };
-        /** @enum {string} */
-        SolverTraceSegmentKindResource: "native_to_runner_callback" | "runner_callback_to_publisher_enqueue" | "publisher_queue" | "publisher_apply" | "api_revision_visibility" | "browser_fetch" | "browser_decode_to_commit" | "commit_to_animation_frame";
-        SolverTraceSegmentResource: {
-            clock_domain: components["schemas"]["SolverTraceClockDomainResource"];
-            /** Format: int64 */
-            duration_ns: number;
-            kind: components["schemas"]["SolverTraceSegmentKindResource"];
         };
         SpinWaveGammaResource: {
             detrend: string;
@@ -9034,6 +9118,9 @@ export interface components {
         } & {
             /** @enum {string} */
             kind: "mesh_build";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            /** @enum {string} */
+            kind: "fdm_grid_refresh";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
             profile: components["schemas"]["SolverProfileCommandConfig"];
         } & {
@@ -12631,6 +12718,9 @@ export interface operations {
                  *     mesh topology are valid for vector glyph placement and surface projection
                  *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
                  *     requires complete field coverage.
+                 *     FDM responses always return the complete cell-centred field, even when
+                 *     this cap is provided, because FMVP v2 has no cell-index mapping for a
+                 *     downsampled payload.
                  */
                 max_samples?: number | null;
                 /**

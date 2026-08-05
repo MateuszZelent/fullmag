@@ -1,24 +1,11 @@
 /// <reference lib="webworker" />
 
-import { colorizeScalarRaster } from "./colorRaster";
-import type {
-  PlanarColorizeRequest,
-  PlanarColorizeResponse,
-} from "./planarRendererProtocol";
+import type { PlanarColorizeRequest } from "./planarRendererProtocol";
+import { colorizePlanarRendererRequest } from "./planarRendererTask";
 
 declare const self: DedicatedWorkerGlobalScope;
 
 self.onmessage = (event: MessageEvent<PlanarColorizeRequest>) => {
-  const request = event.data;
-  const pixels = colorizeScalarRaster(
-    request.values,
-    request.range,
-    request.mask,
-  );
-  const response: PlanarColorizeResponse = {
-    id: request.id,
-    kind: "colorized",
-    pixels,
-  };
-  self.postMessage(response, [pixels.buffer]);
+  const response = colorizePlanarRendererRequest(event.data);
+  self.postMessage(response, [response.pixels.buffer]);
 };

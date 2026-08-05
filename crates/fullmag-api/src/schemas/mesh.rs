@@ -964,6 +964,26 @@ pub struct FdmRegionLegendEntryResource {
     pub priority: i32,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum FdmMagneticSupportSemanticRole {
+    MagneticSupport,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct FdmMagneticSupportSummaryResource {
+    pub semantic_role: FdmMagneticSupportSemanticRole,
+    /// Grid identity used to compute this exact support summary.
+    pub grid_fingerprint: String,
+    /// Cell-edge AABB of the exact active-cell mask in meters.
+    pub bounds_min_m: [f64; 3],
+    /// Cell-edge AABB of the exact active-cell mask in meters.
+    pub bounds_max_m: [f64; 3],
+    pub active_cell_count: u64,
+    pub inactive_cell_count: u64,
+    pub active_unassigned_cell_count: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct FdmRegionMembershipResource {
     pub schema_version: String,
@@ -978,6 +998,10 @@ pub struct FdmRegionMembershipResource {
     pub counts: [u32; 3],
     pub cell_m: [f64; 3],
     pub cell_count: u64,
+    /// Exact realized magnetic-support summary. Missing on legacy artifacts;
+    /// consumers must then keep outside-support presentation fail-closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetic_support: Option<FdmMagneticSupportSummaryResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub object_ids: Vec<String>,
     pub region_legend: Vec<FdmRegionLegendEntryResource>,

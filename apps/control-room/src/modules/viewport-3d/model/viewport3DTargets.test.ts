@@ -14,6 +14,7 @@ import {
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
+  targetForFdmUniverseOutsideSupport,
   targetForMeshPart,
   type FdmSelectionGrid,
 } from "./viewport3DTargets";
@@ -32,6 +33,14 @@ describe("viewport3DTargets", () => {
       id: "fdm-domain",
       kind: "fdm-domain",
       label: "current",
+    });
+  });
+
+  it("keeps the outside-support overlay as a distinct structured-domain target", () => {
+    expect(targetForFdmUniverseOutsideSupport()).toEqual({
+      id: "fdm-universe-outside-support",
+      kind: "fdm-domain",
+      label: "Universe outside magnetic support",
     });
   });
 
@@ -437,6 +446,7 @@ describe("viewport3DTargets", () => {
       ref: {
         kind: "mesh.grid.mask",
         nodeId: "model:mesh:mask",
+        scope: "mask",
         type: "fdm-domain",
         visualizationTargetId: "fdm-domain",
       },
@@ -479,6 +489,74 @@ describe("viewport3DTargets", () => {
       radius: Math.sqrt(29) / 2,
       size: [2, 3, 4],
     });
+  });
+
+  it("focuses the distinct FDM universe and magnetic-support scopes to their own bounds", () => {
+    const grid: FdmSelectionGrid = {
+      bounds: { center: [0, 0, 0], radius: 2, size: [4, 4, 4] },
+      displayCellBudget: 8,
+      displayCellCount: 8,
+      gridFingerprint: "grid-current",
+      kind: "fdm-grid",
+      origin: [-2, -2, -2],
+      shape: [2, 2, 2],
+      spacing: [2, 2, 2],
+      stride: 1,
+      totalCells: 8,
+    };
+    const overlay = {
+      kind: "fdm-universe-outside-magnetic-support" as const,
+      legend: { magneticSupport: "support", outsideSupport: "outside" },
+      magneticSupportBounds: {
+        center: [0, 0, 0] as [number, number, number],
+        radius: 1,
+        size: [2, 2, 2] as [number, number, number],
+      },
+      target: {
+        id: "fdm-universe-outside-support" as const,
+        kind: "fdm-domain" as const,
+        label: "Universe outside magnetic support" as const,
+      },
+      universeBounds: grid.bounds!,
+    };
+    const domain = {
+      airboxParts: [],
+      magneticParts: [],
+      magneticSurfacePartsByPartId: new Map(),
+      objectPartIds: new Map(),
+      partsById: new Map(),
+    };
+    const selection = (scope: "magnetic-support" | "universe-outside-support"): Selection => ({
+      kind: scope === "magnetic-support"
+        ? "mesh.grid.magnetic-support"
+        : "mesh.grid.universe-outside-support",
+      label: scope,
+      moduleSource: "explorer",
+      nodeId: scope === "magnetic-support"
+        ? "model:mesh:magnetic-support"
+        : "model:mesh:outside-support",
+      objectId: null,
+      ref: {
+        kind: scope === "magnetic-support"
+          ? "mesh.grid.magnetic-support"
+          : "mesh.grid.universe-outside-support",
+        nodeId: scope === "magnetic-support"
+          ? "model:mesh:magnetic-support"
+          : "model:mesh:outside-support",
+        scope,
+        type: "fdm-domain",
+        visualizationTargetId: scope === "universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : "fdm-domain",
+      },
+    });
+
+    expect(resolveViewport3DSelectionBounds(
+      selection("universe-outside-support"), domain, null, grid, overlay,
+    )).toEqual(overlay.universeBounds);
+    expect(resolveViewport3DSelectionBounds(
+      selection("magnetic-support"), domain, null, grid, overlay,
+    )).toEqual(overlay.magneticSupportBounds);
   });
 
   it("resolves an FDM cell to exact cell bounds only for the current grid fingerprint", () => {

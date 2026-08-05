@@ -164,6 +164,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
 | `data/material-fields` and `data/material-fields/{field_id}` | material-parameter field data catalog and per-assignment realized sample payloads for authored material fields; detail resources may include typed realized material-field asset metadata (`asset_id`, `artifact_path`, mesh identity, location, component count, source kind, algorithm, timing), while `model/material-fields` remains the summary/status resource |
 | `data/mesh-region-membership/{region_id}` and `data/mesh-region-memberships` | realized-region membership indices for current FEM mesh parts, with explicit `object_segments` fallback when no mesh-part entry exists and typed Box/Cylinder/Sphere geometry projection for authored regions without mesh parts; topology remains owned by mesh topology resources, and the list resource exposes available memberships plus unresolved authored region ids without moving heavy topology into status |
+| `data/fdm-region-memberships` and `data/fdm-region-membership[/{region_id}]` | thin realized FDM membership descriptor plus full or region-scoped binary FMRM payloads. The descriptor owns grid/legend identity and an optional exact `magnetic_support` summary derived from the realized active and region masks: cell-edge support bounds and active, inactive, and active-unassigned cell counts. Legacy artifacts may omit the summary; consumers then fail closed instead of inferring support from authored or domain bounds. The binary payload remains the owner of per-cell membership. |
 | `meshing/summary` | lightweight mesh dashboard summary and revision pointers |
 | `meshing/builds` | mesh build history collection |
 | `meshing/builds/current` | current build/pipeline state, current resolved build target, and mesh provenance (`source_scene_revision`, `geometry_realization_revision`) |
@@ -201,6 +202,16 @@ envelope with `resource = "simulation"`, `resource_id = "preparation"`, the
 new revision, and the canonical
 `recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
 remains authoritative; the event is cache invalidation only.
+
+FDM membership realization has an independent
+`region_membership_revision`; neither `mesh_revision` nor
+`domain_generation_id` substitutes for it. A revision change emits a
+`resource.batch_changed` entry with `resource = "domain"`,
+`resource_id = "fdm-region-memberships"`, the current domain generation, and
+`recommended_fetch = "/v2/sessions/current/data/fdm-region-memberships"`.
+The event carries no descriptor or mask data. HTTP v2 remains authoritative,
+and the recommended fetch invalidates the descriptor and its revision-scoped
+binary membership consumers.
 
 ### Relaxation solver contract
 
@@ -293,6 +304,27 @@ Capability resources have distinct scopes:
 - `platform/capabilities`: process/runtime/server-level capability matrix.
 - `sessions/current/status.capabilities`: the only UI gating source for the active session.
 - `meshing/capabilities`: meshing policy/build feature matrix only; it must not drive global UI gating.
+
+`status.capabilities.active_lane` is the planner-owned operation snapshot for
+the current session. It carries authored ProblemIR intent, the effective
+execution request after managed-launcher/environment overrides, an optional
+resolved lane only when backend, discretization, device, precision, and mode
+were explicitly resolved, provenance for both intent layers, planner source identity, qualification as a separate
+non-claim, and stable operation entries with `state`, `reason_code`, `reason`,
+and `requires`. `reason_code` is machine-readable and version-stable;
+human-readable `reason` text may evolve. The active-lane snapshot schema is
+`active-lane-capabilities.v2`.
+The operation state vocabulary is `supported | semantic_only | deferred |
+unsupported | stale`. Missing planner capabilities produce `source.kind =
+unavailable`, `resolved = null`, and `stale` for every operation; clients must
+not reconstruct support from `domain.discretization`, engine-name heuristics,
+or platform/meshing capabilities.
+
+`active_lane.authored`, `active_lane.requested`, and `active_lane.resolved`
+must be labelled in the UI as **Authored request**, **Effective request**, and
+**Resolved**. In particular, `FULLMAG_FDM_EXECUTION=gpu` may produce authored
+`device=cpu`, effective `device=gpu`, and resolved `device=gpu`; collapsing
+those values destroys launcher-override provenance.
 
 ## 3.3 Model authoring and Geometry object lifecycle
 

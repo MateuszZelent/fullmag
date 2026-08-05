@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
   UNKNOWN_MESH_COMMAND_LANE_REASON,
 } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import {
@@ -24,9 +23,9 @@ describe("MeshBuildDialog", () => {
     expect(shouldLoadMeshBuildDialogFemResources(true, "unknown")).toBe(false);
   });
 
-  it("publishes explicit not-applicable messages for FDM and unresolved lanes", () => {
+  it("keeps FDM grid/mask refresh separate from FEM mesh controls", () => {
     expect(meshBuildDialogUnavailableMessage("fdm")).toBe(
-      FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
+      "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.",
     );
     expect(meshBuildDialogUnavailableMessage("unknown")).toBe(
       UNKNOWN_MESH_COMMAND_LANE_REASON,

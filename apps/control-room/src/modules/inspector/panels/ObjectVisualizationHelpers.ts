@@ -21,13 +21,17 @@ export function selectObjectVisualizationManifestStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
-      explicit_topology: status.data.capabilities.explicit_topology,
+      // A malformed/stale status response must not crash the inspector. The
+      // lane resolver still has enough information to keep an explicit FDM
+      // session on its structured-grid path; missing capability data disables
+      // FEM manifest loading through the existing fail-closed gate.
+      explicit_topology: status.data.capabilities?.explicit_topology ?? false,
     },
     domain: {
-      discretization: status.data.domain.discretization,
+      discretization: status.data.domain?.discretization ?? "",
     },
     resources: {
-      mesh_revision: status.data.resources.mesh_revision,
+      mesh_revision: status.data.resources?.mesh_revision,
     },
   };
 }

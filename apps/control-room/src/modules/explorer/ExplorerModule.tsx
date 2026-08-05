@@ -465,6 +465,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     meshSummary.data,
     modelResource.data,
     domainMeta.data,
+    domainMeta.status,
+    sessionStatusData?.domain.discretization,
     fdmRegionMembership.data,
     fdmRegionMembership.status,
     modelCouplings.data,

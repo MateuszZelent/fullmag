@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
+use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, fdm_grid_shape};
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
@@ -43,7 +44,7 @@ pub async fn get_domain_meta(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    let is_fem = snapshot.fem_mesh.is_some();
+    let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot);
     let latest = snapshot.live_state.as_ref().map(|l| &l.latest_step);
 
     let grid_shape = if is_fem {
@@ -224,6 +225,9 @@ pub async fn get_domain_topology(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
+    if is_fdm_snapshot(snapshot) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
@@ -270,6 +274,9 @@ pub async fn get_domain_slice_mesh_overlay(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
+    if is_fdm_snapshot(snapshot) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };

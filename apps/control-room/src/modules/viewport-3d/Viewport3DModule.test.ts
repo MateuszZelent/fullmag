@@ -831,6 +831,37 @@ describe("resolveViewport3DColorbarLegend", () => {
     ).toBe(retainedPlan);
   });
 
+  it("clears retained FDM colorbar ranges when field identity is incompatible", () => {
+    const retainedPlan = planViewport3DColorbars({
+      rangeStatesByGroupKey: new Map(),
+      targets: buildViewport3DColorbarTargetPlans({
+        fdmSettings: visualizationSettings({ viewportColorbarVisible: true }),
+        parts: [],
+      }),
+    });
+
+    expect(
+      resolveViewport3DColorbarPlansForRender({
+        fieldIdentityCompatible: false,
+        planned: [],
+        renderSurfaceAvailable: true,
+        retained: retainedPlan,
+        targetPlanAvailable: true,
+        viewportColorbarRequested: true,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveRetainedViewport3DColorbarPlansForStore({
+        fieldIdentityCompatible: false,
+        planned: [],
+        renderSurfaceAvailable: true,
+        retained: retainedPlan,
+        targetPlanAvailable: true,
+        viewportColorbarRequested: true,
+      }),
+    ).toEqual([]);
+  });
+
   it("does not carry retained per-part colorbars into FDM colorbar mode", () => {
     const previous = [
       {
@@ -1757,5 +1788,23 @@ describe("Viewport3DModule scene wiring", () => {
     expect(styles).toMatch(
       /\.fm-viewport-3d__region-modes\s*\{[\s\S]*?pointer-events:\s*auto;/,
     );
+  });
+
+  it("exposes the FDM universe overlay as a distinct optional target with its own legend", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain('aria-label="FDM universe overlay"');
+    expect(source).toContain("Universe outside support");
+    expect(source).toContain("fdmUniverseOverlayVisible");
+    expect(source).toContain("legend.magneticSupport");
+    expect(source).toContain("legend.outsideSupport");
+    expect(source).toContain("viewportSelectionForFdmUniverseOutsideSupport");
+    expect(source).toContain(
+      "onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}",
+    );
+    expect(source).not.toContain("FDM Airbox mesh");
   });
 });

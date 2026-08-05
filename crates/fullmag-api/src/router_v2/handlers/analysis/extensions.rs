@@ -22,6 +22,7 @@ use crate::router_v2::handlers::data::resolved_vector_field::{
     expand_compact_fem_node_values, resolve_topological_charge_magnetization,
     ResolvedFieldSourceKind, ResolvedObjectVectorField,
 };
+use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, field_quantity_revision};
 use crate::schemas::analysis_extensions::{
     TopologicalChargeExecutionProvenance as TopologicalChargeExecutionProvenanceV2,
@@ -448,8 +449,9 @@ pub async fn get_object_topological_charge(
     )
     .await?
     .0;
-    let unsupported_fem_order = snapshot.fem_mesh.is_some() && fem_fe_order != Some(1);
-    let unsupported_fdm_scope = snapshot.fem_mesh.is_none()
+    let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(&snapshot);
+    let unsupported_fem_order = is_fem && fem_fe_order != Some(1);
+    let unsupported_fdm_scope = !is_fem
         && fdm_requires_object_mask(
             snapshot
                 .scene_document
@@ -485,7 +487,7 @@ pub async fn get_object_topological_charge(
     } else {
         topological_charge_profile_response(
             &legacy,
-            snapshot.fem_mesh.is_some(),
+            is_fem,
             query.support,
             fdm_profile_geometry(&snapshot),
         )
@@ -618,7 +620,7 @@ pub async fn get_object_topological_charge(
             stage_id: resolved_field
                 .as_ref()
                 .and_then(|field| field.stage_id.clone()),
-            discretization: if snapshot.fem_mesh.is_some() {
+            discretization: if is_fem {
                 "fem".to_string()
             } else {
                 "fdm".to_string()

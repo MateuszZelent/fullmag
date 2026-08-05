@@ -1,8 +1,12 @@
 "use client";
 
-import type { ComponentType } from "react";
+import { useMemo, type ComponentType } from "react";
 
-import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
+import {
+  useDomainMetaResource,
+  useFdmRegionMembershipResource,
+} from "@/kernel/resources/geometryLifecycleResources";
+import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { isExplicitFdmAirboxRuntime, useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
@@ -24,9 +28,30 @@ function AirboxInspectorLanePanel({
   const runtimeStatus = useAirboxInspectorRuntimeStatus();
   const explicitFdm = isExplicitFdmAirboxRuntime(runtimeStatus);
   const domain = useDomainMetaResource({ enabled: explicitFdm });
+  const membership = useFdmRegionMembershipResource({ enabled: explicitFdm });
+  const roleEvidence = useMemo(() => {
+    if (!domain.data) return null;
+    try {
+      const presentation = buildDomainPresentation({
+        domainMeta: domain.data,
+        fdmMembership: membership.data,
+        fdmMembershipStatus: membership.error
+          ? "error"
+          : membership.status,
+      });
+      return { presentation, source: "domain-presentation" as const };
+    } catch {
+      return null;
+    }
+  }, [domain.data, membership.data, membership.error, membership.status]);
 
   if (explicitFdm) {
-    return <FdmUniverseExtentPanel resource={domain} />;
+    return (
+      <FdmUniverseExtentPanel
+        resource={domain}
+        roleEvidence={roleEvidence}
+      />
+    );
   }
   return <FemPanel selection={selection} />;
 }

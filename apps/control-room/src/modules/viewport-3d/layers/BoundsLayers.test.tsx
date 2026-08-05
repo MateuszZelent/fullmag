@@ -115,6 +115,17 @@ it("records full-airbox volume-edge hidden-edge semantics in topology telemetry"
   expect(boundsLayersSource).toContain("render-semantic=${resolveAirboxWireframeSemantic(renderSettings)}");
 });
 
+it("routes the distinct FDM universe overlay pick through its selection callback", () => {
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+  expect(source).toContain("name={model.target.id}");
+  expect(source).toContain("event.stopPropagation()");
+  expect(source).toContain("onSelect();");
+});
+
 it("maps an airbox surface triangle to its canonical cell identity", () => {
   expect(resolveAirboxMeshPartSurfacePickIdentity({
     expandedSurfaceFaces: false,

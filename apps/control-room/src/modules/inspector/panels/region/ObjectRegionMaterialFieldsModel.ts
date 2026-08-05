@@ -13,6 +13,11 @@ export type SceneMaterialParameterName =
 export type SceneRegionConflictPolicy =
   components["schemas"]["SceneRegionConflictPolicy"];
 export type SceneRegionFrame = components["schemas"]["SceneRegionFrame"];
+export type MaterialFieldSerializationLane = "fdm" | "fem" | "unknown";
+
+export interface MaterialFieldSerializationOptions {
+  meshPolicyLane?: MaterialFieldSerializationLane;
+}
 
 export type MaterialFieldKind = "constant" | "linear" | "radial";
 
@@ -175,6 +180,7 @@ export function materialFieldDraftFromAssignment(
 export function materialFieldFromDraft(
   draft: MaterialFieldDraft,
   model: { objectId: string; regionId: string },
+  options: MaterialFieldSerializationOptions = {},
 ): SceneMaterialParameterAssignment {
   let value: SceneMaterialParameterField;
   if (draft.kind === "constant") {
@@ -203,14 +209,20 @@ export function materialFieldFromDraft(
     };
   }
 
+  const meshPolicyLane = options.meshPolicyLane ?? "fem";
+  const conflictPolicy =
+    meshPolicyLane !== "fem" && draft.conflictPolicy === "min_mesh_size_wins"
+      ? undefined
+      : draft.conflictPolicy;
+
   return {
     assignment_id: draft.assignmentId,
-    conflict_policy: draft.conflictPolicy,
     owner_object: model.objectId,
     parameter: draft.parameter,
     priority: Math.trunc(draft.priority),
     region_id: model.regionId,
     value,
+    ...(conflictPolicy ? { conflict_policy: conflictPolicy } : {}),
   };
 }
 

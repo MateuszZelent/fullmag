@@ -7,6 +7,7 @@ export {
   acquireViewport3DWorkerRuntime,
   getViewport3DWorkerRuntimeSnapshot,
 } from "./viewport3dWorkerRuntime";
+export { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
 export { manifestRenderableCarriers } from "./viewport3dDomainAdapter";
 export {
   useViewport3DRenderedScalarRange,

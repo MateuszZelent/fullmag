@@ -6,12 +6,30 @@ import { FormField } from "../../primitives/FormField";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionEditRealizationPolicy } from "../ObjectRegionsPanelModel";
+import type { MeshInspectorLane } from "../fdmMeshInspectorModel";
 import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
   ObjectRegionInlineDiagnostics,
   type RegionSubPanelProps,
 } from "./shared";
+
+export interface ObjectRegionOverviewLaneView {
+  inlineDiagnostics: boolean;
+  realization: MeshInspectorLane;
+}
+
+export function resolveObjectRegionOverviewLaneView(
+  meshLane: MeshInspectorLane = "unknown",
+): ObjectRegionOverviewLaneView {
+  if (meshLane === "fem") {
+    return { inlineDiagnostics: true, realization: "fem" };
+  }
+  if (meshLane === "fdm") {
+    return { inlineDiagnostics: false, realization: "fdm" };
+  }
+  return { inlineDiagnostics: false, realization: "unknown" };
+}
 
 export function ObjectRegionOverviewPanel({
   model,
@@ -31,12 +49,14 @@ export function ObjectRegionOverviewPanel({
   deleteRegion,
   feedback,
 }: RegionSubPanelProps) {
+  const laneView = resolveObjectRegionOverviewLaneView(meshLane);
+
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Region Identity">
-        {meshLane === "fdm" ? null : (
+        {laneView.inlineDiagnostics ? (
           <ObjectRegionInlineDiagnostics
             capabilityGates={[
               "regions.realized_materialization",
@@ -44,7 +64,7 @@ export function ObjectRegionOverviewPanel({
             ]}
             model={model}
           />
-        )}
+        ) : null}
         <FormField
           label="Region name"
           mono={false}
@@ -74,12 +94,7 @@ export function ObjectRegionOverviewPanel({
           <option value="object">Object</option>
           <option value="world">World</option>
         </FormField>
-        {meshLane === "fdm" ? (
-          <FieldRow
-            label="Realization"
-            value="Not applicable for FDM structured-grid regions"
-          />
-        ) : (
+        {laneView.realization === "fem" ? (
           <FormField
             label="Realization"
             type="select"
@@ -94,6 +109,15 @@ export function ObjectRegionOverviewPanel({
             <option value="conformal">Conformal</option>
             <option value="project">Project</option>
           </FormField>
+        ) : (
+          <FieldRow
+            label="Realization"
+            value={
+              laneView.realization === "fdm"
+                ? "Not applicable for FDM structured-grid regions"
+                : "Withheld until the session discretization is explicit"
+            }
+          />
         )}
       </InspectorGroup>
 

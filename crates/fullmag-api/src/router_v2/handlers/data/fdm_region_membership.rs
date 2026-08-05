@@ -16,7 +16,9 @@ use sha2::{Digest, Sha256};
 
 use crate::artifacts::{read_json_artifact_value, resolve_artifact_path};
 use crate::error::ApiError;
-use crate::schemas::mesh::{FdmRegionLegendEntryResource, FdmRegionMembershipResource};
+use crate::schemas::mesh::{
+    FdmMagneticSupportSummaryResource, FdmRegionLegendEntryResource, FdmRegionMembershipResource,
+};
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
 
@@ -33,6 +35,8 @@ struct FdmMembershipArtifactDescriptor {
     counts: [u32; 3],
     cell_m: [f64; 3],
     cell_count: u64,
+    #[serde(default)]
+    magnetic_support: Option<FdmMagneticSupportSummaryResource>,
     #[serde(default)]
     object_ids: Vec<String>,
     region_legend: Vec<FdmRegionLegendEntryResource>,
@@ -223,7 +227,187 @@ fn load_descriptor(
             "unsupported FDM region membership descriptor schema",
         ));
     }
+    validate_descriptor_summary(&descriptor)?;
+    if descriptor.magnetic_support.is_some() {
+        let binary_path = resolve_artifact_path(&artifact_dir, &descriptor.binary_path)?;
+        let binary = std::fs::read(&binary_path).map_err(|error| {
+            ApiError::internal(format!(
+                "FDM magnetic-support summary requires its FMRM binary artifact: {error}"
+            ))
+        })?;
+        let (payload, mask_offset) = validate_fmrm_payload(&binary, &descriptor)?;
+        validate_summary_against_fmrm(&descriptor, &payload[mask_offset..])?;
+    }
     Ok((descriptor, artifact_dir))
+}
+
+fn validate_descriptor_summary(
+    descriptor: &FdmMembershipArtifactDescriptor,
+) -> Result<(), ApiError> {
+    let expected_cell_count = descriptor
+        .counts
+        .into_iter()
+        .try_fold(1u64, |product, count| product.checked_mul(u64::from(count)))
+        .ok_or_else(|| ApiError::internal("FDM membership grid cell count overflows u64"))?;
+    if descriptor.counts.contains(&0) || descriptor.cell_count != expected_cell_count {
+        return Err(ApiError::internal(
+            "FDM membership descriptor grid counts do not match cell_count",
+        ));
+    }
+    for axis in 0..3 {
+        if !descriptor.origin_m[axis].is_finite()
+            || !descriptor.cell_m[axis].is_finite()
+            || descriptor.cell_m[axis] <= 0.0
+        {
+            return Err(ApiError::internal(
+                "FDM membership descriptor grid geometry is invalid",
+            ));
+        }
+    }
+
+    let Some(summary) = descriptor.magnetic_support.as_ref() else {
+        return Ok(());
+    };
+    if descriptor.schema_version != "fdm_region_membership.v2" {
+        return Err(ApiError::internal(
+            "FDM magnetic-support summary requires the v2 membership contract",
+        ));
+    }
+    if summary.grid_fingerprint != descriptor.grid_fingerprint {
+        return Err(ApiError::internal(
+            "FDM magnetic-support summary grid identity does not match descriptor",
+        ));
+    }
+    if summary.active_cell_count == 0
+        || summary
+            .active_cell_count
+            .checked_add(summary.inactive_cell_count)
+            != Some(descriptor.cell_count)
+        || summary.active_unassigned_cell_count > summary.active_cell_count
+    {
+        return Err(ApiError::internal(
+            "FDM magnetic-support summary cell counts are inconsistent",
+        ));
+    }
+    for axis in 0..3 {
+        let grid_min = descriptor.origin_m[axis];
+        let grid_max = grid_min + f64::from(descriptor.counts[axis]) * descriptor.cell_m[axis];
+        let support_min = summary.bounds_min_m[axis];
+        let support_max = summary.bounds_max_m[axis];
+        if !grid_max.is_finite()
+            || !support_min.is_finite()
+            || !support_max.is_finite()
+            || support_min < grid_min
+            || support_max > grid_max
+            || support_min >= support_max
+            || !is_cell_edge_aligned(support_min, grid_min, descriptor.cell_m[axis])
+            || !is_cell_edge_aligned(support_max, grid_min, descriptor.cell_m[axis])
+        {
+            return Err(ApiError::internal(
+                "FDM magnetic-support summary bounds are invalid for descriptor grid",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_cell_edge_aligned(value: f64, origin: f64, spacing: f64) -> bool {
+    let ordinal = (value - origin) / spacing;
+    let tolerance = 128.0 * f64::EPSILON * ordinal.abs().max(1.0);
+    (ordinal - ordinal.round()).abs() <= tolerance
+}
+
+fn validate_summary_against_fmrm(
+    descriptor: &FdmMembershipArtifactDescriptor,
+    mask_bytes: &[u8],
+) -> Result<(), ApiError> {
+    let summary = descriptor.magnetic_support.as_ref().ok_or_else(|| {
+        ApiError::internal("FDM magnetic-support binary validation requires a summary")
+    })?;
+    let nx = usize::try_from(descriptor.counts[0])
+        .map_err(|_| ApiError::internal("FDM support x count is not addressable"))?;
+    let ny = usize::try_from(descriptor.counts[1])
+        .map_err(|_| ApiError::internal("FDM support y count is not addressable"))?;
+    let plane_stride = nx
+        .checked_mul(ny)
+        .ok_or_else(|| ApiError::internal("FDM support xy plane size overflows usize"))?;
+    let mut support_min = [u32::MAX; 3];
+    let mut support_max_exclusive = [0u32; 3];
+    let mut active_cell_count = 0u64;
+    let mut inactive_cell_count = 0u64;
+    let mut active_unassigned_cell_count = 0u64;
+
+    for (index, chunk) in mask_bytes.chunks_exact(4).enumerate() {
+        let membership = u32::from_le_bytes(chunk.try_into().unwrap());
+        if membership == u32::MAX {
+            inactive_cell_count = inactive_cell_count
+                .checked_add(1)
+                .ok_or_else(|| ApiError::internal("FDM inactive support count overflows u64"))?;
+            continue;
+        }
+        active_cell_count = active_cell_count
+            .checked_add(1)
+            .ok_or_else(|| ApiError::internal("FDM active support count overflows u64"))?;
+        if membership == 0 {
+            active_unassigned_cell_count =
+                active_unassigned_cell_count.checked_add(1).ok_or_else(|| {
+                    ApiError::internal("FDM active-unassigned support count overflows u64")
+                })?;
+        }
+        let coordinates = [
+            u32::try_from(index % nx)
+                .map_err(|_| ApiError::internal("FDM support x index exceeds u32"))?,
+            u32::try_from((index / nx) % ny)
+                .map_err(|_| ApiError::internal("FDM support y index exceeds u32"))?,
+            u32::try_from(index / plane_stride)
+                .map_err(|_| ApiError::internal("FDM support z index exceeds u32"))?,
+        ];
+        for (axis, coordinate) in coordinates.into_iter().enumerate() {
+            support_min[axis] = support_min[axis].min(coordinate);
+            support_max_exclusive[axis] = support_max_exclusive[axis].max(
+                coordinate
+                    .checked_add(1)
+                    .ok_or_else(|| ApiError::internal("FDM support edge index exceeds u32"))?,
+            );
+        }
+    }
+
+    if active_cell_count == 0 {
+        return Err(ApiError::internal(
+            "FMRM binary contains no active magnetic-support cells",
+        ));
+    }
+    let bounds_min_m: [f64; 3] = std::array::from_fn(|axis| {
+        descriptor.origin_m[axis] + f64::from(support_min[axis]) * descriptor.cell_m[axis]
+    });
+    let bounds_max_m: [f64; 3] = std::array::from_fn(|axis| {
+        descriptor.origin_m[axis] + f64::from(support_max_exclusive[axis]) * descriptor.cell_m[axis]
+    });
+    if summary.active_cell_count != active_cell_count
+        || summary.inactive_cell_count != inactive_cell_count
+        || summary.active_unassigned_cell_count != active_unassigned_cell_count
+        || (0..3).any(|axis| {
+            !support_bound_matches(
+                summary.bounds_min_m[axis],
+                bounds_min_m[axis],
+                descriptor.cell_m[axis],
+            ) || !support_bound_matches(
+                summary.bounds_max_m[axis],
+                bounds_max_m[axis],
+                descriptor.cell_m[axis],
+            )
+        })
+    {
+        return Err(ApiError::internal(
+            "FDM magnetic-support summary disagrees with FMRM binary mask",
+        ));
+    }
+    Ok(())
+}
+
+fn support_bound_matches(published: f64, realized: f64, spacing: f64) -> bool {
+    let scale = published.abs().max(realized.abs()).max(spacing.abs());
+    (published - realized).abs() <= 128.0 * f64::EPSILON * scale
 }
 
 fn to_resource(
@@ -242,6 +426,7 @@ fn to_resource(
         counts: descriptor.counts,
         cell_m: descriptor.cell_m,
         cell_count: descriptor.cell_count,
+        magnetic_support: descriptor.magnetic_support,
         object_ids: descriptor.object_ids,
         region_legend: descriptor.region_legend,
         encoding: descriptor.encoding,
@@ -460,7 +645,8 @@ fn insert_header(response: &mut axum::response::Response, name: &'static str, va
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_fmrm_payload, FMRM_HEADER_LEN};
+    use super::{validate_descriptor_summary, validate_fmrm_payload, FMRM_HEADER_LEN};
+    use crate::schemas::mesh::{FdmMagneticSupportSemanticRole, FdmMagneticSupportSummaryResource};
 
     fn descriptor() -> super::FdmMembershipArtifactDescriptor {
         super::FdmMembershipArtifactDescriptor {
@@ -472,6 +658,7 @@ mod tests {
             counts: [2, 2, 1],
             cell_m: [1.0e-9; 3],
             cell_count: 4,
+            magnetic_support: None,
             object_ids: Vec::new(),
             region_legend: Vec::new(),
             encoding: "FMRM:u32_le".to_string(),
@@ -509,5 +696,75 @@ mod tests {
             .expect_err("mask length mismatch must reject")
             .message
             .contains("mask length"));
+    }
+
+    #[test]
+    fn validates_magnetic_support_identity_counts_and_interior_bounds() {
+        let mut descriptor = descriptor();
+        descriptor.schema_version = "fdm_region_membership.v2".to_string();
+        descriptor.encoding = "FMRM:u32_membership_le".to_string();
+        descriptor.origin_m = [1.0e-9, -3.0e-9, 7.0e-9];
+        descriptor.counts = [4, 3, 2];
+        descriptor.cell_m = [2.0e-9, 3.0e-9, 4.0e-9];
+        descriptor.cell_count = 24;
+        descriptor.magnetic_support = Some(FdmMagneticSupportSummaryResource {
+            semantic_role: FdmMagneticSupportSemanticRole::MagneticSupport,
+            grid_fingerprint: descriptor.grid_fingerprint.clone(),
+            bounds_min_m: [3.0e-9, -3.0e-9, 7.0e-9],
+            bounds_max_m: [7.0e-9, 3.0e-9, 11.0e-9],
+            active_cell_count: 3,
+            inactive_cell_count: 21,
+            active_unassigned_cell_count: 1,
+        });
+        validate_descriptor_summary(&descriptor).expect("valid interior support must pass");
+
+        descriptor
+            .magnetic_support
+            .as_mut()
+            .unwrap()
+            .grid_fingerprint = "11".repeat(32);
+        assert!(validate_descriptor_summary(&descriptor)
+            .expect_err("mismatched summary identity must reject")
+            .message
+            .contains("identity"));
+        descriptor
+            .magnetic_support
+            .as_mut()
+            .unwrap()
+            .grid_fingerprint = "00".repeat(32);
+        descriptor
+            .magnetic_support
+            .as_mut()
+            .unwrap()
+            .inactive_cell_count = 20;
+        assert!(validate_descriptor_summary(&descriptor)
+            .expect_err("inconsistent summary counts must reject")
+            .message
+            .contains("counts"));
+        descriptor
+            .magnetic_support
+            .as_mut()
+            .unwrap()
+            .inactive_cell_count = 21;
+        descriptor.magnetic_support.as_mut().unwrap().bounds_min_m[0] = 2.5e-9;
+        assert!(validate_descriptor_summary(&descriptor)
+            .expect_err("unaligned summary bounds must reject")
+            .message
+            .contains("bounds"));
+    }
+
+    #[test]
+    fn rejects_unknown_magnetic_support_semantic_role() {
+        let result =
+            serde_json::from_value::<FdmMagneticSupportSummaryResource>(serde_json::json!({
+                "semantic_role": "airbox",
+                "grid_fingerprint": "00".repeat(32),
+                "bounds_min_m": [0.0, 0.0, 0.0],
+                "bounds_max_m": [1.0, 1.0, 1.0],
+                "active_cell_count": 1,
+                "inactive_cell_count": 0,
+                "active_unassigned_cell_count": 0
+            }));
+        assert!(result.is_err(), "unknown semantic role must reject");
     }
 }

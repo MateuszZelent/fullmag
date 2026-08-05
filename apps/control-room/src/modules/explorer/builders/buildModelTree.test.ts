@@ -357,6 +357,7 @@ describe("buildModelTree", () => {
 
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
     const nodes = buildModelTree({
+      domainDiscretization: "fem",
       universe: {
         id: "u0",
         label: "Universe",
@@ -447,7 +448,7 @@ describe("buildModelTree", () => {
   });
 
   it("builds the exact stable Airbox subtree in semantic order", () => {
-    const [session] = buildModelTree();
+    const [session] = buildModelTree({ domainDiscretization: "fem" });
     const universe = session?.children?.find((node) => node.id === "model:universe");
     const airbox = universe?.children?.find((node) => node.id === "model:airbox");
 
@@ -526,7 +527,7 @@ describe("buildModelTree", () => {
   });
 
   it("places Boundary Faces beside Airbox under Universe", () => {
-    const [session] = buildModelTree();
+    const [session] = buildModelTree({ domainDiscretization: "fem" });
     const universe = session?.children?.find((node) => node.id === "model:universe");
 
     expect(universe?.children?.map(({ id }) => id)).toEqual([
@@ -545,6 +546,7 @@ describe("buildModelTree", () => {
 
   it("marks Boundary Faces ready when the shared mesh is realized", () => {
     const [session] = buildModelTree({
+      domainDiscretization: "fem",
       mesh: {
         manifestSourceSceneRevision: 1,
         meshName: "semantic-target-fixture",
@@ -565,6 +567,7 @@ describe("buildModelTree", () => {
 
   it("marks Boundary Faces stale when its realized carrier belongs to an older scene", () => {
     const [session] = buildModelTree({
+      domainDiscretization: "fem",
       mesh: {
         manifestSourceSceneRevision: 1,
         meshName: "stale-boundary-fixture",
@@ -585,6 +588,7 @@ describe("buildModelTree", () => {
 
   it("keeps Boundary Faces unavailable when a mesh has no outer-boundary carrier", () => {
     const [session] = buildModelTree({
+      domainDiscretization: "fem",
       mesh: {
         meshName: "mesh-without-boundary-carrier",
         outerBoundaryPartCount: 0,
@@ -602,6 +606,7 @@ describe("buildModelTree", () => {
 
   it("exposes every orphan render target as an explicit unassigned mesh-part node", () => {
     const nodes = buildModelTree({
+      domainDiscretization: "fem",
       mesh: {
         partCount: 1,
         visualizationPartFallbacks: [
@@ -634,6 +639,7 @@ describe("buildModelTree", () => {
 
   it("retains and resolves the selected path even when the active filter does not match it", () => {
     const nodes = buildModelTree({
+      domainDiscretization: "fem",
       mesh: {
         visualizationPartFallbacks: [
           {
@@ -660,6 +666,7 @@ describe("buildModelTree", () => {
 
   it("puts Debug last under antenna and ordinary object Visualization", () => {
     const flattened = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fem",
       objects: [
         { id: "film", label: "Film" },
         { id: "antenna", label: "Antenna", objectRole: "antenna" },
@@ -732,6 +739,7 @@ describe("buildModelTree", () => {
   it("labels the shared-domain mesh node from mesh build freshness", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({
+        domainDiscretization: "fem",
         mesh: {
           meshName: "shared-domain",
           meshRevision: 12,
@@ -1022,7 +1030,10 @@ describe("buildModelTree", () => {
       },
     );
 
-    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    const flattened = flattenExplorerNodes(buildModelTree({
+      ...snapshot,
+      domainDiscretization: "fem",
+    }));
 
     expect(
       flattened.find((node) => node.id === "model:object:film:regions")?.badge,
@@ -4507,8 +4518,36 @@ describe("buildModelTree", () => {
       "workspace.focus-selection",
     ]);
     expect(nodes.find((node) => node.id === "model:mesh:magnetic-support")?.label).toBe(
-      "Structured Grid Extent",
+      "Magnetic Support",
     );
+  });
+
+  it("withholds FEM nodes during SSR hydration until an FDM lane is explicit", () => {
+    const hydratedFromServer = flattenExplorerNodes(
+      buildModelTree({ domainPresentationStatus: "loading" }),
+    );
+    const hydratedFdm = flattenExplorerNodes(
+      buildModelTree({ domainPresentation: fdmExplorerPresentation() }),
+    );
+    const femOnlyKinds = [
+      "mesh.shared-domain",
+      "mesh.builds",
+      "mesh.quality",
+      "mesh.size-fields",
+      "mesh.regions",
+      "airbox.root",
+      "boundary-faces.root",
+    ];
+
+    expect(hydratedFromServer.find((node) => node.id === "model:mesh")).toMatchObject({
+      kind: "mesh.root",
+      label: "Mesh",
+      badge: "lane loading",
+      status: "queued",
+    });
+    for (const nodes of [hydratedFromServer, hydratedFdm]) {
+      expect(nodes.map((node) => node.kind)).not.toEqual(expect.arrayContaining(femOnlyKinds));
+    }
   });
 
   it("keeps a degraded FDM tree when DomainMeta presentation construction fails", () => {
@@ -4549,7 +4588,7 @@ describe("buildModelTree", () => {
     expect(nodes.map((node) => node.kind)).not.toContain("airbox.root");
   });
 
-  it("does not expose FEM visualization-debug nodes in an FDM model tree", () => {
+  it("keeps object visualization diagnostics available in an FDM model tree", () => {
     const nodes = flattenExplorerNodes(
       buildModelTree({
         domainPresentation: fdmExplorerPresentation(),
@@ -4567,13 +4606,12 @@ describe("buildModelTree", () => {
         ] as never,
       }),
     );
-
-    expect(nodes.map((node) => node.kind)).not.toEqual(
-      expect.arrayContaining([
-        "object.visualization.debug",
-        "object.region.visualization.debug",
-        "airbox.visualization.debug",
-      ]),
-    );
+    for (const kind of [
+      "object.visualization.debug",
+      "object.region.visualization.debug",
+    ]) {
+      expect(nodes.map((node) => node.kind)).toContain(kind);
+    }
+    expect(nodes.map((node) => node.kind)).not.toContain("airbox.visualization.debug");
   });
 });

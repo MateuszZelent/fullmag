@@ -27,7 +27,6 @@ import {
   type RegionSubPanelProps,
 } from "./shared";
 import {
-  fdmMeshNotApplicableReason,
   resolveFdmObjectMeshInspectorModel,
   type FdmObjectMeshInspectorResources,
 } from "../fdmMeshInspectorModel";
@@ -121,6 +120,9 @@ export function ObjectRegionMeshPanel({
               message={fdmModel.notice}
             />
           ) : null}
+          <FieldRow label="Grid policy" value="execution-plan owned (read-only)" />
+          <FieldRow label="Explorer role" value="FDM Grid / Magnetic Support" />
+          <FieldRow label="Grid status" value={fdmModel.status} />
           <FieldRow label="Mesh semantics" value="structured grid cells" />
           <FieldRow label="Grid origin" value={fdmModel.origin?.join(", ") ?? "not materialized"} unit="m" />
           <FieldRow label="Grid spacing" value={fdmModel.spacing?.join(", ") ?? "not materialized"} unit="m" />
@@ -147,15 +149,6 @@ export function ObjectRegionMeshPanel({
             }
           />
           <FieldRow label="Grid fingerprint" value={fdmModel.gridFingerprint ?? "not materialized"} mono />
-        </InspectorGroup>
-        <InspectorGroup title="FEM Mesh Controls" badge="not applicable" collapsible defaultOpen={false}>
-          <FeedbackBanner kind="warning" message={fdmMeshNotApplicableReason()} />
-          <FieldRow label="Element order" value="Not applicable for FDM" />
-          <FieldRow label="Tetra / prism / hex topology" value="Not applicable for FDM" />
-          <FieldRow label="Gmsh and size fields" value="Not applicable for FDM" />
-          <FieldRow label="Mesh quality" value="Not applicable for structured cells" />
-          <FieldRow label="Shared-domain build" value="Not available in the FDM region inspector" />
-          <FieldRow label="Write actions" value="Read-only: no FEM policy patch or mesh-build command" />
         </InspectorGroup>
       </div>
     );

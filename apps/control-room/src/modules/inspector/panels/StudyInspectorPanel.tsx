@@ -64,6 +64,7 @@ import {
   SESSION_STATUS_RESOURCE_KEY,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
+import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -436,7 +437,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 type StudyInspectorRuntimeStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
-    "algorithms_available" | "binary_fields" | "explicit_topology"
+    "active_lane" | "algorithms_available" | "binary_fields" | "explicit_topology"
   >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
@@ -457,6 +458,7 @@ function selectStudyInspectorRuntimeStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
+      active_lane: status.data.capabilities.active_lane,
       algorithms_available: status.data.capabilities.algorithms_available,
       binary_fields: status.data.capabilities.binary_fields,
       explicit_topology: status.data.capabilities.explicit_topology,
@@ -501,6 +503,7 @@ function studyInspectorRuntimeStatusEquals(
   if (!previous || !next) return previous === next;
   return (
     previous.capabilities.binary_fields === next.capabilities.binary_fields &&
+    previous.capabilities.active_lane === next.capabilities.active_lane &&
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&
@@ -581,6 +584,7 @@ export function useStudyInspectorPanelController(
           nodeId: selection.nodeId,
         };
   const model = resolveStudyInspectorModel({
+    activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     commandQueue: commandQueue.data,
     currentRun: currentRun.data,
     energyHistory: energyHistory.data,
@@ -668,6 +672,7 @@ export function useStudyInspectorPanelController(
   const commitStageDrafts = async () => {
     const localIssues = state.stageDrafts.flatMap((draft, index) =>
       validateStudyStageDraft(draft, {
+        activeLane: runtimeStatus?.capabilities.active_lane ?? null,
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
         demagEnabled: state.globalDraft.demagEnabled,
@@ -739,6 +744,7 @@ export function useStudyInspectorPanelController(
   };
   const commitGlobalDraft = async () => {
     const errors = validateStudyGlobalDraft(state.globalDraft, {
+      activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
       sessionDiscretization: runtimeStatus?.domain.discretization,
     }).filter(
@@ -855,12 +861,14 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     state,
   } = useStudyInspectorPanelController(selection);
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
+    activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
     sessionDiscretization: runtimeStatus?.domain.discretization,
   });
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
   const stageValidation = state.stageDrafts.flatMap((draft, index) => [
     ...validateStudyStageDraft(draft, {
+      activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
       backend: model.requested.backend,
       demagEnabled: state.globalDraft.demagEnabled,
@@ -925,6 +933,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         />
 
         <StudyBoundarySection
+          activeLane={runtimeStatus?.capabilities.active_lane ?? null}
           algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
           authoringBusy={state.authoringBusy}
           authoringFeedback={
@@ -944,6 +953,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
 
         <StudyPipelineSection
           activeStageIndex={activeStageIndex}
+          activeLane={runtimeStatus?.capabilities.active_lane ?? null}
           algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
           authoringBusy={state.authoringBusy}
           authoringFeedback={
@@ -1227,10 +1237,16 @@ function StudyRuntimeProvenanceRows({
 }) {
   return (
     <div className="fm-study-runtime-provenance" data-provenance-status={provenance.fallback.status}>
-      <FieldRow label="Requested backend" value={provenance.requested.backend} mono />
-      <FieldRow label="Requested device" value={provenance.requested.device} mono />
-      <FieldRow label="Requested mode" value={provenance.requested.mode} mono />
-      <FieldRow label="Requested precision" value={provenance.requested.precision} mono />
+      <FieldRow label="Authored intent backend" value={provenance.authored.backend} mono />
+      <FieldRow label="Authored intent device" value={provenance.authored.device} mono />
+      <FieldRow label="Authored intent mode" value={provenance.authored.mode} mono />
+      <FieldRow label="Authored intent precision" value={provenance.authored.precision} mono />
+      <FieldRow label="Authored intent provenance" value={provenance.sources.authored} mono />
+      <FieldRow label="Effective request backend" value={provenance.effective.backend} mono />
+      <FieldRow label="Effective request device" value={provenance.effective.device} mono />
+      <FieldRow label="Effective request mode" value={provenance.effective.mode} mono />
+      <FieldRow label="Effective request precision" value={provenance.effective.precision} mono />
+      <FieldRow label="Effective request provenance" value={provenance.sources.effective} mono />
       <FieldRow label="Resolved backend" value={provenance.resolved.backend} mono />
       <FieldRow label="Resolved device" value={provenance.resolved.device} mono />
       <FieldRow label="Resolved mode" value={provenance.resolved.mode} mono />
@@ -1388,6 +1404,7 @@ export function StudySelectedStageSection({
 }
 
 export function StudyBoundarySection({
+  activeLane,
   algorithmsAvailable,
   authoringBusy,
   authoringFeedback,
@@ -1399,6 +1416,7 @@ export function StudyBoundarySection({
   requestedDiscretization,
   snapshot,
 }: {
+  activeLane?: ActiveLaneCapabilitySnapshot | null;
   algorithmsAvailable?: readonly string[];
   authoringBusy: boolean;
   authoringFeedback: {
@@ -1427,6 +1445,7 @@ export function StudyBoundarySection({
     },
   );
   const validation = validateStudyGlobalDraft(draft, {
+    activeLane,
     algorithmsAvailable,
     requestedDiscretization,
     sessionDiscretization,

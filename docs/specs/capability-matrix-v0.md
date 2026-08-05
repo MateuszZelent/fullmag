@@ -38,6 +38,41 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
 
+### Active-session UI operation projection
+
+`GET /v2/sessions/current/status` projects planner truth through
+`capabilities.active_lane` for unified-workspace command and panel gating. Its
+UI operation states are deliberately narrower than the repository-wide
+promotion vocabulary:
+
+| State | UI meaning |
+|---|---|
+| `supported` | The resolved planner capability profile advertises the operation for the current lane. |
+| `semantic_only` | Canonical authoring semantics exist, but the active planner lane is not executable for the operation. |
+| `deferred` | The operation has an explicit future lifecycle but is not currently available. |
+| `unsupported` | The active lane explicitly does not provide the operation. |
+| `stale` | Planner capability truth is missing; clients fail closed. |
+
+Every active-session operation also carries a stable `reason_code` matching
+its canonical capability classification (`capability_supported`,
+`capability_semantic_only`, `capability_deferred`, `capability_unsupported`, or
+`capability_stale`). UI projections may present `unsupported` as
+`not-applicable` and `stale` as `not-materialized`, but must preserve the
+original machine code and human-readable reason.
+
+Authored ProblemIR backend/discretization/device/precision/mode and the
+effective request after launch overrides always remain separately visible.
+Resolved values are present only when runtime resolution explicitly supplied
+every lane dimension; they are never filled from requested values or inferred
+from an engine name. `source.authored_intent` and
+`source.effective_request` identify provenance, while `source.kind` identifies
+the planner profile. `qualification`
+remains a separate `not_asserted` value because operation availability alone
+is not scientific or production qualification. Interaction operations map the
+canonical interaction catalog plus explicit STT/SOT/thermal execution gates;
+study operations distinguish time-domain, eigenmode, frequency-response, and
+FFT availability. A missing planner snapshot makes all entries `stale`.
+
 ## Mixed-P1 shared-domain target vocabulary
 
 The canonical target is defined by
@@ -474,6 +509,7 @@ timestep policy. Missing or mismatched artifact/source evidence fails closed to
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires active-mask voxelizer for accurate curved-boundary FDM execution |
 | Imported geometry ref | planned | planned | planned | semantic-only | FDM planner accepts it when a precomputed grid asset is attached; public execution still depends on voxelization extras |
 | Material constants (`Ms`, `A`, `alpha`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Used by the CPU reference FDM runner and the MFEM/libCEED/hypre CPU plus MFEM/libCEED/CUDA GPU FEM runners |
+| Per-object absorbing boundary layer (`alpha.absorbing_boundary`) | reference executable | unsupported | implemented | implemented | Additive cell/nodewise Gilbert damping with object/universe frame, face selection, and linear/quadratic/smootherstep profiles. FDM CPU and FEM planner/native material-field lanes carry the resolved `alpha_field`; native FDM CUDA rejects the request before launch because cellwise damping fields are unsupported. No managed spin-wave reflection qualification is implied. |
 | Material constants (`Ku1`, `anisU`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local uniaxial anisotropy is executable on the current FDM and FEM lanes. CPU FDM, single-grid native CUDA FDM, and public multilayer FDM expose the derived `H_ani` observation boundary; native FEM CPU qualification includes `exchange_anis_uniaxial` and `exchange_demag_anis_uniaxial` readiness gates for the no-PBC adaptive slice. A separate managed uniform-`M_s` FEM GPU fixture compares projected `eden_ani` and `eden_total` with native `E_ani` and `E_total`; this is bounded observable qualification, not validation of every anisotropy/runtime combination. Shared-domain FEM may realize different per-object uniaxial axes as nodal axis fields when materialization proves ownership; cubic-axis heterogeneity and surface anisotropy remain separately gated. |
 | Material constants (`Kc1`, `anisC1`, `anisC2`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local cubic anisotropy is executable on the current FDM and FEM lanes. CPU FDM, single-grid native CUDA FDM, and public multilayer FDM expose the derived `H_ani` observation boundary; native FEM CPU qualification includes `exchange_anis_cubic` and `exchange_demag_anis_cubic` readiness gates for the no-PBC adaptive slice. A separate managed uniform-`M_s` FEM GPU fixture selects `H_ani_cubic` and compares projected `eden_ani` and `eden_total` with native `E_ani` and `E_total`; this does not cover nonlocal or surface anisotropy. |
 | Per-cell material fields (`ms_field`, `a_field`, `alpha_field`, `ku*_field`, `kc*_field`) | planned | bounded FEM exec | planned | **partial-production-executable** (FEM CPU DG0 `M_s`) | Current FDM execution plans carry uniform material constants only; single-grid and public multilayer FDM reject used materials with per-cell material fields instead of silently dropping them. FEM carries material field payloads through native material-field lanes where supported. The newly qualified sharp element-DG0 `M_s` slice is CPU/double ordinary time evolution with mandatory consistent-mass exchange; Poisson demag and Zeeman are optional additions, not standalone DG0 owners. GPU DG0, direct relaxation, DG0 anisotropy/DMI/thermal/STT/Oersted/magnetoelastic combinations, and discontinuous DG0 `A` remain unsupported and reject without nodal fallback. The direct-relaxation restriction is enforced by both planner and native ABI; DG0 step statistics use a direct allocation-free material-weighted reduction. |

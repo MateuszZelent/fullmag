@@ -45,6 +45,7 @@ interface ResourceRuntimeEntry<TData> {
 type StoredResourceRuntimeEntry = ResourceRuntimeEntry<never>;
 
 export interface ResourceRuntimeStoreStats {
+  activePauseCount: number;
   entryCount: number;
   inflightCount: number;
   listenerCount: number;
@@ -98,7 +99,8 @@ function settledForExternalRevision<TData>(
 
 export class ResourceRuntimeStore<TData = unknown> {
   private readonly entries = new Map<ResourceKey, StoredResourceRuntimeEntry>();
-  private readonly pausePredicates = new Set<ResourceRuntimePausePredicate>();
+  private readonly pausePredicates = new Map<number, ResourceRuntimePausePredicate>();
+  private pauseRegistrationId = 0;
 
   stats(): ResourceRuntimeStoreStats {
     let inflightCount = 0;
@@ -119,6 +121,7 @@ export class ResourceRuntimeStore<TData = unknown> {
       }
     }
     return {
+      activePauseCount: this.pausePredicates.size,
       entryCount: this.entries.size,
       inflightCount,
       listenerCount,
@@ -210,13 +213,15 @@ export class ResourceRuntimeStore<TData = unknown> {
   }
 
   beginPauseMatching(predicate: ResourceRuntimePausePredicate): () => void {
-    this.pausePredicates.add(predicate);
+    const registrationId = ++this.pauseRegistrationId;
+    this.pausePredicates.set(registrationId, predicate);
     this.pauseMatching(predicate);
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      this.pausePredicates.delete(predicate);
+      this.pausePredicates.delete(registrationId);
+      this.resumePendingLoads();
     };
   }
 
@@ -249,6 +254,15 @@ export class ResourceRuntimeStore<TData = unknown> {
     const entry = this.getOrCreateEntry<TLoadData>(resourceKey);
     if (this.loadPaused(resourceKey)) {
       this.pauseLoad(resourceKey);
+      entry.pendingRequest = {
+        abortStaleInflight,
+        externalRevision,
+        force,
+        load,
+        minRefetchIntervalMs,
+        resolveRevision,
+        resourceKey,
+      };
       return Promise.resolve(entry.snapshot);
     }
 
@@ -419,12 +433,23 @@ export class ResourceRuntimeStore<TData = unknown> {
   }
 
   private loadPaused(resourceKey: ResourceKey): boolean {
-    for (const predicate of this.pausePredicates) {
+    for (const predicate of this.pausePredicates.values()) {
       if (predicate(resourceKey)) {
         return true;
       }
     }
     return false;
+  }
+
+  private resumePendingLoads(): void {
+    for (const [resourceKey, stored] of this.entries) {
+      if (this.loadPaused(resourceKey)) continue;
+      const entry = stored as unknown as ResourceRuntimeEntry<unknown>;
+      const pendingRequest = entry.pendingRequest;
+      if (!pendingRequest) continue;
+      entry.pendingRequest = null;
+      void this.ensureLoad(pendingRequest);
+    }
   }
 
   private releaseUnobservedEntry<TEntryData>(

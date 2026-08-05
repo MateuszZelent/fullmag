@@ -1,4 +1,5 @@
 import type {
+  LiveStatusResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -11,6 +12,7 @@ import type {
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import {
   BACKEND_INTERACTION_IDS,
@@ -208,9 +210,13 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-physics",
     category: "Physics",
     scope: "selection",
-    isEnabled: (context) => Boolean(context.selection),
-    disabledReason: (context) =>
-      context.selection ? null : "Selection controller is not available.",
+    isEnabled: (context) =>
+      Boolean(context.selection) && physicsInteractionOperation(context).enabled,
+    disabledReason: (context) => {
+      if (!context.selection) return "Selection controller is not available.";
+      const operation = physicsInteractionOperation(context);
+      return operation.enabled ? null : operation.reason;
+    },
     run: selectPhysicsInteractionFromCommand,
   },
 ];
@@ -474,6 +480,23 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
     context.source,
   );
   return { status: "completed" };
+}
+
+function physicsInteractionOperation(context: CommandContext) {
+  const input = asPhysicsInteractionInput(context.input);
+  if (!input) {
+    return resolveActiveLaneOperation(null, "interaction.exchange");
+  }
+  const rawStatus = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  const record = asRecord(rawStatus);
+  const status = (record?.data ?? rawStatus) as
+    | LiveStatusResource
+    | null
+    | undefined;
+  return resolveActiveLaneOperation(
+    status?.capabilities?.active_lane ?? null,
+    `interaction.${input.interactionId}`,
+  );
 }
 
 async function patchAirboxVisualization(

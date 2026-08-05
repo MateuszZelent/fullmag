@@ -588,6 +588,7 @@ impl ProblemIR {
                 region: "strip".to_string(),
                 material: "Py".to_string(),
                 initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
+                absorbing_boundary: None,
             }],
             couplings: Vec::new(),
             planar_monitors: Vec::new(),
@@ -1855,6 +1856,13 @@ impl ProblemIR {
                     &mut errors,
                 );
             }
+            if let Some(layer) = &magnet.absorbing_boundary {
+                validate_absorbing_boundary(
+                    &format!("magnet '{}'.absorbing_boundary", magnet.name),
+                    layer,
+                    &mut errors,
+                );
+            }
         }
 
         match (
@@ -1998,6 +2006,71 @@ impl ProblemIR {
             execution_mode,
             notes,
         })
+    }
+}
+
+fn validate_absorbing_boundary(
+    path: &str,
+    layer: &AbsorbingBoundaryLayerIR,
+    errors: &mut Vec<String>,
+) {
+    if !layer.total_width_m.is_finite() || layer.total_width_m <= 0.0 {
+        errors.push(format!("{path}.total_width_m must be finite and > 0"));
+    }
+    if !layer.ramp_width_m.is_finite() || layer.ramp_width_m <= 0.0 {
+        errors.push(format!("{path}.ramp_width_m must be finite and > 0"));
+    }
+    if layer.total_width_m.is_finite()
+        && layer.ramp_width_m.is_finite()
+        && layer.ramp_width_m > layer.total_width_m
+    {
+        errors.push(format!(
+            "{path}.ramp_width_m must be <= total_width_m"
+        ));
+    }
+    if !layer.max_damping.is_finite() || layer.max_damping < 0.0 {
+        errors.push(format!("{path}.max_damping must be finite and >= 0"));
+    }
+    if layer.faces.is_empty() {
+        errors.push(format!("{path}.faces must contain at least one face"));
+    }
+    let mut faces = BTreeSet::new();
+    for face in &layer.faces {
+        if !faces.insert(*face) {
+            errors.push(format!("{path}.faces must not contain duplicates"));
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod absorbing_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_absorbing_boundary_is_rejected_by_problem_validation() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.magnets[0].absorbing_boundary = Some(AbsorbingBoundaryLayerIR {
+            total_width_m: 2.0,
+            ramp_width_m: 3.0,
+            max_damping: -0.1,
+            faces: vec![AbsorbingBoundaryFaceIR::XPlus, AbsorbingBoundaryFaceIR::XPlus],
+            profile: AbsorbingBoundaryProfileIR::Smootherstep,
+            frame: AbsorbingBoundaryFrameIR::Object,
+        });
+
+        let errors = problem
+            .validate()
+            .expect_err("invalid absorbing boundary should fail IR validation");
+        assert!(errors.iter().any(|error| {
+            error.contains("ramp_width_m must be <= total_width_m")
+        }));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("max_damping must be finite and >= 0")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("faces must not contain duplicates")));
     }
 }
 

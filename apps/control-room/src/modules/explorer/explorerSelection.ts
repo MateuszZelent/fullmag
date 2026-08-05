@@ -1,4 +1,5 @@
 import type {
+  FdmDomainSelectionScope,
   FdmDomainSelectionKind,
   SelectionRef,
 } from "@/kernel/selection/selectionTypes";
@@ -61,6 +62,20 @@ const FDM_DOMAIN_SELECTION_KINDS = new Set<FdmDomainSelectionKind>([
   "mesh.grid.region",
   "mesh.grid.universe-outside-support",
 ]);
+
+const FDM_DOMAIN_SELECTION_SCOPES: Record<
+  FdmDomainSelectionKind,
+  FdmDomainSelectionScope
+> = {
+  "mesh.grid": "domain",
+  "mesh.grid.active-unassigned": "active-unassigned",
+  "mesh.grid.descriptor": "descriptor",
+  "mesh.grid.magnetic-support": "magnetic-support",
+  "mesh.grid.mask": "mask",
+  "mesh.grid.provenance": "provenance",
+  "mesh.grid.region": "region",
+  "mesh.grid.universe-outside-support": "universe-outside-support",
+};
 
 function isFdmDomainSelectionKind(
   kind: ExplorerNode["kind"],
@@ -138,11 +153,17 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   if (isFdmDomainSelectionKind(node.kind)) {
+    if (node.kind === "mesh.grid.region" && !node.regionId) return null;
     return {
       kind: node.kind,
       nodeId: node.id,
+      ...(node.kind === "mesh.grid.region" ? { regionId: node.regionId } : {}),
+      scope: FDM_DOMAIN_SELECTION_SCOPES[node.kind],
       type: "fdm-domain",
-      visualizationTargetId: "fdm-domain",
+      visualizationTargetId:
+        node.kind === "mesh.grid.universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : "fdm-domain",
     };
   }
 

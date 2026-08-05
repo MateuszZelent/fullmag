@@ -261,7 +261,9 @@ function useObjectRegionMagneticParametersPanelView({
         model.objectId,
         [
           ...retainedFields,
-          ...fieldDrafts.map((field) => materialFieldFromDraft(field, model)),
+          ...fieldDrafts.map((field) =>
+            materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
+          ),
         ],
         { baseRevision: model.revision ?? undefined },
       );
@@ -289,10 +291,21 @@ function useObjectRegionMagneticParametersPanelView({
       <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Material Overrides">
-        <ObjectRegionInlineDiagnostics
-          capabilityGates={["regions.material_override"]}
-          model={model}
-        />
+        {meshLane === "fem" ? (
+          <ObjectRegionInlineDiagnostics
+            capabilityGates={["regions.material_override"]}
+            model={model}
+          />
+        ) : (
+          <FieldRow
+            label="Realization diagnostics"
+            value={
+              meshLane === "fdm"
+                ? "Not applicable for FDM structured-grid materialization"
+                : "Withheld until the session discretization is explicit"
+            }
+          />
+        )}
         <FieldRow label="Overrides" value={model.materialOverrideCount} />
         <FieldRow label="Parameter fields" value={model.materialFieldCount} />
 
@@ -413,10 +426,10 @@ function useObjectRegionMagneticParametersPanelView({
           <FieldRow label="Region fields" value="no local parameter fields" />
         ) : null}
         {fieldDrafts.map((field, index) => {
-          const realizationRows = materialFieldRealizationRows(
-            field.assignmentId,
-            materialFields,
-          );
+          const realizationRows =
+            meshLane === "fem"
+              ? materialFieldRealizationRows(field.assignmentId, materialFields)
+              : [];
           return (
           <div
             className="fm-region-override fm-section-separator"
@@ -452,13 +465,25 @@ function useObjectRegionMagneticParametersPanelView({
               <option value="linear">Linear gradient</option>
               <option value="radial">Radial gradient</option>
             </FormField>
-            {realizationRows.map((row, rowIndex) => (
+            {meshLane === "fdm" ? (
               <FieldRow
-                key={`realization:${field.assignmentId}:${rowIndex}`}
-                label={row.label}
-                value={row.value}
+                label="Realization"
+                value="Not applicable for FDM structured-grid fields"
               />
-            ))}
+            ) : meshLane === "unknown" ? (
+              <FieldRow
+                label="Realization"
+                value="Withheld until the session discretization is explicit"
+              />
+            ) : (
+              realizationRows.map((row, rowIndex) => (
+                <FieldRow
+                  key={`realization:${field.assignmentId}:${rowIndex}`}
+                  label={row.label}
+                  value={row.value}
+                />
+              ))
+            )}
             {field.kind === "constant" ? (
               <PhysicalScalarField
                 label="Value"
@@ -571,16 +596,25 @@ function useObjectRegionMagneticParametersPanelView({
             <FormField
               label="Conflict"
               type="select"
-              value={field.conflictPolicy}
+              value={
+                meshLane !== "fem" && field.conflictPolicy === "min_mesh_size_wins"
+                  ? ""
+                  : field.conflictPolicy
+              }
               onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                 updateMaterialFieldDraft(index, {
                   conflictPolicy: event.target.value as SceneRegionConflictPolicy,
                 })
               }
             >
+              {meshLane !== "fem" && field.conflictPolicy === "min_mesh_size_wins" ? (
+                <option value="">Not applicable (legacy FEM policy)</option>
+              ) : null}
               <option value="error">Error</option>
               <option value="higher_priority_wins">Higher Priority Wins</option>
-              <option value="min_mesh_size_wins">Min Mesh Size Wins</option>
+              {meshLane === "fem" ? (
+                <option value="min_mesh_size_wins">Min Mesh Size Wins</option>
+              ) : null}
             </FormField>
             <div className="fm-inspector-toolbar fm-toolbar-top">
               <Button

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 
 import {
   resolveCommandSummary,
@@ -10,9 +11,74 @@ import {
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 
 describe("StudyInspectorPanelModel", () => {
+  it("separates authored intent from effective request without inventing fallback", () => {
+    const activeLane = {
+      ...activeLaneCapabilityFixture(),
+      authored: {
+        backend: "fdm",
+        device: "cpu",
+        discretization: "fdm",
+        mode: "strict",
+        precision: "double",
+      },
+      requested: {
+        backend: "fdm",
+        device: "gpu",
+        discretization: "fdm",
+        mode: "strict",
+        precision: "double",
+      },
+      resolved: {
+        backend: "fdm",
+        device: "gpu",
+        discretization: "fdm",
+        mode: "strict",
+        precision: "double",
+      },
+    };
+    const provenance = studyRuntimeProvenanceFromCurrentRun(
+      {
+        artifact_dir: "/tmp/fullmag/run-gpu",
+        requested_backend: "fdm",
+        requested_device: "gpu",
+        requested_mode: "strict",
+        requested_precision: "double",
+        resolved_backend: "fdm",
+        resolved_device: "gpu",
+        resolved_engine_id: "fdm_cuda",
+        resolved_mode: "strict",
+        resolved_precision: "double",
+        resolved_runtime_family: "fdm-cuda",
+        resolved_fallback: null,
+        revision: 4,
+        run_id: "run-gpu",
+        session_id: "session-gpu",
+        started_at: "2026-08-04T10:00:00Z",
+        status: "running",
+        total_steps: 8,
+      } as never,
+      activeLane,
+    );
+
+    expect(provenance.authored.device).toBe("cpu");
+    expect(provenance.effective.device).toBe("gpu");
+    expect(provenance.resolved.device).toBe("gpu");
+    expect(provenance.fallback.status).toBe("none");
+    expect(provenance.sources).toEqual({
+      authored: "problem_ir.runtime_selection",
+      effective: "session.runtime_resolution",
+    });
+  });
+
   it("keeps runtime provenance explicitly unavailable while the current run is not loaded", () => {
     expect(studyRuntimeProvenanceFromCurrentRun(null)).toEqual({
-      requested: {
+      authored: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+      },
+      effective: {
         backend: "not loaded",
         device: "not loaded",
         mode: "not loaded",
@@ -32,6 +98,10 @@ describe("StudyInspectorPanelModel", () => {
         fallbackEngine: "not loaded",
         reason: "not loaded",
         message: "Current run provenance is not loaded.",
+      },
+      sources: {
+        authored: "not loaded",
+        effective: "not loaded",
       },
     });
   });
@@ -59,7 +129,13 @@ describe("StudyInspectorPanelModel", () => {
         total_steps: 8,
       } as never),
     ).toEqual({
-      requested: {
+      authored: {
+        backend: "not available",
+        device: "not available",
+        mode: "not available",
+        precision: "not available",
+      },
+      effective: {
         backend: "fdm",
         device: "auto",
         mode: "strict",
@@ -79,6 +155,10 @@ describe("StudyInspectorPanelModel", () => {
         fallbackEngine: "not applicable",
         reason: "not reported",
         message: "No fallback reported.",
+      },
+      sources: {
+        authored: "not available",
+        effective: "not available",
       },
     });
   });

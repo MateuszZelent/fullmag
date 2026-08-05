@@ -214,6 +214,42 @@ describe("viewport3DFieldDataPlan", () => {
     });
   });
 
+  it("keeps FDM vector-only requests complete so cell mapping remains addressable", () => {
+    const fdmSettings: VisualizationTargetSettings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "H_eff",
+      shaderVisible: false,
+      vectorBudget: 128,
+      vectorsVisible: true,
+      visible: true,
+    };
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 128,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(plan.demands).toContainEqual(
+      expect.objectContaining({
+        completeness: "complete",
+        maxSamples: null,
+        passId: "fdm-domain:vector-glyph",
+        targetId: "fdm-domain",
+      }),
+    );
+    const [request] = Array.from(plan.requests.values());
+    expect(request).toMatchObject({
+        query: {
+          component: "full",
+          scope_kind: "full",
+        },
+      });
+    expect(request?.query).not.toHaveProperty("max_samples");
+  });
+
   it("keeps orientation surfaces on complete full-vector data", () => {
     const plan = objectPlan("object:orientation", {
       surfaceColorSource: "orientation",

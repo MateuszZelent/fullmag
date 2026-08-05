@@ -7,6 +7,7 @@ import {
   applyViewport3DPerspectiveCameraPose,
   applyViewport3DOrthographicCameraPose,
   resolveViewport3DProjectionCameraClip,
+  resolveViewport3DEffectiveCameraState,
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
   resolveNextViewport3DModelLayerStage,
@@ -71,6 +72,45 @@ describe("Viewport3DScene scale helpers", () => {
         { height: 600, width: 800 },
       ),
     ).toBeCloseTo(600 / (1e-7 * 1.6));
+  });
+
+  it("fits the untouched default camera to an FDM domain", () => {
+    const fitted = resolveViewport3DEffectiveCameraState({
+      bounds: {
+        center: [0, 0, 0],
+        radius: 2.58e-7,
+        size: [5e-7, 1.25e-7, 3e-9],
+      },
+      cameraState: {
+        position: [2e-6, 1.4e-6, 2e-6],
+        target: [0, 0, 0],
+        up: [0, 0, 1],
+      },
+    });
+
+    expect(fitted.position[0]).toBeCloseTo(2.58e-7 * 2.8);
+    expect(fitted.position[1]).toBeCloseTo(2.58e-7 * 2.8 * 0.72);
+    expect(fitted.position[2]).toBeCloseTo(2.58e-7 * 2.8);
+    expect(fitted.target).toEqual([0, 0, 0]);
+  });
+
+  it("preserves an explicit user camera instead of refitting it", () => {
+    const cameraState = {
+      position: [7e-7, 4e-7, 9e-7] as [number, number, number],
+      target: [1e-8, -2e-8, 0] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
+    };
+
+    expect(
+      resolveViewport3DEffectiveCameraState({
+        bounds: {
+          center: [0, 0, 0],
+          radius: 2.58e-7,
+          size: [5e-7, 1.25e-7, 3e-9],
+        },
+        cameraState,
+      }),
+    ).toBe(cameraState);
   });
 
   it("uses a viewport-sized orthographic frustum with micromagnetic zoom", () => {
@@ -296,6 +336,24 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).toContain("realizedRegionOverlayModels.status");
     expect(source).toContain("models={realizedRegionOverlayModels.models}");
     expect(source).not.toContain("onBuildStatusChange=");
+  });
+
+  it("does not mount FEM airbox or topology layers in the FDM scene lane", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const modelStack = source.slice(
+      source.indexOf("function Viewport3DModelLayerStack"),
+      source.indexOf("function RegionOverlayNativePickingLayer"),
+    );
+
+    expect(modelStack).toContain(
+      "{!fdmLaneActive &&\n      stageVisibility.baseGeometry &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
+    );
+    expect(modelStack).toContain(
+      "{!fdmLaneActive &&\n      stageVisibility.baseGeometry &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+    );
   });
 
   it("can skip viewport canvas probes and orientation widgets from browser runtime flags", () => {

@@ -466,6 +466,27 @@ function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
   );
 }
 
+export function shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+  appliedCameraState,
+  autoFittedBoundsSignature,
+  cameraState,
+  lastAutoFitCameraState,
+}: {
+  appliedCameraState: Viewport3DCameraState | null;
+  autoFittedBoundsSignature: string | null;
+  cameraState: Viewport3DCameraState;
+  lastAutoFitCameraState: Viewport3DCameraState | null;
+}): boolean {
+  return Boolean(
+    autoFittedBoundsSignature &&
+      appliedCameraState &&
+      lastAutoFitCameraState &&
+      isDefaultCameraState(cameraState) &&
+      nearCameraState(appliedCameraState, lastAutoFitCameraState) &&
+      !isDefaultCameraState(lastAutoFitCameraState),
+  );
+}
+
 export function shouldAutoFitViewport3DBoundsChange({
   currentCameraState,
   lastAutoFitCameraState,
@@ -575,6 +596,16 @@ export function CameraController({
 
   useEffect(() => {
     const state = cameraStateRef.current;
+    if (
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: appliedCameraStateRef.current,
+        autoFittedBoundsSignature: autoFittedBoundsRef.current,
+        cameraState: state,
+        lastAutoFitCameraState: lastAutoFitCameraStateRef.current,
+      })
+    ) {
+      return;
+    }
     applyViewport3DCameraUp(camera, state.up);
     camera.position.set(...state.position);
     applyCameraLookAt(camera, state.target);
@@ -595,6 +626,16 @@ export function CameraController({
         appliedCameraState: appliedCameraStateRef.current,
         currentCamera: camera,
         nextCameraState: cameraState,
+      })
+    ) {
+      return;
+    }
+    if (
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: appliedCameraStateRef.current,
+        autoFittedBoundsSignature: autoFittedBoundsRef.current,
+        cameraState,
+        lastAutoFitCameraState: lastAutoFitCameraStateRef.current,
       })
     ) {
       return;
@@ -717,6 +758,7 @@ function readViewport3DCameraControlsDiagnostics({
 }
 
 interface OrbitCameraControlsProps {
+  bounds: Viewport3DBounds | null;
   cameraGestureRef: Viewport3DCameraGestureRef;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -946,6 +988,7 @@ function useSmoothViewport3DWheelZoom({
 }
 
 function useOrbitCameraControlsModel({
+  bounds,
   cameraGestureRef,
   cameraOrthographicScale,
   cameraProjection,
@@ -981,6 +1024,26 @@ function useOrbitCameraControlsModel({
     const currentTarget = controls?.target?.toArray();
     if (!controls || !currentTarget) return;
     const currentPosition = camera.position.toArray();
+    const fittedCamera = bounds ? resolveViewport3DCameraFit(bounds) : null;
+    if (
+      fittedCamera &&
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: {
+          position: tuple3(currentPosition),
+          target: tuple3(currentTarget),
+          up: tuple3(camera.up.toArray()),
+        },
+        autoFittedBoundsSignature: "orbit-bounds",
+        cameraState,
+        lastAutoFitCameraState: {
+          position: fittedCamera.position,
+          target: fittedCamera.target,
+          up: VIEWPORT_3D_WORLD_UP,
+        },
+      })
+    ) {
+      return;
+    }
     if (
       !shouldSyncCameraControlsPose({
         currentPosition,
@@ -1002,7 +1065,14 @@ function useOrbitCameraControlsModel({
     }
     invalidate();
     tracker.recordDirtyFrame("camera-control-target");
-  }, [camera, cameraGestureRef, cameraState, invalidate, tracker]);
+  }, [
+    bounds,
+    camera,
+    cameraGestureRef,
+    cameraState,
+    invalidate,
+    tracker,
+  ]);
 
   useEffect(() => {
     const element = gl.domElement;

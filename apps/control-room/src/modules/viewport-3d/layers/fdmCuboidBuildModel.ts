@@ -5,6 +5,10 @@ import {
 
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import type { Viewport3DVectorAnchorMode } from "../viewport3dRenderModel";
+import {
+  buildFdmFieldIndexResolver,
+  type FdmFieldIndexingResult,
+} from "../model/fdmFieldIndexing";
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const FDM_VECTOR_SEGMENT_STRIDE = 7;
@@ -103,6 +107,9 @@ export function buildFdmCuboidInstanceModel(
   const realizedCellIndices = realizedRegionIds
     ? collectRealizedCellIndices(realizedRegionIds)
     : null;
+  const fieldIndexing = options.fieldVector
+    ? buildFdmFieldIndexResolver(options.fieldVector, totalCells)
+    : null;
   const candidateCount = Math.min(
     domain.displayCellCount,
     realizedCellIndices?.length ?? totalCells,
@@ -123,7 +130,14 @@ export function buildFdmCuboidInstanceModel(
           totalCells - 1,
           Math.floor((instance * totalCells) / candidateCount),
         );
-    if (!cellPassesMagnitudeThreshold(options.fieldVector, cellIndex, threshold)) {
+    if (
+      !cellPassesMagnitudeThreshold(
+        options.fieldVector,
+        cellIndex,
+        threshold,
+        fieldIndexing,
+      )
+    ) {
       continue;
     }
     sampledCellIndices[sampledCellCount] = cellIndex;
@@ -158,6 +172,7 @@ export function buildFdmCuboidInstanceModel(
         cellIndex,
         topography,
         dz,
+        fieldIndexing,
       );
   }
 
@@ -273,18 +288,33 @@ export function buildFdmVectorSegmentsUncached(
     return null;
   }
 
-  const vectorCount = Math.min(model.count, fieldVector.pointCount, maxVectors);
+  const fieldIndexing = buildFdmFieldIndexResolver(
+    fieldVector,
+    model.gridShape[0] * model.gridShape[1] * model.gridShape[2],
+  );
+  if (fieldIndexing.status !== "compatible") return null;
+
+  const validInstances: number[] = [];
+  for (let instance = 0; instance < model.count; instance += 1) {
+    const cellOrdinal = model.cellIndices[instance] ?? -1;
+    if (fieldIndexing.resolve(cellOrdinal) !== null) {
+      validInstances.push(instance);
+    }
+  }
+  const vectorCount = Math.min(validInstances.length, maxVectors);
   const anchorMode = options.anchorMode ?? "center";
   if (vectorCount <= 0) return null;
 
-  const stride = Math.max(1, Math.floor(model.count / vectorCount));
+  const stride = Math.max(1, Math.floor(validInstances.length / vectorCount));
 
   let maxMagnitude = 0;
   for (let vector = 0; vector < vectorCount; vector += 1) {
-    const instance = Math.min(model.count - 1, vector * stride);
-    const pointIndex = model.cellIndices[instance] ?? 0;
-    if (pointIndex >= fieldVector.pointCount) continue;
-    const offset = pointIndex * fieldVector.nComp;
+    const instance =
+      validInstances[Math.min(validInstances.length - 1, vector * stride)] ?? 0;
+    const cellOrdinal = model.cellIndices[instance] ?? -1;
+    const fieldIndex = fieldIndexing.resolve(cellOrdinal);
+    if (fieldIndex === null) continue;
+    const offset = fieldIndex * fieldVector.nComp;
     const magnitude = Math.hypot(
       fieldVector.values[offset] ?? 0,
       fieldVector.values[offset + 1] ?? 0,
@@ -298,12 +328,14 @@ export function buildFdmVectorSegmentsUncached(
   const segments = new Float32Array(vectorCount * FDM_VECTOR_SEGMENT_STRIDE);
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
-    const instance = Math.min(model.count - 1, vector * stride);
-    const pointIndex = model.cellIndices[instance] ?? 0;
-    if (pointIndex >= fieldVector.pointCount) continue;
+    const instance =
+      validInstances[Math.min(validInstances.length - 1, vector * stride)] ?? 0;
+    const cellOrdinal = model.cellIndices[instance] ?? -1;
+    const fieldIndex = fieldIndexing.resolve(cellOrdinal);
+    if (fieldIndex === null) continue;
 
     const positionOffset = instance * 3;
-    const valueOffset = pointIndex * fieldVector.nComp;
+    const valueOffset = fieldIndex * fieldVector.nComp;
     const target = vector * FDM_VECTOR_SEGMENT_STRIDE;
     const x = model.centers[positionOffset] ?? 0;
     const y = model.centers[positionOffset + 1] ?? 0;
@@ -395,11 +427,14 @@ function cellPassesMagnitudeThreshold(
   fieldVector: DecodedFieldVector | null | undefined,
   cellIndex: number,
   threshold: number,
+  fieldIndexing: FdmFieldIndexingResult | null,
 ): boolean {
   if (threshold <= 0 || !fieldVector) return true;
-  if (cellIndex >= fieldVector.pointCount) return false;
+  if (!fieldIndexing || fieldIndexing.status !== "compatible") return true;
+  const fieldIndex = fieldIndexing.resolve(cellIndex);
+  if (fieldIndex === null) return false;
 
-  const offset = cellIndex * fieldVector.nComp;
+  const offset = fieldIndex * fieldVector.nComp;
   if (fieldVector.nComp === 1) {
     return Math.abs(fieldVector.values[offset] ?? 0) >= threshold;
   }
@@ -440,12 +475,20 @@ function resolveVoxelTopographyDisplacement(
   cellIndex: number,
   topography: FdmVoxelTopographyOptions,
   cellHeight: number,
+  fieldIndexing: FdmFieldIndexingResult | null,
 ): number {
-  if (!topography.enabled || !fieldVector || cellIndex >= fieldVector.pointCount) {
+  if (
+    !topography.enabled ||
+    !fieldVector ||
+    !fieldIndexing ||
+    fieldIndexing.status !== "compatible"
+  ) {
     return 0;
   }
 
-  const offset = cellIndex * fieldVector.nComp;
+  const fieldIndex = fieldIndexing.resolve(cellIndex);
+  if (fieldIndex === null) return 0;
+  const offset = fieldIndex * fieldVector.nComp;
   const x = fieldVector.values[offset] ?? 0;
   const y = fieldVector.nComp > 1 ? fieldVector.values[offset + 1] ?? 0 : 0;
   const z = fieldVector.nComp > 2 ? fieldVector.values[offset + 2] ?? 0 : 0;

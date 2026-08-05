@@ -982,6 +982,7 @@ mod tests {
                 problem_name: "test".to_string(),
                 requested_backend: "fdm".to_string(),
                 explicit_selection: true,
+                authored_requested_device: "cpu".to_string(),
                 requested_device: "cpu".to_string(),
                 requested_precision: "double".to_string(),
                 requested_mode: "strict".to_string(),

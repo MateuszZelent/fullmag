@@ -502,12 +502,6 @@ pub(crate) fn resolve_m1_fem_spin_transport(
         }) {
             errors.push(format!("{prefix} stage coupling into LLG is not yet implemented and fails before provenance"));
         }
-        if problem.energy_terms.iter().any(|term| matches!(term,
-            fullmag_ir::EnergyTermIR::OerstedField { source, .. } if source == &module.current_source_id))
-        {
-            errors.push(format!("{prefix} Oersted stage coupling from solved current is not yet implemented"));
-        }
-
         let source = problem
             .current_modules
             .iter()
@@ -531,6 +525,18 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             continue;
         };
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+        let oersted_source_bound = problem.energy_terms.iter().any(|term| {
+            matches!(
+                term,
+                fullmag_ir::EnergyTermIR::OerstedField { source, .. }
+                    if source == &module.current_source_id
+            )
+        });
+        if oersted_source_bound && reciprocal {
+            errors.push(format!(
+                "{prefix} FEM reciprocal M2 Oersted coupling is not stage-consistent; use one-way Ohmic transport or the FDM coupled lane"
+            ));
+        }
         let expected_model = if reciprocal {
             fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
         } else {
@@ -963,6 +969,13 @@ fn materialize_fem_descriptor(
         } else {
             "fem_cpu_double_conforming_h1_p1_transparent_m1".into()
         },
+        oersted_source_bound: problem.energy_terms.iter().any(|term| {
+            matches!(
+                term,
+                fullmag_ir::EnergyTermIR::OerstedField { source, .. }
+                    if source == &module.current_source_id
+            )
+        }),
     })
 }
 
@@ -2695,6 +2708,79 @@ mod tests {
             plans[0].inserted_default_boundaries,
             ["spin:all_external_surfaces=spin_insulating"]
         );
+    }
+
+    #[test]
+    fn fem_ohmic_oersted_binds_the_solved_charge_field() {
+        let mut problem = fem_problem();
+        problem.energy_terms.push(EnergyTermIR::OerstedField {
+            model: OerstedFieldModelIR::FromCurrentSolution,
+            source: "charge".into(),
+        });
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let plans = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect("bounded FEM Oersted source binding");
+        let descriptor = plans[0]
+            .fem_cpu_double
+            .as_ref()
+            .expect("executable FEM descriptor");
+        assert!(descriptor.oersted_source_bound);
+    }
+
+    #[test]
+    fn fem_reciprocal_oersted_fails_closed_before_runtime() {
+        let mut problem = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            model,
+            coupling,
+            definition: Some(charge),
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        *model = CurrentTransportModelIR::MagnetoresistivePoisson;
+        *coupling = TransportCouplingIR::Bidirectional;
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        charge.materials[0].material.sigma_parallel_spm = Some(4.4e6);
+        charge.materials[0].material.sigma_perpendicular_spm = Some(4.0e6);
+        charge.materials[0].material.sigma_ahe_spm = Some(0.2e6);
+        charge.solver.engine = "block_gmres".into();
+        charge.solver.operator_version = FEM_M2_OPERATOR_VERSION.into();
+        charge.solver.physical_residual_version = FEM_RESIDUAL_VERSION.into();
+        problem.spin_transport_modules[0].constitutive_version =
+            FEM_M2_CONSTITUTIVE_VERSION.into();
+        problem.spin_transport_modules[0].solver.operator_version = FEM_M2_OPERATOR_VERSION.into();
+        problem.energy_terms.push(EnergyTermIR::OerstedField {
+            model: OerstedFieldModelIR::FromCurrentSolution,
+            source: "charge".into(),
+        });
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let error = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect_err("FEM reciprocal Oersted must not use a stale one-shot field");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("stage-consistent")));
     }
 
     #[test]

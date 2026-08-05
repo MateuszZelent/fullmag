@@ -2872,6 +2872,14 @@ pub(crate) fn plan_fem(
                     fem_plan.oersted_realization =
                         Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
                 }
+                ResolvedOerstedTerm::SolvedCurrent { .. } => {
+                    // The steady transport runtime solves charge first and
+                    // derives the nodal Oersted field from that result before
+                    // constructing the LLG backend.  Do not synthesize a
+                    // prescribed field in the planner.
+                    fem_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+                }
             }
             break;
         }

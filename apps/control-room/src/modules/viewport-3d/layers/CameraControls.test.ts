@@ -14,6 +14,7 @@ import {
   shouldApplyViewport3DOrbitDebugAngles,
   shouldApplyViewport3DCameraState,
   shouldAutoFitViewport3DBoundsChange,
+  shouldPreserveViewport3DAutoFitAgainstDefaultCamera,
   shouldSyncCameraControlsPose,
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./CameraControls";
@@ -376,7 +377,7 @@ describe("CameraControls", () => {
       "utf8",
     );
     const targetSyncBlock = source.slice(
-      source.indexOf('tracker.recordDirtyFrame("camera-control-target")') - 1200,
+      source.indexOf('tracker.recordDirtyFrame("camera-control-target")') - 1800,
       source.indexOf('tracker.recordDirtyFrame("camera-control-target")') + 90,
     );
     const orbitControlsStart = source.indexOf("<DreiOrbitControls");
@@ -387,6 +388,12 @@ describe("CameraControls", () => {
 
     expect(targetSyncBlock).toContain(
       "if (viewport3DCameraGestureActive(cameraGestureRef)) return;",
+    );
+    expect(targetSyncBlock).toContain(
+      "shouldPreserveViewport3DAutoFitAgainstDefaultCamera",
+    );
+    expect(targetSyncBlock).toContain(
+      "const fittedCamera = bounds ? resolveViewport3DCameraFit(bounds) : null;",
     );
     expect(orbitControlsBlock).not.toContain("target={cameraState.target}");
     expect(targetSyncBlock).toContain(".target.set(");
@@ -444,7 +451,7 @@ describe("CameraControls", () => {
       "utf8",
     );
     const cameraResourceBlock = source.slice(
-      source.indexOf('tracker.recordDirtyFrame("camera-resource")') - 720,
+      source.indexOf('tracker.recordDirtyFrame("camera-resource")') - 1200,
       source.indexOf('tracker.recordDirtyFrame("camera-resource")') + 80,
     );
 
@@ -513,6 +520,50 @@ describe("CameraControls", () => {
         lastAutoFitCameraState,
         nextBoundsSignature: "next",
         previousBoundsSignature: "previous",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not let a late default resource camera overwrite an FDM auto-fit", () => {
+    const bounds = {
+      center: [0, 0, 0] as [number, number, number],
+      radius: 2.5e-7,
+      size: [5e-7, 5e-7, 5e-7] as [number, number, number],
+    };
+    const fit = resolveViewport3DCameraFit(bounds);
+    const fittedCameraState = {
+      position: fit.position,
+      target: fit.target,
+      up: [0, 0, 1] as [number, number, number],
+    };
+
+    expect(
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: fittedCameraState,
+        autoFittedBoundsSignature: "fdm-grid",
+        cameraState: DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+        lastAutoFitCameraState: fittedCameraState,
+      }),
+    ).toBe(true);
+  });
+
+  it("still accepts an explicit default camera after the user leaves auto-fit", () => {
+    const fittedCameraState = {
+      position: [7e-7, 4e-7, 7e-7] as [number, number, number],
+      target: [0, 0, 0] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
+    };
+
+    expect(
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: {
+          position: [1.2e-6, 4e-7, 9e-7],
+          target: [0, 0, 0],
+          up: [0, 0, 1],
+        },
+        autoFittedBoundsSignature: "fdm-grid",
+        cameraState: DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+        lastAutoFitCameraState: fittedCameraState,
       }),
     ).toBe(false);
   });

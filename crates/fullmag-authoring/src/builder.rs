@@ -742,6 +742,8 @@ pub struct ScriptBuilderGeometryEntry {
     pub allocated_region_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryLayerIR>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

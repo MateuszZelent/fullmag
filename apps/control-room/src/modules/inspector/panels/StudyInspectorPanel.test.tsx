@@ -73,9 +73,15 @@ describe("StudyInspectorPanel", () => {
             relaxTorqueStop: null,
             runId: "run-fdm",
             runtimeProvenance: {
-              requested: {
+              authored: {
                 backend: "fdm",
-                device: "auto",
+                device: "cpu",
+                mode: "strict",
+                precision: "double",
+              },
+              effective: {
+                backend: "fdm",
+                device: "gpu",
                 mode: "strict",
                 precision: "double",
               },
@@ -94,6 +100,10 @@ describe("StudyInspectorPanel", () => {
                 reason: "cuda_unavailable",
                 message: "CUDA device unavailable; using the reference CPU engine.",
               },
+              sources: {
+                authored: "problem_ir.runtime_selection",
+                effective: "session.runtime_resolution",
+              },
             },
             state: "running",
           },
@@ -104,10 +114,13 @@ describe("StudyInspectorPanel", () => {
       />,
     );
 
-    expect(html).toContain("Requested backend");
+    expect(html).toContain("Authored intent backend");
     expect(html).toContain("fdm");
-    expect(html).toContain("Requested device");
-    expect(html).toContain("auto");
+    expect(html).toContain("Authored intent device");
+    expect(html).toContain("Effective request backend");
+    expect(html).toContain("Effective request device");
+    expect(html).toContain("problem_ir.runtime_selection");
+    expect(html).toContain("session.runtime_resolution");
     expect(html).toContain("Resolved runtime family");
     expect(html).toContain("fdm-cuda");
     expect(html).toContain("Resolved engine");

@@ -2,7 +2,10 @@ import type {
   DomainMetaResource,
   FdmRegionMembershipResource,
 } from "@/kernel/api/apiTypes";
+import type { DecodedFdmRegionMembership } from "@/kernel/api/codecs/fdmRegionMembershipCodec";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import type { Selection } from "@/kernel/selection/selectionTypes";
+import { resolveFdmCellState } from "@/shared/domain/mesh/domainPresentation";
 
 export type FdmGridInspectorStatus =
   | "loading"
@@ -53,6 +56,277 @@ export interface FdmGridInspectorModel {
   statusLabel: string;
   totalCells: number | null;
   units: Readonly<Record<string, string>>;
+}
+
+export type FdmGridSelectionScope =
+  | "domain"
+  | "descriptor"
+  | "magnetic-support"
+  | "active-unassigned"
+  | "mask"
+  | "provenance"
+  | "region"
+  | "universe-outside-support"
+  | "cell";
+
+export interface FdmGridSelectionCell {
+  cellOrdinal: string;
+  gridFingerprint: string;
+  ijk: readonly [number, number, number];
+  maskState: "inactive" | "active-unassigned" | "region";
+  membershipRevision: string;
+  numericRegionId: number | null;
+  regionId: string | null;
+}
+
+export interface FdmMagneticSupportSummary {
+  activeCellCount: number;
+  activeUnassignedCellCount: number;
+  boundsMax: readonly [number, number, number];
+  boundsMin: readonly [number, number, number];
+  inactiveCellCount: number;
+}
+
+export interface FdmGridSelectionInspectorModel {
+  cell: FdmGridSelectionCell | null;
+  notice: string | null;
+  region: FdmGridLegendEntry | null;
+  scope: FdmGridSelectionScope;
+  snapshotCell: FdmGridSelectionCell | null;
+  status: "current" | "degraded" | "stale";
+  support: FdmMagneticSupportSummary | null;
+  title: string;
+}
+
+type BinarySnapshot = Pick<
+  ResourceResult<DecodedFdmRegionMembership | null>,
+  "data" | "error" | "status"
+>;
+
+const SCOPE_TITLES: Record<FdmGridSelectionScope, string> = {
+  "active-unassigned": "Active / Unassigned Cells",
+  cell: "FDM Cell",
+  descriptor: "Structured Grid Descriptor",
+  domain: "FDM Domain",
+  "magnetic-support": "Magnetic Support",
+  mask: "Cell Mask",
+  provenance: "Grid Provenance",
+  region: "FDM Region",
+  "universe-outside-support": "Universe Outside Magnetic Support",
+};
+
+function supportSummary(
+  grid: Pick<FdmGridInspectorModel, "origin" | "shape" | "spacing">,
+  membership: FdmRegionMembershipResource | null,
+): FdmMagneticSupportSummary | null {
+  const support = membership?.magnetic_support;
+  const boundsMin = tuple3(support?.bounds_min_m);
+  const boundsMax = tuple3(support?.bounds_max_m);
+  const origin = grid.origin;
+  const shape = grid.shape;
+  const spacing = grid.spacing;
+  const cellEdgeIndex = (value: number, axis: number): number | null => {
+    const offset = (value - origin![axis]) / spacing![axis];
+    const rounded = Math.round(offset);
+    const tolerance = 1e-9 * Math.max(1, Math.abs(offset));
+    if (Math.abs(offset - rounded) > tolerance) return null;
+    return rounded >= 0 && rounded <= shape![axis] ? rounded : null;
+  };
+  if (
+    !support ||
+    !origin ||
+    !shape ||
+    !spacing ||
+    spacing.some((value) => !Number.isFinite(value) || value <= 0) ||
+    support.semantic_role !== "magnetic-support" ||
+    support.grid_fingerprint !== membership.grid_fingerprint ||
+    !boundsMin ||
+    !boundsMax ||
+    boundsMin.some((value, index) => value > boundsMax[index]) ||
+    boundsMin.some(
+      (value, index) => cellEdgeIndex(value, index) === null,
+    ) ||
+    boundsMax.some(
+      (value, index) => cellEdgeIndex(value, index) === null,
+    ) ||
+    ![
+      support.active_cell_count,
+      support.active_unassigned_cell_count,
+      support.inactive_cell_count,
+    ].every((value) => Number.isSafeInteger(value) && value >= 0) ||
+    support.active_cell_count + support.inactive_cell_count !== membership.cell_count ||
+    support.active_unassigned_cell_count > support.active_cell_count ||
+    (support.active_cell_count > 0 &&
+      boundsMin.some((value, index) => value >= boundsMax[index]))
+  ) {
+    return null;
+  }
+  return {
+    activeCellCount: support.active_cell_count,
+    activeUnassignedCellCount: support.active_unassigned_cell_count,
+    boundsMax,
+    boundsMin,
+    inactiveCellCount: support.inactive_cell_count,
+  };
+}
+
+function snapshotCell(
+  selection: Selection,
+): FdmGridSelectionCell | null {
+  const ref = selection.ref?.type === "fdm-cell" ? selection.ref : null;
+  return ref
+    ? {
+        cellOrdinal: ref.cellOrdinal,
+        gridFingerprint: ref.gridFingerprint,
+        ijk: ref.ijk,
+        maskState: ref.maskState,
+        membershipRevision: ref.membershipRevision,
+        numericRegionId: ref.numericRegionId,
+        regionId: ref.regionId,
+      }
+    : null;
+}
+
+function selectionScope(selection: Selection): FdmGridSelectionScope {
+  if (selection.ref?.type === "fdm-cell") return "cell";
+  return selection.ref?.type === "fdm-domain" ? selection.ref.scope : "domain";
+}
+
+function staleSelection(
+  scope: FdmGridSelectionScope,
+  snapshot: FdmGridSelectionCell | null,
+  notice: string,
+): FdmGridSelectionInspectorModel {
+  return {
+    cell: null,
+    notice,
+    region: null,
+    scope,
+    snapshotCell: snapshot,
+    status: "stale",
+    support: null,
+    title: SCOPE_TITLES[scope],
+  };
+}
+
+export function resolveFdmGridSelectionInspectorModel({
+  base,
+  binary,
+  membership,
+  selection,
+}: {
+  base: FdmGridInspectorModel;
+  binary: BinarySnapshot;
+  membership: ResourceSnapshot<FdmRegionMembershipResource>;
+  selection: Selection;
+}): FdmGridSelectionInspectorModel {
+  const scope = selectionScope(selection);
+  const snapshot = snapshotCell(selection);
+  const descriptor = membership.data;
+  const common = {
+    cell: null,
+    notice: null,
+    region: null,
+    scope,
+    snapshotCell: snapshot,
+    status: "current" as const,
+    support: null,
+    title: SCOPE_TITLES[scope],
+  };
+
+  if (base.status !== "ready" || !descriptor) {
+    return {
+      ...common,
+      notice: base.notice ?? "Current FDM grid resources are unavailable.",
+      status: base.status === "stale" ? "stale" : "degraded",
+    };
+  }
+
+  if (
+    scope === "magnetic-support" ||
+    scope === "active-unassigned" ||
+    scope === "universe-outside-support"
+  ) {
+    const support = supportSummary(base, descriptor);
+    return support
+      ? { ...common, support }
+      : {
+          ...common,
+          notice:
+            "The canonical magnetic-support summary is not published or does not match the current grid; support facts are withheld.",
+          status: "degraded",
+          support: null,
+        };
+  }
+
+  if (scope === "region") {
+    const regionId = selection.ref?.type === "fdm-domain"
+      ? selection.ref.regionId?.trim() || null
+      : null;
+    const entry = regionId
+      ? base.membership?.legend.find((candidate) => candidate.regionId === regionId) ?? null
+      : null;
+    return entry
+      ? { ...common, region: entry }
+      : {
+          ...common,
+          notice: "The selected FDM region is not present in the current membership legend.",
+          status: "stale",
+        };
+  }
+
+  if (scope !== "cell" || !snapshot) return common;
+
+  const decoded = binary.data;
+  const expectedRevision = `${descriptor.mesh_revision}:${descriptor.region_membership_revision}`;
+  const ordinal = Number(snapshot.cellOrdinal);
+  if (
+    binary.status !== "ready" ||
+    binary.error ||
+    !decoded ||
+    decoded.semanticStatus !== "canonical" ||
+    decoded.gridFingerprint !== descriptor.grid_fingerprint ||
+    decoded.cellCount !== descriptor.cell_count ||
+    decoded.counts.some((value, index) => value !== descriptor.counts[index]) ||
+    snapshot.gridFingerprint !== descriptor.grid_fingerprint ||
+    snapshot.membershipRevision !== expectedRevision ||
+    !Number.isSafeInteger(ordinal) ||
+    ordinal < 0 ||
+    ordinal >= decoded.cellCount
+  ) {
+    return staleSelection(
+      scope,
+      snapshot,
+      "The selected FDM cell identity does not match the current grid or membership resource.",
+    );
+  }
+
+  const nx = descriptor.counts[0];
+  const ny = descriptor.counts[1];
+  const expectedIJK: [number, number, number] = [
+    ordinal % nx,
+    Math.floor(ordinal / nx) % ny,
+    Math.floor(ordinal / (nx * ny)),
+  ];
+  const numericRegionId = decoded.regionIds[ordinal];
+  if (numericRegionId === undefined) {
+    return staleSelection(scope, snapshot, "The selected FDM cell is absent from the current mask.");
+  }
+  const state = resolveFdmCellState(numericRegionId, descriptor);
+  if (
+    snapshot.ijk.some((value, index) => value !== expectedIJK[index]) ||
+    snapshot.maskState !== state.kind ||
+    snapshot.numericRegionId !== state.numericRegionId ||
+    snapshot.regionId !== state.regionId
+  ) {
+    return staleSelection(
+      scope,
+      snapshot,
+      "The selected FDM cell details do not match the current membership mask.",
+    );
+  }
+
+  return { ...common, cell: snapshot };
 }
 
 const STATUS_LABELS: Record<FdmGridInspectorStatus, string> = {

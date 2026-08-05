@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  DATA_FIELD_VECTOR_PATH,
   DATA_FIELDS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
@@ -436,13 +437,49 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain("allowMissingSessionSmoke");
     expect(screenshotScript).toContain("isAllowedMissingSessionResponse");
     expect(screenshotScript).toContain("verifyFdmFixtureRegionOverlaySelection");
+    expect(screenshotScript).toContain("verifyFdmFixtureFieldPresentation");
+    expect(screenshotScript).toContain("configureFdmFixtureFieldPresentation");
+    expect(screenshotScript).toContain("patchFdmVisualization");
+    expect(screenshotScript).toContain("readFdmVisualizationSettings");
+    expect(screenshotScript).toContain("readViewportAuditRuntime");
+    expect(screenshotScript).toContain("readViewport3DFieldUpdateHoldActive");
+    expect(screenshotScript).toContain(".fm-viewport-3d__hud");
+    expect(screenshotScript).toContain("viewportColorbarVisible: true");
+    expect(screenshotScript).toContain(
+      "configureFdmFixtureFieldPresentation(page, true)",
+    );
+    expect(screenshotScript).toContain("waitForFixtureRequest");
+    expect(screenshotScript).toContain("waitForProjectionFixtureRender");
+    expect(screenshotScript).not.toContain("waitForTimeout(400)");
+    expect(screenshotScript).toContain("projection-fallback");
+    expect(screenshotScript).toContain("1, 0, 0.25");
     expect(screenshotScript).toContain("FDM_FIXTURE_REGION_NODE_ID");
     expect(screenshotScript).toContain("ensureExplorerNodeExpanded");
     expect(screenshotScript).toContain("clickCanvasUntilExplorerNodeSelected");
     expect(screenshotScript).toContain('name: "Auto"');
     expect(screenshotScript).toContain("Region overlay mode must default to Auto.");
+    expect(screenshotScript).toContain(
+      'const visibility = control.getByRole("button", { exact: true, name: "Regions" });',
+    );
+    expect(screenshotScript).toContain(
+      "Authored region overlay mode must remain disabled while region overlays are hidden.",
+    );
+    expect(screenshotScript).toContain("await visibility.click()");
+    expect(screenshotScript).toContain(
+      "Authored region overlay mode remained disabled after enabling region overlays.",
+    );
     expect(screenshotScript).toContain("aria-selected");
     expect(screenshotScript).toContain("Viewport 3D region overlay selection passed");
+    expect(screenshotScript).toContain('"x-fullmag-domain-generation-id": "1"');
+    expect(screenshotScript).toContain("WebGL is unavailable");
+    expect(screenshotScript).toContain("drawingBufferWidth");
+    expect(screenshotScript).toContain(".fm-viewport-3d__colorbar-range-label");
+    expect(screenshotScript).toContain(
+      DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m"),
+    );
+    expect(screenshotScript.match(/browser\.newPage/g)).toHaveLength(1);
+    expect(screenshotScript.match(/browser\.newContext/g)).toHaveLength(3);
+    expect(screenshotScript.match(/await context\.close\(\)/g)).toHaveLength(3);
   });
 
   it("publishes the current scene and a complete generated-shape target registry for projection screenshots", () => {

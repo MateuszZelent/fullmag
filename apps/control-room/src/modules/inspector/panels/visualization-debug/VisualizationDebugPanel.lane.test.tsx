@@ -1,17 +1,20 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const testState = vi.hoisted(() => ({
   adapterCalls: 0,
   discretization: "fdm",
+  omitDomain: false,
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
   SESSION_STATUS_RESOURCE_KEY: "session:status",
   useSessionStatusSelector: (selector: (status: unknown) => unknown) =>
     selector({
-      data: { domain: { discretization: testState.discretization } },
+      data: testState.omitDomain
+        ? {}
+        : { domain: { discretization: testState.discretization } },
     }),
 }));
 
@@ -41,9 +44,14 @@ const selection: Selection = {
 };
 
 describe("VisualizationDebugPanel lane gate", () => {
+  beforeEach(() => {
+    testState.adapterCalls = 0;
+    testState.discretization = "fdm";
+    testState.omitDomain = false;
+  });
+
   it("does not mount the FEM evidence adapter for explicit FDM debug selections", () => {
     testState.discretization = "fdm";
-    testState.adapterCalls = 0;
 
     const html = renderToStaticMarkup(<VisualizationDebugPanel selection={selection} />);
 
@@ -53,11 +61,28 @@ describe("VisualizationDebugPanel lane gate", () => {
 
   it("mounts the evidence adapter after the session resolves to FEM", () => {
     testState.discretization = "fem";
-    testState.adapterCalls = 0;
 
     const html = renderToStaticMarkup(<VisualizationDebugPanel selection={selection} />);
 
     expect(testState.adapterCalls).toBe(1);
     expect(html).toContain("debug adapter");
+  });
+
+  it("withholds the evidence adapter until the session lane is explicit", () => {
+    testState.discretization = "";
+
+    const html = renderToStaticMarkup(<VisualizationDebugPanel selection={selection} />);
+
+    expect(testState.adapterCalls).toBe(0);
+    expect(html).toContain("unavailable until the session discretization is explicit");
+  });
+
+  it("withholds the evidence adapter when the status has no domain", () => {
+    testState.omitDomain = true;
+
+    const html = renderToStaticMarkup(<VisualizationDebugPanel selection={selection} />);
+
+    expect(testState.adapterCalls).toBe(0);
+    expect(html).toContain("unavailable until the session discretization is explicit");
   });
 });

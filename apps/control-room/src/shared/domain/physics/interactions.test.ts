@@ -95,6 +95,14 @@ describe("physics interaction catalog", () => {
       "fredkin_koehler",
       "fmm",
     ]);
+    expect(
+      interactionSpecsForDiscretization("fdm").some(
+        (spec) => spec.id === "magnetoelastic",
+      ),
+    ).toBe(false);
+    expect(
+      interactionAvailabilityForDiscretization("magnetoelastic", "fdm"),
+    ).toMatchObject({ status: "unsupported" });
     expect(interactionSpecsForDiscretization("unknown")).toEqual([]);
   });
 

@@ -26,6 +26,22 @@ export function viewportSelectionForDomain(
   };
 }
 
+export function viewportSelectionForFdmUniverseOutsideSupport(): ViewportSelectionPatch {
+  return {
+    kind: "mesh.grid.universe-outside-support",
+    label: "Universe Outside Magnetic Support",
+    nodeId: "model:mesh:outside-support",
+    objectId: null,
+    ref: {
+      kind: "mesh.grid.universe-outside-support",
+      nodeId: "model:mesh:outside-support",
+      scope: "universe-outside-support",
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-universe-outside-support",
+    },
+  };
+}
+
 /** Build an FDM cell selection only from a canonical membership identity. */
 export function viewportSelectionForFdmCell({
   instanceId,

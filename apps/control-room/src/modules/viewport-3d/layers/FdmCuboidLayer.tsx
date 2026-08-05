@@ -334,10 +334,23 @@ function resolveProjectedFdmInspectHit({
   };
 }
 
+export function fdmCuboidSurfaceMeshKey(
+  modelCount: number,
+  usesInstanceColors: boolean,
+): string {
+  return `fdm-cuboids-surface-${modelCount}-${usesInstanceColors ? "field-colors" : "uniform-color"}`;
+}
+
 interface FdmCuboidMatrixUploadOptions {
   invalidate: () => void;
   model: FdmCuboidInstanceModel | null;
   shaderVisible: boolean;
+  /**
+   * The surface mesh is reconstructed when its color carrier changes.
+   * Include the same identity in the upload lifecycle so a newly constructed
+   * InstancedMesh does not keep Three.js's default identity matrices.
+   */
+  surfaceMeshKey: string;
   surfaceRef: { current: InstancedMesh | null };
   tracker: Viewport3DResourceTracker;
   wireframeRef: { current: InstancedMesh | null };
@@ -348,6 +361,7 @@ function useFdmCuboidMatrixUpload({
   invalidate,
   model,
   shaderVisible,
+  surfaceMeshKey,
   surfaceRef,
   tracker,
   wireframeRef,
@@ -421,6 +435,7 @@ function useFdmCuboidMatrixUpload({
     invalidate,
     model,
     shaderVisible,
+    surfaceMeshKey,
     surfaceRef,
     tracker,
     wireframeRef,
@@ -650,13 +665,26 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
 }) {
   const invalidate = useBatchedInvalidate();
   const geometry = useMemo(
-    () => tracker.track("geometry", new BoxGeometry(1, 1, 1)),
+    () => {
+      const next = new BoxGeometry(1, 1, 1);
+      // MeshBasicMaterial enables the regular vertex-color channel together
+      // with InstancedMesh.instanceColor. Keep that channel neutral so the
+      // per-cell instance colors are not multiplied by WebGL's default (0,0,0,1).
+      const color = new Float32Array(next.getAttribute("position").count * 3);
+      color.fill(1);
+      next.setAttribute("color", new BufferAttribute(color, 3));
+      return tracker.track("geometry", next);
+    },
     [tracker],
   );
   const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
   const usesInstanceColors = Boolean(
     surfaceColors && surfaceColors.colors.length === model.count * 3,
+  );
+  const surfaceMeshKey = fdmCuboidSurfaceMeshKey(
+    model.count,
+    usesInstanceColors,
   );
   const lastAdoptedSurfaceRef = useRef<{
     fieldBufferId: string | null;
@@ -758,6 +786,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     invalidate,
     model,
     shaderVisible: renderPlan.surface.visible,
+    surfaceMeshKey,
     surfaceRef,
     tracker,
     wireframeRef,
@@ -779,7 +808,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         <instancedMesh
           args={[geometry, surfaceMaterial, model.count]}
           frustumCulled={false}
-          key={`fdm-cuboids-surface-${model.count}`}
+          key={surfaceMeshKey}
           onPointerMove={onPointerMove}
           onPointerOut={onPointerOut}
           ref={surfaceRef}
@@ -1129,6 +1158,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           opacity={targetRenderPlan.vectors.opacity}
+          renderOnTop
           fieldBufferId={
             fieldVector
               ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`

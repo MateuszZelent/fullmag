@@ -236,6 +236,8 @@ pub(crate) struct SessionManifest {
     #[serde(default)]
     pub explicit_selection: bool,
     #[serde(default = "default_auto")]
+    pub authored_requested_device: String,
+    #[serde(default = "default_auto")]
     pub requested_device: String,
     #[serde(default = "default_double")]
     pub requested_precision: String,
@@ -1520,6 +1522,7 @@ mod tests {
                 object_regions: Vec::new(),
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
+                absorbing_boundary: None,
             }],
             mesh_interfaces: Vec::new(),
             field_drives: Vec::new(),
@@ -1551,6 +1554,7 @@ mod tests {
                 problem_name: "demo".to_string(),
                 requested_backend: "auto".to_string(),
                 explicit_selection: false,
+                authored_requested_device: "auto".to_string(),
                 requested_device: "auto".to_string(),
                 requested_precision: "double".to_string(),
                 requested_mode: "strict".to_string(),

@@ -32,6 +32,8 @@ import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldVectorEnabled,
   resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DDomainRenderLane,
+  resolveViewport3DFdmFieldIdentityCompatible,
   resolveViewport3DFieldRenderModelBuildOptions,
   resolveViewport3DSelectedSnapshotId,
   resolveViewport3DSelectedSnapshotQuery,
@@ -174,6 +176,90 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("publishes the central FDM display sampling provenance in the HUD summary", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "adaptFdmDomainPresentation(fdmDomainPresentation, FDM_DISPLAY_CELL_BUDGET)",
+    );
+    expect(source).toContain("formatFdmDisplaySamplingSummary({");
+    expect(source).toContain("budget: fdmDomain.displayCellBudget");
+    expect(source).toContain("displaySamples: fdmDomain.displayCellCount");
+    expect(source).toContain("stride: fdmDomain.stride");
+    expect(source).toContain("total: fdmDomain.totalCells");
+    expect(source).not.toContain("`${fdmDomain.displayCellCount}/${fdmDomain.totalCells}`");
+  });
+
+  it("keeps FEM colorbar identity compatible regardless of FDM-only diagnostics", () => {
+    expect(
+      resolveViewport3DFdmFieldIdentityCompatible({
+        fdmFieldCompatibilityStatus: "mismatch",
+        fdmLaneActive: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveViewport3DFdmFieldIdentityCompatible({
+        fdmFieldCompatibilityStatus: "mismatch",
+        fdmLaneActive: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses FEM topology and manifest targets while an FDM domain is active", () => {
+    const femDomain = {
+      airboxParts: [{ id: "airbox" }],
+      magneticParts: [{ id: "film" }],
+      magneticSurfacePartsByPartId: new Map(),
+      objectPartIds: new Map([["film", ["film"]]]),
+      partsById: new Map([["film", { id: "film" }]]),
+    } as never;
+
+    for (const topologyFreshness of ["current", "stale", "unknown"] as const) {
+      const lane = resolveViewport3DDomainRenderLane({
+        fdmActive: true,
+        femDomain,
+        topologyFreshness,
+      });
+
+      expect(lane.femDomain.magneticParts).toEqual([]);
+      expect(lane.femDomain.airboxParts).toEqual([]);
+      expect(lane.topologyCurrent).toBe(false);
+      expect(lane.topologyRenderable).toBe(false);
+    }
+  });
+
+  it("preserves FEM topology and manifest targets when no FDM domain is active", () => {
+    const femDomain = {
+      airboxParts: [{ id: "airbox" }],
+      magneticParts: [{ id: "film" }],
+      magneticSurfacePartsByPartId: new Map(),
+      objectPartIds: new Map([["film", ["film"]]]),
+      partsById: new Map([["film", { id: "film" }]]),
+    } as never;
+
+    const lane = resolveViewport3DDomainRenderLane({
+      fdmActive: false,
+      femDomain,
+      topologyFreshness: "current",
+    });
+
+    expect(lane.femDomain).toBe(femDomain);
+    expect(lane.topologyCurrent).toBe(true);
+    expect(lane.topologyRenderable).toBe(true);
+  });
+
+  it("does not surface FEM topology freshness labels in the FDM lane", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      'const fdmLaneActive = domainMeta.data?.discretization === "fdm";',
+    );
+    expect(source).toContain(
+      "const topologyFreshnessStatus = fdmLaneActive\n    ? null\n    : resolveViewport3DTopologyFreshnessLabel(topologyFreshness);",
+    );
+    expect(source).toContain("topologyFreshnessStatus ??\n    topology.status");
+  });
+
   it("uses full metadata component for scalar spatial quantities", () => {
     expect(resolveViewport3DFieldMetaScalarComponent("eden_total", "magnitude"))
       .toBe("full");
@@ -218,16 +304,16 @@ describe("useViewport3DSceneModel", () => {
   it("fails closed for ambiguous legacy FMRM membership", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
-    expect(source).toContain(
-      'if (binary.semanticStatus !== "canonical") return null;',
-    );
+    expect(source).toContain("resolveViewport3DFdmRealizedRegionIds(");
   });
 
   it("passes a current FDM grid identity to selection focus without a FEM fallback", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain("const fdmSelectionGrid = useMemo<FdmSelectionGrid | null>");
-    expect(source).toContain('membership.freshness.toLowerCase() === "current"');
+    expect(source).toContain(
+      'fdmDomainPresentation?.resourceStatus === "realized"',
+    );
     expect(source).toContain("resolveViewport3DSelectionBounds(");
     expect(source).toContain("fdmSelectionGrid,");
   });
@@ -3673,11 +3759,16 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("realizedRegionIds: fdmRealizedRegionIds");
     expect(source).toContain("membership=${fdmRegionMembership.revision ?? \"none\"}");
     expect(source).toContain("const fdmRealizedRegionIds = useMemo");
+    expect(source).toContain("adaptDomainPresentation({");
+    expect(source).toContain("expectedFdmGridFingerprint:");
     expect(source).toContain(
-      "fdmRegionMembership.error || fdmRegionMembershipBinary.error",
+      "fdmRegionMembershipBinary.data?.gridFingerprint ?? null",
     );
     expect(source).toContain(
-      'fdmRegionMembership.status === "ready" ? undefined : null',
+      "resolveViewport3DFdmRealizedRegionIds(",
+    );
+    expect(source).toContain(
+      "fdmRegionMembership.error || fdmRegionMembershipBinary.error",
     );
     expect(source).toContain("fdmBuildFieldRevision");
     expect(source).toContain("fdmInstanceModel: fdmInstanceModel");
@@ -3685,5 +3776,18 @@ describe("useViewport3DSceneModel", () => {
     expect(source).not.toContain("const fdmInstanceModel = useMemo<");
     expect(source).not.toContain("buildFdmCuboidInstanceModel(");
     expect(source).not.toContain("const fdmSurfaceInstanceModel");
+  });
+
+  it("binds FMVP v2 FDM rendering to trusted response domain identity", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "resolveTrustedViewport3DResponseDomainGenerationId(",
+    );
+    expect(source).toContain("fieldVector.responseMetadata");
+    expect(source).toContain(
+      "targetQuantityFieldVectors.responseMetadataByRequestId",
+    );
+    expect(source).toContain("responseDomainGenerationId:");
   });
 });

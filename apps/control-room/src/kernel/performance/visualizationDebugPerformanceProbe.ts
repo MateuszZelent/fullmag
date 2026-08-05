@@ -1,8 +1,17 @@
 export interface VisualizationDebugPerformanceCounters {
   publishes: number;
+  resourceCounts?: VisualizationDebugResourceCounts;
   scans: number;
   viewportFrameReasons?: Record<string, number>;
   viewportFrames: number;
+}
+
+export interface VisualizationDebugResourceCounts {
+  geometries: number;
+  materials: number;
+  renderTargets: number;
+  textures: number;
+  workers: number;
 }
 
 declare global {
@@ -19,6 +28,14 @@ export function recordVisualizationDebugPublish(): void {
 export function recordVisualizationDebugScan(): void {
   const counters = readCounters();
   if (counters) counters.scans += 1;
+}
+
+export function recordVisualizationDebugResourceCounts(
+  counts: VisualizationDebugResourceCounts,
+): void {
+  const counters = readCounters();
+  if (!counters) return;
+  counters.resourceCounts = { ...counts };
 }
 
 export function recordVisualizationDebugViewportFrame(reason: string): void {

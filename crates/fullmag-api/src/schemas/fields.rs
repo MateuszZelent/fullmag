@@ -109,6 +109,9 @@ pub struct FieldVectorQuery {
     /// mesh topology are valid for vector glyph placement and surface projection
     /// modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
     /// requires complete field coverage.
+    /// FDM responses always return the complete cell-centred field, even when
+    /// this cap is provided, because FMVP v2 has no cell-index mapping for a
+    /// downsampled payload.
     pub max_samples: Option<u32>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.

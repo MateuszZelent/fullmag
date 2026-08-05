@@ -20,6 +20,7 @@ import type {
 import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
+import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
 
@@ -263,6 +264,7 @@ function liveStatusFixture(
   return {
     api_contract_version: "1.0.0",
     capabilities: {
+      active_lane: activeLaneCapabilityFixture(),
       algorithms_available: [],
       binary_fields: true,
       cell_fields: true,

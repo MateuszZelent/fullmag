@@ -57,6 +57,7 @@ import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
 import {
   acquireViewport3DWorkerRuntime,
   getViewport3DWorkerRuntimeSnapshot,
+  viewport3DFieldUpdateHoldActive,
 } from "@/modules/viewport-3d/public";
 import {
   createViewport3DInactiveResourcePauseController,
@@ -69,7 +70,10 @@ import { ChartViewportHandoffController } from "./visualization/ChartViewportHan
 import { CameraRegistryController } from "./visualization/CameraRegistryController";
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
-import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import {
+  ObjectVisualizationController,
+  type VisualizationTargetPatch,
+} from "./visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
@@ -380,6 +384,12 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         flushVisualization: () => Promise<void>;
         setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
+        patchFdmVisualization: (patch: VisualizationTargetPatch) => void;
+        readFdmVisualizationSettings: () => ReturnType<
+          ObjectVisualizationController["getSettings"]
+        >;
+        readViewport3DFieldUpdateHoldActive: () => boolean;
+        readActiveViewportModule: () => string;
         publishVisualizationState: (state: VisualizationStateResource) => void;
         readViewportAuditRuntime: () => {
           listenerCounts: ReturnType<typeof sharedResourceRuntimeStore.listenerCounts>;
@@ -480,6 +490,19 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         kernel.visualizationSync.queuePatch(patch);
         await kernel.visualizationSync.flushNow();
       },
+      patchFdmVisualization: (patch: VisualizationTargetPatch) => {
+        kernel.visualization.patchDefaults("fdm-domain", patch);
+      },
+      readFdmVisualizationSettings: () =>
+        kernel.visualization.getSettings({
+          id: "fdm-domain",
+          kind: "fdm-domain",
+          label: "FDM domain",
+        }),
+      readViewport3DFieldUpdateHoldActive: () =>
+        viewport3DFieldUpdateHoldActive(),
+      readActiveViewportModule: () =>
+        kernel.layout.get().activeViewportMainModuleId,
       publishVisualizationState: (state: VisualizationStateResource) => {
         sharedResourceRuntimeStore.updateData(
           VISUALIZATION_STATE_PATH,

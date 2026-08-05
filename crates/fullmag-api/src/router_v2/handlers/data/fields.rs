@@ -13,7 +13,8 @@ use serde::Deserialize;
 
 use super::field_resolution::{
     extract_fdm_field, extract_fem_field, fem_magnetic_node_indices,
-    field_values_match_current_domain, flatten_json_field_values, json_field_grid,
+    field_values_match_current_domain, flatten_json_field_values, is_fdm_snapshot,
+    json_field_grid,
     live_magnetization_available, strict_flat_json_field_values,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
@@ -823,7 +824,11 @@ fn resolved_current_field_grid(
     point_count: usize,
 ) -> [u32; 3] {
     match grid {
-        Some(grid) if snapshot.fem_mesh.is_some() && grid.contains(&0) => {
+        Some(grid)
+            if snapshot.fem_mesh.is_some()
+                && !is_fdm_snapshot(snapshot)
+                && grid.contains(&0) =>
+        {
             // Unstructured FEM geometry is carried by FMVP v3 topology metadata,
             // while its grid header is the canonical linear node-count carrier.
             [point_count as u32, 1, 1]
@@ -1952,6 +1957,7 @@ fn apply_field_scope(
 fn resolve_field_vector_sample_limit(
     query: &FieldVectorQuery,
     _scope: Option<&ResolvedFieldScope>,
+    is_fdm: bool,
 ) -> Result<Option<usize>, ApiError> {
     let Some(max_samples) = query.max_samples else {
         return Ok(None);
@@ -1960,6 +1966,15 @@ fn resolve_field_vector_sample_limit(
         return Err(ApiError::bad_request(
             "max_samples must be greater than zero",
         ));
+    }
+    // FDM field values are cell-centred and the legacy FMVP v2 payload carries
+    // no cell-index metadata. Returning a downsampled vector would therefore
+    // make the values impossible to place in the grid (and would cause the
+    // viewport to fail closed). Keep the data contract correct by returning
+    // the complete FDM field; FEM continues to honour max_samples via FMVP v3
+    // node-index metadata.
+    if is_fdm {
+        return Ok(None);
     }
     Ok(Some(max_samples as usize))
 }
@@ -2217,12 +2232,20 @@ pub async fn get_field_vector(
         raw_point_count,
         quantity_id,
     )?;
-    let sample_limit = resolve_field_vector_sample_limit(&query, resolved_scope.as_ref())?;
+    let sample_limit = resolve_field_vector_sample_limit(
+        &query,
+        resolved_scope.as_ref(),
+        is_fdm_snapshot(snapshot),
+    )?;
     let resolved_scope = resolved_scope.map(|scope| sample_field_scope(scope, sample_limit));
-    let topology_hash = snapshot
-        .fem_mesh
-        .as_ref()
-        .map(fullmag_runner::fem_mesh_topology_fingerprint);
+    let topology_hash = (!is_fdm_snapshot(snapshot))
+        .then(|| {
+            snapshot
+                .fem_mesh
+                .as_ref()
+                .map(fullmag_runner::fem_mesh_topology_fingerprint)
+        })
+        .flatten();
     let topology_hash_bytes = topology_hash
         .as_deref()
         .map(mesh_topology_hash_bytes)
@@ -3425,7 +3448,7 @@ fn is_fem_runtime(snapshot: &crate::types::SessionStateResponse) -> bool {
                 | RuntimeEngineId::FemFrequencyResponseDenseValidation
                 | RuntimeEngineId::FemFrequencyResponseProductionCpu
         )
-    ) || snapshot.fem_mesh.is_some()
+    ) || (snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot))
 }
 
 fn fem_topology_available(snapshot: &crate::types::SessionStateResponse) -> bool {

@@ -18,6 +18,7 @@ from .init import (
     texture,
 )
 from .model import (
+    AbsorbingBoundaryLayer,
     AdaptiveTimestep,
     AntennaFieldSource,
     ArchWaveguide,
@@ -318,6 +319,7 @@ class _MeshNamespace:
 mesh = _MeshNamespace()
 
 __all__ = [
+    "AbsorbingBoundaryLayer",
     # Class-based API
     "BackendTarget",
     "mesh",

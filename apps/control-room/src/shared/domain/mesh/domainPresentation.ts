@@ -39,8 +39,18 @@ export interface FdmUniverseOutsideMagneticSupport {
   reason: string;
 }
 
+export interface FdmMagneticSupportPresentation {
+  activeCellCount: number;
+  activeUnassignedCellCount: number;
+  bounds: DomainBounds3;
+  inactiveCellCount: number;
+  kind: "magnetic-support";
+}
+
 export interface FdmGridPresentation {
+  declaredCellCount: number | null;
   descriptor: StructuredGridDescriptor;
+  descriptorCellCountCompatible: boolean;
   gridFingerprint: string | null;
   membership: FdmRegionMembershipResource | null;
   membershipStatus: DomainResourceStatus;
@@ -77,6 +87,7 @@ export interface FdmDomainPresentation extends DomainPresentationBase {
   airbox: null;
   fdmGrid: FdmGridPresentation;
   femTopology: null;
+  magneticSupport: FdmMagneticSupportPresentation | null;
   universeOutsideMagneticSupport: FdmUniverseOutsideMagneticSupport | null;
 }
 
@@ -85,6 +96,7 @@ export interface FemDomainPresentation extends DomainPresentationBase {
   airbox: SharedDomainAirboxPresentation | null;
   fdmGrid: null;
   femTopology: FemTopologyPresentation;
+  magneticSupport: null;
   universeOutsideMagneticSupport: null;
 }
 
@@ -202,6 +214,77 @@ function femAirbox(
     : null;
 }
 
+function finiteTuple3(values: readonly number[] | null | undefined): [number, number, number] | null {
+  return values?.length === 3 && values.every(Number.isFinite)
+    ? [values[0]!, values[1]!, values[2]!]
+    : null;
+}
+
+function fdmMagneticSupport(
+  meta: DomainMetaResource,
+  membership: FdmRegionMembershipResource | null,
+  resourceStatus: DomainResourceStatus,
+): FdmMagneticSupportPresentation | null {
+  const summary = membership?.magnetic_support;
+  const min = finiteTuple3(summary?.bounds_min_m);
+  const max = finiteTuple3(summary?.bounds_max_m);
+  const domainMin = finiteTuple3(meta.bounds.min);
+  const domainMax = finiteTuple3(meta.bounds.max);
+  if (
+    resourceStatus !== "realized" ||
+    !summary ||
+    summary.semantic_role !== "magnetic-support" ||
+    summary.grid_fingerprint !== membership.grid_fingerprint ||
+    !min ||
+    !max ||
+    !domainMin ||
+    !domainMax ||
+    min.some((value, axis) => value > max[axis]!) ||
+    min.some((value, axis) => value < domainMin[axis]!) ||
+    max.some((value, axis) => value > domainMax[axis]!) ||
+    ![
+      summary.active_cell_count,
+      summary.active_unassigned_cell_count,
+      summary.inactive_cell_count,
+    ].every((value) => Number.isSafeInteger(value) && value >= 0) ||
+    summary.active_cell_count + summary.inactive_cell_count !== membership.cell_count ||
+    summary.active_unassigned_cell_count > summary.active_cell_count
+  ) {
+    return null;
+  }
+  return {
+    activeCellCount: summary.active_cell_count,
+    activeUnassignedCellCount: summary.active_unassigned_cell_count,
+    bounds: { max, min },
+    inactiveCellCount: summary.inactive_cell_count,
+    kind: "magnetic-support",
+  };
+}
+
+function domainBoundsStrictlyContain(
+  outer: {
+    max: readonly number[];
+    min: readonly number[];
+  },
+  inner: DomainBounds3,
+): boolean {
+  const outerMin = finiteTuple3(outer.min);
+  const outerMax = finiteTuple3(outer.max);
+  if (!outerMin || !outerMax) return false;
+  return outerMin.every((value, axis) => value <= inner.min[axis]!) &&
+    outerMax.every((value, axis) => value >= inner.max[axis]!) &&
+    (outerMin.some((value, axis) => value < inner.min[axis]!) ||
+      outerMax.some((value, axis) => value > inner.max[axis]!));
+}
+
+function domainBounds3(
+  bounds: DomainMetaResource["bounds"],
+): DomainBounds3 | null {
+  const min = finiteTuple3(bounds.min);
+  const max = finiteTuple3(bounds.max);
+  return min && max ? { max, min } : null;
+}
+
 export function buildDomainPresentation(
   input: DomainPresentationInput,
 ): DomainPresentation {
@@ -215,6 +298,11 @@ export function buildDomainPresentation(
       throw new Error("FDM DomainMeta is missing its structured grid descriptor.");
     }
     const membership = input.fdmMembership ?? null;
+    const shape = tuple3(meta.grid.shape, [0, 0, 0]);
+    const totalCells = gridCellCount(shape);
+    const declaredCellCount = meta.counts.cells ?? null;
+    const descriptorCellCountCompatible =
+      declaredCellCount === null || declaredCellCount === totalCells;
     const state = stateStatus(input.fdmMembershipStatus, membership !== null);
     const fresh = membership?.freshness?.toLowerCase() === "current";
     const compatible =
@@ -225,7 +313,9 @@ export function buildDomainPresentation(
         input.expectedFdmGridFingerprint,
       );
     const resourceStatus =
-      state === "loading" || state === "stale" || state === "error"
+      !descriptorCellCountCompatible
+        ? "incompatible"
+        : state === "loading" || state === "stale" || state === "error"
         ? state
         : membership === null
           ? state
@@ -234,16 +324,26 @@ export function buildDomainPresentation(
             : !compatible
               ? "incompatible"
               : "realized";
-    const shape = tuple3(meta.grid.shape, [0, 0, 0]);
     const origin = tuple3(meta.grid.origin, [0, 0, 0]);
     const spacing = tuple3(meta.grid.spacing, [0, 0, 0]);
+    const magneticSupport = fdmMagneticSupport(meta, membership, resourceStatus);
+    const realizedDomainBounds = domainBounds3(meta.bounds);
     const role = input.universeOutsideMagneticSupport
       ? {
           bounds: input.universeOutsideMagneticSupport.bounds,
           kind: "universe-outside-magnetic-support" as const,
           reason: input.universeOutsideMagneticSupport.reason,
         }
-      : null;
+      : magneticSupport &&
+          magneticSupport.inactiveCellCount > 0 &&
+          realizedDomainBounds &&
+          domainBoundsStrictlyContain(realizedDomainBounds, magneticSupport.bounds)
+        ? {
+            bounds: realizedDomainBounds,
+            kind: "universe-outside-magnetic-support" as const,
+            reason: "validated-magnetic-support-with-inactive-cells",
+          }
+        : null;
     const fingerprint = membership?.grid_fingerprint ?? input.expectedFdmGridFingerprint ?? null;
     const revision = membership
       ? `${meta.generation_id}:${membership.mesh_revision}:${membership.region_membership_revision}`
@@ -254,18 +354,21 @@ export function buildDomainPresentation(
       discretization: "fdm",
       domainId: meta.domain_id,
       fdmGrid: {
+        declaredCellCount,
         descriptor: meta.grid,
+        descriptorCellCountCompatible,
         gridFingerprint: fingerprint,
         membership,
         membershipStatus: resourceStatus,
         origin,
         shape,
         spacing,
-        totalCells: gridCellCount(shape),
+        totalCells,
       },
       femTopology: null,
       fingerprint,
       generationId: meta.generation_id,
+      magneticSupport,
       resourceStatus,
       revision,
       units: meta.units,
@@ -303,6 +406,7 @@ export function buildDomainPresentation(
     },
     fingerprint,
     generationId: meta.generation_id,
+    magneticSupport: null,
     resourceStatus,
     revision,
     units: meta.units,

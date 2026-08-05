@@ -5763,6 +5763,7 @@ mod tests {
             name: "cell".to_string(),
             region: "cell".to_string(),
             material: "Py".to_string(),
+            absorbing_boundary: None,
             initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
