@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve; OE-T0/H(div) conservation, closure, OE-F1 singular quadrature and OE-F2 airbox qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve; standalone OE-T0/OE-F1/OE-F2 CPU operator contracts pass, but their provenance-preserving end-to-end integration remains open."
     },
     {
       "solver": "FEM",
@@ -132,6 +132,24 @@
       "path": "justfile",
       "symbol": "verify-fem-steady-transport-native-contract",
       "responsibility": "Build and test the native FEM transport lane in the managed MFEM/HYPRE container; this gate is required before promotion."
+    },
+    {
+      "id": "managed-fem-oet0-gate",
+      "path": "justfile",
+      "symbol": "verify-fem-oersted-oet0-cpu-contract",
+      "responsibility": "Managed CPU/MPI proof for immutable conservative RT0/H(div) current-view certificates; this is an operator contract, not end-to-end LLG coupling."
+    },
+    {
+      "id": "managed-fem-oef1-gate",
+      "path": "justfile",
+      "symbol": "verify-fem-oersted-oef1-cpu-contract",
+      "responsibility": "Managed CPU FP64 direct tetrahedral Biot-Savart quadrature contract and bounded refinement behavior."
+    },
+    {
+      "id": "managed-fem-oef2-gate",
+      "path": "justfile",
+      "symbol": "verify-fem-oersted-oef2-cpu-contract",
+      "responsibility": "Managed CPU mixed H(curl)-H1 vector-potential contract with gauge and weak-Ampere diagnostics."
     }
   ],
   "public_api": {

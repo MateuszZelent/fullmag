@@ -8572,3 +8572,51 @@ Globalny stan celu pozostaje niezamknięty: FEM CPU M1/M2 transport jest
 `reference_executable`, FEM solved-current Oersted ma tylko bounded slice,
 FEM GPU transport/Oersted pozostaje `semantic_only`, a równoważność FEM↔FDM
 nie została ustanowiona.
+
+## 32.89. Świeże managed bramy operatorów FEM OE-T0/OE-F1/OE-F2 (2026-08-05)
+
+### 32.89.1. Zakres i rozdzielenie dowodu
+
+Na aktualnym `master` ponownie uruchomiono wszystkie trzy bramy w repozytoryjnym
+kontenerze `fullmag/fem-cpu:local`, przez recepty `just`:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oet0-cpu-contract
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef1-cpu-contract
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef2-cpu-contract
+```
+
+Konfiguracja dowodu była jawnie CPU-only (`FULLMAG_ENABLE_CUDA=OFF`,
+`FULLMAG_ENABLE_FEM_GPU=OFF`, `FULLMAG_USE_MFEM_STACK=ON`) i linkowała MFEM 4.7
+oraz HYPRE 2.32. Nie użyto hostowego CMake ani hostowego binarium jako dowodu.
+
+### 32.89.2. Wyniki
+
+| Brama | Wykonany zakres | Wynik |
+|---|---|---|
+| OE-T0 | immutable `ConservativeCurrentView` RT0/H(div), constraint-rank, okresowy potencjał, testy MPI `-n 1/-n 2` i byte-identical certificate | `pass`, 4/4 ctest |
+| OE-F1 | bezpośrednia tetrahedralna kwadratura Biot–Savarta z adaptacją/refinementem i projekcją CPU FP64 | `pass`, `fem_oersted_direct_tetra_contract` |
+| OE-F2 | mieszany blok `H_0(curl) × H^1_0`, gauge `tangential_A_h1_0.v1`, residua Ampère’a i kompatybilności | `pass`, `fem_oersted_vector_potential_contract` |
+
+Jest to mocny dowód, że FEM nie był analizowany wyłącznie statycznie ani
+wyłącznie przez porównanie FDM. Potwierdza on wykonywalność i własności
+numeryczne trzech operatorów FEM CPU na ich kontrolowanych fixture’ach.
+
+### 32.89.3. Granica integracji z publicznym łańcuchem
+
+Powyższe bramy nie awansują jeszcze `CurrentTransport → H_oe → LLG` do
+`production_executable`. Bounded ścieżka w §32.88 nadal używa nodalnego H1
+rzutu `J_charge` i regularizowanego midpoint Biot–Savarta. Nie przekazuje jeszcze
+do OE-F1/OE-F2 immutable view z tym samym `source_state_revision`, digestem
+siatki i tożsamością stage’u, ani nie wykonuje solved-current solve dla każdego
+etapu LLG w FEM M2/GPU. Dlatego pozostają prawdziwe:
+
+- `FEM CPU OE-T0/OE-F1/OE-F2 operator contracts = reference_executable`,
+- `FEM solved-current dynamic Oersted end-to-end = development_executable`,
+- `FEM GPU transport/Oersted = semantic_only`,
+- `FEM↔FDM product equivalence = false`.
+
+Następny krok implementacyjny jest jednoznaczny: zastąpić bounded nodal projection
+publikowanym `ConservativeCurrentView`, następnie wywołać OE-F1 lub OE-F2 z
+provenance źródła i dołączyć bezpośredni oracle oraz sweep `h`/`dt` do wspólnego
+benchmarku FEM↔FDM.
