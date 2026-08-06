@@ -42,6 +42,7 @@ export function PrimitiveObjectLayer({
   materialProfile,
   onSelectObject,
   primitiveModel,
+  realizedObjectIds,
   tracker,
 }: {
   colors: Viewport3DColors;
@@ -49,6 +50,7 @@ export function PrimitiveObjectLayer({
   materialProfile: Viewport3DMaterialProfile;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  realizedObjectIds?: ReadonlySet<string>;
   tracker: Viewport3DResourceTracker;
 }) {
   const invalidate = useBatchedInvalidate();
@@ -70,6 +72,7 @@ export function PrimitiveObjectLayer({
           object={object}
           onSelectObject={onSelectObject}
           materialProfile={materialProfile}
+          hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
           settings={getObjectSettings(object)}
           tracker={tracker}
         />
@@ -82,18 +85,22 @@ function PrimitiveObject({
   colors,
   object,
   materialProfile,
+  hasRealizedObjectGeometry,
   onSelectObject,
   settings,
   tracker,
 }: {
   colors: Viewport3DColors;
+  hasRealizedObjectGeometry: boolean;
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
-  if (!shouldRenderPrimitiveObject(object, settings)) return null;
+  if (!shouldRenderPrimitiveObject(object, settings, hasRealizedObjectGeometry)) {
+    return null;
+  }
 
   return (
     <RenderablePrimitiveObject
@@ -152,7 +159,14 @@ function RenderablePrimitiveObject({
     materialProfile,
   );
   const opacity = renderPlan.primitive.opacity;
-  const primitiveColor = renderSettings.primitiveMonoColor;
+  // A primitive-only object uses this field-free preview when no realized
+  // FDM/FEM surface is available.  The inspector's Solid surface control
+  // edits `shaderMonoColor`, so prefer that value for the preview whenever
+  // Solid is selected instead of retaining the stale primitive preference.
+  const primitiveColor =
+    renderSettings.surfaceColorSource === "solid"
+      ? renderSettings.shaderMonoColor
+      : renderSettings.primitiveMonoColor;
   const shaderColor =
     primitiveColor && !primitiveColor.startsWith("var(")
       ? primitiveColor

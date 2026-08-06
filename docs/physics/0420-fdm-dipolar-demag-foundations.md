@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-03-23
+- Last updated: 2026-08-06
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -534,6 +534,28 @@ This means:
 - material jumps are represented by jumps in $\mathbf{M}$,
 - no separate interface-charge bookkeeping is needed in the regular-grid operator,
 - geometry error comes from voxelization/staircasing, not from the dipolar operator itself.
+
+#### 3.1.7 Solver mask and full-domain `H_demag` observability
+
+The active-cell mask is a solver-domain rule, not a statement that the
+magnetostatic stray field vanishes in the FDM airbox. The CPU reference path
+therefore keeps two views of the same FFT result:
+
+- the solver view crops `H_demag` to active cells before it contributes to
+  `H_eff`, LLG right-hand sides, solver extrema, and energy accounting;
+- the observable view keeps the inverse-FFT values on the complete FDM grid
+  and is published as the full-domain `H_demag` vector resource.
+
+Both views use the same source magnetization: inactive cells still contribute
+$\mathbf{M}=\mathbf{0}$ to the convolution. The distinction only changes the
+output crop, so the active-cell field and the demagnetization energy are
+unchanged. This makes FDM Airbox vectors physically meaningful without giving
+airbox cells a magnetization state or a scalar surface shader.
+
+The native CUDA FDM solver still exposes its existing active-masked demag
+buffer. Full-domain CUDA `H_demag` publication is deferred until it has a
+separate observable buffer and CPU/GPU parity coverage; it must not be claimed
+by the CPU-reference contract above.
 
 ### 3.2 FEM interpretation
 

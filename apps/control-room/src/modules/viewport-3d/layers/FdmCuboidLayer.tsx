@@ -406,6 +406,17 @@ export function fdmCuboidSurfaceMeshKey(
   return `fdm-cuboids-surface-${modelCount}-${usesInstanceColors ? "field-colors" : "uniform-color"}`;
 }
 
+export function fdmCuboidUsesInstanceColors(
+  settings: Pick<VisualizationTargetSettings, "surfaceColorSource">,
+  surfaceColors: ScalarColorBuffer | null,
+  renderCount: number,
+): boolean {
+  return (
+    settings.surfaceColorSource !== "solid" &&
+    Boolean(surfaceColors && surfaceColors.colors.length === renderCount * 3)
+  );
+}
+
 interface FdmCuboidMatrixUploadOptions {
   invalidate: () => void;
   instanceOrdinals?: Uint32Array | null;
@@ -769,8 +780,10 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
   const renderCount = instanceOrdinals?.length ?? model.count;
-  const usesInstanceColors = Boolean(
-    surfaceColors && surfaceColors.colors.length === renderCount * 3,
+  const usesInstanceColors = fdmCuboidUsesInstanceColors(
+    renderSettings,
+    surfaceColors,
+    renderCount,
   );
   const surfaceMeshKey = fdmCuboidSurfaceMeshKey(
     renderCount,

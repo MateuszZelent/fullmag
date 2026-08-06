@@ -2073,6 +2073,13 @@ export function resolveVisualizationTargetFromSelection(
       selection.ref.type === "fdm-domain"
         ? selection.ref.visualizationTargetId
         : "fdm-domain";
+    if (targetId.startsWith("region:")) {
+      return {
+        id: targetId,
+        kind: "region",
+        label: selection.label,
+      };
+    }
     return {
       id: targetId,
       kind: "fdm-domain",

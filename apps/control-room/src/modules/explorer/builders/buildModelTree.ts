@@ -24,7 +24,10 @@ import { buildStudyNodes } from "./study/studyExplorerNodes";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { PlanarMonitorCollectionResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  canonicalVisualizationSceneObjectId,
+  isVisualizationAirboxIdentity,
+} from "@/kernel/selection/selectionTypes";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   buildEigenSpectrumChartModel,
@@ -1069,30 +1072,33 @@ function fdmMeshPolicyNodes(
   const domainMeshId = "model:mesh:shared-domain";
   const regionsMeshId = "model:mesh:regions";
   const regionLegend = membership?.region_legend ?? [];
-  const regionIdOccurrences = new Map<string, number>();
+  const regionOwnersById = new Map<string, Set<string>>();
   for (const entry of regionLegend) {
-    regionIdOccurrences.set(
-      entry.region_id,
-      (regionIdOccurrences.get(entry.region_id) ?? 0) + 1,
-    );
+    const owners = regionOwnersById.get(entry.region_id) ?? new Set<string>();
+    owners.add(canonicalVisualizationSceneObjectId(entry.object_id));
+    regionOwnersById.set(entry.region_id, owners);
   }
-  const regionNodes = regionLegend.map((entry) => ({
-    // Preserve the legacy region-only id while the region is unambiguous.
-    // Once multiple ferromagnetic owners publish the same region id, include
-    // the owner so Explorer keys and selection identities cannot collide.
-    id:
-      regionIdOccurrences.get(entry.region_id) === 1
-        ? `model:mesh:region:${encodeURIComponent(entry.region_id)}`
-        : `model:mesh:region:${encodeURIComponent(entry.object_id)}:${encodeURIComponent(entry.region_id)}`,
-    kind: "mesh.grid.region" as const,
-    label: entry.region_id,
-    parentId: regionsMeshId,
-    objectId: entry.object_id,
-    regionId: entry.region_id,
-    badge: `${entry.numeric_id}`,
-    icon: "layers" as const,
-    status: "ready" as const,
-  }));
+  const regionNodes = regionLegend.map((entry) => {
+    const objectId = canonicalVisualizationSceneObjectId(entry.object_id);
+    const owners = regionOwnersById.get(entry.region_id);
+    return {
+      // Preserve the legacy region-only id while the region is unambiguous.
+      // Once multiple ferromagnetic owners publish the same region id, include
+      // the owner so Explorer keys and selection identities cannot collide.
+      id:
+        owners?.size === 1
+          ? `model:mesh:region:${encodeURIComponent(entry.region_id)}`
+          : `model:mesh:region:${encodeURIComponent(objectId)}:${encodeURIComponent(entry.region_id)}`,
+      kind: "mesh.grid.region" as const,
+      label: entry.region_id,
+      parentId: regionsMeshId,
+      objectId,
+      regionId: entry.region_id,
+      badge: `${entry.numeric_id}`,
+      icon: "layers" as const,
+      status: "ready" as const,
+    };
+  });
   const structuredGridDetails: ExplorerNode[] = [
     {
       id: "model:mesh:grid",

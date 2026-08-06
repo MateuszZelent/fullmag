@@ -109,6 +109,67 @@ describe("buildViewport3DFdmTargetViews", () => {
     expect(Array.from(regionView?.cellIndices ?? [])).toEqual([1, 3]);
   });
 
+  it("keeps a homogeneous active grid renderable when the membership lists aliases", () => {
+    const result = buildViewport3DFdmTargetViews({
+      membership: membership({
+        object_ids: ["film", "film-geometry"],
+        region_legend: [],
+      }),
+      model: model([0, 0, 0, 0]),
+      realizedRegionIds: Uint32Array.from([0, 0, 0, 0]),
+      sceneObjectIds: new Set(["film"]),
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.views.map((view) => view.target.id)).toEqual([
+      "object:film",
+    ]);
+    expect(Array.from(result.views[0]?.cellIndices ?? [])).toEqual([0, 1, 2, 3]);
+  });
+
+  it("does not collapse distinct scene objects when the membership lists several owners", () => {
+    const result = buildViewport3DFdmTargetViews({
+      membership: membership({
+        object_ids: ["film-a", "film-b", "film-a-geometry"],
+        region_legend: [],
+      }),
+      model: model([0, 0, 0, 0]),
+      realizedRegionIds: Uint32Array.from([0, 0, 0, 0]),
+      sceneObjectIds: new Set(["film-a", "film-b"]),
+    });
+
+    expect(result).toMatchObject({
+      reason: "ambiguous-active-unassigned-owner",
+      status: "incompatible",
+      views: [],
+    });
+  });
+
+  it("uses the resolved scene owner for region aliases as well as object aliases", () => {
+    const result = buildViewport3DFdmTargetViews({
+      membership: membership({
+        object_ids: ["film", "film-geometry"],
+        region_legend: [
+          {
+            numeric_id: 1,
+            object_id: "film-geometry",
+            priority: 0,
+            region_id: "core",
+          },
+        ],
+      }),
+      model: model([1, 1, 1, 1]),
+      realizedRegionIds: Uint32Array.from([1, 1, 1, 1]),
+      sceneObjectIds: new Set(["film"]),
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.views.map((view) => view.target.id)).toEqual([
+      "object:film",
+      "region:film:core",
+    ]);
+  });
+
   it("does not treat same-owner region interfaces as object surface boundaries", () => {
     const realizedRegionIds = new Uint32Array(27);
     realizedRegionIds.fill(1);

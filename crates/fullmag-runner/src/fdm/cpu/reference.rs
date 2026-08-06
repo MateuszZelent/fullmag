@@ -2334,11 +2334,16 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_demag" => {
                 if self.demag_field.is_none() {
-                    self.demag_field = Some(self.problem.demag_field(self.state).map_err(
-                        |error| RunError {
-                            message: format!("CPU FDM snapshot '{}': demag field: {}", name, error),
-                        },
-                    )?);
+                    self.demag_field = Some(
+                        self.problem
+                            .observable_demag_field(self.state)
+                            .map_err(|error| RunError {
+                                message: format!(
+                                    "CPU FDM snapshot '{}': demag field: {}",
+                                    name, error
+                                ),
+                            })?,
+                    );
                 }
                 Ok(self.demag_field.as_deref().expect("cached demag field"))
             }
@@ -3128,6 +3133,41 @@ mod tests {
             observe_state_call_count(),
             0,
             "material scalar previews should not force a full observables pass"
+        );
+    }
+
+    #[test]
+    fn snapshot_h_demag_keeps_stray_field_in_inactive_fdm_cells() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+        plan.enable_exchange = false;
+        plan.active_mask = Some(
+            std::iter::once(true)
+                .chain(std::iter::repeat_n(false, 15))
+                .collect(),
+        );
+        plan.initial_magnetization = std::iter::once([1.0, 0.0, 0.0])
+            .chain(std::iter::repeat_n([0.0, 0.0, 0.0], 15))
+            .collect();
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["H_demag"],
+            &LivePreviewRequest {
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("H_demag preview should build");
+        let field = fields.first().expect("H_demag preview should be present");
+
+        assert_eq!(field.quantity, "H_demag");
+        assert_eq!(field.active_mask, plan.active_mask);
+        assert!(
+            field.vector_field_values[3..6]
+                .iter()
+                .any(|component| component.abs() > 0.0),
+            "inactive FDM cells should retain H_demag for airbox vectors"
         );
     }
 

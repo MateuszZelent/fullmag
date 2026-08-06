@@ -747,6 +747,98 @@ mod tests {
     }
 
     #[test]
+    fn cpu_interactive_cache_keeps_h_demag_in_inactive_fdm_cells() {
+        let mut plan = make_soa_fdm_plan();
+        plan.active_mask = Some(
+            std::iter::once(true)
+                .chain(std::iter::repeat_n(false, 7))
+                .collect(),
+        );
+        plan.initial_magnetization = std::iter::once([1.0, 0.0, 0.0])
+            .chain(std::iter::repeat_n([0.0, 0.0, 0.0], 7))
+            .collect();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
+                .expect("CPU interactive runtime should build");
+        let cpu = match &mut runtime.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => panic!("expected CPU runtime"),
+        };
+        let observables = crate::fdm::cpu::reference::observe_state(&cpu.problem, &cpu.state)
+            .expect("solver observables should build");
+        let mut display = DisplaySelectionState::default();
+        display.selection.quantity = "H_eff".to_string();
+        display.selection.kind = DisplayKind::VectorField;
+
+        let fields = cpu
+            .live_cached_preview_fields(&display, &observables, plan.grid.cells)
+            .expect("interactive cache should build")
+            .expect("interactive cache should include fields");
+        let demag = fields
+            .iter()
+            .find(|field| field.quantity == "H_demag")
+            .expect("cached H_demag should be present");
+
+        assert!(
+            demag.vector_field_values[3..6]
+                .iter()
+                .any(|component| component.abs() > 0.0),
+            "the live H_demag cache must retain airbox vectors"
+        );
+    }
+
+    #[test]
+    fn cpu_interactive_streaming_preview_keeps_h_demag_in_inactive_fdm_cells() {
+        let mut plan = make_soa_fdm_plan();
+        plan.active_mask = Some(
+            std::iter::once(true)
+                .chain(std::iter::repeat_n(false, 7))
+                .collect(),
+        );
+        plan.initial_magnetization = std::iter::once([1.0, 0.0, 0.0])
+            .chain(std::iter::repeat_n([0.0, 0.0, 0.0], 7))
+            .collect();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
+                .expect("CPU interactive runtime should build");
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "H_demag".to_string();
+            state.selection.kind = DisplayKind::VectorField;
+            state
+        };
+        let mut preview = None;
+
+        runtime
+            .execute_with_live_preview_streaming(
+                &plan,
+                1e-14,
+                &[],
+                plan.grid.cells,
+                8,
+                &display_selection,
+                None,
+                None,
+                &mut |update| {
+                    if preview.is_none() {
+                        preview = update.preview_field;
+                    }
+                    StepAction::Stop
+                },
+            )
+            .expect("CPU interactive streaming runtime should execute");
+
+        let preview = preview.expect("streaming update should include H_demag preview");
+        assert!(
+            preview.vector_field_values[3..6]
+                .iter()
+                .any(|component| component.abs() > 0.0),
+            "the streaming H_demag preview must retain airbox vectors"
+        );
+    }
+
+    #[test]
     fn cpu_interactive_snapshot_step_stats_uses_last_step_report_without_reobserving_state() {
         let plan = make_soa_fdm_plan();
         let mut runtime =
@@ -1514,6 +1606,50 @@ impl CpuInteractiveFdmPreviewRuntime {
         ))
     }
 
+    fn live_preview_field(
+        &mut self,
+        request: &LivePreviewRequest,
+        observables: &StateObservables,
+        grid: [u32; 3],
+    ) -> Result<LivePreviewField, RunError> {
+        if matches!(
+            request.quantity.as_str(),
+            "H_demag" | "H_demag.x" | "H_demag.y" | "H_demag.z"
+        ) {
+            return self.snapshot_preview(request);
+        }
+        Ok(build_grid_preview_field(
+            request,
+            select_observables(observables, &request.quantity)?,
+            grid,
+            self.plan_signature.active_mask.as_deref(),
+        ))
+    }
+
+    fn live_cached_preview_fields(
+        &mut self,
+        display_state: &DisplaySelectionState,
+        observables: &StateObservables,
+        grid: [u32; 3],
+    ) -> Result<Option<Vec<LivePreviewField>>, RunError> {
+        let Some(mut fields) = build_cached_grid_preview_fields(
+            display_state,
+            observables,
+            grid,
+            self.plan_signature.active_mask.as_deref(),
+        ) else {
+            return Ok(None);
+        };
+        for field in &mut fields {
+            if field.quantity == "H_demag" {
+                let mut request = display_state.preview_request();
+                request.quantity = "H_demag".to_string();
+                *field = self.snapshot_preview(&request)?;
+            }
+        }
+        Ok(Some(fields))
+    }
+
     fn execute_with_live_preview(
         &mut self,
         plan: &FdmPlanIR,
@@ -1599,22 +1735,12 @@ impl CpuInteractiveFdmPreviewRuntime {
             );
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(build_grid_preview_field(
-                    &preview_cfg,
-                    select_observables(&current_observables, &preview_cfg.quantity)?,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                ))
+                Some(self.live_preview_field(&preview_cfg, &current_observables, grid)?)
             } else {
                 None
             };
             let cached_preview_fields = if cached_display_due {
-                build_cached_grid_preview_fields(
-                    &display_state,
-                    &current_observables,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                )
+                self.live_cached_preview_fields(&display_state, &current_observables, grid)?
             } else {
                 None
             };
@@ -1706,22 +1832,12 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(build_grid_preview_field(
-                    &preview_cfg,
-                    select_observables(&current_observables, &preview_cfg.quantity)?,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                ))
+                Some(self.live_preview_field(&preview_cfg, &current_observables, grid)?)
             } else {
                 None
             };
             let cached_preview_fields = if cached_display_due {
-                build_cached_grid_preview_fields(
-                    &display_state,
-                    &current_observables,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                )
+                self.live_cached_preview_fields(&display_state, &current_observables, grid)?
             } else {
                 None
             };
@@ -1958,12 +2074,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             );
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(build_grid_preview_field(
-                    &preview_cfg,
-                    select_observables(&current_observables, &preview_cfg.quantity)?,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                ))
+                Some(self.live_preview_field(&preview_cfg, &current_observables, grid)?)
             } else {
                 None
             };
@@ -2072,12 +2183,7 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(build_grid_preview_field(
-                    &preview_cfg,
-                    select_observables(&current_observables, &preview_cfg.quantity)?,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                ))
+                Some(self.live_preview_field(&preview_cfg, &current_observables, grid)?)
             } else {
                 None
             };

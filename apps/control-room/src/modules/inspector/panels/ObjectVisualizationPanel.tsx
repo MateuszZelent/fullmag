@@ -47,6 +47,7 @@ import {
   useSceneResource,
   useDomainMetaResource,
   useFdmRegionMembershipResource,
+  useFdmRegionMembershipBinaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   isVisualizationAirboxIdentity,
@@ -160,6 +161,13 @@ function useObjectVisualizationPanelState(
   const fdmDomain = useDomainMetaResource({ enabled: fdmResourcesEnabled });
   const fdmMembership = useFdmRegionMembershipResource({
     enabled: fdmResourcesEnabled,
+  });
+  const fdmMembershipRevision = fdmMembership.data
+    ? `${fdmMembership.data.mesh_revision}:${fdmMembership.data.region_membership_revision}`
+    : null;
+  const fdmMembershipBinary = useFdmRegionMembershipBinaryResource(null, {
+    enabled: fdmResourcesEnabled,
+    revision: fdmMembershipRevision,
   });
   const manifest = useMeshSharedDomainManifestResource({
     enabled:
@@ -526,6 +534,7 @@ function useObjectVisualizationPanelState(
     restoreVisualizationAppliedBaseline({
       baseline,
       currentOverrides: visualizationState.data?.overrides ?? [],
+      fdm: fdmTarget,
       queuePatch: (statePatch) => visualizationSync.queuePatch(statePatch),
       visualization,
     });
@@ -621,6 +630,11 @@ function useObjectVisualizationPanelState(
         membership: fdmMembership.data,
         membershipError: fdmMembership.error,
         membershipStatus: fdmMembership.status,
+        membershipBinaryReason:
+          "reason" in fdmMembershipBinary.availability
+            ? fdmMembershipBinary.availability.reason
+            : null,
+        membershipBinaryStatus: fdmMembershipBinary.availability.status,
       })
     : null;
   const regionCarrier = resolveRegionVisualizationCarrier({

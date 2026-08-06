@@ -79,6 +79,7 @@ export function restoreVisualizationAppliedBaseline({
   currentOverrides,
   queuePatch,
   visualization,
+  fdm = false,
 }: {
   baseline: {
     overrides: VisualizationStateResource["overrides"];
@@ -90,10 +91,11 @@ export function restoreVisualizationAppliedBaseline({
     ObjectVisualizationController,
     "clearTarget" | "patchTarget" | "patchViewportPreferences"
   >;
+  fdm?: boolean;
 }): void {
   const isFdmBaseline =
     baseline.targets.length > 0 &&
-    baseline.targets.every(({ target }) => target.kind === "fdm-domain");
+    (fdm || baseline.targets.every(({ target }) => target.kind === "fdm-domain"));
 
   if (!isFdmBaseline) {
     const baselineTargets = baseline.targets.map((entry) => entry.target);
@@ -376,6 +378,13 @@ export function resolveObjectVisualizationTargetForLane({
       ? { id: "fdm-domain", kind: "fdm-domain", label: selection.label }
       : null;
   }
+  if (
+    lane === "fdm" &&
+    selection.ref?.type === "fdm-domain" &&
+    selection.ref.scope === "region"
+  ) {
+    return selectionTarget?.kind === "region" ? selectionTarget : null;
+  }
   if (lane === "fem") {
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
@@ -443,6 +452,8 @@ export function fdmVisualizationResourceNotice({
   membership,
   membershipError,
   membershipStatus,
+  membershipBinaryReason,
+  membershipBinaryStatus,
 }: {
   domain: DomainMetaResource | null | undefined;
   domainError?: Error | null;
@@ -450,6 +461,8 @@ export function fdmVisualizationResourceNotice({
   membership: FdmRegionMembershipResource | null | undefined;
   membershipError?: Error | null;
   membershipStatus: string;
+  membershipBinaryReason?: string | null;
+  membershipBinaryStatus?: string | null;
 }): string | null {
   if (domainError || domainStatus === "error") {
     return `FDM grid descriptor could not be loaded${domainError?.message ? `: ${domainError.message}` : "."}`;
@@ -483,6 +496,15 @@ export function fdmVisualizationResourceNotice({
     membership.cell_count !== expectedCellCount
   ) {
     return "FDM cell membership does not match the current structured-grid descriptor.";
+  }
+  if (membershipBinaryStatus && membershipBinaryStatus !== "ready") {
+    if (membershipBinaryReason === "request-error") {
+      return "FDM membership mask could not be loaded; shaded, wireframe, and vector rendering remain unavailable.";
+    }
+    if (membershipBinaryReason === "not-materialized") {
+      return "FDM membership mask is not materialized; re-plan or run the study to publish it before rendering fields.";
+    }
+    return "FDM membership mask is not ready for this grid; re-plan or run the study before rendering fields.";
   }
   return null;
 }

@@ -46,9 +46,12 @@ export function buildPrimitiveTransformGizmoSegments(
 }
 
 export function shouldRenderPrimitiveTransformGizmo(
-  settings: VisualizationTargetSettings,
+  _settings: VisualizationTargetSettings,
 ): boolean {
-  return settings.visible && settings.wireframeVisible;
+  // Wireframe is a display pass, not an implicit manipulate mode.  The
+  // texture-pivot marker has no user-facing mode/command yet, so rendering it
+  // here makes ordinary Shaded + Wireframe show a misleading red sphere.
+  return false;
 }
 
 /**
@@ -180,9 +183,11 @@ function remapExtrudedCardinalAxisGeometry(
 export function shouldRenderPrimitiveObject(
   object: Viewport3DPrimitiveObject,
   settings: VisualizationTargetSettings,
+  hasRealizedObjectGeometry = false,
 ): boolean {
   const renderSettings = resolvePrimitiveObjectRenderSettings(object, settings);
   return (
+    !hasRealizedObjectGeometry &&
     object.meshState !== "mesh-ready" &&
     renderSettings.visible &&
     (renderSettings.primitiveVisible === true ||

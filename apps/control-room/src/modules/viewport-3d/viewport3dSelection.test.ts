@@ -143,12 +143,15 @@ describe("viewport3dSelection", () => {
         label: "region:free-layer",
       }),
     ).toMatchObject({
-      kind: "object.region",
+      kind: "mesh.grid.region",
       label: "region:free-layer",
-      nodeId: "model:object:free-layer:regions:region:free-layer",
+      nodeId: "model:mesh:region:free-layer:region%3Afree-layer",
       objectId: "free-layer",
       ref: {
+        kind: "mesh.grid.region",
         regionId: "region:free-layer",
+        scope: "region",
+        type: "fdm-domain",
         visualizationTargetId: "region:free-layer:region%3Afree-layer",
       },
     });

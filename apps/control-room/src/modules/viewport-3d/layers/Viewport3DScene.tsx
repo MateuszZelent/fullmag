@@ -1008,6 +1008,17 @@ function Viewport3DModelLayerStack({
         vectorGlyphColors: null,
         vectorSegments: null,
       }));
+  const realizedFdmObjectIds = useMemo(
+    () =>
+      new Set(
+        fdmTargetViews.flatMap((view) =>
+          view.ownerTarget.kind === "object" && view.ownerTarget.id.startsWith("object:")
+            ? [view.ownerTarget.id.slice("object:".length)]
+            : [],
+        ),
+      ),
+    [fdmTargetViews],
+  );
   const fdmAirboxVectorSettings = fdmUniverseOutsideSupportSettings
     ? {
         ...fdmUniverseOutsideSupportSettings,
@@ -1115,6 +1126,7 @@ function Viewport3DModelLayerStack({
           materialProfile={materialProfile}
           onSelectObject={onSelectObject}
           primitiveModel={primitiveModel}
+          realizedObjectIds={realizedFdmObjectIds}
           tracker={tracker}
         />
       ) : null}
@@ -1445,14 +1457,28 @@ export function Viewport3DScene({
       );
     }
     return scheduleViewport3DProjectionRenderFrames({ invalidate, tracker });
-  }, [
-    cameraClip,
-    cameraProjection,
-    effectiveCameraState,
-    invalidate,
-    setThreeState,
-    tracker,
-  ]);
+    // Camera pose is applied only on projection change or mount — not on every
+    // camera state update.  OrbitControls owns the live camera position during
+    // interaction; re-applying React state on every debounced update would
+    // overwrite the current OrbitControls position and cause visible "rewind".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraProjection, invalidate, setThreeState, tracker]);
+
+  // Bounds/resource changes still need to refresh clipping, but updating the
+  // clip planes must not re-apply the declarative pose while OrbitControls is
+  // moving the live camera.
+  useLayoutEffect(() => {
+    const activeCamera =
+      cameraProjection === "orthographic"
+        ? orthographicCameraRef.current
+        : perspectiveCameraRef.current;
+    if (!activeCamera) return;
+    activeCamera.near = cameraClip.near;
+    activeCamera.far = cameraClip.far;
+    activeCamera.updateProjectionMatrix();
+    tracker.recordDirtyFrame("camera-clip");
+    invalidate();
+  }, [cameraClip, cameraProjection, invalidate, tracker]);
 
   // Demand rendering needs an explicit frame when async resources settle.
   useEffect(() => {

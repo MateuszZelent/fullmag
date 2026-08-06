@@ -251,6 +251,18 @@ impl ExchangeLlgProblem {
         })
     }
 
+    /// Full-domain stray field for observability. Unlike [`Self::demag_field`],
+    /// this preserves values in inactive FDM cells while leaving the solver
+    /// field and its active-cell mask unchanged.
+    pub fn observable_demag_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(if self.terms.demag {
+            self.observable_demag_field_from_vectors(state.magnetization())
+        } else {
+            zero_vectors(self.grid.cell_count())
+        })
+    }
+
     pub fn external_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.external_field_vectors())

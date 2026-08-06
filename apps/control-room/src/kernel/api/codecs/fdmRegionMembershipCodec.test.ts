@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   decodeFdmRegionMembership,
@@ -118,6 +118,22 @@ describe("FMRM codec", () => {
       legendFingerprint: descriptor.region_legend_fingerprint,
       status: "ready",
     });
+  });
+
+  it("validates a canonical legend when the HTTP page has no WebCrypto subtle API", async () => {
+    vi.stubGlobal("crypto", {});
+
+    try {
+      await expect(
+        validateFdmRegionMembershipContract(
+          decodeFdmRegionMembership(makeBuffer(2, 2)),
+          descriptor,
+          domain,
+        ),
+      ).resolves.toMatchObject({ status: "ready" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("rejects stale and generation-mismatched membership explicitly", async () => {

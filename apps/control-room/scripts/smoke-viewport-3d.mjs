@@ -376,7 +376,16 @@ async function verifyCameraGesturesStayLocal({ page }) {
   await assertCameraGestureDoesNotFetch(page, "orbit rotate", async () => {
     await page.mouse.move(x, y);
     await page.mouse.down({ button: "left" });
-    await page.mouse.move(x + 120, y + 42, { steps: 8 });
+    // Keep the pointer held across several damping/commit windows. A single
+    // instantaneous drag cannot expose the old ~180 ms camera rewind race.
+    for (let step = 1; step <= 12; step += 1) {
+      await page.mouse.move(
+        x + (120 * step) / 12,
+        y + (42 * step) / 12,
+        { steps: 1 },
+      );
+      await page.waitForTimeout(120);
+    }
     await page.mouse.up({ button: "left" });
   });
   const rotateCameraSignature = await waitForCameraSignatureChange(

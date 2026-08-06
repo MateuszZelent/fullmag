@@ -2301,6 +2301,28 @@ function selectViewport3DObjectVisualizationSnapshot(
   };
 }
 
+/**
+ * FDM scene targets are client-side structured-grid views. The FEM
+ * visualization registry can still be present in the session resource, but
+ * it must not replace the local FDM target state used by the grid renderer.
+ */
+export function resolveViewport3DFdmTargetVisualization({
+  inheritedSettings,
+  snapshot,
+  target,
+}: {
+  inheritedSettings?: VisualizationTargetSettings;
+  snapshot: ObjectVisualizationSnapshot;
+  target: VisualizationTargetRef;
+}) {
+  return resolveTargetVisualization({
+    inheritedSettings,
+    snapshot,
+    target,
+    visualizationState: null,
+  });
+}
+
 function viewport3DObjectVisualizationSnapshotEquals(
   previous: ObjectVisualizationSnapshot,
   next: ObjectVisualizationSnapshot,
@@ -2603,8 +2625,12 @@ export function useViewport3DSceneModel({
       fdmRealizedRegionIds.length === fdmDomain.totalCells,
   );
   const fdmTargetDefinitionsResult = useMemo(
-    () => buildViewport3DFdmTargetDefinitions(fdmRegionMembership.data),
-    [fdmRegionMembership.data],
+    () =>
+      buildViewport3DFdmTargetDefinitions(
+        fdmRegionMembership.data,
+        sceneObjectIds,
+      ),
+    [fdmRegionMembership.data, sceneObjectIds],
   );
   const femDomain = useMemo(
     () =>
@@ -3169,10 +3195,9 @@ export function useViewport3DSceneModel({
     }
     for (const definition of fdmTargetDefinitionsResult.definitions) {
       if (definition.target.kind !== "object") continue;
-      const resolved = resolveTargetVisualization({
+      const resolved = resolveViewport3DFdmTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target: definition.target,
-        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         definition.target.id,
@@ -3183,11 +3208,10 @@ export function useViewport3DSceneModel({
       if (definition.target.kind !== "region") continue;
       const inheritedSettings = settingsById.get(definition.ownerTarget.id);
       if (!inheritedSettings) continue;
-      const resolved = resolveTargetVisualization({
+      const resolved = resolveViewport3DFdmTargetVisualization({
         inheritedSettings,
         snapshot: objectVisualizationSnapshot,
         target: definition.target,
-        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         definition.target.id,
@@ -3199,7 +3223,6 @@ export function useViewport3DSceneModel({
     fdmMembershipCurrent,
     fdmTargetDefinitionsResult,
     objectVisualizationSnapshot,
-    renderingState,
   ]);
   const fdmTargetSettings = useMemo(
     () => [...fdmTargetSettingsById.values()],
@@ -3275,9 +3298,9 @@ export function useViewport3DSceneModel({
           kind: "object",
           label: object.label,
         },
-        visualizationState: renderingState,
+        visualizationState: fdmLaneActive ? null : renderingState,
       }).effectiveSettings,
-    [objectVisualizationSnapshot, renderingState],
+    [fdmLaneActive, objectVisualizationSnapshot, renderingState],
   );
   const getRegionSettings = useCallback(
     (region: RegionOverlayInput) => {
@@ -3291,7 +3314,7 @@ export function useViewport3DSceneModel({
           kind: "object",
           label: objectId,
         },
-        visualizationState: renderingState,
+        visualizationState: fdmLaneActive ? null : renderingState,
       }).settings;
       return resolveTargetVisualization({
         inheritedSettings: objectSettings,
@@ -3301,10 +3324,15 @@ export function useViewport3DSceneModel({
           kind: "region",
           label: region.name ?? regionId,
         },
-        visualizationState: renderingState,
+        visualizationState: fdmLaneActive ? null : renderingState,
       }).effectiveSettings;
     },
-    [fallbackSettings, objectVisualizationSnapshot, renderingState],
+    [
+      fallbackSettings,
+      fdmLaneActive,
+      objectVisualizationSnapshot,
+      renderingState,
+    ],
   );
   const airboxVectorsVisible = viewport3DAirboxVectorsVisible(
     airboxSettings.visible,
@@ -4158,8 +4186,14 @@ export function useViewport3DSceneModel({
         membership: fdmRegionMembership.data,
         model: fdmInstanceModel,
         realizedRegionIds: fdmRealizedRegionIds,
+        sceneObjectIds,
       }),
-    [fdmInstanceModel, fdmRealizedRegionIds, fdmRegionMembership.data],
+    [
+      fdmInstanceModel,
+      fdmRealizedRegionIds,
+      fdmRegionMembership.data,
+      sceneObjectIds,
+    ],
   );
   const fdmAirboxPassPlan = resolveFdmAirboxPassPlan(
     fdmUniverseOutsideSupportSettings ?? fdmSettings,
@@ -4637,7 +4671,9 @@ export function useViewport3DSceneModel({
     manifestCarrierKind: femDomain.renderCarrierDiagnostics?.kind,
     manifestCarrierRejectedCount:
       femDomain.renderCarrierDiagnostics?.rejectedCarrierCount,
-    objectCount: femDomain.objectPartIds.size,
+    objectCount: fdmLaneActive
+      ? fdmTargetViews.length
+      : femDomain.objectPartIds.size,
     pipelineDiagnostics: buildPipelineDiagnostics,
     quantityId: primaryFieldQuantityId,
     surfaceColorStatus: chunkedScalarColors.status,

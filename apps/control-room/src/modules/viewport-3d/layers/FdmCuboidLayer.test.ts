@@ -12,6 +12,7 @@ import {
   buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership,
   buildFdmCuboidUploadBatches,
   buildFdmCuboidColorUploadBatchesForView,
+  fdmCuboidUsesInstanceColors,
   buildFdmVectorSegments,
   fdmCuboidSurfaceMeshKey,
   hasAnyEffectiveFdmPass,
@@ -217,6 +218,29 @@ describe("FdmCuboidLayer model", () => {
     expect(fdmCuboidSurfaceMeshKey(4096, true)).toBe(
       "fdm-cuboids-surface-4096-field-colors",
     );
+  });
+
+  it("never lets stale field colors override an explicitly solid surface", () => {
+    const surfaceColors = {
+      buildKey: "field-colors",
+      colors: new Float32Array(12),
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      fdmCuboidUsesInstanceColors(
+        { surfaceColorSource: "solid" },
+        surfaceColors,
+        4,
+      ),
+    ).toBe(false);
+    expect(
+      fdmCuboidUsesInstanceColors(
+        { surfaceColorSource: "orientation" },
+        surfaceColors,
+        4,
+      ),
+    ).toBe(true);
   });
 
   it("clears the exact FDM surface receipt when colors disappear or the pass unmounts", () => {

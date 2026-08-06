@@ -1,6 +1,7 @@
 import type {
   FdmDomainSelectionScope,
   FdmDomainSelectionKind,
+  RegionVisualizationTargetId,
   SelectionRef,
 } from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
@@ -182,7 +183,12 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       visualizationTargetId:
         node.kind === "mesh.grid.universe-outside-support"
           ? "fdm-universe-outside-support"
-          : "fdm-domain",
+          : node.kind === "mesh.grid.region" && node.objectId && node.regionId
+            ? visualizationTargetIdForSceneObject(
+                node.objectId,
+                node.regionId,
+              ) as RegionVisualizationTargetId
+            : "fdm-domain",
     };
   }
 

@@ -85,6 +85,21 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
       status: enabled ? "ready" : "idle",
     };
   },
+  useFdmRegionMembershipBinaryResource: (
+    _regionId: string | null,
+    { enabled }: { enabled: boolean },
+  ) => {
+    resourceCall("fdm-membership-binary", enabled);
+    return {
+      availability: enabled
+        ? { reason: "loading", status: "pending" }
+        : { reason: "loading", status: "pending" },
+      data: null,
+      error: null,
+      revision: null,
+      status: enabled ? "idle" : "idle",
+    };
+  },
   useMeshRegionMembershipResource: (
     _ownerObjectId: string | null | undefined,
     _regionId: string | null | undefined,

@@ -373,6 +373,29 @@ describe("buildModelTree", () => {
     expect(snapshot.objects?.[0]?.meshStatus).toBe("mesh-ready");
   });
 
+  it("marks an object ready when the current FDM membership owns its realized cells", () => {
+    const snapshot = modelTreeSnapshotFromScene(
+      {
+        objects: [{ id: "film", name: "Film", role: "magnet" }],
+      } as SceneResource,
+      {
+        domainPresentation: {
+          discretization: "fdm",
+          fdmGrid: {
+            membership: {
+              freshness: "current",
+              object_ids: ["film", "film_geom"],
+              region_legend: [],
+            },
+          },
+          resourceStatus: "realized",
+        } as never,
+      },
+    );
+
+    expect(snapshot.objects?.[0]?.meshStatus).toBe("mesh-ready");
+  });
+
   it("removes synthetic air-role scene objects before they can become Explorer nodes", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [
@@ -4969,6 +4992,35 @@ describe("buildModelTree", () => {
       "object:other",
     ]);
     expect(regionNodes.every((node) => node.parentId === "model:mesh:regions")).toBe(true);
+  });
+
+  it("canonicalizes FDM geometry aliases in region mesh nodes", () => {
+    const base = fdmExplorerPresentation() as FdmDomainPresentation;
+    const membership = base.fdmGrid.membership;
+    expect(membership).not.toBeNull();
+    const presentation: FdmDomainPresentation = {
+      ...base,
+      fdmGrid: {
+        ...base.fdmGrid,
+        membership: {
+          ...membership!,
+          region_legend: membership!.region_legend.map((entry) => ({
+            ...entry,
+            object_id: "film_geom",
+          })),
+        },
+      },
+    };
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainPresentation: presentation,
+      objects: [{ id: "film", label: "Film" }] as never,
+    }));
+    const regionNode = nodes.find((node) => node.kind === "mesh.grid.region");
+
+    expect(regionNode).toMatchObject({
+      id: "model:mesh:region:region%3Acore",
+      objectId: "film",
+    });
   });
 
   it("keeps object visualization diagnostics available in an FDM model tree", () => {

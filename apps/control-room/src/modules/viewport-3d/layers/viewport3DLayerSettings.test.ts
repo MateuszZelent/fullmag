@@ -68,6 +68,20 @@ describe("surfaceMaterialColorFromSettings", () => {
       ),
     ).toBe("#abcdef");
   });
+
+  it("uses the solid source color even when the legacy shader mode is still a field mode", () => {
+    expect(
+      surfaceMaterialColorFromSettings(
+        settings({
+          shaderColorMode: "orientation",
+          shaderMonoColor: "#abcdef",
+          surfaceColorSource: "solid",
+        }),
+        "#313244",
+        false,
+      ),
+    ).toBe("#abcdef");
+  });
 });
 
 describe("resolveMeshPartSurfaceMaterialColor", () => {

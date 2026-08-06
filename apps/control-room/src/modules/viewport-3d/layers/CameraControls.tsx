@@ -1012,6 +1012,7 @@ function useOrbitCameraControlsModel({
     normalizeViewport3DOrbitDebugAngles(orbitDebugAngles),
   );
   const controlsSyncingRef = useRef(false);
+  const cameraGestureEndedRef = useRef(false);
   const previousHudControlsEnabledRef = useRef<boolean | null>(null);
   const suppressNextRestCommitRef = useRef(false);
   const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
@@ -1312,7 +1313,9 @@ function useOrbitCameraControlsModel({
     const controls = controlsRef.current;
     const controlTarget = controls?.target?.toArray();
     if (!controls || !controlTarget) {
-      endViewport3DCameraGesture(cameraGestureRef);
+      if (cameraGestureEndedRef.current) {
+        endViewport3DCameraGesture(cameraGestureRef);
+      }
       return;
     }
     const controlPosition = camera.position.toArray();
@@ -1336,7 +1339,9 @@ function useOrbitCameraControlsModel({
     if (currentAngles) {
       onOrbitDebugAnglesChange?.(currentAngles);
     }
-    endViewport3DCameraGesture(cameraGestureRef);
+    if (cameraGestureEndedRef.current) {
+      endViewport3DCameraGesture(cameraGestureRef);
+    }
   }, [
     camera,
     cameraGestureRef,
@@ -1382,18 +1387,32 @@ function useOrbitCameraControlsModel({
 
   const recordOrbitControlFrame = useCallback(() => {
     tracker.recordDirtyFrame("camera-control");
-    scheduleCameraControlsPoseCommit();
+    // OrbitControls emits change events continuously while the pointer is
+    // held. Do not publish intermediate poses into React/store state: that
+    // invalidates the viewport every 180 ms and can feed a stale pose back
+    // into the live controls. Commit only after onEnd, then let damping
+    // changes restart the quiet-period timer until the pose settles.
+    if (cameraGestureEndedRef.current) {
+      scheduleCameraControlsPoseCommit({ restart: true });
+    }
   }, [scheduleCameraControlsPoseCommit, tracker]);
 
   const handleTransitionStart = useCallback(() => {
     if (controlsSyncingRef.current) return;
     clearCameraControlsPoseCommit();
+    cameraGestureEndedRef.current = false;
     beginViewport3DCameraGesture(cameraGestureRef);
   }, [cameraGestureRef, clearCameraControlsPoseCommit]);
 
   const handleEnd = useCallback(() => {
+    // The canvas-level pointerup listener runs in capture phase and can end
+    // the shared gesture before Drei emits onEnd. Keep the hold active while
+    // OrbitControls damping settles and the final pose is committed; otherwise
+    // a remote/store update can re-apply the previous pose in that window.
+    beginViewport3DCameraGesture(cameraGestureRef);
+    cameraGestureEndedRef.current = true;
     scheduleCameraControlsPoseCommit({ restart: true });
-  }, [scheduleCameraControlsPoseCommit]);
+  }, [cameraGestureRef, scheduleCameraControlsPoseCommit]);
 
   useSmoothViewport3DWheelZoom({
     camera,

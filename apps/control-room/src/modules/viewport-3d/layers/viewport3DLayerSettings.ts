@@ -33,8 +33,15 @@ export function surfaceMaterialColorFromSettings(
   fallback: ColorRepresentation,
   hasVertexColors: boolean,
 ): ColorRepresentation {
-  return hasVertexColors
-    ? VERTEX_COLOR_MATERIAL_COLOR
+  if (hasVertexColors) return VERTEX_COLOR_MATERIAL_COLOR;
+
+  // `surfaceColorSource` is the inspector's canonical choice.  The solid
+  // color control intentionally patches that source and `shaderMonoColor`,
+  // but it does not need to rewrite the legacy `shaderColorMode` field.  The
+  // material must therefore honor the source directly or FDM surfaces keep
+  // falling back to the default mesh color while the inspector says Solid.
+  return settings.surfaceColorSource === "solid"
+    ? renderableColor(settings.shaderMonoColor, fallback)
     : shaderColorFromSettings(settings, fallback);
 }
 

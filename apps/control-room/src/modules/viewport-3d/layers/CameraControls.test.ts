@@ -295,15 +295,45 @@ describe("CameraControls", () => {
     );
 
     expect(source).toContain("VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS");
-    expect(updateBlock).toContain("scheduleCameraControlsPoseCommit();");
+    expect(updateBlock).toContain("cameraGestureEndedRef.current");
+    expect(updateBlock).toContain(
+      "scheduleCameraControlsPoseCommit({ restart: true });",
+    );
+    expect(updateBlock).not.toContain("scheduleCameraControlsPoseCommit();");
     expect(updateBlock).not.toContain("clearCameraControlsPoseCommit();");
     expect(transitionBlock).toContain("beginViewport3DCameraGesture(cameraGestureRef);");
     expect(transitionBlock).toContain("clearCameraControlsPoseCommit();");
     expect(endBlock).toContain(
       "scheduleCameraControlsPoseCommit({ restart: true });",
     );
+    expect(endBlock).toContain(
+      "beginViewport3DCameraGesture(cameraGestureRef);",
+    );
     expect(controlsBlock).toContain("onStart={handleTransitionStart}");
     expect(controlsBlock).toContain("onEnd={handleEnd}");
+  });
+
+  it("keeps a sustained pointer drag active across debounce commits", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const commitStart = source.indexOf("const commitCameraControlsPose");
+    const scheduleStart = source.indexOf(
+      "const scheduleCameraControlsPoseCommit",
+      commitStart,
+    );
+    const commitBlock = source.slice(commitStart, scheduleStart);
+    const transitionStart = source.indexOf("const handleTransitionStart = useCallback");
+    const endStart = source.indexOf("const handleEnd = useCallback", transitionStart);
+    const transitionBlock = source.slice(transitionStart, endStart);
+    const endBlock = source.slice(endStart, source.indexOf("return {", endStart));
+
+    expect(commitBlock).toContain("cameraGestureEndedRef.current");
+    expect(commitBlock).toContain("if (cameraGestureEndedRef.current)");
+    expect(commitBlock).toContain("endViewport3DCameraGesture(cameraGestureRef);");
+    expect(transitionBlock).toContain("cameraGestureEndedRef.current = false;");
+    expect(endBlock).toContain("cameraGestureEndedRef.current = true;");
   });
 
   it("does not duplicate Drei OrbitControls invalidation on every change event", () => {

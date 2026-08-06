@@ -3,7 +3,10 @@ import {
   FMRM_INACTIVE_REGION_ID,
   type DecodedFieldVector,
 } from "@/kernel/api/codecs";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import {
+  canonicalVisualizationSceneObjectId,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
 import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -78,10 +81,13 @@ export function buildViewport3DFdmTargetViews({
   membership,
   model,
   realizedRegionIds,
+  sceneObjectIds,
 }: {
   membership: FdmRegionMembershipResource | null | undefined;
   model: FdmCuboidInstanceModel | null | undefined;
   realizedRegionIds: Uint32Array | null | undefined;
+  /** Authored scene ids disambiguate backend magnet/geometry aliases. */
+  sceneObjectIds?: ReadonlySet<string>;
 }): Viewport3DFdmTargetViewsResult {
   if (!membership || !model || !realizedRegionIds) {
     return incompatible("membership-or-model-unavailable");
@@ -98,7 +104,10 @@ export function buildViewport3DFdmTargetViews({
     return incompatible("membership-cell-count-mismatch");
   }
 
-  const definitionsResult = buildViewport3DFdmTargetDefinitions(membership);
+  const definitionsResult = buildViewport3DFdmTargetDefinitions(
+    membership,
+    sceneObjectIds,
+  );
   if (definitionsResult.status !== "ready") {
     return incompatible(definitionsResult.reason ?? "invalid-region-legend");
   }
@@ -107,19 +116,14 @@ export function buildViewport3DFdmTargetViews({
   for (const entry of membership.region_legend) {
     legendByNumericId.set(entry.numeric_id, entry);
   }
-  const objectIds = new Set(
-    (membership.object_ids ?? [])
-      .map(normalizeMembershipObjectId)
-      .filter((value): value is string => Boolean(value)),
-  );
-  for (const entry of membership.region_legend) {
-    const objectId = normalizeMembershipObjectId(entry.object_id);
-    if (objectId) objectIds.add(objectId);
-  }
+  const objectIds = resolveFdmMembershipObjectIds(membership, sceneObjectIds);
   const targetIdByNumericRegionId = new Map<number, string>();
   const ownerTargetIdByNumericRegionId = new Map<number, string>();
   for (const entry of membership.region_legend) {
-    const objectId = normalizeMembershipObjectId(entry.object_id);
+    const objectId = resolveFdmMembershipObjectId(
+      entry.object_id,
+      sceneObjectIds,
+    );
     if (!objectId) return incompatible("invalid-region-legend");
     const ownerTarget = objectTarget(objectId);
     ownerTargetIdByNumericRegionId.set(entry.numeric_id, ownerTarget.id);
@@ -128,10 +132,24 @@ export function buildViewport3DFdmTargetViews({
       visualizationTargetIdForSceneObject(objectId, entry.region_id),
     );
   }
-  const unassignedTargetId =
+  // When the region legend is empty (homogeneous magnet, no sub-regions),
+  // every active cell has region ID 0 ("active-unassigned") and must be
+  // owned by exactly one scene object. The membership descriptor can contain
+  // both a magnet id and a generated geometry alias; resolve that alias only
+  // when the authored scene proves the owner. Never paint one of several
+  // independent scene objects by choosing a lexical first id.
+  //
+  // Fallback: when sceneObjectIds are unavailable (scene not loaded yet),
+  // the backend may list both "film" and "film_geom" as separate entries.
+  // Canonical deduplication (strip _geom suffix) collapses these to one
+  // effective owner, avoiding the ambiguous-owner error during initial load.
+  const unassignedOwnerObjectId =
     objectIds.size === 1
-      ? visualizationTargetIdForSceneObject(objectIds.values().next().value as string)
-      : null;
+      ? (objectIds.values().next().value as string)
+      : resolveCanonicalUnassignedOwner(objectIds, membership.region_legend.length);
+  const unassignedTargetId = unassignedOwnerObjectId
+    ? visualizationTargetIdForSceneObject(unassignedOwnerObjectId)
+    : null;
   for (const numericRegionId of realizedRegionIds) {
     if (numericRegionId === FMRM_INACTIVE_REGION_ID) continue;
     if (numericRegionId === 0) {
@@ -173,10 +191,10 @@ export function buildViewport3DFdmTargetViews({
     let ownerTarget: VisualizationTargetRef;
     let target: VisualizationTargetRef;
     if (numericRegionId === 0) {
-      if (objectIds.size !== 1) {
+      if (!unassignedOwnerObjectId) {
         return incompatible("ambiguous-active-unassigned-owner");
       }
-      const objectId = objectIds.values().next().value as string;
+      const objectId = unassignedOwnerObjectId;
       ownerTarget = objectTarget(objectId);
       target = ownerTarget;
     } else {
@@ -184,7 +202,10 @@ export function buildViewport3DFdmTargetViews({
       if (!entry) {
         return incompatible("sampled-region-missing-from-legend");
       }
-      const objectId = normalizeMembershipObjectId(entry.object_id);
+      const objectId = resolveFdmMembershipObjectId(
+        entry.object_id,
+        sceneObjectIds,
+      );
       if (!objectId) return incompatible("invalid-region-legend");
       ownerTarget = objectTarget(objectId);
       target = {
@@ -322,6 +343,7 @@ function resolveExactTargetSurfaceInstances({
 
 export function buildViewport3DFdmTargetDefinitions(
   membership: FdmRegionMembershipResource | null | undefined,
+  sceneObjectIds?: ReadonlySet<string>,
 ): Viewport3DFdmTargetDefinitionsResult {
   if (!membership) {
     return { definitions: [], reason: "membership-unavailable", status: "incompatible" };
@@ -333,25 +355,33 @@ export function buildViewport3DFdmTargetDefinitions(
   const definitions: Viewport3DFdmTargetDefinition[] = [];
   const seenNumericIds = new Set<number>();
   const seenTargetIds = new Set<string>();
-  const objectIds = new Set(
-    (membership.object_ids ?? [])
-      .map(normalizeMembershipObjectId)
-      .filter((value): value is string => Boolean(value)),
-  );
+  const objectIds = resolveFdmMembershipObjectIds(membership, sceneObjectIds);
   for (const entry of membership.region_legend) {
-    const objectId = normalizeMembershipObjectId(entry.object_id);
+    const objectId = resolveFdmMembershipObjectId(
+      entry.object_id,
+      sceneObjectIds,
+    );
     if (!objectId) {
       return { definitions: [], reason: "invalid-region-legend", status: "incompatible" };
     }
     objectIds.add(objectId);
   }
-  for (const objectId of [...objectIds].toSorted()) {
+  // Canonical dedup: collapse aliases like "film"/"film_geom" into one
+  // canonical ID when there is no scene disambiguation.
+  const effectiveObjectIds =
+    membership.region_legend.length === 0 && objectIds.size > 1
+      ? new Set([...objectIds].map(canonicalVisualizationSceneObjectId))
+      : objectIds;
+  for (const objectId of [...effectiveObjectIds].toSorted()) {
     const target = objectTarget(objectId);
     definitions.push({ numericRegionId: null, ownerTarget: target, target });
     seenTargetIds.add(target.id);
   }
   for (const entry of membership.region_legend) {
-    const objectId = normalizeMembershipObjectId(entry.object_id);
+    const objectId = resolveFdmMembershipObjectId(
+      entry.object_id,
+      sceneObjectIds,
+    );
     if (
       !Number.isInteger(entry.numeric_id) ||
       entry.numeric_id <= 0 ||
@@ -384,6 +414,76 @@ function incompatible(reason: string): Viewport3DFdmTargetViewsResult {
 function normalizeMembershipObjectId(value: string): string | null {
   const normalized = value.trim().replace(/^object:/, "");
   return normalized || null;
+}
+
+function resolveFdmMembershipObjectIds(
+  membership: FdmRegionMembershipResource,
+  sceneObjectIds: ReadonlySet<string> | undefined,
+): Set<string> {
+  const objectIds = new Set<string>();
+  for (const value of membership.object_ids ?? []) {
+    const objectId = resolveFdmMembershipObjectId(value, sceneObjectIds);
+    if (objectId) objectIds.add(objectId);
+  }
+  for (const entry of membership.region_legend) {
+    const objectId = resolveFdmMembershipObjectId(
+      entry.object_id,
+      sceneObjectIds,
+    );
+    if (objectId) objectIds.add(objectId);
+  }
+  return objectIds;
+}
+
+function resolveFdmMembershipObjectId(
+  value: string,
+  sceneObjectIds: ReadonlySet<string> | undefined,
+): string | null {
+  const normalized = normalizeMembershipObjectId(value);
+  if (!normalized || !sceneObjectIds || sceneObjectIds.size === 0) {
+    return normalized;
+  }
+
+  const sceneIds = [
+    ...new Set(
+      [...sceneObjectIds]
+        .map((sceneId) => normalizeMembershipObjectId(sceneId))
+        .filter((sceneId): sceneId is string => Boolean(sceneId))
+        .map(canonicalVisualizationSceneObjectId),
+    ),
+  ];
+  const canonical = canonicalVisualizationSceneObjectId(normalized);
+  const matches = sceneIds.filter(
+    (sceneId) =>
+      sceneId === normalized ||
+      sceneId === canonical ||
+      normalized === `${sceneId}-geometry` ||
+      normalized === `${sceneId}_geometry` ||
+      normalized === `${sceneId}_geom`,
+  );
+  return matches.length === 1 ? matches[0] ?? normalized : normalized;
+}
+
+/**
+ * When sceneObjectIds are unavailable, the backend may list both a magnet
+ * name and its generated geometry alias (e.g. "film" and "film_geom") as
+ * separate entries.  Canonical deduplication (`canonicalVisualizationSceneObjectId`)
+ * strips known suffixes like `_geom`, collapsing aliases of the same physical
+ * object into one canonical ID.  If after dedup exactly one canonical ID
+ * remains **and** the region legend is empty (no sub-regions to disambiguate),
+ * that ID is the unambiguous owner of all active-unassigned cells.
+ */
+function resolveCanonicalUnassignedOwner(
+  objectIds: ReadonlySet<string>,
+  legendLength: number,
+): string | null {
+  if (legendLength > 0) return null; // sub-regions require explicit legend resolution
+  const canonicalIds = new Set(
+    [...objectIds].map(canonicalVisualizationSceneObjectId),
+  );
+  return canonicalIds.size === 1
+    ? (canonicalIds.values().next().value as string)
+    : null;
 }
 
 function objectTarget(objectId: string): VisualizationTargetRef {

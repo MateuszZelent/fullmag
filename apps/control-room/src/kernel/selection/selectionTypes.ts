@@ -259,7 +259,8 @@ export type SelectionRef =
       type: "fdm-domain";
       visualizationTargetId:
         | "fdm-domain"
-        | "fdm-universe-outside-support";
+        | "fdm-universe-outside-support"
+        | RegionVisualizationTargetId;
     }
   | {
       cellOrdinal: string;

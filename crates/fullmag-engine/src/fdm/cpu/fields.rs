@@ -448,10 +448,35 @@ impl ExchangeLlgProblem {
         self.demag_field_from_vectors_ws(magnetization, &mut ws)
     }
 
+    pub(crate) fn observable_demag_field_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<Vector3> {
+        let mut ws = self.create_workspace();
+        self.observable_demag_field_from_vectors_ws(magnetization, &mut ws)
+    }
+
     pub(crate) fn demag_field_from_vectors_ws(
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
+    ) -> Vec<Vector3> {
+        self.demag_field_from_vectors_ws_with_output_mask(magnetization, ws, true)
+    }
+
+    pub(crate) fn observable_demag_field_from_vectors_ws(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+    ) -> Vec<Vector3> {
+        self.demag_field_from_vectors_ws_with_output_mask(magnetization, ws, false)
+    }
+
+    fn demag_field_from_vectors_ws_with_output_mask(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        mask_inactive_output: bool,
     ) -> Vec<Vector3> {
         let px = ws.px;
         let py = ws.py;
@@ -518,7 +543,7 @@ impl ExchangeLlgProblem {
                 for x in 0..self.grid.nx {
                     let src_index = padded_index(px, py, x, y, z);
                     let dst_index = self.grid.index(x, y, z);
-                    field[dst_index] = if self.is_active(dst_index) {
+                    field[dst_index] = if !mask_inactive_output || self.is_active(dst_index) {
                         [
                             ws.buf_hx[src_index].re * normalisation,
                             ws.buf_hy[src_index].re * normalisation,
@@ -4644,5 +4669,44 @@ mod stt_tests {
         let soa_add = soa_add.gather_to_aos();
         assert_eq!(aos_add, torque);
         assert_eq!(soa_add, torque);
+    }
+
+    #[test]
+    fn observable_demag_field_preserves_stray_field_in_inactive_cells() {
+        let problem = ExchangeLlgProblem::with_terms_and_mask(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                demag: true,
+                ..Default::default()
+            },
+            Some(vec![true, false]),
+        )
+        .expect("masked FDM problem should build");
+        let state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+            .expect("state should build");
+
+        let solver_field = problem
+            .demag_field(&state)
+            .expect("solver demag should build");
+        let observable_field = problem
+            .observable_demag_field(&state)
+            .expect("observable demag should build");
+
+        assert_eq!(observable_field[0], solver_field[0]);
+        assert_eq!(solver_field[1], [0.0; 3]);
+        assert!(
+            observable_field[1]
+                .iter()
+                .any(|component| component.abs() > 0.0),
+            "airbox cell should retain the physical stray field for H_demag visualization"
+        );
+        let masked_energy = problem.demag_energy_from_fields(state.magnetization(), &solver_field);
+        let observable_energy =
+            problem.demag_energy_from_fields(state.magnetization(), &observable_field);
+        assert_eq!(observable_energy, masked_energy);
     }
 }

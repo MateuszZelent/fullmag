@@ -108,6 +108,7 @@ export function selectObjectVisualizationPanelSnapshot(
 
   return {
     defaults,
+    pendingOverrides,
     viewportPreferenceDefaults,
     viewportPreferences,
     overrides,

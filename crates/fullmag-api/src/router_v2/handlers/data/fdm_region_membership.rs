@@ -650,10 +650,40 @@ fn to_resource(
         cell_m: descriptor.cell_m,
         cell_count: descriptor.cell_count,
         magnetic_support: descriptor.magnetic_support,
-        object_ids: descriptor.object_ids,
+        object_ids: canonicalize_object_ids(&descriptor.object_ids),
         region_legend: descriptor.region_legend,
         encoding: descriptor.encoding,
     }
+}
+
+/// Deduplicate object IDs by stripping geometry-alias suffixes.
+///
+/// The planner internally carries both the magnet name (`"film"`) and its
+/// generated geometry alias (`"film_geom"`) as `owner_names` for region
+/// filtering.  The public API should expose only canonical scene object IDs
+/// so that the frontend resolves exactly one render target per physical
+/// object, preventing "ambiguous-active-unassigned-owner" errors.
+fn canonicalize_object_ids(ids: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::with_capacity(ids.len());
+    for id in ids {
+        let canonical = strip_geometry_suffix(id);
+        if seen.insert(canonical.clone()) {
+            result.push(canonical);
+        }
+    }
+    result
+}
+
+fn strip_geometry_suffix(id: &str) -> String {
+    for suffix in ["_geom", "_geometry", "-geometry"] {
+        if let Some(base) = id.strip_suffix(suffix) {
+            if !base.is_empty() {
+                return base.to_string();
+            }
+        }
+    }
+    id.to_string()
 }
 
 pub(super) fn load_resolved_fdm_membership(

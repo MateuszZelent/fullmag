@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildViewport3DCameraRegistryPatch,
   buildViewport3DColorbarTargetPlans,
   formatHysteresisReplayGlyphVector,
   formatHysteresisReplayLabel,
@@ -279,6 +280,26 @@ describe("createViewport3DPointerHoldLifecycle", () => {
 
     expect(onEnd).toHaveBeenCalledOnce();
     expect(target.removeEventListener).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("viewport camera registry handoff", () => {
+  it("keeps orbit commits in the dirty camera registry", () => {
+    expect(
+      buildViewport3DCameraRegistryPatch({
+        position: [3, 2, 1],
+        target: [0.5, 0.25, 0],
+        up: [0, 0, 1],
+        orthographicScale: 2.5,
+        projection: "orthographic",
+      }),
+    ).toEqual({
+      orthographic_scale: 2.5,
+      position: [3, 2, 1],
+      projection: "orthographic",
+      target: [0.5, 0.25, 0],
+      up: [0, 0, 1],
+    });
   });
 });
 
@@ -1588,7 +1609,7 @@ describe("notifyMeshTopologyRendered", () => {
 });
 
 describe("Viewport3DModule scene wiring", () => {
-  it("keeps ordinary camera gestures local while explicit camera patches persist", () => {
+  it("keeps ordinary camera gestures local while committing the latest pose to the registry", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
@@ -1609,7 +1630,9 @@ describe("Viewport3DModule scene wiring", () => {
     );
     expect(patchCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).toContain("viewport3dStore.setCamera(nextCamera);");
-    expect(saveCameraStateSource).not.toContain("kernel.cameraRegistry.patchCamera");
+    expect(saveCameraStateSource).toContain(
+      "kernel.cameraRegistry.patchCamera(buildViewport3DCameraRegistryPatch(camera));",
+    );
     expect(saveCameraStateSource).toContain("orthographicScale");
     expect(saveCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).not.toContain("queuePatch({ camera: nextCamera })");

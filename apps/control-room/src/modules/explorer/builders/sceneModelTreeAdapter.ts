@@ -15,6 +15,7 @@ import type {
   DomainMetaResource,
 } from "@/kernel/api/apiTypes";
 import {
+  canonicalVisualizationSceneObjectId,
   isVisualizationAirboxIdentity,
 } from "@/kernel/selection/selectionTypes";
 import {
@@ -119,6 +120,7 @@ export function modelTreeSnapshotFromScene(
             magnetizationById,
             authoredRegionsByObject,
             materialFieldsByObject,
+            resources.domainPresentation,
             resources.meshManifest,
           );
           if (snapshot) {
@@ -418,6 +420,7 @@ function sceneObjectSnapshot(
   magnetizationById: ReadonlyMap<string, SceneMagnetizationAssetSnapshot>,
   authoredRegionsByObject: ReadonlyMap<string, ModelTreeObjectRegionSnapshot[]>,
   materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
+  domainPresentation: DomainPresentation | null | undefined,
   meshManifest: MeshSharedDomainManifestResource | null | undefined,
 ): ModelTreeObjectSnapshot | null {
   if (!value || typeof value !== "object") return null;
@@ -449,7 +452,12 @@ function sceneObjectSnapshot(
     material: materialRef,
     materialLabel: material?.label ?? materialRef,
     materialPropertyKeys: material?.propertyKeys,
-    meshStatus: meshStatusFromTags(object.tags, id, meshManifest),
+    meshStatus: meshStatusFromTags(
+      object.tags,
+      id,
+      meshManifest,
+      domainPresentation,
+    ),
     objectRole: sceneObjectRole(object),
     physicsInteractions: sceneObjectPhysicsInteractions(
       object.physics_stack,
@@ -984,6 +992,7 @@ function meshStatusFromTags(
   value: unknown,
   objectId: string,
   meshManifest: MeshSharedDomainManifestResource | null | undefined,
+  domainPresentation: DomainPresentation | null | undefined,
 ): ExplorerNodeStatus {
   const tags: string[] = [];
   if (Array.isArray(value)) {
@@ -998,6 +1007,9 @@ function meshStatusFromTags(
   if (tags.includes("mesh:validation-blocked")) return "validation-blocked";
   if (tags.includes("mesh:dirty")) return "mesh-stale";
   if (tags.includes("mesh:ready")) return "mesh-ready";
+  if (fdmMembershipOwnsObject(domainPresentation, objectId)) {
+    return "mesh-ready";
+  }
   const objectAliases = new Set(
     manifestCarrierOwnershipAliases({ object_id: objectId }),
   );
@@ -1014,6 +1026,29 @@ function meshStatusFromTags(
     }
   }
   return "primitive-only";
+}
+
+function fdmMembershipOwnsObject(
+  presentation: DomainPresentation | null | undefined,
+  objectId: string,
+): boolean {
+  if (
+    presentation?.discretization !== "fdm" ||
+    presentation.resourceStatus !== "realized"
+  ) {
+    return false;
+  }
+  const membership = presentation.fdmGrid.membership;
+  if (membership?.freshness.trim().toLowerCase() !== "current") return false;
+  const canonicalObjectId = canonicalVisualizationSceneObjectId(objectId);
+  const owners = [
+    ...(membership?.object_ids ?? []),
+    ...membership.region_legend.map((entry) => entry.object_id),
+  ];
+  return owners.some((owner) =>
+    canonicalVisualizationSceneObjectId(owner.replace(/^object:/, "")) ===
+      canonicalObjectId,
+  );
 }
 
 function interactionLabel(kind: string): string {

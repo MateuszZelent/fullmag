@@ -190,7 +190,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_demag" => {
                 if self.demag_field.is_none() {
-                    self.demag_field = Some(self.problem.demag_field(self.state).map_err(
+                    self.demag_field = Some(self.problem.observable_demag_field(self.state).map_err(
                         |error| RunError {
                             message: format!("CPU FDM snapshot '{}': demag field: {}", name, error),
                         },

@@ -226,6 +226,22 @@ export function buildViewport3DVisualizationDebugFrameCommit({
   };
 }
 
+export function buildViewport3DCameraRegistryPatch(
+  camera: Viewport3DCameraChange,
+): NonNullable<VisualizationStatePatch["camera"]> {
+  return {
+    position: camera.position,
+    target: camera.target,
+    up: camera.up ?? VIEWPORT_3D_WORLD_UP,
+    ...(camera.projection === undefined
+      ? {}
+      : { projection: camera.projection }),
+    ...(camera.orthographicScale === undefined
+      ? {}
+      : { orthographic_scale: camera.orthographicScale }),
+  };
+}
+
 const VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS = {
   alpha: false,
   antialias: false,
@@ -1305,6 +1321,7 @@ export default function Viewport3DModule({
   );
   const saveCameraState = useCallback(
     (camera: Viewport3DCameraChange) => {
+      kernel.cameraRegistry.patchCamera(buildViewport3DCameraRegistryPatch(camera));
       const nextCamera = {
         position: camera.position,
         target: camera.target,
@@ -1325,7 +1342,7 @@ export default function Viewport3DModule({
         viewport3dStore.setCamera(nextCamera);
       }
     },
-    [],
+    [kernel.cameraRegistry],
   );
   const beginCameraInteraction = useCallback(() => {
     kernel.cameraRegistry.beginInteraction();

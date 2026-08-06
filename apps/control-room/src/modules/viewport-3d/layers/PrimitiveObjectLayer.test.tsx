@@ -65,6 +65,9 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     );
 
     expect(primitiveSurfaceSource).toContain("renderSettings.primitiveMonoColor");
+    expect(primitiveSurfaceSource).toContain(
+      'renderSettings.surfaceColorSource === "solid"',
+    );
     expect(primitiveSurfaceSource).toContain("renderPlan.primitive.opacity");
     expect(primitiveSurfaceSource).toContain("renderPlan.points.visible");
     expect(primitiveSurfaceSource).toContain("pointColorFromSettings");
@@ -196,6 +199,18 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       .toBe(false);
   });
 
+  it("does not confuse ordinary wireframe with an unavailable manipulate mode", () => {
+    expect(
+      shouldRenderPrimitiveTransformGizmo({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        renderMode: "wireframe",
+        shaderVisible: true,
+        visible: true,
+        wireframeVisible: true,
+      }),
+    ).toBe(false);
+  });
+
   it("renders pre-mesh channels only before mesh-ready state", () => {
     expect(
       shouldRenderPrimitiveObject(
@@ -215,6 +230,16 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
       ),
     ).toBe(true);
+  });
+
+  it("does not render a primitive fallback when a realized FDM carrier owns the object", () => {
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "primitive-only" },
+        DEFAULT_OBJECT_VISUALIZATION,
+        true,
+      ),
+    ).toBe(false);
   });
 
   it("keeps pre-mesh wireframe and bounds independent from primitive fill", () => {

@@ -348,6 +348,7 @@ describe("selectExplorerNode", () => {
       regionId: "region:core",
       scope: "region",
       type: "fdm-domain",
+      visualizationTargetId: "region:object:core:region%3Acore",
     });
   });
 

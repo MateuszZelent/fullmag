@@ -303,6 +303,15 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_SKIP_CAMERA_GESTURES");
   });
 
+  it("holds orbit rotation across the damping window", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain(
+      "for (let step = 1; step <= 12; step += 1)",
+    );
+    expect(smokeScript).toContain("await page.waitForTimeout(120);");
+  });
+
   it("does not add fixed settle delays to measured camera gesture phases", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
     const gestureGuardBlock = smokeScript.slice(

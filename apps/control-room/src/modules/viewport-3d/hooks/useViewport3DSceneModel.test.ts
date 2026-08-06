@@ -7,6 +7,7 @@ import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
+  resolveTargetVisualization,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
@@ -52,6 +53,7 @@ import {
   resolveViewport3DRegionTargetsForMembershipOwnerParts,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
+  resolveViewport3DFdmTargetVisualization,
   resolveViewport3DAirboxFieldVectorDemandPlan,
   resolveViewport3DAirboxVectorSampleBudget,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
@@ -136,6 +138,58 @@ describe("airbox vector sample budget", () => {
     ).toMatchObject({
       geometry_scope: "surface",
       max_samples: 1024,
+    });
+  });
+});
+
+describe("FDM target visualization boundary", () => {
+  it("keeps local FDM object patches effective when a FEM registry entry is present", () => {
+    const visualization = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    visualization.patchTarget(target, {
+      shaderVisible: true,
+      surfaceColorSource: "component_x",
+      visible: true,
+      wireframeVisible: false,
+    });
+
+    const femRegistryState = {
+      revision: 7,
+      targets: {
+        airbox: {},
+        objects: [
+          {
+            scope: "object",
+            scope_id: "film",
+            settings: {
+              render_mode: "off",
+              surface_visible: false,
+              visible: false,
+            },
+          },
+        ],
+        parts: [],
+      },
+    } as never;
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: visualization.getSnapshot(),
+        target,
+        visualizationState: femRegistryState,
+      }).effectiveSettings,
+    ).toMatchObject({ shaderVisible: false, visible: false });
+
+    const resolved = resolveViewport3DFdmTargetVisualization({
+      snapshot: visualization.getSnapshot(),
+      target,
+    });
+
+    expect(resolved.effectiveSettings).toMatchObject({
+      shaderVisible: true,
+      surfaceColorSource: "component_x",
+      visible: true,
+      wireframeVisible: false,
     });
   });
 });

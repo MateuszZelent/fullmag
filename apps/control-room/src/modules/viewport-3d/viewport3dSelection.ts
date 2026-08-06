@@ -2,6 +2,7 @@ import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
 import type { DecodedFdmRegionMembership } from "@/kernel/api/codecs";
 import type {
   MeshElementFamily,
+  RegionVisualizationTargetId,
   Selection,
 } from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
@@ -180,7 +181,22 @@ export function viewportSelectionForFdmTarget(
       );
       const regionId = decodeURIComponent(encodedRegionId);
       if (!objectId || !regionId) return null;
-      return viewportSelectionForRegion({ objectId, regionId });
+      const nodeId = `model:mesh:region:${encodeURIComponent(objectId)}:${encodeURIComponent(regionId)}`;
+      return {
+        kind: "mesh.grid.region",
+        label: target.label ?? regionId,
+        nodeId,
+        objectId,
+        ref: {
+          kind: "mesh.grid.region",
+          nodeId,
+          objectId,
+          regionId,
+          scope: "region",
+          type: "fdm-domain",
+          visualizationTargetId: target.id as RegionVisualizationTargetId,
+        },
+      };
     } catch {
       return null;
     }
