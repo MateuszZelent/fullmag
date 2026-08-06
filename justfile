@@ -3742,6 +3742,55 @@ run-interactive script:
     just build-static-control-room
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag -i {{script}}
 
+run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backend="fdm" device="cpu" web_port="3197" api_port="8197":
+    just ensure-python
+    just build fullmag
+    bash -euo pipefail -c '\
+      fixture="$(realpath "{{fixture}}")"; \
+      backend="{{backend}}"; device="{{device}}"; \
+      case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend" >&2; exit 2 ;; esac; \
+      case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device" >&2; exit 2 ;; esac; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      smoke_dir="$(TMPDIR=/tmp mktemp -d)"; \
+      smoke_script="$smoke_dir/$(basename "$fixture")"; \
+      token="$(python3 -c "import uuid; print(uuid.uuid4())")"; \
+      original_sha="$(sha256sum "$fixture" | cut -d " " -f1)"; \
+      cp "$fixture" "$smoke_script"; \
+      printf "%s\n" "$token" > "$smoke_dir/.fullmag-smoke-disposable"; \
+      sim_pid=""; \
+      cleanup() { \
+        status=$?; trap - EXIT INT TERM; \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; \
+        post_sha="$(sha256sum "$fixture" | cut -d " " -f1)"; \
+        rm -rf "$smoke_dir"; \
+        if [ "$post_sha" != "$original_sha" ]; then echo "original smoke fixture changed: $fixture before=$original_sha after=$post_sha" >&2; exit 1; fi; \
+        exit "$status"; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      PATH="{{local_bin}}:$PATH" \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_API_PORT="{{api_port}}" \
+      FULLMAG_FDM_EXECUTION="$device" \
+      FULLMAG_FEM_EXECUTION="$device" \
+      fullmag --dev --web-port "{{web_port}}" --backend "$backend" -i "$smoke_script" \
+        > "$smoke_dir/fullmag.log" 2>&1 & \
+      sim_pid=$!; \
+      api_url="http://localhost:{{api_port}}"; web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        if curl -fsS "$api_url/v2/sessions/current" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 120 "$smoke_dir/fullmag.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current" >/dev/null; \
+      TMPDIR=/tmp \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_SMOKE_DISPOSABLE_SCRIPT_PATH="$smoke_script" \
+      CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN="$token" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
+
 run-headless script:
     just ensure-python
     just build fullmag

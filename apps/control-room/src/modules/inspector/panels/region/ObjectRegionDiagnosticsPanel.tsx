@@ -20,7 +20,7 @@ export function resolveObjectRegionDiagnosticsLaneView(
 ): ObjectRegionDiagnosticsLaneView {
   if (meshLane === "fdm") {
     return {
-      realizationPolicy: "Not applicable for FDM structured-grid regions",
+      realizationPolicy: "Runtime-derived structured-grid membership",
       realizationStatus: "Runtime-derived structured-grid membership",
     };
   }

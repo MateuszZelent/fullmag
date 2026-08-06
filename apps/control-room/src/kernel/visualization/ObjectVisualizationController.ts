@@ -165,27 +165,197 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
   label: "Airbox",
 };
 
+/**
+ * The structured FDM universe outside magnetic support is a logical view of
+ * the same regular grid, not a FEM airbox mesh.  Keep it as a separate
+ * visualization target so its viewport choices cannot overwrite the
+ * magnetic-support target.
+ */
+export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET: VisualizationTargetRef = {
+  id: "fdm-universe-outside-support",
+  kind: "fdm-domain",
+  // User-facing identity is shared with the FEM domain.  The id/kind remain
+  // FDM-specific so the regular-grid settings cannot leak into FEM state.
+  label: "Airbox",
+};
+
 export interface VisualizationTargetCapabilities {
   primaryRenderModes: readonly VisualizationRenderMode[];
   showBoundsControl: boolean;
+  showGeometryScopeControl: boolean;
+  supportsFieldData: boolean;
+  supportsPoints: boolean;
+  supportsVectors: boolean;
 }
 
 const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
   primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
   showBoundsControl: true,
+  showGeometryScopeControl: true,
+  supportsFieldData: true,
+  supportsPoints: true,
+  supportsVectors: true,
 };
 
 const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
-  primaryRenderModes: ["wireframe", "points"],
-  showBoundsControl: false,
+  primaryRenderModes: ["wireframe"],
+  showBoundsControl: true,
+  showGeometryScopeControl: true,
+  supportsFieldData: true,
+  supportsPoints: false,
+  supportsVectors: true,
+};
+
+const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
+  primaryRenderModes: ["wireframe"],
+  showBoundsControl: true,
+  showGeometryScopeControl: false,
+  supportsFieldData: true,
+  supportsPoints: false,
+  supportsVectors: true,
 };
 
 export function visualizationTargetCapabilities(
-  kind: VisualizationTargetKind,
+  target: VisualizationTargetRef,
 ): VisualizationTargetCapabilities {
-  return kind === "airbox"
+  if (isFdmUniverseOutsideSupportTarget(target)) {
+    return FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES;
+  }
+  return target.kind === "airbox"
     ? AIRBOX_VISUALIZATION_TARGET_CAPABILITIES
     : DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
+}
+
+export function isFdmUniverseOutsideSupportTarget(
+  target: VisualizationTargetRef,
+): boolean {
+  return (
+    target.kind === "fdm-domain" &&
+    target.id === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+  );
+}
+
+const FDM_UNIVERSE_OUTSIDE_SUPPORT_PATCH_FIELDS = new Set<
+  keyof VisualizationTargetPatch
+>([
+  "activeQuantityId",
+  "boundsOpacityPercent",
+  "boundsVisible",
+  "renderMode",
+  "vectorAlphaPercent",
+  "vectorBudget",
+  "vectorCenteringEnabled",
+  "vectorColorMode",
+  "vectorLengthScale",
+  "vectorMonoColor",
+  "vectorThickness",
+  "vectorsVisible",
+  "visible",
+  "wireframeColor",
+  "wireframeOpacityPercent",
+  "wireframeVisible",
+]);
+
+export function visualizationTargetUnsupportedPatchFields(
+  target: VisualizationTargetRef,
+  patch: VisualizationTargetPatch,
+): Array<keyof VisualizationTargetPatch> {
+  const isAirboxTarget =
+    target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target);
+  if (!isAirboxTarget) return [];
+  const unsupportedAirboxFields = new Set<keyof VisualizationTargetPatch>([
+    "pointColor",
+    "pointOpacityPercent",
+    "pointsVisible",
+    "shaderColorMode",
+    "shaderMonoColor",
+    "shaderVisible",
+    "surfaceColorSource",
+    "surfaceOpacityPercent",
+    "surfaceProjectionMode",
+    "viewportColorbarVisible",
+  ]);
+  if (target.kind === "airbox") {
+    const unsupported = (Object.keys(patch) as Array<keyof VisualizationTargetPatch>).filter(
+      (field) => patch[field] !== undefined && unsupportedAirboxFields.has(field),
+    );
+    if (
+      patch.renderMode !== undefined &&
+      patch.renderMode !== "off" &&
+      patch.renderMode !== "wireframe"
+    ) {
+      unsupported.push("renderMode");
+    }
+    return [...new Set(unsupported)];
+  }
+  const unsupported = (Object.keys(patch) as Array<keyof VisualizationTargetPatch>).filter(
+    (field) =>
+      patch[field] !== undefined &&
+      !FDM_UNIVERSE_OUTSIDE_SUPPORT_PATCH_FIELDS.has(field),
+  );
+  if (
+    patch.renderMode !== undefined &&
+    patch.renderMode !== "off" &&
+    patch.renderMode !== "wireframe"
+  ) {
+    unsupported.push("renderMode");
+  }
+  return [...new Set(unsupported)];
+}
+
+export function visualizationTargetSupportedPatch(
+  target: VisualizationTargetRef,
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  if (target.kind === "airbox") {
+    const supported = Object.fromEntries(
+      Object.entries(patch).filter(
+        ([field, value]) =>
+          value !== undefined &&
+          ![
+            "pointColor",
+            "pointOpacityPercent",
+            "pointsVisible",
+            "shaderColorMode",
+            "shaderMonoColor",
+            "shaderVisible",
+            "surfaceColorSource",
+            "surfaceOpacityPercent",
+            "surfaceProjectionMode",
+            "viewportColorbarVisible",
+          ].includes(field),
+      ),
+    ) as VisualizationTargetPatch;
+    if (supported.renderMode !== undefined) {
+      const renderMode = supported.renderMode;
+      delete supported.renderMode;
+      supported.wireframeVisible = renderMode === "wireframe";
+    }
+    return supported;
+  }
+  if (!isFdmUniverseOutsideSupportTarget(target)) return patch;
+  const supported = Object.fromEntries(
+    Object.entries(patch).filter(
+      ([field, value]) =>
+        value !== undefined &&
+        FDM_UNIVERSE_OUTSIDE_SUPPORT_PATCH_FIELDS.has(
+          field as keyof VisualizationTargetPatch,
+        ),
+    ),
+  ) as VisualizationTargetPatch;
+  if (
+    supported.renderMode !== undefined &&
+    supported.renderMode !== "off" &&
+    supported.renderMode !== "wireframe"
+  ) {
+    supported.renderMode = "wireframe";
+  }
+  if (supported.renderMode !== undefined) {
+    const renderMode = supported.renderMode;
+    delete supported.renderMode;
+    supported.wireframeVisible = renderMode === "wireframe";
+  }
+  return supported;
 }
 
 export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
@@ -224,6 +394,82 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   wireframeOpacityPercent: 100,
   wireframeVisible: false,
 };
+
+export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTargetSettings = {
+  ...DEFAULT_OBJECT_VISUALIZATION,
+  boundsOpacityPercent: 55,
+  boundsVisible: true,
+  geometryScope: "full",
+  pointColor: "var(--fm-info)",
+  renderMode: "wireframe",
+  shaderColorMode: "monochrome",
+  shaderVisible: false,
+  surfaceColorSource: "solid",
+  vectorsVisible: false,
+  visible: true,
+  wireframeColor: "var(--fm-info)",
+  wireframeOpacityPercent: 55,
+  wireframeVisible: true,
+};
+
+function normalizeFdmUniverseOutsideSupportVisualizationSettings(
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  const wireframeVisible = settings.wireframeVisible || settings.shaderVisible;
+  return normalizeVisualizationSettings({
+    ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+    activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
+    boundsOpacityPercent: settings.boundsOpacityPercent,
+    boundsVisible: settings.boundsVisible,
+    renderMode: wireframeVisible ? "wireframe" : "off",
+    visible: settings.visible,
+    vectorAlphaPercent: settings.vectorAlphaPercent,
+    vectorBudget: settings.vectorBudget,
+    vectorCenteringEnabled: settings.vectorCenteringEnabled,
+    vectorColorMode: settings.vectorColorMode,
+    vectorLengthScale: settings.vectorLengthScale,
+    vectorMonoColor: settings.vectorMonoColor,
+    vectorThickness: settings.vectorThickness,
+    vectorsVisible: settings.vectorsVisible,
+    wireframeColor: settings.wireframeColor,
+    wireframeOpacityPercent: settings.wireframeOpacityPercent,
+    wireframeVisible,
+  });
+}
+
+/**
+ * The FDM domain target is the magnetic structured-grid view. Before the
+ * membership artifact is available it must remain an outline, never a
+ * filled shader over every authored universe cell.
+ */
+export const DEFAULT_FDM_DOMAIN_VISUALIZATION: VisualizationTargetSettings = {
+  ...DEFAULT_OBJECT_VISUALIZATION,
+  boundsVisible: false,
+  geometryScope: "full",
+  renderMode: "wireframe",
+  shaderVisible: false,
+  surfaceColorSource: "solid",
+  wireframeVisible: true,
+};
+
+/**
+ * A structured-grid descriptor is not a magnetic mask. Until the canonical
+ * FMRM membership is current, keep viewport rendering fail-closed: outline
+ * the authored grid, but never paint every universe cell as a magnetic field.
+ */
+export function resolveFdmViewportVisualizationSettings(
+  settings: VisualizationTargetSettings,
+  membershipReady: boolean,
+): VisualizationTargetSettings {
+  if (membershipReady) return settings;
+  return {
+    ...settings,
+    renderMode: "wireframe",
+    shaderVisible: false,
+    surfaceColorSource: "solid",
+    vectorsVisible: false,
+  };
+}
 
 export const DEFAULT_REGION_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
@@ -386,7 +632,7 @@ export class ObjectVisualizationController {
     const current = this.overrides.get(key) ?? {};
     const next = normalizePatch({
       ...current,
-      ...patch,
+      ...visualizationTargetSupportedPatch(target, patch),
     });
 
     if (samePatch(current, next)) {
@@ -406,7 +652,7 @@ export class ObjectVisualizationController {
     const current = this.pendingOverrides.get(key);
     const nextPatch = normalizePatch({
       ...(current?.patch ?? {}),
-      ...patch,
+      ...visualizationTargetSupportedPatch(target, patch),
     });
     const next: PendingVisualizationTargetPatch = {
       baseRevision,
@@ -515,8 +761,14 @@ export class ObjectVisualizationController {
 
 function defaultVisualizationSettings(
   kind: VisualizationTargetKind,
+  targetId?: string,
 ): VisualizationTargetSettings {
   if (kind === "airbox") return DEFAULT_AIRBOX_VISUALIZATION;
+  if (kind === "fdm-domain") {
+    return targetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+      ? DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION
+      : DEFAULT_FDM_DOMAIN_VISUALIZATION;
+  }
   if (kind === "part") return DEFAULT_PART_VISUALIZATION;
   if (kind === "region") return DEFAULT_REGION_VISUALIZATION;
   return DEFAULT_OBJECT_VISUALIZATION;
@@ -578,9 +830,37 @@ export function resolveVisualizationSettings(
   target: VisualizationTargetRef,
   baseSettings?: VisualizationTargetPatch,
 ): VisualizationTargetSettings {
-  return normalizeVisualizationSettings({
-    ...resolveDefaultVisualizationSettings(snapshot, target.kind, baseSettings),
+  const settings = normalizeVisualizationSettings({
+    ...resolveDefaultVisualizationSettings(
+      snapshot,
+      target.kind,
+      baseSettings,
+      target.id,
+    ),
     ...(snapshot.overrides[visualizationTargetKey(target)] ?? {}),
+  });
+  if (isFdmUniverseOutsideSupportTarget(target)) {
+    return normalizeFdmUniverseOutsideSupportVisualizationSettings(settings);
+  }
+  return target.kind === "airbox"
+    ? normalizeAirboxVisualizationSettings(settings)
+    : settings;
+}
+
+function normalizeAirboxVisualizationSettings(
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  const wireframeVisible = settings.wireframeVisible;
+  return normalizeVisualizationSettings({
+    ...DEFAULT_AIRBOX_VISUALIZATION,
+    ...settings,
+    activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
+    pointsVisible: false,
+    renderMode: wireframeVisible ? "wireframe" : "off",
+    shaderVisible: false,
+    surfaceColorSource: "solid",
+    viewportColorbarVisible: false,
+    wireframeVisible,
   });
 }
 
@@ -616,6 +896,7 @@ export function resolveDefaultVisualizationSettings(
   snapshot: ObjectVisualizationSnapshot,
   kind: VisualizationTargetKind,
   baseSettings?: VisualizationTargetPatch,
+  targetId?: string,
 ): VisualizationTargetSettings {
   if (kind === "region") {
     return normalizeVisualizationSettings({
@@ -626,9 +907,12 @@ export function resolveDefaultVisualizationSettings(
     });
   }
   return normalizeVisualizationSettings({
-    ...defaultVisualizationSettings(kind),
+    ...defaultVisualizationSettings(kind, targetId),
     ...(baseSettings ?? {}),
-    ...(snapshot.defaults[kind] ?? {}),
+    ...(kind === "fdm-domain" &&
+    targetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+      ? {}
+      : (snapshot.defaults[kind] ?? {})),
   });
 }
 
@@ -651,9 +935,10 @@ export function resolveTargetVisualization({
     (registryEntry
       ? visualizationSettingsFromResolvedTarget(
           registryEntry.settings,
-          defaultVisualizationSettings(target.kind),
+          defaultVisualizationSettings(target.kind, target.id),
         )
-      : null) ?? resolveVisualizationBaseSettings(target.kind, visualizationState);
+      : null) ??
+      resolveVisualizationBaseSettings(target.kind, target.id, visualizationState);
   const baseSettings =
     target.kind === "airbox"
       ? {
@@ -663,9 +948,16 @@ export function resolveTargetVisualization({
           ),
         }
       : resolvedBaseSettings;
+  const targetKey = visualizationTargetKey(target);
+  const pendingOverride = resolvePendingTargetPatch(snapshot, target);
   const localOverride = registryEntry
-    ? resolvePendingTargetPatch(snapshot, target)
-    : snapshot.overrides[visualizationTargetKey(target)] ?? null;
+    ? pendingOverride
+    : pendingOverride || snapshot.overrides[targetKey]
+      ? {
+          ...(snapshot.overrides[targetKey] ?? {}),
+          ...(pendingOverride ?? {}),
+        }
+      : null;
   const viewportPreferences = snapshot.viewportPreferences?.[
     visualizationTargetKey(target)
   ] ?? null;
@@ -681,19 +973,23 @@ export function resolveTargetVisualization({
         ? resolveRegionInheritedBaseline(inheritedSettings)
         : undefined
       : inheritedSettings ?? baseSettings;
-  const settings = normalizeVisualizationSettings({
+  const normalizedSettings = normalizeVisualizationSettings({
     ...(registryEntry
       ? baseSettings
       : resolveDefaultVisualizationSettings(
           snapshot,
           target.kind,
           inheritedDefaultSettings,
+          target.id,
         )),
     ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
     ...(viewportPreferenceDefaults ?? {}),
     ...(viewportPreferences ?? {}),
   });
+  const settings = isFdmUniverseOutsideSupportTarget(target)
+    ? normalizeFdmUniverseOutsideSupportVisualizationSettings(normalizedSettings)
+    : normalizedSettings;
 
   return {
     baseSettings,
@@ -1377,6 +1673,7 @@ function mergeOptionalRecord<T extends object>(
 
 function resolveVisualizationBaseSettings(
   kind: VisualizationTargetKind,
+  targetId: string | undefined,
   state: VisualizationStateResource | null | undefined,
 ): VisualizationTargetSettings {
   if (kind === "airbox") {
@@ -1386,7 +1683,7 @@ function resolveVisualizationBaseSettings(
   // resource describes FEM/object layers, so it must never seed the FDM
   // baseline (local FDM snapshot overrides/preferences still apply below).
   if (kind === "fdm-domain") {
-    return DEFAULT_OBJECT_VISUALIZATION;
+    return defaultVisualizationSettings(kind, targetId);
   }
   return resolveGlobalObjectVisualizationSettings(state);
 }
@@ -1496,7 +1793,7 @@ export function resolveAirboxVisualizationSettingsFromState(
   const pointsVisible =
     airbox?.points?.visible ?? baseSettings.pointsVisible;
 
-  return {
+  return normalizeAirboxVisualizationSettings({
     ...baseSettings,
     activeQuantityId: resolveAirboxCompatibleQuantityId(activeQuantityId),
     boundsVisible:
@@ -1532,7 +1829,7 @@ export function resolveAirboxVisualizationSettingsFromState(
       airbox?.vectors?.visible ?? baseSettings.vectorsVisible,
     visible: airbox?.visible ?? baseSettings.visible,
     wireframeVisible,
-  };
+  });
 }
 
 function visualizationSettingsFromResolvedTarget(
@@ -1592,7 +1889,9 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
   currentOverrides?: VisualizationStateResource["overrides"],
 ): VisualizationStatePatch {
-  const normalized = normalizePatch(patch);
+  const normalized = normalizePatch(
+    visualizationTargetSupportedPatch(AIRBOX_VISUALIZATION_TARGET, patch),
+  );
   const vectors =
     normalized.vectorsVisible === undefined && normalized.vectorBudget === undefined
       ? {}
@@ -1733,19 +2032,11 @@ export function resetAirboxVisualizationState(
   currentState: Pick<VisualizationStateResource, "overrides">,
 ): VisualizationStatePatch {
   return {
-    layers: {
-      airbox: {
+      layers: {
+        airbox: {
         bounds: {
           opacity: DEFAULT_AIRBOX_VISUALIZATION.boundsOpacityPercent / 100,
           visible: DEFAULT_AIRBOX_VISUALIZATION.boundsVisible,
-        },
-        points: {
-          opacity: DEFAULT_AIRBOX_VISUALIZATION.pointOpacityPercent / 100,
-          visible: DEFAULT_AIRBOX_VISUALIZATION.pointsVisible,
-        },
-        surface: {
-          opacity: DEFAULT_AIRBOX_VISUALIZATION.surfaceOpacityPercent / 100,
-          visible: DEFAULT_AIRBOX_VISUALIZATION.shaderVisible,
         },
         vectors: {
           density: DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
@@ -1778,10 +2069,31 @@ export function resolveVisualizationTargetFromSelection(
     selection.ref?.type === "fdm-cell" ||
     selection.ref?.type === "fdm-domain"
   ) {
+    const targetId =
+      selection.ref.type === "fdm-domain"
+        ? selection.ref.visualizationTargetId
+        : "fdm-domain";
     return {
-      id: "fdm-domain",
+      id: targetId,
       kind: "fdm-domain",
-      label: selection.label,
+      label:
+        targetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+          ? FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.label
+          : selection.label,
+    };
+  }
+
+  // FDM reuses the Airbox Explorer subtree, but its display state is still a
+  // structured-grid target.  Preserve that identity when the common Airbox
+  // visualization panel receives an FDM Airbox selection.
+  if (
+    selection.ref?.type === "airbox" &&
+    selection.ref.visualizationTargetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+  ) {
+    return {
+      id: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
+      kind: "fdm-domain",
+      label: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.label,
     };
   }
 
@@ -1830,7 +2142,11 @@ export function resolveVisualizationTargetFromSelection(
 
 export function visualizationTargetKey(target: VisualizationTargetRef): string {
   if (target.kind === "airbox") return "airbox";
-  if (target.kind === "fdm-domain") return "fdm-domain";
+  if (target.kind === "fdm-domain") {
+    return target.id === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+      ? FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+      : "fdm-domain";
+  }
   return canonicalVisualizationTargetId(target);
 }
 

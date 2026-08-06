@@ -18,9 +18,11 @@ const support = {
 function fdmPresentation({
   magneticSupport,
   resourceStatus = "realized",
+  universeOutsideMagneticSupport = null,
 }: {
   magneticSupport: FdmMagneticSupportPresentation | null;
   resourceStatus?: FdmDomainPresentation["resourceStatus"];
+  universeOutsideMagneticSupport?: FdmDomainPresentation["universeOutsideMagneticSupport"];
 }): FdmDomainPresentation {
   return {
     airbox: null,
@@ -50,7 +52,7 @@ function fdmPresentation({
     resourceStatus,
     revision: "generation:1:1:1",
     units: { length: "m" },
-    universeOutsideMagneticSupport: null,
+    universeOutsideMagneticSupport,
   };
 }
 
@@ -71,16 +73,18 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
         universeBounds: universe,
       }),
     ).toEqual({
+      activeCellCount: 6,
       kind: "fdm-universe-outside-magnetic-support",
       legend: {
         magneticSupport: "Magnetic support · 6 active cells",
-        outsideSupport: "Universe outside support · 2 inactive cells",
+        outsideSupport: "Airbox · 2 inactive cells",
       },
       magneticSupportBounds: support,
+      inactiveCellCount: 2,
       target: {
         id: "fdm-universe-outside-support",
         kind: "fdm-domain",
-        label: "Universe outside magnetic support",
+        label: "Airbox",
       },
       universeBounds: universe,
     });
@@ -103,10 +107,61 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
       kind: "fdm-universe-outside-magnetic-support",
       legend: {
         magneticSupport: "Magnetic support · 6 active cells",
-        outsideSupport: "Universe outside support · 2 inactive cells",
+        outsideSupport: "Airbox · 2 inactive cells",
       },
       magneticSupportBounds: { center: [0, 0, 0], size: [2, 2, 2] },
       universeBounds: { center: [0, 0, 0], size: [4, 4, 4] },
+    });
+  });
+
+  it("builds a bounds-only authored overlay before FDM membership materializes", () => {
+    const presentation = fdmPresentation({
+      magneticSupport: null,
+      resourceStatus: "authoring-grid",
+      universeOutsideMagneticSupport: {
+        bounds: { min: [-2, -2, -2], max: [2, 2, 2] },
+        magneticSupportBounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+        kind: "universe-outside-magnetic-support",
+        reason: "authored-universe-exceeds-magnetic-support",
+      },
+    });
+
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(presentation),
+    ).toMatchObject({
+      kind: "fdm-universe-outside-magnetic-support",
+      legend: {
+        magneticSupport: "Magnetic support · authored bounds",
+        outsideSupport: "Airbox · membership pending",
+      },
+      magneticSupportBounds: { center: [0, 0, 0], size: [2, 2, 2] },
+      universeBounds: { center: [0, 0, 0], size: [4, 4, 4] },
+    });
+  });
+
+  it("uses an explicit universe-outside-support envelope instead of generic domain bounds", () => {
+    const presentation = fdmPresentation({
+      magneticSupport: {
+        activeCellCount: 6,
+        activeUnassignedCellCount: 1,
+        bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+        inactiveCellCount: 2,
+        kind: "magnetic-support",
+      },
+      universeOutsideMagneticSupport: {
+        bounds: { min: [-3, -2, -1.5], max: [3, 2, 1.5] },
+        kind: "universe-outside-magnetic-support",
+        reason: "backend-declared-universe-outside-magnetic-support",
+      },
+    });
+
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(presentation),
+    ).toMatchObject({
+      universeBounds: {
+        center: [0, 0, 0],
+        size: [6, 4, 3],
+      },
     });
   });
 

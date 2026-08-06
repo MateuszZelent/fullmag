@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
+
 import { FdmGridInspectorPanelView } from "./FdmGridInspectorPanel";
 import type {
   FdmGridInspectorModel,
@@ -75,7 +77,7 @@ describe("FdmGridInspectorPanelView", () => {
     expect(html).toContain("u32le-v2");
     expect(html).toContain("grid-fingerprint-7");
     expect(html).toContain("region:core");
-    expect(html).not.toMatch(/Gmsh|hmax|hmin|tet|quality|Build|Airbox|shared-domain/i);
+    expect(html).not.toMatch(/Gmsh|hmax|hmin|tet|quality|Build|FEM|shared-domain/i);
   });
 
   it("renders an explicit not-materialized state rather than inventing a mask", () => {
@@ -195,5 +197,37 @@ describe("FdmGridInspectorPanelView", () => {
     expect(html).toContain("Magnetic Support");
     expect(html).toContain("support facts are withheld");
     expect(html).not.toContain("Active cells");
+  });
+
+  it("exposes structured-grid display controls and every owner/region for the universe outside support", () => {
+    const html = renderToStaticMarkup(
+      <FdmGridInspectorPanelView
+        detail={selectionDetail({
+          scope: "universe-outside-support",
+          title: "Airbox Visualization",
+          support: {
+            activeCellCount: 16,
+            activeUnassignedCellCount: 2,
+            boundsMax: [4, 3, 2],
+            boundsMin: [0, 0, 0],
+            inactiveCellCount: 8,
+          },
+        })}
+        displaySettings={{
+          ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+          visible: true,
+          boundsVisible: true,
+          wireframeVisible: true,
+        }}
+        model={readyModel()}
+        onDisplayPatch={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Airbox · Visualization");
+    expect(html).toContain("Universe/support bounds opacity");
+    expect(html).toContain("Grid wireframe opacity");
+    expect(html).toContain("Owner: object:core · Region: region:core");
+    expect(html).not.toMatch(/Gmsh|hmax|hmin|tet|quality|Build|FEM|shared-domain/i);
   });
 });

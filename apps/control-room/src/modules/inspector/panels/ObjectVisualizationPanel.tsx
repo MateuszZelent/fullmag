@@ -13,11 +13,13 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
+  isFdmUniverseOutsideSupportTarget,
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
   resolveTargetVisualization,
   resetAirboxVisualizationState,
   resolveVisualizationTargetFromSelection,
+  visualizationTargetCapabilities,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
@@ -41,7 +43,7 @@ import {
 } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   useMeshSharedDomainManifestResource,
-  useMeshRegionMembershipsResource,
+  useMeshRegionMembershipResource,
   useSceneResource,
   useDomainMetaResource,
   useFdmRegionMembershipResource,
@@ -71,7 +73,6 @@ import {
   restoreVisualizationAppliedBaseline,
   fdmGridCellCount,
   fdmVisualizationResourceNotice,
-  isFdmVisualizationTarget,
   resolveObjectVisualizationLane,
   resolveObjectVisualizationResourceGates,
   resolveObjectVisualizationTargetForLane,
@@ -146,7 +147,7 @@ function useObjectVisualizationPanelState(
   });
   const { fdm: fdmResourcesEnabled, fem: femResourcesEnabled } =
     resolveObjectVisualizationResourceGates({ lane, target });
-  const fdmTarget = fdmResourcesEnabled && isFdmVisualizationTarget(target);
+  const fdmTarget = fdmResourcesEnabled && target !== null;
   const visualizationState = useVisualizationStateResource({
     enabled: femResourcesEnabled,
   });
@@ -199,14 +200,18 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
-  const regionId = useMemo(() => {
+  const regionTarget = useMemo(() => {
     if (resolvedTarget?.kind !== "region") return null;
-    const parsed = parseRegionVisualizationTargetId(resolvedTarget.id);
-    return parsed?.regionId ?? null;
+    return parseRegionVisualizationTargetId(resolvedTarget.id);
   }, [resolvedTarget]);
-  const regionMemberships = useMeshRegionMembershipsResource(
-    regionId ? [regionId] : [],
-    { enabled: femResourcesEnabled && Boolean(regionId) },
+  const regionMembership = useMeshRegionMembershipResource(
+    regionTarget?.objectId,
+    regionTarget?.regionId,
+    { enabled: femResourcesEnabled && Boolean(regionTarget) },
+  );
+  const regionMemberships = useMemo(
+    () => (regionMembership.data ? [regionMembership.data] : null),
+    [regionMembership.data],
   );
   const childRegionTargets = useMemo(
     () =>
@@ -338,6 +343,10 @@ function useObjectVisualizationPanelState(
     ? resolveObjectVisualizationPanelTopologyFreshness({
         manifest: manifest.data,
         scene: scene.data,
+        targetObjectId:
+          resolvedTarget.kind === "object"
+            ? resolvedTarget.id
+            : selection.objectId,
         targetKind: resolvedTarget.kind,
       })
     : null;
@@ -352,6 +361,7 @@ function useObjectVisualizationPanelState(
     ? buildVisualizationPanelSections({
         effectiveSettings: renderResolution?.finalSettings ?? effectiveSettings,
         settings,
+        target: resolvedTarget ?? undefined,
       })
     : [];
   const passControlsDisabled =
@@ -369,7 +379,7 @@ function useObjectVisualizationPanelState(
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!resolvedTarget) return;
-    if (resolvedTarget.kind === "fdm-domain") {
+    if (fdmTarget) {
       const viewportPatch = viewportRenderingPreferencesPatch(patchValue);
       if (Object.keys(viewportPatch).length > 0) {
         visualization.patchViewportPreferences(resolvedTarget, viewportPatch);
@@ -461,7 +471,7 @@ function useObjectVisualizationPanelState(
 
   async function resetTarget(): Promise<void> {
     if (!resolvedTarget) return;
-    if (resolvedTarget.kind === "fdm-domain") {
+    if (fdmTarget) {
       visualization.clearTarget(resolvedTarget);
       setFeedback(null);
       return;
@@ -615,7 +625,7 @@ function useObjectVisualizationPanelState(
     : null;
   const regionCarrier = resolveRegionVisualizationCarrier({
     manifestRegions: fdmTarget ? null : manifest.data?.regions,
-    memberships: fdmTarget ? null : regionMemberships.data,
+    memberships: fdmTarget ? null : regionMemberships,
     target: fdmTarget ? null : resolvedTarget,
   });
   const vectorBudgetRanges = {
@@ -623,7 +633,7 @@ function useObjectVisualizationPanelState(
       fdmCellCount,
       geometryScope: "full",
       manifestRegions: manifest.data?.regions,
-      memberships: regionMemberships.data,
+      memberships: regionMemberships,
       meshParts: manifest.data?.mesh_parts,
       target: resolvedTarget,
     }),
@@ -631,7 +641,7 @@ function useObjectVisualizationPanelState(
       fdmCellCount,
       geometryScope: "surface",
       manifestRegions: manifest.data?.regions,
-      memberships: regionMemberships.data,
+      memberships: regionMemberships,
       meshParts: manifest.data?.mesh_parts,
       target: resolvedTarget,
     }),
@@ -807,14 +817,18 @@ function ObjectVisualizationPanelView({
     displaySettings.vectorsVisible,
     displaySettings.pointsVisible,
   ].filter(Boolean).length;
+  const capabilities = visualizationTargetCapabilities(target);
   const meshState = renderResolution?.degradedReasons.length
     ? "Degraded"
     : "Ready";
   const requiresFieldData =
-    displaySettings.vectorsVisible ||
-    (displaySettings.shaderVisible && settings.surfaceColorSource !== "solid");
+    capabilities.supportsFieldData &&
+    (displaySettings.vectorsVisible ||
+      (displaySettings.shaderVisible && settings.surfaceColorSource !== "solid"));
   const dataState =
-    !requiresFieldData
+    !capabilities.supportsFieldData
+      ? "Not available"
+      : !requiresFieldData
       ? "Not required"
       : fieldCatalog.status === "ready"
         ? "Live"
@@ -893,7 +907,7 @@ function ObjectVisualizationPanelView({
               pending={pending}
               renderWarning={renderWarning}
               settings={settings}
-              targetKind={target.kind}
+              target={target}
               primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
                 />
                 <VisualizationRenderModeSection
@@ -901,23 +915,36 @@ function ObjectVisualizationPanelView({
               passControlsDisabled={passControlsDisabled}
               pending={pending}
               patch={patch}
-              targetKind={target.kind}
+              target={target}
                 />
-                {settings.shaderVisible || settings.vectorsVisible ? (
+                {capabilities.supportsFieldData &&
+                (settings.shaderVisible ||
+                  settings.vectorsVisible ||
+                  target.kind === "airbox" ||
+                  isFdmUniverseOutsideSupportTarget(target)) ? (
                   <VisualizationQuantitySection
               onFieldCatalogRequest={onFieldCatalogRequest}
               patch={patch}
               pending={pending}
               settings={settings}
-              targetKind={target.kind}
+              targetKind={
+                target.kind === "airbox" ||
+                isFdmUniverseOutsideSupportTarget(target)
+                  ? "airbox"
+                  : target.kind
+              }
                   />
                 ) : null}
               </>
             }
             enabledPassCount={enabledPassCount}
             meshState={meshState}
-            quantitySource={settings.activeQuantityId || "H_eff"}
-            surfaceColoring={target.kind === "airbox" ? null : (
+            quantitySource={
+              capabilities.supportsFieldData
+                ? settings.activeQuantityId || "H_eff"
+                : "Not available"
+            }
+            surfaceColoring={!capabilities.supportsFieldData || target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? null : (
               <VisualizationSurfaceColoringSection
               patch={patch}
               patchColor={patchColor}
@@ -930,7 +957,7 @@ function ObjectVisualizationPanelView({
               target={target}
               />
             )}
-            vectors={
+            vectors={capabilities.supportsVectors ? (
               <VisualizationVectorsSection
               meshParts={vectorMeshParts}
               onTogglePartVectors={onTogglePartVectors}
@@ -946,10 +973,10 @@ function ObjectVisualizationPanelView({
               vectorBudgetRange={vectorBudgetRange}
               vectorTopologyHash={vectorTopologyHash}
               />
-            }
+            ) : null}
       />
 
-      {settings.pointsVisible ? (
+      {capabilities.supportsPoints && settings.pointsVisible ? (
         <VisualizationPointsSection
             patch={patch}
             patchColor={patchColor}
@@ -967,14 +994,14 @@ function ObjectVisualizationPanelView({
             settings={settings}
         />
       ) : null}
-      <VisualizationGeometryScopeSection
+      {capabilities.showGeometryScopeControl ? <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
         pending={pending}
         patch={patch}
         settings={settings}
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
-      />
+      /> : null}
       {renderWarning ? (
         <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
       ) : null}

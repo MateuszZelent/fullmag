@@ -11,6 +11,7 @@ const membership = {
   mesh_part_ids: ["part:core"],
   mesh_revision: 7,
   node_indices: [3],
+  owner_object_id: "film",
   realization: "conformal",
   region_id: "film:core",
   region_membership_revision: 9,

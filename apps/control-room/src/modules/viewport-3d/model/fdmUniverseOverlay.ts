@@ -4,7 +4,7 @@ import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation
 export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET = {
   id: "fdm-universe-outside-support",
   kind: "fdm-domain",
-  label: "Universe outside magnetic support",
+  label: "Airbox",
 } as const;
 
 /**
@@ -20,6 +20,9 @@ export interface FdmUniverseOutsideSupportOverlayModel {
     outsideSupport: string;
   };
   magneticSupportBounds: Viewport3DBounds;
+  /** Counts are exact only after the canonical FMRM artifact is available. */
+  activeCellCount: number | null;
+  inactiveCellCount: number | null;
   target: typeof FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET;
   universeBounds: Viewport3DBounds;
 }
@@ -31,8 +34,8 @@ export function resolveFdmUniverseOutsideSupportOverlayModel({
   universeBounds,
   semanticRole,
 }: {
-  activeCellCount: number;
-  inactiveCellCount: number;
+  activeCellCount: number | null;
+  inactiveCellCount: number | null;
   magneticSupportBounds: Viewport3DBounds | null;
   universeBounds: Viewport3DBounds | null;
   semanticRole: "universe-outside-magnetic-support" | null | undefined;
@@ -47,10 +50,18 @@ export function resolveFdmUniverseOutsideSupportOverlayModel({
   }
 
   return {
+    activeCellCount,
+    inactiveCellCount,
     kind: "fdm-universe-outside-magnetic-support",
     legend: {
-      magneticSupport: `Magnetic support · ${activeCellCount.toLocaleString("en-US")} active cells`,
-      outsideSupport: `Universe outside support · ${inactiveCellCount.toLocaleString("en-US")} inactive cells`,
+      magneticSupport:
+        activeCellCount === null
+          ? "Magnetic support · authored bounds"
+          : `Magnetic support · ${activeCellCount.toLocaleString("en-US")} active cells`,
+      outsideSupport:
+        inactiveCellCount === null
+          ? "Airbox · membership pending"
+          : `Airbox · ${inactiveCellCount.toLocaleString("en-US")} inactive cells`,
     },
     magneticSupportBounds,
     target: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
@@ -65,39 +76,63 @@ export function resolveFdmUniverseOutsideSupportOverlayFromPresentation(
     presentation?.discretization === "fdm"
       ? presentation.magneticSupport
       : null;
-  const magneticSupportBounds = support
-    ? toViewportBounds(support.bounds)
-    : null;
+  const authoredRole =
+    presentation?.discretization === "fdm"
+      ? presentation.universeOutsideMagneticSupport
+      : null;
+  const magneticSupportBounds = toViewportBounds(
+    support?.bounds ?? authoredRole?.magneticSupportBounds ?? null,
+  );
+  // Prefer the backend-declared role envelope when it is present.  The
+  // generic domain bounds can describe the realized grid, while the explicit
+  // role is the authoritative universe extent for an FDM grid with multiple
+  // magnetic objects/regions.  This remains an AABB diagnostic overlay; no
+  // FEM airbox topology or inactive-cell field is inferred here.
   const universeBounds = presentation
-    ? toViewportBounds(presentation.bounds)
+    ? toViewportBounds(
+        presentation.universeOutsideMagneticSupport?.bounds ??
+          presentation.bounds,
+      )
     : null;
   if (
     !presentation ||
     presentation.discretization !== "fdm" ||
-    presentation.resourceStatus !== "realized" ||
-    !support ||
     !magneticSupportBounds ||
-    !universeBounds ||
-    support.inactiveCellCount === 0
+    !universeBounds
+  ) {
+    return null;
+  }
+  if (presentation.resourceStatus === "realized") {
+    if (!support || support.inactiveCellCount === 0) return null;
+    return resolveFdmUniverseOutsideSupportOverlayModel({
+      activeCellCount: support.activeCellCount,
+      inactiveCellCount: support.inactiveCellCount,
+      magneticSupportBounds,
+      semanticRole: "universe-outside-magnetic-support",
+      universeBounds,
+    });
+  }
+  if (
+    authoredRole?.reason !== "authored-universe-exceeds-magnetic-support" ||
+    !authoredRole.magneticSupportBounds
   ) {
     return null;
   }
   return resolveFdmUniverseOutsideSupportOverlayModel({
-    activeCellCount: support.activeCellCount,
-    inactiveCellCount: support.inactiveCellCount,
+    activeCellCount: null,
+    inactiveCellCount: null,
     magneticSupportBounds,
     semanticRole: "universe-outside-magnetic-support",
     universeBounds,
   });
 }
 
-function toViewportBounds({
-  max,
-  min,
-}: {
+function toViewportBounds(bounds: {
   max: readonly number[];
   min: readonly number[];
-}): Viewport3DBounds | null {
+} | null): Viewport3DBounds | null {
+  if (!bounds) return null;
+  const { max, min } = bounds;
   if (
     max.length !== 3 ||
     min.length !== 3 ||

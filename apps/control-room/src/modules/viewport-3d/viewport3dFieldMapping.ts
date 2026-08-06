@@ -245,6 +245,9 @@ export function buildFdmSampledScalarColors(
 
   const indexing = buildFdmFieldIndexResolver(fieldVector, domainCellCount);
   if (indexing.status !== "compatible") return null;
+  for (const cellOrdinal of cellOrdinals) {
+    if (indexing.resolve(cellOrdinal) === null) return null;
+  }
 
   const range =
     resolveProvidedScalarRange(scalarRange) ??
@@ -257,12 +260,7 @@ export function buildFdmSampledScalarColors(
   for (let index = 0; index < cellOrdinals.length; index += 1) {
     const fieldIndex = indexing.resolve(cellOrdinals[index] ?? -1);
     const target = index * 3;
-    if (fieldIndex === null) {
-      colors[target] = 0.5;
-      colors[target + 1] = 0.5;
-      colors[target + 2] = 0.5;
-      continue;
-    }
+    if (fieldIndex === null) return null;
     if (scalarValues) {
       scalarValues[index] = scalarAt(fieldVector, fieldIndex, resolvedColorMode);
     }

@@ -3,7 +3,6 @@
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type {
-  FemManifestRenderDomain,
   Viewport3DMeshPart,
   Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
@@ -20,7 +19,6 @@ import type {
 } from "../viewport3dRenderModel";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { MeshPartLayer } from "./MeshPartLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -30,15 +28,12 @@ export function TopologyMeshLayer({
   adoptionRegistry,
   colors,
   vectorColorMode,
-  fallbackSettings,
-  femDomain,
   fieldModel,
   getPartSettings,
   materialProfile,
   magnetizationTexturePreviews,
   meshQualityColors,
   meshQualityOverlayVisible,
-  onSelectDomain,
   onSelectPart,
   tracker,
   topologyModel,
@@ -48,15 +43,12 @@ export function TopologyMeshLayer({
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   vectorColorMode: string;
-  fallbackSettings: VisualizationTargetSettings;
-  femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   materialProfile: Viewport3DMaterialProfile;
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
-  onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
@@ -124,24 +116,5 @@ export function TopologyMeshLayer({
     );
   }
 
-  return (
-    <FallbackTopologyMeshLayer
-      colors={colors}
-      fallbackSettings={
-        topologyCurrent
-          ? fallbackSettings
-          : resolveUnavailableTopologyVisualizationSettings(fallbackSettings)
-      }
-      femDomain={femDomain}
-      fieldModel={resolvedFieldModel}
-      materialProfile={materialProfile}
-      meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
-      onSelectDomain={onSelectDomain}
-      onSelectPart={onSelectPart}
-      topologyModel={topologyModel}
-      tracker={tracker}
-      vectorColorMode={vectorColorMode}
-      vectorStyle={vectorStyle}
-    />
-  );
+  return null;
 }

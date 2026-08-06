@@ -58,23 +58,30 @@ SCENARIOS = {**DYNAMICS_SCENARIOS, **RELAXATION_SCENARIOS}
 DIRECT_SCENARIOS = {**SCENARIOS, **FDM_COUNTERPART_SCENARIOS}
 
 
-def _export_run_config(path: Path, *, backend: str = "fem") -> dict[str, object]:
+def _export_run_config(
+    path: Path,
+    *,
+    backend: str = "fem",
+    skip_geometry_assets: bool = True,
+) -> dict[str, object]:
+    args = [
+        "export-run-config",
+        "--script",
+        str(path),
+        "--backend",
+        backend,
+        "--mode",
+        "strict",
+        "--precision",
+        "double",
+    ]
+    if skip_geometry_assets:
+        # Keep the default scenario checks fast; callers that qualify
+        # full materialization explicitly opt into geometry assets.
+        args.append("--skip-geometry-assets")
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        exit_code = runtime_helper.main(
-            [
-                "export-run-config",
-                "--script",
-                str(path),
-                "--backend",
-                backend,
-                "--mode",
-                "strict",
-                "--precision",
-                "double",
-                "--skip-geometry-assets",
-            ]
-        )
+        exit_code = runtime_helper.main(args)
     assert exit_code == 0
     return json.loads(stdout.getvalue())
 
@@ -179,6 +186,21 @@ def test_fdm_projected_gradient_bb_counterpart_exports_cpu_double_relaxation() -
         "format": "zarr",
         "dataset": "m",
     }
+
+
+def test_fdm_projected_gradient_bb_counterpart_materializes_grid_assets() -> None:
+    payload = _export_run_config(
+        FDM_COUNTERPART_SCENARIOS["relax_projected_gradient_bb_fdm"],
+        backend="fdm",
+        skip_geometry_assets=False,
+    )
+
+    assets = payload["shared_geometry_assets"]["fdm_grid_assets"]
+    assert len(assets) == 1
+    asset = assets[0]
+    assert asset["cells"] == [128, 32, 30]
+    assert len(asset["active_mask"]) == 128 * 32 * 30
+    assert sum(asset["active_mask"]) == 960
 
 
 @pytest.mark.parametrize("scenario,path", DYNAMICS_SCENARIOS.items())

@@ -55,9 +55,10 @@ export function ObjectRegionMeshPanel({
   const fdmDomain = useDomainMetaResource({ enabled: fdmLane });
   const fdmMembership = useFdmRegionMembershipResource({ enabled: fdmLane });
   const fdmMembershipBinary = useFdmRegionMembershipBinaryResource(
-    model.regionId === "none" ? null : model.regionId,
+    model.regionId,
     {
       enabled: fdmLane && model.mode === "committed" && model.regionId !== "none",
+      ownerObjectId: model.objectId,
     },
   );
   const fdmMeshResources = useMemo<FdmObjectMeshInspectorResources>(
@@ -78,7 +79,7 @@ export function ObjectRegionMeshPanel({
       }),
     [fdmMeshResources, meshLane, model.objectId, model.regionId],
   );
-  const membership = useMeshRegionMembershipResource(model.regionId, {
+  const membership = useMeshRegionMembershipResource(model.objectId, model.regionId, {
     enabled:
       femLane &&
       model.mode === "committed" &&
@@ -113,17 +114,17 @@ export function ObjectRegionMeshPanel({
     return (
       <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
         <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
-        <InspectorGroup title="FDM Region Participation" badge={fdmModel.status}>
+        <InspectorGroup title="Region Mesh" badge={fdmModel.status}>
           {fdmModel.notice ? (
             <FeedbackBanner
               kind={fdmModel.status === "error" ? "error" : "warning"}
               message={fdmModel.notice}
             />
           ) : null}
-          <FieldRow label="Grid policy" value="execution-plan owned (read-only)" />
-          <FieldRow label="Explorer role" value="FDM Grid / Magnetic Support" />
-          <FieldRow label="Grid status" value={fdmModel.status} />
-          <FieldRow label="Mesh semantics" value="structured grid cells" />
+          <FieldRow label="Mesh policy" value="execution-plan owned (read-only)" />
+          <FieldRow label="Mesh scope" value={`${model.objectId} / ${model.regionId}`} />
+          <FieldRow label="Mesh realization" value="structured-grid cell membership" />
+          <FieldRow label="Mesh status" value={fdmModel.status} />
           <FieldRow label="Grid origin" value={fdmModel.origin?.join(", ") ?? "not materialized"} unit="m" />
           <FieldRow label="Grid spacing" value={fdmModel.spacing?.join(", ") ?? "not materialized"} unit="m" />
           <FieldRow label="Grid shape" value={fdmModel.shape?.join(" × ") ?? "not materialized"} />

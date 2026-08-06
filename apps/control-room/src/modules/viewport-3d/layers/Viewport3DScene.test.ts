@@ -356,6 +356,18 @@ describe("Viewport3DScene scale helpers", () => {
     );
   });
 
+  it("uses the magnetic-support bounds for the generic FDM domain frame", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "fdmUniverseOutsideSupport?.magneticSupportBounds ??",
+    );
+    expect(source).not.toContain("bounds={fdmDomain?.bounds ?? bounds}");
+  });
+
   it("can skip viewport canvas probes and orientation widgets from browser runtime flags", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
@@ -634,5 +646,30 @@ describe("Viewport3DScene region overlay visibility", () => {
         stageVisible: true,
       }),
     ).toBe(false);
+  });
+
+  it("renders magnetic FDM cells through target views instead of one domain carrier", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("fdmTargetViews.map((view)");
+    expect(source).toContain("instanceOrdinals={view.instanceOrdinals}");
+    expect(source).toContain("carrierId={view.target.id}");
+    expect(source).toContain("fieldVector={view.fieldVector}");
+    expect(source).not.toContain("fieldVector={stagedFieldVector}");
+    expect(source).toContain("inspectQuantityId={view.settings.activeQuantityId}");
+    expect(source).toContain("settings={view.settings}");
+    expect(source).not.toContain("instanceModel={fdmInstanceModel}");
+  });
+
+  it("passes each FDM target view identity to its picking callback", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("onSelectTarget={() => onSelectFdmTarget(view.target)}");
   });
 });

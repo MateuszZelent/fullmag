@@ -31,6 +31,7 @@ const profileSwitchScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-profile-switch.mjs",
   import.meta.url,
 );
+const justfileUrl = new URL("../../../../../justfile", import.meta.url);
 
 function endpointFamilyLiteral(path: string, suffix: string): string {
   const suffixStart = path.lastIndexOf(suffix);
@@ -43,6 +44,31 @@ function endpointFamilyLiteral(path: string, suffix: string): string {
 }
 
 describe("viewport smoke projection round-trip", () => {
+  it("refuses mutating an existing session without a disposable script guard", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain(
+      'import { createSmokeMutationGuard } from "./lib/smoke-session-isolation.mjs"',
+    );
+    expect(smokeScript).toContain("const requiresDisposableSession =");
+    expect(smokeScript).toContain("mutationRequired: requiresDisposableSession");
+    expect(smokeScript).toContain("mutationGuard.installProcessGuards()");
+    expect(smokeScript).toContain("mutationGuard.restoreAndVerify()");
+    expect(smokeScript).toContain("Viewport smoke fixture isolation passed:");
+  });
+
+  it("provides a launcher that binds mutating smoke to a temporary script", () => {
+    const justfile = readFileSync(justfileUrl, "utf8");
+
+    expect(justfile).toContain("run-viewport-3d-smoke-disposable");
+    expect(justfile).toContain('smoke_dir="$(TMPDIR=/tmp mktemp -d)"');
+    expect(justfile).toContain("TMPDIR=/tmp");
+    expect(justfile).toContain('cp "$fixture" "$smoke_script"');
+    expect(justfile).toContain(".fullmag-smoke-disposable");
+    expect(justfile).toContain("CONTROL_ROOM_SMOKE_DISPOSABLE_SCRIPT_PATH");
+    expect(justfile).toContain("CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN");
+  });
+
   it("toggles relative to the initial projection state", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 

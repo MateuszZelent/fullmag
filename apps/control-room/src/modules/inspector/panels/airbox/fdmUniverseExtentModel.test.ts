@@ -69,6 +69,8 @@ describe("fdmUniverseExtentModel", () => {
       reason: "backend-published support role",
     });
     expect(model.universeRoleSource).toBe("domain-presentation");
+    expect(model.status).toBe("not-materialized");
+    expect(model.notice).toContain("membership mask is not materialized");
   });
 
   it("rejects a role from a different DomainMeta identity", () => {
@@ -172,4 +174,45 @@ describe("fdmUniverseExtentModel", () => {
     });
     expect(model.status).toBe("stale");
   });
+
+  it.each(["error", "stale"] as const)(
+    "propagates a %s FDM membership lane status even when descriptor data is cached",
+    (membershipStatus) => {
+      const presentation = buildDomainPresentation({
+        domainMeta: fdmDomain,
+        fdmMembership: {
+          binary_path: "fdm-membership.v2.bin",
+          cell_count: 24,
+          cell_m: [1, 4 / 3, 0.25],
+          counts: [4, 3, 2],
+          domain_generation_id: "generation-1",
+          encoding: "FMRM:u32_le",
+          freshness: "current",
+          grid_fingerprint: "grid-1",
+          mesh_revision: 1,
+          origin_m: [-2, -1, 0],
+          region_legend: [],
+          region_membership_revision: 1,
+          schema_version: "fdm_region_membership.v2",
+        },
+        fdmMembershipStatus: membershipStatus,
+        universeOutsideMagneticSupport: {
+          bounds: {
+            max: [...fdmDomain.bounds.max] as [number, number, number],
+            min: [...fdmDomain.bounds.min] as [number, number, number],
+          },
+          reason: "authored-universe-exceeds-magnetic-support",
+        },
+      });
+
+      const model = resolveFdmUniverseExtentModel({
+        explicitFdm: true,
+        resource: { data: fdmDomain, error: null, status: "ready" },
+        roleEvidence: { source: "domain-presentation", presentation },
+      });
+
+      expect(model.status).toBe(membershipStatus);
+      expect(model.notice).toContain("FDM membership data");
+    },
+  );
 });

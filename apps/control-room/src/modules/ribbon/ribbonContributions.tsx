@@ -93,6 +93,8 @@ import {
   resolveEffectiveVisualizationSettings,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  isFdmUniverseOutsideSupportTarget,
+  visualizationTargetCapabilities,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
   type SurfaceColorSource,
@@ -487,7 +489,7 @@ const meshTab: RibbonTabContent = {
       tone: "compute",
       actions: [
         { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
-        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM grid", "FEM shared domain", "Quality report"]) },
+        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM mesh", "FEM shared domain", "Quality report"]) },
         { id: "mesh-stats",     icon: icon(BarChart3),  label: "Statistics",               iconColor: C.peach },
       ],
     },
@@ -507,7 +509,7 @@ const meshTab: RibbonTabContent = {
       subtitle: "quality",
       tone: "neutral",
       actions: [
-        { id: "mesher",  icon: icon(Hexagon),    label: "Mesher",  disabled: true, iconColor: C.teal, menu: radioMenu("mesh-method", "Mesher", "auto", [["auto", "Auto"], ["fdm", "FDM grid"], ["tet", "Tetrahedral"], ["external", "External import"]]) },
+        { id: "mesher",  icon: icon(Hexagon),    label: "Mesher",  disabled: true, iconColor: C.teal, menu: radioMenu("mesh-method", "Mesher", "auto", [["auto", "Auto"], ["fdm", "FDM structured"], ["tet", "Tetrahedral"], ["external", "External import"]]) },
         { id: "quality", icon: icon(ListChecks), label: "Quality", iconColor: C.green },
       ],
     },
@@ -1025,10 +1027,8 @@ function meshBuildStatus(context: RibbonBuildContext): {
 
 function buildNonFemMeshTabContent(
   content: RibbonTabContent,
-  discretization: Exclude<RibbonDiscretization, "fem">,
 ): RibbonTabContent {
-  const overviewLabel =
-    discretization === "fdm" ? "Open grid overview" : "Open mesh/grid overview";
+  const overviewLabel = "Open mesh overview";
   const viewGroup = content.groups.find((group) => group.id === "mesh-view");
   if (!viewGroup) return { ...content, groups: [] };
 
@@ -1037,14 +1037,14 @@ function buildNonFemMeshTabContent(
     groups: [
       {
         ...viewGroup,
-        title: discretization === "fdm" ? "Grid" : "Mesh / Grid",
+        title: "Mesh",
         actions: viewGroup.actions
           .map((action) => {
             if (action.id === "mesh-inspector") {
               return {
                 ...action,
                 id: "mesh.open-overview",
-                label: discretization === "fdm" ? "Grid overview" : "Overview",
+                label: "Mesh overview",
                 menu: [
                   {
                     type: "item" as const,
@@ -1072,7 +1072,7 @@ function buildMeshTabContent(
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
   if (discretization !== "fem") {
-    return buildNonFemMeshTabContent(content, discretization);
+    return buildNonFemMeshTabContent(content);
   }
 
   const status = meshBuildStatus(context);
@@ -3230,6 +3230,12 @@ function buildSelectedVisualizationGroup(
 ): RibbonTabContent["groups"][number] {
   const { selection, visualizationSnapshot } = context;
   const target = resolveRibbonVisualizationTarget(context);
+  const targetCapabilities = target
+    ? visualizationTargetCapabilities(target)
+    : null;
+  const isAirboxLikeTarget =
+    target?.kind === "airbox" ||
+    (target ? isFdmUniverseOutsideSupportTarget(target) : false);
   const inheritedRegionSettings =
     target?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({
@@ -3351,7 +3357,7 @@ function buildSelectedVisualizationGroup(
                 ? visualizationTargetCommandInput(target, targetQuantityPatch(value))
                 : value,
           },
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected-texture:visible",
             label: "Surface on/off",
@@ -3360,7 +3366,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-surface-visible",
             commandInput: (checked: boolean) => checked,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "radio-group",
             id: "selected-texture:surface-coloring",
             label: "Color source",
@@ -3373,7 +3379,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-surface-color-source",
             commandInput: (value: unknown) => value,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "color",
             id: "selected-texture:solid-color",
             label: "Solid color",
@@ -3385,7 +3391,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-shader-mono-color",
             commandInput: (value: unknown) => value,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "status",
             id: "selected-texture:field-status",
             label: "Field status",
@@ -3512,10 +3518,9 @@ function buildSelectedVisualizationGroup(
             label: "Render mode",
             value: selectedRenderMode,
             disabled: !enabled || passControlsDisabled,
-            items: target?.kind === "airbox"
+            items: isAirboxLikeTarget
               ? [
                   { value: "wireframe", label: "Wireframe" },
-                  { value: "points", label: "Points" },
                   { value: "off", label: "Off" },
                 ]
               : SELECTED_RENDER_ITEMS.map((item) => ({ ...item })),
@@ -3534,7 +3539,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-geometry-scope",
             commandInput: (value: unknown) => value,
           },
-          ...(target?.kind === "airbox" ? [] : [{
+            ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected:wireframe",
             label: "Wireframe on/off",
@@ -3571,7 +3576,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-wireframe-opacity-percent",
             commandInput: (value: unknown) => value,
           },
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected:frame",
             label: "Frame on/off",
@@ -3580,7 +3585,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-bounds-visible",
             commandInput: (checked: boolean) => checked,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected:points",
             label: "Points on/off",
@@ -3589,18 +3594,20 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-points-visible",
             commandInput: (checked: boolean) => checked,
           } as RibbonMenuNode]),
-          {
-            type: "color",
-            id: "selected:point-color",
-            label: "Point color",
-            value: settings?.pointColor ?? targetDefaults.pointColor,
-            disabled:
-              !enabled ||
-              passControlsDisabled ||
-              !effectiveSettings?.pointsVisible,
-            commandId: "visualization.target.set-point-color",
-            commandInput: (value: unknown) => value,
-          },
+          ...(targetCapabilities?.supportsPoints === false
+            ? []
+            : [{
+                type: "color",
+                id: "selected:point-color",
+                label: "Point color",
+                value: settings?.pointColor ?? targetDefaults.pointColor,
+                disabled:
+                  !enabled ||
+                  passControlsDisabled ||
+                  !effectiveSettings?.pointsVisible,
+                commandId: "visualization.target.set-point-color",
+                commandInput: (value: unknown) => value,
+              } as RibbonMenuNode]),
           {
             type: "item",
             id: "selected:clear",

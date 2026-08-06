@@ -2,8 +2,8 @@
   "measurements": [],
   "preCanvasErrorBoundaryProof": {
     "canvasCount": 0,
-    "componentStackBytes": 6083,
-    "errorStackBytes": 988,
+    "componentStackBytes": 6057,
+    "errorStackBytes": 990,
     "message": "Maximum update depth exceeded (viewport audit injection)",
     "retryVisible": true
   },
@@ -18,6 +18,8 @@
       "Scope": "Universe boundary; not an Airbox or unassigned mesh target"
     },
     "boundaryFacesInspectorVisible": true,
+    "canonicalAirboxExplorerNodeCount": 1,
+    "leakedAirboxSegmentNodeCount": 0,
     "outerBoundaryUnassignedNodeCount": 0,
     "selectedNodeIds": [
       "model:airbox",
@@ -25,8 +27,8 @@
       "model:object:semantic-magnet"
     ],
     "webgl": {
-      "drawingBufferHeight": 483,
-      "drawingBufferWidth": 731,
+      "drawingBufferHeight": 478,
+      "drawingBufferWidth": 617,
       "isContextLost": false
     }
   }

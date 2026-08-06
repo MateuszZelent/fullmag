@@ -102,7 +102,10 @@ pub(crate) fn grid_certificate_artifacts(plan: &ExecutionPlanIR) -> Vec<Auxiliar
 ///
 /// The numeric mask is intentionally kept out of thin JSON metadata.  The
 /// companion JSON document contains only the grid/legend identity needed to
-/// decode and scope the binary payload.
+/// decode and scope the binary payload. Multilayer FDM deliberately returns
+/// no artifact: its independent native grids cannot be truthfully encoded in
+/// the one-grid FMRM contract, and publishing a synthetic all-active mask
+/// would corrupt object/region ownership.
 pub(crate) fn region_membership_artifacts(
     plan: &ExecutionPlanIR,
 ) -> Result<Vec<AuxiliaryArtifact>, String> {
@@ -170,6 +173,7 @@ pub(crate) fn region_membership_artifacts(
     let descriptor = serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": "fdm_region_membership.v2",
         "binary_path": "mesh/fdm_region_membership.v2.bin",
+        "domain_generation_id": certificate.grid_fingerprint,
         "grid_fingerprint": certificate.grid_fingerprint,
         "region_legend_fingerprint": certificate.region_legend_fingerprint,
         "origin_m": certificate.origin_m,

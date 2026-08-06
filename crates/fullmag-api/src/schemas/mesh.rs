@@ -933,6 +933,9 @@ pub struct MeshRegionMembershipResource {
     /// `current` applies only to certified mesh membership; `preview` is analytic projection.
     pub freshness: String,
     pub realization: String,
+    /// Canonical scene-object owner. Together with `region_id` this is the
+    /// stable authored-region identity.
+    pub owner_object_id: String,
     pub region_id: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -946,12 +949,19 @@ pub struct MeshRegionMembershipResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshUnresolvedRegionResource {
+    /// Canonical scene-object owner. Region ids are not globally unique.
+    pub owner_object_id: String,
+    pub region_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct MeshRegionMembershipListResource {
     pub mesh_id: String,
     pub mesh_revision: u64,
     pub memberships: Vec<MeshRegionMembershipResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unresolved_region_ids: Vec<String>,
+    pub unresolved_regions: Vec<MeshUnresolvedRegionResource>,
 }
 
 /// Thin descriptor for realized FDM cell membership. The mask itself is kept
@@ -991,6 +1001,7 @@ pub struct FdmRegionMembershipResource {
     pub region_membership_revision: u64,
     pub freshness: String,
     pub binary_path: String,
+    pub domain_generation_id: String,
     pub grid_fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region_legend_fingerprint: Option<String>,

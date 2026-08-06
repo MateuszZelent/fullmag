@@ -11,6 +11,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   createPrimitiveObjectGeometry,
   releasePrimitiveObjectGeometry,
+  resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
@@ -63,8 +64,10 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       source.indexOf("function PrimitiveObjectGizmo"),
     );
 
-    expect(primitiveSurfaceSource).toContain("settings.primitiveMonoColor");
+    expect(primitiveSurfaceSource).toContain("renderSettings.primitiveMonoColor");
     expect(primitiveSurfaceSource).toContain("renderPlan.primitive.opacity");
+    expect(primitiveSurfaceSource).toContain("renderPlan.points.visible");
+    expect(primitiveSurfaceSource).toContain("pointColorFromSettings");
     expect(primitiveSurfaceSource).not.toContain("fieldModel");
     expect(primitiveSurfaceSource).not.toContain("scalarColors");
     expect(primitiveSurfaceSource).not.toContain("magnetizationTexturePreview");
@@ -237,5 +240,44 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("uses a field-free primitive fill for a requested shaded pre-mesh pass", () => {
+    const settings = resolvePrimitiveObjectRenderSettings(
+      primitiveObject("box"),
+      { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: true },
+    );
+
+    expect(settings.primitiveVisible).toBe(true);
+    expect(settings.shaderVisible).toBe(true);
+  });
+
+  it("does not invent a primitive fill for wireframe-only or mesh-ready passes", () => {
+    expect(
+      resolvePrimitiveObjectRenderSettings(
+        primitiveObject("box"),
+        { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: false, wireframeVisible: true },
+      ).primitiveVisible,
+    ).toBe(false);
+    expect(
+      resolvePrimitiveObjectRenderSettings(
+        { ...primitiveObject("box"), meshState: "mesh-ready" },
+        { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: true },
+      ).primitiveVisible,
+    ).toBe(false);
+  });
+
+  it("renders a primitive-only points pass without a field payload", () => {
+    expect(
+      shouldRenderPrimitiveObject(
+        primitiveObject("box"),
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          pointsVisible: true,
+          shaderVisible: false,
+          wireframeVisible: false,
+        },
+      ),
+    ).toBe(true);
   });
 });

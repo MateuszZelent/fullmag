@@ -82,6 +82,20 @@ function makeKernel(): KernelApi {
 }
 
 describe("selectExplorerNode", () => {
+  it("does not select a semantic grouping root marked nonselectable", () => {
+    const kernel = makeKernel();
+
+    selectExplorerNode(kernel, {
+      id: "model:objects",
+      kind: "objects.root",
+      label: "Objects",
+      parentId: "model:session",
+      selectable: false,
+    }, "explorer");
+
+    expect(kernel.selection.get().nodeId).toBeNull();
+  });
+
   it("writes only selectedSeriesIds for a pinned Quick Chart selection", () => {
     const kernel = makeKernel();
     const node = {
@@ -201,14 +215,15 @@ describe("selectExplorerNode", () => {
     ["mesh.grid.mask", "model:mesh:mask", "mask"],
     ["mesh.grid.provenance", "model:mesh:provenance", "provenance"],
     ["mesh.grid.region", "model:mesh:region:core", "region"],
-    ["mesh.grid.universe-outside-support", "model:mesh:outside-support", "universe-outside-support"],
+    ["mesh.grid.universe-outside-support", "model:universe:grid:outside-support", "universe-outside-support"],
   ] as const)("maps %s to the canonical FDM domain target", (kind, id, scope) => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
       id,
       kind,
       label: kind,
-      parentId: "model:mesh",
+      parentId:
+        scope === "universe-outside-support" ? "model:universe:grid" : "model:mesh",
       ...(kind === "mesh.grid.region" ? { regionId: "region:core" } : {}),
     };
 
@@ -224,6 +239,59 @@ describe("selectExplorerNode", () => {
         scope === "universe-outside-support"
           ? "fdm-universe-outside-support"
           : "fdm-domain",
+    });
+  });
+
+  it("keeps the shared FDM Airbox visualization child on the structured-grid target", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      visualizationTargetId: "fdm-universe-outside-support",
+    }, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "airbox.visualization",
+      nodeId: "model:airbox:visualization",
+      ref: {
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-universe-outside-support",
+      },
+    });
+  });
+
+  it("keeps the shared FDM Airbox root on the outside-support target", () => {
+    const domainMeta: DomainMetaResource = {
+      bounds: { min: [0, 0, 0], max: [2, 1, 1] },
+      coordinate_system: "cartesian",
+      counts: { cells: 2 },
+      dimension: 3,
+      discretization: "fdm",
+      domain_id: "domain:fdm",
+      generation_id: "generation-airbox",
+      grid: { origin: [0, 0, 0], shape: [2, 1, 1], spacing: [1, 1, 1] },
+      units: { length: "m" },
+    };
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainPresentation: buildDomainPresentation({
+        domainMeta,
+        universeOutsideMagneticSupport: {
+          bounds: { min: [0, 0, 0], max: [2, 1, 1] },
+          reason: "explicit test universe",
+        },
+      }),
+    }));
+    const root = nodes.find((node) => node.id === "model:airbox");
+    expect(root).toBeDefined();
+
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, root!, "explorer");
+
+    expect(kernel.selection.get().ref).toMatchObject({
+      type: "airbox",
+      visualizationTargetId: "fdm-universe-outside-support",
     });
   });
 
@@ -244,6 +312,7 @@ describe("selectExplorerNode", () => {
       cell_count: 2,
       cell_m: [1, 1, 1],
       counts: [2, 1, 1],
+      domain_generation_id: "generation-1",
       encoding: "u32le",
       freshness: "current",
       grid_fingerprint: "grid-1",
@@ -275,6 +344,7 @@ describe("selectExplorerNode", () => {
 
     expect(kernel.selection.get().ref).toMatchObject({
       kind: "mesh.grid.region",
+      objectId: "object:core",
       regionId: "region:core",
       scope: "region",
       type: "fdm-domain",
@@ -387,6 +457,32 @@ describe("selectExplorerNode", () => {
         nodeId: id,
         type: "airbox",
         visualizationTargetId: "airbox",
+      },
+    });
+  });
+
+  it("keeps the shared Airbox visualization kind while selecting the FDM outside-support target", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      visualizationTargetId: "fdm-universe-outside-support",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "airbox.visualization",
+      label: "Visualization",
+      nodeId: "model:airbox:visualization",
+      ref: {
+        kind: "mesh.grid.universe-outside-support",
+        nodeId: "model:airbox:visualization",
+        scope: "universe-outside-support",
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-universe-outside-support",
       },
     });
   });

@@ -9,6 +9,7 @@ import {
   buildFdmFieldIndexResolver,
   type FdmFieldIndexingResult,
 } from "../model/fdmFieldIndexing";
+import { sampleFdmDisplayCellIndices } from "@/shared/domain/mesh/fdmDisplaySampling";
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const FDM_VECTOR_SEGMENT_STRIDE = 7;
@@ -21,8 +22,8 @@ export interface FdmCuboidInstanceModel {
   centers: Float32Array;
   count: number;
   gridShape: [number, number, number];
-  /** Realized numeric region IDs for sampled cells; null means authored grid fallback. */
-  regionIds: Uint32Array | null;
+  /** Realized numeric region IDs for sampled cells. */
+  regionIds: Uint32Array;
 }
 
 export interface FdmVoxelTopographyOptions {
@@ -31,19 +32,28 @@ export interface FdmVoxelTopographyOptions {
   enabled: boolean;
 }
 
+/**
+ * The structured FDM lattice has one canonical membership artifact.  A
+ * viewport pass must select cells from that artifact rather than treating the
+ * authored universe as magnetic material.
+ */
+export type FdmCuboidCellSelection = "all" | "active" | "inactive";
+
 export interface FdmCuboidInstanceModelOptions {
+  cellSelection: FdmCuboidCellSelection;
   fieldVector?: DecodedFieldVector | null;
-  realizedRegionIds?: Uint32Array | null;
+  realizedRegionIds: Uint32Array | null;
   voxelFillRatio?: number;
   voxelMagnitudeThreshold?: number;
   voxelTopography?: FdmVoxelTopographyOptions;
 }
 
 export interface FdmCuboidBuildRequest {
+  cellSelection: FdmCuboidCellSelection;
   domain: FdmGridRenderDomain | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
-  realizedRegionIds?: Uint32Array | null;
+  realizedRegionIds: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorScale: number;
@@ -54,6 +64,8 @@ export interface FdmCuboidBuildRequest {
 
 export interface FdmCuboidBuildResult {
   model: FdmCuboidInstanceModel | null;
+  /** Cell ordinals represented by the vector segment stream, in the same order. */
+  vectorCellIndices: Uint32Array | null;
   vectorSegments: Float32Array | null;
 }
 
@@ -61,6 +73,7 @@ export function buildViewport3DFdmCuboid(
   request: FdmCuboidBuildRequest,
 ): FdmCuboidBuildResult {
   const model = buildFdmCuboidInstanceModel(request.domain, {
+    cellSelection: request.cellSelection,
     fieldVector: request.modelFieldVector,
     realizedRegionIds: request.realizedRegionIds,
     voxelFillRatio: request.voxelFillRatio,
@@ -74,14 +87,22 @@ export function buildViewport3DFdmCuboid(
     request.maxVectorGlyphs,
     { anchorMode: request.vectorAnchorMode },
   );
-  return { model, vectorSegments };
+  const vectorCellIndices = buildFdmVectorSampledCellIndices(
+    model,
+    request.vectorField,
+    request.maxVectorGlyphs,
+  );
+  return { model, vectorCellIndices, vectorSegments };
 }
 
 export function buildFdmCuboidInstanceModel(
   domain: FdmGridRenderDomain | null,
-  options: FdmCuboidInstanceModelOptions = {},
+  options: FdmCuboidInstanceModelOptions,
 ): FdmCuboidInstanceModel | null {
   if (!domain || domain.displayCellCount <= 0 || domain.totalCells <= 0) {
+    return null;
+  }
+  if (!isFdmCuboidCellSelection(options.cellSelection)) {
     return null;
   }
 
@@ -93,43 +114,39 @@ export function buildFdmCuboidInstanceModel(
   const topography = normalizeVoxelTopography(options.voxelTopography);
   const gridCells = Math.max(nx * ny * nz, 1);
   const totalCells = Math.min(domain.totalCells, gridCells);
-  const realizedMembershipRequested = options.realizedRegionIds !== undefined;
-  if (realizedMembershipRequested && options.realizedRegionIds === null) {
-    return null;
-  }
   const realizedRegionIds = validRealizedRegionIds(
     options.realizedRegionIds,
     totalCells,
   );
-  if (realizedMembershipRequested && !realizedRegionIds) {
+  if (!realizedRegionIds) {
     return null;
   }
-  const realizedCellIndices = realizedRegionIds
-    ? collectRealizedCellIndices(realizedRegionIds)
-    : null;
   const fieldIndexing = options.fieldVector
     ? buildFdmFieldIndexResolver(options.fieldVector, totalCells)
     : null;
-  const candidateCount = Math.min(
-    domain.displayCellCount,
-    realizedCellIndices?.length ?? totalCells,
-  );
-  if (candidateCount <= 0) return null;
-  const sampledCellIndices = new Uint32Array(candidateCount);
+  const displayCellIndices = sampleFdmDisplayCellIndicesWithMinimumMembership({
+    cellSelection: options.cellSelection,
+    displayCellCount: domain.displayCellCount,
+    fieldIndexing,
+    fieldVector: options.fieldVector,
+    realizedRegionIds,
+    threshold,
+    totalCells,
+  });
+  if (displayCellIndices.length <= 0) return null;
+  const sampledCellIndices = new Uint32Array(displayCellIndices.length);
   let sampledCellCount = 0;
 
-  for (let instance = 0; instance < candidateCount; instance += 1) {
-    const cellIndex = realizedCellIndices
-      ? (realizedCellIndices[
-          Math.min(
-            realizedCellIndices.length - 1,
-            Math.floor((instance * realizedCellIndices.length) / candidateCount),
-          )
-        ] ?? 0)
-      : Math.min(
-          totalCells - 1,
-          Math.floor((instance * totalCells) / candidateCount),
-        );
+  for (const cellIndex of displayCellIndices) {
+    const isInactive =
+      (realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) ===
+      FMRM_INACTIVE_REGION_ID;
+    if (
+      (options.cellSelection === "active" && isInactive) ||
+      (options.cellSelection === "inactive" && !isInactive)
+    ) {
+      continue;
+    }
     if (
       !cellPassesMagnitudeThreshold(
         options.fieldVector,
@@ -149,14 +166,12 @@ export function buildFdmCuboidInstanceModel(
 
   const centers = new Float32Array(count * 3);
   const cellIndices = new Uint32Array(count);
-  const sampledRegionIds = realizedRegionIds ? new Uint32Array(count) : null;
+  const sampledRegionIds = new Uint32Array(count);
 
   for (let instance = 0; instance < count; instance += 1) {
     const cellIndex = sampledCellIndices[instance] ?? 0;
     cellIndices[instance] = cellIndex;
-    if (sampledRegionIds) {
-      sampledRegionIds[instance] = realizedRegionIds?.[cellIndex] ?? 0;
-    }
+    sampledRegionIds[instance] = realizedRegionIds[cellIndex] ?? 0;
     const ix = cellIndex % nx;
     const iy = Math.floor(cellIndex / nx) % ny;
     const iz = Math.floor(cellIndex / (nx * ny)) % nz;
@@ -190,6 +205,110 @@ export function buildFdmCuboidInstanceModel(
   };
 }
 
+function sampleFdmDisplayCellIndicesWithMinimumMembership({
+  cellSelection,
+  displayCellCount,
+  fieldIndexing,
+  fieldVector,
+  realizedRegionIds,
+  threshold,
+  totalCells,
+}: {
+  cellSelection: FdmCuboidCellSelection;
+  displayCellCount: number;
+  fieldIndexing: FdmFieldIndexingResult | null;
+  fieldVector: DecodedFieldVector | null | undefined;
+  realizedRegionIds: Uint32Array;
+  threshold: number;
+  totalCells: number;
+}): Uint32Array {
+  const budget = Math.min(Math.max(0, Math.floor(displayCellCount)), totalCells);
+  if (budget <= 0) return new Uint32Array();
+  const baseSample = sampleFdmDisplayCellIndices(totalCells, budget);
+
+  const firstCellByRegion = new Map<number, number>();
+  for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+    const regionId = realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
+    if (!cellMatchesSelection(regionId, cellSelection)) continue;
+    if (
+      !cellPassesMagnitudeThreshold(
+        fieldVector,
+        cellIndex,
+        threshold,
+        fieldIndexing,
+      )
+    ) {
+      continue;
+    }
+    if (!firstCellByRegion.has(regionId)) {
+      firstCellByRegion.set(regionId, cellIndex);
+    }
+  }
+  if (firstCellByRegion.size === 0) return new Uint32Array();
+
+  const selected = new Set<number>();
+  const selectedCountByRegion = new Map<number, number>();
+  for (const cellIndex of baseSample) {
+    const regionId = realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
+    if (!cellMatchesSelection(regionId, cellSelection)) continue;
+    if (
+      !cellPassesMagnitudeThreshold(
+        fieldVector,
+        cellIndex,
+        threshold,
+        fieldIndexing,
+      )
+    ) {
+      continue;
+    }
+    selected.add(cellIndex);
+    selectedCountByRegion.set(
+      regionId,
+      (selectedCountByRegion.get(regionId) ?? 0) + 1,
+    );
+  }
+  for (const [regionId, cellIndex] of [...firstCellByRegion].toSorted(
+    ([left], [right]) => left - right,
+  )) {
+    if ((selectedCountByRegion.get(regionId) ?? 0) > 0) continue;
+    if (selected.size < budget) {
+      selected.add(cellIndex);
+      selectedCountByRegion.set(regionId, 1);
+      continue;
+    }
+    const replacement = [...selected]
+      .toSorted((left, right) => right - left)
+      .find((selectedCell) => {
+        const selectedRegion =
+          realizedRegionIds[selectedCell] ?? FMRM_INACTIVE_REGION_ID;
+        return (selectedCountByRegion.get(selectedRegion) ?? 0) > 1;
+      });
+    if (replacement === undefined) continue;
+    const replacedRegion =
+      realizedRegionIds[replacement] ?? FMRM_INACTIVE_REGION_ID;
+    selected.delete(replacement);
+    selectedCountByRegion.set(
+      replacedRegion,
+      (selectedCountByRegion.get(replacedRegion) ?? 1) - 1,
+    );
+    selected.add(cellIndex);
+    selectedCountByRegion.set(regionId, 1);
+  }
+  return Uint32Array.from([...selected].toSorted((left, right) => left - right));
+}
+
+function cellMatchesSelection(
+  regionId: number,
+  selection: FdmCuboidCellSelection,
+): boolean {
+  const inactive = regionId === FMRM_INACTIVE_REGION_ID;
+  return (
+    selection === "all" ||
+    (selection === "active" && !inactive) ||
+    (selection === "inactive" && inactive)
+  );
+}
+
 function validRealizedRegionIds(
   regionIds: Uint32Array | null | undefined,
   cellCount: number,
@@ -197,23 +316,12 @@ function validRealizedRegionIds(
   return regionIds && regionIds.length === cellCount ? regionIds : null;
 }
 
-function collectRealizedCellIndices(regionIds: Uint32Array): Uint32Array {
-  const activeIndices = new Uint32Array(
-    regionIds.reduce(
-      (count, regionId) =>
-        count + (regionId !== FMRM_INACTIVE_REGION_ID ? 1 : 0),
-      0,
-    ),
+function isFdmCuboidCellSelection(
+  selection: unknown,
+): selection is FdmCuboidCellSelection {
+  return (
+    selection === "all" || selection === "active" || selection === "inactive"
   );
-  let writeOffset = 0;
-  for (let cellIndex = 0; cellIndex < regionIds.length; cellIndex += 1) {
-    if ((regionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) === FMRM_INACTIVE_REGION_ID) {
-      continue;
-    }
-    activeIndices[writeOffset] = cellIndex;
-    writeOffset += 1;
-  }
-  return activeIndices;
 }
 
 /**
@@ -224,51 +332,90 @@ function collectRealizedCellIndices(regionIds: Uint32Array): Uint32Array {
 export function buildFdmPointPositions(
   model: FdmCuboidInstanceModel | null | undefined,
   geometryScope: "surface" | "full",
+  instanceOrdinals?: Uint32Array | null,
 ): Float32Array | null {
   if (!model || model.count <= 0) return null;
-  if (geometryScope === "full") return model.centers;
+  if (geometryScope === "full" && !instanceOrdinals) return model.centers;
 
-  const [nx, ny, nz] = model.gridShape;
-  let count = 0;
-  for (let instance = 0; instance < model.count; instance += 1) {
-    if (isFdmSurfaceCell(model.cellIndices[instance] ?? 0, nx, ny, nz)) {
-      count += 1;
-    }
-  }
+  const scopedInstances = resolveFdmGeometryScopeInstanceOrdinals(
+    model,
+    geometryScope,
+    instanceOrdinals,
+  );
+  const count = scopedInstances.length;
   if (count <= 0) return null;
 
   const positions = new Float32Array(count * 3);
-  let writeOffset = 0;
-  for (let instance = 0; instance < model.count; instance += 1) {
-    if (!isFdmSurfaceCell(model.cellIndices[instance] ?? 0, nx, ny, nz)) {
-      continue;
-    }
-    const sourceOffset = instance * 3;
+  for (let instance = 0; instance < scopedInstances.length; instance += 1) {
+    const sourceInstance = scopedInstances[instance] ?? 0;
+    const sourceOffset = sourceInstance * 3;
+    const writeOffset = instance * 3;
     positions[writeOffset] = model.centers[sourceOffset] ?? 0;
     positions[writeOffset + 1] = model.centers[sourceOffset + 1] ?? 0;
     positions[writeOffset + 2] = model.centers[sourceOffset + 2] ?? 0;
-    writeOffset += 3;
   }
   return positions;
 }
 
-function isFdmSurfaceCell(
+export function resolveFdmGeometryScopeInstanceOrdinals(
+  model: FdmCuboidInstanceModel,
+  geometryScope: "surface" | "full",
+  instanceOrdinals?: Uint32Array | null,
+): Uint32Array {
+  const candidateCount = instanceOrdinals?.length ?? model.count;
+  const candidates = instanceOrdinals
+    ? instanceOrdinals
+    : Uint32Array.from({ length: model.count }, (_, index) => index);
+  if (geometryScope === "full" || candidateCount <= 1) return candidates;
+
+  const targetCells = new Set<number>();
+  for (let index = 0; index < candidateCount; index += 1) {
+    const sourceInstance = candidates[index];
+    if (sourceInstance === undefined || sourceInstance >= model.count) continue;
+    targetCells.add(model.cellIndices[sourceInstance] ?? -1);
+  }
+  const surfaceInstances = new Uint32Array(candidateCount);
+  let surfaceCount = 0;
+  for (let index = 0; index < candidateCount; index += 1) {
+    const sourceInstance = candidates[index];
+    if (sourceInstance === undefined || sourceInstance >= model.count) continue;
+    if (
+      isFdmTargetSurfaceCell(
+        model.cellIndices[sourceInstance] ?? -1,
+        model.gridShape,
+        targetCells,
+      )
+    ) {
+      surfaceInstances[surfaceCount] = sourceInstance;
+      surfaceCount += 1;
+    }
+  }
+  if (surfaceCount > 0) return surfaceInstances.slice(0, surfaceCount);
+  const fallback = candidates[0];
+  return fallback === undefined ? new Uint32Array() : Uint32Array.of(fallback);
+}
+
+function isFdmTargetSurfaceCell(
   cellIndex: number,
-  nx: number,
-  ny: number,
-  nz: number,
+  [nx, ny, nz]: readonly [number, number, number],
+  targetCells: ReadonlySet<number>,
 ): boolean {
+  if (cellIndex < 0) return false;
   const ix = cellIndex % nx;
   const iy = Math.floor(cellIndex / nx) % ny;
   const iz = Math.floor(cellIndex / (nx * ny)) % nz;
-  return (
-    ix === 0 ||
-    iy === 0 ||
-    iz === 0 ||
-    ix === nx - 1 ||
-    iy === ny - 1 ||
-    iz === nz - 1
-  );
+  if (ix === 0 || iy === 0 || iz === 0 || ix === nx - 1 || iy === ny - 1 || iz === nz - 1) {
+    return true;
+  }
+  const xy = nx * ny;
+  return ![
+    cellIndex - 1,
+    cellIndex + 1,
+    cellIndex - nx,
+    cellIndex + nx,
+    cellIndex - xy,
+    cellIndex + xy,
+  ].every((neighbor) => targetCells.has(neighbor));
 }
 
 export function buildFdmVectorSegmentsUncached(
@@ -276,7 +423,11 @@ export function buildFdmVectorSegmentsUncached(
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
   maxVectors: number,
-  options: { anchorMode?: Viewport3DVectorAnchorMode } = {},
+  options: {
+    anchorMode?: Viewport3DVectorAnchorMode;
+    geometryScope?: "surface" | "full";
+    instanceOrdinals?: Uint32Array | null;
+  } = {},
 ): Float32Array | null {
   if (
     !model ||
@@ -288,29 +439,26 @@ export function buildFdmVectorSegmentsUncached(
     return null;
   }
 
+  const sampledInstances = resolveFdmVectorSampledInstances(
+    model,
+    fieldVector,
+    maxVectors,
+    options.instanceOrdinals,
+    options.geometryScope,
+  );
+  if (!sampledInstances) return null;
+  const vectorCount = sampledInstances.length;
+  const anchorMode = options.anchorMode ?? "center";
+  if (vectorCount <= 0) return null;
   const fieldIndexing = buildFdmFieldIndexResolver(
     fieldVector,
     model.gridShape[0] * model.gridShape[1] * model.gridShape[2],
   );
   if (fieldIndexing.status !== "compatible") return null;
 
-  const validInstances: number[] = [];
-  for (let instance = 0; instance < model.count; instance += 1) {
-    const cellOrdinal = model.cellIndices[instance] ?? -1;
-    if (fieldIndexing.resolve(cellOrdinal) !== null) {
-      validInstances.push(instance);
-    }
-  }
-  const vectorCount = Math.min(validInstances.length, maxVectors);
-  const anchorMode = options.anchorMode ?? "center";
-  if (vectorCount <= 0) return null;
-
-  const stride = Math.max(1, Math.floor(validInstances.length / vectorCount));
-
   let maxMagnitude = 0;
   for (let vector = 0; vector < vectorCount; vector += 1) {
-    const instance =
-      validInstances[Math.min(validInstances.length - 1, vector * stride)] ?? 0;
+    const instance = sampledInstances[vector] ?? 0;
     const cellOrdinal = model.cellIndices[instance] ?? -1;
     const fieldIndex = fieldIndexing.resolve(cellOrdinal);
     if (fieldIndex === null) continue;
@@ -328,8 +476,7 @@ export function buildFdmVectorSegmentsUncached(
   const segments = new Float32Array(vectorCount * FDM_VECTOR_SEGMENT_STRIDE);
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
-    const instance =
-      validInstances[Math.min(validInstances.length - 1, vector * stride)] ?? 0;
+    const instance = sampledInstances[vector] ?? 0;
     const cellOrdinal = model.cellIndices[instance] ?? -1;
     const fieldIndex = fieldIndexing.resolve(cellOrdinal);
     if (fieldIndex === null) continue;
@@ -369,6 +516,78 @@ export function buildFdmVectorSegmentsUncached(
   return segments;
 }
 
+/** Cell ordinals represented by the sampled FDM vector stream. */
+export function buildFdmVectorSampledCellIndices(
+  model: FdmCuboidInstanceModel | null,
+  fieldVector: DecodedFieldVector | null | undefined,
+  maxVectors: number,
+  instanceOrdinals?: Uint32Array | null,
+  geometryScope: "surface" | "full" = "full",
+): Uint32Array | null {
+  const sampledInstances = resolveFdmVectorSampledInstances(
+    model,
+    fieldVector,
+    maxVectors,
+    instanceOrdinals,
+    geometryScope,
+  );
+  if (!sampledInstances || !model) return null;
+
+  const cellIndices = new Uint32Array(sampledInstances.length);
+  for (let index = 0; index < sampledInstances.length; index += 1) {
+    cellIndices[index] = model.cellIndices[sampledInstances[index] ?? 0] ?? 0;
+  }
+  return cellIndices;
+}
+
+function resolveFdmVectorSampledInstances(
+  model: FdmCuboidInstanceModel | null,
+  fieldVector: DecodedFieldVector | null | undefined,
+  maxVectors: number,
+  instanceOrdinals?: Uint32Array | null,
+  geometryScope: "surface" | "full" = "full",
+): Uint32Array | null {
+  if (
+    !model ||
+    !fieldVector ||
+    fieldVector.nComp < 3 ||
+    fieldVector.pointCount === 0 ||
+    maxVectors <= 0
+  ) {
+    return null;
+  }
+
+  const fieldIndexing = buildFdmFieldIndexResolver(
+    fieldVector,
+    model.gridShape[0] * model.gridShape[1] * model.gridShape[2],
+  );
+  if (fieldIndexing.status !== "compatible") return null;
+
+  const scopedInstances = resolveFdmGeometryScopeInstanceOrdinals(
+    model,
+    geometryScope,
+    instanceOrdinals,
+  );
+  const validInstances: number[] = [];
+  for (const instance of scopedInstances) {
+    if (instance >= model.count) continue;
+    const cellOrdinal = model.cellIndices[instance] ?? -1;
+    if (fieldIndexing.resolve(cellOrdinal) !== null) {
+      validInstances.push(instance);
+    }
+  }
+  const vectorCount = Math.min(validInstances.length, Math.floor(maxVectors));
+  if (vectorCount <= 0) return null;
+
+  const stride = Math.max(1, Math.floor(validInstances.length / vectorCount));
+  const sampledInstances = new Uint32Array(vectorCount);
+  for (let vector = 0; vector < vectorCount; vector += 1) {
+    sampledInstances[vector] =
+      validInstances[Math.min(validInstances.length - 1, vector * stride)] ?? 0;
+  }
+  return sampledInstances;
+}
+
 export function resolveFdmVectorGlyphScale(
   model: FdmCuboidInstanceModel | null,
   requestedScale: number,
@@ -403,6 +622,7 @@ export function estimateFdmCuboidBuildOutputBytes(
   return (
     modelCount * 3 * Float32Array.BYTES_PER_ELEMENT +
     modelCount * Uint32Array.BYTES_PER_ELEMENT +
+    vectorCount * Uint32Array.BYTES_PER_ELEMENT +
     vectorCount * FDM_VECTOR_SEGMENT_STRIDE * Float32Array.BYTES_PER_ELEMENT
   );
 }
@@ -414,6 +634,7 @@ export function transferablesForFdmCuboidBuildResult(
   addArrayBufferTransferable(transferables, result.model?.cellIndices.buffer);
   addArrayBufferTransferable(transferables, result.model?.centers.buffer);
   addArrayBufferTransferable(transferables, result.model?.regionIds?.buffer);
+  addArrayBufferTransferable(transferables, result.vectorCellIndices?.buffer);
   addArrayBufferTransferable(transferables, result.vectorSegments?.buffer);
   return transferables;
 }

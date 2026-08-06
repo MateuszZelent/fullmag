@@ -183,7 +183,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     state: draftState,
   });
 
-  const membership = useMeshRegionMembershipResource(model.regionId, {
+  const membership = useMeshRegionMembershipResource(model.objectId, model.regionId, {
     enabled:
       meshLane === "fem" &&
       model.mode === "committed" &&

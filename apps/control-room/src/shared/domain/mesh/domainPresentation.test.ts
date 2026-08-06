@@ -39,6 +39,7 @@ function membership(
     cell_count: 8,
     cell_m: [2, 1, 0.5],
     counts: [2, 2, 2],
+    domain_generation_id: "generation-7",
     encoding: "u32le",
     freshness: "current",
     grid_fingerprint: "grid-fingerprint-7",
@@ -94,6 +95,68 @@ function topology(): DecodedTopology {
 }
 
 describe("domain presentation boundary", () => {
+  it("derives an authored FDM Airbox role before membership materializes", async () => {
+    const domainPresentationModule = (await import("./domainPresentation")) as Record<string, unknown>;
+    const deriveRole = domainPresentationModule["deriveAuthoredFdmUniverseOutsideMagneticSupport"] as
+      | ((input: {
+          domainBounds: DomainMetaResource["bounds"];
+          objects: readonly unknown[] | null | undefined;
+        }) => unknown)
+      | undefined;
+
+    expect(deriveRole).toBeTypeOf("function");
+    const role = deriveRole?.({
+      domainBounds: fdmMeta().bounds,
+      objects: [
+        {
+          id: "film",
+          role: "magnet",
+          geometry: {
+            bounds_max: [3, 1, 0.5],
+            bounds_min: [1, 0.5, 0.25],
+          },
+        },
+      ],
+    });
+
+    expect(role).toEqual({
+      bounds: { min: [0, 0, 0], max: [4, 2, 1] },
+      magneticSupportBounds: { min: [1, 0.5, 0.25], max: [3, 1, 0.5] },
+      reason: "authored-universe-exceeds-magnetic-support",
+    });
+  });
+
+  it("keeps an authored Airbox envelope for separated magnetic objects", async () => {
+    const domainPresentationModule = (await import("./domainPresentation")) as Record<string, unknown>;
+    const deriveRole = domainPresentationModule["deriveAuthoredFdmUniverseOutsideMagneticSupport"] as
+      | ((input: {
+          domainBounds: DomainMetaResource["bounds"];
+          objects: readonly unknown[] | null | undefined;
+        }) => { magneticSupportBounds?: DomainMetaResource["bounds"] } | null)
+      | undefined;
+
+    const role = deriveRole?.({
+      domainBounds: fdmMeta().bounds,
+      objects: [
+        {
+          id: "left",
+          role: "magnetic_object",
+          geometry: { bounds_min: [0, 0, 0], bounds_max: [1, 2, 1] },
+        },
+        {
+          id: "right",
+          role: "magnetic_object",
+          geometry: { bounds_min: [3, 0, 0], bounds_max: [4, 2, 1] },
+        },
+      ],
+    });
+
+    expect(role?.magneticSupportBounds).toEqual({
+      min: [0, 0, 0],
+      max: [4, 2, 1],
+    });
+  });
+
   it("presents an FDM authored grid without requiring a FEM manifest", () => {
     const presentation = buildDomainPresentation({
       domainMeta: fdmMeta(),
@@ -155,6 +218,30 @@ describe("domain presentation boundary", () => {
     });
   });
 
+  it("publishes an Airbox role for inactive cells inside a full support envelope", () => {
+    const presentation = buildDomainPresentation({
+      domainMeta: fdmMeta(),
+      fdmMembership: membership({
+        magnetic_support: {
+          active_cell_count: 6,
+          active_unassigned_cell_count: 0,
+          bounds_max_m: [4, 2, 1],
+          bounds_min_m: [0, 0, 0],
+          grid_fingerprint: "grid-fingerprint-7",
+          inactive_cell_count: 2,
+          semantic_role: "magnetic-support",
+        },
+      }),
+      fdmMembershipStatus: "ready",
+    });
+
+    if (!isFdmDomain(presentation)) throw new Error("expected FDM presentation");
+    expect(presentation.universeOutsideMagneticSupport).toMatchObject({
+      bounds: { min: [0, 0, 0], max: [4, 2, 1] },
+      reason: "validated-magnetic-support-with-inactive-cells",
+    });
+  });
+
   it("rejects a magnetic-support summary whose counts or bounds do not match the current domain", () => {
     const invalidSupports: Array<
       NonNullable<FdmRegionMembershipResource["magnetic_support"]>
@@ -206,6 +293,26 @@ describe("domain presentation boundary", () => {
       reason: "backend-declared-universe-outside-magnetic-support",
     });
     expect(presentation.airbox).toBeNull();
+  });
+
+  it("keeps a known authored Airbox envelope when a realized descriptor lacks a support summary", () => {
+    const presentation = buildDomainPresentation({
+      domainMeta: fdmMeta(),
+      fdmMembership: membership({ magnetic_support: null }),
+      fdmMembershipStatus: "ready",
+      universeOutsideMagneticSupport: {
+        bounds: { min: [0, 0, 0], max: [4, 2, 1] },
+        magneticSupportBounds: { min: [1, 0, 0], max: [3, 2, 1] },
+        reason: "authored-universe-exceeds-magnetic-support",
+      },
+    });
+
+    expect(presentation.resourceStatus).toBe("realized");
+    expect(presentation.magneticSupport).toBeNull();
+    expect(presentation.universeOutsideMagneticSupport).toMatchObject({
+      reason: "authored-universe-exceeds-magnetic-support",
+      magneticSupportBounds: { min: [1, 0, 0], max: [3, 2, 1] },
+    });
   });
 
   it("preserves explicit FDM resource loading, stale, and error states", () => {

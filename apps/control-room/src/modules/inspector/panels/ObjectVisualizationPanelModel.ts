@@ -41,7 +41,6 @@ import {
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
   renderModePatch,
-  surfaceColorSourceToColorMode,
   type ObjectVisualizationController,
   type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
@@ -53,6 +52,8 @@ import {
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
   type ViewportTargetRenderingPreferences,
+  isFdmUniverseOutsideSupportTarget,
+  visualizationTargetCapabilities,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   resolveVisualizationTopologyFreshness,
@@ -299,7 +300,7 @@ export function shouldShowVectorFieldColorbar(
 export function fieldMetaScopeQueryForVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
   carrier?: RegionVisualizationCarrier | null,
-): Pick<FieldMetaQuery, "scope_id" | "scope_kind"> {
+): Pick<FieldMetaQuery, "owner_object_id" | "scope_id" | "scope_kind"> {
   switch (target?.kind) {
     case "object":
       return {
@@ -317,6 +318,13 @@ export function fieldMetaScopeQueryForVisualizationTarget(
       // FEM VisualizationState scope and must never be serialized as one.
       return { scope_id: null, scope_kind: null };
     case "region":
+      if (carrier?.kind === "membership") {
+        return {
+          owner_object_id: carrier.objectId,
+          scope_id: carrier.regionId,
+          scope_kind: "region",
+        };
+      }
       if (carrier?.kind === "mesh-parts" && carrier.partIds.length === 1) {
         return { scope_id: carrier.partIds[0] ?? null, scope_kind: "part" };
       }
@@ -372,15 +380,28 @@ export function resolveObjectVisualizationTargetForLane({
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
 
-  const fdmVisualizationSelection =
+  const objectVisualizationSelection =
     selection.kind === "object.visualization" ||
     selection.kind === "object.visualization.debug" ||
     selection.kind === "object.region.visualization" ||
-    selection.kind === "object.region.visualization.debug" ||
+    selection.kind === "object.region.visualization.debug";
+  if (objectVisualizationSelection) {
+    // An FDM object is still an authored scene object. Its primitive display
+    // preferences must address the same object target used by
+    // PrimitiveObjectLayer; the structured-grid target belongs to Mesh/Grid.
+    return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
+  }
+
+  const fdmVisualizationSelection =
     selection.kind === "airbox.visualization" ||
-    selection.kind === "airbox.visualization.debug";
+    selection.kind === "airbox.visualization.debug" ||
+    selection.kind === "mesh.grid.universe-outside-support";
   if (!fdmVisualizationSelection) return null;
-  return { id: "fdm-domain", kind: "fdm-domain", label: selection.label };
+  // Airbox is a shared Explorer vocabulary.  Keep the dedicated FDM Airbox
+  // target when the selection carries it; otherwise use the magnetic grid.
+  return selectionTarget?.kind === "fdm-domain"
+    ? selectionTarget
+    : { id: "fdm-domain", kind: "fdm-domain", label: selection.label };
 }
 
 export function resolveObjectVisualizationResourceGates({
@@ -391,7 +412,7 @@ export function resolveObjectVisualizationResourceGates({
   target: VisualizationTargetRef | null;
 }): { fdm: boolean; fem: boolean } {
   return {
-    fdm: lane === "fdm" && target?.kind === "fdm-domain",
+    fdm: lane === "fdm" && target !== null,
     fem: lane === "fem" && target !== null && target.kind !== "fdm-domain",
   };
 }
@@ -669,15 +690,17 @@ const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
   scene,
+  targetObjectId,
   targetKind,
 }: {
   manifest: unknown;
   scene: unknown;
+  targetObjectId?: string | null;
   targetKind: VisualizationTargetKind;
 }): VisualizationTopologyFreshness | null {
   if (targetKind === "fdm-domain") return null;
   return scene && manifest
-    ? resolveVisualizationTopologyFreshness(scene, manifest)
+    ? resolveVisualizationTopologyFreshness(scene, manifest, { targetObjectId })
     : null;
 }
 
@@ -887,7 +910,7 @@ export function resolveVisualizationVectorBudgetRange({
   meshParts: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
-  if (target?.kind === "fdm-domain") {
+  if (structuredGridCellCount !== null && structuredGridCellCount !== undefined) {
     const cellCount = structuredGridCellCount;
     if (
       cellCount !== null &&
@@ -924,8 +947,9 @@ export function resolveVisualizationVectorBudgetRange({
   }
 
   if (carrier?.kind === "membership") {
-    const regionId = carrier.regionId;
-    const membership = memberships?.find((m) => m.region_id === regionId);
+    const membership = memberships?.find((m) =>
+      meshRegionMembershipMatchesCarrier(m, carrier),
+    );
     const nodeCount = membership?.node_indices?.length ?? 0;
     if (nodeCount <= 0) {
       return fallbackVisualizationVectorBudgetRange();
@@ -1074,18 +1098,17 @@ export function resolveRegionVisualizationCarrier({
 
   if (memberships) {
     for (const membership of memberships) {
-      if (membership.region_id === regionTarget.regionId) {
-        const hasElements = (membership.element_indices && membership.element_indices.length > 0) ||
-                            (membership.node_indices && membership.node_indices.length > 0) ||
-                            (membership.boundary_face_indices && membership.boundary_face_indices.length > 0);
-        if (hasElements) {
-          return {
-            kind: "membership",
-            objectId: regionTarget.objectId,
-            syntheticPartId: `membership:${encodeURIComponent(regionTarget.regionId)}`,
-            regionId: regionTarget.regionId,
-          };
-        }
+      if (!meshRegionMembershipMatchesTarget(membership, regionTarget)) continue;
+      const hasElements = (membership.element_indices && membership.element_indices.length > 0) ||
+                          (membership.node_indices && membership.node_indices.length > 0) ||
+                          (membership.boundary_face_indices && membership.boundary_face_indices.length > 0);
+      if (hasElements) {
+        return {
+          kind: "membership",
+          objectId: regionTarget.objectId,
+          syntheticPartId: `membership:${encodeURIComponent(regionTarget.objectId)}:${encodeURIComponent(regionTarget.regionId)}`,
+          regionId: regionTarget.regionId,
+        };
       }
     }
   }
@@ -1371,6 +1394,27 @@ export function parseRegionVisualizationTargetId(
   }
 }
 
+function meshRegionMembershipMatchesTarget(
+  membership: MeshRegionMembershipResource,
+  target: { objectId: string; regionId: string },
+): boolean {
+  return (
+    membership.region_id === target.regionId &&
+    canonicalVisualizationSceneObjectId(membership.owner_object_id) ===
+      canonicalVisualizationSceneObjectId(target.objectId)
+  );
+}
+
+function meshRegionMembershipMatchesCarrier(
+  membership: MeshRegionMembershipResource,
+  carrier: Extract<RegionVisualizationCarrier, { kind: "membership" }>,
+): boolean {
+  return meshRegionMembershipMatchesTarget(membership, {
+    objectId: carrier.objectId,
+    regionId: carrier.regionId,
+  });
+}
+
 export function resolveObjectChildRegionVisualizationTargets({
   manifestRegions,
   objectId,
@@ -1627,12 +1671,8 @@ export function buildAirboxVectorDiagnostic({
     vectorDomain === "magnetic_only" ||
     vectorDomain === "object" ||
     vectorDomain === "part";
-  const surfaceColorMode =
-    quantityCompatible && settings.visible && settings.shaderVisible
-      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-      : null;
   const sampleLimit =
-    settings.vectorsVisible && !surfaceColorMode
+    settings.vectorsVisible
       ? Math.max(0, Math.floor(settings.vectorBudget))
       : null;
   const quantity = fieldCatalog?.quantities.find(
@@ -1742,16 +1782,12 @@ export function buildAirboxVisibilityDiagnostic({
 }): AirboxVisibilityDiagnostic {
   const hasDrawablePass =
     settings.boundsVisible ||
-    settings.pointsVisible ||
-    settings.shaderVisible ||
     settings.vectorsVisible ||
     settings.wireframeVisible;
   const details = [
     { label: "Backend master", value: settings.visible ? "on" : "off" },
-    { label: "Surface pass", value: settings.shaderVisible ? "on" : "off" },
     { label: "Wireframe pass", value: settings.wireframeVisible ? "on" : "off" },
     { label: "Frame pass", value: settings.boundsVisible ? "on" : "off" },
-    { label: "Points pass", value: settings.pointsVisible ? "on" : "off" },
     { label: "Vectors pass", value: settings.vectorsVisible ? "on" : "off" },
     { label: "Effective display", value: displaySettings.visible ? "on" : "off" },
   ];
@@ -1770,7 +1806,7 @@ export function buildAirboxVisibilityDiagnostic({
     return {
       details,
       message:
-        "The airbox master flag is on, but all drawable airbox passes are off. Enable Wireframe, Frame, Surface, Points, or Vectors to make the airbox render.",
+        "The airbox master flag is on, but all drawable airbox passes are off. Enable Wireframe, Frame, or Vectors to make the airbox render.",
       status: "no-drawable-pass",
       title: "Airbox has no active pass",
     };
@@ -1807,21 +1843,70 @@ export function buildAirboxVisibilityDiagnostic({
 export function buildVisualizationPanelSections({
   effectiveSettings,
   settings,
+  target,
 }: {
   effectiveSettings: VisualizationTargetSettings;
   settings: VisualizationTargetSettings;
+  target?: VisualizationTargetRef;
 }): VisualizationPanelSection[] {
   const passDisabled = !settings.visible;
+  const capabilities = target ? visualizationTargetCapabilities(target) : null;
+  const isAirboxTarget = target?.kind === "airbox";
+  const isFdmAirboxTarget = target ? isFdmUniverseOutsideSupportTarget(target) : false;
 
-  return [
+  if (capabilities?.supportsFieldData === false) {
+    return [
+      {
+        disabled: passDisabled,
+        fields: [
+          { id: "visible", kind: "toggle", label: "Visible" },
+          { id: "boundsVisible", kind: "toggle", label: "Frame" },
+          { id: "boundsOpacityPercent", kind: "number", label: "Bounds opacity" },
+        ],
+        id: "display-passes",
+        title: "Display Passes",
+      },
+      {
+        disabled: passDisabled || !effectiveSettings.wireframeVisible,
+        fields: [
+          { id: "wireframeColor", kind: "color", label: "Wireframe color" },
+          {
+            id: "wireframeOpacityPercent",
+            kind: "number",
+            label: "Wireframe opacity",
+          },
+        ],
+        id: "wireframe",
+        title: "Wireframe",
+      },
+      {
+        disabled: false,
+        fields: [],
+        id: "overrides",
+        title: "Overrides",
+      },
+    ];
+  }
+
+  const sections: VisualizationPanelSection[] = [
     {
       disabled: passDisabled,
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
-        { id: "boundsVisible", kind: "toggle", label: "Frame" },
-        { id: "boundsOpacityPercent", kind: "number", label: "Bounds opacity" },
-        { id: "vectorsVisible", kind: "toggle", label: "Vectors" },
-      ],
+        ...(capabilities?.showBoundsControl === false
+          ? []
+          : [
+              { id: "boundsVisible", kind: "toggle", label: "Frame" },
+              {
+                id: "boundsOpacityPercent",
+                kind: "number",
+                label: "Bounds opacity",
+              },
+            ]),
+        ...(capabilities?.supportsVectors === false
+          ? []
+          : [{ id: "vectorsVisible", kind: "toggle", label: "Vectors" }]),
+      ] as VisualizationPanelField[],
       id: "display-passes",
       title: "Display Passes",
     },
@@ -1833,7 +1918,10 @@ export function buildVisualizationPanelSections({
       id: "quantity-source",
       title: "Quantity Source",
     },
-    {
+  ];
+
+  if (!isAirboxTarget && !isFdmAirboxTarget) {
+    sections.push({
       disabled: passDisabled || !effectiveSettings.shaderVisible,
       fields: [
         { id: "surfaceColorSource", kind: "mode", label: "Color source" },
@@ -1842,8 +1930,11 @@ export function buildVisualizationPanelSections({
       ],
       id: "surface-coloring",
       title: "Surface Coloring",
-    },
-    {
+    });
+  }
+
+  if (capabilities?.supportsPoints !== false) {
+    sections.push({
       disabled: passDisabled || !effectiveSettings.pointsVisible,
       fields: [
         { id: "pointColor", kind: "color", label: "Point color" },
@@ -1851,48 +1942,61 @@ export function buildVisualizationPanelSections({
       ],
       id: "points",
       title: "Points",
-    },
-    {
-      disabled: passDisabled || !effectiveSettings.wireframeVisible,
-      fields: [
-        { id: "wireframeColor", kind: "color", label: "Wireframe color" },
-        {
-          id: "wireframeOpacityPercent",
-          kind: "number",
-          label: "Wireframe opacity",
-        },
-      ],
-      id: "wireframe",
-      title: "Wireframe",
-    },
-    {
+    });
+  }
+
+  sections.push({
+    disabled: passDisabled || !effectiveSettings.wireframeVisible,
+    fields: [
+      { id: "wireframeColor", kind: "color", label: "Wireframe color" },
+      {
+        id: "wireframeOpacityPercent",
+        kind: "number",
+        label: "Wireframe opacity",
+      },
+    ],
+    id: "wireframe",
+    title: "Wireframe",
+  });
+
+  if (capabilities?.supportsVectors !== false) {
+    const vectorFields: VisualizationPanelField[] = [
+      { id: "vectorColorMode", kind: "mode", label: "Vector coloring" },
+      { id: "vectorMonoColor", kind: "color", label: "Vector mono color" },
+      { id: "vectorAlphaPercent", kind: "number", label: "Vector opacity" },
+      { id: "vectorThickness", kind: "number", label: "Vector thickness" },
+      { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
+      { id: "vectorBudget", kind: "number", label: "Arrow budget" },
+      { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
+      { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Lift above surface" },
+      { id: "vectorSurfaceOffsetScale", kind: "number", label: "Extra surface gap" },
+    ];
+    if (capabilities?.showGeometryScopeControl !== false) {
+      vectorFields.push({ id: "geometryScope", kind: "mode", label: "Arrow extent" });
+    }
+    sections.push({
       disabled: passDisabled || !effectiveSettings.vectorsVisible,
-      fields: [
-        { id: "vectorColorMode", kind: "mode", label: "Vector coloring" },
-        { id: "vectorMonoColor", kind: "color", label: "Vector mono color" },
-        { id: "vectorAlphaPercent", kind: "number", label: "Vector opacity" },
-        { id: "vectorThickness", kind: "number", label: "Vector thickness" },
-        { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
-        { id: "vectorBudget", kind: "number", label: "Arrow budget" },
-        { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
-        { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Lift above surface" },
-        { id: "vectorSurfaceOffsetScale", kind: "number", label: "Extra surface gap" },
-        { id: "geometryScope", kind: "mode", label: "Arrow extent" },
-      ],
+      fields: vectorFields,
       id: "vectors",
       title: "Vectors",
-    },
-    {
+    });
+  }
+
+  if (capabilities?.showGeometryScopeControl !== false) {
+    sections.push({
       disabled: passDisabled,
       fields: [{ id: "geometryScope", kind: "mode", label: "Geometry scope" }],
       id: "geometry-scope",
       title: "Geometry Scope",
-    },
-    {
-      disabled: false,
-      fields: [],
-      id: "overrides",
-      title: "Overrides",
-    },
-  ];
+    });
+  }
+
+  sections.push({
+    disabled: false,
+    fields: [],
+    id: "overrides",
+    title: "Overrides",
+  });
+
+  return sections;
 }

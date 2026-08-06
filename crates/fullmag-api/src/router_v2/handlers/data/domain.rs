@@ -9,13 +9,14 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
-use crate::router_v2::handlers::sessions::status::{domain_generation_id, fdm_grid_shape};
+use crate::router_v2::handlers::sessions::status::{
+    domain_generation_id, fdm_grid_geometry, fdm_grid_shape,
+};
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
 
@@ -132,12 +133,26 @@ pub async fn get_domain_meta(
             boundary_faces,
         },
         grid,
-        element_type: if is_fem {
-            Some("tetrahedron".into())
-        } else {
-            None
-        },
+        element_type: is_fem
+            .then(|| snapshot.fem_mesh.as_ref().and_then(fem_element_type))
+            .flatten(),
     }))
+}
+
+fn fem_element_type(mesh: &fullmag_runner::FemMeshPayload) -> Option<String> {
+    let first = *mesh.cells.types.first()?;
+    if mesh.cells.types.iter().any(|cell_type| *cell_type != first) {
+        return Some("mixed".to_string());
+    }
+    Some(
+        match first {
+            fullmag_ir::FemCellTypeIR::Tet4 => "tetrahedron",
+            fullmag_ir::FemCellTypeIR::Prism6 => "prism",
+            fullmag_ir::FemCellTypeIR::Pyramid5 => "pyramid",
+            fullmag_ir::FemCellTypeIR::Hex8 => "hexahedron",
+        }
+        .to_string(),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,55 +162,10 @@ struct FdmGridLayout {
 }
 
 fn fdm_grid_descriptor(snapshot: &SessionStateResponse) -> FdmGridLayout {
-    let layout = snapshot
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("artifact_layout"))
-        .filter(|layout| layout.get("backend").and_then(Value::as_str) == Some("fdm"));
-    let origin = layout
-        .and_then(|layout| {
-            layout
-                .get("origin_m")
-                .or_else(|| layout.get("origin"))
-                .or_else(|| layout.get("grid_origin"))
-                .or_else(|| layout.get("native_origin"))
-        })
-        .and_then(value_array3_f64_any_finite)
-        .unwrap_or([0.0, 0.0, 0.0]);
-    let spacing = layout
-        .and_then(|layout| layout.get("cell_size"))
-        .and_then(value_array3_f64_allow_planar)
-        .unwrap_or([1.0, 1.0, 1.0]);
+    let (origin, spacing) = fdm_grid_geometry(snapshot)
+        .unwrap_or(([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]));
 
     FdmGridLayout { origin, spacing }
-}
-
-fn value_array3_f64_any_finite(value: &Value) -> Option<[f64; 3]> {
-    let array = value.as_array()?;
-    let values = [
-        array.first()?.as_f64()?,
-        array.get(1)?.as_f64()?,
-        array.get(2)?.as_f64()?,
-    ];
-    values
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some(values)
-}
-
-fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
-    let array = value.as_array()?;
-    let values = [
-        array.first()?.as_f64()?,
-        array.get(1)?.as_f64()?,
-        array.get(2)?.as_f64()?,
-    ];
-    let positive_axes = values.iter().filter(|value| **value > 0.0).count();
-    values
-        .iter()
-        .all(|value| value.is_finite() && *value >= 0.0)
-        .then_some(values)
-        .filter(|_| positive_axes >= 2)
 }
 
 #[utoipa::path(
@@ -353,7 +323,7 @@ pub async fn get_domain_slice_mesh_overlay(
         segment_count,
         point_count: 0,
         topology_revision: snapshot.mesh_revision,
-        domain_generation_id,
+        domain_generation_id: domain_generation_id.to_string(),
         etag: etag.clone(),
     };
 

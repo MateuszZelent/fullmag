@@ -9,12 +9,14 @@ import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
   hasVisualizationStatePatch,
+  isFdmUniverseOutsideSupportTarget,
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
   removeTargetOverrideField,
   renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  visualizationTargetUnsupportedPatchFields,
   viewportRenderingPreferencesFromTargetPatch,
   visualizationStateOverrideMatchesTarget,
   type SurfaceColorSource,
@@ -73,6 +75,17 @@ async function patchSelectedTarget(
     };
   }
 
+  const unsupportedFields = visualizationTargetUnsupportedPatchFields(
+    target,
+    patch,
+  );
+  if (unsupportedFields.length > 0) {
+    return {
+      status: "failed" as const,
+      message: `The selected target does not support ${unsupportedFields.join(", ")}.`,
+    };
+  }
+
   if (target.kind !== "airbox") {
     const viewportPreferences = viewportRenderingPreferencesFromTargetPatch(patch);
     if (Object.keys(viewportPreferences).length > 0) {
@@ -117,6 +130,10 @@ async function patchTargetOverrideResource(
   patch: VisualizationTargetPatch,
   basePatch: VisualizationStatePatch = {},
 ): Promise<boolean> {
+  // FDM targets live in the local structured-grid renderer. They are not
+  // valid FEM `/visualization/state` override scopes, so return false and
+  // let callers apply the patch to ObjectVisualizationController locally.
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -137,6 +154,7 @@ async function clearTargetOverrideResource(
   context: CommandContext,
   target: VisualizationTargetRef,
 ): Promise<boolean> {
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -155,6 +173,9 @@ async function removeTargetOverrideFieldResource(
   target: VisualizationTargetRef,
   field: keyof VisualizationTargetPatch,
 ): Promise<boolean> {
+  // FDM structured-grid display state is local to the viewport controller;
+  // there is no corresponding `/visualization/state` scope to remove.
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -403,13 +424,28 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
           };
         }
         if (
+          visualizationTargetUnsupportedPatchFields(target, {
+            surfaceColorSource: "solid",
+          }).length > 0
+        ) {
+          return {
+            status: "failed" as const,
+            message: "The selected target does not support surfaceColorSource.",
+          };
+        }
+        if (
           target.kind !== "airbox" &&
+          target.kind !== "fdm-domain" &&
           (await removeTargetOverrideFieldResource(
             context,
             target,
             "surfaceColorSource",
           ))
         ) {
+          visualization.removeTargetOverrideField(target, "surfaceColorSource");
+          return { status: "completed" as const };
+        }
+        if (target.kind === "fdm-domain") {
           visualization.removeTargetOverrideField(target, "surfaceColorSource");
           return { status: "completed" as const };
         }
@@ -450,12 +486,15 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
-      return value
-        ? patchSelectedTarget(
-            context,
-            renderModePatch(value as VisualizationRenderMode | "off"),
-          )
-        : invalidPayload("visualization.target.set-render-mode");
+      if (!value) return invalidPayload("visualization.target.set-render-mode");
+      const target = selectedTarget(context);
+      const renderMode = value as VisualizationRenderMode | "off";
+      return patchSelectedTarget(
+        context,
+        target && isFdmUniverseOutsideSupportTarget(target)
+          ? { renderMode }
+          : renderModePatch(renderMode),
+      );
     },
   },
   {

@@ -8,6 +8,9 @@ const testState = vi.hoisted(() => ({
 vi.mock("./mesh-details/useMeshDetailsModel", () => ({
   useMeshDetailsModel: () => ({ lane: testState.lane }),
 }));
+vi.mock("./fdm-grid/FdmGridInspectorPanel", () => ({
+  FdmGridInspectorPanel: () => <div data-testid="fdm-mesh-summary">FDM structured Mesh summary</div>,
+}));
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { MeshDetailsPanel } from "./MeshDetailsPanel";
@@ -22,14 +25,13 @@ const selection = {
 } satisfies Selection;
 
 describe("MeshDetailsPanel lane boundary", () => {
-  it("renders neutral structured-grid semantics and no FEM sections in FDM", () => {
+  it("renders the shared Mesh summary through the structured-grid adapter in FDM", () => {
     testState.lane = "fdm";
     const html = renderToStaticMarkup(
       <MeshDetailsPanel selection={selection} />,
     );
 
-    expect(html).toContain("Structured FDM Grid");
-    expect(html).toContain("not applicable");
+    expect(html).toContain("FDM structured Mesh summary");
     expect(html).not.toContain("Shared-Domain Mesh");
     expect(html).not.toContain("Mesh Build Pipeline");
   });

@@ -26,8 +26,12 @@ import {
   useModelMaterialFieldsResource,
   useModelRegionsResource,
   useSceneResource,
+  useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import {
+  buildDomainPresentation,
+  deriveAuthoredFdmUniverseOutsideMagneticSupport,
+} from "@/shared/domain/mesh/domainPresentation";
 import {
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
@@ -89,6 +93,7 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
+import { resolveCurrentFemAirboxEvidence } from "./femAirboxEvidence";
 import {
   explorerCrossSectionsEqual,
   selectExplorerCrossSections,
@@ -241,6 +246,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const domainMeta = useDomainMetaResource({ enabled: modelTabActive });
+  const universeMeshPolicy = useUniverseMeshPolicyResource({
+    enabled:
+      modelTabActive &&
+      sessionStatusData?.domain.discretization.toLowerCase() === "fem",
+  });
   const fdmRegionMembership = useFdmRegionMembershipResource({
     enabled:
       modelTabActive && sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
@@ -332,10 +342,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     let domainPresentationStatus = domainMeta.status;
     if (domainMeta.data) {
       try {
+        const authoredFdmRole =
+          domainMeta.data.discretization.toLowerCase() === "fdm"
+            ? deriveAuthoredFdmUniverseOutsideMagneticSupport({
+                domainBounds: domainMeta.data.bounds,
+                objects: modelResource.data?.objects,
+              })
+            : null;
         domainPresentation = buildDomainPresentation({
           domainMeta: domainMeta.data,
           fdmMembership: fdmRegionMembership.data,
           fdmMembershipStatus: fdmRegionMembership.status,
+          universeOutsideMagneticSupport: authoredFdmRole,
         });
       } catch {
         // Keep DomainMeta's discretization visible to the Explorer. A failed
@@ -429,10 +447,30 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             textureLoadEnabled: textureLoadObjectIds.has(object.id),
           }],
     );
+    const femAirbox =
+      sessionStatusData?.domain.discretization.toLowerCase() === "fem"
+        ? resolveCurrentFemAirboxEvidence({
+            currentMeshRevision: sessionStatusData.resources.mesh_revision,
+            manifest: { data: manifest.data, status: manifest.status },
+            policy: {
+              data: universeMeshPolicy.data,
+              status: universeMeshPolicy.status,
+            },
+            scene: { data: modelResource.data, status: modelResource.status },
+            summary: { data: meshSummary.data, status: meshSummary.status },
+          })
+        : null;
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
-            { ...modelSnapshot, crossSections, mesh, objects, domainPresentation },
+            {
+              ...modelSnapshot,
+              airbox: femAirbox,
+              crossSections,
+              mesh,
+              objects,
+              domainPresentation,
+            },
             {
               activeAnalysisFieldOverlay,
               frequencyDomainManifest: frequencyDomainManifest.data,
@@ -462,11 +500,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     selectedNodeId,
     crossSections,
     manifest.data,
+    manifest.status,
     meshSummary.data,
+    meshSummary.status,
     modelResource.data,
+    modelResource.status,
     domainMeta.data,
     domainMeta.status,
+    universeMeshPolicy.data,
+    universeMeshPolicy.status,
     sessionStatusData?.domain.discretization,
+    sessionStatusData?.resources.mesh_revision,
     fdmRegionMembership.data,
     fdmRegionMembership.status,
     modelCouplings.data,

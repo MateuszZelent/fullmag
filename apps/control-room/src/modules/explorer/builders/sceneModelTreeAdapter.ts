@@ -14,7 +14,9 @@ import type {
   OerstedFieldListResource,
   DomainMetaResource,
 } from "@/kernel/api/apiTypes";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+} from "@/kernel/selection/selectionTypes";
 import {
   isKnownCurrentTransport,
   isKnownSpinTransport,
@@ -486,9 +488,7 @@ function authoredRegionsByOwner(
   memberships: readonly MeshRegionMembershipResource[] | null | undefined,
 ): Map<string, ModelTreeObjectRegionSnapshot[]> {
   const byObject = new Map<string, ModelTreeObjectRegionSnapshot[]>();
-  const membershipByRegionId = new Map(
-    (memberships ?? []).map((membership) => [membership.region_id, membership]),
-  );
+  const resolveMembership = buildOwnerQualifiedMembershipResolver(memberships);
   if (resource?.regions?.length) {
     for (const region of resource.regions) {
       if (region.source !== "authored_object_region") continue;
@@ -511,7 +511,7 @@ function authoredRegionsByOwner(
           meshLifecycleStatus: resolveRegionMeshLifecycle({
             build: null,
             draftDirty: false,
-            membership: membershipByRegionId.get(region.region_id),
+            membership: resolveMembership(owner, region.region_id),
             policyEnabled: Boolean(region.mesh_policy),
             supported: true,
           }).status,
@@ -547,7 +547,7 @@ function authoredRegionsByOwner(
         meshLifecycleStatus: resolveRegionMeshLifecycle({
           build: null,
           draftDirty: false,
-          membership: membershipByRegionId.get(id),
+          membership: resolveMembership(objectId, id),
           policyEnabled: Boolean(region?.mesh_policy),
           supported: true,
         }).status,
@@ -561,6 +561,25 @@ function authoredRegionsByOwner(
     }
   }
   return sortRegionMap(byObject);
+}
+
+function buildOwnerQualifiedMembershipResolver(
+  memberships: readonly MeshRegionMembershipResource[] | null | undefined,
+): (ownerId: string, regionId: string) => MeshRegionMembershipResource | undefined {
+  const candidatesByIdentity = new Map<string, MeshRegionMembershipResource[]>();
+  for (const membership of memberships ?? []) {
+    const ownerId = stringValue(membership.owner_object_id);
+    if (!ownerId) continue;
+    const identity = `${ownerId}\u0000${membership.region_id}`;
+    const candidates = candidatesByIdentity.get(identity) ?? [];
+    candidates.push(membership);
+    candidatesByIdentity.set(identity, candidates);
+  }
+
+  return (ownerId, regionId) => {
+    const candidates = candidatesByIdentity.get(`${ownerId}\u0000${regionId}`) ?? [];
+    return candidates.length === 1 ? candidates[0] : undefined;
+  };
 }
 
 function pushRegionSnapshot(

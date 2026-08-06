@@ -27,7 +27,7 @@ function fdmModel(cellIndices: number[]): FdmCuboidInstanceModel {
     centers: new Float32Array(cellIndices.length * 3),
     count: cellIndices.length,
     gridShape: [cellIndices.length, 1, 1],
-    regionIds: null,
+    regionIds: new Uint32Array(cellIndices.length),
   };
 }
 

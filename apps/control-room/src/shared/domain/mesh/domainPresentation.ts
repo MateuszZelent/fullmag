@@ -36,6 +36,8 @@ export type DomainResourceState =
 export interface FdmUniverseOutsideMagneticSupport {
   bounds: DomainBounds3;
   kind: "universe-outside-magnetic-support";
+  /** Authored support envelope used only for a bounds preview before FMRM. */
+  magneticSupportBounds?: DomainBounds3;
   reason: string;
 }
 
@@ -261,28 +263,134 @@ function fdmMagneticSupport(
   };
 }
 
-function domainBoundsStrictlyContain(
-  outer: {
-    max: readonly number[];
-    min: readonly number[];
-  },
-  inner: DomainBounds3,
-): boolean {
-  const outerMin = finiteTuple3(outer.min);
-  const outerMax = finiteTuple3(outer.max);
-  if (!outerMin || !outerMax) return false;
-  return outerMin.every((value, axis) => value <= inner.min[axis]!) &&
-    outerMax.every((value, axis) => value >= inner.max[axis]!) &&
-    (outerMin.some((value, axis) => value < inner.min[axis]!) ||
-      outerMax.some((value, axis) => value > inner.max[axis]!));
-}
-
 function domainBounds3(
   bounds: DomainMetaResource["bounds"],
 ): DomainBounds3 | null {
   const min = finiteTuple3(bounds.min);
   const max = finiteTuple3(bounds.max);
   return min && max ? { max, min } : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function finiteTuple3Unknown(value: unknown): [number, number, number] | null {
+  return Array.isArray(value) ? finiteTuple3(value) : null;
+}
+
+function authoredObjectBounds(value: unknown): DomainBounds3 | null {
+  const object = recordValue(value);
+  if (!object) return null;
+  const geometry = recordValue(object.geometry);
+  const geometryMin = finiteTuple3Unknown(geometry?.bounds_min);
+  const geometryMax = finiteTuple3Unknown(geometry?.bounds_max);
+  if (geometryMin && geometryMax) {
+    return { min: geometryMin, max: geometryMax };
+  }
+
+  const params = recordValue(geometry?.geometry_params);
+  const size = finiteTuple3Unknown(params?.size ?? params?.dimensions);
+  if (!size || size.some((component) => component <= 0)) return null;
+  const translation =
+    finiteTuple3Unknown(recordValue(object.transform)?.translation) ?? [0, 0, 0];
+  const half = size.map((component) => component / 2) as [number, number, number];
+  return {
+    min: translation.map((component, axis) => component - half[axis]) as [
+      number,
+      number,
+      number,
+    ],
+    max: translation.map((component, axis) => component + half[axis]) as [
+      number,
+      number,
+      number,
+    ],
+  };
+}
+
+function authoredObjectIsMagnetic(value: unknown): boolean {
+  const object = recordValue(value);
+  if (!object) return false;
+  const role = typeof object.role === "string" ? object.role.toLowerCase() : "magnet";
+  const hint = recordValue(object.visualization_hint);
+  const hintRole = typeof hint?.role === "string" ? hint.role.toLowerCase() : "";
+  return role !== "antenna" && role !== "auxiliary" && hintRole !== "antenna";
+}
+
+function boxVolume(bounds: DomainBounds3): number {
+  return Math.max(
+    bounds.max[0] - bounds.min[0],
+    0,
+  ) * Math.max(bounds.max[1] - bounds.min[1], 0) * Math.max(bounds.max[2] - bounds.min[2], 0);
+}
+
+/**
+ * Supplies a conservative Airbox role from authored geometry while the FDM
+ * membership artifact is still unavailable. The result is only an extent
+ * envelope; exact cell ownership remains deferred to FMRM membership.
+ */
+export function deriveAuthoredFdmUniverseOutsideMagneticSupport({
+  domainBounds,
+  objects,
+}: {
+  domainBounds: DomainMetaResource["bounds"];
+  objects: readonly unknown[] | null | undefined;
+}): Omit<FdmUniverseOutsideMagneticSupport, "kind"> | null {
+  const domain = domainBounds3(domainBounds);
+  if (!domain || !objects?.length) return null;
+  const magneticBounds = objects
+    .filter(authoredObjectIsMagnetic)
+    .map(authoredObjectBounds)
+    .filter((bounds): bounds is DomainBounds3 => bounds !== null)
+    .map((bounds) => ({
+      min: bounds.min.map((value, axis) => Math.max(value, domain.min[axis])) as [
+        number,
+        number,
+        number,
+      ],
+      max: bounds.max.map((value, axis) => Math.min(value, domain.max[axis])) as [
+        number,
+        number,
+        number,
+      ],
+    }))
+    .filter((bounds) => bounds.min.every((value, axis) => value <= bounds.max[axis]));
+  if (magneticBounds.length === 0) return null;
+
+  const support = magneticBounds.reduce<DomainBounds3>(
+    (accumulator, bounds) => ({
+      min: accumulator.min.map((value, axis) => Math.min(value, bounds.min[axis])) as [
+        number,
+        number,
+        number,
+      ],
+      max: accumulator.max.map((value, axis) => Math.max(value, bounds.max[axis])) as [
+        number,
+        number,
+        number,
+      ],
+    }),
+    magneticBounds[0],
+  );
+  const scale = Math.max(...domain.min.map(Math.abs), ...domain.max.map(Math.abs), 1);
+  const tolerance = Number.EPSILON * 256 * scale;
+  const universeExceedsEnvelope =
+    domain.min.some((value, axis) => support.min[axis] > value + tolerance) ||
+    domain.max.some((value, axis) => support.max[axis] < value - tolerance);
+  const unionVolume = boxVolume(support);
+  const summedVolume = magneticBounds.reduce((sum, bounds) => sum + boxVolume(bounds), 0);
+  const disjointMagneticObjects =
+    magneticBounds.length > 1 && summedVolume + unionVolume * 1e-12 < unionVolume;
+  if (!universeExceedsEnvelope && !disjointMagneticObjects) return null;
+
+  return {
+    bounds: domain,
+    magneticSupportBounds: support,
+    reason: "authored-universe-exceeds-magnetic-support",
+  };
 }
 
 export function buildDomainPresentation(
@@ -328,22 +436,37 @@ export function buildDomainPresentation(
     const spacing = tuple3(meta.grid.spacing, [0, 0, 0]);
     const magneticSupport = fdmMagneticSupport(meta, membership, resourceStatus);
     const realizedDomainBounds = domainBounds3(meta.bounds);
-    const role = input.universeOutsideMagneticSupport
+    const explicitRole = input.universeOutsideMagneticSupport
       ? {
           bounds: input.universeOutsideMagneticSupport.bounds,
           kind: "universe-outside-magnetic-support" as const,
+          ...(input.universeOutsideMagneticSupport.magneticSupportBounds
+            ? {
+                magneticSupportBounds:
+                  input.universeOutsideMagneticSupport.magneticSupportBounds,
+              }
+            : {}),
           reason: input.universeOutsideMagneticSupport.reason,
         }
-      : magneticSupport &&
-          magneticSupport.inactiveCellCount > 0 &&
-          realizedDomainBounds &&
-          domainBoundsStrictlyContain(realizedDomainBounds, magneticSupport.bounds)
+      : null;
+    const membershipRole =
+      magneticSupport &&
+      magneticSupport.inactiveCellCount > 0 &&
+      realizedDomainBounds
         ? {
             bounds: realizedDomainBounds,
             kind: "universe-outside-magnetic-support" as const,
+            // The AABB is only an extent envelope. Exact inactive cells stay
+            // in the canonical FMRM membership mask, which is required for
+            // disjoint multi-ferromagnet/region layouts.
             reason: "validated-magnetic-support-with-inactive-cells",
           }
         : null;
+    // Keep the authored envelope available when a realized descriptor does
+    // not carry a validated magnetic-support summary.  It remains bounds-only
+    // and never authorizes FDM cell or field rendering; the exact FMRM mask is
+    // still required by the cuboid builder.
+    const role = membershipRole ?? explicitRole;
     const fingerprint = membership?.grid_fingerprint ?? input.expectedFdmGridFingerprint ?? null;
     const revision = membership
       ? `${meta.generation_id}:${membership.mesh_revision}:${membership.region_membership_revision}`

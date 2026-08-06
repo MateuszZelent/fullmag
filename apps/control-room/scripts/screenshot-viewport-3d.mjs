@@ -281,6 +281,7 @@ async function configureFdmFixtureFieldPresentation(page, vectorsVisible = true)
   await page.evaluate((showVectors) => {
     window.__FULLMAG_CONTROL_ROOM_AUDIT__.patchFdmVisualization({
       activeQuantityId: "m",
+      shaderVisible: true,
       shaderColorMode: "magnitude",
       surfaceColorSource: "magnitude",
       vectorBudget: 192,
@@ -848,6 +849,18 @@ async function installFdmFixtureApi(page, fixtureRequests) {
     }
     if (path === "/v2/sessions/current/data/domain/meta") {
       await fulfillJson(route, fdmDomainMetaFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fdm-region-memberships") {
+      await fulfillJson(route, fdmRegionMembershipFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fdm-region-membership") {
+      await fulfillBinary(route, makeFdmRegionMembershipBuffer());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fdm-region-membership/fixture-region-owner%3Acore") {
+      await fulfillBinary(route, makeFdmRegionMembershipBuffer());
       return;
     }
     if (path === "/v2/sessions/current/data/domain/topology") {
@@ -1504,6 +1517,40 @@ function fdmDomainMetaFixture() {
   };
 }
 
+function fdmRegionMembershipFixture() {
+  return {
+    binary_path: "data/fdm-region-membership.v2.bin",
+    cell_count: 192,
+    cell_m: [1e-7, 1e-7, 1e-7],
+    counts: [12, 8, 2],
+    encoding: "FMRM:u32_le",
+    freshness: "current",
+    grid_fingerprint: "0".repeat(64),
+    magnetic_support: {
+      active_cell_count: 96,
+      active_unassigned_cell_count: 0,
+      bounds_max_m: [4e-7, 3e-7, 1e-7],
+      bounds_min_m: [-4e-7, -3e-7, -1e-7],
+      grid_fingerprint: "0".repeat(64),
+      inactive_cell_count: 96,
+      semantic_role: "magnetic-support",
+    },
+    mesh_revision: 1,
+    object_ids: [FDM_FIXTURE_REGION_OBJECT_ID],
+    origin_m: [-6e-7, -4e-7, -1e-7],
+    region_legend: [
+      {
+        numeric_id: 1,
+        object_id: FDM_FIXTURE_REGION_OBJECT_ID,
+        priority: 0,
+        region_id: FDM_FIXTURE_REGION_ID,
+      },
+    ],
+    region_membership_revision: 1,
+    schema_version: "fdm_region_membership.v2",
+  };
+}
+
 function fdmVisualizationStateFixture() {
   return {
     active_quantity_id: "m",
@@ -2048,6 +2095,28 @@ function makeFdmFieldVectorBuffer() {
     }
   }
 
+  return buffer;
+}
+
+function makeFdmRegionMembershipBuffer() {
+  const cellCount = 192;
+  const buffer = new ArrayBuffer(64 + cellCount * Uint32Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMRM"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 2);
+  view.setUint32(8, 12, true);
+  view.setUint32(12, 8, true);
+  view.setUint32(16, 2, true);
+  view.setUint32(20, cellCount, true);
+  view.setUint32(24, 1, true);
+
+  const regionIds = new Uint32Array(buffer, 64, cellCount);
+  for (let index = 0; index < cellCount; index += 1) {
+    regionIds[index] = index % 2 === 0 ? 1 : 0xffff_ffff;
+  }
   return buffer;
 }
 

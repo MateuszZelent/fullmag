@@ -32,6 +32,7 @@ import {
   resetAirboxVisualizationState,
   visualizationStateOverrideMatchesTarget,
   visualizationStatePatchFromDefaultTargetPatch,
+  visualizationTargetUnsupportedPatchFields,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -314,6 +315,17 @@ async function patchVisualizationTargetFromCommand(
     return patchAirboxVisualization(context, input.patch);
   }
 
+  const unsupportedFields = visualizationTargetUnsupportedPatchFields(
+    input.target,
+    input.patch,
+  );
+  if (unsupportedFields.length > 0) {
+    return {
+      message: `Visualization target does not support: ${unsupportedFields.join(", ")}.`,
+      status: "failed",
+    };
+  }
+
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(input.patch);
   if (Object.keys(localPatch).length > 0) {
     context.visualization.patchViewportPreferences(input.target, localPatch);
@@ -573,6 +585,11 @@ async function patchTargetOverrideResource(
   target: VisualizationTargetRef,
   patch: VisualizationTargetPatch,
 ): Promise<boolean> {
+  // The structured-grid FDM target is viewport-local.  The v2 visualization
+  // registry has no `fdm-domain` scope, so callers must fall back to the
+  // ObjectVisualizationController instead of queueing an unchanged backend
+  // override and reporting success.
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -592,6 +609,9 @@ async function clearTargetOverrideResource(
   context: CommandContext,
   target: VisualizationTargetRef,
 ): Promise<boolean> {
+  // See patchTargetOverrideResource: FDM display state is not a backend
+  // visualization-state scope.
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;

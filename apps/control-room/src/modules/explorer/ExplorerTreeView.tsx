@@ -318,6 +318,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
     if (item.activeResource?.kind === "command") items.push(item);
     return items;
   }, []);
+  const selectable = node.selectable !== false;
 
   function handleSelect(): void {
     selectExplorerNode(kernel, node, moduleId);
@@ -350,7 +351,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      handleSelect();
+      if (selectable) handleSelect();
       return;
     }
     if (event.key === "ArrowRight" && hasChildren && !expanded) {
@@ -378,8 +379,8 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       role="treeitem"
       tabIndex={focusable ? 0 : -1}
       aria-expanded={hasChildren ? expanded : undefined}
-      aria-selected={active}
-      onClick={handleSelect}
+      aria-selected={selectable ? active : undefined}
+      onClick={selectable ? handleSelect : undefined}
       onDoubleClick={handleToggle}
       onFocus={() => setExplorerKeyboardRow(node.id)}
       onKeyDown={handleKeyDown}
@@ -433,7 +434,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       <ContextMenuContent>
         <ContextMenuLabel>{node.label}</ContextMenuLabel>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem>
+        {selectable ? <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem> : null}
         {commandItems.map(({ active, command, disabled, disabledReason }) => (
           <ContextMenuItem
             key={command.id}

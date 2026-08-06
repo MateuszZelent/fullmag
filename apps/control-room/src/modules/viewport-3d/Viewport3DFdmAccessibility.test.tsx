@@ -22,6 +22,7 @@ function membership(
     cell_count: 8,
     cell_m: [1e-9, 2e-9, 3e-9],
     counts: [2, 2, 2],
+    domain_generation_id: "generation-31",
     encoding: "u32le",
     freshness: "current",
     grid_fingerprint: "grid-7",

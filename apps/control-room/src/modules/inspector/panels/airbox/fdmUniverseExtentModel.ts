@@ -141,7 +141,7 @@ export function resolveFdmUniverseExtentModel({
   if (!explicitFdm) {
     return withStatus(
       "not-applicable",
-      "FDM universe extent is not applicable to the current explicit FEM lane.",
+      "FDM universe extent is unavailable because the current execution lane is not FDM.",
     );
   }
 
@@ -155,8 +155,8 @@ export function resolveFdmUniverseExtentModel({
     return withStatus(
       resource.status === "loading" ? "loading" : "not-materialized",
       resource.status === "loading"
-        ? "FDM DomainMeta is loading. FEM shared-domain meshing controls remain disabled."
-        : "FDM DomainMeta is not materialized; no FEM shared-domain mesh is inferred.",
+        ? "FDM DomainMeta is loading; structured-grid controls remain unavailable."
+        : "FDM DomainMeta is not materialized; no structured-grid extent is available.",
     );
   }
 
@@ -164,7 +164,7 @@ export function resolveFdmUniverseExtentModel({
   if (domain.discretization.trim().toLowerCase() !== "fdm") {
     return withStatus(
       "error",
-      `Session requested FDM, but DomainMeta resolved '${domain.discretization}'. FEM shared-domain controls remain disabled until the lane is reconciled.`,
+      `Session requested FDM, but DomainMeta resolved '${domain.discretization}'. Structured-grid controls remain disabled until the lane is reconciled.`,
       {
         ...baseModel(),
         domainId: domain.domain_id,
@@ -196,14 +196,60 @@ export function resolveFdmUniverseExtentModel({
   if (!gridShape || !origin || !spacing) {
     return withStatus(
       "error",
-      "FDM DomainMeta does not contain a complete structured-grid descriptor; no FEM shared-domain mesh is applicable.",
+      "FDM DomainMeta does not contain a complete structured-grid descriptor; extent controls remain unavailable.",
+      fields,
+    );
+  }
+
+  const presentationStatus =
+    roleEvidence?.source === "domain-presentation"
+      ? roleEvidence.presentation.resourceStatus
+      : null;
+  if (presentationStatus === "error") {
+    return withStatus(
+      "error",
+      "FDM membership data failed to load; the published Airbox extent cannot be treated as current.",
+      fields,
+    );
+  }
+  if (presentationStatus === "loading") {
+    return withStatus(
+      "loading",
+      "FDM membership data is loading; the published Airbox extent remains provisional.",
+      fields,
+    );
+  }
+  if (presentationStatus === "stale") {
+    return withStatus(
+      "stale",
+      "FDM membership data is stale; re-run or re-plan the study before trusting the Airbox extent.",
+      fields,
+    );
+  }
+  if (presentationStatus === "incompatible") {
+    return withStatus(
+      "not-materialized",
+      "FDM membership data does not match the current structured grid; the Airbox extent is not current.",
+      fields,
+    );
+  }
+
+  const authoredRoleWithoutMembership =
+    fields.universeRole !== null &&
+    roleEvidence?.source === "domain-presentation" &&
+    roleEvidence.presentation.discretization === "fdm" &&
+    roleEvidence.presentation.fdmGrid.membership === null;
+  if (authoredRoleWithoutMembership) {
+    return withStatus(
+      "not-materialized",
+      "Authored FDM Airbox extent is known, but the membership mask is not materialized; re-plan or run the study to publish it.",
       fields,
     );
   }
 
   return withStatus(
     resource.status === "stale" ? "stale" : "ready",
-    "Structured FDM universe/grid extent is published; magnetic-support / universe role is not published unless a matching DomainPresentation or explicit role resource provides it.",
+    "Structured FDM universe/grid extent is published; the magnetic-support / universe role is shown only with matching presentation or role evidence.",
     fields,
   );
 }

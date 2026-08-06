@@ -37,8 +37,10 @@ export const DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR =
 export type Viewport3DFieldScopeKind =
   | "airbox"
   | "full"
+  | "layer"
   | "object"
   | "part"
+  | "region"
   | "selection";
 
 export interface Viewport3DScalarRangePolicy {
@@ -147,13 +149,21 @@ export interface Viewport3DPlanPartModel {
 }
 
 export interface Viewport3DTargetQuantityFieldRequestsOptions {
+  fdmAirboxSettings?: VisualizationTargetSettings | null;
   fdmSettings: VisualizationTargetSettings | null;
+  fdmTargetSettings?: readonly Viewport3DFdmTargetSettingsForPlanning[];
   getPartSettings: (part: Viewport3DPlanMeshPart) => VisualizationTargetSettings;
   magneticPartScopedFieldIds: ReadonlySet<string>;
   magneticParts: readonly Viewport3DPlanPartModel[];
   maxVectorGlyphs: number;
   primaryFieldQuantityId: string;
   selectedSnapshotQuery?: FieldVectorQuery | null;
+}
+
+export interface Viewport3DFdmTargetSettingsForPlanning {
+  label: string;
+  settings: VisualizationTargetSettings;
+  targetId: string;
 }
 
 export interface Viewport3DTargetQuantityFieldDemandPlan {
@@ -295,7 +305,10 @@ export function buildViewport3DPassDemands(
 ): Viewport3DPassDemand[] {
   if (!plan.visible) return [];
   const scopeKind = options.scopeKind ?? scopeKindForTargetKind(plan.targetKind);
-  const scopeId = options.scopeId ?? scopeIdForTarget(plan.targetId, scopeKind);
+  const scopeId =
+    options.scopeId === undefined
+      ? scopeIdForTarget(plan.targetId, scopeKind)
+      : options.scopeId;
   const demands: Viewport3DPassDemand[] = [];
 
   if (plan.shader.visible && plan.shader.scalarColorMode) {
@@ -539,8 +552,6 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   fieldQuery = { component: "full", scope_kind: "full" },
   quantityId,
   replayQuery = null,
-  shaderVisible = false,
-  surfaceColorSource = "solid",
   vectorBudget = fieldQuery.max_samples ?? 0,
   vectorsVisible = Boolean(fieldQuery.max_samples != null),
 }: {
@@ -570,8 +581,8 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
         geometryScope: "full",
         scalarColorPalette: "viridis",
         shaderMonoColor: DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
-        shaderVisible,
-        surfaceColorSource,
+        shaderVisible: false,
+        surfaceColorSource: "solid",
         surfaceProjectionMode: "raw_nodal",
         vectorBudget,
         vectorCenteringEnabled: true,
@@ -715,7 +726,9 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
 }
 
 export function resolveViewport3DTargetQuantityFieldDemandPlan({
+  fdmAirboxSettings,
   fdmSettings,
+  fdmTargetSettings = [],
   getPartSettings,
   magneticPartScopedFieldIds,
   magneticParts,
@@ -758,34 +771,89 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     );
   }
 
-  if (
-    fdmSettings &&
-    !sameViewport3DQuantityIdForPlanning(
-      fdmSettings.activeQuantityId,
-      primaryFieldQuantityId,
-    ) &&
-    fdmSettings.visible &&
-    (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
-  ) {
-    const quantityId = resolveCanonicalQuantityId(fdmSettings.activeQuantityId);
+  for (const target of fdmTargetSettings) {
+    if (
+      sameViewport3DQuantityIdForPlanning(
+        target.settings.activeQuantityId,
+        primaryFieldQuantityId,
+      ) ||
+      !target.settings.visible ||
+      (!target.settings.shaderVisible && !target.settings.vectorsVisible)
+    ) {
+      continue;
+    }
+    const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
     demands.push(
       ...buildViewport3DPassDemands(
         buildViewport3DTargetRenderPlan({
-          label: "FDM domain",
+          label: target.label,
           quantityId,
-          settings: fdmSettings,
-          targetId: "fdm-domain",
+          settings: target.settings,
+          targetId: target.targetId,
           targetKind: "fdm-domain",
         }),
         {
-          forceComplete: true,
+          forceComplete: target.targetId !== "fdm-universe-outside-support",
           maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
-            fdmSettings.vectorBudget,
+            target.settings.vectorBudget,
             maxVectorGlyphs,
           ),
           replayQuery: selectedSnapshotQuery,
           scopeId: null,
           scopeKind: "full",
+        },
+      ),
+    );
+  }
+
+  for (const target of [
+    fdmSettings
+      ? { label: "FDM domain", settings: fdmSettings, targetId: "fdm-domain" }
+      : null,
+    fdmAirboxSettings
+      ? {
+          label: "FDM Airbox",
+          settings: fdmAirboxSettings,
+          targetId: "fdm-universe-outside-support",
+        }
+      : null,
+  ]) {
+    if (
+      !target ||
+      sameViewport3DQuantityIdForPlanning(
+        target.settings.activeQuantityId,
+        primaryFieldQuantityId,
+      ) ||
+      !target.settings.visible ||
+      (!target.settings.shaderVisible && !target.settings.vectorsVisible)
+    ) {
+      continue;
+    }
+    const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
+    demands.push(
+      ...buildViewport3DPassDemands(
+        buildViewport3DTargetRenderPlan({
+          label: target.label,
+          quantityId,
+          settings:
+            target.targetId === "fdm-universe-outside-support"
+              ? { ...target.settings, shaderVisible: false }
+              : target.settings,
+          targetId: target.targetId,
+          targetKind: "fdm-domain",
+        }),
+        {
+          forceComplete: target.targetId !== "fdm-universe-outside-support",
+          maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
+            target.settings.vectorBudget,
+            maxVectorGlyphs,
+          ),
+          replayQuery: selectedSnapshotQuery,
+          scopeId: null,
+          scopeKind:
+            target.targetId === "fdm-universe-outside-support"
+              ? "airbox"
+              : "full",
         },
       ),
     );

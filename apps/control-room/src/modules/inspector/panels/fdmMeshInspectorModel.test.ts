@@ -41,6 +41,7 @@ function membership(
     cell_count: 24,
     cell_m: [2, 1, 0.5],
     counts: [2, 3, 4],
+    domain_generation_id: "generation-1",
     encoding: "u32le-v2",
     freshness: "current",
     grid_fingerprint: "grid-1",
@@ -179,6 +180,40 @@ describe("fdmMeshInspectorModel", () => {
       inactiveCellCount: 22,
       metadata: [{ numericId: 9, objectId: "object:b", regionId: "region:b" }],
     });
+  });
+
+  it("keeps duplicate region ids scoped to the selected object owner", () => {
+    const duplicateOwnerMembership = membership({
+      region_legend: [
+        { numeric_id: 7, object_id: "object:a", priority: 0, region_id: "region:shared" },
+        { numeric_id: 9, object_id: "object:b", priority: 0, region_id: "region:shared" },
+      ],
+    });
+    const canonical: DecodedFdmRegionMembership = {
+      counts: [2, 3, 4],
+      cellCount: 24,
+      formatVersion: 2,
+      gridFingerprint: "grid-1",
+      legendCount: 2,
+      payloadKind: 2,
+      regionIds: new Uint32Array([7, 9, FMRM_INACTIVE_REGION_ID, ...new Array(21).fill(FMRM_INACTIVE_REGION_ID)]),
+      semanticStatus: "canonical",
+    };
+
+    const model = resolveFdmObjectMeshInspectorModel({
+      lane: "fdm",
+      objectId: "object:a",
+      regionId: "region:shared",
+      resources: resources({
+        membership: snapshot(duplicateOwnerMembership),
+        binary: snapshot(canonical),
+      }),
+    });
+
+    expect(model.metadata).toEqual([
+      { numericId: 7, objectId: "object:a", priority: 0, regionId: "region:shared" },
+    ]);
+    expect(model.activeCellCount).toBe(1);
   });
 
   it("fails closed when the selected region is not owned by the selected object", () => {

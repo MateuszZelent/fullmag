@@ -96,7 +96,7 @@ export function ObjectRegionMetadataSection({
           meshLane === "fem"
             ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
             : meshLane === "fdm"
-              ? "Not applicable for FDM structured-grid regions"
+              ? "structured-grid membership"
               : "Withheld until the session discretization is explicit"
         }
       />
@@ -163,7 +163,7 @@ export function ObjectRegionActionsSection({
       ) : (
         <>
           <FieldRow
-            label="Mesh semantics"
+            label="Mesh realization"
             value={
               meshLane === "fdm"
                 ? "structured-grid cell participation"
@@ -171,7 +171,7 @@ export function ObjectRegionActionsSection({
             }
           />
           <FieldRow
-            label="FEM mesh realization"
+            label="Unstructured topology"
             value={
               meshLane === "fdm"
                 ? "Not applicable for FDM structured-grid regions"

@@ -11,7 +11,7 @@ const model = {
 describe("ObjectRegionDiagnosticsPanel lane presentation", () => {
   it("does not expose FEM realization status on the FDM lane", () => {
     expect(resolveObjectRegionDiagnosticsLaneView(model, "fdm")).toEqual({
-      realizationPolicy: "Not applicable for FDM structured-grid regions",
+      realizationPolicy: "Runtime-derived structured-grid membership",
       realizationStatus: "Runtime-derived structured-grid membership",
     });
   });

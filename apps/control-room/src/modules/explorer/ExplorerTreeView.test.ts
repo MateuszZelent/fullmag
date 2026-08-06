@@ -268,6 +268,18 @@ describe("flattenVisibleExplorerRows", () => {
     );
   });
 
+  it("renders nonselectable semantic roots without selection affordances", () => {
+    expect(explorerTreeViewSource).toContain(
+      "const selectable = node.selectable !== false",
+    );
+    expect(explorerTreeViewSource).toContain(
+      "aria-selected={selectable ? active : undefined}",
+    );
+    expect(explorerTreeViewSource).toContain(
+      "{selectable ? <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem> : null}",
+    );
+  });
+
   it("resolves context command state with node-provided command input", () => {
     const commands = new CommandRegistry();
     commands.register({

@@ -23,7 +23,12 @@ import {
 } from "./Viewport3DModule";
 import { planViewport3DColorbars } from "./model/viewport3DColorbarPlan";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
+import {
+  targetForFdmDomain,
+  targetForFdmUniverseOutsideSupport,
+} from "./model/viewport3DTargets";
 
 function scalarColorBuffer(
   mode: string,
@@ -278,6 +283,39 @@ describe("createViewport3DPointerHoldLifecycle", () => {
 });
 
 describe("resolveViewport3DColorbarLegend", () => {
+  it("keeps nested Airbox HUD legend text to one bounded line", () => {
+    const source = readFileSync(
+      "src/design/styles/viewport-3d.css",
+      "utf8",
+    );
+
+    expect(source).toContain(".fm-viewport-3d__hud > fieldset");
+    expect(source).toContain("--fm-viewport-3d-orientation-reserve");
+    expect(source).toContain("max-inline-size: 100%");
+    expect(source).toContain(".fm-viewport-3d__airbox-legend");
+    expect(source).toContain("flex: 1 1 0");
+    expect(source).toContain("white-space: nowrap");
+  });
+
+  it("hides only the Airbox target when its HUD toggle is disabled", () => {
+    const controller = new ObjectVisualizationController();
+    const magneticDomain = targetForFdmDomain("FDM domain");
+
+    expect(magneticDomain).not.toBeNull();
+    controller.patchTarget(magneticDomain!, {
+      visible: true,
+      wireframeVisible: true,
+    });
+    const magneticSettingsBefore = controller.getSettings(magneticDomain!);
+
+    controller.patchTarget(targetForFdmUniverseOutsideSupport(), {
+      visible: false,
+    });
+
+    expect(controller.getSettings(targetForFdmUniverseOutsideSupport()).visible).toBe(false);
+    expect(controller.getSettings(magneticDomain!)).toEqual(magneticSettingsBefore);
+  });
+
   it("renders the viewport legend as an Inspector-style scientific range card", () => {
     const source = readFileSync(
       "src/modules/viewport-3d/Viewport3DModule.tsx",
@@ -1796,15 +1834,25 @@ describe("Viewport3DModule scene wiring", () => {
       "utf8",
     );
 
-    expect(source).toContain('aria-label="FDM universe overlay"');
-    expect(source).toContain("Universe outside support");
-    expect(source).toContain("fdmUniverseOverlayVisible");
+    expect(source).toContain('aria-label="Airbox overlay"');
+    expect(source).toMatch(/\n\s+Airbox\n/);
+    expect(source).toContain("fdmUniverseOutsideSupportSettings?.visible");
+    expect(source).toContain("patchTarget(targetForFdmUniverseOutsideSupport()");
     expect(source).toContain("legend.magneticSupport");
     expect(source).toContain("legend.outsideSupport");
+    expect(source).toContain('className="fm-viewport-3d__airbox-legend"');
     expect(source).toContain("viewportSelectionForFdmUniverseOutsideSupport");
     expect(source).toContain(
       "onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}",
     );
     expect(source).not.toContain("FDM Airbox mesh");
+
+    const styles = readFileSync(
+      new URL("../../design/styles/viewport-3d.css", import.meta.url),
+      "utf8",
+    );
+    expect(styles).toMatch(
+      /\.fm-viewport-3d__airbox-legend\s*\{[\s\S]*?text-overflow:\s*ellipsis;/,
+    );
   });
 });

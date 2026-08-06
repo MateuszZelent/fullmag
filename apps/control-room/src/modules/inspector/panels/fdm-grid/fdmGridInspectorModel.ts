@@ -112,7 +112,7 @@ const SCOPE_TITLES: Record<FdmGridSelectionScope, string> = {
   mask: "Cell Mask",
   provenance: "Grid Provenance",
   region: "FDM Region",
-  "universe-outside-support": "Universe Outside Magnetic Support",
+  "universe-outside-support": "Airbox Visualization",
 };
 
 function supportSummary(
@@ -260,12 +260,21 @@ export function resolveFdmGridSelectionInspectorModel({
   }
 
   if (scope === "region") {
-    const regionId = selection.ref?.type === "fdm-domain"
-      ? selection.ref.regionId?.trim() || null
+    const regionRef = selection.ref?.type === "fdm-domain"
+      ? selection.ref
       : null;
-    const entry = regionId
-      ? base.membership?.legend.find((candidate) => candidate.regionId === regionId) ?? null
-      : null;
+    const regionId = regionRef?.regionId?.trim() || null;
+    const ownerId = regionRef?.objectId?.trim() || null;
+    const candidates = regionId
+      ? (base.membership?.legend.filter((candidate) => candidate.regionId === regionId) ?? [])
+      : [];
+    // Region ids are object-scoped. Legacy selections may omit objectId, but
+    // must not silently resolve an ambiguous duplicate to the first owner.
+    const entry = ownerId
+      ? candidates.find((candidate) => candidate.objectId === ownerId) ?? null
+      : candidates.length === 1
+        ? candidates[0]
+        : null;
     return entry
       ? { ...common, region: entry }
       : {

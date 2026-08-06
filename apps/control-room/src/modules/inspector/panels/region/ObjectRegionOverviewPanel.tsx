@@ -114,7 +114,7 @@ export function ObjectRegionOverviewPanel({
             label="Realization"
             value={
               laneView.realization === "fdm"
-                ? "Not applicable for FDM structured-grid regions"
+                ? "Runtime-derived structured-grid membership"
                 : "Withheld until the session discretization is explicit"
             }
           />

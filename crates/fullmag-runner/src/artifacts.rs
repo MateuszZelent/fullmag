@@ -4025,6 +4025,10 @@ mod tests {
         let descriptor: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
             .expect("membership descriptor should be JSON");
         assert_eq!(descriptor["schema_version"], "fdm_region_membership.v2");
+        assert_eq!(
+            descriptor["domain_generation_id"],
+            descriptor["grid_fingerprint"]
+        );
         assert_eq!(descriptor["object_ids"], serde_json::json!(["body"]));
         assert_eq!(descriptor["cell_count"], 8);
         assert_eq!(descriptor["magnetic_support"]["semantic_role"], "magnetic-support");
@@ -4238,6 +4242,16 @@ mod tests {
                 .as_str()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn fdm_multilayer_does_not_synthesize_a_single_grid_region_membership() {
+        let plan = test_multilayer_execution_plan();
+
+        let artifacts = crate::fdm::artifacts::region_membership_artifacts(&plan)
+            .expect("multilayer membership policy should not fail artifact publication");
+
+        assert!(artifacts.is_empty());
     }
 
     #[test]

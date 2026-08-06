@@ -857,20 +857,37 @@ export function resolveAirboxTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
   topologyFreshness: Viewport3DTopologyFreshness,
 ): VisualizationTargetSettings {
+  const runtimeSettings = resolveAirboxRuntimeVisualizationSettings(settings);
   if (isViewport3DTopologyCurrent(topologyFreshness)) {
-    return settings;
+    return runtimeSettings;
   }
 
   return {
-    ...resolveUnavailableTopologyVisualizationSettings(settings),
-    geometryScope: settings.geometryScope,
+    ...resolveUnavailableTopologyVisualizationSettings(runtimeSettings),
+    geometryScope: runtimeSettings.geometryScope,
   };
 }
 
 export function resolveAirboxRuntimeVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
-  return settings;
+  if (
+    !settings.shaderVisible &&
+    !settings.pointsVisible &&
+    settings.surfaceColorSource === "solid" &&
+    !settings.viewportColorbarVisible &&
+    settings.renderMode === (settings.wireframeVisible ? "wireframe" : "off")
+  ) {
+    return settings;
+  }
+  return {
+    ...settings,
+    pointsVisible: false,
+    renderMode: settings.wireframeVisible ? "wireframe" : "off",
+    shaderVisible: false,
+    surfaceColorSource: "solid",
+    viewportColorbarVisible: false,
+  };
 }
 
 export function resolveAirboxSurfaceColorState(
@@ -987,11 +1004,13 @@ function lerp(start: number, end: number, factor: number): number {
 
 export const DomainBoxLayer = memo(function DomainBoxLayer({
   bounds,
+  boundsOpacityPercent = 35,
   boundsVisible = true,
   colors,
   onSelectDomain,
 }: {
   bounds: Viewport3DBounds | null;
+  boundsOpacityPercent?: number;
   boundsVisible?: boolean;
   colors: Viewport3DColors;
   onSelectDomain: () => void;
@@ -1015,7 +1034,7 @@ export const DomainBoxLayer = memo(function DomainBoxLayer({
       />
       <meshBasicMaterial
         color={colors.accent}
-        opacity={0.35}
+        opacity={percentToUnit(boundsOpacityPercent)}
         transparent
         wireframe
       />
@@ -1033,14 +1052,25 @@ export const FdmUniverseOutsideSupportLayer = memo(
     colors,
     model,
     onSelect,
+    settings,
     tracker,
   }: {
     colors: Viewport3DColors;
     model: FdmUniverseOutsideSupportOverlayModel | null;
     onSelect: () => void;
+    settings: VisualizationTargetSettings | null;
     tracker: Viewport3DResourceTracker;
   }) {
-    if (!model) return null;
+    if (!model || !settings?.visible) return null;
+    const universeBoundsOpacity = percentToUnit(
+      settings.boundsOpacityPercent,
+    );
+    const magneticSupportWireframeOpacity = percentToUnit(
+      settings.wireframeOpacityPercent,
+    );
+    const wireframeColor = wireframeColorFromSettings(settings, colors.accent);
+    const membershipRealized =
+      model.activeCellCount !== null && model.inactiveCellCount !== null;
     return (
       <group
         name={model.target.id}
@@ -1050,20 +1080,42 @@ export const FdmUniverseOutsideSupportLayer = memo(
           onSelect();
         }}
       >
-        <BoundsVolumeWireframe
-          bounds={model.universeBounds}
-          color={colors.accent}
-          opacity={0.55}
-          policySemantic="hiddenEdges"
-          tracker={tracker}
-        />
-        <BoundsVolumeWireframe
-          bounds={model.magneticSupportBounds}
-          color={colors.field}
-          opacity={0.8}
-          policySemantic="featureEdges"
-          tracker={tracker}
-        />
+        {settings.boundsVisible ? (
+          membershipRealized ? (
+            <BoundsVolumeWireframe
+              bounds={model.universeBounds}
+              color={wireframeColor}
+              opacity={universeBoundsOpacity}
+              policySemantic="hiddenEdges"
+              tracker={tracker}
+            />
+          ) : (
+            <BoundsBox
+              bounds={model.universeBounds}
+              color={wireframeColor}
+              opacity={universeBoundsOpacity}
+              policySemantic="hiddenEdges"
+            />
+          )
+        ) : null}
+        {settings.wireframeVisible ? (
+          membershipRealized ? (
+            <BoundsVolumeWireframe
+              bounds={model.magneticSupportBounds}
+              color={wireframeColor}
+              opacity={magneticSupportWireframeOpacity}
+              policySemantic="featureEdges"
+              tracker={tracker}
+            />
+          ) : (
+            <BoundsBox
+              bounds={model.magneticSupportBounds}
+              color={wireframeColor}
+              opacity={magneticSupportWireframeOpacity}
+              policySemantic="featureEdges"
+            />
+          )
+        ) : null}
       </group>
     );
   },

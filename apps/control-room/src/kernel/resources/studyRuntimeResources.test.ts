@@ -283,6 +283,16 @@ describe("study runtime command resource bundles", () => {
     ).toBe(
       `${expectedPath}?component=x&scope_id=permalloy_layer&scope_kind=object`,
     );
+    expect(
+      resolveFieldMetaResourceKey("m", {
+        component: "magnitude",
+        owner_object_id: "body-b",
+        scope_id: "shared",
+        scope_kind: "region",
+      }),
+    ).toBe(
+      `${expectedPath}?component=magnitude&owner_object_id=body-b&scope_id=shared&scope_kind=region`,
+    );
   });
 
   it("tracks field freshness independently of the payload revision", () => {

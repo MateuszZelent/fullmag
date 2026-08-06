@@ -4168,6 +4168,7 @@ export interface components {
             cell_count: number;
             cell_m: number[];
             counts: number[];
+            domain_generation_id: string;
             encoding: string;
             freshness: string;
             grid_fingerprint: string;
@@ -4726,22 +4727,35 @@ export interface components {
              *     mesh topology are valid for vector glyph placement and surface projection
              *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
              *     requires complete field coverage.
-             *     FDM responses always return the complete cell-centred field, even when
-             *     this cap is provided, because FMVP v2 has no cell-index mapping for a
-             *     downsampled payload.
+             *     Full-domain FDM responses always return the complete cell-centred field,
+             *     even when this cap is provided, because FMVP v2 has no cell-index
+             *     mapping for a downsampled payload. Scoped FDM responses use FMVP v3
+             *     explicit cell ordinals; multilayer layer/object scopes carry the native
+             *     grid certificate fingerprint and scope provenance in FMMI metadata.
              */
             max_samples?: number | null;
+            /**
+             * @description Optional canonical owner of a `region` scope.
+             *
+             *     Required when the current single-grid FDM membership has the same
+             *     `region_id` under more than one magnetic object. It is ignored by
+             *     globally unique region IDs to preserve existing unqualified requests.
+             */
+            owner_object_id?: string | null;
             /**
              * Format: double
              * @description Phase angle in radians for `view=phase_rotated_real`.
              */
             phase_rad?: number | null;
-            /** @description Scope identifier for `object` and `part` scopes. */
+            /** @description Scope identifier for `object`, `region`, and `part` scopes. */
             scope_id?: string | null;
             /**
-             * @description Optional FEM scope for large-domain samples.
+             * @description Optional FEM or FDM scope for large-domain samples.
              *
-             *     Accepted values: `full`, `object`, `part`, `airbox`, `selection`.
+             *     Accepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,
+             *     `selection`. Single-grid FDM supports `object`, `region`, and `airbox`
+             *     from current FMRM membership. Multilayer FDM supports native `layer`
+             *     and `object` scopes without projecting payloads onto the common grid.
              *     `object` and `part` require `scope_id`; `airbox` may omit it and resolves
              *     to the first mesh part with role `air`; `selection` resolves from the
              *     current workspace selection.
@@ -6403,7 +6417,7 @@ export interface components {
             mesh_id: string;
             /** Format: int64 */
             mesh_revision: number;
-            unresolved_region_ids?: string[];
+            unresolved_regions?: components["schemas"]["MeshUnresolvedRegionResource"][];
         };
         MeshRegionMembershipResource: {
             boundary_face_indices: number[];
@@ -6416,6 +6430,11 @@ export interface components {
             /** Format: int64 */
             mesh_revision: number;
             node_indices: number[];
+            /**
+             * @description Canonical scene-object owner. Together with `region_id` this is the
+             *     stable authored-region identity.
+             */
+            owner_object_id: string;
             realization: string;
             realization_method?: string | null;
             realization_warnings?: string[];
@@ -6625,6 +6644,11 @@ export interface components {
             report?: Record<string, never> | null;
             /** Format: int64 */
             revision: number;
+        };
+        MeshUnresolvedRegionResource: {
+            /** @description Canonical scene-object owner. Region ids are not globally unique. */
+            owner_object_id: string;
+            region_id: string;
         };
         MetricsSummary: {
             /**
@@ -11409,6 +11433,12 @@ export interface operations {
             /** @description Binary realized FDM cell membership (FMRM) */
             200: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11418,6 +11448,12 @@ export interface operations {
             /** @description Partial FMRM payload */
             206: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11438,6 +11474,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Persisted membership does not belong to the current FDM domain */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Requested FMRM byte range is not satisfiable */
             416: {
                 headers: {
@@ -11449,7 +11492,10 @@ export interface operations {
     };
     data_get_sessions_current_data_fdm_region_membership_region_id: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Canonical object owner used to disambiguate duplicate region IDs. */
+                owner_object_id?: string;
+            };
             header?: {
                 /** @description Strong ETag from a previous scoped FMRM response */
                 "If-None-Match"?: string | null;
@@ -11467,6 +11513,12 @@ export interface operations {
             /** @description Scoped binary realized FDM cell membership (FMRM) */
             200: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11476,6 +11528,12 @@ export interface operations {
             /** @description Partial scoped FMRM payload */
             206: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11491,6 +11549,13 @@ export interface operations {
             };
             /** @description No realized FDM membership or unknown region ID */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Persisted membership does not belong to the current FDM domain */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11537,6 +11602,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Persisted membership does not belong to the current FDM domain */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     data_get_sessions_current_data_fields: {
@@ -11571,10 +11643,12 @@ export interface operations {
             query?: {
                 /** @description Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`). */
                 component?: string | null;
-                /** @description Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`). */
+                /** @description Optional FEM or FDM scope used for statistics. */
                 scope_kind?: string | null;
-                /** @description Scope identifier for `object` and `part` scopes. */
+                /** @description Scope identifier for `object`, `region`, and `part` scopes. */
                 scope_id?: string | null;
+                /** @description Optional canonical owner of a `region` scope. */
+                owner_object_id?: string | null;
                 /**
                  * @description Optional persisted analysis snapshot id, for example a saved
                  *     hysteresis-point magnetization state.
@@ -12692,16 +12766,27 @@ export interface operations {
                  */
                 component?: string | null;
                 /**
-                 * @description Optional FEM scope for large-domain samples.
+                 * @description Optional FEM or FDM scope for large-domain samples.
                  *
-                 *     Accepted values: `full`, `object`, `part`, `airbox`, `selection`.
+                 *     Accepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,
+                 *     `selection`. Single-grid FDM supports `object`, `region`, and `airbox`
+                 *     from current FMRM membership. Multilayer FDM supports native `layer`
+                 *     and `object` scopes without projecting payloads onto the common grid.
                  *     `object` and `part` require `scope_id`; `airbox` may omit it and resolves
                  *     to the first mesh part with role `air`; `selection` resolves from the
                  *     current workspace selection.
                  */
                 scope_kind?: string | null;
-                /** @description Scope identifier for `object` and `part` scopes. */
+                /** @description Scope identifier for `object`, `region`, and `part` scopes. */
                 scope_id?: string | null;
+                /**
+                 * @description Optional canonical owner of a `region` scope.
+                 *
+                 *     Required when the current single-grid FDM membership has the same
+                 *     `region_id` under more than one magnetic object. It is ignored by
+                 *     globally unique region IDs to preserve existing unqualified requests.
+                 */
+                owner_object_id?: string | null;
                 /**
                  * @description Optional geometric subset for scoped vector samples.
                  *
@@ -12718,9 +12803,11 @@ export interface operations {
                  *     mesh topology are valid for vector glyph placement and surface projection
                  *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
                  *     requires complete field coverage.
-                 *     FDM responses always return the complete cell-centred field, even when
-                 *     this cap is provided, because FMVP v2 has no cell-index mapping for a
-                 *     downsampled payload.
+                 *     Full-domain FDM responses always return the complete cell-centred field,
+                 *     even when this cap is provided, because FMVP v2 has no cell-index
+                 *     mapping for a downsampled payload. Scoped FDM responses use FMVP v3
+                 *     explicit cell ordinals; multilayer layer/object scopes carry the native
+                 *     grid certificate fingerprint and scope provenance in FMMI metadata.
                  */
                 max_samples?: number | null;
                 /**
@@ -12758,7 +12845,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads. */
+            /** @description Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads. */
             200: {
                 headers: {
                     /** @description Resolved component projection */
@@ -12891,7 +12978,13 @@ export interface operations {
     };
     data_get_sessions_current_data_mesh_region_membership_region_id: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Canonical owner object ID. Required when multiple objects expose the
+                 *     same authored region ID.
+                 */
+                owner_object_id?: string;
+            };
             header?: never;
             path: {
                 /** @description Authored or realized region id */
@@ -12912,6 +13005,13 @@ export interface operations {
             };
             /** @description No active mesh or membership for the region */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Region ID is ambiguous without owner_object_id */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

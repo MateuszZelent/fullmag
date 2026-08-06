@@ -213,6 +213,7 @@ import type {
   FieldStateImportResponse,
   FieldStateInspectRequest,
   FieldStateInspectResponse,
+  FdmScopedFieldVectorQuery,
   FieldVectorQuery,
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
@@ -284,6 +285,7 @@ import type {
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
   FdmRegionMembershipResource,
+  PendingJsonResourceResult,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
@@ -998,6 +1000,11 @@ export class ControlRoomApi {
           options,
         ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
       },
+      fdmVector: (
+        quantityId: string,
+        query: FdmScopedFieldVectorQuery,
+        options?: BinaryRequestOptions,
+      ) => this.data.fields.vector(quantityId, query, options),
       planar: {
         meta: (
           quantityId: string,
@@ -1089,11 +1096,18 @@ export class ControlRoomApi {
           ),
       },
     },
-    meshRegionMembership: (regionId: string, options?: RequestOptions) =>
+    meshRegionMembership: (
+      ownerObjectId: string,
+      regionId: string,
+      options?: RequestOptions,
+    ) =>
       this.requestJson<MeshRegionMembershipResource>(
         DATA_MESH_REGION_MEMBERSHIP_PATH,
         options,
-        { path: { region_id: regionId } },
+        {
+          path: { region_id: regionId },
+          query: { owner_object_id: ownerObjectId },
+        },
       ),
     meshRegionMemberships: (options?: RequestOptions) =>
       this.requestJson<MeshRegionMembershipListResource>(
@@ -1101,13 +1115,14 @@ export class ControlRoomApi {
         options,
       ),
     fdmRegionMemberships: (options?: RequestOptions) =>
-      this.requestOptionalJson<FdmRegionMembershipResource>(
+      this.requestPendingJson<FdmRegionMembershipResource>(
         DATA_FDM_REGION_MEMBERSHIPS_PATH,
         options,
       ),
     fdmRegionMembershipBytes: (options?: BinaryRequestOptions) =>
       this.requestBinaryBytes(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH, options),
     fdmRegionMembershipRegionBytes: (
+      ownerObjectId: string | null,
       regionId: string,
       options?: BinaryRequestOptions,
     ) =>
@@ -1115,6 +1130,7 @@ export class ControlRoomApi {
         DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
         options,
         { region_id: regionId },
+        ownerObjectId ? { owner_object_id: ownerObjectId } : undefined,
       ),
     scalars: {
       window: (
@@ -2213,6 +2229,24 @@ export class ControlRoomApi {
     return readOpenApiResult<T>(result);
   }
 
+  private async requestPendingJson<T>(
+    path: OpenApiV2Path,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<PendingJsonResourceResult<T>> {
+    const result = await this.transport.GET(path as never, {
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+
+    if (result.response?.status === 204) {
+      return { data: null, status: "pending" };
+    }
+
+    return { data: readOpenApiResult<T>(result), status: "ready" };
+  }
+
   private async requestFieldMeta(
     quantityId: string,
     path: OpenApiV2Path,
@@ -3255,6 +3289,7 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
 function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
   return {
     component: query.component ?? undefined,
+    owner_object_id: query.owner_object_id ?? undefined,
     scope_id: normalizeFieldMetaScopeId(
       query.scope_kind,
       query.scope_id,

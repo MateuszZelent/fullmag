@@ -64,17 +64,17 @@ mod tests {
     }
 
     #[test]
-    fn public_status_catalog_and_realtime_generations_are_decimal_strings() {
-        const GENERATION: u64 = 9_007_199_254_741_001;
+    fn public_status_catalog_and_realtime_generations_preserve_exact_strings() {
+        const GENERATION: &str = "sha256:0123456789abcdef";
         let status = serde_json::to_value(DomainSummary {
-            generation_id: GENERATION,
+            generation_id: GENERATION.to_string(),
             discretization: "fem".to_owned(),
             cell_count: 1,
         })
         .expect("status domain should serialize");
         let catalog = serde_json::to_value(FieldCatalog {
             revision: 1,
-            domain_generation_id: GENERATION,
+            domain_generation_id: GENERATION.to_string(),
             quantities: Vec::new(),
         })
         .expect("field catalog should serialize");
@@ -84,7 +84,7 @@ mod tests {
             resource_id: None,
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(GENERATION),
+            domain_generation_id: Some(GENERATION.to_string()),
             recommended_fetch: None,
         })
         .expect("realtime change should serialize");
@@ -94,7 +94,7 @@ mod tests {
             catalog["domain_generation_id"].clone(),
             realtime["domain_generation_id"].clone(),
         ] {
-            assert_eq!(value, "9007199254741001");
+            assert_eq!(value, GENERATION);
         }
     }
 }

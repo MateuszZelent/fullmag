@@ -1,12 +1,12 @@
 """Zero-field FDM relaxation qualification for NIST µMAG SP4.
 
 This is the FDM counterpart of ``relax_projected_gradient_bb.py`` in this
-directory.  It keeps the physical problem and the relaxation observables
-identical so the two backends can be tested side by side.
+directory. It keeps the physical problem and relaxation observables aligned
+while using a larger authored universe so the FDM airbox is materialized.
 
-Run headlessly on CPU with::
+Run interactively on CPU with::
 
-    just fullmag build=True fdm cpu tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb_fdm.py
+    just fullmag build=True dev fdm cpu tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb_fdm.py
 """
 
 import fullmag as fm
@@ -19,15 +19,13 @@ study.mode("strict")
 study.interactive(True)
 study.wait_for_solve(True)
 
-
-
 study.universe(
     mode="manual",
-    size=(500e-9, 125e-9, 3e-9),
+    size=(800e-9, 325e-9, 90e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
-study.cell(500e-9 / 128.0, 125e-9 / 32.0, 3e-9)
+study.cell(800e-9 / 128.0, 325e-9 / 32.0, 90e-9 / 30.0)
 
 film = study.geometry(
     fm.Box(size=(500e-9, 125e-9, 3e-9), name="film"),

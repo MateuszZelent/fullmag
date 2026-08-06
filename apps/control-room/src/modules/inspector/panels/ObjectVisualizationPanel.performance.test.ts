@@ -37,7 +37,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("useDomainMetaResource");
     expect(panelSource).toContain("useFdmRegionMembershipResource");
     expect(panelSource).toContain(
-      "const fdmTarget = fdmResourcesEnabled && isFdmVisualizationTarget(target)",
+      "const fdmTarget = fdmResourcesEnabled && target !== null",
     );
     expect(panelSource).toContain("femResourcesEnabled &&");
     expect(panelSource).toContain(
@@ -114,7 +114,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   });
 
   it("uses target capabilities and one geometry extent control", () => {
-    expect(panelSource).toContain("visualizationTargetCapabilities(targetKind)");
+    expect(panelSource).toContain("visualizationTargetCapabilities(target)");
     expect(panelSource).toContain("targetKind={target.kind}");
     expect(panelSource.match(/<VisualizationGeometryScopeSection/g)).toHaveLength(1);
     expect(panelSource).not.toContain('label="Arrow extent"');

@@ -24,7 +24,7 @@ export type Viewport3DFieldDomainCompatibility =
         | "duplicate-node-index"
         | "domain-generation-mismatch"
         | "domain-generation-unknown"
-        | "fdm-mesh-topology-metadata"
+        | "fdm-carrier-identity-unknown"
         | "missing-node-indices"
         | "mesh-topology-hash-mismatch"
         | "mesh-topology-revision-mismatch"
@@ -121,6 +121,14 @@ export function resolveViewport3DFieldDomainCompatibility({
     return { reason: "mesh-topology-revision-mismatch", status: "mismatch" };
   }
 
+  if (
+    (field.indexing === "explicit_node_indices" ||
+      field.indexing === "sampled_node_indices") &&
+    hasDuplicateFieldNodeIndex(field.nodeIndices, field.pointCount)
+  ) {
+    return { reason: "duplicate-node-index", status: "mismatch" };
+  }
+
   if (domain.discretization === "fdm") {
     if (field.formatVersion === 2) {
       if (!responseDomainGenerationId || !domain.domainGenerationId) {
@@ -130,11 +138,8 @@ export function resolveViewport3DFieldDomainCompatibility({
         return { reason: "domain-generation-mismatch", status: "mismatch" };
       }
     }
-    if (
-      field.meshTopologyHash !== null &&
-      field.meshTopologyHash !== undefined
-    ) {
-      return { reason: "fdm-mesh-topology-metadata", status: "mismatch" };
+    if (field.meshTopologyHash != null && domain.meshTopologyHash == null) {
+      return { reason: "fdm-carrier-identity-unknown", status: "mismatch" };
     }
     const fdmIndexing = buildFdmFieldIndexResolver(field, domain.pointCount);
     if (fdmIndexing.status === "degraded") {
@@ -161,4 +166,18 @@ export function resolveViewport3DFieldDomainCompatibility({
 function canonicalMeshTopologyHash(value: string): string {
   const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
   return match?.[1]?.toLowerCase() ?? value;
+}
+
+function hasDuplicateFieldNodeIndex(
+  nodeIndices: ArrayLike<number> | null | undefined,
+  pointCount: number,
+): boolean {
+  if (!nodeIndices || nodeIndices.length !== pointCount) return false;
+  const seen = new Set<number>();
+  for (let index = 0; index < nodeIndices.length; index += 1) {
+    const nodeIndex = nodeIndices[index];
+    if (nodeIndex !== undefined && seen.has(nodeIndex)) return true;
+    if (nodeIndex !== undefined) seen.add(nodeIndex);
+  }
+  return false;
 }

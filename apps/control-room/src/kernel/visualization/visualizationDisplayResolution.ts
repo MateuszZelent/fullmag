@@ -4,6 +4,10 @@ import type { VisualizationTargetSettings } from "./ObjectVisualizationControlle
 
 export type VisualizationTopologyFreshness = "current" | "stale" | "unknown";
 
+export interface VisualizationTopologyFreshnessOptions {
+  targetObjectId?: string | null;
+}
+
 export type ManifestRenderableCarrierKind =
   | "mesh-parts"
   | "mixed"
@@ -26,9 +30,10 @@ type JsonRecord = Record<string, unknown>;
 export function resolveVisualizationTopologyFreshness(
   scene: unknown,
   manifest: unknown,
+  options: VisualizationTopologyFreshnessOptions = {},
 ): VisualizationTopologyFreshness {
   const sceneRecord = asRecord(scene);
-  const sceneRevision = asFiniteNumber(sceneRecord?.revision);
+  const sceneRevision = resolveSceneRevision(scene);
   const manifestRecord = asRecord(manifest);
   const sourceSceneRevision = asFiniteNumber(manifestRecord?.source_scene_revision);
 
@@ -39,7 +44,11 @@ export function resolveVisualizationTopologyFreshness(
   if (sourceSceneRevision === null) {
     const cleanTopologyCoverage =
       !sceneHasDirtyGeometry(sceneRecord) &&
-      manifestCoversVisibleSceneObjects(sceneRecord, manifestRecord);
+      manifestCoversVisibleSceneObjects(
+        sceneRecord,
+        manifestRecord,
+        options.targetObjectId,
+      );
     if (sceneHasDirtyGeometry(sceneRecord)) {
       return "unknown";
     }
@@ -50,6 +59,18 @@ export function resolveVisualizationTopologyFreshness(
   }
 
   return sceneRevision === sourceSceneRevision ? "current" : "stale";
+}
+
+/**
+ * SceneResource accepts both revision spellings while older live bundles may
+ * still publish scene_revision. Keep all viewport consumers on one fallback.
+ */
+export function resolveSceneRevision(value: unknown): number | null {
+  const record = asRecord(value);
+  return (
+    asFiniteNumber(record?.revision) ??
+    asFiniteNumber(record?.scene_revision)
+  );
 }
 
 export function isVisualizationTopologyCurrent(
@@ -156,18 +177,21 @@ function sceneHasKnownObjects(scene: JsonRecord | null): boolean {
 function manifestCoversVisibleSceneObjects(
   scene: JsonRecord | null,
   manifest: JsonRecord | null,
+  targetObjectId?: string | null,
 ): boolean {
   if (!Array.isArray(scene?.objects)) {
     return false;
   }
 
+  const selectedObjectId = normalizeSceneObjectId(targetObjectId);
   const visibleSceneObjectIds = scene.objects.flatMap((item) => {
     const object = asRecord(item);
     const objectId = object?.id;
     return object &&
       object.visible !== false &&
       typeof objectId === "string" &&
-      objectId.length > 0
+      objectId.length > 0 &&
+      (!selectedObjectId || objectId === selectedObjectId)
       ? [objectId]
       : [];
   });
@@ -206,6 +230,15 @@ function manifestCoversVisibleSceneObjects(
       manifestObjectIds.has(alias),
     ),
   );
+}
+
+function normalizeSceneObjectId(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith("object:")
+    ? trimmed.slice("object:".length)
+    : trimmed;
 }
 
 export function resolveManifestRenderableCarrierKind({

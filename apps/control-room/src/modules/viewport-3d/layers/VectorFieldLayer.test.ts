@@ -52,11 +52,9 @@ describe("VectorFieldLayer performance contracts", () => {
     });
   });
 
-  it("retries GPU uploads after the instanced color attribute mounts", () => {
-    expect(vectorFieldLayerSource).toContain(
-      "const [instanceColorAttr, setInstanceColorAttr]",
-    );
-    expect(vectorFieldLayerSource).toContain("setInstanceColorAttr(attr);");
+  it("creates a stable instanced color attribute for GPU uploads", () => {
+    expect(vectorFieldLayerSource).toContain("return useMemo(() => {");
+    expect(vectorFieldLayerSource).toContain("new InstancedBufferAttribute(");
     expect(vectorFieldLayerSource).toContain(
       "instanceColorAttr,\n    invalidate,",
     );

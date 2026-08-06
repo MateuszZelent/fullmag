@@ -725,7 +725,7 @@ const PANELS: InspectorPanelContribution[] = [
   },
   {
     id: "mesh-details",
-    title: "Mesh Details",
+    title: "Mesh",
     selectionKinds: [
       "mesh.root",
       "mesh.shared-domain",
@@ -739,7 +739,7 @@ const PANELS: InspectorPanelContribution[] = [
   },
   {
     id: "fdm-grid",
-    title: "FDM Grid",
+    title: "FDM Mesh",
     selectionKinds: [
       "mesh.grid",
       "mesh.grid.descriptor",

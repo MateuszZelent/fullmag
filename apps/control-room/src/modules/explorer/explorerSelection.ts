@@ -152,11 +152,30 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  // FDM uses the shared product-level Airbox labels but its visualization is
+  // a structured-grid outside-support target, not the FEM airbox target.
+  // Keep the Explorer selection kind (`airbox.visualization`) so the common
+  // visualization panel is used, while carrying the lane-specific ref.
+  if (
+    (node.kind === "airbox.visualization" ||
+      node.kind === "airbox.visualization.debug") &&
+    node.visualizationTargetId === "fdm-universe-outside-support"
+  ) {
+    return {
+      kind: "mesh.grid.universe-outside-support",
+      nodeId: node.id,
+      scope: "universe-outside-support",
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-universe-outside-support",
+    };
+  }
+
   if (isFdmDomainSelectionKind(node.kind)) {
     if (node.kind === "mesh.grid.region" && !node.regionId) return null;
     return {
       kind: node.kind,
       nodeId: node.id,
+      ...(node.objectId ? { objectId: node.objectId } : {}),
       ...(node.kind === "mesh.grid.region" ? { regionId: node.regionId } : {}),
       scope: FDM_DOMAIN_SELECTION_SCOPES[node.kind],
       type: "fdm-domain",
@@ -317,7 +336,10 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       kind: node.kind,
       nodeId: node.id,
       type: "airbox",
-      visualizationTargetId: "airbox",
+      visualizationTargetId:
+        node.visualizationTargetId === "fdm-universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : "airbox",
     };
   }
 
@@ -515,6 +537,7 @@ export function selectExplorerNode(
   node: ExplorerNode,
   source: ModuleId,
 ): void {
+  if (node.selectable === false) return;
   if (node.crossSectionPlotId) {
     selectCrossSectionPlot(node.crossSectionPlotId);
   }

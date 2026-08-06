@@ -251,6 +251,32 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("registers one Mesh inspector contract for global, object, region, and Airbox scopes", () => {
+    const expected = new Map([
+      ["mesh.root", "mesh-details"],
+      ["mesh.shared-domain", "mesh-details"],
+      ["mesh.builds", "mesh-details"],
+      ["mesh.quality", "mesh-details"],
+      ["mesh.size-fields", "mesh-details"],
+      ["mesh.regions", "mesh-details"],
+      ["object.mesh", "object-mesh-policy"],
+      ["object.region.mesh", "object-region-mesh"],
+      ["airbox.mesh", "airbox-mesh-overview"],
+    ] as const);
+
+    for (const [kind, panelId] of expected) {
+      expect(resolveInspectorPanel({ kind })?.id, kind).toBe(panelId);
+      expect(resolveInspectorPanel({ kind })?.id).not.toBe("placeholder");
+    }
+  });
+
+  it("keeps FDM grid as a technical detail below the product-level Mesh contract", () => {
+    expect(resolveInspectorPanel({ kind: "mesh.root" })?.title).toBe("Mesh");
+    expect(resolveInspectorPanel({ kind: "mesh.grid.descriptor" })?.title).toBe(
+      "FDM Mesh",
+    );
+  });
+
   it("routes every structured FDM grid node and FDM cell to the dedicated grid inspector", () => {
     const kinds = [
       "mesh.grid",

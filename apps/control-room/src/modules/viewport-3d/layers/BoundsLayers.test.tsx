@@ -126,6 +126,46 @@ it("routes the distinct FDM universe overlay pick through its selection callback
   expect(source).toContain("onSelect();");
 });
 
+it("uses the dedicated FDM universe target channels instead of fixed FEM airbox opacity", () => {
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+  expect(source).toContain("settings?.visible");
+  expect(source).toContain("settings.wireframeVisible");
+  expect(source).toContain("settings.wireframeOpacityPercent");
+  expect(source).toContain("settings.boundsVisible");
+  expect(source).toContain("settings.boundsOpacityPercent");
+  expect(source).not.toContain("opacity={0.55}");
+  expect(source).not.toContain("opacity={0.8}");
+});
+
+it("routes generic FDM domain-frame opacity and Airbox wireframe color through target settings", () => {
+  expect(boundsLayersSource).toContain(
+    "opacity={percentToUnit(boundsOpacityPercent)}",
+  );
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+  expect(source).toContain("const wireframeColor = wireframeColorFromSettings");
+  expect(source).not.toContain("color={colors.field}");
+});
+
+it("keeps a pending authored FDM Airbox as two extent boxes, not fake grid lines", () => {
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+
+  expect(source).toContain("membershipRealized");
+  expect(source).toContain("<BoundsBox");
+  expect(source).toContain("<BoundsVolumeWireframe");
+});
+
 it("maps an airbox surface triangle to its canonical cell identity", () => {
   expect(resolveAirboxMeshPartSurfacePickIdentity({
     expandedSurfaceFaces: false,
@@ -264,18 +304,26 @@ describe("AirboxLayer", () => {
     });
   });
 
-  it("preserves wireframe-only airbox settings at runtime", () => {
+  it("keeps wireframe-only airbox settings at runtime", () => {
     expect(resolveAirboxRuntimeVisualizationSettings(visibleWireframeAirbox))
       .toBe(visibleWireframeAirbox);
   });
 
-  it("preserves airbox settings that already have another drawable pass", () => {
+  it("strips stale Airbox shader and point passes at runtime", () => {
     const settings = {
       ...visibleWireframeAirbox,
+      pointsVisible: true,
       shaderVisible: true,
+      surfaceColorSource: "magnitude" as const,
     };
 
-    expect(resolveAirboxRuntimeVisualizationSettings(settings)).toBe(settings);
+    expect(resolveAirboxRuntimeVisualizationSettings(settings)).toMatchObject({
+      pointsVisible: false,
+      renderMode: "wireframe",
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      wireframeVisible: true,
+    });
   });
 
   it("uses volume edges for full airbox wireframe and surface edges for surface mode", () => {

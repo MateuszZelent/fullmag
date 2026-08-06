@@ -271,12 +271,12 @@ export function FdmObjectMeshPolicySection({
   const statusKind = model.status === "error" ? "error" : "warning";
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="FDM Structured Grid" badge={model.status}>
+      <InspectorGroup title="Object Mesh" badge="structured-grid">
         {model.notice ? <FeedbackBanner kind={statusKind} message={model.notice} /> : null}
-        <FieldRow label="Grid policy" value="execution-plan owned (read-only)" />
-        <FieldRow label="Explorer role" value="FDM Grid / Magnetic Support" />
-        <FieldRow label="Grid status" value={model.status} />
-        <FieldRow label="Mesh semantics" value="structured grid cells" />
+        <FieldRow label="Mesh policy" value="execution-plan owned (read-only)" />
+        <FieldRow label="Mesh scope" value="selected object / magnetic support" />
+        <FieldRow label="Mesh realization" value="structured-grid cells" />
+        <FieldRow label="Mesh status" value={model.status} />
         <FieldRow label="Origin" value={model.origin?.join(", ") ?? "not materialized"} unit="m" />
         <FieldRow label="Spacing" value={model.spacing?.join(", ") ?? "not materialized"} unit="m" />
         <FieldRow label="Grid shape" value={model.shape?.join(" × ") ?? "not materialized"} />

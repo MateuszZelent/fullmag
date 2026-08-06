@@ -3713,6 +3713,9 @@
             },
             "type": "array"
           },
+          "domain_generation_id": {
+            "type": "string"
+          },
           "encoding": {
             "type": "string"
           },
@@ -3778,6 +3781,7 @@
           "region_membership_revision",
           "freshness",
           "binary_path",
+          "domain_generation_id",
           "grid_fingerprint",
           "origin_m",
           "counts",
@@ -5683,11 +5687,18 @@
             ]
           },
           "max_samples": {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFDM responses always return the complete cell-centred field, even when\nthis cap is provided, because FMVP v2 has no cell-index mapping for a\ndownsampled payload.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFull-domain FDM responses always return the complete cell-centred field,\neven when this cap is provided, because FMVP v2 has no cell-index\nmapping for a downsampled payload. Scoped FDM responses use FMVP v3\nexplicit cell ordinals; multilayer layer/object scopes carry the native\ngrid certificate fingerprint and scope provenance in FMMI metadata.",
             "format": "int32",
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "owner_object_id": {
+            "description": "Optional canonical owner of a `region` scope.\n\nRequired when the current single-grid FDM membership has the same\n`region_id` under more than one magnetic object. It is ignored by\nglobally unique region IDs to preserve existing unqualified requests.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -5700,14 +5711,14 @@
             ]
           },
           "scope_id": {
-            "description": "Scope identifier for `object` and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
             "type": [
               "string",
               "null"
             ]
           },
           "scope_kind": {
-            "description": "Optional FEM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `part`, `airbox`, `selection`.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
+            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
             "type": [
               "string",
               "null"
@@ -12419,9 +12430,9 @@
             "minimum": 0,
             "type": "integer"
           },
-          "unresolved_region_ids": {
+          "unresolved_regions": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/MeshUnresolvedRegionResource"
             },
             "type": "array"
           }
@@ -12483,6 +12494,10 @@
             },
             "type": "array"
           },
+          "owner_object_id": {
+            "description": "Canonical scene-object owner. Together with `region_id` this is the\nstable authored-region identity.",
+            "type": "string"
+          },
           "realization": {
             "type": "string"
           },
@@ -12524,6 +12539,7 @@
           "region_membership_revision",
           "freshness",
           "realization",
+          "owner_object_id",
           "region_id",
           "source",
           "mesh_part_ids",
@@ -13350,6 +13366,22 @@
         },
         "required": [
           "revision"
+        ],
+        "type": "object"
+      },
+      "MeshUnresolvedRegionResource": {
+        "properties": {
+          "owner_object_id": {
+            "description": "Canonical scene-object owner. Region ids are not globally unique.",
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_object_id",
+          "region_id"
         ],
         "type": "object"
       },
@@ -28533,19 +28565,62 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary realized FDM cell membership (FMRM)"
+            "description": "Binary realized FDM cell membership (FMRM)",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "206": {
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial FMRM payload"
+            "description": "Partial FMRM payload",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
             "description": "FMRM payload not modified for the supplied ETag"
           },
           "404": {
             "description": "No realized FDM region membership artifact"
+          },
+          "409": {
+            "description": "Persisted membership does not belong to the current FDM domain"
           },
           "416": {
             "description": "Requested FMRM byte range is not satisfiable"
@@ -28565,6 +28640,15 @@
             "in": "path",
             "name": "region_id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical object owner used to disambiguate duplicate region IDs.",
+            "in": "query",
+            "name": "owner_object_id",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -28599,19 +28683,62 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Scoped binary realized FDM cell membership (FMRM)"
+            "description": "Scoped binary realized FDM cell membership (FMRM)",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "206": {
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial scoped FMRM payload"
+            "description": "Partial scoped FMRM payload",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
             "description": "Scoped FMRM payload not modified for the supplied ETag"
           },
           "404": {
             "description": "No realized FDM membership or unknown region ID"
+          },
+          "409": {
+            "description": "Persisted membership does not belong to the current FDM domain"
           },
           "416": {
             "description": "Requested FMRM byte range is not satisfiable"
@@ -28641,6 +28768,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Persisted membership does not belong to the current FDM domain"
           }
         },
         "tags": [
@@ -28697,7 +28827,7 @@
             }
           },
           {
-            "description": "Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`).",
+            "description": "Optional FEM or FDM scope used for statistics.",
             "in": "query",
             "name": "scope_kind",
             "required": false,
@@ -28709,9 +28839,21 @@
             }
           },
           {
-            "description": "Scope identifier for `object` and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional canonical owner of a `region` scope.",
+            "in": "query",
+            "name": "owner_object_id",
             "required": false,
             "schema": {
               "type": [
@@ -31756,7 +31898,7 @@
             }
           },
           {
-            "description": "Optional FEM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `part`, `airbox`, `selection`.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
+            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
             "in": "query",
             "name": "scope_kind",
             "required": false,
@@ -31768,9 +31910,21 @@
             }
           },
           {
-            "description": "Scope identifier for `object` and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional canonical owner of a `region` scope.\n\nRequired when the current single-grid FDM membership has the same\n`region_id` under more than one magnetic object. It is ignored by\nglobally unique region IDs to preserve existing unqualified requests.",
+            "in": "query",
+            "name": "owner_object_id",
             "required": false,
             "schema": {
               "type": [
@@ -31792,7 +31946,7 @@
             }
           },
           {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFDM responses always return the complete cell-centred field, even when\nthis cap is provided, because FMVP v2 has no cell-index mapping for a\ndownsampled payload.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFull-domain FDM responses always return the complete cell-centred field,\neven when this cap is provided, because FMVP v2 has no cell-index\nmapping for a downsampled payload. Scoped FDM responses use FMVP v3\nexplicit cell ordinals; multilayer layer/object scopes carry the native\ngrid certificate fingerprint and scope provenance in FMMI metadata.",
             "in": "query",
             "name": "max_samples",
             "required": false,
@@ -31860,7 +32014,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.",
+            "description": "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads.",
             "headers": {
               "x-fullmag-component": {
                 "description": "Resolved component projection",
@@ -32042,6 +32196,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Canonical owner object ID. Required when multiple objects expose the\nsame authored region ID.",
+            "in": "query",
+            "name": "owner_object_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -32057,6 +32220,9 @@
           },
           "404": {
             "description": "No active mesh or membership for the region"
+          },
+          "409": {
+            "description": "Region ID is ambiguous without owner_object_id"
           }
         },
         "tags": [

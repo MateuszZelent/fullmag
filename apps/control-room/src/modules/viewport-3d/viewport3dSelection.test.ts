@@ -6,6 +6,7 @@ import {
   viewportSelectionForObject,
   viewportSelectionForRegion,
   viewportSelectionForFdmCell,
+  viewportSelectionForFdmTarget,
   viewportSelectionForFdmUniverseOutsideSupport,
 } from "./viewport3dSelection";
 import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
@@ -18,6 +19,7 @@ describe("viewport3dSelection", () => {
       cell_count: 8,
       cell_m: [1, 1, 1],
       counts: [2, 2, 2],
+      domain_generation_id: "generation-7",
       encoding: "u32le",
       freshness: "current",
       grid_fingerprint: "grid-7",
@@ -64,13 +66,13 @@ describe("viewport3dSelection", () => {
 
   it("maps the FDM universe overlay pick to its distinct visualization target", () => {
     expect(viewportSelectionForFdmUniverseOutsideSupport()).toEqual({
-      kind: "mesh.grid.universe-outside-support",
-      label: "Universe Outside Magnetic Support",
-      nodeId: "model:mesh:outside-support",
+      kind: "airbox.visualization",
+      label: "Airbox",
+      nodeId: "model:airbox:visualization",
       objectId: null,
       ref: {
         kind: "mesh.grid.universe-outside-support",
-        nodeId: "model:mesh:outside-support",
+        nodeId: "model:airbox:visualization",
         scope: "universe-outside-support",
         type: "fdm-domain",
         visualizationTargetId: "fdm-universe-outside-support",
@@ -119,6 +121,47 @@ describe("viewport3dSelection", () => {
         visualizationTargetId: "region:free-layer:region%3Afree-layer",
       },
     });
+  });
+
+  it("maps FDM target-view picks to their object or region Explorer nodes", () => {
+    expect(
+      viewportSelectionForFdmTarget({
+        id: "object:free-layer",
+        kind: "object",
+        label: "Free layer",
+      }),
+    ).toMatchObject({
+      kind: "object.root",
+      label: "Free layer",
+      nodeId: "model:object:free-layer",
+      objectId: "free-layer",
+    });
+    expect(
+      viewportSelectionForFdmTarget({
+        id: "region:free-layer:region%3Afree-layer",
+        kind: "region",
+        label: "region:free-layer",
+      }),
+    ).toMatchObject({
+      kind: "object.region",
+      label: "region:free-layer",
+      nodeId: "model:object:free-layer:regions:region:free-layer",
+      objectId: "free-layer",
+      ref: {
+        regionId: "region:free-layer",
+        visualizationTargetId: "region:free-layer:region%3Afree-layer",
+      },
+    });
+  });
+
+  it("fails closed for malformed FDM region target identities", () => {
+    expect(
+      viewportSelectionForFdmTarget({
+        id: "region:missing-separator",
+        kind: "region",
+        label: "broken",
+      }),
+    ).toBeNull();
   });
 
   it("maps an Airbox carrier pick to the canonical Airbox Explorer node", () => {

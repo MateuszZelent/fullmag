@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use fullmag_authoring::{
     SceneDocument, SceneObject, SceneObjectRegion, SceneRegionFrame, SceneRegionShape,
@@ -11,24 +11,37 @@ use fullmag_authoring::{
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
 
 use crate::error::ApiError;
-use crate::schemas::mesh::{MeshRegionMembershipListResource, MeshRegionMembershipResource};
+use crate::schemas::mesh::{
+    MeshRegionMembershipListResource, MeshRegionMembershipResource, MeshUnresolvedRegionResource,
+};
 use crate::types::AppState;
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MeshRegionMembershipQuery {
+    /// Canonical owner object ID. Required when multiple objects expose the
+    /// same authored region ID.
+    pub owner_object_id: Option<String>,
+}
 
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/data/mesh-region-membership/{region_id}",
     params(
-        ("region_id" = String, Path, description = "Authored or realized region id")
+        ("region_id" = String, Path, description = "Authored or realized region id"),
+        MeshRegionMembershipQuery
     ),
     responses(
         (status = 200, description = "Realized-region membership indices from FEM mesh parts, object segments, or geometry projection", body = MeshRegionMembershipResource),
         (status = 404, description = "No active mesh or membership for the region"),
+        (status = 409, description = "Region ID is ambiguous without owner_object_id"),
     ),
     tag = "data"
 )]
 pub async fn get_mesh_region_membership(
     State(state): State<Arc<AppState>>,
     Path(region_id): Path<String>,
+    Query(query): Query<MeshRegionMembershipQuery>,
 ) -> Result<Json<MeshRegionMembershipResource>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -43,11 +56,17 @@ pub async fn get_mesh_region_membership(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
 
-    build_mesh_region_membership(
+    let owner_object_id = resolve_mesh_region_owner(
+        scene,
+        &region_id,
+        query.owner_object_id.as_deref(),
+    )?;
+    build_mesh_region_membership_for_owner(
         scene,
         mesh,
         snapshot.mesh_revision,
         snapshot.region_realization_revisions.membership,
+        &owner_object_id,
         &region_id,
     )
     .map(Json)
@@ -80,18 +99,22 @@ pub async fn get_mesh_region_memberships(
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
 
     let mut memberships = Vec::new();
-    let mut unresolved_region_ids = Vec::new();
-    for region_id in enabled_authored_region_ids(scene) {
-        if let Some(membership) = build_mesh_region_membership(
+    let mut unresolved_regions = Vec::new();
+    for (owner_object_id, region_id) in enabled_authored_region_keys(scene) {
+        if let Some(membership) = build_mesh_region_membership_for_owner(
             scene,
             mesh,
             snapshot.mesh_revision,
             snapshot.region_realization_revisions.membership,
+            &owner_object_id,
             &region_id,
         ) {
             memberships.push(membership);
         } else {
-            unresolved_region_ids.push(region_id);
+            unresolved_regions.push(MeshUnresolvedRegionResource {
+                owner_object_id,
+                region_id,
+            });
         }
     }
 
@@ -99,7 +122,7 @@ pub async fn get_mesh_region_memberships(
         mesh_id: mesh.mesh_id.clone(),
         mesh_revision: snapshot.mesh_revision,
         memberships,
-        unresolved_region_ids,
+        unresolved_regions,
     }))
 }
 
@@ -110,14 +133,33 @@ pub(crate) fn build_mesh_region_membership(
     region_membership_revision: u64,
     region_id: &str,
 ) -> Option<MeshRegionMembershipResource> {
-    let parts = mesh_region_membership_parts(scene, mesh, region_id);
+    let owner_object_id = resolve_mesh_region_owner(scene, region_id, None).ok()?;
+    build_mesh_region_membership_for_owner(
+        scene,
+        mesh,
+        mesh_revision,
+        region_membership_revision,
+        &owner_object_id,
+        region_id,
+    )
+}
+
+fn build_mesh_region_membership_for_owner(
+    scene: &SceneDocument,
+    mesh: &FemMeshPayload,
+    mesh_revision: u64,
+    region_membership_revision: u64,
+    owner_object_id: &str,
+    region_id: &str,
+) -> Option<MeshRegionMembershipResource> {
+    let parts = mesh_region_membership_parts(scene, mesh, owner_object_id, region_id);
     let segments = if parts.is_empty() {
-        mesh_region_membership_segments(scene, mesh, region_id)
+        mesh_region_membership_segments(scene, mesh, owner_object_id, region_id)
     } else {
         Vec::new()
     };
     let projection = if parts.is_empty() && segments.is_empty() {
-        mesh_region_membership_geometry_projection(scene, mesh, region_id)
+        mesh_region_membership_geometry_projection(scene, mesh, owner_object_id, region_id)
     } else {
         None
     };
@@ -208,6 +250,7 @@ pub(crate) fn build_mesh_region_membership(
         } else {
             "realized".to_string()
         },
+        owner_object_id: owner_object_id.to_string(),
         region_id: region_id.to_string(),
         source: if projection.is_some() {
             "geometry_projection"
@@ -237,45 +280,46 @@ struct GeometryProjectionMembership {
 fn mesh_region_membership_parts<'a>(
     scene: &SceneDocument,
     mesh: &'a FemMeshPayload,
+    owner_object_id: &str,
     region_id: &str,
 ) -> Vec<&'a FemMeshPartPayload> {
-    for object in &scene.objects {
-        if object_region_matches(object, region_id) {
-            return mesh
-                .mesh_parts
-                .iter()
-                .filter(|part| {
-                    part.object_id
-                        .as_deref()
-                        .map(|id| object_ids_match(id, &object.id))
-                        .unwrap_or(false)
-                })
-                .collect();
-        }
+    let Some(object) = scene
+        .objects
+        .iter()
+        .find(|object| object_ids_match(&object.id, owner_object_id))
+    else {
+        return Vec::new();
+    };
+    if object_region_matches(object, region_id) {
+        return mesh
+            .mesh_parts
+            .iter()
+            .filter(|part| {
+                part.object_id
+                    .as_deref()
+                    .map(|id| object_ids_match(id, &object.id))
+                    .unwrap_or(false)
+            })
+            .collect();
+    }
 
-        if let Some(region) = object.regions.iter().find(|region| {
-            region.enabled
-                && (region.region_id == region_id
-                    || region.name == region_id
-                    || region_geometry_aliases(&region.region_id, &region.name).contains(region_id))
-        }) {
-            let geometry_aliases = region_geometry_aliases(&region.region_id, &region.name);
-            return mesh
-                .mesh_parts
-                .iter()
-                .filter(|part| {
-                    part.object_id
+    if let Some(region) = find_matching_enabled_region(object, region_id) {
+        let geometry_aliases = region_geometry_aliases(&region.region_id, &region.name);
+        return mesh
+            .mesh_parts
+            .iter()
+            .filter(|part| {
+                part.object_id
+                    .as_deref()
+                    .map(|id| object_ids_match(id, &object.id))
+                    .unwrap_or(false)
+                    && part
+                        .geometry_id
                         .as_deref()
-                        .map(|id| object_ids_match(id, &object.id))
+                        .map(|geometry_id| geometry_aliases.contains(geometry_id))
                         .unwrap_or(false)
-                        && part
-                            .geometry_id
-                            .as_deref()
-                            .map(|geometry_id| geometry_aliases.contains(geometry_id))
-                            .unwrap_or(false)
-                })
-                .collect();
-        }
+            })
+            .collect();
     }
 
     Vec::new()
@@ -284,37 +328,38 @@ fn mesh_region_membership_parts<'a>(
 fn mesh_region_membership_segments<'a>(
     scene: &SceneDocument,
     mesh: &'a FemMeshPayload,
+    owner_object_id: &str,
     region_id: &str,
 ) -> Vec<&'a FemMeshObjectSegment> {
-    for object in &scene.objects {
-        if object_region_matches(object, region_id) {
-            return mesh
-                .object_segments
-                .iter()
-                .filter(|segment| object_ids_match(&segment.object_id, &object.id))
-                .collect();
-        }
+    let Some(object) = scene
+        .objects
+        .iter()
+        .find(|object| object_ids_match(&object.id, owner_object_id))
+    else {
+        return Vec::new();
+    };
+    if object_region_matches(object, region_id) {
+        return mesh
+            .object_segments
+            .iter()
+            .filter(|segment| object_ids_match(&segment.object_id, &object.id))
+            .collect();
+    }
 
-        if let Some(region) = object.regions.iter().find(|region| {
-            region.enabled
-                && (region.region_id == region_id
-                    || region.name == region_id
-                    || region_geometry_aliases(&region.region_id, &region.name).contains(region_id))
-        }) {
-            let geometry_aliases = region_geometry_aliases(&region.region_id, &region.name);
-            return mesh
-                .object_segments
-                .iter()
-                .filter(|segment| {
-                    object_ids_match(&segment.object_id, &object.id)
-                        && segment
-                            .geometry_id
-                            .as_deref()
-                            .map(|geometry_id| geometry_aliases.contains(geometry_id))
-                            .unwrap_or(false)
-                })
-                .collect();
-        }
+    if let Some(region) = find_matching_enabled_region(object, region_id) {
+        let geometry_aliases = region_geometry_aliases(&region.region_id, &region.name);
+        return mesh
+            .object_segments
+            .iter()
+            .filter(|segment| {
+                object_ids_match(&segment.object_id, &object.id)
+                    && segment
+                        .geometry_id
+                        .as_deref()
+                        .map(|geometry_id| geometry_aliases.contains(geometry_id))
+                        .unwrap_or(false)
+            })
+            .collect();
     }
 
     Vec::new()
@@ -323,9 +368,10 @@ fn mesh_region_membership_segments<'a>(
 fn mesh_region_membership_geometry_projection(
     scene: &SceneDocument,
     mesh: &FemMeshPayload,
+    owner_object_id: &str,
     region_id: &str,
 ) -> Option<GeometryProjectionMembership> {
-    let (object, region) = find_enabled_object_region(scene, region_id)?;
+    let (object, region) = find_enabled_object_region(scene, owner_object_id, region_id)?;
     if matches!(region.shape, SceneRegionShape::Csg { .. }) {
         return None;
     }
@@ -374,30 +420,79 @@ fn mesh_region_membership_geometry_projection(
 
 fn find_enabled_object_region<'a>(
     scene: &'a SceneDocument,
+    owner_object_id: &str,
     region_id: &str,
 ) -> Option<(&'a SceneObject, &'a SceneObjectRegion)> {
-    scene.objects.iter().find_map(|object| {
-        object.regions.iter().find_map(|region| {
-            (region.enabled
-                && (region.region_id == region_id
-                    || region.name == region_id
-                    || region_geometry_aliases(&region.region_id, &region.name)
-                        .contains(region_id)))
-            .then_some((object, region))
-        })
-    })
+    let object = scene
+        .objects
+        .iter()
+        .find(|object| object_ids_match(&object.id, owner_object_id))?;
+    find_matching_enabled_region(object, region_id).map(|region| (object, region))
 }
 
-fn enabled_authored_region_ids(scene: &SceneDocument) -> Vec<String> {
-    let mut ids = Vec::new();
+fn enabled_authored_region_keys(scene: &SceneDocument) -> Vec<(String, String)> {
+    let mut keys = Vec::new();
     for object in &scene.objects {
         for region in &object.regions {
-            if region.enabled && !region.region_id.is_empty() && !ids.contains(&region.region_id) {
-                ids.push(region.region_id.clone());
+            let key = (object.id.clone(), region.region_id.clone());
+            if region.enabled && !region.region_id.is_empty() && !keys.contains(&key) {
+                keys.push(key);
             }
         }
     }
-    ids
+    keys
+}
+
+fn resolve_mesh_region_owner(
+    scene: &SceneDocument,
+    region_id: &str,
+    requested_owner_object_id: Option<&str>,
+) -> Result<String, ApiError> {
+    if let Some(requested) = requested_owner_object_id {
+        let object = scene
+            .objects
+            .iter()
+            .find(|object| object_ids_match(&object.id, requested))
+            .ok_or_else(|| ApiError::not_found(format!("scene object '{requested}' not found")))?;
+        if object_region_matches(object, region_id)
+            || find_matching_enabled_region(object, region_id).is_some()
+        {
+            return Ok(object.id.clone());
+        }
+        return Err(ApiError::not_found(format!(
+            "mesh region membership '{requested}/{region_id}' not found"
+        )));
+    }
+
+    let mut owners = scene
+        .objects
+        .iter()
+        .filter(|object| {
+            object_region_matches(object, region_id)
+                || find_matching_enabled_region(object, region_id).is_some()
+        })
+        .map(|object| object.id.clone());
+    let owner = owners.next().ok_or_else(|| {
+        ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
+    })?;
+    if owners.next().is_some() {
+        return Err(ApiError::conflict(format!(
+            "mesh region membership '{region_id}' is ambiguous; provide owner_object_id"
+        )));
+    }
+    Ok(owner)
+}
+
+fn find_matching_enabled_region<'a>(
+    object: &'a SceneObject,
+    region_id: &str,
+) -> Option<&'a SceneObjectRegion> {
+    object.regions.iter().find(|region| {
+        region.enabled
+            && (region.region_id == region_id
+                || region.name == region_id
+                || region_geometry_aliases(&region.region_id, &region.name).contains(region_id))
+    })
 }
 
 fn region_sample_point(

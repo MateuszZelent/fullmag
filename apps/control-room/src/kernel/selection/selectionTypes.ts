@@ -246,6 +246,14 @@ export type SelectionRef =
   | {
       kind: FdmDomainSelectionKind;
       nodeId: string;
+      /**
+       * Optional owner identity for region-scoped FDM mesh selections.
+       *
+       * Region identifiers are scoped by ferromagnetic object in the
+       * membership legend. Keep this optional for legacy nodes that only
+       * published a region id; new nodes must carry it when available.
+       */
+      objectId?: string;
       regionId?: string;
       scope: FdmDomainSelectionScope;
       type: "fdm-domain";
@@ -296,7 +304,7 @@ export type SelectionRef =
         | "airbox.visualization.debug";
       nodeId: string;
       type: "airbox";
-      visualizationTargetId: "airbox";
+      visualizationTargetId: "airbox" | "fdm-universe-outside-support";
     }
   | {
       boundaryFaceIndex?: number | null;
@@ -625,6 +633,7 @@ export function selectionRefEquals(
         right.type === "fdm-domain" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.objectId, right.objectId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
         left.scope === right.scope &&
         left.visualizationTargetId === right.visualizationTargetId

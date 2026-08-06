@@ -24,6 +24,7 @@ import {
 import { MeshEditorCapabilitiesSection } from "./mesh-details/MeshEditorCapabilitiesSection";
 import { MeshViewportDeliverySection } from "./mesh-details/MeshViewportDeliverySection";
 import { MixedTopologyProvenanceSection } from "./mesh-details/MixedTopologyProvenanceSection";
+import { FdmGridInspectorPanel } from "./fdm-grid/FdmGridInspectorPanel";
 import {
   type MeshDetailsLane,
   useMeshDetailsModel,
@@ -37,7 +38,7 @@ function MeshLaneStatusSection({ lane }: { lane: MeshDetailsLane }) {
   return (
     <InspectorGroup
       badge={isFdm ? "not applicable" : "unresolved"}
-      title={isFdm ? "Structured FDM Grid" : "Mesh lane unresolved"}
+      title={isFdm ? "Structured FDM Mesh" : "Mesh lane unresolved"}
     >
       <FeedbackBanner
         kind="warning"
@@ -155,6 +156,12 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
 
 export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const model = useMeshDetailsModel(selection);
+  if (model.lane === "fdm") {
+    // The global Mesh node is shared by both lanes.  FDM contributes the
+    // structured-grid/membership summary through its lane adapter instead of
+    // rendering an unrelated FEM build/quality panel.
+    return <FdmGridInspectorPanel selection={selection} />;
+  }
   if (model.lane !== "fem") {
     return (
       <div

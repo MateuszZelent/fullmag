@@ -137,7 +137,7 @@ describe("viewport3dFieldMapping", () => {
     );
   });
 
-  it("maps sampled FDM scalar colors through explicit cell indices", () => {
+  it("fails closed when an explicit FDM field covers only part of a target view", () => {
     const result = buildFdmSampledScalarColors(
       {
         ...vectorField([
@@ -153,17 +153,29 @@ describe("viewport3dFieldMapping", () => {
       "viridis",
     );
 
+    expect(result).toBeNull();
+  });
+
+  it("maps sampled FDM scalar colors only when every target cell is covered", () => {
+    const result = buildFdmSampledScalarColors(
+      {
+        ...vectorField([
+          1, 0, 0,
+          0.1, 0, 0,
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([3, 1]),
+      },
+      Uint32Array.from([3, 1]),
+      4,
+      "magnitude",
+      "viridis",
+    );
+
     expect(result).not.toBeNull();
     expect(Array.from(result?.scalarValues ?? [])).toEqual([
       expect.closeTo(1),
       expect.closeTo(0.1),
-      expect.closeTo(0),
-    ]);
-    expect(Array.from(result?.colors ?? []).slice(0, 3)).toEqual(
-      Array.from(Float32Array.from(magnitudeColorRgb(1))),
-    );
-    expect(Array.from(result?.colors ?? []).slice(6, 9)).toEqual([
-      0.5, 0.5, 0.5,
     ]);
   });
 

@@ -72,6 +72,7 @@ import type {
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
   FdmRegionMembershipResource,
+  PendingJsonResourceResult,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigResource,
@@ -92,7 +93,10 @@ import {
 } from "../api/apiTypes";
 import {
   decodeFdmRegionMembership,
+  FMRM_HEADER_LEN,
+  validateFdmRegionMembershipContract,
   type DecodedFdmRegionMembership,
+  type FdmRegionMembershipContractResult,
   type DecodedMeshQualityData,
   type DecodedTopology,
 } from "../api/codecs";
@@ -111,10 +115,44 @@ export {
 } from "../visualization/useVisualizationStateResource";
 
 import { useResource } from "./useResource";
+import type { ResourceResult } from "./resourceTypes";
 
 interface ResourceHookOptions {
   enabled?: boolean;
   revision?: ResourceRevision | null;
+}
+
+interface FdmMembershipBinaryResourceOptions extends ResourceHookOptions {
+  expectedGenerationId?: string | null;
+  expectedGridFingerprint?: string | null;
+  ownerObjectId?: string | null;
+}
+
+export type FdmRegionMembershipAvailability =
+  | { reason: "loading" | "not-materialized"; status: "pending" }
+  | { reason: string; status: "incompatible" }
+  | {
+      generationId: string;
+      gridFingerprint: string;
+      legendFingerprint: string | null;
+      status: "ready";
+    };
+
+export interface FdmRegionMembershipDescriptorResult
+  extends ResourceResult<FdmRegionMembershipResource> {
+  availability: FdmRegionMembershipAvailability;
+}
+
+type FdmRegionMembershipBinaryLoadResult =
+  | { reason: "not-materialized"; status: "pending" }
+  | Extract<FdmRegionMembershipContractResult, { status: "incompatible" }>
+  | (Extract<FdmRegionMembershipContractResult, { status: "ready" }> & {
+      data: DecodedFdmRegionMembership;
+    });
+
+export interface FdmRegionMembershipBinaryResult
+  extends ResourceResult<DecodedFdmRegionMembership> {
+  availability: FdmRegionMembershipAvailability;
 }
 
 const fdmRegionMembershipBinaryCache = new ResourceCache<DecodedFdmRegionMembership>({
@@ -163,16 +201,22 @@ export const FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY =
 export const resolveFdmRegionMembershipBinaryResourceKey = (
   regionId?: string | null,
   revision?: ResourceRevision | null,
+  ownerObjectId?: string | null,
 ) => {
   const baseKey = regionId
-    ? `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:${encodeURIComponent(regionId)}`
+    ? ownerObjectId
+      ? `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:owner:${encodeURIComponent(ownerObjectId)}:region:${encodeURIComponent(regionId)}`
+      : `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:${encodeURIComponent(regionId)}`
     : DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH;
   return revision == null
     ? baseKey
     : `${baseKey}#revision=${encodeURIComponent(String(revision))}`;
 };
-export const meshRegionMembershipResourceKey = (regionId: string) =>
-  `${DATA_MESH_REGION_MEMBERSHIP_PATH}:${encodeURIComponent(regionId)}`;
+export const meshRegionMembershipResourceKey = (
+  ownerObjectId: string,
+  regionId: string,
+) =>
+  `${DATA_MESH_REGION_MEMBERSHIP_PATH}:owner:${encodeURIComponent(ownerObjectId)}:region:${encodeURIComponent(regionId)}`;
 export const resolveMeshRegionMembershipsResourceKey = (
   regionIds: readonly string[],
 ) => {
@@ -351,6 +395,7 @@ export function resolveFdmRegionMembershipRevision(
   if (!resource) return null;
   return [
     resource.schema_version,
+    resource.domain_generation_id,
     resource.mesh_revision,
     resource.region_membership_revision,
     resource.grid_fingerprint,
@@ -395,6 +440,7 @@ export function resolveMeshRegionMembershipRevision(
     membership.mesh_id,
     membership.mesh_revision,
     membership.region_membership_revision,
+    membership.owner_object_id,
     membership.region_id,
     membership.source,
   ].join(":");
@@ -424,7 +470,10 @@ export function resolveMeshRegionMembershipListRevision(
     resource.mesh_id,
     resource.mesh_revision,
     membershipsRevision ?? "empty",
-    (resource.unresolved_region_ids ?? []).toSorted().join(","),
+    (resource.unresolved_regions ?? [])
+      .map((region) => `${region.owner_object_id}\u0000${region.region_id}`)
+      .toSorted()
+      .join(","),
   ].join(":");
 }
 
@@ -908,20 +957,21 @@ export function useMeshSharedDomainRealizedSizeFieldsResource(
 }
 
 export function useMeshRegionMembershipResource(
+  ownerObjectId: string | null | undefined,
   regionId: string | null | undefined,
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
-  const enabled = options.enabled !== false && Boolean(regionId);
-  const resourceKey = regionId
-    ? meshRegionMembershipResourceKey(regionId)
+  const enabled = options.enabled !== false && Boolean(ownerObjectId && regionId);
+  const resourceKey = ownerObjectId && regionId
+    ? meshRegionMembershipResourceKey(ownerObjectId, regionId)
     : `${DATA_MESH_REGION_MEMBERSHIP_PATH}:none`;
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      regionId
-        ? api.data.meshRegionMembership(regionId, { signal })
+      ownerObjectId && regionId
+        ? api.data.meshRegionMembership(ownerObjectId, regionId, { signal })
         : Promise.resolve(null),
-    [api, regionId],
+    [api, ownerObjectId, regionId],
   );
 
   return useResource<MeshRegionMembershipResource | null>({
@@ -973,12 +1023,67 @@ export function useFdmRegionMembershipResource(
     [api],
   );
 
-  return useResource<FdmRegionMembershipResource | null>({
+  const resource = useResource<PendingJsonResourceResult<FdmRegionMembershipResource>>({
     enabled: options.enabled,
     load,
-    resolveRevision: resolveFdmRegionMembershipRevision,
+    resolveRevision: (result) =>
+      result.status === "ready"
+        ? resolveFdmRegionMembershipRevision(result.data)
+        : null,
     resourceKey: FDM_REGION_MEMBERSHIPS_RESOURCE_KEY,
   });
+
+  return resolveFdmRegionMembershipDescriptorResult(resource);
+}
+
+export function resolveFdmRegionMembershipDescriptorResult(
+  resource: ResourceResult<PendingJsonResourceResult<FdmRegionMembershipResource>>,
+): FdmRegionMembershipDescriptorResult {
+  if (resource.error || resource.status === "error") {
+    return {
+      ...resource,
+      availability: { reason: "request-error", status: "incompatible" },
+      data: null,
+    };
+  }
+  if (resource.status !== "ready") {
+    return {
+      ...resource,
+      availability: { reason: "loading", status: "pending" },
+      data: null,
+    };
+  }
+  if (!resource.data) {
+    return {
+      ...resource,
+      availability: { reason: "loading", status: "pending" },
+      data: null,
+    };
+  }
+  if (resource.data.status === "pending") {
+    return {
+      ...resource,
+      availability: { reason: "not-materialized", status: "pending" },
+      data: null,
+    };
+  }
+  if (resource.data.data.freshness.trim().toLowerCase() !== "current") {
+    return {
+      ...resource,
+      availability: { reason: "stale-descriptor", status: "incompatible" },
+      data: null,
+    };
+  }
+  return {
+    ...resource,
+    availability: {
+      generationId: resource.data.data.domain_generation_id,
+      gridFingerprint: resource.data.data.grid_fingerprint,
+      legendFingerprint: resource.data.data.region_legend_fingerprint ?? null,
+      status: "ready",
+    },
+    data: resource.data.data,
+  };
 }
 
 function resolveDomainMetaRevision(meta: DomainMetaResource | null): ResourceRevision | null {
@@ -1002,19 +1107,56 @@ export function useDomainMetaResource(options: ResourceHookOptions = {}) {
 
 export function useFdmRegionMembershipBinaryResource(
   regionId?: string | null,
-  options: ResourceHookOptions = {},
+  options: FdmMembershipBinaryResourceOptions = {},
 ) {
   const { api } = useKernel();
+  const descriptor = useFdmRegionMembershipResource({ enabled: options.enabled });
+  const domain = useDomainMetaResource({ enabled: options.enabled });
   const normalizedRegionId = regionId?.trim() || null;
+  const normalizedOwnerObjectId = options.ownerObjectId?.trim() || null;
+  const contractRevision =
+    descriptor.data && domain.data
+      ? [
+          domain.data.generation_id,
+          resolveFdmRegionMembershipRevision(descriptor.data),
+          options.expectedGenerationId ?? "current",
+          options.expectedGridFingerprint ?? "descriptor",
+        ].join(":")
+      : options.revision;
   const resourceKey = resolveFdmRegionMembershipBinaryResourceKey(
     normalizedRegionId,
-    options.revision,
+    contractRevision,
+    normalizedOwnerObjectId,
   );
+  const prerequisite: FdmRegionMembershipAvailability =
+    descriptor.availability.status !== "ready"
+      ? descriptor.availability
+      : domain.status !== "ready" || !domain.data
+        ? { reason: "loading", status: "pending" }
+        : descriptor.data?.domain_generation_id !== domain.data.generation_id
+          ? { reason: "generation-mismatch", status: "incompatible" }
+          : options.expectedGenerationId != null &&
+            options.expectedGenerationId !== domain.data.generation_id
+          ? { reason: "generation-mismatch", status: "incompatible" }
+          : options.expectedGridFingerprint != null &&
+              options.expectedGridFingerprint !== descriptor.data?.grid_fingerprint
+            ? { reason: "grid-fingerprint-mismatch", status: "incompatible" }
+            : {
+                generationId: domain.data.generation_id,
+                gridFingerprint: descriptor.data?.grid_fingerprint ?? "",
+                legendFingerprint:
+                  descriptor.data?.region_legend_fingerprint ?? null,
+                status: "ready",
+              };
+  const contractReady = prerequisite.status === "ready";
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
+      if (!descriptor.data || !domain.data) {
+        return { reason: "not-materialized", status: "pending" } as const;
+      }
       const cached = fdmRegionMembershipBinaryCache.peek(resourceKey);
       const result = await (normalizedRegionId
-        ? api.data.fdmRegionMembershipRegionBytes(normalizedRegionId, {
+        ? api.data.fdmRegionMembershipRegionBytes(normalizedOwnerObjectId, normalizedRegionId, {
             etag: cached?.etag,
             signal,
           })
@@ -1025,39 +1167,107 @@ export function useFdmRegionMembershipBinaryResource(
 
       if (result.status === "not-applicable") {
         fdmRegionMembershipBinaryCache.delete(resourceKey);
-        return null;
+        return { reason: "not-materialized", status: "pending" } as const;
       }
+      let decoded: DecodedFdmRegionMembership;
       if (result.status === "not-modified") {
         if (!cached) {
           throw new Error(
             `FDM region membership ${resourceKey} returned 304 without cache entry`,
           );
         }
-        return cached.data;
+        decoded = cached.data;
+      } else {
+        decoded = decodeFdmRegionMembership(result.data);
       }
 
-      const decoded = decodeFdmRegionMembership(result.data);
+      const contract = await validateFdmRegionMembershipContract(
+        decoded,
+        descriptor.data,
+        domain.data,
+        {
+          expectedGenerationId: options.expectedGenerationId,
+          expectedGridFingerprint: options.expectedGridFingerprint,
+        },
+      );
+      if (contract.status === "incompatible") {
+        fdmRegionMembershipBinaryCache.delete(resourceKey);
+        return contract;
+      }
       fdmRegionMembershipBinaryCache.set(resourceKey, {
-        byteLength: result.byteLength,
+        byteLength:
+          result.status === "ready"
+            ? result.byteLength
+            : decoded.regionIds.byteLength + FMRM_HEADER_LEN,
         data: decoded,
-        etag: result.etag,
+        etag: result.etag ?? cached?.etag ?? null,
       });
-      return decoded;
+      return { ...contract, data: decoded };
     },
-    [api, normalizedRegionId, resourceKey],
+    [
+      api,
+      descriptor.data,
+      domain.data,
+      normalizedRegionId,
+      normalizedOwnerObjectId,
+      options.expectedGenerationId,
+      options.expectedGridFingerprint,
+      resourceKey,
+    ],
   );
   const resolveRevision = useCallback(
     () => fdmRegionMembershipBinaryCache.peek(resourceKey)?.etag ?? null,
     [resourceKey],
   );
 
-  return useResource<DecodedFdmRegionMembership | null>({
+  const resource = useResource<FdmRegionMembershipBinaryLoadResult>({
     abortStaleInflight: true,
-    enabled: options.enabled,
+    enabled: options.enabled !== false && contractReady,
     load,
     resolveRevision,
     resourceKey,
   });
+
+  return resolveFdmRegionMembershipBinaryResult(
+    resource,
+    prerequisite,
+  );
+}
+
+export function resolveFdmRegionMembershipBinaryResult(
+  resource: ResourceResult<FdmRegionMembershipBinaryLoadResult>,
+  prerequisite: FdmRegionMembershipAvailability,
+): FdmRegionMembershipBinaryResult {
+  if (prerequisite.status !== "ready") {
+    return { ...resource, availability: prerequisite, data: null };
+  }
+  if (resource.error || resource.status === "error") {
+    return {
+      ...resource,
+      availability: { reason: "request-error", status: "incompatible" },
+      data: null,
+    };
+  }
+  if (!resource.data) {
+    return {
+      ...resource,
+      availability: { reason: "loading", status: "pending" },
+      data: null,
+    };
+  }
+  if (resource.data.status !== "ready") {
+    return { ...resource, availability: resource.data, data: null };
+  }
+  return {
+    ...resource,
+    availability: {
+      generationId: resource.data.generationId,
+      gridFingerprint: resource.data.gridFingerprint,
+      legendFingerprint: resource.data.legendFingerprint,
+      status: "ready",
+    },
+    data: resource.data.data,
+  };
 }
 
 function normalizeMeshRegionMembershipIds(regionIds: readonly string[]): string[] {

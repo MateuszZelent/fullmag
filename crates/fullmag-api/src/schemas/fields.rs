@@ -6,9 +6,7 @@ use utoipa::ToSchema;
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldCatalog {
     pub revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub quantities: Vec<FieldDescriptor>,
 }
 
@@ -30,9 +28,7 @@ pub struct FieldDescriptor {
     pub location: String,
     pub unit: String,
     pub field_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub available: bool,
     pub source_step: u64,
     pub source_revision: u64,
@@ -53,9 +49,7 @@ pub struct FieldMeta {
     pub location: String,
     pub unit: String,
     pub field_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub stats: Option<FieldStats>,
     pub source_step: u64,
     pub source_revision: u64,
@@ -87,15 +81,24 @@ pub struct FieldVectorQuery {
     /// - `magnitude` → per-point L2 norm (nComp=1)
     /// - `x`/`y`/`z`/`cN` → single component by index (nComp=1)
     pub component: Option<String>,
-    /// Optional FEM scope for large-domain samples.
+    /// Optional FEM or FDM scope for large-domain samples.
     ///
-    /// Accepted values: `full`, `object`, `part`, `airbox`, `selection`.
+    /// Accepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,
+    /// `selection`. Single-grid FDM supports `object`, `region`, and `airbox`
+    /// from current FMRM membership. Multilayer FDM supports native `layer`
+    /// and `object` scopes without projecting payloads onto the common grid.
     /// `object` and `part` require `scope_id`; `airbox` may omit it and resolves
     /// to the first mesh part with role `air`; `selection` resolves from the
     /// current workspace selection.
     pub scope_kind: Option<String>,
-    /// Scope identifier for `object` and `part` scopes.
+    /// Scope identifier for `object`, `region`, and `part` scopes.
     pub scope_id: Option<String>,
+    /// Optional canonical owner of a `region` scope.
+    ///
+    /// Required when the current single-grid FDM membership has the same
+    /// `region_id` under more than one magnetic object. It is ignored by
+    /// globally unique region IDs to preserve existing unqualified requests.
+    pub owner_object_id: Option<String>,
     /// Optional geometric subset for scoped vector samples.
     ///
     /// Accepted values: `full` (default) and `surface`. `surface` is currently
@@ -109,9 +112,11 @@ pub struct FieldVectorQuery {
     /// mesh topology are valid for vector glyph placement and surface projection
     /// modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
     /// requires complete field coverage.
-    /// FDM responses always return the complete cell-centred field, even when
-    /// this cap is provided, because FMVP v2 has no cell-index mapping for a
-    /// downsampled payload.
+    /// Full-domain FDM responses always return the complete cell-centred field,
+    /// even when this cap is provided, because FMVP v2 has no cell-index
+    /// mapping for a downsampled payload. Scoped FDM responses use FMVP v3
+    /// explicit cell ordinals; multilayer layer/object scopes carry the native
+    /// grid certificate fingerprint and scope provenance in FMMI metadata.
     pub max_samples: Option<u32>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.
@@ -146,9 +151,7 @@ pub struct FieldSliceMeta {
     /// Resolved cut in world coordinates (m), if domain bounds are known.
     pub cut_world: Option<f64>,
     pub field_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     /// Sampling path used to construct this slice.
     ///
     /// Examples: `fdm_nearest`, `fem_fallback_fdm_nearest`.
@@ -229,9 +232,7 @@ pub struct FieldProjectionMeta {
     pub include_air_as_zero: bool,
     pub samples: u32,
     pub field_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub sampling_method: String,
     pub etag: String,
     pub projection_revision: String,
@@ -262,9 +263,7 @@ pub struct FieldProjectionProfile {
     pub component: String,
     pub plane: String,
     pub field_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub sampling_method: String,
     pub pixel_x: u32,
     pub pixel_y: u32,

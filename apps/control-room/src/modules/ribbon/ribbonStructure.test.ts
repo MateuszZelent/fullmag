@@ -47,6 +47,7 @@ import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectio
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizationCommandContributions";
@@ -1451,6 +1452,30 @@ describe("ribbon structure", () => {
     expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
   });
 
+  it("accepts FDM Airbox vector edits in the local structured-grid controller", async () => {
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      overrides: [],
+      revision: 7,
+    });
+
+    const result = await context.commands.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context.commandContext as CommandContext,
+      visualizationTargetCommandInput(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+        vectorsVisible: true,
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(patches).toEqual([]);
+    expect(invalidations).toEqual([]);
+    expect(context.visualization.getSnapshot().overrides).toMatchObject({
+      [FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id]: {
+        vectorsVisible: true,
+      },
+    });
+  });
+
   it("routes physics interaction choices through the command registry", async () => {
     const content = buildRibbonTabContent("physics", {
       commands: createRibbonCommandRegistry(),
@@ -1840,15 +1865,11 @@ describe("ribbon structure", () => {
       disabled: false,
       value: "var(--fm-airbox-wire)",
     });
-    expect(pointColorNode).toMatchObject({
-      disabled: false,
-      value: "var(--fm-info)",
-    });
+    expect(pointColorNode).toBeUndefined();
 
     if (
       vectorThicknessNode?.type !== "slider" ||
       wireframeColorNode?.type !== "color" ||
-      pointColorNode?.type !== "color" ||
       visibleNode?.type !== "checkbox"
     ) {
       throw new Error("Expected selected airbox style controls");
@@ -1857,14 +1878,12 @@ describe("ribbon structure", () => {
     const commandContext = { ...context, selection };
     await runRibbonNode(vectorThicknessNode, 2.4, commandContext);
     await runRibbonNode(wireframeColorNode, "#ffffff", commandContext);
-    await runRibbonNode(pointColorNode, "#66eeff", commandContext);
     await runRibbonNode(visibleNode, false, commandContext);
 
-    expect(patches).toHaveLength(4);
+    expect(patches).toHaveLength(3);
     expect(patches).toMatchObject([
       { overrides: [{ style: { vector_thickness: 2.4 } }] },
       { overrides: [{ style: { wireframe_color: "#ffffff" } }] },
-      { overrides: [{ style: { point_color: "#66eeff" } }] },
       { layers: { airbox: { visible: false } } },
     ]);
     await vi.waitFor(() =>
@@ -1872,7 +1891,6 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
         [VISUALIZATION_STATE_PATH, 43],
-        [VISUALIZATION_STATE_PATH, 44],
       ]),
     );
   });
@@ -2093,8 +2111,6 @@ describe("ribbon structure", () => {
         layers: {
           airbox: {
             bounds: { opacity: 1, visible: false },
-            points: { opacity: 1, visible: false },
-            surface: { opacity: 0.28, visible: false },
             vectors: { density: 1200, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: false },
@@ -2355,7 +2371,7 @@ describe("ribbon structure", () => {
     );
 
     expect(visibleNode).toMatchObject({ checked: false, disabled: false });
-    expect(renderModeNode).toMatchObject({ value: "points", disabled: true });
+    expect(renderModeNode).toMatchObject({ value: "wireframe", disabled: true });
     expect(vectorsNode).toMatchObject({ checked: false, disabled: true });
   });
 
@@ -3496,7 +3512,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("fails closed to the grid overview for an explicit FDM session", () => {
+  it("fails closed to the Mesh overview for an explicit FDM session", () => {
     const visualization = new ObjectVisualizationController();
     const sessionStatus = {
       domain: { discretization: "fdm" },
@@ -3549,7 +3565,7 @@ describe("ribbon structure", () => {
       ?.actions.find((action) => action.id === "mesh.open-overview");
     expect(inspectorAction?.menu).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: "Open grid overview" }),
+        expect.objectContaining({ label: "Open mesh overview" }),
       ]),
     );
     expect(inspectorAction?.menu).not.toEqual(

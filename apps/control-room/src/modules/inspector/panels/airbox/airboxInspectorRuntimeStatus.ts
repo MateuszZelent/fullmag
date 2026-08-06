@@ -1,5 +1,6 @@
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 import { isExplicitFdmStudy } from "../StudyGlobalAuthoringModel";
 
 export type AirboxInspectorRuntimeStatus = {
@@ -56,6 +57,30 @@ export function isExplicitFdmAirboxRuntime(
   return isExplicitFdmStudy({
     sessionDiscretization: status?.domain.discretization,
   });
+}
+
+export type AirboxInspectorLane = "conflict" | "fdm" | "fem";
+
+export function resolveAirboxInspectorLane(
+  selection: Selection,
+  status: AirboxInspectorRuntimeStatus | null | undefined,
+): AirboxInspectorLane {
+  const selectionLane =
+    selection.ref?.type === "airbox"
+      ? selection.ref.visualizationTargetId === "fdm-universe-outside-support"
+        ? "fdm"
+        : "fem"
+      : null;
+  const discretization = status?.domain.discretization.trim().toLowerCase();
+  const runtimeLane =
+    discretization === "fdm" || discretization === "fem"
+      ? discretization
+      : null;
+
+  if (selectionLane && runtimeLane && selectionLane !== runtimeLane) {
+    return "conflict";
+  }
+  return selectionLane ?? runtimeLane ?? "fem";
 }
 
 export function useAirboxInspectorRuntimeStatus() {

@@ -767,6 +767,25 @@ describe("scoped mesh quality panels", () => {
     expect(html).not.toContain("ż".repeat(513));
   });
 
+  it("keeps FDM Airbox parameters geometry-only and requires a rerun or re-plan", () => {
+    const html = renderToStaticMarkup(
+      <AirboxMeshParametersPanel
+        lane="fdm"
+        selection={{ ...airboxSelection, kind: "airbox.mesh.parameters" }}
+      />,
+    );
+
+    expect(html).toContain("Canonical Airbox Geometry");
+    expect(html).toContain("Padding X");
+    expect(html).toContain("Center X");
+    expect(html).toContain("FDM policy changes apply to the next run");
+    expect(html).not.toContain("Maximum element growth rate");
+    expect(html).not.toContain("Curvature factor");
+    expect(html).not.toContain("Element grading");
+    expect(html).not.toContain("Advanced Authored Policy JSON");
+    expect(html).not.toContain("Build Shared-Domain Mesh");
+  });
+
   it("labels absent Airbox-scoped quality gates as unknown backend evidence", () => {
     const html = renderToStaticMarkup(
       <AirboxMeshQualityGatesPanel

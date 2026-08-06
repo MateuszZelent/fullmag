@@ -5,7 +5,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
   type RefObject,
 } from "react";
@@ -574,26 +573,14 @@ function useVectorGlyphMaterialSync({
 function useVectorGlyphInstanceColorAttribute(
   capacity: number,
 ): InstancedBufferAttribute | null {
-  const instanceColorAttrRef = useRef<InstancedBufferAttribute | null>(null);
-  const [instanceColorAttr, setInstanceColorAttr] =
-    useState<InstancedBufferAttribute | null>(null);
-  useEffect(() => {
+  return useMemo(() => {
     const attr = new InstancedBufferAttribute(
       new Float32Array(capacity * 3),
       3,
     );
     attr.setUsage(DynamicDrawUsage);
-    instanceColorAttrRef.current = attr;
-    setInstanceColorAttr(attr);
-    return () => {
-      if (instanceColorAttrRef.current === attr) {
-        instanceColorAttrRef.current = null;
-        setInstanceColorAttr(null);
-      }
-    };
+    return attr;
   }, [capacity]);
-
-  return instanceColorAttr;
 }
 
 function useVectorGlyphBuild({
@@ -1115,6 +1102,7 @@ export function VectorFieldLayer({
   carrierId,
   colors,
   colorMode = "orientation",
+  glyphColorsOverride,
   opacity = 1,
   segments,
   fieldBufferId,
@@ -1128,6 +1116,8 @@ export function VectorFieldLayer({
   carrierId?: string;
   colors: Viewport3DColors;
   colorMode?: string;
+  /** Optional field-derived RGB values, one triplet per glyph. */
+  glyphColorsOverride?: Float32Array | null;
   materialProfile?: Viewport3DMaterialProfile["glyphs"];
   opacity?: number;
   renderOnTop?: boolean;
@@ -1172,7 +1162,7 @@ export function VectorFieldLayer({
   });
   const glyphBuild = visibleGlyphBuild?.result ?? null;
   const glyphTransforms = glyphBuild?.transforms ?? null;
-  const glyphColors = glyphBuild?.colors ?? null;
+  const glyphColors = glyphColorsOverride ?? glyphBuild?.colors ?? null;
   const useInstanceColors = Boolean(glyphColors);
   const glyphCount = glyphTransforms?.count ?? 0;
   const transformScratch = useMemo(

@@ -115,7 +115,7 @@ describe("viewport3dTopologyStaleness", () => {
     ).toBe("current");
   });
 
-  it("keeps loaded FEM domain topology renderable while scene resources are unavailable", () => {
+  it("does not promote loaded FEM topology with unknown provenance to current", () => {
     expect(
       resolveViewport3DTopologyFreshness(
         null,
@@ -125,7 +125,23 @@ describe("viewport3dTopologyStaleness", () => {
           topology: { nodeCount: 76 },
         },
       ),
-    ).toBe("current");
+    ).toBe("unknown");
+  });
+
+  it("keeps FEM topology unknown when a populated scene has no manifest provenance", () => {
+    expect(
+      resolveViewport3DTopologyFreshness(
+        {
+          objects: [{ id: "film", tags: ["mesh:ready"], visible: true }],
+          revision: 12,
+        },
+        null,
+        {
+          domainMeta: { discretization: "fem" },
+          topology: { nodeCount: 76 },
+        },
+      ),
+    ).toBe("unknown");
   });
 
   it("keeps matching manifest provenance current", () => {

@@ -70,7 +70,7 @@ function titleCase(value: string): string {
 
 function resolveFamily(kind: string): FamilyDescriptor {
   if (kind === "fdm.cell" || kind === "mesh.grid" || kind.startsWith("mesh.grid.")) {
-    return { tabs: [], typeLabel: "FDM grid" };
+    return { tabs: [], typeLabel: "FDM mesh" };
   }
   if (kind.endsWith(".visualization") || kind.includes(".visualization.")) {
     return { tabs: [], typeLabel: "Display" };

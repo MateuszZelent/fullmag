@@ -11,7 +11,11 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    expect(configSource).toContain('distDir: auditBuild ? ".next-audit" : ".next"');
+    expect(configSource).toContain("FULLMAG_NEXT_DIST_DIR");
+    expect(configSource).toContain("isIsolatedSmokeDistDir");
+    expect(configSource).toContain(
+      'distDir: isolatedSmokeDistDir ?? (auditBuild ? ".next-audit" : ".next")',
+    );
   });
 
   it("allows the public Traefik origin used by the HMR websocket", () => {

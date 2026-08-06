@@ -159,8 +159,10 @@ describe("ObjectMeshPolicyPanel FDM lane", () => {
     );
     expect(source).toContain("<FdmObjectMeshPolicySection");
     expect(source).not.toContain("FEM Mesh Controls");
-    expect(source).toContain('label="Grid policy" value="execution-plan owned (read-only)"');
-    expect(source).toContain('label="Explorer role" value="FDM Grid / Magnetic Support"');
+    expect(source).toContain('InspectorGroup title="Object Mesh" badge="structured-grid"');
+    expect(source).toContain('label="Mesh policy" value="execution-plan owned (read-only)"');
+    expect(source).toContain('label="Mesh scope" value="selected object / magnetic support"');
+    expect(source).toContain('label="Mesh realization" value="structured-grid cells"');
     expect(source).toContain("if (explicitFdm)");
     expect(source).toContain('if (meshLane !== "fem")');
     expect(source).toContain("Mesh policy lane is unresolved");

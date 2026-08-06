@@ -40,7 +40,7 @@ describe("viewport3DTargets", () => {
     expect(targetForFdmUniverseOutsideSupport()).toEqual({
       id: "fdm-universe-outside-support",
       kind: "fdm-domain",
-      label: "Universe outside magnetic support",
+      label: "Airbox",
     });
   });
 
@@ -505,6 +505,7 @@ describe("viewport3DTargets", () => {
       totalCells: 8,
     };
     const overlay = {
+      activeCellCount: null,
       kind: "fdm-universe-outside-magnetic-support" as const,
       legend: { magneticSupport: "support", outsideSupport: "outside" },
       magneticSupportBounds: {
@@ -515,8 +516,9 @@ describe("viewport3DTargets", () => {
       target: {
         id: "fdm-universe-outside-support" as const,
         kind: "fdm-domain" as const,
-        label: "Universe outside magnetic support" as const,
+        label: "Airbox" as const,
       },
+      inactiveCellCount: null,
       universeBounds: grid.bounds!,
     };
     const domain = {
@@ -534,7 +536,7 @@ describe("viewport3DTargets", () => {
       moduleSource: "explorer",
       nodeId: scope === "magnetic-support"
         ? "model:mesh:magnetic-support"
-        : "model:mesh:outside-support",
+        : "model:universe:grid:outside-support",
       objectId: null,
       ref: {
         kind: scope === "magnetic-support"
@@ -542,7 +544,7 @@ describe("viewport3DTargets", () => {
           : "mesh.grid.universe-outside-support",
         nodeId: scope === "magnetic-support"
           ? "model:mesh:magnetic-support"
-          : "model:mesh:outside-support",
+          : "model:universe:grid:outside-support",
         scope,
         type: "fdm-domain",
         visualizationTargetId: scope === "universe-outside-support"

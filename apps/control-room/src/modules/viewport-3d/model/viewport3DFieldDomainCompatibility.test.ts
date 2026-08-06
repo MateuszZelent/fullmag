@@ -221,7 +221,57 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
     ).toMatchObject({ status: "compatible" });
   });
 
-  it("rejects FEM topology metadata on an FDM field even when counts happen to match", () => {
+  it("accepts an FDM FMVP v3 carrier hash only when it matches the current FMRM grid", () => {
+    const gridFingerprint = "72a6526603d5488bde1206de81d455638d624bdcd6209ef7638349de3cf4fcdc";
+    expect(
+      resolveViewport3DFieldDomainCompatibility({
+        domain: {
+          discretization: "fdm",
+          domainGenerationId: "fdm-1",
+          meshTopologyHash: `sha256:${gridFingerprint}`,
+          meshTopologyRevision: null,
+          pointCount: 4,
+        },
+        field: {
+          domainGenerationId: "fdm-1",
+          formatVersion: 3,
+          indexing: "explicit_node_indices",
+          meshTopologyHash: gridFingerprint,
+          meshTopologyRevision: "1",
+          nodeIndices: Uint32Array.from([0, 2]),
+          pointCount: 2,
+        },
+      }),
+    ).toEqual({ reason: "compatible", status: "compatible" });
+  });
+
+  it("fails closed when an FDM FMVP v3 carrier hash disagrees with the current FMRM grid", () => {
+    expect(
+      resolveViewport3DFieldDomainCompatibility({
+        domain: {
+          discretization: "fdm",
+          domainGenerationId: "fdm-1",
+          meshTopologyHash: "a".repeat(64),
+          meshTopologyRevision: null,
+          pointCount: 4,
+        },
+        field: {
+          domainGenerationId: "fdm-1",
+          formatVersion: 3,
+          indexing: "explicit_node_indices",
+          meshTopologyHash: "b".repeat(64),
+          meshTopologyRevision: "1",
+          nodeIndices: Uint32Array.from([0, 2]),
+          pointCount: 2,
+        },
+      }),
+    ).toMatchObject({
+      reason: "mesh-topology-hash-mismatch",
+      status: "mismatch",
+    });
+  });
+
+  it("fails closed for scoped FDM FMVP v3 when the FMRM carrier is unavailable", () => {
     expect(
       resolveViewport3DFieldDomainCompatibility({
         domain: {
@@ -234,14 +284,15 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
         field: {
           domainGenerationId: "fdm-1",
           formatVersion: 3,
-          indexing: "full_domain",
-          meshTopologyHash: "stale-fem-hash",
-          meshTopologyRevision: "7",
-          pointCount: 4,
+          indexing: "explicit_node_indices",
+          meshTopologyHash: "b".repeat(64),
+          meshTopologyRevision: "1",
+          nodeIndices: Uint32Array.from([0, 2]),
+          pointCount: 2,
         },
       }),
     ).toMatchObject({
-      reason: "fdm-mesh-topology-metadata",
+      reason: "fdm-carrier-identity-unknown",
       status: "mismatch",
     });
   });
@@ -260,6 +311,32 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
       }),
     ).toMatchObject({ status: "degraded", reason: "fmvp-v2-legacy" });
   });
+
+  it.each(["explicit_node_indices", "sampled_node_indices"] as const)(
+    "rejects duplicate node indices in a scoped FEM field using %s",
+    (indexing) => {
+      expect(
+        resolveViewport3DFieldDomainCompatibility({
+          domain: {
+            ...domain,
+            discretization: "fem",
+          },
+          field: {
+            domainGenerationId: "43",
+            formatVersion: 3,
+            indexing,
+            meshTopologyHash: "h",
+            meshTopologyRevision: "7",
+            nodeIndices: Uint32Array.from([1, 1]),
+            pointCount: 2,
+          },
+        }),
+      ).toMatchObject({
+        reason: "duplicate-node-index",
+        status: "mismatch",
+      });
+    },
+  );
 
   it("does not pass a downsampled legacy FDM vector into the renderer", () => {
     expect(

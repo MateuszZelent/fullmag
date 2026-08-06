@@ -256,10 +256,13 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(meshPanel).toContain('if (meshLane === "fdm")');
     expect(meshPanel).toContain('if (meshLane !== "fem")');
     expect(meshPanel).not.toContain('title="FEM Mesh Controls"');
-    expect(meshPanel).toContain('label="Grid policy" value="execution-plan owned (read-only)"');
-    expect(meshPanel).toContain('label="Explorer role" value="FDM Grid / Magnetic Support"');
+    expect(meshPanel).toContain('InspectorGroup title="Region Mesh" badge={fdmModel.status}');
+    expect(meshPanel).toContain('label="Mesh policy" value="execution-plan owned (read-only)"');
+    expect(meshPanel).toContain('label="Mesh scope" value={`${model.objectId} / ${model.regionId}`}');
+    expect(meshPanel).toContain('label="Mesh realization" value="structured-grid cell membership"');
     expect(shared).toContain("canWriteMeshRegion");
     expect(shared).toContain("FDM structured-grid membership is read-only");
+    expect(shared).toContain('label="Mesh realization"');
 
     for (const panelName of [
       "ObjectRegionOverviewPanel.tsx",
@@ -302,7 +305,7 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(meshPanel).toContain("model.regionId");
     expect(meshPanel).toContain("regionId: model.regionId");
     expect(overview).toContain('meshLane === "fdm"');
-    expect(overview).toContain("Not applicable for FDM structured-grid regions");
+    expect(overview).toContain("Runtime-derived structured-grid membership");
   });
 
   it("does not fetch the FEM scene while routing explicit-FDM region visualization", () => {

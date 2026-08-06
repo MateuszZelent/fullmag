@@ -70,4 +70,24 @@ describe("FDM cell selection identity", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps duplicate region ids distinct by ferromagnetic owner", () => {
+    const first: Extract<SelectionRef, { type: "fdm-domain" }> = {
+      kind: "mesh.grid.region",
+      nodeId: "model:mesh:region:object%3Aa:shared",
+      objectId: "object:a",
+      regionId: "shared",
+      scope: "region",
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-domain",
+    };
+    const second = {
+      ...first,
+      objectId: "object:b",
+    };
+
+    expect(selectionRefEquals(first, first)).toBe(true);
+    expect(selectionRefEquals(first, second)).toBe(false);
+    expect(selectionRefEquals(first, { ...first, objectId: undefined })).toBe(false);
+  });
 });

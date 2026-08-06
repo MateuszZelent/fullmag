@@ -326,6 +326,8 @@ export interface ExplorerNode {
   resourceRef?: string;
   displayUnits?: Record<string, string>;
   range?: { fromSI: number; toSI: number } | null;
+  /** Grouping rows stay focusable/expandable but do not create a Selection. */
+  selectable?: boolean;
   selectedSeriesIds?: readonly string[];
   tableId?: string;
   xAxisId?: string;
@@ -448,6 +450,14 @@ export interface ModelTreeSnapshot {
   crossSections?: ModelTreeCrossSectionSnapshot | null;
   materials?: readonly ModelTreeMaterialSnapshot[];
   mesh?: ModelTreeMeshSnapshot | null;
+  airbox?: {
+    /** A committed universe mesh policy requests an Airbox realization. */
+    authoredPolicy: boolean;
+    /** The current mesh manifest contains an owner-resolved Airbox carrier. */
+    realizedCarrier: boolean;
+    /** Runtime planning published an effective Airbox target. */
+    resolvedTarget?: boolean;
+  } | null;
   universe?: {
     id: string;
     label: string;

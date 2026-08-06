@@ -85,8 +85,9 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
       status: enabled ? "ready" : "idle",
     };
   },
-  useMeshRegionMembershipsResource: (
-    _regionIds: readonly string[],
+  useMeshRegionMembershipResource: (
+    _ownerObjectId: string | null | undefined,
+    _regionId: string | null | undefined,
     { enabled }: { enabled: boolean },
   ) => {
     resourceCall("region-memberships", enabled);
@@ -186,13 +187,13 @@ const selection: Selection = {
 };
 
 describe("ObjectVisualizationPanel lane routing", () => {
-  it("uses only FDM resources for a normal explicit-FDM object visualization route", () => {
+  it("keeps a normal explicit-FDM object visualization route on the object target", () => {
     testState.discretization = "fdm";
     testState.resourceCalls.length = 0;
 
     const html = renderToStaticMarkup(<ObjectVisualizationPanel selection={selection} />);
 
-    expect(html).toContain("Structured grid cells");
+    expect(html).toContain("Target ID:object:film");
     expect(testState.resourceCalls).toEqual(
       expect.arrayContaining([
         { name: "domain-meta", enabled: true },

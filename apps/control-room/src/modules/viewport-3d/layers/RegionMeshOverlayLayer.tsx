@@ -33,6 +33,10 @@ export interface RegionMeshOverlayLayerProps {
 const CSS_VARIABLE_COLOR_PATTERN = /^var\((--[-_a-zA-Z0-9]+)\)$/;
 const REGION_MESH_OVERLAY_UPLOAD_FRAME_BUDGET_MS = 3;
 
+function regionMeshOverlayIdentity(model: RegionMeshOverlayModel): string {
+  return `${encodeURIComponent(model.objectId)}:${encodeURIComponent(model.regionId)}`;
+}
+
 interface RegionMeshOverlayGeometrySnapshot {
   readonly geometry: BufferGeometry | null;
   readonly version: number;
@@ -85,7 +89,7 @@ export function RegionMeshOverlayLayer({
     <group name="region-mesh-overlays">
       {models.map((model) => (
         <RegionMeshOverlayShape
-          key={model.regionId}
+          key={regionMeshOverlayIdentity(model)}
           model={model}
           onSelectRegion={onSelectRegion}
           targetVisualizationRevision={targetVisualizationRevision}
@@ -146,7 +150,7 @@ function RegionMeshOverlayShape({
 
   return (
     <group
-      name={`region-mesh-overlay:${model.regionId}`}
+      name={`region-mesh-overlay:${encodeURIComponent(model.objectId)}:${encodeURIComponent(model.regionId)}`}
       onClick={selectRegionFromClick}
       onPointerDown={handlePointerDown}
     >
@@ -213,6 +217,7 @@ function useRegionMeshOverlayGeometryUpload({
   const uploadKey = createRegionMeshOverlayGeometryUploadKey({
     indexBytes: indices?.byteLength ?? 0,
     kind,
+    objectId: model.objectId,
     positionsBytes: model.positions.byteLength,
     regionId: model.regionId,
     targetVisualizationRevision,
@@ -346,6 +351,7 @@ function createRegionMeshOverlayGeometry(
 function createRegionMeshOverlayGeometryUploadKey({
   indexBytes,
   kind,
+  objectId,
   positionsBytes,
   regionId,
   targetVisualizationRevision,
@@ -353,6 +359,7 @@ function createRegionMeshOverlayGeometryUploadKey({
 }: {
   indexBytes: number;
   kind: "edge" | "surface";
+  objectId: string;
   positionsBytes: number;
   regionId: string;
   targetVisualizationRevision?: string | number | null;
@@ -360,6 +367,7 @@ function createRegionMeshOverlayGeometryUploadKey({
 }): string {
   return [
     "region-overlay-geometry",
+    `object=${encodeURIComponent(objectId)}`,
     `region=${regionId}`,
     `kind=${kind}`,
     `topology=${topologyRevision ?? "none"}`,

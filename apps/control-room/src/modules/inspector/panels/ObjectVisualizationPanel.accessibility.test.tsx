@@ -10,7 +10,12 @@ import {
   NumberField,
   VisualizationDisplayPassesSection,
 } from "./ObjectVisualizationTargetSection";
-import { DEFAULT_AIRBOX_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  AIRBOX_VISUALIZATION_TARGET,
+  DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import {
   nextVisualizationRadioValue,
   visualizationSectionDisabledDescription,
@@ -27,7 +32,7 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
         primitiveDisplayToggleVisible={false}
         renderWarning={null}
         settings={DEFAULT_AIRBOX_VISUALIZATION}
-        targetKind="airbox"
+        target={AIRBOX_VISUALIZATION_TARGET}
       />,
     );
 
@@ -36,6 +41,26 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain(">Vectors</button>");
     expect(html).not.toContain('aria-label="Toggle surface shading"');
     expect(html).not.toContain('aria-label="Toggle wireframe overlay"');
+  });
+
+  it("exposes FDM Airbox field vectors while retaining visibility and bounds", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationDisplayPassesSection
+        displaySettings={DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION}
+        passControlsDisabled={false}
+        patch={vi.fn().mockResolvedValue(undefined)}
+        pending={false}
+        primitiveDisplayToggleVisible={false}
+        renderWarning={null}
+        settings={DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION}
+        target={FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Toggle target visibility"');
+    expect(html).toContain('aria-label="Toggle target bounds"');
+    expect(html).toContain("Bounds opacity");
+    expect(html).toContain("Toggle vector field arrows");
   });
 
   it("exposes only independent display overlays as pressed toggles", () => {

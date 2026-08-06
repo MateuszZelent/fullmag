@@ -53,6 +53,7 @@ import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/vis
 import type { ModuleProps } from "@/kernel/types";
 import {
   surfaceColorSourceToColorMode,
+  type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
@@ -119,9 +120,10 @@ import {
   type Viewport3DMeshCellSelectionIdentity,
   type Viewport3DMeshCellSelectionRequest,
 } from "./viewport3dMeshCellSelection";
-import type {
-  HysteresisReplayGlyphModel,
-  HysteresisStepViewportTarget,
+import {
+  targetForFdmUniverseOutsideSupport,
+  type HysteresisReplayGlyphModel,
+  type HysteresisStepViewportTarget,
 } from "./model/viewport3DTargets";
 import {
   buildViewport3DTargetRenderPlan,
@@ -155,6 +157,7 @@ import {
   viewportSelectionForDomain,
   viewportSelectionForFdmCell,
   viewportSelectionForFdmUniverseOutsideSupport,
+  viewportSelectionForFdmTarget,
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
@@ -516,6 +519,7 @@ function resolveViewport3DColorbarLegendFromPlan({
 interface Viewport3DScalarColorbarLegendInput {
   colorPalette: string;
   fdmSurfaceColors?: ScalarColorBuffer | null;
+  fdmVectorColors?: ScalarColorBuffer | null;
   fdmSettings?: Pick<
     Viewport3DSceneProps["fdmSettings"],
     "activeQuantityId" | "scalarColorPalette" | "viewportColorbarVisible"
@@ -554,18 +558,26 @@ function scalarColorRangeKey(buffer: ScalarColorBuffer): string {
 export function resolveViewport3DScalarColorbarLegend({
   colorPalette,
   fdmSurfaceColors,
+  fdmVectorColors,
   fieldModel,
   quantityId,
   surfaceColorMode,
   unit,
   vectorColorMode,
 }: Viewport3DScalarColorbarLegendInput): Viewport3DColorbarLegend | null {
-  if (fdmSurfaceColors) {
+  const fdmColorBuffer =
+    fdmSurfaceColors &&
+    (!surfaceColorMode ||
+      fdmSurfaceColors.colorMode === surfaceColorMode ||
+      !fdmVectorColors)
+      ? fdmSurfaceColors
+      : fdmVectorColors;
+  if (fdmColorBuffer) {
     return resolveViewport3DColorbarLegend({
       colorMode: surfaceColorMode ?? vectorColorMode,
-      colorPalette: fdmSurfaceColors.colorPalette ?? colorPalette,
+      colorPalette: fdmColorBuffer.colorPalette ?? colorPalette,
       quantityId,
-      range: fdmSurfaceColors.range,
+      range: fdmColorBuffer.range,
       unit,
     });
   }
@@ -747,17 +759,19 @@ export function resolveViewport3DScalarColorbarLegends({
   colorPalette,
   fdmSettings,
   fdmSurfaceColors,
+  fdmVectorColors,
   fieldModel,
   parts,
   surfaceColorMode,
   vectorColorMode,
 }: Viewport3DScalarColorbarLegendInput): Viewport3DScopedColorbarLegend[] {
-  if (fdmSurfaceColors && fdmSettings?.viewportColorbarVisible) {
+  const fdmColorBuffer = fdmSurfaceColors ?? fdmVectorColors;
+  if (fdmColorBuffer && fdmSettings?.viewportColorbarVisible) {
     const legend = resolveViewport3DColorbarLegend({
       colorMode: surfaceColorMode ?? vectorColorMode,
-      colorPalette: fdmSurfaceColors.colorPalette ?? fdmSettings.scalarColorPalette,
+      colorPalette: fdmColorBuffer.colorPalette ?? fdmSettings.scalarColorPalette,
       quantityId: fdmSettings.activeQuantityId,
-      range: fdmSurfaceColors.range,
+      range: fdmColorBuffer.range,
       unit: quantityUnitForColorbar(fdmSettings.activeQuantityId),
     });
     return legend ? [{ key: "fdm", legend }] : [];
@@ -1138,7 +1152,6 @@ interface Viewport3DFrameProps
   fdmFieldIdentityCompatible: boolean;
   fdmSelectionCellOrdinal: number | null;
   fdmSelectionAnnouncement: string | null;
-  fdmUniverseOverlayVisible: boolean;
   hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
   hysteresisReplayTarget: HysteresisStepViewportTarget | null;
   inspectRevision: number;
@@ -1198,8 +1211,6 @@ export default function Viewport3DModule({
     useState<RegionDiagnosticOverlayState>(
       DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
     );
-  const [fdmUniverseOverlayVisible, setFdmUniverseOverlayVisible] =
-    useState(true);
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -1213,7 +1224,7 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
-  const { onSelectDomain, onSelectFdmCell, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectRegion } =
+  const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
       fdmDomain: sceneModel.fdmDomain,
@@ -1331,6 +1342,14 @@ export default function Viewport3DModule({
   const changeRegionOverlayVisibility = useCallback((visible: boolean) => {
     setRegionDiagnosticOverlayState((state) => ({ ...state, visible }));
   }, []);
+  const changeFdmUniverseOverlayVisibility = useCallback(
+    (visible: boolean) => {
+      kernel.visualization.patchTarget(targetForFdmUniverseOutsideSupport(), {
+        visible,
+      });
+    },
+    [kernel.visualization],
+  );
 
   return (
     <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
@@ -1348,16 +1367,16 @@ export default function Viewport3DModule({
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
       fitRevision={commandState.fitRevision}
       kernel={kernel}
-      fdmUniverseOverlayVisible={fdmUniverseOverlayVisible}
       fdmSelectionCellOrdinal={fdmSelectionCellOrdinal}
       fdmSelectionAnnouncement={fdmSelectionAnnouncement}
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
-      onFdmUniverseOverlayVisibilityChange={setFdmUniverseOverlayVisible}
+      onFdmUniverseOverlayVisibilityChange={changeFdmUniverseOverlayVisibility}
       onRegionOverlaySourceChange={changeRegionOverlaySource}
       onRegionOverlayVisibilityChange={changeRegionOverlayVisibility}
       onSelectDomain={onSelectDomain}
       onSelectFdmCell={onSelectFdmCell}
+      onSelectFdmTarget={onSelectFdmTarget}
       onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
@@ -1367,7 +1386,6 @@ export default function Viewport3DModule({
       onCameraInteractionStart={beginCameraInteraction}
       captureRevision={commandState.captureRevision}
       inspectEnabled={commandState.widgets.inspectEnabled}
-      inspectQuantityId={sceneModel.quantityId}
       inspectRevision={commandState.widgets.inspectRevision}
       requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
@@ -1473,6 +1491,13 @@ function useViewport3DSelectionHandlers({
   const onSelectFdmUniverseOutsideSupport = useCallback(() => {
     select(viewportSelectionForFdmUniverseOutsideSupport());
   }, [select]);
+  const onSelectFdmTarget = useCallback(
+    (target: VisualizationTargetRef) => {
+      const selection = viewportSelectionForFdmTarget(target);
+      if (selection) select(selection);
+    },
+    [select],
+  );
   const onSelectPart = useCallback(
     (partSelection: Viewport3DPartSelection) => {
       const address = resolveSemanticTargetForMeshPart(
@@ -1509,6 +1534,7 @@ function useViewport3DSelectionHandlers({
     onSelectDomain,
     onSelectFdmCell,
     onSelectFdmUniverseOutsideSupport,
+    onSelectFdmTarget,
     onSelectObject,
     onSelectPart,
     onSelectRegion,
@@ -1528,7 +1554,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   fieldRefresh,
   fdmSelectionCellOrdinal,
   fdmSelectionAnnouncement,
-  fdmUniverseOverlayVisible,
   hysteresisReplayGlyphModel,
   hysteresisReplayTarget,
   inspectRevision,
@@ -1704,8 +1729,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         settings: getColorbarPartSettings(partModel.part),
         targetKind: "airbox" as const,
       })),
+      ...sceneProps.fdmTargetViews.map((view) => ({
+        id: view.target.id,
+        label: view.target.label ?? view.target.id,
+        objectScopeId:
+          view.target.kind === "object" ? view.target.id : view.ownerTarget.id,
+        role: null,
+        settings: view.settings,
+        targetKind: view.target.kind,
+      })),
     ],
-    [colorbarSceneObjectIds, colorbarTopologyModel, getColorbarPartSettings],
+    [
+      colorbarSceneObjectIds,
+      colorbarTopologyModel,
+      getColorbarPartSettings,
+      sceneProps.fdmTargetViews,
+    ],
   );
   const renderSurfaceAvailable = Boolean(sceneProps.topology || sceneProps.fdmDomain);
   const retainedColorbarPlans = useSyncExternalStore(
@@ -1716,10 +1755,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const colorbarTargetPlans = useMemo(
     () =>
       buildViewport3DColorbarTargetPlans({
-        fdmSettings: sceneProps.fdmDomain ? sceneProps.fdmSettings : null,
+        fdmSettings:
+          sceneProps.fdmDomain && sceneProps.fdmTargetViews.length === 0
+            ? sceneProps.fdmSettings
+            : null,
         parts: colorbarParts,
       }),
-    [colorbarParts, sceneProps.fdmDomain, sceneProps.fdmSettings],
+    [
+      colorbarParts,
+      sceneProps.fdmDomain,
+      sceneProps.fdmSettings,
+      sceneProps.fdmTargetViews.length,
+    ],
   );
   const initialColorbarPlans = useMemo(
     () =>
@@ -1737,10 +1784,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     () =>
       resolveViewport3DColorbarRangeStates({
         fdmSurfaceColors: sceneProps.fdmSurfaceColors,
+        fdmTargetColorBuffers: new Map(
+          sceneProps.fdmTargetViews.map((view) => [
+            view.target.id,
+            view.surfaceColors ?? view.vectorColors,
+          ]),
+        ),
+        fdmVectorColors: sceneProps.fdmVectorColors,
         fieldModel: sceneProps.fieldModel,
         plans: initialColorbarPlans,
       }),
-    [initialColorbarPlans, sceneProps.fdmSurfaceColors, sceneProps.fieldModel],
+    [
+      initialColorbarPlans,
+      sceneProps.fdmSurfaceColors,
+      sceneProps.fdmTargetViews,
+      sceneProps.fdmVectorColors,
+      sceneProps.fieldModel,
+    ],
   );
   const plannedColorbars = useMemo(
     () =>
@@ -2081,25 +2141,35 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         ) : null}
         {sceneProps.fdmUniverseOutsideSupport ? (
           <fieldset
-            aria-label="FDM universe overlay"
-            className="fm-viewport-3d__region-modes"
+            aria-label="Airbox overlay"
+            className="fm-viewport-3d__airbox-controls fm-viewport-3d__region-modes"
             data-target-id={sceneProps.fdmUniverseOutsideSupport.target.id}
           >
             <Button
-              aria-pressed={fdmUniverseOverlayVisible}
+              aria-pressed={Boolean(
+                sceneProps.fdmUniverseOutsideSupportSettings?.visible,
+              )}
               size="sm"
               type="button"
-              variant={fdmUniverseOverlayVisible ? "primary" : "secondary"}
+              variant={
+                sceneProps.fdmUniverseOutsideSupportSettings?.visible
+                  ? "primary"
+                  : "secondary"
+              }
               onClick={() =>
                 onFdmUniverseOverlayVisibilityChange(
-                  !fdmUniverseOverlayVisible,
+                  !sceneProps.fdmUniverseOutsideSupportSettings?.visible,
                 )
               }
             >
-              Universe outside support
+              Airbox
             </Button>
-            {fdmUniverseOverlayVisible ? (
-              <span>
+            {sceneProps.fdmUniverseOutsideSupportSettings?.visible ? (
+              <span
+                aria-label={`${sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport} · ${sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}`}
+                className="fm-viewport-3d__airbox-legend"
+                title={`${sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport} · ${sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}`}
+              >
                 {sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport}
                 {" · "}
                 {sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}
@@ -2126,11 +2196,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           <Viewport3DRendererProfile visualProfile={visualProfile} />
           <Viewport3DScene
             {...sceneProps}
-            fdmUniverseOutsideSupport={
-              fdmUniverseOverlayVisible
-                ? sceneProps.fdmUniverseOutsideSupport
-                : null
-            }
             adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}

@@ -113,6 +113,7 @@ export function buildPlanarMonitorNodes(
     kind: "model.planar.monitors",
     label: "Planar Monitors",
     parentId: "model:definitions",
+    selectable: false,
     status: "ready",
   };
 }
@@ -950,7 +951,7 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
       {
         id: "model:mesh:shared-domain",
         kind: "mesh.shared-domain",
-        label: "Shared-Domain Solver Mesh",
+        label: "Domain Mesh",
         parentId: "model:mesh",
         badge: meshFreshnessBadge(freshness),
         icon: "mesh",
@@ -1057,28 +1058,47 @@ function fdmMeshPolicyNodes(
           ? "mesh-building"
           : resolvedStatus === "stale" || resolvedStatus === "incompatible"
             ? "mesh-stale"
+            : resolvedStatus === "authoring-grid" || resolvedStatus === "missing"
+              ? "mesh-stale"
             : presentationStatus === "error"
               ? "degraded"
               : presentationStatus === "loading"
                 ? "mesh-building"
                 : "ready";
   const cellCount = grid.totalCells;
-  const regionNodes = (membership?.region_legend ?? []).map((entry) => ({
-    id: `model:mesh:region:${encodeURIComponent(entry.region_id)}`,
+  const domainMeshId = "model:mesh:shared-domain";
+  const regionsMeshId = "model:mesh:regions";
+  const regionLegend = membership?.region_legend ?? [];
+  const regionIdOccurrences = new Map<string, number>();
+  for (const entry of regionLegend) {
+    regionIdOccurrences.set(
+      entry.region_id,
+      (regionIdOccurrences.get(entry.region_id) ?? 0) + 1,
+    );
+  }
+  const regionNodes = regionLegend.map((entry) => ({
+    // Preserve the legacy region-only id while the region is unambiguous.
+    // Once multiple ferromagnetic owners publish the same region id, include
+    // the owner so Explorer keys and selection identities cannot collide.
+    id:
+      regionIdOccurrences.get(entry.region_id) === 1
+        ? `model:mesh:region:${encodeURIComponent(entry.region_id)}`
+        : `model:mesh:region:${encodeURIComponent(entry.object_id)}:${encodeURIComponent(entry.region_id)}`,
     kind: "mesh.grid.region" as const,
     label: entry.region_id,
-    parentId: "model:mesh",
+    parentId: regionsMeshId,
+    objectId: entry.object_id,
     regionId: entry.region_id,
     badge: `${entry.numeric_id}`,
     icon: "layers" as const,
     status: "ready" as const,
   }));
-  const children: ExplorerNode[] = [
+  const structuredGridDetails: ExplorerNode[] = [
     {
       id: "model:mesh:grid",
       kind: "mesh.grid.descriptor",
       label: "Structured Grid",
-      parentId: "model:mesh",
+      parentId: domainMeshId,
       badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
       icon: "mesh",
       status,
@@ -1087,7 +1107,7 @@ function fdmMeshPolicyNodes(
       id: "model:mesh:magnetic-support",
       kind: "mesh.grid.magnetic-support",
       label: "Magnetic Support",
-      parentId: "model:mesh",
+      parentId: domainMeshId,
       badge: `${grid.shape.join(" × ")} cells`,
       icon: "layers",
       status,
@@ -1096,7 +1116,7 @@ function fdmMeshPolicyNodes(
       id: "model:mesh:active-unassigned",
       kind: "mesh.grid.active-unassigned",
       label: "Active / Unassigned Cells",
-      parentId: "model:mesh",
+      parentId: domainMeshId,
       badge: "FDM membership",
       icon: "layers",
       status: membership ? "ready" : "stale",
@@ -1105,7 +1125,7 @@ function fdmMeshPolicyNodes(
       id: "model:mesh:mask",
       kind: "mesh.grid.mask",
       label: "Cell Mask",
-      parentId: "model:mesh",
+      parentId: domainMeshId,
       badge: membership ? membership.encoding : "pending",
       icon: "shield",
       status,
@@ -1114,34 +1134,203 @@ function fdmMeshPolicyNodes(
       id: "model:mesh:provenance",
       kind: "mesh.grid.provenance",
       label: "Grid Provenance",
-      parentId: "model:mesh",
+      parentId: domainMeshId,
       badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "pending",
       icon: "activity",
       status: "ready",
     },
-    ...regionNodes,
   ];
-  if (presentation?.universeOutsideMagneticSupport) {
-    children.push({
-      id: "model:mesh:outside-support",
-      kind: "mesh.grid.universe-outside-support",
-      label: "Universe Outside Magnetic Support",
-      parentId: "model:mesh",
-      badge: "explicit universe extent",
-      icon: "shield",
-      status: "ready",
-    });
-  }
   return {
     id: "model:mesh",
-    kind: "mesh.grid",
-    label: "FDM Grid",
+    // Mesh is the shared product-level summary for both FEM and FDM.  The
+    // structured representation is a detail of its domain-mesh child, not a
+    // second product-level "FDM Grid" node.
+    kind: "mesh.root",
+    label: "Mesh",
     parentId: "model:session",
-    badge: `${grid.shape.join(" × ")} / ${cellCount}`,
+    badge: `FDM · ${grid.shape.join(" × ")} / ${cellCount} cells`,
     icon: "mesh",
     status,
     contextCommands: ["workspace.focus-selection"],
-    children,
+    children: [
+      {
+        id: domainMeshId,
+        kind: "mesh.shared-domain",
+        label: "Domain Mesh",
+        parentId: "model:mesh",
+        badge: `structured grid · ${grid.shape.join(" × ")} / ${cellCount} cells`,
+        icon: "mesh",
+        status,
+        children: structuredGridDetails,
+      },
+      {
+        id: "model:mesh:builds",
+        kind: "mesh.builds",
+        label: "Build Pipeline",
+        parentId: "model:mesh",
+        badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "execution artifact",
+        icon: "activity",
+        selectable: false,
+        status,
+      },
+      {
+        id: "model:mesh:quality",
+        kind: "mesh.quality",
+        label: "Quality Gates",
+        parentId: "model:mesh",
+        badge: "structured-grid checks",
+        icon: "gauge",
+        selectable: false,
+        status: "ready",
+      },
+      {
+        id: "model:mesh:size-fields",
+        kind: "mesh.size-fields",
+        label: "Realized Size Fields",
+        parentId: "model:mesh",
+        badge: "uniform spacing",
+        icon: "settings",
+        selectable: false,
+        status: "ready",
+      },
+      {
+        id: regionsMeshId,
+        kind: "mesh.regions",
+        label: "Regions And Mesh Parts",
+        parentId: "model:mesh",
+        badge: `${regionNodes.length} regions / structured cells`,
+        icon: "layers",
+        selectable: false,
+        status: regionNodes.length > 0 ? "ready" : "stale",
+        children: regionNodes,
+      },
+    ],
+  };
+}
+
+/**
+ * FDM exposes the same product-level Airbox entry as FEM when the declared
+ * universe contains cells outside the realized magnetic support.  The mesh
+ * child remains a structured-grid selection; the shared child labels are
+ * retained for navigation, while the FDM lane renders them as read-only
+ * execution facts instead of FEM element-size/topology controls.
+ */
+function fdmAirboxNode(
+  presentation: FdmDomainPresentation,
+  presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",
+): ExplorerNode | null {
+  if (!presentation.universeOutsideMagneticSupport) return null;
+  const grid = presentation.fdmGrid;
+  const meshStatus: ExplorerNodeStatus =
+    presentation.resourceStatus === "error"
+      ? "mesh-failed"
+      : presentation.resourceStatus === "loading"
+        ? "mesh-building"
+      : presentation.resourceStatus === "stale" || presentation.resourceStatus === "incompatible"
+          ? "mesh-stale"
+        : presentation.resourceStatus === "authoring-grid" || presentation.resourceStatus === "missing"
+          ? "mesh-stale"
+          : presentationStatus === "error"
+            ? "degraded"
+            : "mesh-ready";
+  const cellCount = grid.totalCells;
+  return {
+    id: "model:airbox",
+    kind: "airbox.root",
+    label: "Airbox",
+    parentId: "model:universe",
+    badge: "FDM universe",
+    icon: "shield",
+    status: meshStatus,
+    visualizationTargetId: "fdm-universe-outside-support",
+    contextCommands: ["workspace.focus-selection"],
+    children: [
+      {
+        id: "model:airbox:mesh",
+        kind: "airbox.mesh",
+        label: "Mesh",
+        parentId: "model:airbox",
+        badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
+        icon: "mesh",
+        status: meshStatus,
+        visualizationTargetId: "fdm-universe-outside-support",
+        contextCommands: ["workspace.focus-selection"],
+        children: [
+          {
+            id: "model:airbox:mesh:parameters",
+            kind: "airbox.mesh.parameters",
+            label: "Parameters",
+            parentId: "model:airbox:mesh",
+            badge: "read-only",
+            icon: "settings",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:quality-gates",
+            kind: "airbox.mesh.quality-gates",
+            label: "Quality Gates",
+            parentId: "model:airbox:mesh",
+            badge: "read-only",
+            icon: "gauge",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:statistics",
+            kind: "airbox.mesh.statistics",
+            label: "Statistics",
+            parentId: "model:airbox:mesh",
+            badge: "structured grid",
+            icon: "activity",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:topology",
+            kind: "airbox.mesh.topology",
+            label: "Topology",
+            parentId: "model:airbox:mesh",
+            badge: "not applicable",
+            icon: "mesh",
+            status: "unsupported",
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:build",
+            kind: "airbox.mesh.build",
+            label: "Build & Provenance",
+            parentId: "model:airbox:mesh",
+            badge: "execution artifact",
+            icon: "activity",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+        ],
+      },
+      {
+        id: "model:airbox:visualization",
+        // Keep the product kind aligned with FEM.  The target marker routes
+        // this FDM selection to the structured-grid outside-support adapter.
+        kind: "airbox.visualization",
+        label: "Visualization",
+        parentId: "model:airbox",
+        badge: "display",
+        icon: "sparkles",
+        status: "ready",
+        visualizationTargetId: "fdm-universe-outside-support",
+        contextCommands: ["workspace.focus-selection"],
+        children: [
+          {
+            ...visualizationDebugNode({
+              kind: "airbox.visualization.debug",
+              parentId: "model:airbox:visualization",
+            }),
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -1334,6 +1523,9 @@ export function buildModelTree(
     label: "Universe",
     size: [2e-6, 1e-6, 5e-8] as const,
   };
+  const legacyAirboxObjectPresent = (snapshot?.objects ?? []).some(
+    (object) => isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
+  );
   const objects = (snapshot?.objects ?? []).filter(
     (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
   );
@@ -1350,6 +1542,29 @@ export function buildModelTree(
           meshRootStatus(snapshot?.mesh),
         )
       : "unavailable";
+  const femAirboxApplicable = Boolean(
+    snapshot?.airbox?.authoredPolicy ||
+      snapshot?.airbox?.realizedCarrier ||
+      snapshot?.airbox?.resolvedTarget ||
+      legacyAirboxObjectPresent,
+  );
+  const femAirboxStatus: ExplorerNodeStatus = snapshot?.mesh?.lastError
+    ? "mesh-failed"
+    : meshPipelineStatusIsActive(snapshot?.mesh?.activeBuildStatus)
+      ? "mesh-building"
+      : snapshot?.airbox?.realizedCarrier
+        ? meshFreshnessStatus(
+            meshFreshnessState(snapshot?.mesh),
+            meshRootStatus(snapshot?.mesh),
+          )
+        : "mesh-stale";
+  const femAirboxBadge = snapshot?.airbox?.realizedCarrier
+    ? "realized"
+    : snapshot?.airbox?.authoredPolicy
+      ? "authored"
+      : snapshot?.airbox?.resolvedTarget
+        ? "resolved"
+        : "legacy carrier";
   const sessionChildren: ExplorerNode[] = [
     {
       badge: "authoring",
@@ -1364,6 +1579,7 @@ export function buildModelTree(
       kind: "definitions.root",
       label: "Definitions",
       parentId: "model:session",
+      selectable: false,
       status: "ready",
     },
     {
@@ -1373,37 +1589,23 @@ export function buildModelTree(
       parentId: "model:session",
       badge: formatSize(universe.size),
       icon: "shield",
+      selectable: false,
       status: "ready",
       children: fdmDomain ? [
-        ...(fdmPresentation?.universeOutsideMagneticSupport
-          ? [{
-              id: "model:universe:grid",
-              kind: "mesh.grid.descriptor" as const,
-              label: "Structured Grid Universe",
-              parentId: "model:universe",
-              badge: "explicit extent",
-              icon: "mesh" as const,
-              status: "ready" as const,
-              children: [{
-                id: "model:universe:grid:outside-support",
-                kind: "mesh.grid.universe-outside-support" as const,
-                label: "Universe Outside Magnetic Support",
-                parentId: "model:universe:grid",
-                badge: "summary",
-                icon: "shield" as const,
-                status: "ready" as const,
-              }],
-            }]
+        ...(fdmPresentation
+          ? [fdmAirboxNode(fdmPresentation, snapshot?.domainPresentationStatus)].filter(
+              (node): node is ExplorerNode => node !== null,
+            )
           : []),
       ] : femDomain ? [
-        {
+        ...(femAirboxApplicable ? [{
           id: "model:airbox",
           kind: "airbox.root",
           label: "Airbox",
           parentId: "model:universe",
-          badge: "domain",
+          badge: femAirboxBadge,
           icon: "shield",
-          status: "ready",
+          status: femAirboxStatus,
           children: [
             {
               id: "model:airbox:mesh",
@@ -1412,7 +1614,7 @@ export function buildModelTree(
               parentId: "model:airbox",
               badge: "mesh policy",
               icon: "mesh",
-              status: "ready",
+              status: femAirboxStatus,
               contextCommands: ["workspace.focus-selection"],
               children: [
                 {
@@ -1421,7 +1623,7 @@ export function buildModelTree(
                   label: "Parameters",
                   parentId: "model:airbox:mesh",
                   icon: "settings",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:quality-gates",
@@ -1429,7 +1631,7 @@ export function buildModelTree(
                   label: "Quality Gates",
                   parentId: "model:airbox:mesh",
                   icon: "gauge",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:statistics",
@@ -1437,7 +1639,7 @@ export function buildModelTree(
                   label: "Statistics",
                   parentId: "model:airbox:mesh",
                   icon: "activity",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:topology",
@@ -1445,7 +1647,7 @@ export function buildModelTree(
                   label: "Topology",
                   parentId: "model:airbox:mesh",
                   icon: "mesh",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:build",
@@ -1453,7 +1655,7 @@ export function buildModelTree(
                   label: "Build & Provenance",
                   parentId: "model:airbox:mesh",
                   icon: "activity",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
               ],
             },
@@ -1464,7 +1666,7 @@ export function buildModelTree(
               parentId: "model:airbox",
               badge: "display",
               icon: "sparkles",
-              status: "ready",
+              status: femAirboxStatus,
               contextCommands: ["workspace.focus-selection"],
               children: [
                 visualizationDebugNode({
@@ -1474,7 +1676,7 @@ export function buildModelTree(
               ],
             },
           ],
-        },
+        } satisfies ExplorerNode] : []),
         {
           id: "model:boundary-faces",
           kind: "boundary-faces.root",
@@ -1498,6 +1700,7 @@ export function buildModelTree(
       parentId: "model:session",
       badge: `${objects.length}`,
       icon: "layers",
+      selectable: false,
       status: "ready",
       children: objects.map((object) => objectNodes(object, resources)),
     },
@@ -1537,6 +1740,7 @@ export function buildModelTree(
       parentId: null,
       badge: "ProblemIR",
       icon: "folder",
+      selectable: false,
       status: "ready",
       contextCommands: ["explorer.expand-all", "explorer.collapse-all"],
       children: sessionChildren,

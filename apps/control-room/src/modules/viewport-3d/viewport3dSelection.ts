@@ -11,6 +11,7 @@ import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
 import type { Viewport3DPrimitiveObject } from "./viewport3dPrimitiveModel";
 import type { FdmCuboidInstanceModel } from "./layers/FdmCuboidLayer";
 import { resolveFdmCellState } from "@/shared/domain/mesh/domainPresentation";
+import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 
 type ViewportSelectionPatch = Omit<Selection, "moduleSource">;
 
@@ -28,13 +29,16 @@ export function viewportSelectionForDomain(
 
 export function viewportSelectionForFdmUniverseOutsideSupport(): ViewportSelectionPatch {
   return {
-    kind: "mesh.grid.universe-outside-support",
-    label: "Universe Outside Magnetic Support",
-    nodeId: "model:mesh:outside-support",
+    // Select the shared Airbox Visualization child so the common
+    // ObjectVisualizationPanel opens for both FEM and FDM.  The ref keeps the
+    // FDM grid scope and target id for resource/renderer routing.
+    kind: "airbox.visualization",
+    label: "Airbox",
+    nodeId: "model:airbox:visualization",
     objectId: null,
     ref: {
       kind: "mesh.grid.universe-outside-support",
-      nodeId: "model:mesh:outside-support",
+      nodeId: "model:airbox:visualization",
       scope: "universe-outside-support",
       type: "fdm-domain",
       visualizationTargetId: "fdm-universe-outside-support",
@@ -141,6 +145,52 @@ export function viewportSelectionForRegion(
       ),
     },
   };
+}
+
+/**
+ * Convert an FDM target-view identity into the canonical Explorer selection.
+ * FDM object/region views share one grid carrier, so the target identity must
+ * travel with the pointer event instead of falling back to the Universe node.
+ */
+export function viewportSelectionForFdmTarget(
+  target: Pick<VisualizationTargetRef, "id" | "kind" | "label">,
+): ViewportSelectionPatch | null {
+  if (target.kind === "object") {
+    const objectId = target.id.startsWith("object:")
+      ? target.id.slice("object:".length)
+      : target.id;
+    return objectId
+      ? viewportSelectionForObject({
+          label: target.label ?? objectId,
+          objectId,
+        })
+      : null;
+  }
+
+  if (target.kind === "region") {
+    const separator = target.id.indexOf(":", "region:".length);
+    if (separator < 0) return null;
+    const encodedObjectId = target.id.slice("region:".length, separator);
+    const encodedRegionId = target.id.slice(separator + 1);
+    if (!encodedObjectId || !encodedRegionId) return null;
+    try {
+      const objectId = decodeURIComponent(encodedObjectId).replace(
+        /^object:/,
+        "",
+      );
+      const regionId = decodeURIComponent(encodedRegionId);
+      if (!objectId || !regionId) return null;
+      return viewportSelectionForRegion({ objectId, regionId });
+    } catch {
+      return null;
+    }
+  }
+
+  if (target.kind === "fdm-domain") {
+    return viewportSelectionForDomain(target.label ?? target.id);
+  }
+
+  return null;
 }
 
 export function viewportSelectionForMeshPart(

@@ -1742,6 +1742,7 @@ function fieldMetaQueryEntries(query: FieldMetaQuery): Array<[string, string]> {
     }
   };
   push("component");
+  push("owner_object_id");
   push("scope_id");
   push("scope_kind");
   push("snapshot_id");
@@ -1803,6 +1804,7 @@ export function fieldMetaFreshnessRevision(
 export function useFieldMetaResource({
   enabled = true,
   component = null,
+  owner_object_id = null,
   scope_id = null,
   scope_kind = null,
   snapshot_id = null,
@@ -1817,12 +1819,13 @@ export function useFieldMetaResource({
   const query = useMemo(
     () => ({
       component,
+      ...(owner_object_id ? { owner_object_id } : {}),
       scope_id,
       scope_kind,
       snapshot_id,
       stage_id,
     }),
-    [component, scope_id, scope_kind, snapshot_id, stage_id],
+    [component, owner_object_id, scope_id, scope_kind, snapshot_id, stage_id],
   );
   const resourceKey = useMemo(
     () => resolveFieldMetaResourceKey(resolvedQuantityId, query),

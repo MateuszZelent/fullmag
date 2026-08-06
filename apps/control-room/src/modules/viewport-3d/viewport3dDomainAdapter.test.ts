@@ -106,6 +106,7 @@ describe("viewport3dDomainAdapter", () => {
     cell_count: 10_000,
     cell_m: [0.1, 0.1, 1],
     counts: [100, 100, 1],
+    domain_generation_id: "generation-current",
     encoding: "u32le",
     freshness: "current",
     grid_fingerprint: "grid-current",

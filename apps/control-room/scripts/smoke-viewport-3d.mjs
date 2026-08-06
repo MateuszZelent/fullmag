@@ -1,5 +1,7 @@
 import { inflateSync } from "node:zlib";
 
+import { createSmokeMutationGuard } from "./lib/smoke-session-isolation.mjs";
+
 const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const VIEWPORT_3D_SELECTOR = ".fm-viewport-3d";
 const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
@@ -32,6 +34,8 @@ const regionOnlyObjectId =
   process.env.CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID ?? null;
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
+const requiresDisposableSession =
+  !allowMissingSession && !cameraOnlySmoke && !hysteresisReplayOnly;
 const CANVAS_SCREENSHOT_TIMEOUT_MS = Number(
   process.env.CONTROL_ROOM_CANVAS_SCREENSHOT_TIMEOUT_MS ?? 60_000,
 );
@@ -68,6 +72,14 @@ const COMPUTE_PERFORMANCE_MEASURE_NAMES = [
   ...VIEWPORT_3D_COMPUTE_MEASURE_NAMES,
   ...REACT_RENDER_MEASURE_NAMES,
 ];
+
+const mutationGuard = await createSmokeMutationGuard({
+  apiBase,
+  env: process.env,
+  mutationRequired: requiresDisposableSession,
+  pageUrl: url,
+});
+const removeMutationProcessGuards = mutationGuard.installProcessGuards();
 
 async function loadPlaywright() {
   try {
@@ -336,7 +348,17 @@ try {
     }
   }
 } finally {
-  await browser.close();
+  try {
+    await browser.close();
+  } finally {
+    const isolationResult = mutationGuard.restoreAndVerify();
+    removeMutationProcessGuards();
+    if (isolationResult.beforeSha256) {
+      console.log(
+        `Viewport smoke fixture isolation passed: script=${mutationGuard.scriptPath} sha256=${isolationResult.afterSha256} restored=${isolationResult.restored}.`,
+      );
+    }
+  }
 }
 
 async function verifyCameraGesturesStayLocal({ page }) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -680,6 +681,47 @@ describe("viewport3DFieldDataPlan", () => {
       quantityId: "H_eff",
     });
 
+    const fdmAirboxTargetQuantity = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_demag",
+        shaderVisible: false,
+        vectorBudget: 64,
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: null,
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "m",
+      }),
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(fdmAirboxTargetQuantity.demands).toEqual([
+      expect.objectContaining({
+        completeness: "sampled-ok",
+        component: "full",
+        passId: "fdm-universe-outside-support:vector-glyph",
+        passKind: "vector-glyph",
+        quantityId: "H_demag",
+        scopeId: null,
+        scopeKind: "airbox",
+        targetId: "fdm-universe-outside-support",
+      }),
+    ]);
+    expect([...fdmAirboxTargetQuantity.requests.values()][0]).toMatchObject({
+      query: {
+        component: "full",
+        max_samples: 64,
+        scope_kind: "airbox",
+      },
+      quantityId: "H_demag",
+    });
+
     const airbox = resolveViewport3DAirboxFieldVectorDemandPlan({
       airboxParts: [{ id: "airbox-a", label: "Airbox A" }],
       quantityId: "H_demag",
@@ -715,6 +757,24 @@ describe("viewport3DFieldDataPlan", () => {
       scope_id: "airbox-surface",
       scope_kind: "airbox",
     });
+
+    const staleShaderAirbox = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "airbox-stale-shader", label: "Airbox" }],
+      quantityId: "H_demag",
+      shaderVisible: true,
+      surfaceColorSource: "magnitude",
+      vectorBudget: 16,
+      vectorsVisible: true,
+    });
+    expect(staleShaderAirbox.demands).toEqual([
+      expect.objectContaining({
+        completeness: "sampled-ok",
+        passKind: "vector-glyph",
+      }),
+    ]);
+    expect(staleShaderAirbox.demands).not.toEqual([
+      expect.objectContaining({ passKind: "surface" }),
+    ]);
 
     const emptyAirbox = resolveViewport3DAirboxFieldVectorDemandPlan({
       airboxParts: [{ id: "airbox-empty", label: "Empty Airbox" }],

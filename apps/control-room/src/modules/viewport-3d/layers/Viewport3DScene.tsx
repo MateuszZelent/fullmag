@@ -43,7 +43,10 @@ import {
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type {
+  VisualizationTargetRef,
+  VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import type {
@@ -143,6 +146,8 @@ import { clampNumber, sameTuple3 } from "../viewport3dMath";
 import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
+import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
+import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -162,12 +167,20 @@ interface Viewport3DSceneProps {
   fdmLaneActive: boolean;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
+  fdmAirboxInstanceModel: FdmCuboidInstanceModel | null | undefined;
+  fdmAirboxPassPlan: FdmAirboxPassPlan;
+  fdmAirboxFieldVector: DecodedFieldVector | null | undefined;
+  fdmAirboxVectorGlyphColors: ScalarColorBuffer | null;
+  fdmAirboxVectorSegments: Float32Array | null;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
+  fdmUniverseOutsideSupportSettings: VisualizationTargetSettings | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
+  fdmTargetViews: readonly Viewport3DFdmTargetRenderView[];
   fdmSettings: VisualizationTargetSettings;
   fdmSurfaceColors: ScalarColorBuffer | null;
+  fdmVectorColors: ScalarColorBuffer | null;
+  fdmVectorGlyphColors: ScalarColorBuffer | null;
   fdmVectorSegments: Float32Array | null;
-  fieldVector: DecodedFieldVector | null | undefined;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
@@ -195,6 +208,7 @@ interface Viewport3DSceneProps {
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
+  onSelectFdmTarget: (target: VisualizationTargetRef) => void;
   onSelectFdmUniverseOutsideSupport: () => void;
   onSelectFdmCell?: (instanceId: number) => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
@@ -223,7 +237,6 @@ interface Viewport3DSceneProps {
   visualizationRevision: number | null;
   hslReferenceVisible: boolean;
   inspectEnabled: boolean;
-  inspectQuantityId: string;
   onInspectClear?: () => void;
   onInspectSample?: (
     sample: Viewport3DInspectSample,
@@ -554,12 +567,16 @@ export function resolveAuthoredRegionOverlayVisibility({
 }
 
 function resolveViewport3DModelLayerStageKey({
-  fdmInstanceModel,
+  fdmAirboxInstanceModel,
+  fdmTargetViews,
   primitiveModel,
   topologyModel,
 }: Pick<
   Viewport3DSceneProps,
-  "fdmInstanceModel" | "primitiveModel" | "topologyModel"
+  | "fdmAirboxInstanceModel"
+  | "fdmTargetViews"
+  | "primitiveModel"
+  | "topologyModel"
 >): string {
   return [
     topologyModel?.meshGenerationId ?? "no-mesh-generation",
@@ -569,7 +586,8 @@ function resolveViewport3DModelLayerStageKey({
     topologyModel?.airboxParts.length ?? 0,
     primitiveModel?.sceneRevision ?? "no-scene-revision",
     primitiveModel?.objects.length ?? 0,
-    fdmInstanceModel ? "fdm-ready" : "fdm-empty",
+    fdmAirboxInstanceModel ? "fdm-airbox-ready" : "fdm-airbox-empty",
+    fdmTargetViews.length > 0 ? "fdm-ready" : "fdm-empty",
   ].join(":");
 }
 
@@ -698,8 +716,10 @@ function Viewport3DOverlayLayerStack({
   planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
+  fdmAirboxPassPlan,
   fdmDomain,
   fdmUniverseOutsideSupport,
+  fdmUniverseOutsideSupportSettings,
   fdmSettings,
   materialProfile,
   onSelectDomain,
@@ -722,8 +742,10 @@ function Viewport3DOverlayLayerStack({
   | "planarMonitorFramePreview"
   | "dimensionFrameDensity"
   | "dimensionFrameMode"
+  | "fdmAirboxPassPlan"
   | "fdmDomain"
   | "fdmUniverseOutsideSupport"
+  | "fdmUniverseOutsideSupportSettings"
   | "fdmSettings"
   | "onSelectDomain"
   | "onSelectFdmUniverseOutsideSupport"
@@ -772,15 +794,25 @@ function Viewport3DOverlayLayerStack({
       {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
         <>
           <DomainBoxLayer
-            bounds={fdmDomain?.bounds ?? bounds}
+            bounds={
+              fdmUniverseOutsideSupport?.magneticSupportBounds ??
+              fdmDomain?.bounds ??
+              bounds
+            }
+            boundsOpacityPercent={fdmSettings.boundsOpacityPercent}
             boundsVisible={fdmSettings.boundsVisible}
             colors={colors}
             onSelectDomain={onSelectDomain}
           />
           <FdmUniverseOutsideSupportLayer
             colors={colors}
-            model={fdmUniverseOutsideSupport}
+            model={
+              fdmAirboxPassPlan.needsExtentOverlay
+                ? fdmUniverseOutsideSupport
+                : null
+            }
             onSelect={onSelectFdmUniverseOutsideSupport}
+            settings={fdmUniverseOutsideSupportSettings}
             tracker={tracker}
           />
           <SelectionHighlightLayer
@@ -824,20 +856,19 @@ function Viewport3DModelLayerStack({
   airboxSettings,
   bounds,
   colors,
+  fdmAirboxPassPlan,
+  fdmAirboxFieldVector,
+  fdmAirboxInstanceModel,
+  fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorSegments,
   fdmLaneActive,
-  fdmInstanceModel,
-  fdmSettings,
-  fdmSurfaceColors,
-  fdmVectorSegments,
+  fdmUniverseOutsideSupportSettings,
+  fdmTargetViews,
   fieldModel,
-  fieldVector,
-  fallbackSettings,
-  femDomain,
   hysteresisReplayGlyphModel,
   getObjectSettings,
   getPartSettings,
   inspectEnabled,
-  inspectQuantityId,
   magnetizationTexturePreviews,
   materialProfile,
   meshQualityColors,
@@ -849,6 +880,8 @@ function Viewport3DModelLayerStack({
   onInspectClear,
   onInspectSample,
   onSelectDomain,
+  onSelectFdmTarget,
+  onSelectFdmUniverseOutsideSupport,
   onSelectFdmCell,
   onSelectObject,
   onSelectPart,
@@ -872,15 +905,15 @@ function Viewport3DModelLayerStack({
   | "airboxSettings"
   | "bounds"
   | "colors"
+  | "fdmAirboxPassPlan"
+  | "fdmAirboxFieldVector"
+  | "fdmAirboxInstanceModel"
+  | "fdmAirboxVectorGlyphColors"
+  | "fdmAirboxVectorSegments"
   | "fdmLaneActive"
-  | "fdmInstanceModel"
-  | "fdmSettings"
-  | "fdmSurfaceColors"
-  | "fdmVectorSegments"
+  | "fdmUniverseOutsideSupportSettings"
+  | "fdmTargetViews"
   | "fieldModel"
-  | "fieldVector"
-  | "fallbackSettings"
-  | "femDomain"
   | "getObjectSettings"
   | "getPartSettings"
   | "hysteresisReplayGlyphModel"
@@ -892,10 +925,11 @@ function Viewport3DModelLayerStack({
   | "periodicOverlayModel"
   | "meshSizeHighlightModel"
   | "inspectEnabled"
-  | "inspectQuantityId"
   | "onInspectClear"
   | "onInspectSample"
   | "onSelectDomain"
+  | "onSelectFdmTarget"
+  | "onSelectFdmUniverseOutsideSupport"
   | "onSelectFdmCell"
   | "onSelectObject"
   | "onSelectPart"
@@ -919,11 +953,12 @@ function Viewport3DModelLayerStack({
   const modelLayerStageKey = useMemo(
     () =>
       resolveViewport3DModelLayerStageKey({
-        fdmInstanceModel,
+        fdmAirboxInstanceModel,
+        fdmTargetViews,
         primitiveModel,
         topologyModel,
       }),
-    [fdmInstanceModel, primitiveModel, topologyModel],
+    [fdmAirboxInstanceModel, fdmTargetViews, primitiveModel, topologyModel],
   );
   const modelLayerStage = useViewport3DModelLayerStage({
     resetKey: modelLayerStageKey,
@@ -963,9 +998,24 @@ function Viewport3DModelLayerStack({
     stageVisible: stageVisibility.authoredRegionOverlays,
   });
   const stagedFieldModel = stageVisibility.fieldDrivenLayers ? fieldModel : null;
-  const stagedFieldVector = stageVisibility.fieldDrivenLayers ? fieldVector : null;
-  const stagedFdmSurfaceColors = stageVisibility.fieldDrivenLayers
-    ? fdmSurfaceColors
+  const stagedFdmTargetViews = stageVisibility.fieldDrivenLayers
+    ? fdmTargetViews
+    : fdmTargetViews.map((view) => ({
+        ...view,
+        fieldVector: null,
+        surfaceColors: null,
+        vectorColors: null,
+        vectorGlyphColors: null,
+        vectorSegments: null,
+      }));
+  const fdmAirboxVectorSettings = fdmUniverseOutsideSupportSettings
+    ? {
+        ...fdmUniverseOutsideSupportSettings,
+        boundsVisible: false,
+        pointsVisible: false,
+        shaderVisible: false,
+        wireframeVisible: false,
+      }
     : null;
   const stagedMeshQualityColors = stageVisibility.fieldDrivenLayers
     ? meshQualityColors
@@ -985,27 +1035,58 @@ function Viewport3DModelLayerStack({
       ) : null}
       {stageVisibility.baseGeometry &&
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
+        <>
+          {stagedFdmTargetViews.map((view) => (
+            <FdmCuboidLayer
+              adoptionRegistry={adoptionRegistry}
+              carrierId={view.target.id}
+              colors={colors}
+              fieldVector={view.fieldVector}
+              geometryScopeInstanceOrdinals={view.surfaceInstanceOrdinals}
+              instanceModel={view.sourceModel}
+              instanceOrdinals={view.instanceOrdinals}
+              inspectEnabled={inspectEnabled}
+              inspectQuantityId={view.settings.activeQuantityId}
+              key={view.target.id}
+              materialProfile={materialProfile}
+              onInspectClear={onInspectClear}
+              onInspectSample={onInspectSample}
+              onSelectDomain={onSelectDomain}
+              onSelectTarget={() => onSelectFdmTarget(view.target)}
+              onSelectFdmCell={onSelectFdmCell}
+              onSelectRegion={onSelectRegion}
+              regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
+              selectedObjectId={selectedObjectId}
+              selectedRegionId={selectedRegionId}
+              settings={view.settings}
+              surfaceColors={view.surfaceColors}
+              tracker={tracker}
+              vectorColorMode={vectorColorMode}
+              vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
+              vectorSegments={view.vectorSegments}
+              vectorStyle={vectorStyle}
+            />
+          ))}
+        </>
+      ) : null}
+      {stageVisibility.baseGeometry &&
+      viewport3DFdmCuboidLayerEnabledFromBrowserConfig() &&
+      fdmAirboxPassPlan.needsVectorAnchors && fdmAirboxVectorSettings ? (
         <FdmCuboidLayer
-          adoptionRegistry={adoptionRegistry}
           colors={colors}
-          fieldVector={stagedFieldVector}
-          instanceModel={fdmInstanceModel}
-          inspectEnabled={inspectEnabled}
-          inspectQuantityId={inspectQuantityId}
+          fieldVector={fdmAirboxFieldVector}
+          vectorGlyphColors={fdmAirboxVectorGlyphColors?.colors ?? null}
+          instanceModel={fdmAirboxInstanceModel}
+          inspectEnabled={false}
+          inspectQuantityId="m"
           materialProfile={materialProfile}
-          onInspectClear={onInspectClear}
-          onInspectSample={onInspectSample}
-          onSelectDomain={onSelectDomain}
-          onSelectFdmCell={onSelectFdmCell}
-          onSelectRegion={onSelectRegion}
-          regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
-          selectedObjectId={selectedObjectId}
-          selectedRegionId={selectedRegionId}
-          settings={fdmSettings}
-          surfaceColors={stagedFdmSurfaceColors}
+          onSelectDomain={onSelectFdmUniverseOutsideSupport}
+          regionOverlays={[]}
+          settings={fdmAirboxVectorSettings}
+          surfaceColors={null}
           tracker={tracker}
-          vectorColorMode={vectorColorMode}
-          vectorSegments={fdmVectorSegments}
+          vectorColorMode={fdmAirboxVectorSettings.vectorColorMode}
+          vectorSegments={fdmAirboxVectorSegments}
           vectorStyle={vectorStyle}
         />
       ) : null}
@@ -1043,15 +1124,12 @@ function Viewport3DModelLayerStack({
         <TopologyMeshLayer
           adoptionRegistry={adoptionRegistry}
           colors={colors}
-          fallbackSettings={fallbackSettings}
-          femDomain={femDomain}
           fieldModel={stagedFieldModel}
           getPartSettings={getPartSettings}
           materialProfile={materialProfile}
           magnetizationTexturePreviews={magnetizationTexturePreviews}
           meshQualityColors={stagedMeshQualityColors}
           meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
-          onSelectDomain={onSelectDomain}
           onSelectPart={onSelectPart}
           tracker={tracker}
           topologyFreshness={topologyFreshness}
@@ -1236,6 +1314,7 @@ export function Viewport3DScene({
   cameraProjection,
   cameraState,
   colors,
+  fdmAirboxFieldVector,
   clip,
   clipFrameRotationDegrees,
   clipIntersectionMarkers,
@@ -1245,18 +1324,18 @@ export function Viewport3DScene({
   dimensionFrameDensity,
   dimensionFrameMode,
   fdmLaneActive,
+  fdmAirboxInstanceModel,
+  fdmAirboxPassPlan,
   airboxSettings,
   fdmDomain,
   fdmUniverseOutsideSupport,
-  fdmInstanceModel,
+  fdmUniverseOutsideSupportSettings,
+  fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorSegments,
+  fdmTargetViews,
   fdmSettings,
-  fdmSurfaceColors,
-  fdmVectorSegments,
-  fieldVector,
-  femDomain,
   fieldModel,
   fitRevision,
-  fallbackSettings,
   getObjectSettings,
   getPartSettings,
   hysteresisReplayGlyphModel,
@@ -1274,6 +1353,7 @@ export function Viewport3DScene({
   onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
+  onSelectFdmTarget,
   onSelectFdmUniverseOutsideSupport,
   onSelectFdmCell,
   onSelectPart,
@@ -1301,7 +1381,6 @@ export function Viewport3DScene({
   visualizationRevision,
   hslReferenceVisible,
   inspectEnabled,
-  inspectQuantityId,
   onInspectClear,
   onInspectSample,
   scaleLabelsVisible,
@@ -1427,8 +1506,10 @@ export function Viewport3DScene({
         planarMonitorFramePreview={planarMonitorFramePreview}
         dimensionFrameDensity={dimensionFrameDensity}
         dimensionFrameMode={dimensionFrameMode}
+        fdmAirboxPassPlan={fdmAirboxPassPlan}
         fdmDomain={fdmDomain}
         fdmUniverseOutsideSupport={fdmUniverseOutsideSupport}
+        fdmUniverseOutsideSupportSettings={fdmUniverseOutsideSupportSettings}
         fdmSettings={fdmSettings}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
@@ -1444,16 +1525,15 @@ export function Viewport3DScene({
         bounds={bounds}
         colors={colors}
         fdmLaneActive={fdmLaneActive}
-        fdmInstanceModel={fdmInstanceModel}
-        fdmSettings={fdmSettings}
-        fdmSurfaceColors={fdmSurfaceColors}
-        fdmVectorSegments={fdmVectorSegments}
+        fdmAirboxFieldVector={fdmAirboxFieldVector}
+        fdmAirboxInstanceModel={fdmAirboxInstanceModel}
+        fdmAirboxPassPlan={fdmAirboxPassPlan}
+        fdmAirboxVectorGlyphColors={fdmAirboxVectorGlyphColors}
+        fdmAirboxVectorSegments={fdmAirboxVectorSegments}
+        fdmTargetViews={fdmTargetViews}
+        fdmUniverseOutsideSupportSettings={fdmUniverseOutsideSupportSettings}
         fieldModel={fieldModel}
-        fieldVector={fieldVector}
         inspectEnabled={inspectEnabled}
-        inspectQuantityId={inspectQuantityId}
-        fallbackSettings={fallbackSettings}
-        femDomain={femDomain}
         getObjectSettings={getObjectSettings}
         getPartSettings={getPartSettings}
         hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
@@ -1468,6 +1548,8 @@ export function Viewport3DScene({
         onInspectClear={onInspectClear}
         onInspectSample={onInspectSample}
         onSelectDomain={onSelectDomain}
+        onSelectFdmTarget={onSelectFdmTarget}
+        onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
         onSelectFdmCell={onSelectFdmCell}
         onSelectObject={onSelectObject}
         onSelectPart={onSelectPart}

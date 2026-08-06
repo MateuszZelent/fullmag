@@ -1607,7 +1607,7 @@ function checkFdmVectorSegmentCache() {
     "FdmVectorSegmentCache",
   ]);
   requireTokens(buildSegments, "buildFdmVectorSegments cache lookup", [
-    "const cacheKey = `${scale}:${maxVectors}:${anchorMode}`",
+    "const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? \"full\"}`",
     "cachedFdmVectorSegments(model, fieldVector, cacheKey)",
     "if (cachedSegments !== undefined) return cachedSegments",
     "cacheFdmVectorSegments(model, fieldVector, cacheKey",
@@ -1629,23 +1629,23 @@ function checkFdmCuboidSceneModelReuse() {
     "buildViewport3DFdmCuboidJobKey",
     "useFdmCuboidBuildResult",
     "modelFieldVector: fdmInstanceModelFieldVector",
-    "fdmVectorSegments",
-    "fdmInstanceModel?.cellIndices",
-    "fdmInstanceModel: fdmInstanceModel",
+    "const fdmTargetViewsResult = useMemo(",
+    "buildViewport3DFdmTargetViews({",
+    "const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] =",
+    "view.instanceOrdinals",
+    "view.surfaceInstanceOrdinals",
+    "view.sourceModel",
   ]);
   forbidTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
     "const fdmInstanceModel = useMemo",
     "buildFdmCuboidInstanceModel(",
   ]);
-  forbidTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
-    "const fdmSurfaceInstanceModel",
-    "fdmInstanceModel: fdmSurfaceInstanceModel",
-  ]);
   requireTokens(sceneSource, "Viewport3DScene FDM model reuse", [
-    "fdmInstanceModel: FdmCuboidInstanceModel | null | undefined",
-    "fdmVectorSegments: Float32Array | null",
-    "instanceModel={fdmInstanceModel}",
-    "vectorSegments={fdmVectorSegments}",
+    "fdmTargetViews: readonly Viewport3DFdmTargetRenderView[]",
+    "fdmTargetViews.map((view) => ({",
+    "instanceModel={view.sourceModel}",
+    "instanceOrdinals={view.instanceOrdinals}",
+    "fdmTargetViews={fdmTargetViews}",
   ]);
   requireTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
     "instanceModel?: FdmCuboidInstanceModel | null",

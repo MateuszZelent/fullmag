@@ -59,7 +59,7 @@ function fdmExplorerPresentation() {
     generation_id: "generation-7", grid: { origin: [0, 0, 0], shape: [2, 2, 2], spacing: [2, 1, 0.5] }, units: { length: "m" },
   };
   const membership: FdmRegionMembershipResource = {
-    binary_path: "fdm.bin", cell_count: 8, cell_m: [2, 1, 0.5], counts: [2, 2, 2], encoding: "u32le", freshness: "current", grid_fingerprint: "grid-7", mesh_revision: 11, origin_m: [0, 0, 0], region_legend: [{ numeric_id: 7, object_id: "object:core", priority: 0, region_id: "region:core" }], region_membership_revision: 12, schema_version: "fdm_region_membership.v1",
+    binary_path: "fdm.bin", cell_count: 8, cell_m: [2, 1, 0.5], counts: [2, 2, 2], domain_generation_id: "generation-7", encoding: "u32le", freshness: "current", grid_fingerprint: "grid-7", mesh_revision: 11, origin_m: [0, 0, 0], region_legend: [{ numeric_id: 7, object_id: "object:core", priority: 0, region_id: "region:core" }], region_membership_revision: 12, schema_version: "fdm_region_membership.v1",
   };
   return buildDomainPresentation({ domainMeta, fdmMembership: membership, fdmMembershipStatus: "ready" });
 }
@@ -327,6 +327,37 @@ const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressRe
 };
 
 describe("buildModelTree", () => {
+  it("keeps Visualization available for a primitive-only scene object", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [
+        { id: "fem-owned", regions: [], transform: { translation: [0, 0, 0] }, visible: true },
+        { id: "fem-fallback", regions: [], transform: { translation: [0.5, 0, 0] }, visible: true },
+      ],
+    } as SceneResource, {
+      domainDiscretization: "fem",
+    });
+
+    expect(snapshot.objects).toEqual([
+      expect.objectContaining({ id: "fem-owned", meshStatus: "primitive-only" }),
+      expect.objectContaining({ id: "fem-fallback", meshStatus: "primitive-only" }),
+    ]);
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+    for (const objectId of ["fem-owned", "fem-fallback"]) {
+      expect(
+        flattened.find(
+          (node) => node.id === `model:object:${objectId}:visualization`,
+        ),
+      ).toMatchObject({
+        kind: "object.visualization",
+        label: "Visualization",
+        objectId,
+        parentId: `model:object:${objectId}`,
+        status: "ready",
+      });
+    }
+  });
+
   it("uses manifest ownership to mark a meshed object ready without a mesh-ready tag", () => {
     const snapshot = modelTreeSnapshotFromScene(
       {
@@ -357,6 +388,7 @@ describe("buildModelTree", () => {
 
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
     const nodes = buildModelTree({
+      airbox: { authoredPolicy: true, realizedCarrier: false },
       domainDiscretization: "fem",
       universe: {
         id: "u0",
@@ -448,7 +480,10 @@ describe("buildModelTree", () => {
   });
 
   it("builds the exact stable Airbox subtree in semantic order", () => {
-    const [session] = buildModelTree({ domainDiscretization: "fem" });
+    const [session] = buildModelTree({
+      airbox: { authoredPolicy: true, realizedCarrier: false },
+      domainDiscretization: "fem",
+    });
     const universe = session?.children?.find((node) => node.id === "model:universe");
     const airbox = universe?.children?.find((node) => node.id === "model:airbox");
 
@@ -527,7 +562,10 @@ describe("buildModelTree", () => {
   });
 
   it("places Boundary Faces beside Airbox under Universe", () => {
-    const [session] = buildModelTree({ domainDiscretization: "fem" });
+    const [session] = buildModelTree({
+      airbox: { authoredPolicy: true, realizedCarrier: false },
+      domainDiscretization: "fem",
+    });
     const universe = session?.children?.find((node) => node.id === "model:universe");
 
     expect(universe?.children?.map(({ id }) => id)).toEqual([
@@ -542,6 +580,62 @@ describe("buildModelTree", () => {
       parentId: "model:universe",
       status: "unavailable",
     });
+  });
+
+  it("does not fabricate a FEM Airbox from discretization alone", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree({ domainDiscretization: "fem" }),
+    );
+
+    expect(flattened.map((node) => node.kind)).not.toContain("airbox.root");
+  });
+
+  it("marks authored FEM Airbox policy stale until a matching carrier is realized", () => {
+    const authored = flattenExplorerNodes(buildModelTree({
+      airbox: { authoredPolicy: true, realizedCarrier: false },
+      domainDiscretization: "fem",
+    }));
+    const realized = flattenExplorerNodes(buildModelTree({
+      airbox: { authoredPolicy: true, realizedCarrier: true },
+      domainDiscretization: "fem",
+      mesh: {
+        manifestSourceSceneRevision: 3,
+        meshName: "shared-domain",
+        meshRevision: 3,
+        sourceSceneRevision: 3,
+      },
+    }));
+
+    expect(authored.find((node) => node.id === "model:airbox")).toMatchObject({
+      badge: "authored",
+      status: "mesh-stale",
+    });
+    expect(
+      authored.find((node) => node.id === "model:airbox:visualization"),
+    ).toMatchObject({ status: "mesh-stale" });
+    expect(realized.find((node) => node.id === "model:airbox")).toMatchObject({
+      badge: "realized",
+      status: "mesh-ready",
+    });
+  });
+
+  it("marks grouping roots as nonselectable instead of routing them to placeholders", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fem",
+      objects: [{ id: "film", label: "Film" }],
+    }));
+
+    for (const kind of [
+      "session.root",
+      "definitions.root",
+      "model.planar.monitors",
+      "universe.root",
+      "objects.root",
+    ]) {
+      expect(nodes.find((node) => node.kind === kind), kind).toMatchObject({
+        selectable: false,
+      });
+    }
   });
 
   it("marks Boundary Faces ready when the shared mesh is realized", () => {
@@ -1020,6 +1114,7 @@ describe("buildModelTree", () => {
             mesh_part_ids: ["part:core"],
             mesh_revision: 3,
             node_indices: [3],
+            owner_object_id: "film",
             realization: "conformal",
             region_id: "reg-core",
             region_membership_revision: 4,
@@ -1188,6 +1283,108 @@ describe("buildModelTree", () => {
     ).not.toContain(
       "model:object:film-a:regions:reg-core:magnetic-parameters:field-ms-core",
     );
+  });
+
+  it("qualifies colliding FEM region memberships through explicit owner identity", () => {
+    const scene = {
+      objects: [
+        {
+          id: "film-a",
+          regions: [{
+            mesh_policy: { maximum_element_size: 1e-9 },
+            name: "Shared A",
+            region_id: "shared",
+            shape: { kind: "box", size: [1, 1, 1] },
+          }],
+        },
+        {
+          id: "film-b",
+          regions: [{
+            mesh_policy: { maximum_element_size: 1e-9 },
+            name: "Shared B",
+            region_id: "shared",
+            shape: { kind: "box", size: [1, 1, 1] },
+          }],
+        },
+      ],
+    } as SceneResource;
+    const membership = (ownerObjectId: string, freshness: string, revision: number) => ({
+      boundary_face_indices: [],
+      element_indices: [revision],
+      freshness,
+      mesh_generation_id: "generation-owners",
+      mesh_id: "shared-domain",
+      mesh_part_ids: [],
+      mesh_revision: 4,
+      node_indices: [revision],
+      owner_object_id: ownerObjectId,
+      realization: "conformal",
+      region_id: "shared",
+      region_membership_revision: revision,
+      source: "fem_shared_domain",
+      topology_fingerprint: "topology-owners",
+    });
+
+    const snapshot = modelTreeSnapshotFromScene(scene, {
+      regionMemberships: [
+        membership("film-a", "current", 11),
+        membership("film-b", "preview", 12),
+      ] as never,
+    });
+
+    expect(snapshot.objects?.find((object) => object.id === "film-a")?.regions?.[0])
+      .toMatchObject({ id: "shared", meshLifecycleStatus: "current" });
+    expect(snapshot.objects?.find((object) => object.id === "film-b")?.regions?.[0])
+      .toMatchObject({ id: "shared", meshLifecycleStatus: "stale" });
+  });
+
+  it("withholds duplicate memberships for the same owner-qualified FEM region", () => {
+    const snapshot = modelTreeSnapshotFromScene(
+      {
+        objects: [
+          {
+            id: "film-a",
+            regions: [{
+              mesh_policy: { maximum_element_size: 1e-9 },
+              name: "Shared A",
+              region_id: "shared",
+              shape: { kind: "box", size: [1, 1, 1] },
+            }],
+          },
+          {
+            id: "film-b",
+            regions: [{
+              mesh_policy: { maximum_element_size: 1e-9 },
+              name: "Shared B",
+              region_id: "shared",
+              shape: { kind: "box", size: [1, 1, 1] },
+            }],
+          },
+        ],
+      } as SceneResource,
+      {
+        regionMemberships: [13, 14].map((revision) => ({
+          boundary_face_indices: [],
+          element_indices: [1],
+          freshness: "current",
+          mesh_generation_id: "generation-ambiguous",
+          mesh_id: "shared-domain",
+          mesh_part_ids: [],
+          mesh_revision: 4,
+          node_indices: [1],
+          owner_object_id: "film-a",
+          realization: "conformal",
+          region_id: "shared",
+          region_membership_revision: revision,
+          source: "fem_shared_domain",
+          topology_fingerprint: "topology-ambiguous",
+        })),
+      },
+    );
+
+    expect(snapshot.objects?.flatMap((object) => object.regions ?? []).map(
+      (region) => region.meshLifecycleStatus,
+    )).toEqual(["stale", "stale"]);
   });
 
   it("shows object texture load nodes only after activation", () => {
@@ -4499,17 +4696,21 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("builds an FDM grid tree without FEM mesh, airbox, or boundary nodes", () => {
+  it("builds one shared Mesh summary with FDM structured-grid details", () => {
     const nodes = flattenExplorerNodes(
       buildModelTree({ domainPresentation: fdmExplorerPresentation() }),
     );
-    expect(nodes.find((node) => node.id === "model:mesh")?.kind).toBe("mesh.grid");
+    expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
+      kind: "mesh.root",
+      label: "Mesh",
+    });
     expect(nodes.map((node) => node.kind)).toEqual(
-      expect.not.arrayContaining([
-        "mesh.shared-domain", "mesh.builds", "mesh.quality", "mesh.size-fields",
-        "mesh.regions", "mesh.unassigned", "airbox.root", "boundary-faces.root",
-      ]),
+      expect.not.arrayContaining(["mesh.unassigned", "boundary-faces.root"]),
     );
+    expect(nodes.map((node) => node.kind)).toEqual(expect.arrayContaining([
+      "mesh.shared-domain", "mesh.builds", "mesh.quality", "mesh.size-fields",
+      "mesh.regions",
+    ]));
     expect(nodes.map((node) => node.id)).toEqual(expect.arrayContaining([
       "model:mesh:grid", "model:mesh:magnetic-support", "model:mesh:active-unassigned",
       "model:mesh:mask", "model:mesh:provenance", "model:mesh:region:region%3Acore",
@@ -4517,6 +4718,16 @@ describe("buildModelTree", () => {
     expect(nodes.find((node) => node.id === "model:mesh")?.contextCommands).toEqual([
       "workspace.focus-selection",
     ]);
+    for (const nodeId of [
+      "model:mesh:builds",
+      "model:mesh:quality",
+      "model:mesh:size-fields",
+      "model:mesh:regions",
+    ]) {
+      expect(nodes.find((node) => node.id === nodeId)).toMatchObject({
+        selectable: false,
+      });
+    }
     expect(nodes.find((node) => node.id === "model:mesh:magnetic-support")?.label).toBe(
       "Magnetic Support",
     );
@@ -4529,15 +4740,7 @@ describe("buildModelTree", () => {
     const hydratedFdm = flattenExplorerNodes(
       buildModelTree({ domainPresentation: fdmExplorerPresentation() }),
     );
-    const femOnlyKinds = [
-      "mesh.shared-domain",
-      "mesh.builds",
-      "mesh.quality",
-      "mesh.size-fields",
-      "mesh.regions",
-      "airbox.root",
-      "boundary-faces.root",
-    ];
+    const femOnlyKinds = ["mesh.unassigned", "boundary-faces.root"];
 
     expect(hydratedFromServer.find((node) => node.id === "model:mesh")).toMatchObject({
       kind: "mesh.root",
@@ -4562,14 +4765,103 @@ describe("buildModelTree", () => {
       domainPresentationStatus: "error",
     }));
     expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
-      kind: "mesh.grid", status: "degraded", contextCommands: ["workspace.focus-selection"],
+      kind: "mesh.root", status: "degraded", contextCommands: ["workspace.focus-selection"],
     });
     expect(nodes.map((node) => node.kind)).not.toEqual(expect.arrayContaining([
-      "mesh.shared-domain", "mesh.builds", "mesh.quality", "airbox.root", "boundary-faces.root",
+      "mesh.unassigned", "airbox.root", "boundary-faces.root",
     ]));
   });
 
-  it("adds only an explicit FDM universe summary, never a FEM Airbox subtree", () => {
+  it("keeps the three shared mesh positions for both FEM and FDM", () => {
+    const fdmPresentation: FdmDomainPresentation = {
+      ...(fdmExplorerPresentation() as FdmDomainPresentation),
+      universeOutsideMagneticSupport: {
+        bounds: { min: [0, 0, 0] as const, max: [8, 4, 2] as const },
+        kind: "universe-outside-magnetic-support" as const,
+        reason: "explicit fixture extent",
+      },
+    };
+    const fdmNodes = flattenExplorerNodes(buildModelTree({
+      domainPresentation: fdmPresentation,
+      objects: [{
+        id: "film",
+        label: "Film",
+        regions: [{ id: "core", label: "Core" }],
+      } as never],
+    }));
+    const femNodes = flattenExplorerNodes(buildModelTree({
+      airbox: { authoredPolicy: true, realizedCarrier: false },
+      domainDiscretization: "fem",
+      objects: [{
+        id: "film",
+        label: "Film",
+        regions: [{ id: "core", label: "Core" }],
+      } as never],
+    }));
+
+    for (const nodes of [fdmNodes, femNodes]) {
+      const meshRoot = nodes.find((node) => node.id === "model:mesh");
+      expect(meshRoot).toMatchObject({
+        kind: "mesh.root",
+        label: "Mesh",
+        parentId: "model:session",
+      });
+      expect(meshRoot?.children?.map(({ id, kind, label, parentId }) => ({
+        id,
+        kind,
+        label,
+        parentId,
+      }))).toEqual([
+        {
+          id: "model:mesh:shared-domain",
+          kind: "mesh.shared-domain",
+          label: "Domain Mesh",
+          parentId: "model:mesh",
+        },
+        {
+          id: "model:mesh:builds",
+          kind: "mesh.builds",
+          label: "Build Pipeline",
+          parentId: "model:mesh",
+        },
+        {
+          id: "model:mesh:quality",
+          kind: "mesh.quality",
+          label: "Quality Gates",
+          parentId: "model:mesh",
+        },
+        {
+          id: "model:mesh:size-fields",
+          kind: "mesh.size-fields",
+          label: "Realized Size Fields",
+          parentId: "model:mesh",
+        },
+        {
+          id: "model:mesh:regions",
+          kind: "mesh.regions",
+          label: "Regions And Mesh Parts",
+          parentId: "model:mesh",
+        },
+      ]);
+      expect(nodes.find((node) => node.id === "model:object:film:mesh")).toMatchObject({
+        kind: "object.mesh",
+        label: "Mesh",
+        parentId: "model:object:film",
+      });
+      expect(nodes.find((node) => node.id === "model:object:film:regions:core:mesh")).toMatchObject({
+        kind: "object.region.mesh",
+        label: "Mesh",
+        parentId: "model:object:film:regions:core",
+      });
+      expect(nodes.find((node) => node.id === "model:airbox:mesh")).toMatchObject({
+        kind: "airbox.mesh",
+        label: "Mesh",
+        parentId: "model:airbox",
+      });
+    }
+  });
+
+  it("adds the shared Airbox subtree for an explicit FDM universe", () => {
     const withUniverse: FdmDomainPresentation = {
       ...(fdmExplorerPresentation() as FdmDomainPresentation),
       universeOutsideMagneticSupport: {
@@ -4579,13 +4871,104 @@ describe("buildModelTree", () => {
       },
     };
     const nodes = flattenExplorerNodes(buildModelTree({ domainPresentation: withUniverse }));
-    expect(nodes.find((node) => node.id === "model:universe:grid")).toMatchObject({
-      kind: "mesh.grid.descriptor", label: "Structured Grid Universe",
+    expect(nodes.find((node) => node.id === "model:airbox")).toMatchObject({
+      kind: "airbox.root", label: "Airbox", parentId: "model:universe",
     });
-    expect(nodes.find((node) => node.id === "model:universe:grid:outside-support")?.kind).toBe(
-      "mesh.grid.universe-outside-support",
-    );
-    expect(nodes.map((node) => node.kind)).not.toContain("airbox.root");
+    expect(nodes.find((node) => node.id === "model:airbox:mesh")).toMatchObject({
+      kind: "airbox.mesh", label: "Mesh", parentId: "model:airbox",
+    });
+    expect(nodes.map((node) => node.id)).toEqual(expect.arrayContaining([
+      "model:airbox:mesh:parameters",
+      "model:airbox:mesh:quality-gates",
+      "model:airbox:mesh:statistics",
+      "model:airbox:mesh:topology",
+      "model:airbox:mesh:build",
+    ]));
+    expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
+      kind: "airbox.visualization",
+      label: "Visualization", parentId: "model:airbox",
+      visualizationTargetId: "fdm-universe-outside-support",
+    });
+    expect(
+      nodes.filter((node) => node.id === "model:airbox:visualization"),
+    ).toHaveLength(1);
+    expect(nodes.find((node) => node.id === "model:universe:grid")).toBeUndefined();
+  });
+
+  it("keeps the FDM Airbox visible from authored geometry before membership materializes", () => {
+    const domainMeta: DomainMetaResource = {
+      bounds: { min: [0, 0, 0], max: [4, 2, 1] },
+      coordinate_system: "cartesian",
+      counts: { cells: 8 },
+      dimension: 3,
+      discretization: "fdm",
+      domain_id: "domain:fdm",
+      generation_id: "generation-authored",
+      grid: { origin: [0, 0, 0], shape: [2, 2, 2], spacing: [2, 1, 0.5] },
+      units: { length: "m" },
+    };
+    const presentation = buildDomainPresentation({
+      domainMeta,
+      fdmMembership: null,
+      fdmMembershipStatus: "ready",
+      universeOutsideMagneticSupport: {
+        bounds: { min: [0, 0, 0], max: [4, 2, 1] },
+        reason: "authored-universe-exceeds-magnetic-support",
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree({ domainPresentation: presentation }));
+
+    expect(nodes.find((node) => node.id === "model:airbox")).toMatchObject({
+      kind: "airbox.root",
+      label: "Airbox",
+      status: "mesh-stale",
+    });
+    expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
+      kind: "mesh.root",
+      label: "Mesh",
+      status: "mesh-stale",
+    });
+    expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
+      kind: "airbox.visualization",
+      visualizationTargetId: "fdm-universe-outside-support",
+    });
+  });
+
+  it("qualifies duplicate FDM region nodes by owner without changing unambiguous ids", () => {
+    const base = fdmExplorerPresentation() as FdmDomainPresentation;
+    const membership = base.fdmGrid.membership;
+    expect(membership).not.toBeNull();
+    const duplicateMembership = {
+      ...membership!,
+      region_legend: [
+        ...membership!.region_legend,
+        {
+          ...membership!.region_legend[0],
+          numeric_id: membership!.region_legend[0].numeric_id + 1,
+          object_id: "object:other",
+          region_id: membership!.region_legend[0].region_id,
+        },
+      ],
+    };
+    const presentation: FdmDomainPresentation = {
+      ...base,
+      fdmGrid: {
+        ...base.fdmGrid,
+        membership: duplicateMembership,
+      },
+    };
+    const nodes = flattenExplorerNodes(buildModelTree({ domainPresentation: presentation }));
+    const regionNodes = nodes.filter((node) => node.kind === "mesh.grid.region");
+
+    expect(regionNodes.map((node) => node.id)).toEqual([
+      "model:mesh:region:object%3Acore:region%3Acore",
+      "model:mesh:region:object%3Aother:region%3Acore",
+    ]);
+    expect(regionNodes.map((node) => node.objectId)).toEqual([
+      "object:core",
+      "object:other",
+    ]);
+    expect(regionNodes.every((node) => node.parentId === "model:mesh:regions")).toBe(true);
   });
 
   it("keeps object visualization diagnostics available in an FDM model tree", () => {

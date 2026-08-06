@@ -37,6 +37,7 @@ export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];
 export interface FieldMetaQuery {
   component?: string | null;
+  owner_object_id?: string | null;
   scope_id?: string | null;
   scope_kind?: string | null;
   snapshot_id?: string | null;
@@ -57,6 +58,29 @@ export type FieldStateInspectResponse =
 export type FieldStateTargetRef =
   components["schemas"]["FieldStateTargetRef"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+type FdmFieldVectorQueryBase = Omit<
+  FieldVectorQuery,
+  "geometry_scope" | "scope_id" | "scope_kind"
+> & {
+  geometry_scope?: never;
+};
+type FdmIdentifiedFieldVectorQueryBase = FdmFieldVectorQueryBase & {
+  scope_id: string;
+};
+export type FdmSingleGridFieldVectorQuery =
+  | (FdmIdentifiedFieldVectorQueryBase & {
+      scope_kind: "object" | "region";
+    })
+  | (FdmFieldVectorQueryBase & {
+      scope_id?: string | null;
+      scope_kind: "airbox";
+    });
+export type FdmMultilayerFieldVectorQuery = FdmIdentifiedFieldVectorQueryBase & {
+  scope_kind: "layer" | "object";
+};
+export type FdmScopedFieldVectorQuery =
+  | FdmSingleGridFieldVectorQuery
+  | FdmMultilayerFieldVectorQuery;
 export type PlanarFieldMetaResource =
   components["schemas"]["PlanarFieldMetaResource"];
 export type PlanarFieldProbeResource =
@@ -246,6 +270,9 @@ export type MeshRegionMembershipResource =
   components["schemas"]["MeshRegionMembershipResource"];
 export type FdmRegionMembershipResource =
   components["schemas"]["FdmRegionMembershipResource"];
+export type PendingJsonResourceResult<TData> =
+  | { data: TData; status: "ready" }
+  | { data: null; status: "pending" };
 export type MeshRegionQualityResource =
   components["schemas"]["MeshRegionQualityResource"];
 export type MeshSemanticsResource =

@@ -858,7 +858,7 @@ async function installFemFixtureApi(page, fixture) {
     if (requestPath === "/v2/sessions/current/status") return fulfillJson(route, femStatusFixture());
     if (requestPath === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualizationState);
     if (requestPath === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, fixture.domainMeta ?? femDomainMetaFixture());
-    if (requestPath === "/v2/sessions/current/data/domain/topology") return fulfillBinary(route, fixture.topology);
+    if (requestPath === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
     if (requestPath === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
     if (requestPath === "/v2/sessions/current/model/scene") {
       return fulfillJson(route, fixture.scene);
@@ -972,8 +972,38 @@ async function fulfillJson(route, body, status = 200) {
   await route.fulfill({ body: JSON.stringify(body), headers: fixtureHeaders({ "content-type": "application/json" }), status });
 }
 
-async function fulfillBinary(route, arrayBuffer, status = 200) {
-  await route.fulfill({ body: Buffer.from(arrayBuffer), headers: fixtureHeaders({ "content-type": "application/octet-stream" }), status });
+async function fulfillTopology(route, topology) {
+  const range = route.request().headers().range;
+  const etag = '"fem-topology-upload-fixture"';
+  if (!range) {
+    return fulfillBinary(route, topology, 200, { etag });
+  }
+  const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+  if (!match) {
+    return route.fulfill({
+      body: "",
+      headers: fixtureHeaders({ "content-range": `bytes */${topology.byteLength}`, etag }),
+      status: 416,
+    });
+  }
+  const start = Number(match[1]);
+  const requestedEnd = Number(match[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 0 || requestedEnd < start || start >= topology.byteLength) {
+    return route.fulfill({
+      body: "",
+      headers: fixtureHeaders({ "content-range": `bytes */${topology.byteLength}`, etag }),
+      status: 416,
+    });
+  }
+  const end = Math.min(requestedEnd, topology.byteLength - 1);
+  return fulfillBinary(route, topology.slice(start, end + 1), 206, {
+    "content-range": `bytes ${start}-${end}/${topology.byteLength}`,
+    etag,
+  });
+}
+
+async function fulfillBinary(route, arrayBuffer, status = 200, extraHeaders = {}) {
+  await route.fulfill({ body: Buffer.from(arrayBuffer), headers: fixtureHeaders({ "content-type": "application/octet-stream", ...extraHeaders }), status });
 }
 
 async function fulfillEmpty(route, status = 204) {
@@ -981,7 +1011,7 @@ async function fulfillEmpty(route, status = 204) {
 }
 
 function fixtureHeaders(extra = {}) {
-  return { "access-control-allow-headers": "*", "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS", "access-control-allow-origin": "*", "access-control-expose-headers": "x-api-contract-version,etag,x-request-id", "x-api-contract-version": "1.0.0", ...extra };
+  return { "access-control-allow-headers": "*", "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS", "access-control-allow-origin": "*", "access-control-expose-headers": "content-range,etag,x-api-contract-version,x-request-id", "x-api-contract-version": "1.0.0", ...extra };
 }
 
 async function loadPlaywright() {

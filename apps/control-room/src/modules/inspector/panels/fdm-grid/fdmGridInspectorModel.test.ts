@@ -16,6 +16,7 @@ import {
 function domainSelection(
   scope: Extract<NonNullable<Selection["ref"]>, { type: "fdm-domain" }>["scope"],
   regionId?: string,
+  objectId?: string,
 ): Selection {
   const kind = scope === "domain" ? "mesh.grid" : `mesh.grid.${scope}`;
   return {
@@ -27,6 +28,7 @@ function domainSelection(
     ref: {
       kind: kind as Extract<NonNullable<Selection["ref"]>, { type: "fdm-domain" }>["kind"],
       nodeId: `model:mesh:${scope}`,
+      ...(objectId ? { objectId } : {}),
       ...(regionId ? { regionId } : {}),
       scope,
       type: "fdm-domain",
@@ -103,6 +105,7 @@ function membership(
     cell_count: 24,
     cell_m: [2, 1, 0.5],
     counts: [2, 3, 4],
+    domain_generation_id: "generation-7",
     encoding: "u32le-v2",
     freshness: "current",
     grid_fingerprint: "grid-fingerprint-7",
@@ -310,7 +313,7 @@ describe("resolveFdmGridSelectionInspectorModel", () => {
 
   it.each([
     ["active-unassigned", "Active / Unassigned Cells"],
-    ["universe-outside-support", "Universe Outside Magnetic Support"],
+    ["universe-outside-support", "Airbox Visualization"],
   ] as const)("uses the canonical support summary for %s", (scope, title) => {
     const descriptor = membershipWithSupport();
     const membershipSnapshot = resource(descriptor);
@@ -354,6 +357,62 @@ describe("resolveFdmGridSelectionInspectorModel", () => {
 
     expect(detail.status).toBe("current");
     expect(detail.support).toBeNull();
+  });
+
+  it("resolves duplicate region ids by their ferromagnetic owner", () => {
+    const descriptor = membership({
+      region_legend: [
+        ...membership().region_legend,
+        {
+          numeric_id: 8,
+          object_id: "object:other",
+          priority: 1,
+          region_id: "region:core",
+        },
+      ],
+    });
+    const membershipSnapshot = resource(descriptor);
+    const detail = resolveFdmGridSelectionInspectorModel({
+      base: resolveFdmGridInspectorModel(resources({ membership: membershipSnapshot })),
+      binary: binaryResource(),
+      membership: membershipSnapshot,
+      selection: domainSelection("region", "region:core", "object:other"),
+    });
+
+    expect(detail).toMatchObject({
+      scope: "region",
+      status: "current",
+      region: {
+        objectId: "object:other",
+        numericId: 8,
+        regionId: "region:core",
+      },
+    });
+  });
+
+  it("withholds an ambiguous legacy region selection instead of guessing an owner", () => {
+    const descriptor = membership({
+      region_legend: [
+        ...membership().region_legend,
+        {
+          numeric_id: 8,
+          object_id: "object:other",
+          priority: 1,
+          region_id: "region:core",
+        },
+      ],
+    });
+    const membershipSnapshot = resource(descriptor);
+    const detail = resolveFdmGridSelectionInspectorModel({
+      base: resolveFdmGridInspectorModel(resources({ membership: membershipSnapshot })),
+      binary: binaryResource(),
+      membership: membershipSnapshot,
+      selection: domainSelection("region", "region:core"),
+    });
+
+    expect(detail.status).toBe("stale");
+    expect(detail.region).toBeNull();
+    expect(detail.notice).toContain("not present");
   });
 
   it("withholds magnetic-support facts from a verified cell scope", () => {

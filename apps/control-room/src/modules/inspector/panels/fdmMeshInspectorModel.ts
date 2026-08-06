@@ -187,7 +187,9 @@ export function resolveFdmObjectMeshInspectorModel({
   const metadata = (membership?.region_legend ?? [])
     .filter((entry) =>
       normalizedRegionId
-        ? Boolean(selectedRegionEntry) && entry.region_id === selectedRegionEntry?.region_id
+        ? Boolean(selectedRegionEntry) &&
+          entry.region_id === selectedRegionEntry?.region_id &&
+          (!objectId || entry.object_id === objectId)
         : !objectId || entry.object_id === objectId,
     )
     .map((entry) => ({

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::{
-    is_fdm_snapshot, live_magnetization_available,
+    is_fdm_backend_kind, is_fdm_snapshot, live_magnetization_available,
 };
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;
 use crate::schemas::relaxation::{canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm};
@@ -181,9 +181,10 @@ pub(crate) fn build_live_status(
             .unwrap_or(0)
     };
     let domain_generation_id = domain_generation_id(snapshot);
+    let domain_generation_revision = domain_generation_revision(snapshot);
 
     let domain = DomainSummary {
-        generation_id: domain_generation_id,
+        generation_id: domain_generation_id.clone(),
         discretization: if is_fem { "fem" } else { "fdm" }.into(),
         cell_count,
     };
@@ -192,7 +193,7 @@ pub(crate) fn build_live_status(
     let field_revision = field_revision(snapshot);
     let artifact_revision = artifact_revision(snapshot);
     let resources = ResourceRevisionMap {
-        topology_revision: topology_revision(snapshot, domain.generation_id),
+        topology_revision: topology_revision(snapshot, domain_generation_revision),
         field_catalog_revision,
         field_revision,
         slice_revision: slice_revision(field_revision, display_sel.revision),
@@ -200,7 +201,7 @@ pub(crate) fn build_live_status(
         command_completion_revision,
         fields_revision: field_revision,
         scalars_revision: snapshot.scalar_revision,
-        domain_generation_id: domain.generation_id,
+        domain_generation_id: domain.generation_id.clone(),
         artifacts_revision: snapshot.artifacts.len() as u64,
         engine_log_revision: snapshot.engine_log.len() as u64,
         solver_profile_revision: snapshot.solver_profile.revision,
@@ -853,19 +854,44 @@ pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generati
     }
 }
 
-pub(crate) fn domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
+pub(crate) fn domain_generation_id(snapshot: &SessionStateResponse) -> String {
     if !is_fdm_snapshot(snapshot) {
         if let Some(generation_id) = snapshot
             .fem_mesh
             .as_ref()
             .and_then(|m| m.generation_id.as_deref())
-            .and_then(|g| g.parse::<u64>().ok())
         {
-            return generation_id;
+            return generation_id.to_string();
         }
     }
 
+    fdm_grid_fingerprint(snapshot)
+        .map(str::to_string)
+        .unwrap_or_else(|| fdm_domain_generation_id(snapshot).to_string())
+}
+
+pub(crate) fn domain_generation_revision(snapshot: &SessionStateResponse) -> u64 {
+    if !is_fdm_snapshot(snapshot) {
+        if let Some(generation_id) = snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|mesh| mesh.generation_id.as_deref())
+        {
+            return fnv1a_hash_bytes(1469598103934665603_u64, generation_id.as_bytes()).max(1);
+        }
+    }
     fdm_domain_generation_id(snapshot)
+}
+
+pub(crate) fn fdm_grid_fingerprint(snapshot: &SessionStateResponse) -> Option<&str> {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("execution_plan"))
+        .and_then(|plan| plan.get("backend_plan"))
+        .and_then(|backend_plan| backend_plan.get("grid_certificate"))
+        .and_then(|certificate| certificate.get("grid_fingerprint"))
+        .and_then(Value::as_str)
 }
 
 pub(crate) fn fdm_grid_shape(
@@ -886,13 +912,14 @@ pub(crate) fn fdm_grid_shape(
                     layout
                         .get("backend")
                         .and_then(Value::as_str)
-                        .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"))
+                        .is_some_and(is_fdm_backend_kind)
                 })
                 .and_then(|layout| {
                     layout
                         .get("grid_cells")
                         .or_else(|| layout.get("grid_shape"))
                         .or_else(|| layout.get("shape"))
+                        .or_else(|| layout.get("common_cells"))
                 })
                 .or_else(|| {
                     metadata
@@ -900,6 +927,12 @@ pub(crate) fn fdm_grid_shape(
                         .and_then(|plan| plan.get("backend_plan"))
                         .and_then(|backend_plan| backend_plan.get("grid"))
                         .and_then(|grid| grid.get("cells"))
+                        .or_else(|| {
+                            metadata
+                                .get("execution_plan")
+                                .and_then(|plan| plan.get("backend_plan"))
+                                .and_then(|backend_plan| backend_plan.get("common_cells"))
+                        })
                 })
         })
         .and_then(value_array3_u32_positive)
@@ -921,23 +954,10 @@ fn fdm_domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
         revision = fnv1a_hash_u64(revision, value as u64);
     }
 
-    if let Some(layout) = fdm_artifact_layout(snapshot) {
+    if let Some((origin, spacing)) = fdm_grid_geometry(snapshot) {
         revision = fnv1a_hash_bytes(revision, b"layout");
-        if let Some(origin) = layout
-            .get("origin_m")
-            .or_else(|| layout.get("origin"))
-            .or_else(|| layout.get("grid_origin"))
-            .or_else(|| layout.get("native_origin"))
-            .and_then(value_array3_f64_any_finite)
-        {
-            revision = fnv1a_hash_f64_array(revision, origin);
-        }
-        if let Some(spacing) = layout
-            .get("cell_size")
-            .and_then(value_array3_f64_allow_planar)
-        {
-            revision = fnv1a_hash_f64_array(revision, spacing);
-        }
+        revision = fnv1a_hash_f64_array(revision, origin);
+        revision = fnv1a_hash_f64_array(revision, spacing);
     }
 
     revision.max(1)
@@ -948,7 +968,54 @@ fn fdm_artifact_layout(snapshot: &SessionStateResponse) -> Option<&Value> {
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.get("artifact_layout"))
-        .filter(|layout| layout.get("backend").and_then(Value::as_str) == Some("fdm"))
+        .filter(|layout| {
+            layout
+                .get("backend")
+                .and_then(Value::as_str)
+                .is_some_and(is_fdm_backend_kind)
+        })
+}
+
+/// Resolve the physical geometry of an FDM domain from the published artifact
+/// layout or, for multilayer plans, from the planner-owned grid certificate.
+/// The latter is intentionally the fallback because `field_layout` stores
+/// multilayer native layers rather than duplicating common-grid coordinates at
+/// the top level.
+pub(crate) fn fdm_grid_geometry(
+    snapshot: &SessionStateResponse,
+) -> Option<([f64; 3], [f64; 3])> {
+    let metadata = snapshot.metadata.as_ref()?;
+    if let Some(layout) = fdm_artifact_layout(snapshot) {
+        if let Some(geometry) = fdm_geometry_from_value(layout) {
+            return Some(geometry);
+        }
+    }
+
+    let backend_plan = metadata
+        .get("execution_plan")
+        .and_then(|plan| plan.get("backend_plan"))?;
+    fdm_geometry_from_value(backend_plan).or_else(|| {
+        backend_plan
+            .get("grid_certificate")
+            .and_then(fdm_geometry_from_value)
+    })
+}
+
+fn fdm_geometry_from_value(value: &Value) -> Option<([f64; 3], [f64; 3])> {
+    let origin_value = value
+        .get("origin_m")
+        .or_else(|| value.get("origin"))
+        .or_else(|| value.get("grid_origin"))
+        .or_else(|| value.get("native_origin"));
+    let origin = match origin_value {
+        Some(origin) => value_array3_f64_any_finite(origin)?,
+        None => [0.0, 0.0, 0.0],
+    };
+    let spacing = value
+        .get("cell_size")
+        .or_else(|| value.get("cell_m"))
+        .and_then(value_array3_f64_allow_planar)?;
+    Some((origin, spacing))
 }
 
 fn value_array3_u32_positive(value: &Value) -> Option<[u32; 3]> {

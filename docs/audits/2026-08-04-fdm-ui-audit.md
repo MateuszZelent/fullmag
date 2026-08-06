@@ -654,6 +654,13 @@ Operacje obejmują co najmniej: grid build, shared mesh build, field quantity, v
 
 ## 11. Docelowa informacja w Explorerze i Inspectorze
 
+Uwaga: poniższa propozycja była docelowym baseline'em przed korektą
+product-level Airbox. Aktualny kontrakt, który zastępuje wariant
+„Universe outside magnetic support” osobnym węzłem, znajduje się w sekcji 17:
+FDM z universe większym od magnetic support również używa `Universe → Airbox`.
+Różnica FDM/FEM jest zachowana w adapterach i statusach paneli, nie w nazwie
+węzła.
+
 ### 11.1 FDM bez airboxa (universe = magnetic support)
 
 ```text
@@ -907,3 +914,498 @@ Nie jest to deklaracja pełnej kwalifikacji produktu. Do osobnego zamknięcia
 pozostają aktualny runtime v2 z `resolved` lane, universe/membership extent w
 działającej sesji, FMVP identity v3/envelope, executed CPU/GPU/precision/mode
 matrix, `fdm_multilayer` oraz kwalifikacja naukowa solvera.
+
+## 17. Stan po unifikacji Airbox FDM/FEM (2026-08-05)
+
+Ostatnia korekta użytkowa nie polegała na zmianie samej etykiety `Universe`.
+Kontrakt produktu został ujednolicony: jeżeli universe FDM zawiera komórki poza
+magnetic support, Explorer pokazuje ten sam węzeł co FEM:
+
+```text
+Universe
+└── Airbox
+    ├── Mesh
+    │   ├── Parameters
+    │   ├── Quality Gates
+    │   ├── Statistics
+    │   ├── Topology
+    │   └── Build & Provenance
+    └── Visualization
+```
+
+W obu lane'ach stabilne są identyfikatory `model:airbox` oraz
+`model:airbox:visualization`. Wspólny `ObjectVisualizationPanel` obsługuje
+widoczność, bounds, tryb renderowania/shader, wektory, źródło ilości,
+kolorowanie i colorbar. FDM ma osobny wewnętrzny target
+`fdm-universe-outside-support`, ale jest to adapter techniczny, a nie drugi
+produktowy węzeł ani zapis do FEM-owego `visualization/state`. Przełączniki
+FDM są lokalnie związane z kontrolerem structured-grid i nie tworzą fałszywego
+override'u FEM.
+
+Tak samo `model:mesh` jest jednym wspólnym węzłem produktu i ma etykietę
+`Mesh` w obu lane'ach. FDM nie tworzy drugiego korzenia „FDM Grid”; jego
+wariant strukturalny jest pokazany w dzieciach `Mesh` jako `Structured Grid`,
+`Cell Mask`, `Magnetic Support` i `Grid Provenance`. Nazwy `mesh.grid.*`
+pozostają wyłącznie typami szczegółowych selekcji/kompatybilności, nie osobną
+gałęzią aplikacji.
+
+Ta unifikacja nie oznacza zrównania reprezentacji numerycznej. Dla FDM:
+
+- `Mesh` oznacza regularny grid (`shape`, `origin`, `spacing`, `cell_count`),
+  nie listę elementów FEM;
+- `Topology` pozostaje jawnie `not applicable`, ponieważ endpoint topology dla
+  FDM zwraca `204`;
+- parametry elementowe FEM (`tet4`, SICN, hmax/hmin jako rozmiar elementu,
+  curvature i shared-domain build) nie mogą być przedstawiane jako działające
+  operacje na regularnym gridzie;
+- `Build & Provenance` pokazuje artefakt planu wykonania. Przy immutable
+  `ExecutionPlanIR` zmiana polityki wymaga ponownego planowania/uruchomienia;
+  UI nie udaje odświeżenia artefaktu przez lokalny refresh.
+
+### 17.1. Wiele ferromagnetyków i regionów
+
+Airbox FDM nie jest wyliczany jako „jeden prostokąt poza jednym obiektem”.
+Prezentacja używa envelope universe/support oraz, gdy backend go opublikuje,
+`FdmRegionMembershipResource`. Inspector pokazuje dla każdego wpisu legendy:
+`object_id`, `region_id`, `numeric_id` i `priority`. Bounds są tylko zakresem
+overlayu; dokładny podział komórek active/unassigned/inactive/background należy
+do maski membership (`u32::MAX` jest sentinelem inactive, a ID `0` pozostaje
+ważnym active/unassigned). Dla rozłącznych magnetyków Airbox jest publikowany,
+jeżeli istnieją nieaktywne komórki, również wtedy, gdy AABB magnetic support
+pokrywa cały envelope. Nie wolno z tego wywnioskować, że każda komórka poza
+AABB jest powietrzem.
+
+`fdm_multilayer` i sesje bez zmaterializowanego artefaktu membership pozostają
+stanem `not materialized`/`deferred`; UI pokazuje ten stan zamiast wymyślać
+legendę albo maskę. To jest świadome ograniczenie kwalifikacji backendu, nie
+powód do przywrócenia FEM-owego topologicznego Airbox.
+
+### 17.2. Dowody API i testów
+
+Sprawdzony kontrakt dla bieżącej sesji FDM:
+
+| Zasób | Oczekiwany wynik |
+|---|---|
+| `data/domain/meta` | `discretization=fdm`, regularny `grid`, bounds universe, cell count |
+| `data/domain/topology` | `204`; odziedziczona topologia FEM nie jest używana przez FDM |
+| `data/fdm-region-memberships` | descriptor/binarny artefakt tylko, gdy runtime opublikował membership; brak artefaktu jest jawny |
+| `meshing/policies/universe` | lane-neutralny zapis authored mode/size/center/padding oraz airbox policy; effective values są read-only |
+| `visualization/state` | wspólny kontrakt FEM pozostaje dla FEM; FDM Airbox używa lokalnego targetu |
+
+Regresje Rust pokrywają izolację `fdm`/`fdm_multilayer` od odziedziczonej
+topologii FEM oraz round-trip polityki universe. Frontendowe testy pokrywają
+identyczne drzewo/selection, wspólny panel wizualizacji, lokalne komendy FDM,
+overlay bounds, legendę wielu regionów i fail-closed lifecycle. Typecheck,
+focused Vitest i `git diff --check` są wymagane przed uznaniem tej warstwy za
+gotową.
+
+### 17.3. Granica browser/runtime
+
+Źródło i testy nie zastępują dowodu uruchomionej aplikacji. Aktualny proces
+`next start` na porcie używanym przez przeglądarkę ma niespójne assety
+`_next/static` (HTTP 500 przed mountem viewportu), dlatego bieżący screenshot
+nie kwalifikuje WebGL, shadera, colorbara ani glyphów. Wcześniejszy kontrolowany
+bundle przeszedł canvas/WebGL/FMVP oraz niezerowe delty shadera i wektorów, ale
+nie jest dowodem aktualnego runtime z membership. Po przebudowaniu i restarcie
+frontend/backend trzeba powtórzyć: canvas/drawing-buffer, Airbox overlay,
+shader, vectors, colorbar, hover/click komórki, reload selection oraz sesję z
+realnym `fdm_region_membership.v2`.
+
+#### Korekta stanu authored przed membership (2026-08-05)
+
+W sesji zgłoszonej z przeglądarki `GET /data/domain/meta` zwracał poprawny FDM
+grid `128 × 32 × 30` dla universe `800 × 325 × 90 nm`, a `model/scene`
+zawierał magnetyczny film o mniejszych bounds. Jednocześnie
+`GET /data/fdm-region-memberships` zwracał `204`, ponieważ bieżący plan nie
+miał jeszcze zmaterializowanego artefaktu membership. Stary adapter wyliczał
+Airbox wyłącznie z realized membership, dlatego `Universe` pozostawał pusty
+w stanie `Waiting for compute / Mesh not built`.
+
+Adapter UI ma teraz drugi, jawnie oznaczony etap: z authored universe i bounds
+magnetycznych obiektów wyprowadza wyłącznie envelope roli Airbox, z powodem
+`authored-universe-exceeds-magnetic-support`. Węzeł pojawia się ze statusem
+oczekującym, a Inspector nie udaje maski: pokazuje `membership mask: Not
+materialized` i wymaga re-plan/run. Gdy pojawi się aktualny membership,
+membership ma pierwszeństwo; dokładne komórki, regiony i sentinele nadal
+pochodzą wyłącznie z FMRM.
+
+### 17.4. Kryterium akceptacji tej korekty
+
+Korekta jest funkcjonalnie zgodna z żądaniem użytkownika, gdy:
+
+1. FEM i FDM pokazują jeden produktowy `Mesh` oraz jeden produktowy `Airbox`, a
+   nie `FDM Grid`/`Universe Outside...` jako osobne korzenie;
+2. wybór `Airbox → Visualization` otwiera ten sam zestaw kontroli, bez FEM-owego
+   zapisu dla targetu FDM;
+3. wspólne opcje geometrii zapisują się przez canonical universe policy, a
+   opcje niedostępne w FDM mają jawny `not applicable`/`deferred`;
+4. wiele magnetyków i regionów zachowuje legendę oraz tożsamość maski;
+5. brak membership, stale revision i immutable plan są widoczne, a nie
+   zastępowane zmyślonym Airboxem lub odświeżeniem.
+
+### 17.5. Kanoniczne rozmieszczenie `Mesh`: globalnie, obiekt, region i Airbox
+
+Ostatnia korekta nomenklatury nie może zakończyć się na wspólnej etykiecie
+`Mesh`. Użytkownik musi mieć ten sam schemat nawigacji niezależnie od tego, czy
+resolved lane to FEM czy FDM. Są trzy stałe poziomy produktu oraz jedna stała
+gałąź zakresu:
+
+```text
+Session Model
+├── Mesh                                      (globalne podsumowanie)
+│   ├── Domain Mesh                           (FEM shared-domain / FDM structured grid)
+│   ├── Build Pipeline
+│   ├── Quality Gates
+│   ├── Realized Size Fields
+│   └── Regions And Mesh Parts                (agregat projekcji zakresów)
+├── Universe
+│   └── Airbox
+│       └── Mesh                              (mesh całego airboxa/universe)
+└── Objects
+    └── <object>
+        ├── Mesh                              (mesh obiektu)
+        └── Regions
+            └── <region>
+                └── Mesh                      (mesh/realizacja regionu)
+```
+
+Globalny `Mesh` nie zawiera drugiej kopii węzła Airbox. Jest agregatem i
+punktem podsumowania; kanoniczny panel zakresu Airbox znajduje się wyłącznie
+pod `Universe → Airbox → Mesh`, a jego panel wizualizacji jest rodzeństwem:
+`Universe → Airbox → Visualization`.
+
+Powyższy rysunek jest znormalizowanym widokiem kontraktu mesh, a nie pełną
+kolejnością wszystkich dzieci `Session Model` w renderowanym Explorerze.
+Rzeczywista relacja dla obiektu jest następująca: `Object → Mesh` oraz
+`Object → Regions → Region → Mesh` są dwiema równoległymi ścieżkami zakresu.
+Obiekt ma ponadto własne dzieci `Geometry`, `Magnetic Parameters`, `Magnetic
+Texture` i `Visualization`; `Session Model` zawiera także `Definitions`,
+gałęzie Physics i `Study`. `model:mesh` pozostaje globalnym rodzeństwem
+`Universe`/`Objects`, niezależnie od jego pozycji sortowania w panelu.
+
+W języku „mesh w trzech miejscach” oznacza to: (1) globalny `Mesh`, (2) mesh
+zakresu obiektu wraz z jego regionami oraz (3) mesh zakresu `Airbox`. Region ma
+jednak własny, jawny węzeł `Mesh` pod obiektem; nie wolno chować jego stanu w
+globalnym liczniku ani traktować go wyłącznie jako etykiety materialnej.
+Stabilne identyfikatory powinny pozostać wspólne dla obu lane'ów:
+
+| Zakres | Node ID | `scope_kind` | Tożsamość realizacji |
+|---|---|---|---|
+| Globalny agregat | `model:mesh` | `global` | `mesh_revision` + `source_scene_revision` |
+| Airbox | `model:airbox:mesh` | `airbox` | FEM: topology/manifest fingerprint; FDM: grid fingerprint + mask revision |
+| Obiekt | `model:object:<objectId>:mesh` | `object` | FEM: mesh parts/size-field; FDM: grid fingerprint + object membership |
+| Region | `model:object:<objectId>:regions:<regionId>:mesh` | `region` | FEM: region mesh-part/topology membership; FDM: grid fingerprint + region ID/mask revision |
+
+Każdy węzeł może używać tego samego panelu produktu, ale panel otrzymuje
+`ResolvedDomainAdapter` i renderuje tylko pola legalne dla realizacji. Wspólne
+wiersze są zawsze obecne: zakres, backend/discretization, bounds, rozdzielczość,
+liczność, status freshness, requested/resolved provenance, fingerprint/revision,
+field/vector readiness oraz link do `Visualization`. Różnice są jawne:
+
+- FEM pokazuje elementy, węzły, rodziny elementów, mesh parts, boundary faces,
+  element-size/quality i region refinement; jego region może mieć osobny
+  resolved mesh-part oraz gęstszy size field, przy zachowaniu spójnej topologii
+  shared-domain.
+- FDM pokazuje `shape`, `origin`, `spacing`, cell count, komórki active,
+  unassigned/inactive, region ID, mask/legend, grid fingerprint i mask
+  freshness. Region/obiekt wskazuje zakres komórek w jednym regularnym gridzie;
+  nie wolno udawać niezależnej FEM topologii ani emitować `tet4`, SICN,
+  boundary faces lub element-size jako aktywnej polityki FDM.
+
+Węzeł globalny nie jest kolejną, trzecią kopią meshu. Jest agregatem wszystkich
+zakresów i musi umożliwiać audyt sum (z jasnym oznaczeniem, które projekcje są
+rozłączne):
+
+```text
+global.cell_or_element_count = canonical domain count
+global.partitioned_count = sum(only disjoint scoped counts)
+global.object_count / region_count / airbox_present
+global.mesh_revision / freshness = max(staleness) z zależności
+```
+
+Dla FDM suma nie może podwójnie liczyć komórek, gdy wiele obiektów/regionów
+dzieli jeden grid: globalny `cell_count` pochodzi z deskryptora gridu, a liczniki
+obiektów/regionów są licznikami membership/legend i mają osobne etykiety. Dla FEM
+globalny count pochodzi z realized manifestu, a agregaty regionów/mesh parts
+muszą mieć jawnie określone, czy są rozłączne, czy nakładają się przez interface.
+
+### 17.6. Semantyka wielu obiektów i regionów
+
+Przy wielu ferromagnetykach i regionach nie ma jednego „mesh obiektu”
+wyliczanego z pierwszego AABB. Adapter musi zachować relacje:
+
+```text
+global Mesh
+├── object A Mesh
+│   ├── region A1 Mesh
+│   └── region A2 Mesh
+├── object B Mesh
+│   └── region B1 Mesh
+└── Airbox Mesh
+```
+
+FDM może mieć jeden wspólny grid dla A i B. Wtedy wszystkie zakresy wskazują
+ten sam `grid_fingerprint`, ale każdy region ma osobny wpis legendy i maski
+(`object_id`, `region_id`, `numeric_id`, `priority`, dokładny cell count).
+Brak binary membership oznacza `not materialized`/`deferred`, a nie pusty mesh.
+FEM może realizować osobne mesh parts i zagęszczenia regionów w jednym
+shared-domain; ich membership/topology fingerprint musi być zgodny z globalnym
+manifestem. Bounds są tylko envelope, nigdy dowodem kompletnego air/background.
+
+### 17.7. Kontrakt zasobów i komend per zakres
+
+Każdy scoped panel musi pobierać zasób z jawnym `scope_kind`, `scope_id`,
+`mesh_revision` i `fingerprint`; nie może używać globalnego FEM `mesh_summary`
+po samym `object_id`. Minimalna macierz:
+
+| Zakres | FEM | FDM |
+|---|---|---|
+| Globalny `Mesh` | shared-domain manifest, quality, build/provenance | grid descriptor, membership summary, mask/provenance |
+| Obiekt `Mesh` | object policy, size field, mesh parts, quality | grid/membership projection dla `object_id`; execution-plan status/read-only, jeśli planner nie obsługuje policy |
+| Region `Mesh` | region policy, realized parts, quality/histograms | exact region cells/legend/mask revision; bez udawanej elementowej jakości |
+| Airbox `Mesh` | airbox parts/topology/build | universe grid extent + outside-support membership; bez FEM topology |
+
+Komendy również są scoped. `mesh.build-shared-domain` jest legalna tylko dla
+FEM. FDM może zapisać wspólną politykę universe, ale przy niezmiennym
+`ExecutionPlanIR` musi dostać `replan/rerun required`; lokalny „refresh” nie może
+zmienić zrealizowanego gridu. Jeśli w przyszłości planner dopuści per-object lub
+per-region FDM policy, endpoint i provenance muszą to opublikować jawnie — nie
+można odblokować przycisku na podstawie samej obecności węzła.
+
+### 17.8. Sprzeczności w bieżącym working tree i otwarte bramki
+
+Obecne źródła mają już część struktury, ale nie spełniają jeszcze całego
+kontraktu:
+
+1. `buildModelTree.ts` tworzy `model:mesh`, `model:object:<id>:mesh`,
+   `model:object:<id>:regions:<id>:mesh` oraz `model:airbox:mesh`; FDM
+   object/region Inspectory używają już wspólnej nomenklatury `Object Mesh` /
+   `Region Mesh`, ale pozostają read-only, bo nie ma jeszcze wspólnego,
+   typed scoped resource dla object/region mesh.
+2. FDM `model:airbox` jest dodawany tylko przy
+   `universeOutsideMagneticSupport`, natomiast FEM Airbox jest obecnie gałęzią
+   zawsze obecną. Należy zdecydować i udokumentować, czy Airbox jest pustym
+   placeholderem z `not present` dla `universe = magnetic support`, czy węzeł
+   ma być wtedy ukryty — oba lane'y muszą zachowywać tę samą regułę.
+3. Dzieci FDM Airbox mają te same nazwy co FEM, ale `Parameters`, `Quality
+   Gates`, `Topology` i `Build & Provenance` są read-only/not-applicable; FEM ma
+   edytowalne polityki i topology. Wspólne UI wymaga capability badge/reason,
+   nie tylko wspólnego labela.
+4. `MeshSummaryResource` i `MeshSemanticsResource` są nadal głównie globalnymi,
+   generic JSON projections. Nie niosą typed `scope_kind` dla FDM object/region
+   i łatwo przez nie zassać FEM topology do FDM.
+5. `FdmRegionMembershipResource` opisuje globalny grid/maskę i legendę, ale
+   scoped region panel musi filtrować tę maskę po `object_id`/`region_id` z
+   tym samym revision/fingerprint. `MeshRegionResource.cell_count` bez tego
+   powiązania nie jest dowodem FDM region mesh.
+6. Gałąź `objectNodes` dla obiektu `antenna` kończy się na Geometry/Antenna/
+   Visualization i nie ma `Mesh`. Jeżeli „każdy obiekt” oznacza także anteny,
+   trzeba dodać jawny `Mesh` z `not applicable`/capability reason; jeśli anteny
+   pozostają poza solver mesh, zakres musi być zapisany jako wyjątek.
+7. `resources:mesh` nadal nosi etykietę `Mesh topology`, co jest FEM-first i
+   powinno być neutralnym `Mesh resources` z rozróżnieniem lane.
+
+### 17.9. Bramka weryfikacyjna dla ujednoliconego schematu
+
+Zmiana jest gotowa dopiero po przejściu wszystkich poniższych testów:
+
+1. Tree snapshot dla FEM, FDM oraz `fdm_multilayer` pokazuje te same cztery
+   zakresy (global/object/region/Airbox; Airbox zgodnie z jedną regułą
+   obecności), z identycznymi node IDs i parentami.
+2. Fixture z co najmniej dwoma magnetykami i trzema regionami potwierdza brak
+   zderzeń ID, poprawne `object_id`/`region_id`, legendę i sumy globalnego
+   podsumowania. FDM testuje jeden wspólny grid z wieloma mask entries; FEM
+   testuje region refinement i shared topology.
+3. Każdy zakres otwiera swój Inspector i Visualization target; zmiana targetu
+   nie zapisuje FDM override do FEM `visualization/state`, a FEM target nie
+   dziedziczy FDM local controller.
+4. FDM Inspector nie renderuje aktywnych FEM-only pól/komend; FEM Inspector nie
+   traci topology/quality. `Topology=not applicable` i `membership=deferred`
+   są stanami jawnie testowanymi.
+5. Zmiana authored policy powoduje właściwą invalidację scoped resource,
+   freshness/revision oraz `replan/rerun` dla FDM; nie ma lokalnego fake refresh.
+6. API probe potwierdza domain/grid/topology/membership isolation dla obu
+   lane'ów, a browser smoke potwierdza canvas, bounds fit, shader/colorbar/
+   vectors oraz wybór global/object/region/Airbox po reloadzie.
+
+### 17.10. Reconciliation z audytem FDM 3D (2026-08-05)
+
+Drugi audyt FDM 3D potwierdza rozdział realizacji: FEM renderuje shared
+topology, a FDM regular-grid cells przez `InstancedMesh`. Potwierdza też, że
+Airbox FDM składa się z dwóch różnych warstw: authored universe/support AABB
+oraz komórek `inactive` wybranych z realized FMRM.
+
+Najważniejsza korekta względem rekomendacji „fallbackuj brak maski do active”
+jest świadoma i celowo fail-closed. Brak lub niezgodna maska nie dowodzi, że
+każda komórka jest ferromagnetykiem; taki fallback odtworzyłby biały blok z
+raportowanego ekranu i zafałszowałby fizyczną rolę Airboxa. Obecny builder wymaga
+jawnego `cellSelection` oraz `Uint32Array` o dokładnie zgodnym rozmiarze; bez
+aktualnego FMRM nie buduje ani warstwy magnetycznej, ani warstwy inactive.
+Authored envelope może pozostać widoczny jako bounds z jawnym stanem
+`membership not materialized`, ale nie jest przedstawiany jako maska.
+
+Z audytu wdrożone są również: osobny target FDM Airbox, rozłączne active/inactive
+passes oraz fail-closed rozdział passów wizualnych (szczegółowa korekta dla
+wektorów i źródła pola znajduje się w sekcji 17.12),
+naprawione mapowanie komend render mode dla zwykłych obiektów oraz ograniczony
+HUD/legend bez nachodzenia na orientation cube. Field-index compatibility i
+membership resources są raportowane w statusie/resource frame; nadal nie ma
+produkcyjnego GPU scalar shader dla FDM, więc CPU instance-color path pozostaje
+jawnie ograniczeniem, a nie udawanym FEM shaderem.
+
+Pozostają dwie bramki kwalifikacyjne: test integracyjny całego łańcucha
+`DomainMeta → FMRM descriptor/binary → scene model → InstancedMesh` oraz browser
+smoke z aktualnie zbudowanym frontendem. Bieżący endpoint `3100` jest
+niedostępny, więc screenshot nie może jeszcze potwierdzić runtime/WebGL; nie
+traktujemy tego jako dowodu przeciwko źródłowej poprawce.
+
+### 17.11. Reconciliation z planem implementacji FDM 3D (2026-08-05)
+
+Plan implementacji porządkuje dalsze prace, ale jego WP1/WP3/WP4 wymagają
+korekty względem kontraktu Fullmag:
+
+| Pakiet | Decyzja | Powód |
+|---|---|---|
+| WP1 membership fallback | nie wdrażać syntetycznej maski active | authored grid nie jest realized membership; fallback pokazałby powietrze jako materiał |
+| WP2 Airbox chain | wdrożone | AABB overlay jest niezależny, a inactive cuboids wymagają aktualnej maski |
+| WP3 tolerant field indexing | fail-closed | częściowo pokolorowane komórki przy niezgodnym payloadzie są naukowo niejednoznaczne; reason jest raportowany |
+| WP4 fallback layer | nie dublować | authored universe/support AABB jest bezpiecznym fallbackiem; sztuczny mesh byłby mylący |
+| WP5 diagnostics | częściowo wdrożone | Inspector pokazuje `membership not materialized`, status zawiera degradację pola, a resource frame śledzi FMRM/build |
+| WP6 color pipeline | wdrożone bez logowania w renderze | kolory są związane z konkretnym modelem i odrzucane przy złej liczności |
+| WP7 bounds/camera | pozostaje bramką UX | wymaga browser smoke na aktualnym bundle, aby nie zamienić jednego mylącego frame w drugi |
+
+Zatem plan jest użyteczny jako backlog, ale nie powinien być wykonywany
+literalnie: żadna warstwa UI nie może „naprawiać” braku backendowego artefaktu
+przez zgadywanie membership ani przez tolerowanie niezgodnych danych pola.
+
+### 17.12. Airbox: tylko wireframe i wektorowe pole fizyczne
+
+Ostatnia korekta kontraktu jest celowa: Airbox nie jest magnetyczną bryłą i nie
+może dostawać shadera powierzchniowego. Dotyczy to zarówno zwykłego targetu
+FEM `airbox`, jak i dedykowanego FDM targetu
+`fdm-universe-outside-support`. Dozwolony zestaw passów to:
+
+```text
+Airbox
+├── Visible
+├── Frame / bounds
+├── Wireframe
+└── Vector field
+    ├── Quantity source (H_eff, H_demag i inne legalne pola wektorowe)
+    ├── vector color/alpha/thickness/length/budget
+    └── FDM: pełny wektor pola + aktualna maska outside-support
+```
+
+Powierzchniowe `shaderVisible`, `surfaceColorSource`, `surfaceOpacity`,
+`viewportColorbarVisible` oraz pass `Points` są odrzucane w kontrolerze i nie
+mają sekcji w Inspectorze. Stare wartości z backendowego
+`visualization/state` są normalizowane przy odczycie, więc nie mogą ponownie
+wyświetlić białego wypełnienia Airboxa. Dla dedykowanego FDM Airboxa zakres
+geometrii jest stały (full outside-support); nie pokazujemy też kontrolki
+`Geometry scope`, która sugerowałaby drugi, niezależny mesh.
+
+Źródło pola nie jest magnetyzacją `m` i nie jest syntetycznym fallbackiem.
+Zmiana `Quantity source` kieruje zapytanie do właściwego zasobu pełnego pola;
+FDM następnie wybiera wyłącznie komórki outside-support z aktualnego FMRM.
+Brak maski, niezgodny fingerprint albo niezgodny count pozostaje stanem
+`not materialized/degraded`, a nie powodem do pokolorowania całego universe.
+Kolory grotów wektorów i legenda zakresu korzystają z tego samego surowego
+bufora pola, zakresu i palety; nie wolno mieszać ich z normalizacją kierunku
+grotów.
+
+Brama weryfikacyjna dla tej korekty:
+
+1. test kontrolera odrzuca shader/points, ale zachowuje quantity/vector;
+2. test panelu pokazuje `Quantity Source`, `Wireframe`, `Vectors` i nie pokazuje
+   `Surface Coloring`, `Points` ani (dla FDM Airbox) `Geometry Scope`;
+3. test renderera normalizuje stare ustawienia bez tworzenia powierzchni;
+4. test planu pola potwierdza, że FDM Airbox żąda pola dla wybranej ilości,
+   a nie `m`;
+5. browser smoke pozostaje dowodem WebGL/canvas, natomiast nie zastępuje API
+   i fizycznej kwalifikacji backendowego bufora pola.
+
+### 17.13. Weryfikacja API → decoder → renderer (2026-08-05)
+
+Weryfikacja została wykonana w kolejności kontraktu danych, a dopiero potem
+frontendu.
+
+#### API i payloady
+
+Udany probe działającego runtime (`GET /v2/sessions/current/status`, HTTP 200,
+`x-api-contract-version: 1.0.0`) został zapisany jako
+`/tmp/fullmag-live-status.json` (SHA-256
+`8a0ab2e7bcba78c8ed57d99218f1a4ccd6cdd49441574ef64aaeaf7bcb0f7964`). Status był
+spójny z lane'em FDM CPU/double: `cell_count=122880`,
+`generation_id=15062012635483042326`, `field_revision=1`,
+`region_membership_revision=0`, `mesh_revision=0`, `stage_count=0` oraz
+`solver.state=waiting_for_compute`.
+
+To ostatnie jest istotne: bieżący runtime nie opublikował jeszcze artefaktu
+FMRM. Endpoint membership ma więc poprawny stan `204 No Content`, a frontend
+nie może z tego wywnioskować, że wszystkie komórki universe są magnetykiem.
+W chwili ponownej kontroli port `3100` nie miał listenera, dlatego nie należy
+traktować tego statusu jako dowodu ukończonego badania ani bieżącego payloadu
+pola.
+
+Starszy, zachowany capture zwykłego FDM (`/tmp/live-field.bin`) jest poprawnym
+FMVP v2: `nComp=3`, grid `128×32×1`, `4096` punktów i `12288` wartości
+`f64`; nagłówki deklarują `x-fullmag-encoding: FMVP;version=2`, finite values
+oraz zgodne metadata field/domain dla tamtej sesji. Jest to dowód dekodowania
+kontraktu, ale nie dowód aktualnej sesji (jej `domain_generation_id` jest inny).
+Suffix `:v3` w ETag jest wersją tokenu cache/projection i nie steruje wyborem
+dekodera; wersję payloadu frontend bierze z nagłówka i magic/version FMVP.
+
+Dodane regresje API przechodzą:
+
+* `router_v2::tests::fdm_` — `10/10`, w tym zwykły i multilayer domain,
+  membership, komendy refresh oraz wspólny FDM slice;
+* `field_vector_full_returns_ncomp_3` — `1/1`;
+* `planar_field_fdm_object_target_uses_published_membership_and_grid_geometry`
+  — `1/1`.
+
+Regresje routingu rozpoznają `fdm_multilayer`, nie dziedziczą przypadkowego
+FEM topology, a origin/spacing są brane z opublikowanego layoutu lub
+plannerowego `grid_certificate`. Pozostaje jednak backendowa bramka dla
+multilayer fields: runner publikuje konkatenację natywnych warstw, podczas gdy
+API field-vector oczekuje liczby punktów wspólnej siatki; per-layer manifest nie
+jest jeszcze źródłem dla `get_field_vector`. Dla takiej sesji endpoint musi
+pozostać `204/degraded`, dopóki kontrakt nie dostarczy jawnego mapowania.
+
+#### Decoder i renderer frontendu
+
+Testy warstwy frontendowej przechodzą: sześć plików związanych z targetami,
+primitive-only, panelem i ribbonem — `226/226`; typecheck Control Room —
+`exit 0`. Rozszerzony screenshot gate z kontrolowanym FDM fixture potwierdził
+pełny łańcuch:
+
+* colorbar widoczny i pobiera `GET .../data/fields/m/samples/vector`;
+* payload FMVP v2 `12×8×2×3`, magnitude `0.55..1.00` jest poprawnie odczytany;
+* przełączenie shadera zmieniło `2409/7416` próbek obrazu;
+* przełączenie wektorów zmieniło `1526/7416` próbek;
+* projection modes zmieniły obraz bez ponownego pobierania topology;
+* profile `interactive`/`figure` i dimension frame przeszły.
+
+Weryfikacja WebGL przeciwko lokalnemu bundlowi również przeszła: `contextLost=false`,
+niezerowy drawing buffer `617×478`. Ten smoke używa brakującej sesji i dlatego
+potwierdza lifecycle/canvas, nie fizyczny payload z runtime.
+
+Frontend zachowuje poprawny fail-closed boundary: przy aktualnym statusie
+`region_membership_revision=0` nie rysuje shadera, punktów, wektorów ani
+kolorowania komórek; pozostawia authored frame/outline i komunikuje brak
+realized membership. To jest prawidłowa reakcja na `204`, nie błąd dekodera.
+
+W fixture gate jawnie włączono `shaderVisible`; sam wybór
+`surfaceColorSource=magnitude` nie powinien automatycznie malować FDM domain,
+gdy target jest jeszcze w stanie wireframe/fail-closed.
+
+#### Granica kwalifikacji
+
+Nie ma jeszcze dowodu end-to-end dla ukończonego, aktualnego badania: trzeba
+uruchomić/replanować study tak, aby runtime opublikował zgodny FMRM oraz pole
+(`m`/`H_demag` przez canonical `compute_fields`), a następnie powtórzyć probe
+status → membership descriptor/binary → FMVP → browser. Dopiero ten przebieg
+kwalifikuje shader, colorbar i vector field na rzeczywistym FDM universe.
+Niezależnie pozostaje do rozwiązania per-object/per-region rendering FDM:
+obecny renderer buduje jedną globalną active-cell pass, a target obiektu służy
+głównie do primitive preview; nie należy przedstawiać tego jako pełnej
+izolacji wizualizacji wielu magnetyków bez osobnej regresji membership-scope.

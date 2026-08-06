@@ -1,6 +1,9 @@
 "use client";
 
-import type { DomainMetaResource } from "@/kernel/api/apiTypes";
+import type {
+  DomainMetaResource,
+  FdmRegionMembershipResource,
+} from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
@@ -24,7 +27,11 @@ function formatCount(value: number | null): string {
   return value == null ? "not available" : value.toLocaleString("en-US");
 }
 
-function roleSourceLabel(source: FdmUniverseExtentModel["universeRoleSource"]): string {
+function roleSourceLabel(model: FdmUniverseExtentModel): string {
+  if (model.universeRole?.reason === "authored-universe-exceeds-magnetic-support") {
+    return "authored scene";
+  }
+  const source = model.universeRoleSource;
   if (source === "domain-presentation") return "domain presentation";
   if (source === "explicit-role-resource") return "explicit role resource";
   return "published";
@@ -41,8 +48,10 @@ function bannerKind(
 }
 
 export function FdmUniverseExtentPanelView({
+  membership,
   model,
 }: {
+  membership?: FdmRegionMembershipResource | null;
   model: FdmUniverseExtentModel;
 }) {
   const kind = bannerKind(model.status);
@@ -52,13 +61,13 @@ export function FdmUniverseExtentPanelView({
       data-fdm-universe-status={model.status}
     >
       {kind ? <FeedbackBanner kind={kind} message={model.notice} /> : null}
-      <InspectorGroup title="Structured FDM universe/grid extent" badge={model.status}>
+      <InspectorGroup title="Airbox · FDM structured universe" badge={model.status}>
         <FieldRow label="Discretization" value="FDM" />
         <FieldRow
-          label="Magnetic-support / universe role"
+          label="Airbox role"
           value={
             model.universeRole
-              ? `Universe outside magnetic support (${roleSourceLabel(model.universeRoleSource)})`
+              ? `Airbox outside magnetic support (${roleSourceLabel(model)})`
               : "not published"
           }
         />
@@ -73,22 +82,48 @@ export function FdmUniverseExtentPanelView({
         <FieldRow label="Bounds max" value={formatTuple(model.boundsMax)} unit={model.units.length} />
       </InspectorGroup>
       <InspectorGroup
-        title="FEM shared-domain controls"
-        badge="not applicable"
-        description="FDM uses a structured grid. FEM element-size, grading, tetrahedral quality, and shared-domain build controls are intentionally unavailable."
+        title="Airbox execution artifact"
+        badge="read-only"
+        description={
+          membership
+            ? "The current FDM grid and membership mask are published by the execution plan. Re-run or re-plan the study to obtain a new extent."
+            : "The FDM grid descriptor is available from authoring, but the membership mask is not materialized. Re-plan or run the study to publish it."
+        }
       >
-        <FieldRow label="Mesh policy" value="Not applicable to explicit FDM" />
-        <FieldRow label="Build command" value="No FEM shared-domain build" />
-        <FieldRow label="Quality / topology" value="Use published FDM grid resources" />
+        <FieldRow label="Grid lifecycle" value="Published structured-grid artifact" />
+        <FieldRow
+          label="Membership mask"
+          value={membership ? "Published with the grid" : "Not materialized"}
+        />
+        <FieldRow label="Standalone refresh" value="Unavailable for the current plan" />
+      </InspectorGroup>
+      <InspectorGroup
+        title="Magnetic support owners and regions"
+        badge={membership?.region_legend.length ? `${membership.region_legend.length}` : "not materialized"}
+        description="Multiple ferromagnetic objects and their regions remain explicit in the FDM membership legend."
+      >
+        {membership?.region_legend.length ? (
+          <ul className="m-0 grid list-none gap-1 p-0 text-fm-xs text-fm-muted">
+            {membership.region_legend.map((entry) => (
+              <li key={`${entry.numeric_id}:${entry.object_id}:${entry.region_id}`}>
+                Owner: {entry.object_id} · Region: {entry.region_id} · numeric {entry.numeric_id} · priority {entry.priority}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <FieldRow label="Contributors" value="not materialized" />
+        )}
       </InspectorGroup>
     </div>
   );
 }
 
 export function FdmUniverseExtentPanel({
+  membership,
   resource,
   roleEvidence,
 }: {
+  membership?: FdmRegionMembershipResource | null;
   resource: Pick<ResourceResult<DomainMetaResource | null>, "data" | "error" | "status">;
   roleEvidence?: FdmUniverseRoleEvidence | null;
 }) {
@@ -97,5 +132,5 @@ export function FdmUniverseExtentPanel({
     resource,
     roleEvidence,
   });
-  return <FdmUniverseExtentPanelView model={model} />;
+  return <FdmUniverseExtentPanelView membership={membership} model={model} />;
 }

@@ -130,9 +130,20 @@ fn fail_owned_preparation_stage(
     error_code: &str,
     safe_summary: &str,
 ) -> Result<()> {
+    fail_owned_preparation_stage_with_detail(workspace, stage_id, error_code, safe_summary, None)
+}
+
+fn fail_owned_preparation_stage_with_detail(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    error_code: &str,
+    safe_summary: &str,
+    detail: Option<String>,
+) -> Result<()> {
     let timestamp_unix_ms = preparation_unix_time_millis()?;
     transition_preparation(workspace, |preparation| {
         preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        preparation.set_failure_detail(detail);
         push_preparation_log_once(
             preparation,
             timestamp_unix_ms,
@@ -174,24 +185,64 @@ fn fail_owned_preparation_stage_with_diagnostics(
 }
 
 fn safe_validation_failure_summary(error: &anyhow::Error, fallback: &str) -> String {
-    let message = error.to_string();
+    error
+        .chain()
+        .find_map(|cause| safe_preparation_error_message(&cause.to_string()))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn safe_preparation_error_detail(error: &anyhow::Error) -> Option<String> {
+    error
+        .chain()
+        .filter_map(|cause| {
+            let message = cause.to_string();
+            safe_preparation_error_message(&message)
+                .or_else(|| sanitized_preparation_error_message(&message))
+        })
+        .last()
+}
+
+fn safe_preparation_error_message(message: &str) -> Option<String> {
     let trimmed = message.trim();
     let is_single_line = !trimmed.contains('\n') && !trimmed.contains('\r');
     let is_bounded = !trimmed.is_empty() && trimmed.chars().count() <= 240;
     let has_private_path = trimmed.contains('/') || trimmed.contains('\\');
     let normalized = trimmed.to_ascii_lowercase();
     let has_secret_marker = normalized.contains("secret") || normalized.contains("token");
-    if is_single_line && is_bounded && !has_private_path && !has_secret_marker {
-        trimmed.to_string()
-    } else {
-        fallback.to_string()
-    }
+    (is_single_line && is_bounded && !has_private_path && !has_secret_marker)
+        .then(|| trimmed.to_string())
 }
 
-fn fail_active_preparation_stage(
+fn sanitized_preparation_error_message(message: &str) -> Option<String> {
+    let line = message
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let normalized = line.to_ascii_lowercase();
+    if normalized.contains("secret") || normalized.contains("token") {
+        return None;
+    }
+    let sanitized = line
+        .split_whitespace()
+        .map(|token| {
+            if token.contains('/') || token.contains('\\') {
+                "<path>"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let is_bounded = !sanitized.is_empty() && sanitized.chars().count() <= 240;
+    is_bounded.then_some(sanitized)
+}
+
+fn fail_active_preparation_stage_with_detail(
     workspace: &LocalLiveWorkspace,
     error_code: &str,
     safe_summary: &str,
+    detail: Option<String>,
 ) -> Result<()> {
     let active_stage_id = workspace
         .snapshot()
@@ -199,7 +250,13 @@ fn fail_active_preparation_stage(
         .as_ref()
         .and_then(|preparation| preparation.active_stage_id);
     if let Some(active_stage_id) = active_stage_id {
-        fail_owned_preparation_stage(workspace, active_stage_id, error_code, safe_summary)?;
+        fail_owned_preparation_stage_with_detail(
+            workspace,
+            active_stage_id,
+            error_code,
+            safe_summary,
+            detail,
+        )?;
     }
     Ok(())
 }
@@ -213,7 +270,12 @@ fn run_active_preparation_operation<T>(
     match operation() {
         Ok(value) => Ok(value),
         Err(error) => {
-            fail_active_preparation_stage(workspace, error_code, safe_failure_summary)?;
+            fail_active_preparation_stage_with_detail(
+                workspace,
+                error_code,
+                safe_failure_summary,
+                safe_preparation_error_detail(&error),
+            )?;
             Err(error)
         }
     }
@@ -228,11 +290,12 @@ fn own_preparation_boundary_failure<T>(
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
-            if let Err(record_error) = fail_owned_preparation_stage(
+            if let Err(record_error) = fail_owned_preparation_stage_with_detail(
                 workspace,
                 PreparationStageId::ScriptMaterialization,
                 error_code,
                 safe_failure_summary,
+                safe_preparation_error_detail(&error),
             ) {
                 eprintln!(
                     "[fullmag-cli] WARNING: could not record safe preparation boundary failure: {}",
@@ -267,7 +330,7 @@ fn wait_for_failed_preparation_close(
             failure.summary
         );
         if let Some(detail) = failure.detail {
-            eprintln!("[fullmag] mesh failure detail: {detail}");
+            eprintln!("[fullmag] preparation failure detail: {detail}");
         }
         if let Some(correlation_id) = failure.diagnostics_correlation_id {
             eprintln!("[fullmag] diagnostic correlation id: {correlation_id}");
@@ -659,10 +722,11 @@ fn project_script_export_failure(
             project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)
         })?;
     } else {
-        fail_active_preparation_stage(
+        fail_active_preparation_stage_with_detail(
             workspace,
             "materialization_failed",
             "Simulation materialization failed",
+            safe_preparation_error_detail(&error),
         )?;
     }
     Ok(error)
@@ -10632,7 +10696,8 @@ mod tests {
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         project_script_export_failure, resolve_adaptive_convergence_metric,
         resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
-        run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
+        run_active_preparation_operation, run_owned_preparation_stage,
+        run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
@@ -11223,7 +11288,7 @@ mod tests {
             .simulation_preparation
             .expect("preparation state");
         assert_eq!(preparation.status, PreparationStatus::Failed);
-        let failure = preparation.failure.expect("owned failure");
+        let failure = preparation.failure.as_ref().expect("owned failure");
         assert_eq!(failure.stage_id, stage_id);
         assert_eq!(failure.error_code, error_code);
         assert_eq!(failure.summary, safe_summary);
@@ -11297,7 +11362,7 @@ mod tests {
             .snapshot()
             .simulation_preparation
             .expect("preparation state");
-        let failure = preparation.failure.expect("owned failure");
+        let failure = preparation.failure.as_ref().expect("owned failure");
         assert_eq!(failure.stage_id, PreparationStageId::Validation);
         assert_eq!(failure.error_code, "validation_failed");
         assert_eq!(failure.summary, raw_error);
@@ -11563,6 +11628,122 @@ mod tests {
             "Simulation materialization failed",
             raw_error,
         );
+        assert_eq!(
+            workspace
+                .snapshot()
+                .simulation_preparation
+                .expect("preparation state")
+                .failure
+                .expect("owned failure")
+                .detail
+                .as_deref(),
+            Some(raw_error)
+        );
+    }
+
+    #[test]
+    fn generic_materialization_failure_preserves_safe_root_cause_detail() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper failed: FDM universe membership is unavailable";
+
+        let error = run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("materialization should fail");
+
+        assert_eq!(error.to_string(), raw_error);
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(failure.summary, "Simulation materialization failed");
+        assert_eq!(failure.detail.as_deref(), Some(raw_error));
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn generic_materialization_failure_selects_safe_cause_from_wrapped_error() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper failed: FDM universe membership is unavailable";
+        let wrapped_error =
+            anyhow::anyhow!(raw_error).context("failed to export ProblemIR from /private/model.py");
+
+        run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(wrapped_error),
+        )
+        .expect_err("materialization should fail");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(failure.detail.as_deref(), Some(raw_error));
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn generic_materialization_failure_sanitizes_multiline_root_cause_detail() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "Traceback (most recent call last):\nValueError: FDM membership unavailable at /private/model.py:42";
+
+        run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("materialization should fail");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("ValueError: FDM membership unavailable at <path>")
+        );
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains("/private/model.py")));
+    }
+
+    #[test]
+    fn generic_materialization_failure_redacts_unsafe_root_cause_detail() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper failed /private/model.py\nsecret-token";
+
+        run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("materialization should fail");
+
+        let failure = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state")
+            .failure
+            .expect("owned failure");
+        assert_eq!(failure.summary, "Simulation materialization failed");
+        assert_eq!(failure.detail, None);
     }
 
     #[test]

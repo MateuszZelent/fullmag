@@ -141,7 +141,7 @@ describe("resolveInspectorDescriptor", () => {
     });
   });
 
-  it("describes FDM grid selections without FEM mesh tabs", () => {
+  it("describes structured FDM selections under the product Mesh vocabulary", () => {
     const descriptor = resolveInspectorDescriptor({
       kind: "mesh.grid.descriptor",
       label: "Structured Grid",
@@ -151,7 +151,7 @@ describe("resolveInspectorDescriptor", () => {
       ref: null,
     });
 
-    expect(descriptor.typeLabel).toBe("FDM grid");
+    expect(descriptor.typeLabel).toBe("FDM mesh");
     expect(descriptor.tabs).toEqual([]);
   });
 

@@ -108,7 +108,7 @@ export function VisualizationDisplayPassesSection({
   pending,
   renderWarning,
   settings,
-  targetKind,
+  target,
   primitiveDisplayToggleVisible,
 }: {
   displaySettings: VisualizationTargetSettings;
@@ -117,10 +117,10 @@ export function VisualizationDisplayPassesSection({
   pending: boolean;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
-  targetKind: VisualizationTargetKind;
+  target: VisualizationTargetRef;
   primitiveDisplayToggleVisible: boolean;
 }) {
-  const capabilities = visualizationTargetCapabilities(targetKind);
+  const capabilities = visualizationTargetCapabilities(target);
   return (
     <div className="grid min-w-0 gap-0" data-slot="visualization-display-passes">
       {renderWarning ? (
@@ -186,6 +186,7 @@ export function VisualizationDisplayPassesSection({
           </button>
         ) : null}
 
+        {capabilities.supportsVectors ? (
         <button
           aria-label="Toggle vector field arrows"
           aria-pressed={displaySettings.vectorsVisible && displaySettings.visible}
@@ -203,6 +204,7 @@ export function VisualizationDisplayPassesSection({
           <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />
           Vectors
         </button>
+        ) : null}
       </div>
 
       {capabilities.showBoundsControl && settings.boundsVisible ? (
@@ -253,15 +255,15 @@ export function VisualizationRenderModeSection({
   passControlsDisabled,
   pending,
   patch,
-  targetKind,
+  target,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   pending: boolean;
   patch: PatchVisualizationTarget;
-  targetKind: VisualizationTargetKind;
+  target: VisualizationTargetRef;
 }) {
-  const capabilities = visualizationTargetCapabilities(targetKind);
+  const capabilities = visualizationTargetCapabilities(target);
   const currentMode = resolveVisualizationDisplayMode(displaySettings);
   const renderModeOptions = RENDER_MODE_OPTIONS.filter(
     (option) =>
@@ -296,7 +298,13 @@ export function VisualizationRenderModeSection({
               disabled={passControlsDisabled || pending}
               role="radio"
               type="button"
-              onClick={() => void patch(renderModeDisplayPatch(option.value))}
+              onClick={() =>
+                void patch(
+                  target.id === "fdm-universe-outside-support"
+                    ? { renderMode: option.value }
+                    : renderModeDisplayPatch(option.value),
+                )
+              }
             >
               <span className="fm-viz-render-mode-tile__icon" aria-hidden="true">
                 {option.value === "surface" && (
