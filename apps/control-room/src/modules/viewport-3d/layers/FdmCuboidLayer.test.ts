@@ -472,8 +472,8 @@ describe("FdmCuboidLayer model", () => {
       voxelMagnitudeThreshold: 0.5,
     });
 
-    expect(model?.count).toBe(2);
-    expect(Array.from(model?.cellIndices ?? [])).toEqual([2, 6]);
+    expect(model?.count).toBe(4);
+    expect(Array.from(model?.cellIndices ?? [])).toEqual([1, 2, 3, 6]);
   });
 
   it("applies stylized topography displacement from the selected field component", () => {

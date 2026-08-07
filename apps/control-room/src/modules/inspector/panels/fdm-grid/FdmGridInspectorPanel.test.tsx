@@ -73,7 +73,7 @@ describe("FdmGridInspectorPanelView", () => {
     expect(html).toContain("Display samples");
     expect(html).toContain("Display stride");
     expect(html).toContain("Display budget");
-    expect(html).toContain("120,000");
+    expect(html).toContain("150,000");
     expect(html).toContain("u32le-v2");
     expect(html).toContain("grid-fingerprint-7");
     expect(html).toContain("region:core");

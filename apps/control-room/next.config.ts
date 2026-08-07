@@ -38,6 +38,7 @@ function configuredPublicDevHost(): string | null {
 const configuredPublicDevHostValue = configuredPublicDevHost();
 const allowedDevOrigins = [
   "fullmag.amucontainers.orion.zfns.eu.org",
+  "127.0.0.1",
   ...(configuredPublicDevHostValue &&
   !["localhost", "127.0.0.1", "::1"].includes(configuredPublicDevHostValue)
     ? [configuredPublicDevHostValue]

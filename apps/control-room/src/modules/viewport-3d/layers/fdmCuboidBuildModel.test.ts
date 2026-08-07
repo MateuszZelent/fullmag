@@ -235,6 +235,39 @@ describe("FDM cuboid realized membership", () => {
     expect(sampled?.regionIds).toEqual(new Uint32Array([7]));
   });
 
+  it("keeps every SP4 active cell when the global stride skips two columns", () => {
+    const [nx, ny, nz] = [128, 32, 30] as const;
+    const totalCells = nx * ny * nz;
+    const realizedRegionIds = new Uint32Array(totalCells);
+    realizedRegionIds.fill(FMRM_INACTIVE_REGION_ID);
+    const expectedCellIndices: number[] = [];
+    for (let y = 10; y <= 21; y += 1) {
+      for (let x = 24; x <= 103; x += 1) {
+        const cellIndex = x + nx * y + nx * ny * 14;
+        realizedRegionIds[cellIndex] = 0;
+        expectedCellIndices.push(cellIndex);
+      }
+    }
+
+    const model = buildFdmCuboidInstanceModel(
+      {
+        bounds: null,
+        displayCellBudget: 120_000,
+        displayCellCount: 120_000,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [nx, ny, nz],
+        spacing: [1, 1, 1],
+        stride: 2,
+        totalCells,
+      },
+      { cellSelection: "active", realizedRegionIds },
+    );
+
+    expect(model?.count).toBe(expectedCellIndices.length);
+    expect(Array.from(model?.cellIndices ?? [])).toEqual(expectedCellIndices);
+  });
+
   it("renders all cells only from an exact realized mask", () => {
     const model = buildFdmCuboidInstanceModel({
       bounds: null,
@@ -313,7 +346,7 @@ describe("FDM cuboid realized membership", () => {
     });
 
     expect(magnetic?.cellIndices).toEqual(new Uint32Array([1, 2]));
-    expect(airbox?.cellIndices).toEqual(new Uint32Array([0]));
+    expect(airbox?.cellIndices).toEqual(new Uint32Array([0, 3]));
     expect(magnetic?.count ?? 0).toBeLessThanOrEqual(domain.displayCellCount);
     expect(airbox?.count ?? 0).toBeLessThanOrEqual(domain.displayCellCount);
   });

@@ -294,6 +294,41 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
     selected.add(cellIndex);
     selectedCountByRegion.set(regionId, 1);
   }
+  // Second pass: inject all matching cells that the stride-based sampling
+  // missed.  Active cells are typically a small fraction of the grid, so
+  // injecting them all keeps the budget nearly unchanged while eliminating
+  // visible gaps in the ferromagnet.
+  for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+    if (selected.has(cellIndex)) continue;
+    const regionId = realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
+    if (!cellMatchesSelection(regionId, cellSelection)) continue;
+    if (
+      !cellPassesMagnitudeThreshold(
+        fieldVector,
+        cellIndex,
+        threshold,
+        fieldIndexing,
+      )
+    ) {
+      continue;
+    }
+    if (selected.size < budget) {
+      selected.add(cellIndex);
+    } else {
+      // Budget full – replace an over-represented inactive sample.
+      const inactiveReplacement = [...selected]
+        .find((sc) => {
+          const sr = realizedRegionIds[sc] ?? FMRM_INACTIVE_REGION_ID;
+          return !cellMatchesSelection(sr, cellSelection);
+        });
+      if (inactiveReplacement !== undefined) {
+        selected.delete(inactiveReplacement);
+        selected.add(cellIndex);
+      }
+      // If no inactive replacement found, skip (budget exhausted with only
+      // matching cells).
+    }
+  }
   return Uint32Array.from([...selected].toSorted((left, right) => left - right));
 }
 

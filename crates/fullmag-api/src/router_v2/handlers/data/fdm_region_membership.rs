@@ -17,7 +17,8 @@ use sha2::{Digest, Sha256};
 use crate::artifacts::{read_json_artifact_value, resolve_artifact_path};
 use crate::error::ApiError;
 use crate::schemas::mesh::{
-    FdmMagneticSupportSummaryResource, FdmRegionLegendEntryResource, FdmRegionMembershipResource,
+    FdmMagneticSupportSemanticRole, FdmMagneticSupportSummaryResource,
+    FdmRegionLegendEntryResource, FdmRegionMembershipResource,
 };
 use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{
@@ -286,7 +287,7 @@ fn load_descriptor(
         "mesh/fdm_region_membership.v1.json"
     };
     let descriptor_value = read_json_artifact_value(&artifact_dir, descriptor_path)?;
-    let descriptor: FdmMembershipArtifactDescriptor = serde_json::from_value(descriptor_value)
+    let mut descriptor: FdmMembershipArtifactDescriptor = serde_json::from_value(descriptor_value)
         .map_err(|error| {
             ApiError::internal(format!("invalid FDM membership descriptor: {error}"))
         })?;
@@ -314,6 +315,69 @@ fn load_descriptor(
         })?;
         let (payload, mask_offset) = validate_fmrm_payload(&binary, &descriptor)?;
         validate_summary_against_fmrm(&descriptor, &payload[mask_offset..])?;
+    } else {
+        // Backfill magnetic_support from binary mask for legacy descriptors.
+        let binary_path = resolve_artifact_path(&artifact_dir, &descriptor.binary_path);
+        if let Ok(binary_path) = binary_path {
+            if let Ok(binary) = std::fs::read(&binary_path) {
+                if let Ok((payload, mask_offset)) = validate_fmrm_payload(&binary, &descriptor) {
+                    let mask_bytes = &payload[mask_offset..];
+                    let nx = descriptor.counts[0] as usize;
+                    let ny = descriptor.counts[1] as usize;
+                    let plane_stride = nx * ny;
+                    let mut support_min = [u32::MAX; 3];
+                    let mut support_max_exclusive = [0u32; 3];
+                    let mut active = 0u64;
+                    let mut inactive = 0u64;
+                    let mut active_unassigned = 0u64;
+
+                    for (index, chunk) in mask_bytes.chunks_exact(4).enumerate() {
+                        let membership = u32::from_le_bytes(chunk.try_into().unwrap());
+                        if membership == u32::MAX {
+                            inactive += 1;
+                            continue;
+                        }
+                        active += 1;
+                        if membership == 0 {
+                            active_unassigned += 1;
+                        }
+                        let coords = [
+                            (index % nx) as u32,
+                            ((index / nx) % ny) as u32,
+                            (index / plane_stride) as u32,
+                        ];
+                        for (axis, coord) in coords.into_iter().enumerate() {
+                            support_min[axis] = support_min[axis].min(coord);
+                            support_max_exclusive[axis] =
+                                support_max_exclusive[axis].max(coord + 1);
+                        }
+                    }
+
+                    if active > 0 && inactive > 0 {
+                        let bounds_min_m: [f64; 3] = std::array::from_fn(|axis| {
+                            descriptor.origin_m[axis]
+                                + f64::from(support_min[axis]) * descriptor.cell_m[axis]
+                        });
+                        let bounds_max_m: [f64; 3] = std::array::from_fn(|axis| {
+                            descriptor.origin_m[axis]
+                                + f64::from(support_max_exclusive[axis])
+                                    * descriptor.cell_m[axis]
+                        });
+                        descriptor.magnetic_support =
+                            Some(FdmMagneticSupportSummaryResource {
+                                semantic_role:
+                                    FdmMagneticSupportSemanticRole::MagneticSupport,
+                                grid_fingerprint: descriptor.grid_fingerprint.clone(),
+                                bounds_min_m,
+                                bounds_max_m,
+                                active_cell_count: active,
+                                inactive_cell_count: inactive,
+                                active_unassigned_cell_count: active_unassigned,
+                            });
+                    }
+                }
+            }
+        }
     }
     Ok((descriptor, artifact_dir))
 }
@@ -348,6 +412,61 @@ fn descriptor_from_resolved_membership(
     let legend_json = serde_json::to_vec(&resolved.region_legend)
         .map_err(|error| ApiError::internal(format!("failed to encode FDM region legend: {error}")))?;
     let legend_hash = Sha256::digest(legend_json);
+
+    // Compute magnetic-support summary from the cell membership mask.
+    let magnetic_support = {
+        let nx = resolved.counts[0] as usize;
+        let ny = resolved.counts[1] as usize;
+        let plane_stride = nx * ny;
+        let mut support_min = [u32::MAX; 3];
+        let mut support_max_exclusive = [0u32; 3];
+        let mut active = 0u64;
+        let mut inactive = 0u64;
+        let mut active_unassigned = 0u64;
+
+        for (index, &membership) in resolved.cell_membership.iter().enumerate() {
+            if membership == u32::MAX {
+                inactive += 1;
+                continue;
+            }
+            active += 1;
+            if membership == 0 {
+                active_unassigned += 1;
+            }
+            let coords = [
+                (index % nx) as u32,
+                ((index / nx) % ny) as u32,
+                (index / plane_stride) as u32,
+            ];
+            for (axis, coord) in coords.into_iter().enumerate() {
+                support_min[axis] = support_min[axis].min(coord);
+                support_max_exclusive[axis] = support_max_exclusive[axis].max(coord + 1);
+            }
+        }
+
+        if active > 0 && inactive > 0 {
+            let bounds_min_m: [f64; 3] = std::array::from_fn(|axis| {
+                resolved.origin_m[axis]
+                    + f64::from(support_min[axis]) * resolved.cell_m[axis]
+            });
+            let bounds_max_m: [f64; 3] = std::array::from_fn(|axis| {
+                resolved.origin_m[axis]
+                    + f64::from(support_max_exclusive[axis]) * resolved.cell_m[axis]
+            });
+            Some(FdmMagneticSupportSummaryResource {
+                semantic_role: FdmMagneticSupportSemanticRole::MagneticSupport,
+                grid_fingerprint: resolved.grid_fingerprint.clone(),
+                bounds_min_m,
+                bounds_max_m,
+                active_cell_count: active,
+                inactive_cell_count: inactive,
+                active_unassigned_cell_count: active_unassigned,
+            })
+        } else {
+            None
+        }
+    };
+
     let descriptor = FdmMembershipArtifactDescriptor {
         schema_version: "fdm_region_membership.v2".to_string(),
         binary_path: "mesh/fdm_region_membership.v2.bin".to_string(),
@@ -360,7 +479,7 @@ fn descriptor_from_resolved_membership(
         counts: resolved.counts,
         cell_m: resolved.cell_m,
         cell_count,
-        magnetic_support: None,
+        magnetic_support,
         object_ids: resolved.object_ids.clone(),
         region_legend: resolved.region_legend.clone(),
         encoding: "FMRM:u32_membership_le".to_string(),

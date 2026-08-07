@@ -24,6 +24,10 @@ describe("control-room Next dev proxy config", () => {
     );
   });
 
+  it("allows the IPv4 loopback origin used by local browser smoke", () => {
+    expect(nextConfig.allowedDevOrigins).toContain("127.0.0.1");
+  });
+
   it("derives an allowed dev origin from the WSL public host", () => {
     const configSource = readFileSync(
       new URL("./next.config.ts", import.meta.url),
