@@ -925,6 +925,10 @@ typedef struct {
     char boundary_gauge_variant[64];
     char error_message[256];
     char diagnostics_json[1024];
+    /* AoS-3 continuous H1 projection for the nodal LLG field. */
+    double *nodal_h_xyz_apm;
+    uint64_t nodal_h_xyz_apm_capacity;
+    uint64_t nodal_h_xyz_apm_len;
 } fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1;
 
 typedef struct {

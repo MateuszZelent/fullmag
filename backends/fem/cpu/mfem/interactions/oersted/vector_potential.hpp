@@ -37,6 +37,7 @@ struct VectorPotentialDiagnostics {
     double weak_ampere_residual = 0.0;
     double compatible_divergence_residual = 0.0;
     double source_pairing_norm = 0.0;
+    double nodal_projection_residual = 0.0;
 };
 
 struct VectorPotentialResult {
@@ -44,6 +45,8 @@ struct VectorPotentialResult {
     std::vector<double> gauge_dofs_apm;
     std::vector<double> compatible_b_dofs_t;
     std::vector<double> compatible_h_dofs_apm;
+    // AoS-3 continuous H1 projection consumed by the nodal LLG runtime.
+    std::vector<double> nodal_h_xyz_apm;
     VectorPotentialDiagnostics diagnostics;
     std::string operator_version;
     std::string source_view_identity_digest;

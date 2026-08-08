@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1/OE-F2 CPU/double ABI and native contract now execute when a public closed_geometry descriptor is supplied, and the planner/runner now expose the exact-key steady_source_invariant.v1 cache gate. This is not magnetization-dependent RK coupling; external-lead closure, full stage coupling, normal-runtime OE-F2 selection, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available, while an append-only closure-aware RT0/OE-F1/OE-F2 CPU/double path now selects OE-F2 in the planner, projects compatible H to nodal LLG values, and injects it before native LLG when a public closed_geometry descriptor is supplied. This is not magnetization-dependent RK coupling; external-lead closure, full stage coupling, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -63,6 +63,12 @@
       "responsibility": "Publish the resolved FEM transport descriptor and resolve steady_source_invariant.v1 only for one-way closed_geometry Oersted; fail closed for reciprocal or unsupported stage coupling."
     },
     {
+      "id": "fem-oef2-planner-selection",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Select the FemVectorPotential realization for solved-current Oersted while preserving the explicit CPU/double closed_geometry boundary."
+    },
+    {
       "id": "python-conservative-current-view",
       "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
       "symbol": "class ConservativeCurrentView",
@@ -102,7 +108,7 @@
       "id": "fem-rt0-oersted-vector-potential-abi",
       "path": "native/include/fullmag_fem.h",
       "symbol": "fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1",
-      "responsibility": "Append-only OE-F2 mixed H(curl) x H1 request/result on the exact RT0 view; publishes coefficients, compatible fields, residuals, gauge and source identity without modifying legacy ABI."
+      "responsibility": "Append-only OE-F2 mixed H(curl) x H1 request/result on the exact RT0 view; publishes coefficients, compatible element fields, nodal H1 projection, residuals, gauge and source identity without modifying legacy ABI."
     },
     {
       "id": "fem-rt0-oersted-native-adapter",
@@ -114,7 +120,7 @@
       "id": "fem-rt0-oersted-runner",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
       "symbol": "solve_native_fem_steady_transport_rt0",
-      "responsibility": "Own FFI buffers, call RT0 or RT0/OE-F1, reject digest/finite/length mismatches and publish direct-field diagnostics without H1-to-RT0 projection."
+      "responsibility": "Own FFI buffers, select RT0/OE-F1 or RT0/OE-F2, validate digest/finite/length/operator contracts, and publish the OE-F2 nodal H1 field for LLG without H1-to-RT0 reconstruction."
     },
     {
       "id": "fem-steady-source-cache",
@@ -133,6 +139,12 @@
       "path": "backends/fem/tests/steady_transport_rt0_contract.cpp",
       "symbol": "main",
       "responsibility": "Managed CPU-only transport→RT0→OE-F1/OE-F2 contract including source-view digest equality, finite fields and residual certificate."
+    },
+    {
+      "id": "fem-oef2-nodal-projection",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp",
+      "symbol": "project_compatible_h_to_nodes",
+      "responsibility": "Project compatible RT0 H=curl(A)/mu0 into a bounded scalar H1/P1 nodal field for the LLG interface and publish the normalized projection residual."
     },
     {
       "id": "fem-dispatch-injection",

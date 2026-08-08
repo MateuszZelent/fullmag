@@ -56,6 +56,12 @@ pub(crate) enum NativeFemSteadyTransportGauge {
     ZeroMeanPotential,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeFemSteadyTransportOerstedMethod {
+    DirectTetraQuadrature,
+    FemVectorPotential,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct NativeFemSteadyTransportRequest {
     pub mesh: MeshIR,
@@ -150,6 +156,17 @@ pub(crate) struct NativeFemSteadyTransportBundle {
     pub oersted_field_xyz: Option<Vec<f64>>,
 }
 
+struct NativeFemOerstedField {
+    field: Vec<f64>,
+    operator_version: String,
+    source_view_identity_digest: String,
+    source_target_pairs: Option<u64>,
+    refined_pairs: Option<u64>,
+    unconverged_pair_count: Option<u64>,
+    maximum_pair_error_apm: Option<f64>,
+    diagnostics: Value,
+}
+
 pub(crate) fn execute_native_fem_steady_transport_plans(
     plan: &FemPlanIR,
 ) -> Result<Option<NativeFemSteadyTransportBundle>, RunError> {
@@ -163,6 +180,11 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
     let mut oersted_field_xyz: Option<Vec<f64>> = None;
     let mut aggregate_oersted_source_kinds = Vec::new();
     let mut steady_source_stages = SteadySourceStageCoordinator::default();
+    let oersted_method = match plan.oersted_realization {
+        Some(fullmag_ir::OerstedRealization::FemVectorPotential) =>
+            NativeFemSteadyTransportOerstedMethod::FemVectorPotential,
+        _ => NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature,
+    };
     for prepared in prepared {
         let resolved = prepared.resolved;
         let stage_cache_key = validate_stage_cache_plan(resolved)?;
@@ -170,7 +192,11 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             .fem_cpu_double
             .as_ref()
             .filter(|descriptor| descriptor.oersted_source_bound)
-            .map(|_| plan.mesh.nodes.as_slice());
+            .map(|_| match oersted_method {
+                NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature =>
+                    plan.mesh.nodes.as_slice(),
+                NativeFemSteadyTransportOerstedMethod::FemVectorPotential => &[][..],
+            });
         let rt0_view = if let Some(view) = resolved
             .fem_cpu_double
             .as_ref()
@@ -179,6 +205,7 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             Some(solve_native_fem_steady_transport_rt0(
                 &prepared.request,
                 view,
+                oersted_method,
                 oersted_targets,
             )?)
         } else {
@@ -226,7 +253,7 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                 if let Some(rt0) = rt0_view.as_ref() {
                     let field = rt0.oersted_h_xyz_apm.as_ref().ok_or_else(|| RunError {
                         message: format!(
-                            "FEM conservative RT0 source '{}' did not publish OE-F1 field (view_identity_digest={})",
+                            "FEM conservative RT0 source '{}' did not publish the selected Oersted field (view_identity_digest={})",
                             resolved.current_source_id, rt0.view_identity_digest
                         ),
                     })?;
@@ -245,18 +272,31 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                         });
                     }
                     let field_sha256 = sha256_f64_slice(field);
-                    transport_provenance.oersted_source_kind =
-                        Some("fem_conservative_current_rt0_view.v1".into());
+                    let source_kind = match oersted_method {
+                        NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature =>
+                            "fem_conservative_current_rt0_view.v1",
+                        NativeFemSteadyTransportOerstedMethod::FemVectorPotential =>
+                            "fem_conservative_current_rt0_vector_potential.v1",
+                    };
+                    transport_provenance.oersted_source_kind = Some(source_kind.into());
                     transport_provenance.oersted_field_sha256 = Some(field_sha256);
                     module_oersted_field_xyz = Some(field.clone());
-                    aggregate_oersted_source_kinds.push(
-                        "fem_conservative_current_rt0_view.v1".to_string(),
-                    );
+                    aggregate_oersted_source_kinds.push(source_kind.to_string());
                     add_flat_field(
                         oersted_field_xyz.get_or_insert_with(|| vec![0.0; field.len()]),
                         field,
                     )?;
                 } else {
+                    if oersted_method
+                        == NativeFemSteadyTransportOerstedMethod::FemVectorPotential
+                    {
+                        return Err(RunError {
+                            message: format!(
+                                "FEM OE-F2 source '{}' has no immutable RT0 view; refusing midpoint fallback",
+                                resolved.current_source_id
+                            ),
+                        });
+                    }
                     let field = solved_current_midpoint_biot_savart_field(
                         &plan.mesh,
                         &descriptor.charge_domain.element_mask,
@@ -312,16 +352,23 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                 "invalidation_count": steady_source_stages.cache().invalidations(),
             })),
             "oersted": module_oersted_field_xyz.as_ref().map(|field| {
-                let direct_rt0 = rt0_view.as_ref().is_some_and(|view| {
-                    view.oersted_h_xyz_apm.is_some()
-                });
+                let operator = rt0_view
+                    .as_ref()
+                    .and_then(|view| view.oersted_operator_version.as_deref());
+                let direct_rt0 = operator == Some("fem_oersted_direct_tetra_quadrature.v1");
+                let vector_potential =
+                    operator == Some("fem_oersted_hcurl_h1_gauge.v1");
                 serde_json::json!({
-                    "source_kind": if direct_rt0 {
+                    "source_kind": if vector_potential {
+                        "fem_conservative_current_rt0_vector_potential.v1"
+                    } else if direct_rt0 {
                         "fem_conservative_current_rt0_view.v1"
                     } else {
                         "solved_current_h1_nodal_midpoint_reference"
                     },
-                    "realization": if direct_rt0 {
+                    "realization": if vector_potential {
+                        "fem_vector_potential_hcurl_h1"
+                    } else if direct_rt0 {
                         "direct_tetra_quadrature"
                     } else {
                         "biot_savart_midpoint"
@@ -393,12 +440,17 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
         let direct_rt0 = aggregate_oersted_source_kinds.iter().all(|kind| {
             kind == "fem_conservative_current_rt0_view.v1"
         });
+        let vector_potential = aggregate_oersted_source_kinds.iter().all(|kind| {
+            kind == "fem_conservative_current_rt0_vector_potential.v1"
+        });
         let mixed_sources = aggregate_oersted_source_kinds
             .iter()
             .any(|kind| kind != aggregate_oersted_source_kinds.first().unwrap_or(kind));
         serde_json::json!({
             "source_kind": if mixed_sources {
                 "mixed"
+            } else if vector_potential {
+                "fem_conservative_current_rt0_vector_potential.v1"
             } else if direct_rt0 {
                 "fem_conservative_current_rt0_view.v1"
             } else {
@@ -406,6 +458,8 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             },
             "realization": if mixed_sources {
                 "mixed"
+            } else if vector_potential {
+                "fem_vector_potential_hcurl_h1"
             } else if direct_rt0 {
                 "direct_tetra_quadrature"
             } else {
@@ -970,6 +1024,7 @@ pub(crate) fn solve_native_fem_steady_transport(
 pub(crate) fn solve_native_fem_steady_transport_rt0(
     request: &NativeFemSteadyTransportRequest,
     view: &ResolvedFemConservativeCurrentViewIR,
+    oersted_method: NativeFemSteadyTransportOerstedMethod,
     target_points: Option<&[[f64; 3]]>,
 ) -> Result<NativeFemSteadyTransportRt0Result, RunError> {
     // The legacy H1 preflight rejects periodic topology because its old ABI
@@ -1302,8 +1357,11 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
         error_message: [0; 256],
         diagnostics_json: [0; 1024],
     };
-    let mut oersted_result_ffi = None;
-    let status = if let Some(target_points) = target_points {
+    let mut direct_oersted_result_ffi = None;
+    let mut vector_potential_result_ffi = None;
+    let status = match oersted_method {
+        NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature =>
+            if let Some(target_points) = target_points {
         let target_points_xyz = target_points
             .iter()
             .flatten()
@@ -1356,18 +1414,104 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
             )
         };
         result_ffi = outer_result.rt0;
-        oersted_result_ffi = Some((outer_result, h_xyz_apm));
+        direct_oersted_result_ffi = Some((outer_result, h_xyz_apm));
         status
-    } else {
-        unsafe {
-            ffi::fullmag_fem_solve_steady_transport_rt0_v1(&request_ffi, &mut result_ffi)
-        }
+            } else {
+                unsafe {
+                    ffi::fullmag_fem_solve_steady_transport_rt0_v1(&request_ffi, &mut result_ffi)
+                }
+            },
+        NativeFemSteadyTransportOerstedMethod::FemVectorPotential =>
+            if target_points.is_some() {
+                let nd_capacity = request.mesh.cell_count().saturating_mul(6).max(1);
+                let h1_capacity = request.mesh.nodes.len().max(1);
+                let rt_capacity = request.mesh.cell_count().saturating_mul(4).max(1);
+                let mut a_dofs_t_m = vec![0.0; nd_capacity];
+                let mut gauge_dofs_apm = vec![0.0; h1_capacity];
+                let mut compatible_b_dofs_t = vec![0.0; rt_capacity];
+                let mut compatible_h_dofs_apm = vec![0.0; rt_capacity];
+                let mut nodal_h_xyz_apm = vec![0.0; request.mesh.nodes.len() * 3];
+                let boundary_gauge_variant =
+                    c_string("tangential_A_h1_0.v1", "boundary_gauge_variant")?;
+                let vector_potential_request =
+                    ffi::fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 {
+                        abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION,
+                        reserved_flags: 0,
+                        struct_size: std::mem::size_of::<
+                            ffi::fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
+                        >() as u64,
+                        rt0: request_ffi,
+                        mu0_si: 1.25663706212e-6,
+                        relative_tolerance: 1.0e-10,
+                        maximum_nd_dofs: 4096,
+                        maximum_h1_dofs: 2048,
+                        boundary_gauge_variant: boundary_gauge_variant.as_ptr(),
+                    };
+                let mut vector_potential_result =
+                    ffi::fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 {
+                        abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION,
+                        reserved_flags: 0,
+                        struct_size: std::mem::size_of::<
+                            ffi::fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+                        >() as u64,
+                        rt0: result_ffi,
+                        a_dofs_t_m: a_dofs_t_m.as_mut_ptr(),
+                        a_dofs_t_m_capacity: a_dofs_t_m.len() as u64,
+                        a_dofs_t_m_len: 0,
+                        gauge_dofs_apm: gauge_dofs_apm.as_mut_ptr(),
+                        gauge_dofs_apm_capacity: gauge_dofs_apm.len() as u64,
+                        gauge_dofs_apm_len: 0,
+                        compatible_b_dofs_t: compatible_b_dofs_t.as_mut_ptr(),
+                        compatible_b_dofs_t_capacity: compatible_b_dofs_t.len() as u64,
+                        compatible_b_dofs_t_len: 0,
+                        compatible_h_dofs_apm: compatible_h_dofs_apm.as_mut_ptr(),
+                        compatible_h_dofs_apm_capacity: compatible_h_dofs_apm.len() as u64,
+                        compatible_h_dofs_apm_len: 0,
+                        converged: 0,
+                        harmonic_count: 0,
+                        essential_nd_dof_count: 0,
+                        essential_h1_dof_count: 0,
+                        first_block_residual: f64::NAN,
+                        constraint_residual: f64::NAN,
+                        weak_ampere_residual: f64::NAN,
+                        compatible_divergence_residual: f64::NAN,
+                        source_pairing_norm: f64::NAN,
+                        operator_version: [0; 96],
+                        source_view_identity_digest: [0; 65],
+                        boundary_gauge_variant: [0; 64],
+                        error_message: [0; 256],
+                        diagnostics_json: [0; 1024],
+                        nodal_h_xyz_apm: nodal_h_xyz_apm.as_mut_ptr(),
+                        nodal_h_xyz_apm_capacity: nodal_h_xyz_apm.len() as u64,
+                        nodal_h_xyz_apm_len: 0,
+                    };
+                let status = unsafe {
+                    ffi::fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+                        &vector_potential_request,
+                        &mut vector_potential_result,
+                    )
+                };
+                result_ffi = vector_potential_result.rt0;
+                vector_potential_result_ffi =
+                    Some((vector_potential_result, nodal_h_xyz_apm));
+                status
+            } else {
+                unsafe {
+                    ffi::fullmag_fem_solve_steady_transport_rt0_v1(&request_ffi, &mut result_ffi)
+                }
+            },
     };
     if status != ffi::FULLMAG_FEM_OK {
-        let error_message = oersted_result_ffi
+        let error_message = vector_potential_result_ffi
             .as_ref()
             .map(|(result, _)| chars(&result.error_message))
             .filter(|message| !message.is_empty())
+            .or_else(|| {
+                direct_oersted_result_ffi
+            .as_ref()
+            .map(|(result, _)| chars(&result.error_message))
+            .filter(|message| !message.is_empty())
+            })
             .unwrap_or_else(|| chars(&result_ffi.error_message));
         return Err(RunError {
             message: error_message,
@@ -1397,7 +1541,7 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
         .take(result_ffi.canonical_face_records_len as usize)
         .map(|record| (record.face_vertex_ids, record.flux_a))
         .collect();
-    let oersted = if let Some((oersted_result, h_xyz_apm)) = oersted_result_ffi {
+    let oersted = if let Some((oersted_result, h_xyz_apm)) = direct_oersted_result_ffi {
         if oersted_result.h_xyz_apm_len != h_xyz_apm.len() as u64
             || oersted_result.h_xyz_apm_len > oersted_result.h_xyz_apm_capacity
             || h_xyz_apm.iter().any(|value| !value.is_finite())
@@ -1429,16 +1573,53 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                 message: "native FEM OE-F1 returned a non-finite pair error".into(),
             });
         }
-        Some((
-            h_xyz_apm,
+        Some(NativeFemOerstedField {
+            field: h_xyz_apm,
             operator_version,
             source_view_identity_digest,
-            oersted_result.source_target_pairs,
-            oersted_result.refined_pairs,
-            oersted_result.unconverged_pair_count,
-            oersted_result.maximum_pair_error_apm,
+            source_target_pairs: Some(oersted_result.source_target_pairs),
+            refined_pairs: Some(oersted_result.refined_pairs),
+            unconverged_pair_count: Some(oersted_result.unconverged_pair_count),
+            maximum_pair_error_apm: Some(oersted_result.maximum_pair_error_apm),
             diagnostics,
-        ))
+        })
+    } else if let Some((oersted_result, nodal_h_xyz_apm)) = vector_potential_result_ffi {
+        if oersted_result.nodal_h_xyz_apm_len != nodal_h_xyz_apm.len() as u64
+            || oersted_result.nodal_h_xyz_apm_len > oersted_result.nodal_h_xyz_apm_capacity
+            || nodal_h_xyz_apm.iter().any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "native FEM OE-F2 returned an invalid nodal H field buffer".into(),
+            });
+        }
+        let source_view_identity_digest = chars(&oersted_result.source_view_identity_digest);
+        if source_view_identity_digest != chars(&result_ffi.view_identity_digest) {
+            return Err(RunError {
+                message: "native FEM OE-F2 source view digest differs from the RT0 result".into(),
+            });
+        }
+        let operator_version = chars(&oersted_result.operator_version);
+        if operator_version != "fem_oersted_hcurl_h1_gauge.v1" {
+            return Err(RunError {
+                message: format!(
+                    "native FEM OE-F2 returned unexpected operator version '{operator_version}'"
+                ),
+            });
+        }
+        let diagnostics_text = chars(&oersted_result.diagnostics_json);
+        let diagnostics = serde_json::from_str(&diagnostics_text).map_err(|error| RunError {
+            message: format!("invalid native FEM OE-F2 diagnostics JSON: {error}"),
+        })?;
+        Some(NativeFemOerstedField {
+            field: nodal_h_xyz_apm,
+            operator_version,
+            source_view_identity_digest,
+            source_target_pairs: None,
+            refined_pairs: None,
+            unconverged_pair_count: None,
+            maximum_pair_error_apm: None,
+            diagnostics,
+        })
     } else {
         None
     };
@@ -1463,14 +1644,20 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
         balance_certificate_digest: chars(&result_ffi.balance_certificate_digest),
         view_identity_digest: chars(&result_ffi.view_identity_digest),
         diagnostics,
-        oersted_h_xyz_apm: oersted.as_ref().map(|value| value.0.clone()),
-        oersted_operator_version: oersted.as_ref().map(|value| value.1.clone()),
-        oersted_source_view_identity_digest: oersted.as_ref().map(|value| value.2.clone()),
-        oersted_source_target_pairs: oersted.as_ref().map(|value| value.3),
-        oersted_refined_pairs: oersted.as_ref().map(|value| value.4),
-        oersted_unconverged_pair_count: oersted.as_ref().map(|value| value.5),
-        oersted_maximum_pair_error_apm: oersted.as_ref().map(|value| value.6),
-        oersted_diagnostics: oersted.map(|value| value.7),
+        oersted_h_xyz_apm: oersted.as_ref().map(|value| value.field.clone()),
+        oersted_operator_version: oersted.as_ref().map(|value| value.operator_version.clone()),
+        oersted_source_view_identity_digest: oersted
+            .as_ref()
+            .map(|value| value.source_view_identity_digest.clone()),
+        oersted_source_target_pairs: oersted.as_ref().and_then(|value| value.source_target_pairs),
+        oersted_refined_pairs: oersted.as_ref().and_then(|value| value.refined_pairs),
+        oersted_unconverged_pair_count: oersted
+            .as_ref()
+            .and_then(|value| value.unconverged_pair_count),
+        oersted_maximum_pair_error_apm: oersted
+            .as_ref()
+            .and_then(|value| value.maximum_pair_error_apm),
+        oersted_diagnostics: oersted.map(|value| value.diagnostics),
     })
 }
 

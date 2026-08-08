@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-05
+- Last updated: 2026-08-08
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula version: `current_transport.fullmag.v1`
@@ -1330,6 +1330,73 @@ kwalifikacja produkcyjna: planner nie wytwarza
 automatycznie stage snapshotu ani `external_lead`, a OE-F2, etapowe sprzężenie LLG,
 niezależnych badań `h`/airbox ani lane GPU.
 
+### 4.6.2. OE-F2 w normalnym runtime FEM CPU/double (zaimplementowana ścieżka ograniczona, 2026-08-08)
+
+Po rozwiązaniu `ResolvedOerstedTerm::SolvedCurrent` planner ustawia w planie
+FEM realizację `FemVectorPotential`. Runner wybiera wtedy
+`NativeFemSteadyTransportOerstedMethod::FemVectorPotential`, przekazuje pustą
+listę punktów celu (pole nie jest liczone z niezależnej kwadratury punktowej) i
+wywołuje append-only symbol OE-F2 na **tym samym immutable RT0 view**, który
+powstał z rozwiązania transportu. Brak tego widoku kończy się błędem
+fail-closed; nie ma powrotu do midpoint H1.
+
+Natywny solver rozwiązuje mieszany problem `H(curl) x H1` z gauge
+`tangential_A_h1_0.v1`, a następnie zwraca kompatybilne
+
+```text
+B = curl(A),       H = B / mu0.
+```
+
+Pole `H` jest polem RT0 na elementach. Interfejs LLG wymaga jednak wartości
+ciągłych w węzłach, dlatego backend wykonuje jawny rzut projekcyjny H1/P1,
+nie rekonstrukcję prądu:
+
+```text
+M u_k = b_k,
+b_k[i] = integral_Omega phi_i(x) H_k(x) dV,
+k in {x,y,z}.
+```
+
+`M` jest skalarną macierzą masy P1, a `u_k` jest wartością nodalną dla
+składowej `H_k`. Residuum publikowane w diagnostyce jako
+`nodal_projection_residual` jest maksymalnym po składowych
+
+```text
+||M u_k - b_k||_2 / max(1, ||b_k||_2).
+```
+
+Wersja CPU/double używa deterministycznej gęstej odwrotności macierzy masy i
+limitu `maximum_h1_dofs=2048`; jest to bounded reference projection, a nie
+skalowalny solver dla dużych siatek. Wynik `nodal_h_xyz_apm` ma kolejność
+`[node0.x,node0.y,node0.z,...]`, jednostkę A/m i jest publikowany wyłącznie
+po kontroli długości, skończoności, zgodności
+`source_view_identity_digest` oraz operatora
+`fem_oersted_hcurl_h1_gauge.v1`.
+
+Po pomyślnym solve runner dodaje ten nodalny wektor do planu pola przed
+utworzeniem natywnego backendu LLG. Artefakt transportu oznacza realizację
+`fem_vector_potential_hcurl_h1`, źródło
+`fem_conservative_current_rt0_vector_potential.v1` i zachowuje digest pola
+oraz widoku. Ścieżka dotyczy obecnie wyłącznie jednokierunkowego,
+`closed_geometry`, steady-source-invariant FEM CPU/double; nie jest callbackiem
+`J_c(m_stage)` dla RK/FSAL i nie zapewnia jeszcze GPU/device-resident,
+`external_lead`, airbox-sequence, porównania FEM↔FDM ani kwalifikacji
+produkcyjnej.
+
+Świeże dowody wykonania:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef2-cpu-contract                 # PASS
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-stage-cache-contract   # PASS
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-native-contract        # PASS
+```
+
+Dokładny test append-only layoutu FFI również przechodzi po zbudowaniu
+`fullmag_fem` w obrazie managed. Dowody te potwierdzają kontrakt natywny,
+wybór metody, walidację i integrację kodową z planem LLG; brak jeszcze
+niezależnego, pełnego fixture'u managed, który wykonałby tę ścieżkę z kompletnym
+publicznym `closed_geometry` end-to-end i zamknąłby bramę produkcyjną.
+
 (validation)=
 ## 5. Validation strategy
 
@@ -1386,7 +1453,7 @@ at least nominal minus `0.25` in the asymptotic range.
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
 - [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; h-refinement and balance gates for RT0/OE-F1 are covered; p, cross-backend and production gates remain open)
-- [ ] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate
+- [x] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate (bounded CPU/double solver and nodal LLG bridge; GPU, p/airbox and production gates remain open)
 - [x] Invariant-source cache gate for one-way closed_geometry (exact-key RHS reuse and changed-identity rejection)
 - [ ] Magnetization-dependent stage coupling, FSAL, rollback, final refresh
 - [ ] Correct external/nonvariational energy semantics
@@ -1412,6 +1479,7 @@ evidence that the approximation is accurate.
 | `crates/fullmag-plan/src/oersted.rs` | `resolve_oersted_term` | bind Oersted source |
 | `crates/fullmag-plan/src/oersted.rs` | `resolve_solved_current_source` | solved-current binding |
 | `crates/fullmag-plan/src/spin_transport.rs` | `resolve_m1_fem_spin_transport` | FEM transport descriptor |
+| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | explicit FemVectorPotential selection for solved-current Oersted |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solved_current_midpoint_biot_savart_field` | bounded midpoint field |
 | `crates/fullmag-runner/src/dispatch.rs` | `normalized_fem_plan_for_runtime` | FEM field injection |
 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `solve_coupled_module` | FDM stage owner |
@@ -1427,6 +1495,7 @@ evidence that the approximation is accurate.
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
 | `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary |
+| `backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp` | `project_compatible_h_to_nodes` | bounded RT0-compatible H to H1/P1 nodal projection and residual |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |

@@ -2874,11 +2874,12 @@ pub(crate) fn plan_fem(
                 }
                 ResolvedOerstedTerm::SolvedCurrent { .. } => {
                     // The steady transport runtime solves charge first and
-                    // derives the nodal Oersted field from that result before
+                    // derives the nodal Oersted field from the bounded
+                    // H(curl) x H1 vector-potential realization before
                     // constructing the LLG backend.  Do not synthesize a
                     // prescribed field in the planner.
                     fem_plan.oersted_realization =
-                        Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+                        Some(fullmag_ir::OerstedRealization::FemVectorPotential);
                 }
             }
             break;

@@ -991,6 +991,9 @@ pub struct fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 {
     pub boundary_gauge_variant: [c_char; 64],
     pub error_message: [c_char; 256],
     pub diagnostics_json: [c_char; 1024],
+    pub nodal_h_xyz_apm: *mut f64,
+    pub nodal_h_xyz_apm_capacity: u64,
+    pub nodal_h_xyz_apm_len: u64,
 }
 
 #[repr(C)]
@@ -2641,12 +2644,9 @@ mod tests {
             ),
             816
         );
-        assert_eq!(
-            std::mem::size_of::<
-                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
-            >(),
-            3432
-        );
+        // 3432 B is the frozen prefix size before the append-only nodal H1
+        // projection fields below. The complete v1 result is asserted as
+        // 3456 B at the end of this test.
         assert_eq!(
             std::mem::offset_of!(
                 fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
@@ -2828,6 +2828,33 @@ mod tests {
                 diagnostics_json
             ),
             2401
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+                nodal_h_xyz_apm
+            ),
+            3432
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+                nodal_h_xyz_apm_capacity
+            ),
+            3440
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+                nodal_h_xyz_apm_len
+            ),
+            3448
+        );
+        assert_eq!(
+            std::mem::size_of::<
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+            >(),
+            3456
         );
     }
 

@@ -9097,10 +9097,11 @@ Do produkcyjnego solved-current Oersted FEM nadal brakuje:
 3. niezależnej zbieżności `p` (bramka `h` dla OE-F1 i certyfikat bilansu są już
    objęte kontraktami CPU), kontroli energii oraz porównania z FDM/MuMax/BORIS
    na tym samym źródle;
-4. normalnego runtime OE-F2 na tym samym view, wyboru metody w IR/plannerze,
-   integracji pola z LLG i publikacji poza fixture C++; append-only ABI/native
-   kontrakt OE-F2 jest już zaimplementowany, ale nie jest jeszcze domyślnie
-   wywoływany przez runner;
+4. niezależnej kwalifikacji normalnego runtime OE-F2 na tym samym view. Wybór
+   `FemVectorPotential` w IR/plannerze, wywołanie OE-F2 przez runner,
+   bounded H1/P1 nodal projection i integracja pola z planem LLG są już
+   zaimplementowane dla FEM CPU/double `closed_geometry`; pozostają fixture
+   end-to-end, niezależna kontrola `p`/energii, airbox i dowód produkcyjny;
 5. managed FEM GPU/device-resident realizacji i osobnego dowodu parity.
 
 Dlatego bieżąca ocena celu po tej iteracji wynosi:
@@ -9118,6 +9119,11 @@ Wartości są rozdzielone celowo: zielony kontrakt natywny nie oznacza jeszcze,
 świeży, certyfikowany prąd.
 
 ## 32.96. Append-only OE-F2 ABI na tym samym immutable RT0 view (2026-08-08)
+
+> Uwaga historyczna: sekcja opisuje stan przed podłączeniem OE-F2 do wyboru
+> realizacji w plannerze i ścieżki LLG. Aktualny stan kodu i dowody są w §32.97;
+> wartości `3432 B` i „brak normalnego runtime” poniżej dotyczą wyłącznie
+> wcześniejszego ABI/native-contract slice.
 
 Po zamknięciu OE-T0/OE-F1 dodano brakujący most natywny OE-F2 bez naruszania
 istniejącego ABI transportu. Nowe typy i symbol
@@ -9202,3 +9208,71 @@ ponowne użycie zaakceptowanego źródła i wymagany final refresh. Nie jest to
 jeszcze dowód callbacku native RK4/RK23/RK45, wielu odmiennych stage identities
 w rzeczywistym integratorze, FSAL w runtime, normalnego OE-F2, GPU ani
 produkcyjnego LLG.
+
+## 32.97. OE-F2: wybór w plannerze i integracja nodalnego H z FEM LLG CPU/double (2026-08-08)
+
+Po akceptacji poprzednich bram zamknięto brakujący odcinek między append-only
+ABI OE-F2 a normalnym przygotowaniem planu FEM. `OerstedRealization` otrzymało
+wariant `FemVectorPotential`, a planner ustawia go dla
+`ResolvedOerstedTerm::SolvedCurrent`. Runner wybiera tę metodę jawnie; nie ma
+już bezwarunkowego nadpisania jej realizacją `BiotSavartMidpoint` po scaleniu
+wyniku transportu.
+
+### Zrealizowany przepływ
+
+1. Dla FEM CPU/double, one-way, steady `closed_geometry` runner materializuje
+   `ConservativeCurrentView` RT0 i przechodzi do
+   `fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1`.
+2. OE-F2 rozwiązuje `H(curl) x H1` z gauge `tangential_A_h1_0.v1`, zwraca
+   `A`, gauge, kompatybilne `B/H`, residuale oraz digest tego samego view.
+3. Backend wykonuje ograniczony, deterministyczny rzut `H` do węzłów P1/H1:
+
+   ```text
+   M u_k = b_k,   b_k[i] = integral phi_i H_k dV,
+   r_proj = max_k ||M u_k-b_k||_2/max(1,||b_k||_2).
+   ```
+
+   Wynik jest publikowany jako `nodal_h_xyz_apm` (A/m, AoS xyz) wraz z
+   `nodal_projection_residual`; gęsta odwrotność i limit `maximum_h1_dofs=2048`
+   są świadomie bounded CPU/double reference, nie realizacją produkcyjnego
+   solvera dla dużych siatek.
+4. Runner wymusza zgodność długości, skończoności, operatora
+   `fem_oersted_hcurl_h1_gauge.v1` i `source_view_identity_digest`. Po tej
+   walidacji dodaje nodalny `H` do `normalized_plan.oersted_field_xyz` przed
+   utworzeniem natywnego LLG. Przy braku immutable RT0 view OE-F2 kończy się
+   błędem; nie ma ukrytego midpoint fallbacku.
+5. Artefakt transportu i provenance oznaczają źródło
+   `fem_conservative_current_rt0_vector_potential.v1`, realizację
+   `fem_vector_potential_hcurl_h1`, digest pola i digest view. OE-F1 pozostaje
+   osobną, jawną realizacją direct-tetra.
+
+### Świeże dowody managed
+
+| Gate | Wynik | Co dokładnie dowodzi | Czego nie dowodzi |
+|---|---|---|---|
+| `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef2-cpu-contract` | **PASS** | native OE-F2, projekcja nodalna, skończoność, residua, digest, bufor błędu i regresja zbyt małego bufora w CPU/double | pełnego publicznego end-to-end z rzeczywistym `closed_geometry` i LLG |
+| `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-stage-cache-contract` | **PASS** | kompilacja FFI/IR/planner/runner oraz cache invariant-source z rollbackiem | callbacku RK/FSAL i `J_c(m_stage)` |
+| `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-native-contract` | **PASS** | ABI, planner, runner, artefakty, API i common-SI transport gate po zmianie | kwalifikacji GPU i pełnego OE-F2 workloadu |
+| managed exact layout test `steady_transport_rt0_extension_layout_is_frozen_and_append_only` | **PASS** | request `824 B`, zamrożony prefiks result `3432 B`, nowe pola `nodal_h_xyz_apm` na offsetach `3432/3440/3448`, pełny result `3456 B` | runtime physics |
+
+### Aktualna granica i ocena
+
+To jest pierwszy wykonywalny, plan-selected OE-F2 CPU/double path, który
+dociera do przygotowania LLG; nie jest jeszcze pełną kwalifikacją fizyczną.
+Nadal otwarte pozostają: rzeczywiste callbacki stage `J_c(m_stage)` z reject/
+FSAL/final-refresh w natywnym RK, niezależne `p`/energia/airbox, porównanie
+FEM↔FDM/MuMax/BORIS, `external_lead`, GPU/device-resident oraz release-clean
+end-to-end z publicznego Python/UI.
+
+Konserwatywna aktualizacja celu po tej zmianie:
+
+```text
+implementacja bounded CPU/double P0–P4: ~100% dla closed_geometry
+publiczny łańcuch Python/IR → RT0 → OE-F2 → nodal H → LLG: ~90%
+gotowość produkcyjna solved-current Oersted FEM: ~48%
+```
+
+Podniesienie dotyczy implementacji i wykonywalnego wyboru metody, nie samego
+statusu `validated_workloads` ani capability GPU. Do awansu produkcyjnego
+potrzebny jest osobny artefakt kwalifikacyjny obejmujący wszystkie powyższe
+otwarte bramy.

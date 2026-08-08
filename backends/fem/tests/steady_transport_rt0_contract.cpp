@@ -308,6 +308,7 @@ void run_closed_geometry_rt0_contract()
     std::vector<double> gauge_dofs_apm(4096, 0.0);
     std::vector<double> compatible_b_dofs_t(8192, 0.0);
     std::vector<double> compatible_h_dofs_apm(8192, 0.0);
+    std::vector<double> nodal_h_xyz_apm(nodes_xyz.size(), 0.0);
     auto vector_potential_request =
         fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1{};
     vector_potential_request.abi_version =
@@ -334,6 +335,8 @@ void run_closed_geometry_rt0_contract()
     vector_potential_result.compatible_b_dofs_t_capacity = compatible_b_dofs_t.size();
     vector_potential_result.compatible_h_dofs_apm = compatible_h_dofs_apm.data();
     vector_potential_result.compatible_h_dofs_apm_capacity = compatible_h_dofs_apm.size();
+    vector_potential_result.nodal_h_xyz_apm = nodal_h_xyz_apm.data();
+    vector_potential_result.nodal_h_xyz_apm_capacity = nodal_h_xyz_apm.size();
     const int vector_potential_status =
         fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
             &vector_potential_request, &vector_potential_result);
@@ -347,8 +350,9 @@ void run_closed_geometry_rt0_contract()
             vector_potential_result.a_dofs_t_m_len > 0 &&
             vector_potential_result.gauge_dofs_apm_len > 0 &&
             vector_potential_result.compatible_b_dofs_t_len > 0 &&
-            vector_potential_result.compatible_h_dofs_apm_len > 0,
-        "public RT0 OE-F2 result did not publish the mixed fields");
+            vector_potential_result.compatible_h_dofs_apm_len > 0 &&
+            vector_potential_result.nodal_h_xyz_apm_len == nodal_h_xyz_apm.size(),
+        "public RT0 OE-F2 result did not publish the mixed and nodal fields");
     require(std::string(vector_potential_result.operator_version) ==
             "fem_oersted_hcurl_h1_gauge.v1",
         "public RT0 OE-F2 operator identity is wrong");
@@ -368,6 +372,9 @@ void run_closed_geometry_rt0_contract()
                 [](double value) { return std::isfinite(value); }) &&
             std::all_of(compatible_h_dofs_apm.begin(),
                 compatible_h_dofs_apm.begin() + vector_potential_result.compatible_h_dofs_apm_len,
+                [](double value) { return std::isfinite(value); }) &&
+            std::all_of(nodal_h_xyz_apm.begin(),
+                nodal_h_xyz_apm.begin() + vector_potential_result.nodal_h_xyz_apm_len,
                 [](double value) { return std::isfinite(value); }),
         "public RT0 OE-F2 field contains a non-finite value");
     require(std::string(vector_potential_result.diagnostics_json).find(
@@ -382,6 +389,7 @@ void run_closed_geometry_rt0_contract()
         compatible_b_dofs_t.size();
     failed_vector_potential_result.compatible_h_dofs_apm_len =
         compatible_h_dofs_apm.size();
+    failed_vector_potential_result.nodal_h_xyz_apm_len = nodal_h_xyz_apm.size();
     failed_vector_potential_result.rt0.rt0_dof_values_len =
         result.rt0_dof_values_len;
     failed_vector_potential_result.rt0.canonical_face_records_len =
@@ -403,6 +411,7 @@ void run_closed_geometry_rt0_contract()
             failed_vector_potential_result.gauge_dofs_apm_len == 0 &&
             failed_vector_potential_result.compatible_b_dofs_t_len == 0 &&
             failed_vector_potential_result.compatible_h_dofs_apm_len == 0 &&
+            failed_vector_potential_result.nodal_h_xyz_apm_len == 0 &&
             failed_vector_potential_result.rt0.converged == 0 &&
             failed_vector_potential_result.rt0.rt0_dof_values_len == 0 &&
             failed_vector_potential_result.rt0.canonical_face_records_len == 0 &&

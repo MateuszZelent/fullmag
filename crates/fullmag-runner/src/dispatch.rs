@@ -2200,8 +2200,11 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         } else {
             normalized_plan.oersted_field_xyz = Some(field.clone());
         }
-        normalized_plan.oersted_realization =
-            Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
+        if normalized_plan.oersted_realization.is_none() {
+            return Err(RunError {
+                message: "FEM solved-current transport returned a field without a resolved Oersted realization".into(),
+            });
+        }
     }
     #[cfg(not(feature = "fem-gpu"))]
     if !normalized_plan.spin_transport_plans.is_empty() {

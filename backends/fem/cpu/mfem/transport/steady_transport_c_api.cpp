@@ -101,6 +101,7 @@ void set_error(
     result->gauge_dofs_apm_len = 0;
     result->compatible_b_dofs_t_len = 0;
     result->compatible_h_dofs_apm_len = 0;
+    result->nodal_h_xyz_apm_len = 0;
     result->harmonic_count = 0;
     result->essential_nd_dof_count = 0;
     result->essential_h1_dof_count = 0;
@@ -1415,6 +1416,10 @@ int solve_rt0(
                 vector_potential_result->compatible_h_dofs_apm_capacity >=
                     mixed.compatible_h_dofs_apm.size(),
             "OE-F2 compatible H output capacity is smaller than the RT0 field");
+        rt0_require(vector_potential_result->nodal_h_xyz_apm != nullptr &&
+                vector_potential_result->nodal_h_xyz_apm_capacity >=
+                    mixed.nodal_h_xyz_apm.size(),
+            "OE-F2 nodal H output capacity is smaller than the H1 projection");
         std::copy(mixed.a_dofs_t_m.begin(), mixed.a_dofs_t_m.end(),
             vector_potential_result->a_dofs_t_m);
         std::copy(mixed.gauge_dofs_apm.begin(), mixed.gauge_dofs_apm.end(),
@@ -1423,10 +1428,13 @@ int solve_rt0(
             vector_potential_result->compatible_b_dofs_t);
         std::copy(mixed.compatible_h_dofs_apm.begin(), mixed.compatible_h_dofs_apm.end(),
             vector_potential_result->compatible_h_dofs_apm);
+        std::copy(mixed.nodal_h_xyz_apm.begin(), mixed.nodal_h_xyz_apm.end(),
+            vector_potential_result->nodal_h_xyz_apm);
         vector_potential_result->a_dofs_t_m_len = mixed.a_dofs_t_m.size();
         vector_potential_result->gauge_dofs_apm_len = mixed.gauge_dofs_apm.size();
         vector_potential_result->compatible_b_dofs_t_len = mixed.compatible_b_dofs_t.size();
         vector_potential_result->compatible_h_dofs_apm_len = mixed.compatible_h_dofs_apm.size();
+        vector_potential_result->nodal_h_xyz_apm_len = mixed.nodal_h_xyz_apm.size();
         vector_potential_result->converged = 1;
         vector_potential_result->harmonic_count = mixed.diagnostics.harmonic_count;
         vector_potential_result->essential_nd_dof_count =
@@ -1462,7 +1470,8 @@ int solve_rt0(
             "\"boundary_gauge_variant\":\"%s\","
             "\"converged\":true,\"nd_dofs\":%d,\"h1_dofs\":%d,"
             "\"harmonic_count\":%d,\"first_block_residual\":%.17g,"
-            "\"constraint_residual\":%.17g,\"compatible_divergence_residual\":%.17g}",
+            "\"constraint_residual\":%.17g,\"compatible_divergence_residual\":%.17g,"
+            "\"nodal_h_xyz_apm_len\":%llu,\"nodal_projection_residual\":%.17g}",
             vector_potential_result->operator_version,
             vector_potential_result->source_view_identity_digest,
             vector_potential_result->boundary_gauge_variant,
@@ -1471,7 +1480,9 @@ int solve_rt0(
             mixed.diagnostics.harmonic_count,
             mixed.diagnostics.first_block_residual,
             mixed.diagnostics.constraint_residual,
-            mixed.diagnostics.compatible_divergence_residual);
+            mixed.diagnostics.compatible_divergence_residual,
+            static_cast<unsigned long long>(vector_potential_result->nodal_h_xyz_apm_len),
+            mixed.diagnostics.nodal_projection_residual);
     }
     return FULLMAG_FEM_OK;
 }

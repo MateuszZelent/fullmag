@@ -884,6 +884,7 @@ impl Default for ThermalSeedConfig {
 pub enum OerstedRealization {
     InfiniteCylinder,
     BiotSavartMidpoint,
+    FemVectorPotential,
 }
 
 impl Default for OerstedRealization {
