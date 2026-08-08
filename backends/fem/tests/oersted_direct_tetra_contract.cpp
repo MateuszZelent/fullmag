@@ -200,6 +200,71 @@ void direct_tetra_consistent_h1_projection_contract()
         "consistent H1 projection produced a non-finite field");
 }
 
+std::array<double, 3> linear_current_field_at_resolution(
+    int subdivisions,
+    int quadrature_order,
+    int maximum_subdivision_depth)
+{
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        subdivisions, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::VectorFunctionCoefficient coefficient(3,
+        [](const mfem::Vector &point, mfem::Vector &value) {
+            value = 0.0;
+            value[0] = 4.0 + 2.0 * point[0];
+        });
+    current.ProjectCoefficient(coefficient);
+
+    DirectTetraQuadratureOptions options;
+    options.base_quadrature_order = quadrature_order;
+    options.maximum_subdivision_depth = maximum_subdivision_depth;
+    options.relative_tolerance = 1.0e-8;
+    options.absolute_tolerance_apm = 1.0e-11;
+    const auto result = DirectTetraQuadrature::EvaluateField(
+        mesh, current, {{2.5, 0.37, 0.61}}, options);
+    require(result.diagnostics.unconverged_pair_count == 0,
+        "linear-current h-refinement left unconverged source pairs");
+    require(result.h_xyz_apm.size() == 3u,
+        "linear-current h-refinement returned an invalid field length");
+    return {result.h_xyz_apm[0], result.h_xyz_apm[1], result.h_xyz_apm[2]};
+}
+
+void direct_tetra_h_refinement_contract()
+{
+    const auto reference = linear_current_field_at_resolution(16, 8, 6);
+    const auto coarse = linear_current_field_at_resolution(1, 8, 6);
+    const auto medium = linear_current_field_at_resolution(2, 8, 6);
+    const auto fine = linear_current_field_at_resolution(4, 8, 6);
+    const auto distance = [](const std::array<double, 3> &lhs,
+                             const std::array<double, 3> &rhs) {
+        double squared = 0.0;
+        for (int component = 0; component < 3; ++component) {
+            const double delta = lhs[component] - rhs[component];
+            squared += delta * delta;
+        }
+        return std::sqrt(squared);
+    };
+    const double coarse_error = distance(coarse, reference);
+    const double medium_error = distance(medium, reference);
+    const double fine_error = distance(fine, reference);
+    require(std::isfinite(coarse_error) && std::isfinite(medium_error) &&
+                std::isfinite(fine_error),
+        "linear-current h-refinement produced a non-finite error");
+    std::cerr << "OE-F1 h-refinement errors: coarse=" << coarse_error
+              << " medium=" << medium_error << " fine=" << fine_error << '\n';
+    require(fine_error < coarse_error,
+        "direct tetrahedral OE-F1 failed h-refinement improvement");
+
+    const auto low_order = linear_current_field_at_resolution(4, 3, 6);
+    const auto high_order = linear_current_field_at_resolution(4, 8, 6);
+    const double order_error = distance(low_order, high_order);
+    require(order_error <= 1.0e-7 * std::max(1.0, distance(high_order,
+        std::array<double, 3>{0.0, 0.0, 0.0})),
+        "direct tetrahedral OE-F1 quadrature order changed the converged far field");
+}
+
 } // namespace
 
 int main()
@@ -208,6 +273,7 @@ int main()
         direct_tetra_signed_current_and_budget_contract();
         direct_tetra_singular_target_contract();
         direct_tetra_consistent_h1_projection_contract();
+        direct_tetra_h_refinement_contract();
         std::cout << "fem direct tetrahedral Oersted contract: PASS\n";
         return 0;
     } catch (const std::exception &error) {

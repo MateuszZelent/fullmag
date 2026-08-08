@@ -303,6 +303,32 @@ void run_closed_geometry_rt0_contract()
     require(std::all_of(h_xyz_apm.begin(), h_xyz_apm.end(),
                 [](double value) { return std::isfinite(value); }),
         "public RT0 OE-F1 field contains a non-finite value");
+
+    require(std::isfinite(result.max_element_divergence_a) &&
+            std::isfinite(result.max_internal_face_jump_a) &&
+            std::isfinite(result.net_outer_flux_a) &&
+            std::isfinite(result.electrode_balance_relative) &&
+            std::isfinite(result.scaled_kkt_residual),
+        "public RT0 balance certificate contains a non-finite value");
+    require(result.max_element_divergence_a >= 0.0 &&
+            result.max_internal_face_jump_a >= 0.0 &&
+            result.electrode_balance_relative >= 0.0 &&
+            result.scaled_kkt_residual >= 0.0,
+        "public RT0 balance certificate contains a negative norm");
+    require(std::abs(result.net_outer_flux_a) <=
+                std::max(request.physical_absolute_gate_a,
+                    request.physical_relative_gate),
+        "closed-geometry RT0 solve leaked measurable outer flux");
+    require(result.max_element_divergence_a <=
+                std::max(request.physical_absolute_gate_a,
+                    request.physical_relative_gate),
+        "closed-geometry RT0 solve failed element balance gate");
+    require(result.max_internal_face_jump_a <=
+                std::max(request.physical_absolute_gate_a,
+                    request.physical_relative_gate),
+        "closed-geometry RT0 solve failed internal-face continuity gate");
+    require(result.electrode_balance_relative <= request.physical_relative_gate,
+        "closed-geometry RT0 solve failed source-cut balance gate");
 }
 
 } // namespace

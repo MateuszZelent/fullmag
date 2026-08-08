@@ -1237,8 +1237,10 @@ sam immutable view, bez rekonstrukcji z nodalnego P1, jest jedynym wejściem do
 `VectorPotentialSolver::Evaluate` (OE-F2). Runner dopisuje do artefaktu
 `source_view_identity_digest` i `stage_identity`; LLG może przyjąć pole dopiero
 po zgodności wszystkich rewizji. Wersja v1 tego rozszerzenia pozostaje
-`reference_executable` CPU/double do czasu trzech poziomów `h`, oracle
-direct-tetra, testów zamknięcia/znaku/energii i managed end-to-end.
+`reference_executable` CPU/double do czasu niezależnej bramki `p`, oracle
+direct-tetra, testów zamknięcia/znaku/energii, porównania backendów i managed
+end-to-end. Bramka OE-F1 ma już kontrolę `h=1/2/4/16` dla liniowo zmiennego
+źródła RT0 oraz osobny test signed-current/singular/near/far.
 
 W kodzie natywnym `fullmag_fem_solve_steady_transport_rt0_oersted_v1` buduje
 `ConservativeCurrentView`, a następnie wywołuje
@@ -1248,8 +1250,10 @@ docelowych i diagnostykę kwadratury; sprawdza też, że digest OE-F1 jest równ
 digestowi RT0. Nie ma konwersji H1→RT0. Managed
 `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract`
 wykonuje trzy kontrakty transportu, ABI i RT0→OE-F1 w obrazie CPU-only
-(`FULLMAG_USE_MFEM_STACK=ON`). Jest to implementacja natywnego adaptera i
-kontraktu FFI, ale nie produkcyjna kwalifikacja: planner nie wytwarza
+(`FULLMAG_USE_MFEM_STACK=ON`). Kontrakt RT0 sprawdza również skończoność,
+ciągłość strumienia, bilans elementów, brak zewnętrznego wycieku i bilans
+source-cut. Jest to implementacja natywnego adaptera i kontraktu FFI, ale nie
+kwalifikacja produkcyjna: planner nie wytwarza
 automatycznie stage snapshotu ani `external_lead`, a OE-F2, etapowe sprzężenie LLG,
 niezależnych badań `h`/airbox ani lane GPU.
 
@@ -1308,7 +1312,7 @@ at least nominal minus `0.25` in the asymptotic range.
 - [ ] FDM direct oracle and cell-integrated CPU/CUDA FFT
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
-- [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; multi-resolution and production gates remain open)
+- [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; h-refinement and balance gates for RT0/OE-F1 are covered; p, cross-backend and production gates remain open)
 - [ ] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate
 - [ ] Stage-consistent coupling, FSAL, rollback, final refresh
 - [ ] Correct external/nonvariational energy semantics

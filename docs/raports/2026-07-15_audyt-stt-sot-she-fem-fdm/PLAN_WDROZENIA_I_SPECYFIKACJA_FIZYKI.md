@@ -9031,6 +9031,21 @@ Sprawdza finite `H_oe`, operator
 wykonywalnego łańcucha natywnego CPU/double na fixture, nie dowód stage-coupled
 LLG ani produkcyjnego runtime FEM.
 
+Po tej aktualizacji ponownie wykonano zarządzany kontrakt
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-rt0-cpu-contract`;
+kompilacja kontenerowa i `fem_steady_transport_rt0_contract` zakończyły się
+`PASS`. Kontrakt sprawdza teraz również skończoność i nieujemność wszystkich
+norm certyfikatu, brak mierzalnego zewnętrznego strumienia, bilans elementów,
+ciągłość strumienia na ścianach wewnętrznych i bilans source-cut względem
+zadanych bramek fizycznych. Wykonano także
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef1-cpu-contract`;
+zarządzany test OE-F1 przeszedł dla liniowo zmiennego źródła RT0 na poziomach
+`h` 1/2/4/16. Zmierzono błędy względem poziomu referencyjnego
+`(6.99174e-4, 3.37272e-4, 1.45936e-4)` i potwierdzono poprawę przy refinowaniu,
+a test zachował wcześniejsze przypadki signed-current, singular/near/far,
+deterministyczności i limitu budżetu kwadratury. Jest to bramka zbieżności
+OE-F1 dla CPU/double; nie jest jeszcze zbieżnością całego LLG ani dowodem GPU.
+
 Hostowe `cargo check` wykonano wyłącznie z task-specific katalogiem Cargo na
 `/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-master`; zapis do
 repozytoryjnego `target/` jest niedozwolony. Przebudowa hostowego managed
@@ -9072,8 +9087,9 @@ Do produkcyjnego solved-current Oersted FEM nadal brakuje:
    `external_lead` pozostaje fail-closed i nie ma domyślnego source-cut);
 2. testu etapowego dla RK/FSAL: dwa RHS, rejected-step rollback i final refresh,
    z identycznym `stage_identity` prądu i magnetyzacji;
-3. niezależnej zbieżności `h`/p, singular/near/far, bilansu i energii oraz
-   porównania z FDM/MuMax/BORIS na tym samym źródle;
+3. niezależnej zbieżności `p` (bramka `h` dla OE-F1 i certyfikat bilansu są już
+   objęte kontraktami CPU), kontroli energii oraz porównania z FDM/MuMax/BORIS
+   na tym samym źródle;
 4. OE-F2 na tym samym view, integracji pola z LLG i publikacji w normalnym
    runtime, a nie tylko fixture C++;
 5. managed FEM GPU/device-resident realizacji i osobnego dowodu parity.
@@ -9083,7 +9099,9 @@ Dlatego bieżąca ocena celu po tej iteracji wynosi:
 ```text
 źródłowa implementacja planu P0–P3: ~100% dla CPU/double `closed_geometry`
 łańcuch publiczny Python/IR → closure descriptor → RT0 → OE-F1 → LLG: ~78%
-kwalifikacja produkcyjna FEM solved-current Oersted: ~45%
+kwalifikacja produkcyjna FEM solved-current Oersted: ~45% (bramka OE-F1 `h` i
+bilansu zwiększa dowód numeryczny, ale nie zmienia granicy bez P4, OE-F2,
+porównania solverów i GPU)
 ```
 
 Wartości są rozdzielone celowo: zielony kontrakt natywny nie oznacza jeszcze,
