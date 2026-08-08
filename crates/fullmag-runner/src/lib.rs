@@ -1472,6 +1472,137 @@ pub(crate) fn attach_plan_integrator_resolution_to_provenance(
         .map(str::to_string);
 }
 
+/// Fail closed when a graph-bearing execution plan reaches the runner without
+/// the typed graph provenance produced by the planner.  The graph revision is
+/// compared with the authored ProblemIR revision so artifacts cannot silently
+/// mix a scene snapshot with a stale mesh/lane resolution.
+pub(crate) fn require_physics_graph_runtime_provenance(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
+    let expected_scene_revision = problem
+        .physics_graph
+        .as_ref()
+        .and_then(|graph| graph.get("scene_revision"))
+        .and_then(serde_json::Value::as_u64);
+    let Some(expected_scene_revision) = expected_scene_revision else {
+        if plan.provenance.physics_graph.is_some() {
+            return Err(RunError {
+                message: "physics_graph runtime provenance exists without an authored scene revision"
+                    .to_string(),
+            });
+        }
+        return Ok(());
+    };
+    let Some(provenance) = plan.provenance.physics_graph.as_ref() else {
+        return Err(RunError {
+            message: "physics_graph runtime provenance is missing from the execution plan"
+                .to_string(),
+        });
+    };
+    if provenance.schema_version != fullmag_ir::PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA {
+        return Err(RunError {
+            message: format!(
+                "unsupported physics_graph runtime provenance schema '{}'",
+                provenance.schema_version
+            ),
+        });
+    }
+    let expected_graph_sha256 = fullmag_plan::physics_graph_sha256(problem)
+        .map_err(|reasons| RunError {
+            message: reasons.join("; "),
+        })?
+        .ok_or_else(|| RunError {
+            message: "physics_graph runtime provenance has no authored graph digest".to_string(),
+        })?;
+    if provenance.graph_sha256 != expected_graph_sha256 {
+        return Err(RunError {
+            message: "physics_graph runtime provenance graph_sha256 does not match authored graph"
+                .to_string(),
+        });
+    }
+    if provenance.scene_revision != expected_scene_revision {
+        return Err(RunError {
+            message: format!(
+                "physics_graph runtime provenance scene revision {} does not match authored revision {}",
+                provenance.scene_revision, expected_scene_revision
+            ),
+        });
+    }
+    if provenance.mesh_revision == 0 {
+        return Err(RunError {
+            message: "physics_graph runtime provenance has no mesh revision".to_string(),
+        });
+    }
+    if provenance.resolved_lane != plan.common.resolved_backend {
+        return Err(RunError {
+            message: format!(
+                "physics_graph runtime provenance resolved lane '{}' does not match execution plan lane '{}'",
+                provenance.resolved_lane.as_str(),
+                plan.common.resolved_backend.as_str()
+            ),
+        });
+    }
+    let mut module_ids = std::collections::BTreeSet::new();
+    for module in &provenance.modules {
+        if module.module_id.trim().is_empty() || !module_ids.insert(module.module_id.as_str()) {
+            return Err(RunError {
+                message: "physics_graph runtime provenance contains an empty or duplicate module_id"
+                    .to_string(),
+            });
+        }
+        if module.scope.trim().is_empty() {
+            return Err(RunError {
+                message: format!(
+                    "physics_graph runtime provenance module '{}' has an empty scope",
+                    module.module_id
+                ),
+            });
+        }
+    }
+    let expected_modules = fullmag_plan::resolve_physics_modules(problem, provenance.resolved_lane)
+        .map_err(|reasons| RunError {
+            message: reasons.join("; "),
+        })?;
+    if expected_modules.len() != provenance.modules.len() {
+        return Err(RunError {
+            message: "physics_graph runtime provenance module set does not match authored graph"
+                .to_string(),
+        });
+    }
+    for expected in expected_modules {
+        let Some(actual) = provenance
+            .modules
+            .iter()
+            .find(|module| module.module_id == expected.module_id)
+        else {
+            return Err(RunError {
+                message: format!(
+                    "physics_graph runtime provenance is missing module '{}'",
+                    expected.module_id
+                ),
+            });
+        };
+        if actual.kind != expected.kind
+            || actual.scope != expected.scope_key
+            || actual.status != expected.status
+            || actual.depends_on != expected.depends_on
+            || actual.requested_lane.as_str() != expected.requested_lane
+            || actual.resolved_lane.as_str() != expected.resolved_lane
+            || actual.fem_marker_ids != expected.fem_marker_ids
+            || actual.fdm_cell_mask_id != expected.fdm_cell_mask_id
+        {
+            return Err(RunError {
+                message: format!(
+                    "physics_graph runtime provenance module '{}' differs from authored resolution",
+                    expected.module_id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn integrator_choice_name(integrator: fullmag_ir::IntegratorChoice) -> &'static str {
     match integrator {
         fullmag_ir::IntegratorChoice::Heun => "heun",
@@ -2068,6 +2199,7 @@ pub fn run_planned_problem(
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
@@ -2205,6 +2337,7 @@ pub fn run_planned_problem_with_hysteresis_stage_id(
     hysteresis_stage_id: Option<&str>,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(
             problem,
@@ -2370,6 +2503,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -2609,6 +2743,7 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -3132,6 +3267,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    require_physics_graph_runtime_provenance(problem, &plan)?;
     let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
         return Err(RunError {
             message:
@@ -3264,6 +3400,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    require_physics_graph_runtime_provenance(problem, &plan)?;
     let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
         return Err(RunError {
             message: "interactive FEM runtime execute path requires a FEM execution plan"
@@ -3417,6 +3554,7 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
     require_supported_fem_topology(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
@@ -3498,6 +3636,7 @@ pub fn run_planned_problem_with_interactive_runtime_live_preview_interruptible(
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
     runtime.execute_planned_streaming(
         problem,
         plan,
@@ -4251,6 +4390,44 @@ mod tests {
             assert_eq!(round_trip.requested_integrator.as_deref(), Some("auto"));
             assert_eq!(round_trip.resolved_integrator.as_deref(), Some("rk45"));
         }
+    }
+
+    #[test]
+    fn runner_requires_typed_physics_graph_provenance_for_graph_bearing_plans() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 7,
+            "modules": [{
+                "id": "current:film",
+                "kind": "current_transport",
+                "applies_to": [{"kind": "object", "object_id": "film"}],
+                "solve_domain": [{"object_id": "film"}],
+                "depends_on": [],
+                "activation": "active",
+                "authored_state": "authored",
+                "capability": "semantic_only",
+                "source_path": "/current_modules/0",
+                "family_payload": {}
+            }],
+            "edges": []
+        }));
+        let mut plan = fullmag_plan::plan(&problem).expect("graph-bearing plan");
+        assert!(require_physics_graph_runtime_provenance(&problem, &plan).is_ok());
+        plan.provenance.physics_graph = None;
+        let error = require_physics_graph_runtime_provenance(&problem, &plan)
+            .expect_err("runner must reject a graph plan without typed provenance");
+        assert!(error.message.contains("physics_graph runtime provenance"));
+
+        let mut plan = fullmag_plan::plan(&problem).expect("graph-bearing plan");
+        plan.provenance
+            .physics_graph
+            .as_mut()
+            .expect("typed graph provenance")
+            .graph_sha256 = "0".repeat(64);
+        let error = require_physics_graph_runtime_provenance(&problem, &plan)
+            .expect_err("runner must reject a stale graph digest");
+        assert!(error.message.contains("graph_sha256"));
     }
 
     fn resolved_auto_sampling_problem() -> (ProblemIR, fullmag_ir::ExecutionPlanIR) {
@@ -5356,6 +5533,7 @@ mod tests {
             provenance: fullmag_ir::ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                physics_graph: None,
             },
         };
         let unique = SystemTime::now()

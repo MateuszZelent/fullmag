@@ -1591,11 +1591,50 @@ pub struct IntegratorResolutionProvenanceIR {
     pub resolved_integrator: Option<IntegratorChoice>,
 }
 
+/// Versioned, typed provenance for the normalized physics graph carried by a
+/// resolved execution plan.  This is intentionally separate from backend
+/// solver telemetry: it records authored graph identity and lane resolution
+/// before a runner realizes operators on a concrete mesh/grid.
+pub const PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA: &str = "physics_graph.runtime.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphRuntimeProvenanceIR {
+    pub schema_version: String,
+    pub graph_sha256: String,
+    pub scene_revision: u64,
+    pub mesh_revision: u64,
+    pub requested_lane: BackendTarget,
+    pub resolved_lane: BackendTarget,
+    pub modules: Vec<PhysicsGraphModuleProvenanceIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphModuleProvenanceIR {
+    pub module_id: String,
+    pub kind: String,
+    /// Canonical, order-independent scope identity (for example
+    /// `object:free-layer` or `cross_object:fixed,free`).
+    pub scope: String,
+    pub status: String,
+    pub depends_on: Vec<String>,
+    pub requested_lane: BackendTarget,
+    pub resolved_lane: BackendTarget,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fem_marker_ids: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cell_mask_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub source_path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ProvenancePlanIR {
     pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrator_resolution: Option<IntegratorResolutionProvenanceIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics_graph: Option<PhysicsGraphRuntimeProvenanceIR>,
 }
 
 #[cfg(test)]

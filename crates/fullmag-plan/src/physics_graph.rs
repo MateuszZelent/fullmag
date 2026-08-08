@@ -1,4 +1,7 @@
-use fullmag_ir::{BackendTarget, ProblemIR};
+use fullmag_ir::{
+    BackendPlanIR, BackendTarget, PhysicsGraphModuleProvenanceIR, PhysicsGraphRuntimeProvenanceIR,
+    ProblemIR, PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +21,7 @@ pub struct ResolvedPhysicsModule {
     pub requested_lane: String,
     pub resolved_lane: String,
     pub status: String,
+    pub depends_on: Vec<String>,
     pub scope_key: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fem_marker_ids: Vec<u32>,
@@ -25,6 +29,7 @@ pub struct ResolvedPhysicsModule {
     pub fdm_cell_mask_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    pub source_path: String,
 }
 
 /// Validate the optional authored graph before backend-specific lowering.
@@ -80,6 +85,15 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
                 errors.push(format!(
                     "physics_graph.modules[{index}].{field} must be an array"
                 ));
+            }
+        }
+        if let Some(dependencies) = module_object.get("depends_on").and_then(Value::as_array) {
+            for dependency in dependencies {
+                if !dependency.is_string() {
+                    errors.push(format!(
+                        "physics_graph.modules[{index}].depends_on entries must be strings"
+                    ));
+                }
             }
         }
     }
@@ -160,9 +174,7 @@ pub fn resolve_physics_modules(
         .expect("validated physics graph modules");
     let mut resolved = Vec::with_capacity(modules.len());
     for module in modules {
-        let module_object = module
-            .as_object()
-            .expect("validated physics graph module");
+        let module_object = module.as_object().expect("validated physics graph module");
         let module_id = module_object
             .get("id")
             .and_then(Value::as_str)
@@ -189,6 +201,18 @@ pub fn resolve_physics_modules(
             .and_then(Value::as_str)
             .unwrap_or("unsupported")
             .to_string();
+        let depends_on = module_object
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .expect("validated physics graph dependencies")
+            .iter()
+            .map(|dependency| {
+                dependency
+                    .as_str()
+                    .expect("validated physics graph dependency")
+                    .to_string()
+            })
+            .collect();
         let scope_key = module_scope_key(module_object);
         let requested_lane = requested_lane(module_object, problem);
         let mut status = authored_status.clone();
@@ -219,9 +243,8 @@ pub fn resolve_physics_modules(
             }
         }
         let active = matches!(status.as_str(), "active" | "configured");
-        let marker = active.then(|| {
-            stable_marker_id(&format!("{scene_revision}:{module_id}:{scope_key}"))
-        });
+        let marker =
+            active.then(|| stable_marker_id(&format!("{scene_revision}:{module_id}:{scope_key}")));
         let fdm_cell_mask_id = (active && resolved_lane == BackendTarget::Fdm).then(|| {
             format!(
                 "physics-mask.v1:{module_id}:{}",
@@ -235,13 +258,144 @@ pub fn resolve_physics_modules(
             requested_lane,
             resolved_lane: resolved_lane.as_str().to_string(),
             status,
+            depends_on,
             scope_key,
             fem_marker_ids: marker.into_iter().collect(),
             fdm_cell_mask_id,
             reason,
+            source_path: module_object
+                .get("source_path")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         });
     }
     Ok(resolved)
+}
+
+/// Build the typed runtime provenance carried by an execution plan.  The
+/// graph is normalized once, while the mesh revision is derived from the
+/// resolved backend plan so FEM and FDM cannot accidentally report a shared
+/// topology identity.
+pub fn physics_graph_runtime_provenance(
+    problem: &ProblemIR,
+    backend_plan: &BackendPlanIR,
+) -> Result<Option<PhysicsGraphRuntimeProvenanceIR>, Vec<String>> {
+    let Some(graph) = resolve_physics_graph(problem)? else {
+        return Ok(None);
+    };
+    let resolved_lane = backend_lane(backend_plan);
+    let modules = resolve_physics_modules(problem, resolved_lane)?;
+    let mesh_revision = mesh_revision(backend_plan)?;
+    let graph_sha256 = canonical_graph_sha256(&graph)
+        .map_err(|reason| vec![format!("physics_graph runtime provenance: {reason}")])?;
+    let typed_modules = modules
+        .into_iter()
+        .map(|module| {
+            Ok(PhysicsGraphModuleProvenanceIR {
+                module_id: module.module_id,
+                kind: module.kind,
+                scope: module.scope_key,
+                status: module.status,
+                depends_on: module.depends_on,
+                requested_lane: parse_backend_lane(&module.requested_lane)?,
+                resolved_lane,
+                fem_marker_ids: module.fem_marker_ids,
+                fdm_cell_mask_id: module.fdm_cell_mask_id,
+                reason: module.reason,
+                source_path: module.source_path,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|reason| vec![format!("physics_graph runtime provenance: {reason}")])?;
+    let scene_revision = graph
+        .get("scene_revision")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    Ok(Some(PhysicsGraphRuntimeProvenanceIR {
+        schema_version: PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA.to_string(),
+        graph_sha256,
+        scene_revision,
+        mesh_revision,
+        requested_lane: problem.backend_policy.requested_backend,
+        resolved_lane,
+        modules: typed_modules,
+    }))
+}
+
+/// Return the digest used to bind a runtime plan to the exact normalized graph
+/// that produced it.  `serde_json` uses the workspace's deterministic object
+/// ordering and compact encoding, matching the Python qualification verifier.
+pub fn physics_graph_sha256(problem: &ProblemIR) -> Result<Option<String>, Vec<String>> {
+    let Some(graph) = resolve_physics_graph(problem)? else {
+        return Ok(None);
+    };
+    canonical_graph_sha256(&graph)
+        .map(Some)
+        .map_err(|reason| vec![format!("physics_graph digest: {reason}")])
+}
+
+fn canonical_graph_sha256(graph: &Value) -> Result<String, String> {
+    let bytes = serde_json::to_vec(graph)
+        .map_err(|error| format!("cannot serialize normalized graph: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn backend_lane(backend_plan: &BackendPlanIR) -> BackendTarget {
+    match backend_plan {
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => BackendTarget::Fdm,
+        BackendPlanIR::Fem(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => BackendTarget::Fem,
+    }
+}
+
+fn parse_backend_lane(value: &str) -> Result<BackendTarget, String> {
+    match value {
+        "auto" => Ok(BackendTarget::Auto),
+        "fdm" => Ok(BackendTarget::Fdm),
+        "fem" => Ok(BackendTarget::Fem),
+        "hybrid" => Ok(BackendTarget::Hybrid),
+        other => Err(format!("unknown execution lane '{other}'")),
+    }
+}
+
+fn mesh_revision(backend_plan: &BackendPlanIR) -> Result<u64, Vec<String>> {
+    let value = match backend_plan {
+        BackendPlanIR::Fdm(plan) => serde_json::json!({
+            "backend": "fdm",
+            "origin_m": plan.origin_m,
+            "grid": plan.grid,
+            "cell_size": plan.cell_size,
+            "region_mask": plan.region_mask,
+            "active_mask": plan.active_mask,
+            "grid_fingerprint": plan.grid_certificate.as_ref().map(|certificate| &certificate.grid_fingerprint),
+        }),
+        BackendPlanIR::FdmMultilayer(plan) => serde_json::json!({
+            "backend": "fdm_multilayer",
+            "common_cells": plan.common_cells,
+            "grid_fingerprint": plan.grid_certificate.as_ref().map(|certificate| &certificate.grid_fingerprint),
+            "topology_tokens": fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers),
+        }),
+        BackendPlanIR::Fem(plan) => serde_json::json!({
+            "backend": "fem",
+            "mesh": plan.mesh,
+        }),
+        BackendPlanIR::FemEigen(plan) => serde_json::json!({
+            "backend": "fem_eigen",
+            "mesh": plan.mesh,
+        }),
+        BackendPlanIR::FemFrequencyResponse(plan) => serde_json::json!({
+            "backend": "fem_frequency_response",
+            "mesh": plan.mesh,
+        }),
+    };
+    let bytes = serde_json::to_vec(&value)
+        .map_err(|error| vec![format!("cannot serialize mesh revision payload: {error}")])?;
+    let digest = Sha256::digest(bytes);
+    Ok(u64::from_be_bytes([
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+    ]))
 }
 
 /// Convert the resolved graph into compact, stable plan provenance notes.
@@ -342,7 +496,10 @@ fn scope_key(scope: &Value) -> String {
             ids.sort_unstable();
             format!("cross_object:{}", ids.join(","))
         }
-        Some(kind) => format!("{kind}:{}", serde_json::to_string(scope).unwrap_or_default()),
+        Some(kind) => format!(
+            "{kind}:{}",
+            serde_json::to_string(scope).unwrap_or_default()
+        ),
         None => "unresolved".to_string(),
     }
 }

@@ -42,8 +42,8 @@ pub use geometry::{
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 pub use physics_graph::{
-    physics_graph_provenance_notes, resolve_physics_graph, resolve_physics_modules,
-    ResolvedPhysicsModule,
+    physics_graph_provenance_notes, physics_graph_runtime_provenance, physics_graph_sha256,
+    resolve_physics_graph, resolve_physics_modules, ResolvedPhysicsModule,
 };
 pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
@@ -161,6 +161,9 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             PlanError { reasons }
         })?;
         execution_plan.provenance.notes.extend(notes);
+        execution_plan.provenance.physics_graph =
+            physics_graph_runtime_provenance(problem, &execution_plan.backend_plan)
+                .map_err(|reasons| PlanError { reasons })?;
     }
 
     Ok(execution_plan)

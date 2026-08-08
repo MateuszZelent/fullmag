@@ -1581,6 +1581,7 @@ pub(crate) fn plan_fdm(
                     resolved_integrator: integrator,
                 }
             }),
+            physics_graph: None,
         },
     })
 }
@@ -2645,6 +2646,7 @@ pub(crate) fn plan_fdm_multilayer(
                     resolved_integrator: integrator,
                 }
             }),
+            physics_graph: None,
         },
     })
 }

@@ -37,6 +37,7 @@ mod origin_tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                physics_graph: None,
             },
         };
 

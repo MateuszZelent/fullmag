@@ -3005,6 +3005,7 @@ pub(crate) fn plan_fem(
                     resolved_integrator: integrator,
                 }
             }),
+            physics_graph: None,
         },
     })
 }
@@ -3670,6 +3671,7 @@ pub(crate) fn plan_fem_eigen(
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
             integrator_resolution: None,
+            physics_graph: None,
         },
     })
 }
@@ -3898,6 +3900,7 @@ pub(crate) fn plan_fem_frequency_response(
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
             integrator_resolution: None,
+            physics_graph: None,
         },
     })
 }

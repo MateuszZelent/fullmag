@@ -4540,6 +4540,7 @@ fn execution_plan_ir_serializes() {
         provenance: ProvenancePlanIR {
             notes: vec!["planner stub".to_string()],
             integrator_resolution: None,
+            physics_graph: None,
         },
     };
 
