@@ -3608,6 +3608,10 @@ mod tests {
         assert_eq!(artifact.relative_path, PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
         assert_eq!(payload["schema_version"], "physics_graph.runtime.v1");
         assert_eq!(payload["scene_revision"], 19);
+        assert!(payload["mesh_revision"].as_u64().is_some_and(|value| value != 0));
+        assert!(payload["graph_sha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64));
         assert_eq!(payload["requested_lane"], "auto");
         assert_eq!(payload["resolved_lane"], "fem");
         assert_eq!(payload["modules"][1]["depends_on"], serde_json::json!(["current:film"]));
@@ -4987,9 +4991,15 @@ mod tests {
         let metadata_graph = &metadata["execution_provenance"]["physics_graph"];
         assert_eq!(metadata_graph["schema_version"], "physics_graph.runtime.v1");
         assert_eq!(metadata_graph["scene_revision"], 23);
+        assert!(metadata_graph["mesh_revision"].as_u64().is_some_and(|value| value != 0));
+        assert!(metadata_graph["graph_sha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64));
         assert_eq!(metadata_graph["requested_lane"], "auto");
         assert_eq!(metadata_graph["resolved_lane"], "fem");
         assert_eq!(metadata_graph["modules"][0]["module_id"], "current:film");
+        assert_eq!(metadata_graph["modules"][0]["scope"], "object:film");
+        assert_eq!(metadata_graph["modules"][0]["depends_on"], serde_json::json!([]));
 
         let artifact_path = output_dir.join(PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
         let artifact: serde_json::Value = serde_json::from_slice(
