@@ -8990,3 +8990,92 @@ Do czasu ukończenia P0–P5 obowiązują następujące twarde zakazy:
 Wynik audytu jest więc blockerem architektoniczno-fizycznym, a nie brakiem
 pojedynczego testu. Najbliższym poprawnym krokiem jest implementacja
 append-only P0/P1, po której dopiero można dodać prawdziwy test end-to-end.
+
+## 32.94. Aktualizacja wdrożenia RT0/OE-F1 po akceptacji planu (2026-08-08)
+
+Niniejsza sekcja zastępuje status z §32.93 tam, gdzie opisuje on brak
+append-only adaptera. Nie zmienia granicy kwalifikacji produkcyjnej: opisuje
+wykonany kod i dowody, ale nie awansuje capability bez bram P4/P5.
+
+### 32.94.1. Zrealizowane etapy
+
+| Etap planu | Stan | Dowód i granica |
+|---|---|---|
+| P0 — ABI append-only | **zrealizowany w kodzie** | `native/include/fullmag_fem.h` oraz `crates/fullmag-fem-sys/src/lib.rs` dodają wyłącznie nowe typy/symbole RT0 i RT0/OE-F1; istniejący `fullmag_fem_steady_transport_*_v1` pozostaje bez zmian. Layout test utrzymuje rozmiary/offsety bazowego ABI i rozszerzeń. |
+| P1 — native immutable view | **zrealizowany dla CPU/double** | `steady_transport_c_api.cpp::solve_rt0` wymaga closure, stabilnych ID, ról ścian, identity/pins i tolerancji, a następnie buduje `ConservativeCurrentView::Build`. Wynik publikuje DOF-y RT0, rekordy kanoniczne, bilanse i digesty. |
+| P2 — FFI/IR/planner | **częściowo zrealizowany** | Rust FFI, typy `ResolvedFemConservativeCurrentViewIR`, walidacja descriptoru i fail-closed preflight są obecne; `cargo check -p fullmag-runner --features fem-gpu` przechodzi z task-specific targetem. Planner nadal ustawia `conservative_current_view=None`, ponieważ nie ma jeszcze bezpiecznego źródła closure/stage snapshotu w publicznym authoringu. |
+| P3 — OE-F1/provenance | **zrealizowany jako opcjonalny adapter** | Nowy `fullmag_fem_solve_steady_transport_rt0_oersted_v1` wywołuje `DirectTetraQuadrature::Evaluate` na tym samym immutable view. Runner sprawdza digest RT0/OE-F1, skończoność, długość i publikuje diagnostykę; nie ma projekcji H1→RT0. Normalna ścieżka bez descriptoru nadal publikuje `solved_current_h1_nodal_midpoint_reference`. |
+
+### 32.94.2. Wykonany dowód zarządzany
+
+Uruchomiono autorytatywną receptę kontenerową (CPU-only, MFEM/HYPRE, bez
+hostowego CMake/binarium):
+
+```text
+PS1=x FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract
+```
+
+Wynik:
+
+```text
+fem_steady_transport_contract ............ PASS
+fem_steady_transport_abi_contract ....... PASS
+fem_steady_transport_rt0_contract ....... PASS
+```
+
+Ostatni kontrakt wykonuje rzeczywisty fixture zamkniętej geometrii: transport
+→ `ConservativeCurrentView` RT0 → bezpośrednia tetrahedralna kwadratura OE-F1.
+Sprawdza finite `H_oe`, operator
+`fem_oersted_direct_tetra_quadrature.v1`, oraz równość
+`source_view_identity_digest` i `view_identity_digest`. Jest to dowód
+wykonywalnego łańcucha natywnego CPU/double na fixture, nie dowód stage-coupled
+LLG ani produkcyjnego runtime FEM.
+
+Hostowe `cargo check` wykonano wyłącznie z task-specific katalogiem Cargo na
+`/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-master`; zapis do
+repozytoryjnego `target/` jest niedozwolony. Przebudowa hostowego managed
+bundle przez `just rebuild-fem-runtime` została uruchomiona z recepty
+kontenerowej, aby sprawdzić symbol także w artefakcie runtime. Wariant
+hash-addressed `hypre-baseline-420aa4ae9a1ee3a960f4137e062391e0ec25c0a2b2ce29550dd314a45dd17ac0`
+przeszedł `validate_managed_fem_runtime_bundle.py` (`schema-v3`, compute
+capability `8.9`, HYPRE binding `1537`), a `nm` potwierdził oba symbole RT0 i
+RT0/OE-F1. Atomowe przełączenie aliasu `fem-gpu-host` i końcowa archiwizacja
+trwały jeszcze podczas zapisu tego snapshotu przez długą procedurę prune na
+zarządzanym storage; do czasu jej zakończenia stary alias nie jest dowodem
+uruchomienia runnera.
+
+### 32.94.3. Korekta interpretacji fizycznej
+
+Nowy adapter nie rozwiązuje fizyki zamknięcia „z samego prądu”. Dla
+`closed_geometry` wymagany jest jawny source-cut i signed `potential_drop_v`; dla
+`external_lead` wymagane są lead mesh, interfejsy, elektrody i przewodność.
+`net_boundary_current_a` pozostaje metryką, nie return path. RT0 jest polem
+`H(div)` z jednostką strumienia `A`, a OE-F1 całkuje z niego `H` w `A/m` bez
+`mu_0`; odwrócenie wszystkich DOF-ów musi odwrócić pole. Zgodność digestów jest
+warunkiem publikacji, a nie substytutem zbieżności `h`/kwadratury.
+
+### 32.94.4. Pozostałe bramy P4/P5
+
+Do produkcyjnego solved-current Oersted FEM nadal brakuje:
+
+1. materializacji kompletnego descriptoru closure/stage w plannerze i
+   publicznym authoringu (bez domyślnego source-cut);
+2. testu etapowego dla RK/FSAL: dwa RHS, rejected-step rollback i final refresh,
+   z identycznym `stage_identity` prądu i magnetyzacji;
+3. niezależnej zbieżności `h`/p, singular/near/far, bilansu i energii oraz
+   porównania z FDM/MuMax/BORIS na tym samym źródle;
+4. OE-F2 na tym samym view, integracji pola z LLG i publikacji w normalnym
+   runtime, a nie tylko fixture C++;
+5. managed FEM GPU/device-resident realizacji i osobnego dowodu parity.
+
+Dlatego bieżąca ocena celu po tej iteracji wynosi:
+
+```text
+źródłowa implementacja planu P0–P3: 100% (CPU/double, opcjonalny descriptor)
+łańcuch publiczny Python/IR → closure snapshot → RT0 → OE-F1 → LLG: ~70%
+kwalifikacja produkcyjna FEM solved-current Oersted: ~45%
+```
+
+Wartości są rozdzielone celowo: zielony kontrakt natywny nie oznacza jeszcze,
+że UI/Python potrafi autoryzować fizyczne zamknięcie ani że każdy etap LLG ma
+świeży, certyfikowany prąd.

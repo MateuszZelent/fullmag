@@ -75,6 +75,15 @@ Obie bramy zakończyły się `PASS`; OE-T0 potwierdził 4/4 testy (serial, MPI
 `n=1`, MPI `n=2` i byte identity). Są to dowody managed FEM CPU i operatora
 RT0/H(div), ale nie dowód integracji RT0 z publicznym solved-current chain.
 
+Aktualizacja 2026-08-08: zarządzany kontrakt
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract`
+zakończył się `PASS` dla transportu, ABI oraz nowego transport→RT0→OE-F1.
+Ostatni test wywołuje append-only symbol OE-F1 na tym samym immutable
+`ConservativeCurrentView`, sprawdza zgodność `source_view_identity_digest` i
+publikuje skończone pole oraz diagnostykę par kwadratury. Jest to wykonywalna
+ścieżka natywna CPU/double; nie jest jeszcze dowodem planner/stage→LLG,
+kwalifikacji GPU ani produkcyjnego continuum limit.
+
 Aktualny publiczny łańcuch FEM pozostaje:
 
 ```text
@@ -86,10 +95,11 @@ OhmicPoisson one-way steady
 ```
 
 Jego jawny `source_kind` to
-`solved_current_h1_nodal_midpoint_reference`. Kontrakt przyszłego
+`solved_current_h1_nodal_midpoint_reference`. Kontrakt
 `ConservativeCurrentView` RT0/H(div), closure, stage identity i źródłowe
-digesty jest opisany w §4.6 noty 0980, ale nie został przedstawiony jako
-zaimplementowany ABI.
+digesty jest teraz realizowany przez append-only RT0/OE-F1 ABI i natywny
+adapter. Publiczny planner nadal nie materializuje closure/stage descriptoru,
+więc standardowy łańcuch pozostaje bezpiecznie na ścieżce H1/midpoint.
 
 ### 4.1 Inwentaryzacja istniejących bram i nowy verifier grafu
 
@@ -156,8 +166,9 @@ browser smoke nie zostały wykonane z powodu niekompletnego `node_modules`.
 1. Semantic typed provenance jest zaimplementowane; nadal brakuje certyfikatu
    realizacji marker/mask na konkretnej siatce/gridzie oraz managed rozróżnienia
    `resolved` od `executed_module_ids`.
-2. FEM RT0/H(div) musi zostać podłączony do publicznego solved-current Oersted
-   z closure, direct tetra oracle, kontrolą znaku/energii oraz sweepem `h`.
+2. FEM RT0/H(div) musi zostać podłączony z planner/IR do publicznego
+   solved-current Oersted i LLG, z closure, direct tetra oracle, kontrolą
+   znaku/energii oraz sweepem `h`; natywny CPU adapter jest już dostępny.
 3. FDM CPU/GPU i FEM CPU/GPU potrzebują wspólnego benchmarku ze stanem,
    konwencją znaku, `h/dt`, artefaktami i continuum limit; graph nie awansuje
    solvera.
@@ -177,7 +188,8 @@ Najwyższy uczciwy status całego celu pozostaje jednak:
 ```text
 scope graph / authoring / API / Explorer: reference_executable
 FEM bounded solved-current Oersted CPU: development_executable
-FEM RT0 end-to-end, FEM GPU, FDM cross-backend equivalence: semantic_only/open
+FEM RT0/OE-F1 native CPU/double contract: development_executable
+FEM public planner→LLG RT0, FEM GPU, FDM cross-backend equivalence: semantic_only/open
 ```
 
 Raport nie zawiera screenshotów ani wygenerowanych artefaktów runtime, ponieważ

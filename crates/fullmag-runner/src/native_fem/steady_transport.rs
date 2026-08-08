@@ -1,6 +1,9 @@
 use crate::types::{AuxiliaryArtifact, FieldSnapshot, RunError, TransportExecutionProvenance};
 use fullmag_fem_sys as ffi;
-use fullmag_ir::{FemCellTypeIR, FemPlanIR, MeshIR};
+use fullmag_ir::{
+    ConservativeCurrentBoundaryRoleIR, ConservativeCurrentClosureIR, FemCellTypeIR, FemPlanIR,
+    MeshIR, ResolvedFemConservativeCurrentViewIR,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::{CStr, CString};
@@ -104,6 +107,34 @@ pub(crate) struct NativeFemSteadyTransportResult {
     pub resolved_interface: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NativeFemSteadyTransportRt0Result {
+    pub rt0_dof_values: Vec<f64>,
+    pub canonical_face_records: Vec<([u64; 3], f64)>,
+    pub max_element_divergence_a: f64,
+    pub max_internal_face_jump_a: f64,
+    pub net_outer_flux_a: f64,
+    pub electrode_balance_relative: f64,
+    pub max_closure_interface_mismatch_a: f64,
+    pub scaled_kkt_residual: f64,
+    pub correction_norm_mw: f64,
+    pub operator_version: String,
+    pub fe_space: String,
+    pub flux_unit: String,
+    pub canonical_face_digest: String,
+    pub balance_certificate_digest: String,
+    pub view_identity_digest: String,
+    pub diagnostics: Value,
+    pub oersted_h_xyz_apm: Option<Vec<f64>>,
+    pub oersted_operator_version: Option<String>,
+    pub oersted_source_view_identity_digest: Option<String>,
+    pub oersted_source_target_pairs: Option<u64>,
+    pub oersted_refined_pairs: Option<u64>,
+    pub oersted_unconverged_pair_count: Option<u64>,
+    pub oersted_maximum_pair_error_apm: Option<f64>,
+    pub oersted_diagnostics: Option<Value>,
+}
+
 pub(crate) struct NativeFemSteadyTransportBundle {
     pub artifacts: Vec<AuxiliaryArtifact>,
     pub field_snapshots: Vec<FieldSnapshot>,
@@ -125,34 +156,97 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
     let mut provenance = Vec::with_capacity(plan.spin_transport_plans.len());
     let mut field_snapshots = Vec::new();
     let mut oersted_field_xyz: Option<Vec<f64>> = None;
+    let mut aggregate_oersted_source_kinds = Vec::new();
     for prepared in prepared {
         let resolved = prepared.resolved;
+        let oersted_targets = resolved
+            .fem_cpu_double
+            .as_ref()
+            .filter(|descriptor| descriptor.oersted_source_bound)
+            .map(|_| plan.mesh.nodes.as_slice());
+        let rt0_view = if let Some(view) = resolved
+            .fem_cpu_double
+            .as_ref()
+            .and_then(|descriptor| descriptor.conservative_current_view.as_ref())
+        {
+            Some(solve_native_fem_steady_transport_rt0(
+                &prepared.request,
+                view,
+                oersted_targets,
+            )?)
+        } else {
+            None
+        };
         let result = solve_native_fem_steady_transport(&prepared.request)?;
         let mut transport_provenance = prepared.provenance;
         let mut module_oersted_field_xyz = None;
+        if let Some(rt0) = rt0_view.as_ref() {
+            transport_provenance.conservative_current_view_identity_digest =
+                Some(rt0.view_identity_digest.clone());
+            transport_provenance.conservative_current_balance_certificate_digest =
+                Some(rt0.balance_certificate_digest.clone());
+        }
         if let Some(descriptor) = resolved.fem_cpu_double.as_ref() {
             if descriptor.oersted_source_bound {
-                let field = solved_current_midpoint_biot_savart_field(
-                    &plan.mesh,
-                    &descriptor.charge_domain.element_mask,
-                    &result.charge_current_density_xyz_apm2,
-                )?;
-                let field_sha256 = sha256_f64_slice(&field);
-                let current_sha256 = sha256_vec3_slice(&result.charge_current_density_xyz_apm2);
-                let mesh_source_sha256 = sha256_mesh_source(
-                    &plan.mesh,
-                    &descriptor.charge_domain.element_mask,
-                )?;
-                transport_provenance.oersted_source_kind =
-                    Some("solved_current_h1_nodal_midpoint_reference".into());
-                transport_provenance.oersted_source_current_sha256 = Some(current_sha256);
-                transport_provenance.oersted_mesh_source_sha256 = Some(mesh_source_sha256);
-                transport_provenance.oersted_field_sha256 = Some(field_sha256);
-                module_oersted_field_xyz = Some(field.clone());
-                add_flat_field(
-                    oersted_field_xyz.get_or_insert_with(|| vec![0.0; field.len()]),
-                    &field,
-                )?;
+                if let Some(rt0) = rt0_view.as_ref() {
+                    let field = rt0.oersted_h_xyz_apm.as_ref().ok_or_else(|| RunError {
+                        message: format!(
+                            "FEM conservative RT0 source '{}' did not publish OE-F1 field (view_identity_digest={})",
+                            resolved.current_source_id, rt0.view_identity_digest
+                        ),
+                    })?;
+                    if field.len() != plan.mesh.nodes.len() * 3 {
+                        return Err(RunError {
+                            message: format!(
+                                "FEM OE-F1 field length {} does not match {} target mesh nodes",
+                                field.len(),
+                                plan.mesh.nodes.len()
+                            ),
+                        });
+                    }
+                    if field.iter().any(|value| !value.is_finite()) {
+                        return Err(RunError {
+                            message: "FEM OE-F1 field contains a non-finite value".into(),
+                        });
+                    }
+                    let field_sha256 = sha256_f64_slice(field);
+                    transport_provenance.oersted_source_kind =
+                        Some("fem_conservative_current_rt0_view.v1".into());
+                    transport_provenance.oersted_field_sha256 = Some(field_sha256);
+                    module_oersted_field_xyz = Some(field.clone());
+                    aggregate_oersted_source_kinds.push(
+                        "fem_conservative_current_rt0_view.v1".to_string(),
+                    );
+                    add_flat_field(
+                        oersted_field_xyz.get_or_insert_with(|| vec![0.0; field.len()]),
+                        field,
+                    )?;
+                } else {
+                    let field = solved_current_midpoint_biot_savart_field(
+                        &plan.mesh,
+                        &descriptor.charge_domain.element_mask,
+                        &result.charge_current_density_xyz_apm2,
+                    )?;
+                    let field_sha256 = sha256_f64_slice(&field);
+                    let current_sha256 = sha256_vec3_slice(&result.charge_current_density_xyz_apm2);
+                    let mesh_source_sha256 = sha256_mesh_source(
+                        &plan.mesh,
+                        &descriptor.charge_domain.element_mask,
+                    )?;
+                    transport_provenance.oersted_source_kind =
+                        Some("solved_current_h1_nodal_midpoint_reference".into());
+                    transport_provenance.oersted_source_current_sha256 = Some(current_sha256);
+                    transport_provenance.oersted_mesh_source_sha256 = Some(mesh_source_sha256);
+                    transport_provenance.oersted_field_sha256 = Some(field_sha256);
+                    module_oersted_field_xyz = Some(field.clone());
+                    aggregate_oersted_source_kinds.push(
+                        "solved_current_h1_nodal_midpoint_reference".to_string(),
+                    );
+                    add_flat_field(
+                        oersted_field_xyz.get_or_insert_with(|| vec![0.0; field.len()]),
+                        &field,
+                    )?;
+                }
             }
         }
         field_snapshots.extend(transport_field_snapshots(
@@ -173,15 +267,54 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             "inserted_default_boundaries": resolved.inserted_default_boundaries,
             "descriptor": resolved.fem_cpu_double,
             "oersted": module_oersted_field_xyz.as_ref().map(|field| {
+                let direct_rt0 = rt0_view.as_ref().is_some_and(|view| {
+                    view.oersted_h_xyz_apm.is_some()
+                });
                 serde_json::json!({
-                    "source_kind": "solved_current_h1_nodal_midpoint_reference",
-                    "realization": "biot_savart_midpoint",
+                    "source_kind": if direct_rt0 {
+                        "fem_conservative_current_rt0_view.v1"
+                    } else {
+                        "solved_current_h1_nodal_midpoint_reference"
+                    },
+                    "realization": if direct_rt0 {
+                        "direct_tetra_quadrature"
+                    } else {
+                        "biot_savart_midpoint"
+                    },
                     "location": "node",
                     "component_order": "xyz",
                     "field_xyz": field,
                     "field_sha256": sha256_f64_slice(field),
                     "source_current_sha256": transport_provenance.oersted_source_current_sha256.clone(),
                     "mesh_source_sha256": transport_provenance.oersted_mesh_source_sha256.clone(),
+                    "operator_version": rt0_view.as_ref().and_then(|view| view.oersted_operator_version.clone()),
+                    "source_view_identity_digest": rt0_view.as_ref().and_then(|view| view.oersted_source_view_identity_digest.clone()),
+                    "source_target_pairs": rt0_view.as_ref().and_then(|view| view.oersted_source_target_pairs),
+                    "refined_pairs": rt0_view.as_ref().and_then(|view| view.oersted_refined_pairs),
+                    "unconverged_pair_count": rt0_view.as_ref().and_then(|view| view.oersted_unconverged_pair_count),
+                    "maximum_pair_error_apm": rt0_view.as_ref().and_then(|view| view.oersted_maximum_pair_error_apm),
+                    "diagnostics": rt0_view.as_ref().and_then(|view| view.oersted_diagnostics.clone()),
+                })
+            }),
+            "conservative_current_rt0": rt0_view.as_ref().map(|view| {
+                serde_json::json!({
+                    "source_kind": "fem_conservative_current_rt0_view.v1",
+                    "operator_version": view.operator_version,
+                    "fe_space": view.fe_space,
+                    "flux_unit": view.flux_unit,
+                    "rt0_dof_values": view.rt0_dof_values,
+                    "canonical_face_records": view.canonical_face_records.iter().map(|(ids, flux)| serde_json::json!({"face_vertex_ids": ids, "flux_a": flux})).collect::<Vec<_>>(),
+                    "max_element_divergence_a": view.max_element_divergence_a,
+                    "max_internal_face_jump_a": view.max_internal_face_jump_a,
+                    "net_outer_flux_a": view.net_outer_flux_a,
+                    "electrode_balance_relative": view.electrode_balance_relative,
+                    "max_closure_interface_mismatch_a": view.max_closure_interface_mismatch_a,
+                    "scaled_kkt_residual": view.scaled_kkt_residual,
+                    "correction_norm_mw": view.correction_norm_mw,
+                    "canonical_face_digest": view.canonical_face_digest,
+                    "balance_certificate_digest": view.balance_certificate_digest,
+                    "view_identity_digest": view.view_identity_digest,
+                    "diagnostics": view.diagnostics,
                 })
             }),
             "result": {
@@ -212,13 +345,32 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
         provenance.push(transport_provenance);
     }
     let aggregate_oersted = oersted_field_xyz.as_ref().map(|field| {
+        let direct_rt0 = aggregate_oersted_source_kinds.iter().all(|kind| {
+            kind == "fem_conservative_current_rt0_view.v1"
+        });
+        let mixed_sources = aggregate_oersted_source_kinds
+            .iter()
+            .any(|kind| kind != aggregate_oersted_source_kinds.first().unwrap_or(kind));
         serde_json::json!({
-            "source_kind": "solved_current_h1_nodal_midpoint_reference",
-            "realization": "biot_savart_midpoint",
+            "source_kind": if mixed_sources {
+                "mixed"
+            } else if direct_rt0 {
+                "fem_conservative_current_rt0_view.v1"
+            } else {
+                "solved_current_h1_nodal_midpoint_reference"
+            },
+            "realization": if mixed_sources {
+                "mixed"
+            } else if direct_rt0 {
+                "direct_tetra_quadrature"
+            } else {
+                "biot_savart_midpoint"
+            },
             "location": "node",
             "component_order": "xyz",
             "field_xyz": field,
             "field_sha256": sha256_f64_slice(field),
+            "source_kinds": aggregate_oersted_source_kinds,
         })
     });
     let bytes = serde_json::to_vec_pretty(&serde_json::json!({
@@ -584,6 +736,12 @@ fn chars(chars: &[std::os::raw::c_char]) -> String {
         .into_owned()
 }
 
+fn c_string(value: &str, label: &str) -> Result<CString, RunError> {
+    CString::new(value).map_err(|_| RunError {
+        message: format!("FEM RT0 {label} contains NUL"),
+    })
+}
+
 fn triples(values: Vec<f64>) -> Vec<[f64; 3]> {
     values
         .chunks_exact(3)
@@ -756,6 +914,518 @@ pub(crate) fn solve_native_fem_steady_transport(
         physical_residual_version: request.physical_residual_version.clone(),
         resolved_execution: "fem_cpu_double".to_string(),
         resolved_interface: "transparent_conforming_h1".to_string(),
+    })
+}
+
+/// Execute the append-only closure-aware FEM transport ABI.  This wrapper
+/// owns every pointed-to buffer for the duration of the call and returns the
+/// immutable RT0 view metadata.  When target points are supplied, the
+/// append-only OE-F1 ABI evaluates direct Biot--Savart on that same view; it
+/// never projects the legacy H1 current into RT0.
+pub(crate) fn solve_native_fem_steady_transport_rt0(
+    request: &NativeFemSteadyTransportRequest,
+    view: &ResolvedFemConservativeCurrentViewIR,
+    target_points: Option<&[[f64; 3]]>,
+) -> Result<NativeFemSteadyTransportRt0Result, RunError> {
+    // The legacy H1 preflight rejects periodic topology because its old ABI
+    // cannot represent a source cut.  The RT0 extension carries that closure
+    // explicitly, so only remove the legacy rejection while retaining every
+    // other validation gate.
+    let mut preflight_request = request.clone();
+    if matches!(
+        &view.closure,
+        ConservativeCurrentClosureIR::ClosedGeometry { .. }
+    ) {
+        preflight_request.mesh.periodic_boundary_pairs.clear();
+        preflight_request.mesh.periodic_node_pairs.clear();
+    }
+    preflight(&preflight_request)?;
+    if request.constitutive_model != NativeFemSteadyTransportConstitutiveModel::OneWay {
+        return Err(RunError {
+            message: "public FEM RT0 solved-current lane currently accepts only one-way steady transport; reciprocal M2 remains fail-closed".into(),
+        });
+    }
+    if request.mesh.nodes.len() != view.stable_vertex_ids.len() {
+        return Err(RunError {
+            message: "FEM RT0 stable vertex identity count differs from the resolved mesh".into(),
+        });
+    }
+    let flat = flatten(request);
+    let packed_mesh = super::PackedNativeMesh::new(&request.mesh);
+    let constitutive = c_string(&request.constitutive_version, "constitutive_version")?;
+    let operator = c_string(&request.operator_version, "operator_version")?;
+    let residual = c_string(&request.physical_residual_version, "physical_residual_version")?;
+    let base = ffi::fullmag_fem_steady_transport_request_v1 {
+        abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION,
+        reserved_flags: 0,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_steady_transport_request_v1>() as u64,
+        execution_lane: ffi::fullmag_fem_steady_transport_execution_lane::FULLMAG_FEM_STEADY_TRANSPORT_CPU_DOUBLE,
+        interface_model: ffi::fullmag_fem_steady_transport_interface_model::FULLMAG_FEM_STEADY_TRANSPORT_TRANSPARENT_CONFORMING_H1,
+        charge_gauge: match request.gauge {
+            NativeFemSteadyTransportGauge::BoundaryReference => ffi::fullmag_fem_steady_transport_charge_gauge::FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE,
+            NativeFemSteadyTransportGauge::ZeroMeanPotential => ffi::fullmag_fem_steady_transport_charge_gauge::FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL,
+        },
+        constitutive_version: constitutive.as_ptr(),
+        operator_version: operator.as_ptr(),
+        physical_residual_version: residual.as_ptr(),
+        mesh: packed_mesh.descriptor(&request.mesh),
+        charge_conductivity_spm_per_element: const_ptr(&request.charge_conductivity_spm_per_element),
+        charge_conductivity_spm_per_element_len: request.charge_conductivity_spm_per_element.len() as u64,
+        magnetization_xyz: const_ptr(&flat.magnetization),
+        magnetization_xyz_len: flat.magnetization.len() as u64,
+        sigma_s_spm: request.sigma_s_spm,
+        polarization_p: request.polarization_p,
+        theta_sh: request.theta_sh,
+        lambda_sf_m: request.lambda_sf_m,
+        has_lambda_j: i32::from(request.lambda_j_m.is_some()),
+        lambda_j_m: request.lambda_j_m.unwrap_or(0.0),
+        has_lambda_phi: i32::from(request.lambda_phi_m.is_some()),
+        lambda_phi_m: request.lambda_phi_m.unwrap_or(0.0),
+        gamma_e_per_ts: request.gamma_e_per_ts,
+        saturation_magnetization_apm: request.saturation_magnetization_apm,
+        relative_tolerance: request.relative_tolerance,
+        absolute_tolerance: request.absolute_tolerance,
+        maximum_iterations: request.maximum_iterations,
+        charge_dirichlet_boundary_attributes: const_ptr(&flat.charge_attributes),
+        charge_dirichlet_values_v: const_ptr(&flat.charge_values),
+        charge_dirichlet_count: flat.charge_attributes.len() as u64,
+        spin_dirichlet_boundary_attributes: const_ptr(&flat.spin_attributes),
+        spin_dirichlet_values_v: const_ptr(&flat.spin_values),
+        spin_dirichlet_count: flat.spin_attributes.len() as u64,
+    };
+
+    let c_identity_source_module_id = c_string(
+        &view.identity.source_module_id, "source_module_id")?;
+    let c_identity_source_state_revision = c_string(
+        &view.identity.source_state_revision, "source_state_revision")?;
+    let c_identity_source_field_digest = c_string(
+        &view.identity.source_field_digest, "source_field_digest")?;
+    let c_identity_conductivity_digest = c_string(
+        &view.identity.conductivity_digest, "conductivity_digest")?;
+    let c_identity_mesh_revision = c_string(&view.identity.mesh_revision, "mesh_revision")?;
+    let c_identity_topology_revision = c_string(
+        &view.identity.topology_revision, "topology_revision")?;
+    let c_identity_geometry_digest = c_string(&view.identity.geometry_digest, "geometry_digest")?;
+    let c_identity_envelope_revision = c_string(
+        &view.identity.envelope_revision, "envelope_revision")?;
+    let c_identity_envelope_digest = c_string(&view.identity.envelope_digest, "envelope_digest")?;
+    let identity = ffi::fullmag_fem_steady_transport_rt0_identity_v1 {
+        source_module_id: c_identity_source_module_id.as_ptr(),
+        source_state_revision: c_identity_source_state_revision.as_ptr(),
+        source_field_digest: c_identity_source_field_digest.as_ptr(),
+        conductivity_digest: c_identity_conductivity_digest.as_ptr(),
+        mesh_revision: c_identity_mesh_revision.as_ptr(),
+        topology_revision: c_identity_topology_revision.as_ptr(),
+        geometry_digest: c_identity_geometry_digest.as_ptr(),
+        envelope_revision: c_identity_envelope_revision.as_ptr(),
+        envelope_digest: c_identity_envelope_digest.as_ptr(),
+        evaluated_envelope_multiplier: view.identity.evaluated_envelope_multiplier,
+        evaluation_time_s: view.identity.evaluation_time_s,
+        stage_identity: view.identity.stage_identity,
+    };
+    let pins_source_state_revision = c_string(
+        &view.pins.required_source_state_revision, "required_source_state_revision")?;
+    let pins_source_field_digest = c_string(
+        &view.pins.required_source_field_digest, "required_source_field_digest")?;
+    let pins_mesh_revision = c_string(&view.pins.required_mesh_revision, "required_mesh_revision")?;
+    let pins_topology_revision = c_string(
+        &view.pins.required_topology_revision, "required_topology_revision")?;
+    let pins = ffi::fullmag_fem_steady_transport_rt0_identity_v1 {
+        source_module_id: c_identity_source_module_id.as_ptr(),
+        source_state_revision: pins_source_state_revision.as_ptr(),
+        source_field_digest: pins_source_field_digest.as_ptr(),
+        conductivity_digest: c_identity_conductivity_digest.as_ptr(),
+        mesh_revision: pins_mesh_revision.as_ptr(),
+        topology_revision: pins_topology_revision.as_ptr(),
+        geometry_digest: c_identity_geometry_digest.as_ptr(),
+        envelope_revision: c_identity_envelope_revision.as_ptr(),
+        envelope_digest: c_identity_envelope_digest.as_ptr(),
+        evaluated_envelope_multiplier: view.identity.evaluated_envelope_multiplier,
+        evaluation_time_s: view.identity.evaluation_time_s,
+        stage_identity: view.identity.stage_identity,
+    };
+    let stable_version = c_string("stable_mesh_vertex_u64.v1", "stable identity version")?;
+    let stable_vertex_identities = ffi::fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1 {
+        version: stable_version.as_ptr(),
+        local_to_stable_vertex_ids: const_ptr(&view.stable_vertex_ids),
+        local_to_stable_vertex_ids_len: view.stable_vertex_ids.len() as u64,
+    };
+
+    let boundary_circuits = view
+        .boundary_faces
+        .iter()
+        .map(|face| {
+            face.circuit_id
+                .as_deref()
+                .map(|id| c_string(id, "boundary circuit_id"))
+                .transpose()
+        })
+        .collect::<Result<Vec<Option<CString>>, _>>()?;
+    let boundary_faces = view
+        .boundary_faces
+        .iter()
+        .zip(boundary_circuits.iter())
+        .map(|(face, circuit)| ffi::fullmag_fem_steady_transport_rt0_boundary_face_v1 {
+            face_vertex_ids: face.face_vertex_ids,
+            role: match face.role {
+                ConservativeCurrentBoundaryRoleIR::InsulatingOuter => ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_INSULATING_OUTER,
+                ConservativeCurrentBoundaryRoleIR::SourceCut => ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_SOURCE_CUT,
+                ConservativeCurrentBoundaryRoleIR::ClosureInterface => ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_CLOSURE_INTERFACE,
+            },
+            circuit_id: circuit.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+        })
+        .collect::<Vec<_>>();
+
+    let mut closed_descriptor = None;
+    let mut external_descriptor = None;
+    let mut closed_source_cuts = Vec::new();
+    let mut closed_source_cut_pairs = Vec::new();
+    let mut closure_strings = Vec::new();
+    let mut lead_packed = None;
+    let mut lead_conductivity = Vec::new();
+    let mut lead_stable_version = None;
+    let mut lead_interface_pairs = Vec::new();
+    let mut lead_minus_electrodes = Vec::new();
+    let mut lead_plus_electrodes = Vec::new();
+
+    let closure_kind = match &view.closure {
+        ConservativeCurrentClosureIR::ClosedGeometry {
+            operator_version,
+            revision,
+            digest,
+            source_cuts,
+        } => {
+            closure_strings.reserve(3 + source_cuts.len());
+            closure_strings.push(c_string(operator_version, "closure operator_version")?);
+            closure_strings.push(c_string(revision, "closure revision")?);
+            closure_strings.push(c_string(digest, "closure digest")?);
+            for cut in source_cuts {
+                let cut_id = c_string(&cut.id, "source cut id")?;
+                let pairs = cut
+                    .face_pairs
+                    .iter()
+                    .map(|pair| ffi::fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1 {
+                        minus_face_vertex_ids: pair.minus_face_vertex_ids,
+                        plus_face_vertex_ids: pair.plus_face_vertex_ids,
+                    })
+                    .collect::<Vec<_>>();
+                closed_source_cut_pairs.push(pairs);
+                let pair_buffer = closed_source_cut_pairs.last().expect("just pushed");
+                closed_source_cuts.push(ffi::fullmag_fem_steady_transport_rt0_source_cut_v1 {
+                    id: cut_id.as_ptr(),
+                    translation_m: cut.translation_m,
+                    potential_drop_v: cut.potential_drop_v,
+                    face_pairs: const_ptr(pair_buffer),
+                    face_pair_count: pair_buffer.len() as u64,
+                });
+                closure_strings.push(cut_id);
+            }
+            let source_cut_closure = ffi::fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1 {
+                operator_version: closure_strings[0].as_ptr(),
+                revision: closure_strings[1].as_ptr(),
+                digest: closure_strings[2].as_ptr(),
+                source_cuts: const_ptr(&closed_source_cuts),
+                source_cut_count: closed_source_cuts.len() as u64,
+            };
+            closed_descriptor = Some(source_cut_closure);
+            ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY
+        }
+        ConservativeCurrentClosureIR::ExternalLead {
+            operator_version,
+            revision,
+            digest,
+            drive_id,
+            outer_electrode_potential_drop_v,
+            lead_mesh,
+            lead_conductivity_spm_per_element,
+            lead_stable_vertex_ids,
+            interface_pairs,
+            minus_outer_electrode_face_vertex_ids,
+            plus_outer_electrode_face_vertex_ids,
+            lead_conductivity_digest,
+        } => {
+            closure_strings.reserve(5);
+            closure_strings.push(c_string(operator_version, "closure operator_version")?);
+            closure_strings.push(c_string(revision, "closure revision")?);
+            closure_strings.push(c_string(digest, "closure digest")?);
+            closure_strings.push(c_string(drive_id, "drive_id")?);
+            closure_strings.push(c_string(lead_conductivity_digest, "lead conductivity digest")?);
+            lead_packed = Some(super::PackedNativeMesh::new(lead_mesh));
+            lead_conductivity = lead_conductivity_spm_per_element.clone();
+            let lead_version = c_string("stable_mesh_vertex_u64.v1", "lead identity version")?;
+            lead_stable_version = Some(lead_version);
+            lead_interface_pairs = interface_pairs
+                .iter()
+                .map(|(device, lead)| ffi::fullmag_fem_steady_transport_rt0_interface_pair_v1 {
+                    transport_face_vertex_ids: *device,
+                    lead_face_vertex_ids: *lead,
+                })
+                .collect();
+            lead_minus_electrodes = minus_outer_electrode_face_vertex_ids
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
+            lead_plus_electrodes = plus_outer_electrode_face_vertex_ids
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
+            let lead_packed_ref = lead_packed.as_ref().expect("lead mesh packed");
+            let lead_mesh_desc = lead_packed_ref.descriptor(lead_mesh);
+            let lead_identity = ffi::fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1 {
+                version: lead_stable_version.as_ref().expect("lead identity").as_ptr(),
+                local_to_stable_vertex_ids: const_ptr(lead_stable_vertex_ids),
+                local_to_stable_vertex_ids_len: lead_stable_vertex_ids.len() as u64,
+            };
+            let lead = ffi::fullmag_fem_steady_transport_rt0_external_lead_closure_v1 {
+                operator_version: closure_strings[0].as_ptr(),
+                revision: closure_strings[1].as_ptr(),
+                digest: closure_strings[2].as_ptr(),
+                drive_id: closure_strings[3].as_ptr(),
+                outer_electrode_potential_drop_v: *outer_electrode_potential_drop_v,
+                lead_mesh: lead_mesh_desc,
+                lead_conductivity_spm_per_element: const_ptr(&lead_conductivity),
+                lead_conductivity_spm_per_element_len: lead_conductivity.len() as u64,
+                lead_stable_vertex_identities: lead_identity,
+                interface_pairs: const_ptr(&lead_interface_pairs),
+                interface_pair_count: lead_interface_pairs.len() as u64,
+                minus_outer_electrode_face_vertex_ids: const_ptr(&lead_minus_electrodes),
+                minus_outer_electrode_face_count: (lead_minus_electrodes.len() / 3) as u64,
+                plus_outer_electrode_face_vertex_ids: const_ptr(&lead_plus_electrodes),
+                plus_outer_electrode_face_count: (lead_plus_electrodes.len() / 3) as u64,
+                lead_conductivity_digest: closure_strings[4].as_ptr(),
+            };
+            external_descriptor = Some(lead);
+            ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD
+        }
+    };
+
+    let request_ffi = ffi::fullmag_fem_steady_transport_rt0_request_v1 {
+        abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION,
+        reserved_flags: 0,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_steady_transport_rt0_request_v1>() as u64,
+        base,
+        closure_kind,
+        reserved_closure: 0,
+        identity,
+        pins,
+        stable_vertex_identities,
+        boundary_faces: const_ptr(&boundary_faces),
+        boundary_face_count: boundary_faces.len() as u64,
+        closed_geometry: closed_descriptor
+            .as_ref()
+            .map_or(ptr::null(), |value| value),
+        external_lead: external_descriptor
+            .as_ref()
+            .map_or(ptr::null(), |value| value),
+        algebraic_relative_tolerance: view.algebraic_relative_tolerance,
+        physical_relative_gate: view.physical_relative_gate,
+        physical_absolute_gate_a: view.physical_absolute_gate_a,
+        reference_mpi_gather_broadcast: i32::from(view.reference_mpi_gather_broadcast),
+    };
+    let capacity = request.mesh.cell_count().saturating_mul(4).max(1);
+    let mut rt0_dof_values = vec![0.0; capacity];
+    let mut canonical_face_records = vec![ffi::fullmag_fem_steady_transport_rt0_face_flux_record_v1 {
+        face_vertex_ids: [0; 3],
+        flux_a: f64::NAN,
+    }; capacity];
+    let mut result_ffi = ffi::fullmag_fem_steady_transport_rt0_result_v1 {
+        abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION,
+        reserved_flags: 0,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_steady_transport_rt0_result_v1>() as u64,
+        rt0_dof_values: rt0_dof_values.as_mut_ptr(),
+        rt0_dof_values_capacity: rt0_dof_values.len() as u64,
+        rt0_dof_values_len: 0,
+        canonical_face_records: canonical_face_records.as_mut_ptr(),
+        canonical_face_records_capacity: canonical_face_records.len() as u64,
+        canonical_face_records_len: 0,
+        converged: 0,
+        max_element_divergence_a: f64::NAN,
+        max_internal_face_jump_a: f64::NAN,
+        net_outer_flux_a: f64::NAN,
+        electrode_balance_relative: f64::NAN,
+        max_closure_interface_mismatch_a: f64::NAN,
+        scaled_kkt_residual: f64::NAN,
+        correction_norm_mw: f64::NAN,
+        operator_version: [0; 96],
+        fe_space: [0; 32],
+        flux_unit: [0; 16],
+        canonical_face_digest: [0; 65],
+        balance_certificate_digest: [0; 65],
+        view_identity_digest: [0; 65],
+        error_message: [0; 256],
+        diagnostics_json: [0; 1024],
+    };
+    let mut oersted_result_ffi = None;
+    let status = if let Some(target_points) = target_points {
+        let target_points_xyz = target_points
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        if target_points_xyz.iter().any(|value| !value.is_finite()) {
+            return Err(RunError {
+                message: "FEM OE-F1 target points contain a non-finite value".into(),
+            });
+        }
+        let mut h_xyz_apm = vec![0.0; target_points_xyz.len()];
+        let oersted_request = ffi::fullmag_fem_steady_transport_rt0_oersted_request_v1 {
+            abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION,
+            reserved_flags: 0,
+            struct_size: std::mem::size_of::<
+                ffi::fullmag_fem_steady_transport_rt0_oersted_request_v1,
+            >() as u64,
+            rt0: request_ffi,
+            target_points_xyz: const_ptr(&target_points_xyz),
+            target_points_xyz_len: target_points_xyz.len() as u64,
+            base_quadrature_order: 4,
+            maximum_subdivision_depth: 6,
+            absolute_tolerance_apm: 1.0e-9,
+            relative_tolerance: 1.0e-5,
+            maximum_source_target_pairs: 1_000_000,
+        };
+        let mut outer_result = ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1 {
+            abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION,
+            reserved_flags: 0,
+            struct_size: std::mem::size_of::<
+                ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1,
+            >() as u64,
+            rt0: result_ffi,
+            h_xyz_apm: h_xyz_apm.as_mut_ptr(),
+            h_xyz_apm_capacity: h_xyz_apm.len() as u64,
+            h_xyz_apm_len: 0,
+            source_target_pairs: 0,
+            refined_pairs: 0,
+            unconverged_pair_count: 0,
+            maximum_pair_error_apm: f64::NAN,
+            operator_version: [0; 96],
+            source_view_identity_digest: [0; 65],
+            error_message: [0; 256],
+            diagnostics_json: [0; 1024],
+        };
+        let status = unsafe {
+            ffi::fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+                &oersted_request,
+                &mut outer_result,
+            )
+        };
+        result_ffi = outer_result.rt0;
+        oersted_result_ffi = Some((outer_result, h_xyz_apm));
+        status
+    } else {
+        unsafe {
+            ffi::fullmag_fem_solve_steady_transport_rt0_v1(&request_ffi, &mut result_ffi)
+        }
+    };
+    if status != ffi::FULLMAG_FEM_OK {
+        let error_message = oersted_result_ffi
+            .as_ref()
+            .map(|(result, _)| chars(&result.error_message))
+            .filter(|message| !message.is_empty())
+            .unwrap_or_else(|| chars(&result_ffi.error_message));
+        return Err(RunError {
+            message: error_message,
+        });
+    }
+    if result_ffi.converged == 0
+        || result_ffi.rt0_dof_values_len > rt0_dof_values.len() as u64
+        || result_ffi.canonical_face_records_len > canonical_face_records.len() as u64
+    {
+        return Err(RunError {
+            message: "native FEM RT0 returned a non-converged or out-of-range result".into(),
+        });
+    }
+    let diagnostics_text = chars(&result_ffi.diagnostics_json);
+    let diagnostics = serde_json::from_str(&diagnostics_text).map_err(|error| RunError {
+        message: format!("invalid native FEM RT0 diagnostics JSON: {error}"),
+    })?;
+    let finite = |label: &str, value: f64| -> Result<f64, RunError> {
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(RunError { message: format!("native FEM RT0 returned non-finite {label}") })
+        }
+    };
+    let canonical_face_records = canonical_face_records
+        .into_iter()
+        .take(result_ffi.canonical_face_records_len as usize)
+        .map(|record| (record.face_vertex_ids, record.flux_a))
+        .collect();
+    let oersted = if let Some((oersted_result, h_xyz_apm)) = oersted_result_ffi {
+        if oersted_result.h_xyz_apm_len != h_xyz_apm.len() as u64
+            || oersted_result.h_xyz_apm_len > oersted_result.h_xyz_apm_capacity
+            || h_xyz_apm.iter().any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "native FEM OE-F1 returned an invalid H field buffer".into(),
+            });
+        }
+        let source_view_identity_digest = chars(&oersted_result.source_view_identity_digest);
+        if source_view_identity_digest != chars(&result_ffi.view_identity_digest) {
+            return Err(RunError {
+                message: "native FEM OE-F1 source view digest differs from the RT0 result".into(),
+            });
+        }
+        let operator_version = chars(&oersted_result.operator_version);
+        if operator_version != "fem_oersted_direct_tetra_quadrature.v1" {
+            return Err(RunError {
+                message: format!(
+                    "native FEM OE-F1 returned unexpected operator version '{operator_version}'"
+                ),
+            });
+        }
+        let diagnostics_text = chars(&oersted_result.diagnostics_json);
+        let diagnostics = serde_json::from_str(&diagnostics_text).map_err(|error| RunError {
+            message: format!("invalid native FEM OE-F1 diagnostics JSON: {error}"),
+        })?;
+        if !oersted_result.maximum_pair_error_apm.is_finite() {
+            return Err(RunError {
+                message: "native FEM OE-F1 returned a non-finite pair error".into(),
+            });
+        }
+        Some((
+            h_xyz_apm,
+            operator_version,
+            source_view_identity_digest,
+            oersted_result.source_target_pairs,
+            oersted_result.refined_pairs,
+            oersted_result.unconverged_pair_count,
+            oersted_result.maximum_pair_error_apm,
+            diagnostics,
+        ))
+    } else {
+        None
+    };
+    Ok(NativeFemSteadyTransportRt0Result {
+        rt0_dof_values: rt0_dof_values
+            .into_iter()
+            .take(result_ffi.rt0_dof_values_len as usize)
+            .map(|value| finite("RT0 DOF", value))
+            .collect::<Result<_, _>>()?,
+        canonical_face_records,
+        max_element_divergence_a: finite("element divergence", result_ffi.max_element_divergence_a)?,
+        max_internal_face_jump_a: finite("internal face jump", result_ffi.max_internal_face_jump_a)?,
+        net_outer_flux_a: finite("outer flux", result_ffi.net_outer_flux_a)?,
+        electrode_balance_relative: finite("electrode balance", result_ffi.electrode_balance_relative)?,
+        max_closure_interface_mismatch_a: finite("closure interface mismatch", result_ffi.max_closure_interface_mismatch_a)?,
+        scaled_kkt_residual: finite("scaled KKT residual", result_ffi.scaled_kkt_residual)?,
+        correction_norm_mw: finite("correction norm", result_ffi.correction_norm_mw)?,
+        operator_version: chars(&result_ffi.operator_version),
+        fe_space: chars(&result_ffi.fe_space),
+        flux_unit: chars(&result_ffi.flux_unit),
+        canonical_face_digest: chars(&result_ffi.canonical_face_digest),
+        balance_certificate_digest: chars(&result_ffi.balance_certificate_digest),
+        view_identity_digest: chars(&result_ffi.view_identity_digest),
+        diagnostics,
+        oersted_h_xyz_apm: oersted.as_ref().map(|value| value.0.clone()),
+        oersted_operator_version: oersted.as_ref().map(|value| value.1.clone()),
+        oersted_source_view_identity_digest: oersted.as_ref().map(|value| value.2.clone()),
+        oersted_source_target_pairs: oersted.as_ref().map(|value| value.3),
+        oersted_refined_pairs: oersted.as_ref().map(|value| value.4),
+        oersted_unconverged_pair_count: oersted.as_ref().map(|value| value.5),
+        oersted_maximum_pair_error_apm: oersted.as_ref().map(|value| value.6),
+        oersted_diagnostics: oersted.map(|value| value.7),
     })
 }
 
@@ -934,6 +1604,7 @@ mod tests {
                 validation_state: "algebra_validated".into(),
                 validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
                 oersted_source_bound: false,
+                conservative_current_view: None,
             }),
         }
     }

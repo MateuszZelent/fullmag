@@ -2920,10 +2920,10 @@ pub struct TransportExecutionProvenance {
     pub fallback: Option<TransportFallbackProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degradation: Option<TransportDegradationProvenance>,
-    /// Identity of a solved-current source consumed by a bounded Oersted
-    /// realization.  The optional fields are absent for transport-only runs
-    /// and remain explicitly descriptive of the current implementation slice;
-    /// they do not claim a conservative RT0/H(div) current view.
+    /// Identity of a solved-current source consumed by an Oersted realization.
+    /// The legacy midpoint lane and the append-only conservative RT0/OE-F1
+    /// lane use distinct `source_kind` values; the optional fields are absent
+    /// for transport-only runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oersted_source_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2932,6 +2932,12 @@ pub struct TransportExecutionProvenance {
     pub oersted_mesh_source_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oersted_field_sha256: Option<String>,
+    /// Identity and balance certificates of the closure-aware conservative
+    /// RT0 source. These are distinct from the legacy nodal-reference hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view_identity_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_balance_certificate_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

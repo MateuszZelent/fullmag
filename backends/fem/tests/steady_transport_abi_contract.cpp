@@ -95,7 +95,25 @@ void mixing_fails_closed_before_mesh_import()
         "mixing rejection diagnostic is missing");
 }
 
-void solved_current_oersted_public_boundary_does_not_claim_rt0()
+void rt0_extension_requires_explicit_closure_before_mesh_import()
+{
+    auto request = fullmag_fem_steady_transport_rt0_request_v1{};
+    request.abi_version = FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION;
+    request.struct_size = sizeof(request);
+    request.closure_kind = FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY;
+    request.base = base_request();
+    auto result = fullmag_fem_steady_transport_rt0_result_v1{};
+    result.abi_version = FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION;
+    result.struct_size = sizeof(result);
+
+    const int status = fullmag_fem_solve_steady_transport_rt0_v1(&request, &result);
+    require(status == FULLMAG_FEM_ERR_INVALID,
+        "RT0 extension accepted a missing closure descriptor");
+    require(std::strstr(result.error_message, "closure") != nullptr,
+        "RT0 missing-closure diagnostic is not stable");
+}
+
+void solved_current_oersted_public_boundary_exposes_append_only_rt0()
 {
     const auto root = fem_source_root();
     const auto repo = root.parent_path().parent_path();
@@ -110,9 +128,15 @@ void solved_current_oersted_public_boundary_does_not_claim_rt0()
     require(header.find("FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION 1u") != std::string::npos,
         "steady transport ABI v1 marker disappeared");
     require(runner.find("solved_current_h1_nodal_midpoint_reference") != std::string::npos,
-        "bounded runner source kind must remain explicit until RT0 integration");
-    require(runner.find("fem_conservative_current_rt0_view.v1") == std::string::npos,
-        "bounded runner must not claim an unimplemented RT0 source view");
+        "legacy H1 reference source kind must remain explicit");
+    require(runner.find("fem_conservative_current_rt0_view.v1") != std::string::npos,
+        "runner must publish the implemented RT0 source view identity");
+    require(runner.find("fullmag_fem_solve_steady_transport_rt0_oersted_v1") !=
+            std::string::npos,
+        "runner must call the append-only RT0 OE-F1 symbol");
+    require(header.find("FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION 1u") !=
+            std::string::npos,
+        "RT0 OE-F1 ABI marker disappeared");
     require(physics.find("Public ABI boundary and next append-only extension") !=
             std::string::npos,
         "physics note must freeze the public ABI blocker and next extension contract");
@@ -631,7 +655,8 @@ int main()
         wrong_abi_version_fails_before_mesh_import();
         gpu_fails_closed_before_mesh_import();
         mixing_fails_closed_before_mesh_import();
-        solved_current_oersted_public_boundary_does_not_claim_rt0();
+        rt0_extension_requires_explicit_closure_before_mesh_import();
+        solved_current_oersted_public_boundary_exposes_append_only_rt0();
         cpu_double_transparent_request_materializes_all_transport_fields();
         cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed();
         const auto affine_oracle = &cpu_double_reciprocal_m2_affine_constitutive_oracle;

@@ -3,9 +3,9 @@ set -euo pipefail
 
 scenario="${1:-}"
 case "$scenario" in
-  steady-transport|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2) ;;
+  steady-transport|steady-transport-rt0|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2) ;;
   *)
-    echo "usage: $0 {steady-transport|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2}" >&2
+    echo "usage: $0 {steady-transport|steady-transport-rt0|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2}" >&2
     exit 2
     ;;
 esac
@@ -107,8 +107,13 @@ fi
 
 case "$scenario" in
   steady-transport)
-    targets=(fem_steady_transport_contract fem_steady_transport_abi_contract)
+    targets=(fem_steady_transport_contract fem_steady_transport_abi_contract fem_steady_transport_rt0_contract)
     executables=(fem_steady_transport_contract fem_steady_transport_abi_contract)
+    executables+=(fem_steady_transport_rt0_contract)
+    ;;
+  steady-transport-rt0)
+    targets=(fem_steady_transport_rt0_contract)
+    executables=(fem_steady_transport_rt0_contract)
     ;;
   time-domain)
     targets=(

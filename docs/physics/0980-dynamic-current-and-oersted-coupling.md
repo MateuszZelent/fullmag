@@ -1039,9 +1039,11 @@ cadence. Planner verifies continuity, closure, regime, topology, PBC, method,
 lane/device/precision, cache identity, solver availability, and strict
 residency. Requested and resolved selections remain visible. Validation is
 scoped to named workload, geometry/BC, lane, precision, and frequency envelope.
-Until OE-T0, OE-F1 and OE-F2 gates are implemented, the canonical FEM direct
-tetra and vector-potential capabilities remain `semantic_only`. Existing
-cylinder or nodal midpoint execution cannot satisfy or promote them.
+Native CPU contracts for OE-T0 and OE-F1 now exist, but the canonical FEM
+direct-tetra and vector-potential capabilities still cannot be promoted from
+the ordinary cylinder or nodal-midpoint execution: planner/stage descriptor
+materialization, snapshot-consistent LLG coupling, OE-F2, GPU and production
+convergence gates remain open.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1127,7 +1129,7 @@ planner and runtime tests cover source identity, FEM M2 fail-closed behavior,
 finite/sign-reversing midpoint fields, and injection length/cylinder guards;
 managed FEM execution is still required before any qualification promotion.
 
-### 4.6. Public ABI boundary and next append-only extension (audyt 2026-08-08)
+### 4.6. Public ABI boundary and implemented append-only RT0/OE-F1 extension (audyt 2026-08-08)
 
 Audyt publicznego łańcucha wykazał, że obecny
 `fullmag_fem_steady_transport_request_v1`/`result_v1` nie może jeszcze
@@ -1141,30 +1143,35 @@ zaakceptowanego snapshotu okresowego potencjału, rewizji źródła/stage'u ani
 certyfikatu bilansu. Dodanie tych pól do istniejącego tailu v1 zmieniłoby
 `struct_size` i naruszyło kontrakt ABI.
 
-Do czasu zamknięcia poniższego rozszerzenia publiczny runner musi pozostawać
-jawnie oznaczony jako
-`solved_current_h1_nodal_midpoint_reference`. Nie wolno zmieniać tego
-`source_kind` na `fem_conservative_current_rt0_view.v1`, wywoływać OE-F1/OE-F2
-z nodalnego bufora ani promować capability FEM dynamic-Oersted. Istniejące
-managed testy `verify-fem-oersted-oet0-cpu-contract`,
-`verify-fem-oersted-oef1-cpu-contract` i
-`verify-fem-oersted-oef2-cpu-contract` dowodzą operatorów w izolacji; nie są
-dowodem połączenia transport → widok RT0 → Oersted → LLG.
+Ta granica v1 pozostaje niezmieniona: standardowy wynik transportu nadal jest
+nodalnym rzutem H1/P1 i nie może być przekazany do operatora RT0. Dodano jednak
+append-only ścieżkę `rt0_request_v1` oraz osobny symbol OE-F1. Jest ona
+aktywna wyłącznie wtedy, gdy resolved plan dostarczy kompletny descriptor
+`conservative_current_view`; brak tego descriptoru zachowuje jawny
+`solved_current_h1_nodal_midpoint_reference`. Sama obecność nowego symbolu nie
+promuje jeszcze ogólnej capability FEM dynamic-Oersted, ponieważ planner nie
+generuje automatycznie closure/stage snapshotu, a etapowe sprzężenie z LLG oraz
+OE-F2 pozostają otwarte. Managed testy operatorów i nowy natywny kontrakt
+RT0→OE-F1 są dowodem wykonania kontrolowanej ścieżki CPU/double, nie dowodem
+kwalifikacji produkcyjnego łańcucha.
 
-#### 4.6.1. Wymagany kontrakt append-only
+#### 4.6.1. Zaimplementowany kontrakt append-only
 
-Następna implementacja ma być nowym, wersjonowanym symbolem i strukturami;
+Implementacja używa nowych, wersjonowanych symboli i struktur;
 nie modyfikuje istniejących struktur ani symboli v1:
 
 ```text
 fullmag_fem_steady_transport_rt0_request_v1
 fullmag_fem_steady_transport_rt0_result_v1
 fullmag_fem_solve_steady_transport_rt0_v1(...)
+fullmag_fem_steady_transport_rt0_oersted_request_v1
+fullmag_fem_steady_transport_rt0_oersted_result_v1
+fullmag_fem_solve_steady_transport_rt0_oersted_v1(...)
 ```
 
 `request_v1` zawiera niezmieniony `base` typu
-`fullmag_fem_steady_transport_request_v1` oraz wymagany
-`conservative_source_descriptor_v1`. Descriptor musi przenosić:
+`fullmag_fem_steady_transport_request_v1` oraz wymagany zagnieżdżony
+descriptor RT0. Descriptor musi przenosić:
 
 1. `closure_kind` (`closed_geometry` albo `external_lead_extension`) oraz
    kompletny opis mesha leadu/interfejsów, jeśli wybrano drugi wariant;
@@ -1182,7 +1189,7 @@ fullmag_fem_solve_steady_transport_rt0_v1(...)
    `evaluated_envelope_multiplier`, `evaluation_time_s` i `stage_identity`;
 5. politykę tolerancji algebraicznej/fizycznej oraz jawny tryb CPU/GPU.
 
-`result_v1` musi zwrócić zarówno nodalny bufor pomocniczy (jeśli zażądany),
+`result_v1` zwraca zarówno nodalny bufor pomocniczy (jeśli zażądany),
 jak i immutable RT0 view: scalar RT0 DOFs na własnym meshu, kanoniczne rekordy
 `(face_vertex_ids[3], flux_a)` posortowane po stabilnych ID, bytes certyfikatu
 bilansu oraz pola `operator_version`, `fe_space`, `unit`,
@@ -1202,9 +1209,18 @@ po zgodności wszystkich rewizji. Wersja v1 tego rozszerzenia pozostaje
 `reference_executable` CPU/double do czasu trzech poziomów `h`, oracle
 direct-tetra, testów zamknięcia/znaku/energii i managed end-to-end.
 
-To jest kontrakt projektowy, nie zaimplementowany symbol. Do jego ukończenia
-bounded nodalny midpoint pozostaje jedyną publiczną ścieżką referencyjną i nie
-może być opisywany jako produkcyjny dynamiczny Oersted FEM.
+W kodzie natywnym `fullmag_fem_solve_steady_transport_rt0_oersted_v1` buduje
+`ConservativeCurrentView`, a następnie wywołuje
+`DirectTetraQuadrature::Evaluate` na dokładnie tym samym immutable view. Runner
+kopiuje digest widoku, digest certyfikatu bilansu, pole `H_oe` w punktach
+docelowych i diagnostykę kwadratury; sprawdza też, że digest OE-F1 jest równy
+digestowi RT0. Nie ma konwersji H1→RT0. Managed
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract`
+wykonuje trzy kontrakty transportu, ABI i RT0→OE-F1 w obrazie CPU-only
+(`FULLMAG_USE_MFEM_STACK=ON`). Jest to implementacja natywnego adaptera i
+kontraktu FFI, ale nie produkcyjna kwalifikacja: planner nadal nie wytwarza
+automatycznie closure/stage snapshotu, OE-F2, etapowego sprzężenia LLG,
+niezależnych badań `h`/airbox ani lane GPU.
 
 (validation)=
 ## 5. Validation strategy
@@ -1259,8 +1275,8 @@ at least nominal minus `0.25` in the asymptotic range.
 - [ ] Conservative FDM charge and face-to-cell publication
 - [ ] FDM direct oracle and cell-integrated CPU/CUDA FFT
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
-- [ ] OE-T0 immutable conservative RT0 view with revision/digest certificate
-- [ ] OE-F1 cutoff-free direct tetrahedral CPU-double oracle
+- [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
+- [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; multi-resolution and production gates remain open)
 - [ ] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate
 - [ ] Stage-consistent coupling, FSAL, rollback, final refresh
 - [ ] Correct external/nonvariational energy semantics
@@ -1293,6 +1309,10 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current` | runtime regression |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | artifact provenance |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_v1` | public v1 ABI boundary |
+| `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_v1` | append-only RT0/OE-F1 ABI |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and direct OE-F1 adapter |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary |
+| `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |
 | `backends/fem/tests/steady_transport_contract.cpp` | `main` | managed transport contract |
 | `backends/fem/tests/conservative_current_view_contract.cpp` | `main` | OE-T0 contract |

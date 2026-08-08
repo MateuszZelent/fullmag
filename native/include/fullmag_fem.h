@@ -690,6 +690,194 @@ typedef struct {
     double sigma_ahe_spm;
 } fullmag_fem_steady_transport_m2_request_v1;
 
+/*
+ * Append-only solved-current extension for the conservative FEM Oersted
+ * source.  The legacy M1/M2 request/result structs above are intentionally
+ * not extended: their nodal H1/P1 current remains a visualization/reference
+ * projection and can never be reinterpreted as an RT0/H(div) field.
+ */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION 1u
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_LAYOUT_FINGERPRINT \
+    "fullmag:fem-steady-transport-rt0:abi:v1:closure-identity-records"
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY 96u
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY 65u
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD = 2,
+} fullmag_fem_steady_transport_rt0_closure_kind;
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_INSULATING_OUTER = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_SOURCE_CUT = 2,
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_CLOSURE_INTERFACE = 3,
+} fullmag_fem_steady_transport_rt0_boundary_role;
+
+typedef struct {
+    uint64_t minus_face_vertex_ids[3];
+    uint64_t plus_face_vertex_ids[3];
+} fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1;
+
+typedef struct {
+    const char *id;
+    double translation_m[3];
+    double potential_drop_v;
+    const fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1 *face_pairs;
+    uint64_t face_pair_count;
+} fullmag_fem_steady_transport_rt0_source_cut_v1;
+
+typedef struct {
+    uint64_t face_vertex_ids[3];
+    uint32_t role;
+    const char *circuit_id;
+} fullmag_fem_steady_transport_rt0_boundary_face_v1;
+
+typedef struct {
+    const char *version;
+    const uint64_t *local_to_stable_vertex_ids;
+    uint64_t local_to_stable_vertex_ids_len;
+} fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1;
+
+typedef struct {
+    const char *source_module_id;
+    const char *source_state_revision;
+    const char *source_field_digest;
+    const char *conductivity_digest;
+    const char *mesh_revision;
+    const char *topology_revision;
+    const char *geometry_digest;
+    const char *envelope_revision;
+    const char *envelope_digest;
+    double evaluated_envelope_multiplier;
+    double evaluation_time_s;
+    uint64_t stage_identity;
+} fullmag_fem_steady_transport_rt0_identity_v1;
+
+typedef struct {
+    const char *operator_version;
+    const char *revision;
+    const char *digest;
+    const fullmag_fem_steady_transport_rt0_source_cut_v1 *source_cuts;
+    uint64_t source_cut_count;
+} fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1;
+
+typedef struct {
+    uint64_t transport_face_vertex_ids[3];
+    uint64_t lead_face_vertex_ids[3];
+} fullmag_fem_steady_transport_rt0_interface_pair_v1;
+
+typedef struct {
+    const char *operator_version;
+    const char *revision;
+    const char *digest;
+    const char *drive_id;
+    double outer_electrode_potential_drop_v;
+    fullmag_fem_mesh_desc lead_mesh;
+    const double *lead_conductivity_spm_per_element;
+    uint64_t lead_conductivity_spm_per_element_len;
+    fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1
+        lead_stable_vertex_identities;
+    const fullmag_fem_steady_transport_rt0_interface_pair_v1 *interface_pairs;
+    uint64_t interface_pair_count;
+    const uint64_t *minus_outer_electrode_face_vertex_ids;
+    uint64_t minus_outer_electrode_face_count;
+    const uint64_t *plus_outer_electrode_face_vertex_ids;
+    uint64_t plus_outer_electrode_face_count;
+    const char *lead_conductivity_digest;
+} fullmag_fem_steady_transport_rt0_external_lead_closure_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_request_v1 base;
+    uint32_t closure_kind;
+    uint32_t reserved_closure;
+    fullmag_fem_steady_transport_rt0_identity_v1 identity;
+    fullmag_fem_steady_transport_rt0_identity_v1 pins;
+    fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1
+        stable_vertex_identities;
+    const fullmag_fem_steady_transport_rt0_boundary_face_v1 *boundary_faces;
+    uint64_t boundary_face_count;
+    const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1
+        *closed_geometry;
+    const fullmag_fem_steady_transport_rt0_external_lead_closure_v1
+        *external_lead;
+    double algebraic_relative_tolerance;
+    double physical_relative_gate;
+    double physical_absolute_gate_a;
+    int reference_mpi_gather_broadcast;
+} fullmag_fem_steady_transport_rt0_request_v1;
+
+typedef struct {
+    uint64_t face_vertex_ids[3];
+    double flux_a;
+} fullmag_fem_steady_transport_rt0_face_flux_record_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    double *rt0_dof_values;
+    uint64_t rt0_dof_values_capacity;
+    uint64_t rt0_dof_values_len;
+    fullmag_fem_steady_transport_rt0_face_flux_record_v1 *canonical_face_records;
+    uint64_t canonical_face_records_capacity;
+    uint64_t canonical_face_records_len;
+    int converged;
+    double max_element_divergence_a;
+    double max_internal_face_jump_a;
+    double net_outer_flux_a;
+    double electrode_balance_relative;
+    double max_closure_interface_mismatch_a;
+    double scaled_kkt_residual;
+    double correction_norm_mw;
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char fe_space[32];
+    char flux_unit[16];
+    char canonical_face_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char balance_certificate_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_steady_transport_rt0_result_v1;
+
+/* Direct OE-F1 evaluation on the exact immutable RT0 view produced by the
+ * closure-aware transport extension.  This is a new symbol; the RT0 result
+ * above remains byte-for-byte stable. */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_request_v1 rt0;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    int32_t base_quadrature_order;
+    int32_t maximum_subdivision_depth;
+    double absolute_tolerance_apm;
+    double relative_tolerance;
+    uint64_t maximum_source_target_pairs;
+} fullmag_fem_steady_transport_rt0_oersted_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_result_v1 rt0;
+    double *h_xyz_apm;
+    uint64_t h_xyz_apm_capacity;
+    uint64_t h_xyz_apm_len;
+    uint64_t source_target_pairs;
+    uint64_t refined_pairs;
+    uint64_t unconverged_pair_count;
+    double maximum_pair_error_apm;
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char source_view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_steady_transport_rt0_oersted_result_v1;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t reserved_flags;
@@ -1456,6 +1644,14 @@ int fullmag_fem_solve_steady_transport_v1(
 int fullmag_fem_solve_steady_transport_m2_v1(
     const fullmag_fem_steady_transport_m2_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_rt0_v1(
+    const fullmag_fem_steady_transport_rt0_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result
 );
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 int fullmag_fem_get_frequency_domain_availability_info(

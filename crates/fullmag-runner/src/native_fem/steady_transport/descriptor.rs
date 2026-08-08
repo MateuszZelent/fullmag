@@ -5,7 +5,10 @@ use super::{
     M2_OPERATOR_VERSION, OPERATOR_VERSION, PHYSICAL_RESIDUAL_VERSION,
 };
 use crate::types::{RunError, TransportExecutionProvenance};
-use fullmag_ir::{CurrentModuleIR, FemPlanIR, ResolvedSpinTransportPlanIR};
+use fullmag_ir::{
+    ConservativeCurrentBoundaryRoleIR, ConservativeCurrentClosureIR, CurrentModuleIR, FemPlanIR,
+    ResolvedFemConservativeCurrentViewIR, ResolvedSpinTransportPlanIR,
+};
 use std::collections::BTreeSet;
 
 pub(super) struct PreparedTransportPlan<'a> {
@@ -52,12 +55,34 @@ pub(super) fn preflight_transport_plans(
             });
         }
         validate_bound_current_source_modules(&plan.current_modules, resolved)?;
+        if let Some(view) = resolved
+            .fem_cpu_double
+            .as_ref()
+            .and_then(|descriptor| descriptor.conservative_current_view.as_ref())
+        {
+            validate_conservative_current_view_descriptor(&plan.mesh, view, &resolved.module_id)?;
+        }
         let request = materialize_native_fem_steady_transport_request(
             &plan.mesh,
             &plan.initial_magnetization,
             resolved,
         )?;
-        super::preflight(&request)?;
+        let mut native_preflight_request = request.clone();
+        if resolved
+            .fem_cpu_double
+            .as_ref()
+            .and_then(|descriptor| descriptor.conservative_current_view.as_ref())
+            .is_some_and(|view| {
+                matches!(
+                    &view.closure,
+                    fullmag_ir::ConservativeCurrentClosureIR::ClosedGeometry { .. }
+                )
+            })
+        {
+            native_preflight_request.mesh.periodic_boundary_pairs.clear();
+            native_preflight_request.mesh.periodic_node_pairs.clear();
+        }
+        super::preflight(&native_preflight_request)?;
         let provenance = super::provenance::transport_provenance(resolved)?;
         prepared.push(PreparedTransportPlan {
             resolved,
@@ -66,6 +91,319 @@ pub(super) fn preflight_transport_plans(
         });
     }
     Ok(prepared)
+}
+
+fn require_rt0_text(value: &str, label: &str) -> Result<(), RunError> {
+    if value.trim().is_empty() {
+        return Err(RunError {
+            message: format!("FEM RT0 {label} must not be empty"),
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn validate_conservative_current_view_descriptor(
+    mesh: &fullmag_ir::MeshIR,
+    view: &ResolvedFemConservativeCurrentViewIR,
+    module_id: &str,
+) -> Result<(), RunError> {
+    if view.stable_vertex_ids.len() != mesh.nodes.len()
+        || view.stable_vertex_ids.iter().any(|id| *id == 0)
+        || view
+            .stable_vertex_ids
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != view.stable_vertex_ids.len()
+    {
+        return Err(RunError {
+            message: format!(
+                "FEM RT0 module '{}' has invalid stable vertex identities",
+                module_id
+            ),
+        });
+    }
+    let expected_boundary_faces = mesh
+        .facets
+        .roles
+        .iter()
+        .filter(|role| {
+            matches!(
+                role,
+                fullmag_ir::FemFacetRoleIR::Exterior
+                    | fullmag_ir::FemFacetRoleIR::PeriodicSeam
+            )
+        })
+        .count();
+    if view.boundary_faces.len() != expected_boundary_faces {
+        return Err(RunError {
+            message: format!(
+                "FEM RT0 module '{}' boundary classification has {} records, expected {}",
+                module_id,
+                view.boundary_faces.len(),
+                expected_boundary_faces
+            ),
+        });
+    }
+    let mut boundary_keys = BTreeSet::new();
+    for face in &view.boundary_faces {
+        if face.face_vertex_ids[0] == 0
+            || face.face_vertex_ids[0] >= face.face_vertex_ids[1]
+            || face.face_vertex_ids[1] >= face.face_vertex_ids[2]
+            || !boundary_keys.insert(face.face_vertex_ids)
+        {
+            return Err(RunError {
+                message: format!(
+                    "FEM RT0 module '{}' has duplicate or non-canonical boundary face IDs",
+                    module_id
+                ),
+            });
+        }
+        match face.role {
+            ConservativeCurrentBoundaryRoleIR::InsulatingOuter => {
+                if face.circuit_id.is_some() {
+                    return Err(RunError {
+                        message: format!(
+                            "FEM RT0 module '{}' insulating face carries circuit_id",
+                            module_id
+                        ),
+                    });
+                }
+            }
+            ConservativeCurrentBoundaryRoleIR::SourceCut
+            | ConservativeCurrentBoundaryRoleIR::ClosureInterface => {
+                require_rt0_text(
+                    face.circuit_id.as_deref().unwrap_or_default(),
+                    "boundary circuit_id",
+                )?;
+            }
+        }
+    }
+    for (label, value) in [
+        ("source_module_id", &view.identity.source_module_id),
+        ("source_state_revision", &view.identity.source_state_revision),
+        ("source_field_digest", &view.identity.source_field_digest),
+        ("conductivity_digest", &view.identity.conductivity_digest),
+        ("mesh_revision", &view.identity.mesh_revision),
+        ("topology_revision", &view.identity.topology_revision),
+        ("geometry_digest", &view.identity.geometry_digest),
+        ("envelope_revision", &view.identity.envelope_revision),
+        ("envelope_digest", &view.identity.envelope_digest),
+        (
+            "required_source_state_revision",
+            &view.pins.required_source_state_revision,
+        ),
+        (
+            "required_source_field_digest",
+            &view.pins.required_source_field_digest,
+        ),
+        ("required_mesh_revision", &view.pins.required_mesh_revision),
+        (
+            "required_topology_revision",
+            &view.pins.required_topology_revision,
+        ),
+    ] {
+        require_rt0_text(value, label)?;
+    }
+    if !view.identity.evaluated_envelope_multiplier.is_finite()
+        || !view.identity.evaluation_time_s.is_finite()
+        || !view.algebraic_relative_tolerance.is_finite()
+        || view.algebraic_relative_tolerance <= 0.0
+        || !view.physical_relative_gate.is_finite()
+        || view.physical_relative_gate <= 0.0
+        || !view.physical_absolute_gate_a.is_finite()
+        || view.physical_absolute_gate_a <= 0.0
+    {
+        return Err(RunError {
+            message: format!(
+                "FEM RT0 module '{}' has invalid identity or physical gates",
+                module_id
+            ),
+        });
+    }
+    match &view.closure {
+        ConservativeCurrentClosureIR::ClosedGeometry {
+            operator_version,
+            revision,
+            digest,
+            source_cuts,
+        } => {
+            require_rt0_text(operator_version, "closed-geometry operator_version")?;
+            require_rt0_text(revision, "closed-geometry revision")?;
+            require_rt0_text(digest, "closed-geometry digest")?;
+            if source_cuts.is_empty()
+                || source_cuts.iter().any(|cut| {
+                    cut.id.trim().is_empty()
+                        || cut.face_pairs.is_empty()
+                        || !cut.potential_drop_v.is_finite()
+                        || cut.translation_m.iter().all(|value| *value == 0.0)
+                })
+            {
+                return Err(RunError {
+                    message: format!(
+                        "FEM RT0 module '{}' has incomplete closed-geometry source-cut closure",
+                        module_id
+                    ),
+                });
+            }
+        }
+        ConservativeCurrentClosureIR::ExternalLead {
+            operator_version,
+            revision,
+            digest,
+            drive_id,
+            outer_electrode_potential_drop_v,
+            lead_mesh,
+            lead_conductivity_spm_per_element,
+            lead_stable_vertex_ids,
+            interface_pairs,
+            minus_outer_electrode_face_vertex_ids,
+            plus_outer_electrode_face_vertex_ids,
+            lead_conductivity_digest,
+        } => {
+            for (label, value) in [
+                ("external-lead operator_version", operator_version),
+                ("external-lead revision", revision),
+                ("external-lead digest", digest),
+                ("external-lead drive_id", drive_id),
+                ("external-lead conductivity_digest", lead_conductivity_digest),
+            ] {
+                require_rt0_text(value, label)?;
+            }
+            if !outer_electrode_potential_drop_v.is_finite()
+                || *outer_electrode_potential_drop_v == 0.0
+                || lead_stable_vertex_ids.len() != lead_mesh.nodes.len()
+                || lead_conductivity_spm_per_element.len() != lead_mesh.cell_count()
+                || lead_conductivity_spm_per_element
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+                || interface_pairs.is_empty()
+                || minus_outer_electrode_face_vertex_ids.is_empty()
+                || plus_outer_electrode_face_vertex_ids.is_empty()
+            {
+                return Err(RunError {
+                    message: format!(
+                        "FEM RT0 module '{}' has incomplete external-lead closure",
+                        module_id
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod rt0_descriptor_tests {
+    use super::*;
+    use fullmag_ir::{
+        ConservativeCurrentBoundaryFaceIR, ConservativeCurrentIdentityIR,
+        ConservativeCurrentPinsIR,
+        ConservativeCurrentSourceCutFacePairIR, ConservativeCurrentSourceCutIR,
+        FemFacetRoleIR, MeshIR,
+    };
+
+    fn mesh() -> MeshIR {
+        MeshIR::from_legacy_tet4(
+            "rt0".into(),
+            vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            vec![[0, 1, 2, 3]],
+            vec![1],
+            vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+            vec![1, 1, 1, 1],
+            vec![],
+            vec![],
+            std::collections::HashMap::new(),
+        )
+    }
+
+    fn valid_view() -> ResolvedFemConservativeCurrentViewIR {
+        ResolvedFemConservativeCurrentViewIR {
+            stable_vertex_ids: vec![10, 20, 30, 40],
+            boundary_faces: vec![
+                [10, 20, 30],
+                [10, 20, 40],
+                [10, 30, 40],
+                [20, 30, 40],
+            ]
+            .into_iter()
+            .map(|face_vertex_ids| ConservativeCurrentBoundaryFaceIR {
+                face_vertex_ids,
+                role: ConservativeCurrentBoundaryRoleIR::InsulatingOuter,
+                circuit_id: None,
+            })
+            .collect(),
+            identity: ConservativeCurrentIdentityIR {
+                source_module_id: "charge".into(),
+                source_state_revision: "state-1".into(),
+                source_field_digest: "sha256:field".into(),
+                conductivity_digest: "sha256:sigma".into(),
+                mesh_revision: "mesh-1".into(),
+                topology_revision: "topology-1".into(),
+                geometry_digest: "sha256:geometry".into(),
+                envelope_revision: "env-1".into(),
+                envelope_digest: "sha256:env".into(),
+                evaluated_envelope_multiplier: 1.0,
+                evaluation_time_s: 0.0,
+                stage_identity: 1,
+            },
+            pins: ConservativeCurrentPinsIR {
+                required_source_state_revision: "state-1".into(),
+                required_source_field_digest: "sha256:field".into(),
+                required_mesh_revision: "mesh-1".into(),
+                required_topology_revision: "topology-1".into(),
+            },
+            closure: ConservativeCurrentClosureIR::ClosedGeometry {
+                operator_version: "fem_closed_current_geometry.v1".into(),
+                revision: "closure-1".into(),
+                digest: "sha256:closure".into(),
+                source_cuts: vec![ConservativeCurrentSourceCutIR {
+                    id: "cut".into(),
+                    translation_m: [1.0, 0.0, 0.0],
+                    potential_drop_v: 1.0,
+                    face_pairs: vec![ConservativeCurrentSourceCutFacePairIR {
+                        minus_face_vertex_ids: [10, 20, 30],
+                        plus_face_vertex_ids: [10, 20, 40],
+                    }],
+                }],
+            },
+            algebraic_relative_tolerance: 1.0e-10,
+            physical_relative_gate: 1.0e-8,
+            physical_absolute_gate_a: 1.0e-12,
+            reference_mpi_gather_broadcast: false,
+        }
+    }
+
+    #[test]
+    fn complete_rt0_descriptor_is_accepted_before_native_call() {
+        let mesh = mesh();
+        validate_conservative_current_view_descriptor(&mesh, &valid_view(), "module")
+            .expect("complete RT0 descriptor should pass planner preflight");
+    }
+
+    #[test]
+    fn missing_stable_vertex_identity_is_rejected_before_native_call() {
+        let mesh = mesh();
+        let mut view = valid_view();
+        view.stable_vertex_ids[0] = 20;
+        let error = validate_conservative_current_view_descriptor(&mesh, &view, "module")
+            .expect_err("duplicate stable identity must fail closed");
+        assert!(error.message.contains("stable vertex identities"));
+    }
+
+    #[test]
+    fn non_boundary_facet_roles_are_not_accepted_as_rt0_boundary_records() {
+        let mut mesh = mesh();
+        mesh.facets.roles[0] = FemFacetRoleIR::MaterialInterface;
+        let error = validate_conservative_current_view_descriptor(&mesh, &valid_view(), "module")
+            .expect_err("boundary record cardinality must match exterior/seam topology");
+        assert!(error.message.contains("boundary classification"));
+    }
 }
 
 pub(super) fn validate_bound_current_source_modules(

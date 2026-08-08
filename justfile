@@ -519,6 +519,10 @@ verify-fem-steady-transport-cpu-only-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh steady-transport
 
+verify-fem-steady-transport-rt0-cpu-contract:
+    docker compose build fem-cpu
+    docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh steady-transport-rt0
+
 verify-fem-time-domain-cpu-only-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh time-domain

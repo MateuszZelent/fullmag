@@ -976,6 +976,7 @@ fn materialize_fem_descriptor(
                     if source == &module.current_source_id
             )
         }),
+        conservative_current_view: None,
     })
 }
 

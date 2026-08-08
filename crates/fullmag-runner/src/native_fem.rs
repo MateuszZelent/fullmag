@@ -63,9 +63,11 @@ pub(crate) use runtime_info::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
-    NativeFemSteadyTransportBundle, NativeFemSteadyTransportExecution,
+    solve_native_fem_steady_transport_rt0, NativeFemSteadyTransportBundle,
+    NativeFemSteadyTransportExecution,
     NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
     NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
+    NativeFemSteadyTransportRt0Result,
 };
 
 #[cfg(feature = "fem-gpu")]

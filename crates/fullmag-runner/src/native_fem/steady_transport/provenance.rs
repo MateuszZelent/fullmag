@@ -51,5 +51,7 @@ pub(super) fn transport_provenance(
         oersted_source_current_sha256: None,
         oersted_mesh_source_sha256: None,
         oersted_field_sha256: None,
+        conservative_current_view_identity_digest: None,
+        conservative_current_balance_certificate_digest: None,
     })
 }

@@ -589,6 +589,24 @@ if(FULLMAG_USE_MFEM_STACK)
         ${CMAKE_SOURCE_DIR}/include
     )
     add_test(NAME fem_steady_transport_abi_contract COMMAND fem_steady_transport_abi_contract)
+
+    add_executable(
+        fem_steady_transport_rt0_contract
+        tests/steady_transport_rt0_contract.cpp
+    )
+    target_link_libraries(fem_steady_transport_rt0_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_steady_transport_rt0_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_steady_transport_rt0_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_steady_transport_rt0_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_steady_transport_rt0_contract
+        COMMAND fem_steady_transport_rt0_contract
+    )
 endif()
 
 add_executable(fem_gpu_state_info tests/gpu_state_info.cpp)

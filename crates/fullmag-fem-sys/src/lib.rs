@@ -16,6 +16,13 @@ pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
 pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD: u32 = 2;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_INSULATING_OUTER: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_SOURCE_CUT: u32 = 2;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_CLOSURE_INTERFACE: u32 = 3;
 pub const FULLMAG_FEM_SOT_FORMULA_NONE: u32 = 0;
 pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
 pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
@@ -746,6 +753,194 @@ pub struct fullmag_fem_steady_transport_m2_request_v1 {
     pub sigma_parallel_spm: f64,
     pub sigma_perpendicular_spm: f64,
     pub sigma_ahe_spm: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1 {
+    pub minus_face_vertex_ids: [u64; 3],
+    pub plus_face_vertex_ids: [u64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_source_cut_v1 {
+    pub id: *const c_char,
+    pub translation_m: [f64; 3],
+    pub potential_drop_v: f64,
+    pub face_pairs: *const fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1,
+    pub face_pair_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_boundary_face_v1 {
+    pub face_vertex_ids: [u64; 3],
+    pub role: u32,
+    pub circuit_id: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1 {
+    pub version: *const c_char,
+    pub local_to_stable_vertex_ids: *const u64,
+    pub local_to_stable_vertex_ids_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_identity_v1 {
+    pub source_module_id: *const c_char,
+    pub source_state_revision: *const c_char,
+    pub source_field_digest: *const c_char,
+    pub conductivity_digest: *const c_char,
+    pub mesh_revision: *const c_char,
+    pub topology_revision: *const c_char,
+    pub geometry_digest: *const c_char,
+    pub envelope_revision: *const c_char,
+    pub envelope_digest: *const c_char,
+    pub evaluated_envelope_multiplier: f64,
+    pub evaluation_time_s: f64,
+    pub stage_identity: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1 {
+    pub operator_version: *const c_char,
+    pub revision: *const c_char,
+    pub digest: *const c_char,
+    pub source_cuts: *const fullmag_fem_steady_transport_rt0_source_cut_v1,
+    pub source_cut_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_interface_pair_v1 {
+    pub transport_face_vertex_ids: [u64; 3],
+    pub lead_face_vertex_ids: [u64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_external_lead_closure_v1 {
+    pub operator_version: *const c_char,
+    pub revision: *const c_char,
+    pub digest: *const c_char,
+    pub drive_id: *const c_char,
+    pub outer_electrode_potential_drop_v: f64,
+    pub lead_mesh: fullmag_fem_mesh_desc,
+    pub lead_conductivity_spm_per_element: *const f64,
+    pub lead_conductivity_spm_per_element_len: u64,
+    pub lead_stable_vertex_identities:
+        fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
+    pub interface_pairs: *const fullmag_fem_steady_transport_rt0_interface_pair_v1,
+    pub interface_pair_count: u64,
+    pub minus_outer_electrode_face_vertex_ids: *const u64,
+    pub minus_outer_electrode_face_count: u64,
+    pub plus_outer_electrode_face_vertex_ids: *const u64,
+    pub plus_outer_electrode_face_count: u64,
+    pub lead_conductivity_digest: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub base: fullmag_fem_steady_transport_request_v1,
+    pub closure_kind: u32,
+    pub reserved_closure: u32,
+    pub identity: fullmag_fem_steady_transport_rt0_identity_v1,
+    pub pins: fullmag_fem_steady_transport_rt0_identity_v1,
+    pub stable_vertex_identities:
+        fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
+    pub boundary_faces: *const fullmag_fem_steady_transport_rt0_boundary_face_v1,
+    pub boundary_face_count: u64,
+    pub closed_geometry:
+        *const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1,
+    pub external_lead:
+        *const fullmag_fem_steady_transport_rt0_external_lead_closure_v1,
+    pub algebraic_relative_tolerance: f64,
+    pub physical_relative_gate: f64,
+    pub physical_absolute_gate_a: f64,
+    pub reference_mpi_gather_broadcast: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_face_flux_record_v1 {
+    pub face_vertex_ids: [u64; 3],
+    pub flux_a: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub rt0_dof_values: *mut f64,
+    pub rt0_dof_values_capacity: u64,
+    pub rt0_dof_values_len: u64,
+    pub canonical_face_records:
+        *mut fullmag_fem_steady_transport_rt0_face_flux_record_v1,
+    pub canonical_face_records_capacity: u64,
+    pub canonical_face_records_len: u64,
+    pub converged: i32,
+    pub max_element_divergence_a: f64,
+    pub max_internal_face_jump_a: f64,
+    pub net_outer_flux_a: f64,
+    pub electrode_balance_relative: f64,
+    pub max_closure_interface_mismatch_a: f64,
+    pub scaled_kkt_residual: f64,
+    pub correction_norm_mw: f64,
+    pub operator_version: [c_char; 96],
+    pub fe_space: [c_char; 32],
+    pub flux_unit: [c_char; 16],
+    pub canonical_face_digest: [c_char; 65],
+    pub balance_certificate_digest: [c_char; 65],
+    pub view_identity_digest: [c_char; 65],
+    pub error_message: [c_char; 256],
+    pub diagnostics_json: [c_char; 1024],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_oersted_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub rt0: fullmag_fem_steady_transport_rt0_request_v1,
+    pub target_points_xyz: *const f64,
+    pub target_points_xyz_len: u64,
+    pub base_quadrature_order: i32,
+    pub maximum_subdivision_depth: i32,
+    pub absolute_tolerance_apm: f64,
+    pub relative_tolerance: f64,
+    pub maximum_source_target_pairs: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_oersted_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub rt0: fullmag_fem_steady_transport_rt0_result_v1,
+    pub h_xyz_apm: *mut f64,
+    pub h_xyz_apm_capacity: u64,
+    pub h_xyz_apm_len: u64,
+    pub source_target_pairs: u64,
+    pub refined_pairs: u64,
+    pub unconverged_pair_count: u64,
+    pub maximum_pair_error_apm: f64,
+    pub operator_version: [c_char; 96],
+    pub source_view_identity_digest: [c_char; 65],
+    pub error_message: [c_char; 256],
+    pub diagnostics_json: [c_char; 1024],
 }
 
 #[repr(C)]
@@ -1614,6 +1809,14 @@ extern "C" {
         request: *const fullmag_fem_steady_transport_m2_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,
     ) -> i32;
+    pub fn fullmag_fem_solve_steady_transport_rt0_v1(
+        request: *const fullmag_fem_steady_transport_rt0_request_v1,
+        result: *mut fullmag_fem_steady_transport_rt0_result_v1,
+    ) -> i32;
+    pub fn fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+        request: *const fullmag_fem_steady_transport_rt0_oersted_request_v1,
+        result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1,
+    ) -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
@@ -2237,6 +2440,93 @@ mod tests {
             std::mem::size_of::<fullmag_fem_steady_transport_m2_request_v1>()
                 >= std::mem::size_of::<fullmag_fem_steady_transport_request_v1>()
                     + 3 * std::mem::size_of::<f64>()
+        );
+    }
+
+    #[test]
+    fn steady_transport_rt0_extension_layout_is_frozen_and_append_only() {
+        assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION, 1);
+        assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY, 1);
+        assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD, 2);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_steady_transport_request_v1>(),
+            472
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_request_v1, base),
+            16
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_steady_transport_rt0_request_v1>(),
+            776
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_request_v1, identity),
+            496
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_request_v1, pins),
+            592
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_request_v1, closed_geometry),
+            728
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_steady_transport_rt0_result_v1>(),
+            1752
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_result_v1, operator_version),
+            128
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_result_v1, view_identity_digest),
+            402
+        );
+        assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_request_v1,
+                rt0
+            ),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_request_v1,
+                target_points_xyz
+            ),
+            792
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_steady_transport_rt0_oersted_request_v1>(),
+            840
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_result_v1,
+                rt0
+            ),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_result_v1,
+                operator_version
+            ),
+            1824
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_result_v1,
+                source_view_identity_digest
+            ),
+            1920
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_steady_transport_rt0_oersted_result_v1>(),
+            3272
         );
     }
 
