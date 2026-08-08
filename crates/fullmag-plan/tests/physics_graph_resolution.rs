@@ -250,6 +250,76 @@ fn planned_graph_realization_distinguishes_resolved_from_executed() {
 }
 
 #[test]
+fn fem_graph_realization_uses_concrete_mesh_element_markers() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = BackendTarget::Fem;
+    problem.physics_graph = Some(serde_json::json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 45,
+        "modules": [{
+            "id": "current:strip",
+            "kind": "current_transport",
+            "applies_to": [{"kind": "object", "object_id": "strip"}],
+            "solve_domain": [{"object_id": "strip"}],
+            "depends_on": [],
+            "activation": "active",
+            "authored_state": "authored",
+            "capability": "reference_executable",
+            "source_path": "/current_modules/0",
+            "family_payload": {}
+        }],
+        "edges": []
+    }));
+    problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: Vec::new(),
+        fem_mesh_assets: Vec::new(),
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+                element_markers: vec![1],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            object_region_markers: Vec::new(),
+            build_report: None,
+        }),
+    });
+
+    let plan = fullmag_plan::plan(&problem).expect("graph-bearing FEM plan");
+    assert!(matches!(
+        plan.backend_plan,
+        fullmag_ir::BackendPlanIR::Fem(_)
+    ));
+    let realization = plan
+        .provenance
+        .physics_graph
+        .as_ref()
+        .and_then(|provenance| provenance.realization.as_ref())
+        .expect("concrete FEM realization provenance");
+    let module = &realization.modules[0];
+    assert_eq!(module.state, PhysicsGraphRealizationStateIR::Resolved);
+    assert!(!module.realized_fem_marker_ids.is_empty());
+    assert!(module.realized_fdm_mask_digest.is_none());
+    assert!(module.realized_cell_count > 0);
+    assert!(module.topology_fingerprint.starts_with("sha256:"));
+}
+
+#[test]
 fn graph_realization_rejects_unknown_execution_observation() {
     let mut problem = ProblemIR::bootstrap_example();
     problem.backend_policy.requested_backend = BackendTarget::Fdm;

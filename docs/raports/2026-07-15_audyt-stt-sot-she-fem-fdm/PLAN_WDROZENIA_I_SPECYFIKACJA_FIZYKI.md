@@ -9314,7 +9314,7 @@ test artefaktu runnera. Zweryfikowano:
 ```text
 CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-realization \
 CARGO_INCREMENTAL=0 cargo test -p fullmag-plan --test physics_graph_resolution
-9 passed; 0 failed
+10 passed; 0 failed
 
 CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-realization \
 CARGO_INCREMENTAL=0 cargo test -p fullmag-runner \
