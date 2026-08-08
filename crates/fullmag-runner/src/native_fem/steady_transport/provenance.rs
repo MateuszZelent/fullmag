@@ -53,5 +53,11 @@ pub(super) fn transport_provenance(
         oersted_field_sha256: None,
         conservative_current_view_identity_digest: None,
         conservative_current_balance_certificate_digest: None,
+        stage_cache_policy: None,
+        stage_cache_key_digest: None,
+        stage_cache_last_observation: None,
+        stage_cache_hit_count: None,
+        stage_cache_miss_count: None,
+        stage_cache_invalidation_count: None,
     })
 }

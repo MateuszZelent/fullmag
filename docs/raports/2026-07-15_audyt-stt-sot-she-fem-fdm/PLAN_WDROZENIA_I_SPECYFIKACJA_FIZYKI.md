@@ -9003,8 +9003,8 @@ wykonany kod i dowody, ale nie awansuje capability bez bram P4/P5.
 |---|---|---|
 | P0 — ABI append-only | **zrealizowany w kodzie** | `native/include/fullmag_fem.h` oraz `crates/fullmag-fem-sys/src/lib.rs` dodają wyłącznie nowe typy/symbole RT0 i RT0/OE-F1; istniejący `fullmag_fem_steady_transport_*_v1` pozostaje bez zmian. Layout test utrzymuje rozmiary/offsety bazowego ABI i rozszerzeń. |
 | P1 — native immutable view | **zrealizowany dla CPU/double** | `steady_transport_c_api.cpp::solve_rt0` wymaga closure, stabilnych ID, ról ścian, identity/pins i tolerancji, a następnie buduje `ConservativeCurrentView::Build`. Wynik publikuje DOF-y RT0, rekordy kanoniczne, bilanse i digesty. |
-| P2 — Python → IR → planner | **zrealizowany dla `closed_geometry`** | Publiczny Python i flat-script API mają jawne typy `ConservativeCurrentView`, identity/pins, klasyfikację wszystkich ścian i source-cut; scene-document dekoder, Rust `SceneCurrentTransport`/authoring validation, OpenAPI v2 oraz panel inspektora (pełny JSON descriptoru) zachowują i walidują wszystkie pola. `ChargeTransportDefinitionIR` przenosi descriptor, planner sprawdza zgodność z mesh/stable IDs, role, piny i closure oraz odrzuca `external_lead` i M2 bez fallbacku. Test obejmuje zachowanie descriptoru przez scenę/API/UI. Stage snapshot nadal nie jest generowany automatycznie. |
-| P3 — OE-F1/provenance | **zrealizowany dla zaakceptowanego descriptoru CPU/double** | Nowy `fullmag_fem_solve_steady_transport_rt0_oersted_v1` wywołuje `DirectTetraQuadrature::Evaluate` na tym samym immutable view. Runner sprawdza digest RT0/OE-F1, skończoność, długość i publikuje diagnostykę; nie ma projekcji H1→RT0. Ścieżka bez descriptoru nadal publikuje `solved_current_h1_nodal_midpoint_reference`. |
+| P2 — Python → IR → planner | **zrealizowany dla `closed_geometry`** | Publiczny Python i flat-script API mają jawne typy `ConservativeCurrentView`, identity/pins, klasyfikację wszystkich ścian i source-cut; scene-document dekoder, Rust `SceneCurrentTransport`/authoring validation, OpenAPI v2 oraz panel inspektora (pełny JSON descriptoru) zachowują i walidują wszystkie pola. `ChargeTransportDefinitionIR` przenosi descriptor, planner sprawdza zgodność z mesh/stable IDs, role, piny i closure oraz odrzuca `external_lead` i M2 bez fallbacku. Dla jednokierunkowego `closed_geometry` planner rozwiązuje jawne `stage_coupling=steady_source_invariant.v1`; test obejmuje zachowanie descriptoru przez scenę/API/UI i odrzucenie nieobsługiwanych kombinacji. Pełny magnetization-dependent stage snapshot nadal nie jest generowany automatycznie. |
+| P3 — OE-F1/provenance | **zrealizowany dla zaakceptowanego descriptoru CPU/double** | Nowy `fullmag_fem_solve_steady_transport_rt0_oersted_v1` wywołuje `DirectTetraQuadrature::Evaluate` na tym samym immutable view. Runner sprawdza digest RT0/OE-F1, skończoność, długość i publikuje diagnostykę; nie ma projekcji H1→RT0. Dla jednokierunkowego `closed_geometry` publikuje także `steady_source_invariant.v1`, SHA-256 klucza oraz hit/miss/invalidation counters; zmiana tożsamości wymaga świeżego solve. Ścieżka bez descriptoru nadal publikuje `solved_current_h1_nodal_midpoint_reference`. |
 
 ### 32.94.2. Wykonany dowód zarządzany
 
@@ -9082,11 +9082,16 @@ warunkiem publikacji, a nie substytutem zbieżności `h`/kwadratury.
 
 Do produkcyjnego solved-current Oersted FEM nadal brakuje:
 
-1. materializacji stage-consistent descriptoru w plannerze/runtime (publiczny
-   `closed_geometry` jest już obsłużony, ale nie ma jeszcze snapshotu per etap;
-   `external_lead` pozostaje fail-closed i nie ma domyślnego source-cut);
-2. testu etapowego dla RK/FSAL: dwa RHS, rejected-step rollback i final refresh,
-   z identycznym `stage_identity` prądu i magnetyzacji;
+1. pełnej materializacji stage-consistent descriptoru w plannerze/runtime.
+   Dla jednokierunkowego `closed_geometry` istnieje już ograniczona polityka
+   `steady_source_invariant.v1`: exact-key immutable-view cache, fail-closed po
+   zmianie tożsamości i jawny final refresh. Nie jest to jeszcze snapshot
+   `J_c(m_stage)` dla magnetyzacji; `external_lead` pozostaje fail-closed i nie
+   ma domyślnego source-cut;
+2. testu etapowego dla pełnego RK/FSAL: dwa różne RHS stage, rejected-step
+   rollback i final refresh, z zgodnym `stage_identity` prądu i magnetyzacji.
+   Obecny test cache obejmuje tylko dwa odczyty tego samego immutable key oraz
+   odrzucenie zmienionej tożsamości;
 3. niezależnej zbieżności `p` (bramka `h` dla OE-F1 i certyfikat bilansu są już
    objęte kontraktami CPU), kontroli energii oraz porównania z FDM/MuMax/BORIS
    na tym samym źródle;
@@ -9098,7 +9103,7 @@ Dlatego bieżąca ocena celu po tej iteracji wynosi:
 
 ```text
 źródłowa implementacja planu P0–P3: ~100% dla CPU/double `closed_geometry`
-łańcuch publiczny Python/IR → closure descriptor → RT0 → OE-F1 → LLG: ~78%
+łańcuch publiczny Python/IR → closure descriptor → RT0 → OE-F1 → LLG: ~82%
 kwalifikacja produkcyjna FEM solved-current Oersted: ~45% (bramka OE-F1 `h` i
 bilansu zwiększa dowód numeryczny, ale nie zmienia granicy bez P4, OE-F2,
 porównania solverów i GPU)
@@ -9107,3 +9112,37 @@ porównania solverów i GPU)
 Wartości są rozdzielone celowo: zielony kontrakt natywny nie oznacza jeszcze,
 że UI/Python potrafi autoryzować fizyczne zamknięcie ani że każdy etap LLG ma
 świeży, certyfikowany prąd.
+
+## 32.95. Bramka invariant-source cache dla FEM closed_geometry (2026-08-08)
+
+Po akceptacji planu dodano najmniejszą bezpieczną gałąź P4, która nie udaje
+sprzężenia `J_c(m_stage)`. Planner rozwiązuje
+`stage_coupling=steady_source_invariant.v1` tylko wtedy, gdy jednokierunkowy,
+stacjonarny FEM CPU/double ma jawny descriptor `closed_geometry`, jest związany
+z `OerstedField`, a widok RT0/H(div) przeszedł walidację. `M2`,
+`external_lead`, brak widoku, GPU i inne kombinacje nadal są odrzucane bez
+fallbacku.
+
+`SteadySourceCacheKey` obejmuje `source_state_revision`, digest pola i
+przewodności, rewizje mesha/topologii/geometrii, envelope, closure, czas,
+wartość envelope oraz deklarowaną `stage_identity`. Klucz jest serializowany
+deterministycznie i publikowany jako SHA-256. Runner publikuje cache dopiero po
+udanym solve RT0/OE-F1; `reuse` akceptuje wyłącznie identyczny klucz i
+`view_identity_digest`, a zmiana tożsamości zwraca błąd wymagający świeżego
+solve. Artefakt/provenance zawiera politykę, digest klucza, obserwację
+hit/miss oraz liczniki hit/miss/invalidation; deklaruje też, że odrzucony
+kandydat nie jest publikowany, a zmiana klucza wymaga final refresh. Sam
+callback rejected-step w natywnym integratorze pozostaje jeszcze otwarty.
+
+Dowód zarządzany wykonano przez receptę kontenerową, bez hostowego buildu
+FEM:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-stage-cache-contract
+```
+
+Wynik: `native_fem::steady_transport::stage_cache::tests::cache_reuses_two_rhs_and_rejects_changed_final_refresh_identity ... ok`,
+`1 passed; 0 failed`. Test sprawdza pierwszy `Miss`, dwa odczyty `Hit` tego
+samego immutable view oraz fail-closed po zmianie `source_state_revision`.
+Nie jest to jeszcze dowód różnych stage identities w RK, callbacku native
+integratora, rejected-step rollback, FSAL, OE-F2, GPU ani produkcyjnego LLG.

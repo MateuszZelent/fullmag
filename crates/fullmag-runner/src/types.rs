@@ -2938,6 +2938,20 @@ pub struct TransportExecutionProvenance {
     pub conservative_current_view_identity_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conservative_current_balance_certificate_digest: Option<String>,
+    /// Explicit cache policy for a source that is invariant across magnetic
+    /// RHS stages.  This is not a magnetization-dependent stage solve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_cache_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_cache_key_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_cache_last_observation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_cache_hit_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_cache_miss_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_cache_invalidation_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

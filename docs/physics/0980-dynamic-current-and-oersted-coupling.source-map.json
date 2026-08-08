@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1 CPU/double ABI and native contract now execute when a public closed_geometry descriptor is supplied, while stage-consistent LLG coupling, external-lead closure, OE-F2, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1 CPU/double ABI and native contract now execute when a public closed_geometry descriptor is supplied, and the planner/runner now expose the exact-key steady_source_invariant.v1 cache gate. This is not magnetization-dependent RK coupling; external-lead closure, full stage coupling, OE-F2, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -60,7 +60,7 @@
       "id": "fem-transport-descriptor",
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "resolve_m1_fem_spin_transport",
-      "responsibility": "Publish the resolved FEM transport descriptor bit and fail closed for reciprocal FEM Oersted stage coupling."
+      "responsibility": "Publish the resolved FEM transport descriptor and resolve steady_source_invariant.v1 only for one-way closed_geometry Oersted; fail closed for reciprocal or unsupported stage coupling."
     },
     {
       "id": "python-conservative-current-view",
@@ -109,6 +109,12 @@
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
       "symbol": "solve_native_fem_steady_transport_rt0",
       "responsibility": "Own FFI buffers, call RT0 or RT0/OE-F1, reject digest/finite/length mismatches and publish direct-field diagnostics without H1-to-RT0 projection."
+    },
+    {
+      "id": "fem-steady-source-cache",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs",
+      "symbol": "reuse",
+      "responsibility": "Require an exact immutable source/view identity for the bounded one-way closed-geometry cache and fail closed when a fresh transport solve is required."
     },
     {
       "id": "fem-rt0-oersted-contract",
@@ -228,7 +234,7 @@
         "si_unit": "stable IDs: 1",
         "validation": "For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.",
         "meaning": "accepted RT0/H(div) source view for OE-T0/OE-F1",
-        "backend_support": "FEM CPU/double closed_geometry; external lead and stage coupling remain fail-closed",
+        "backend_support": "FEM CPU/double closed_geometry; invariant-source cache is bounded and exact-key; external lead and magnetization-dependent stage coupling remain fail-closed",
         "problem_ir": "current_modules[].conservative_current_view"
       }
     ]

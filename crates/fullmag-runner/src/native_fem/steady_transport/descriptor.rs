@@ -11,6 +11,8 @@ use fullmag_ir::{
 };
 use std::collections::BTreeSet;
 
+const STEADY_SOURCE_CACHE_POLICY: &str = "steady_source_invariant.v1";
+
 pub(super) struct PreparedTransportPlan<'a> {
     pub resolved: &'a ResolvedSpinTransportPlanIR,
     pub request: NativeFemSteadyTransportRequest,
@@ -596,6 +598,14 @@ fn resolved_fem_descriptor_contradiction(
     } else {
         matches!(descriptor.charge_solver.engine.as_str(), "auto" | "cg")
     };
+    let expected_stage_coupling = if !reciprocal
+        && descriptor.oersted_source_bound
+        && descriptor.conservative_current_view.is_some()
+    {
+        STEADY_SOURCE_CACHE_POLICY
+    } else {
+        "none"
+    };
     let reciprocal_material_valid = match (reciprocal, descriptor.reciprocal_material.as_ref()) {
         (false, None) => true,
         (true, Some(material)) => {
@@ -683,7 +693,7 @@ fn resolved_fem_descriptor_contradiction(
             .iter()
             .any(|interface| interface.law != "transparent" || reciprocal)
         || descriptor.interface_realization != "transparent_conforming_h1"
-        || descriptor.stage_coupling != "none"
+        || descriptor.stage_coupling != expected_stage_coupling
         || descriptor.capability_status != "reference_executable"
         || descriptor.implementation_state != "executable"
         || descriptor.validation_state != "algebra_validated"

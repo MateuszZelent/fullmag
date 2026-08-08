@@ -114,6 +114,15 @@ H_oe(x,t)=a(t)H_oe0(x),
 so the base maps may be cached. Magnetization-dependent conductivity, iSHE, or
 nonseparable electrodes require refresh under the selected coupling policy.
 
+The one-way steady FEM `closed_geometry` slice has an explicit, narrower cache
+policy, `steady_source_invariant.v1`. It may reuse an immutable RT0/OE-F1 view
+only when the complete source identity is unchanged: source and conductivity
+digests, mesh/topology/geometry, envelope, closure, evaluation time, evaluated
+multiplier and the declared source `stage_identity`. A SHA-256 key digest is
+published with the artifact. A changed identity requires a fresh transport
+solve before a new field can be published; this policy is not a
+magnetization-dependent `J_c(m_stage)` solve.
+
 ### 2.2 Global circuit closure
 
 Local continuity in a truncated bar with inlet and outlet is insufficient for
@@ -207,7 +216,8 @@ Pulse/PWL/tabulated inputs require finite rise time or declared
 
 ### 2.6 Stage time, accepted state, and rollback
 
-For every explicit RK RHS evaluation:
+For every explicit RK RHS evaluation in a magnetization-dependent or transient
+model:
 
 ```text
 t_stage=t_n+c_i dt,
@@ -222,6 +232,12 @@ does not publish a field, change committed revisions, or leave tentative
 transport/Oersted state as accepted. After acceptance, observables are refreshed
 at the accepted state; published `J_charge`, `H_oe`, and work/energy correspond
 to the RHS state they describe.
+
+The current FEM invariant-source gate is deliberately weaker than this full
+stage contract. It allows repeated RHS reads only for one exact immutable view
+identity and rejects a changed key; it does not yet provide a callback into the
+native RK tableau, FSAL across distinct stage identities, device rollback, or a
+magnetization-dependent refresh. Those remain qualification gates.
 
 (symbols-and-si-units)=
 ### 2.7 Symbols and SI units
@@ -1026,7 +1042,7 @@ drive = CurrentTransport(
 | `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
-| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; external lead and stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
+| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; invariant-source cache is bounded and exact-key; external lead and magnetization-dependent stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
 
 (round-trip-and-failure-semantics)=
 #### 4.1.1 Requested intent, resolved execution and failures
@@ -1070,10 +1086,12 @@ lane/device/precision, cache identity, solver availability, and strict
 residency. Requested and resolved selections remain visible. Validation is
 scoped to named workload, geometry/BC, lane, precision, and frequency envelope.
 Native CPU contracts for OE-T0 and OE-F1 now exist, and the canonical planner
-accepts the explicit closed-geometry descriptor. It still cannot promote the
-ordinary cylinder/nodal-midpoint path or any stage-coupled run: external-lead
-materialization, snapshot-consistent LLG coupling, OE-F2, GPU and production
-convergence gates remain open.
+accepts the explicit closed-geometry descriptor. For that descriptor it resolves
+`stage_coupling=steady_source_invariant.v1`; the runner validates and publishes
+the exact cache identity. This is a static-source reuse guard, not a promotion
+of the ordinary cylinder/nodal-midpoint path or a stage-coupled run:
+external-lead materialization, magnetization-dependent LLG coupling, OE-F2, GPU
+and production convergence gates remain open.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1098,6 +1116,11 @@ airbox certificate, projection identity, and work-snapshot identity. A missing
 or mismatched manifest fails closed. No generic dispatcher, `Context`, or
 `mfem_bridge.cpp` owns these algorithms: they belong to current-transport and
 Oersted subsystems under `backends/fem`.
+
+The transport provenance additionally records the invariant-source cache policy,
+key digest, last hit/miss observation and bounded hit/miss/invalidation counts.
+These counters describe an exact immutable view and must not be interpreted as
+proof of a per-RHS magnetization-dependent solve.
 
 Until the public runner consumes the immutable RT0/H(div) view, its bounded
 steady FEM reference path is intentionally versioned separately as
@@ -1159,6 +1182,27 @@ planner and runtime tests cover source identity, FEM M2 fail-closed behavior,
 finite/sign-reversing midpoint fields, and injection length/cylinder guards;
 managed FEM execution is still required before any qualification promotion.
 
+#### 4.5.1. Invariant-source stage cache (implemented bounded gate)
+
+For a one-way steady Ohmic plan with an explicit `closed_geometry` RT0 view, the
+planner resolves `stage_coupling=steady_source_invariant.v1`. The runner builds
+`SteadySourceCacheKey` from the source, conductivity, mesh, topology, geometry,
+envelope, closure, evaluation-time, multiplier and declared stage identities,
+and publishes its SHA-256 digest with the transport artifact. The first
+successful RT0/OE-F1 solve is a cache miss; subsequent reads are accepted only
+when both the key and `view_identity_digest` match exactly. A changed identity
+returns a fail-closed error until a fresh transport solve is completed. The
+artifact declares the policy that rejected candidates do not publish and that
+a final refresh is required after a key change; the native rejected-step
+callback is still open.
+
+This gate protects the static one-way source already injected before native LLG;
+it is not a callback that solves transport for each magnetization stage. It does
+not yet prove RK4/RK23/RK45 or FSAL across distinct stage identities, device
+rollback, external-lead closure, reciprocal M2, OE-F2, or GPU execution. The
+capability therefore remains `development_executable`/`semantic_only` as
+documented in the matrix.
+
 ### 4.6. Public ABI boundary and implemented append-only RT0/OE-F1 extension (audyt 2026-08-08)
 
 Audyt publicznego łańcucha wykazał, że obecny
@@ -1180,8 +1224,10 @@ aktywna wyłącznie wtedy, gdy resolved plan dostarczy kompletny descriptor
 `conservative_current_view`; brak tego descriptoru zachowuje jawny
 `solved_current_h1_nodal_midpoint_reference`. Sama obecność nowego symbolu nie
 promuje jeszcze ogólnej capability FEM dynamic-Oersted. Planner akceptuje
-wyłącznie jawnie dostarczony `closed_geometry`; nie generuje automatycznie
-closure/stage snapshotu, a etapowe sprzężenie z LLG oraz OE-F2 pozostają otwarte.
+wyłącznie jawnie dostarczony `closed_geometry` i dla niego deklaruje tylko
+`steady_source_invariant.v1`; nie generuje automatycznie
+magnetization-dependent stage snapshotu. Pełne etapowe sprzężenie z LLG oraz
+OE-F2 pozostają otwarte.
 Managed testy operatorów i nowy natywny kontrakt
 RT0→OE-F1 są dowodem wykonania kontrolowanej ścieżki CPU/double, nie dowodem
 kwalifikacji produkcyjnego łańcucha.
@@ -1314,7 +1360,8 @@ at least nominal minus `0.25` in the asymptotic range.
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
 - [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; h-refinement and balance gates for RT0/OE-F1 are covered; p, cross-backend and production gates remain open)
 - [ ] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate
-- [ ] Stage-consistent coupling, FSAL, rollback, final refresh
+- [x] Invariant-source cache gate for one-way closed_geometry (exact-key RHS reuse and changed-identity rejection)
+- [ ] Magnetization-dependent stage coupling, FSAL, rollback, final refresh
 - [ ] Correct external/nonvariational energy semantics
 - [ ] Quantities, provenance, typed API, and UI inspectors
 - [ ] Cross-backend convergence and managed/browser proof
@@ -1352,6 +1399,7 @@ evidence that the approximation is accurate.
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
 | `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary |
+| `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |
 | `backends/fem/tests/steady_transport_contract.cpp` | `main` | managed transport contract |

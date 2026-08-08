@@ -19,9 +19,13 @@ const PHYSICAL_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
 mod descriptor;
 mod provenance;
 mod publication;
+mod stage_cache;
 
 use descriptor::preflight_transport_plans;
 use publication::transport_field_snapshots;
+use stage_cache::{
+    validate_plan as validate_stage_cache_plan, SteadySourceCache, STEADY_SOURCE_CACHE_POLICY,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeFemSteadyTransportExecution {
@@ -157,8 +161,10 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
     let mut field_snapshots = Vec::new();
     let mut oersted_field_xyz: Option<Vec<f64>> = None;
     let mut aggregate_oersted_source_kinds = Vec::new();
+    let mut steady_source_cache = SteadySourceCache::default();
     for prepared in prepared {
         let resolved = prepared.resolved;
+        let stage_cache_key = validate_stage_cache_plan(resolved)?;
         let oersted_targets = resolved
             .fem_cpu_double
             .as_ref()
@@ -185,6 +191,26 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                 Some(rt0.view_identity_digest.clone());
             transport_provenance.conservative_current_balance_certificate_digest =
                 Some(rt0.balance_certificate_digest.clone());
+            if let Some(key) = stage_cache_key.as_ref() {
+                let _initial_observation = steady_source_cache.publish_solve(
+                    key.clone(),
+                    rt0.view_identity_digest.clone(),
+                )?;
+                // The native FEM integrator consumes this immutable field on
+                // every RHS.  Bind the first RHS explicitly so a future
+                // stage callback cannot silently reuse a changed source.
+                let observation = steady_source_cache
+                    .reuse(key, &rt0.view_identity_digest)?;
+                transport_provenance.stage_cache_policy =
+                    Some(STEADY_SOURCE_CACHE_POLICY.into());
+                transport_provenance.stage_cache_key_digest = Some(key.digest());
+                transport_provenance.stage_cache_last_observation =
+                    Some(format!("{observation:?}").to_ascii_lowercase());
+                transport_provenance.stage_cache_hit_count = Some(steady_source_cache.hits());
+                transport_provenance.stage_cache_miss_count = Some(steady_source_cache.misses());
+                transport_provenance.stage_cache_invalidation_count =
+                    Some(steady_source_cache.invalidations());
+            }
         }
         if let Some(descriptor) = resolved.fem_cpu_double.as_ref() {
             if descriptor.oersted_source_bound {
@@ -266,6 +292,16 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             "capabilities": resolved.capabilities,
             "inserted_default_boundaries": resolved.inserted_default_boundaries,
             "descriptor": resolved.fem_cpu_double,
+            "stage_cache": stage_cache_key.as_ref().map(|key| serde_json::json!({
+                "policy": STEADY_SOURCE_CACHE_POLICY,
+                "key_digest": key.digest(),
+                "rhs_reuse": "same immutable source view for every magnetic RHS",
+                "rejected_step": "does_not_publish",
+                "final_refresh": "required_if_key_changes",
+                "hit_count": steady_source_cache.hits(),
+                "miss_count": steady_source_cache.misses(),
+                "invalidation_count": steady_source_cache.invalidations(),
+            })),
             "oersted": module_oersted_field_xyz.as_ref().map(|field| {
                 let direct_rt0 = rt0_view.as_ref().is_some_and(|view| {
                     view.oersted_h_xyz_apm.is_some()

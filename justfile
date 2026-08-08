@@ -523,6 +523,14 @@ verify-fem-steady-transport-rt0-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh steady-transport-rt0
 
+# Stage-consistency gate for the physically invariant one-way closed source.
+# The managed runner test exercises two RHS reuses and rejects a changed
+# source identity; magnetization-dependent M2 and external-lead coupling stay
+# fail-closed.
+verify-fem-steady-transport-stage-cache-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-steady-transport-stage-cache CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::stage_cache::tests::cache_reuses_two_rhs_and_rejects_changed_final_refresh_identity -- --exact --nocapture'
+
 verify-fem-time-domain-cpu-only-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh time-domain

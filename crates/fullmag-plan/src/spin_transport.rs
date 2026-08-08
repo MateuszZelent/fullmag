@@ -17,6 +17,20 @@ use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use crate::surface_selectors::resolve_fem_surface_selector;
 use crate::PlanError;
 
+const FEM_STEADY_SOURCE_CACHE_POLICY: &str = "steady_source_invariant.v1";
+
+fn resolve_fem_stage_coupling(
+    reciprocal: bool,
+    oersted_source_bound: bool,
+    conservative_current_view: Option<&fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
+) -> &'static str {
+    if !reciprocal && oersted_source_bound && conservative_current_view.is_some() {
+        FEM_STEADY_SOURCE_CACHE_POLICY
+    } else {
+        "none"
+    }
+}
+
 pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub owner_names: &'a [&'a str],
     pub grid_cells: [u32; 3],
@@ -924,6 +938,18 @@ fn materialize_fem_descriptor(
                 .into(),
         ]);
     }
+    let oersted_source_bound = problem.energy_terms.iter().any(|term| {
+        matches!(
+            term,
+            fullmag_ir::EnergyTermIR::OerstedField { source, .. }
+                if source == &module.current_source_id
+        )
+    });
+    let stage_coupling = resolve_fem_stage_coupling(
+        reciprocal,
+        oersted_source_bound,
+        conservative_current_view.as_ref(),
+    );
     const MU0_H_PER_M: f64 = 1.256_637_061_435_917_3e-6;
     Ok(ResolvedFemSpinTransportIR {
         descriptor_schema: if reciprocal {
@@ -967,7 +993,7 @@ fn materialize_fem_descriptor(
         resolved_spin_engine: "gmres".into(),
         interface_law: "transparent".into(),
         interface_realization: "transparent_conforming_h1".into(),
-        stage_coupling: "none".into(),
+        stage_coupling: stage_coupling.into(),
         capability_status: "reference_executable".into(),
         implementation_state: "executable".into(),
         validation_state: "algebra_validated".into(),
@@ -976,13 +1002,7 @@ fn materialize_fem_descriptor(
         } else {
             "fem_cpu_double_conforming_h1_p1_transparent_m1".into()
         },
-        oersted_source_bound: problem.energy_terms.iter().any(|term| {
-            matches!(
-                term,
-                fullmag_ir::EnergyTermIR::OerstedField { source, .. }
-                    if source == &module.current_source_id
-            )
-        }),
+        oersted_source_bound,
         conservative_current_view,
     })
 }
@@ -3584,6 +3604,17 @@ mod tests {
         )
         .expect("valid RT0 view should lower");
         assert_eq!(resolved, Some(view));
+    }
+
+    #[test]
+    fn closed_one_way_oersted_view_resolves_to_invariant_source_cache() {
+        let (_, view) = valid_rt0_view_for_planner();
+        assert_eq!(
+            resolve_fem_stage_coupling(false, true, Some(&view)),
+            FEM_STEADY_SOURCE_CACHE_POLICY
+        );
+        assert_eq!(resolve_fem_stage_coupling(false, false, Some(&view)), "none");
+        assert_eq!(resolve_fem_stage_coupling(true, true, Some(&view)), "none");
     }
 
     #[test]
