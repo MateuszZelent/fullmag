@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -239,6 +240,69 @@ void vector_potential_exact_sequence_contract()
             result.compatible_h_dofs_apm.size() &&
             !result.compatible_b_dofs_t.empty(),
         "OE-F2 did not publish compatible RT0 B/H fields");
+
+    // Independent target-space/energy gate. Do not infer the scalar gauge
+    // boundary condition from the mixed residual: reconstruct the returned
+    // H1 field and inspect the boundary true DOFs directly.
+    mfem::H1_FECollection h1_fec(1, 3);
+    mfem::FiniteElementSpace h1_space(&mesh, &h1_fec);
+    require(static_cast<int>(result.gauge_dofs_apm.size()) ==
+            h1_space.GetVSize(),
+        "OE-F2 gauge payload does not match the H1 target space");
+    mfem::GridFunction gauge(&h1_space);
+    std::copy(result.gauge_dofs_apm.begin(), result.gauge_dofs_apm.end(),
+        gauge.GetData());
+    mfem::Array<int> boundary_true_dofs;
+    h1_space.GetBoundaryTrueDofs(boundary_true_dofs);
+    double maximum_boundary_gauge = 0.0;
+    for (int index = 0; index < boundary_true_dofs.Size(); ++index) {
+        maximum_boundary_gauge = std::max(maximum_boundary_gauge,
+            std::abs(gauge[boundary_true_dofs[index]]));
+    }
+    require(std::isfinite(maximum_boundary_gauge) &&
+            maximum_boundary_gauge <= 1.0e-12,
+        "OE-F2 H1_0 target-space gauge is nonzero on the boundary");
+
+    // The source-potential pairing is a separate energy diagnostic. It is not
+    // the LLG Zeeman/work observable; it checks the positive quadratic form
+    // of the linear magnetostatic source solve without reusing solver
+    // residuals or the returned diagnostic norm.
+    mfem::ND_FECollection nd_fec(1, 3);
+    mfem::FiniteElementSpace nd_space(&mesh, &nd_fec);
+    require(static_cast<int>(result.a_dofs_t_m.size()) == nd_space.GetVSize(),
+        "OE-F2 vector-potential payload does not match the ND target space");
+    mfem::GridFunction vector_potential(&nd_space);
+    std::copy(result.a_dofs_t_m.begin(), result.a_dofs_t_m.end(),
+        vector_potential.GetData());
+    const mfem::IntegrationRule &rule = mfem::IntRules.Get(
+        mfem::Geometry::TETRAHEDRON, 4);
+    double source_potential_pairing = 0.0;
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        auto *transformation = mesh.GetElementTransformation(element);
+        mfem::Vector source_value(3);
+        mfem::Vector potential_value(3);
+        for (int point = 0; point < rule.GetNPoints(); ++point) {
+            const auto &integration_point = rule.IntPoint(point);
+            transformation->SetIntPoint(&integration_point);
+            current->field().GetVectorValue(
+                *transformation, integration_point, source_value);
+            vector_potential.GetVectorValue(
+                *transformation, integration_point, potential_value);
+            const double integrand = source_value * potential_value;
+            require(std::isfinite(integrand),
+                "OE-F2 source-potential integrand is non-finite");
+            source_potential_pairing += 0.5 * integrand *
+                transformation->Weight() * integration_point.weight;
+        }
+    }
+    require(std::isfinite(source_potential_pairing) &&
+            source_potential_pairing > 0.0,
+        "OE-F2 source-potential energy diagnostic is not finite and positive");
+    std::cout << std::setprecision(17)
+              << "OE-F2 target-space max boundary |p|="
+              << maximum_boundary_gauge
+              << " source-potential energy W_J="
+              << source_potential_pairing << "\n";
 
     VectorPotentialOptions unsupported = options;
     unsupported.boundary_gauge_variant = "natural_curl_zero_mean_h1.v1";

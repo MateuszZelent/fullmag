@@ -966,6 +966,18 @@ runtime gates are independently measured.  On any failed call, payload lengths,
 status, numeric certificates and identity strings are cleared before the error
 is returned; consumers must treat `converged == 0` as non-publishable.
 
+The first independent diagnostic gate is deliberately narrower than a
+production work observable.  It reconstructs the returned scalar coefficients
+in the same `H^1_0` target space and checks every boundary true DOF of
+`p_gauge` against the declared zero trace.  On the same fixture it evaluates
+the source--potential pairing
+`W_J = 1/2 integral_Omega J_RT0 dot A dV` with an independent tetrahedral
+quadrature.  A finite positive `W_J` is a source/linear-solve energy check; it
+does **not** replace the accepted-state Zeeman/work quantity
+`-mu0 integral M dot H_oe dV`, nor does it certify an airbox truncation.  The
+latter still require a separate target-space/refinement study on three
+geometrically similar airboxes and an accepted-time magnetization snapshot.
+
 ### 3.5 SI, sign, energy and accepted work snapshot
 
 The two FEM realizations consume the same signed conventional `J_c [A/m^2]`

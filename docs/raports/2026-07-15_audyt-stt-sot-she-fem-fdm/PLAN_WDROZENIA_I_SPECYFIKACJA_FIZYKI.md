@@ -9573,3 +9573,33 @@ zbieżności operatorów OE-F1/OE-F2 CPU/double. Nie obejmuje jeszcze publiczneg
 accepted-time `J_c(m_stage)`, niezależnego target-space `p`, energii
 `-mu0∫M·H_oe dV`, badania rozmiaru airboxa ani GPU/device-resident; capability
 pozostaje `reference_executable`.
+
+## 32.106. Niezależna bramka target-space i energii źródło--potencjał OE-F2 (2026-08-09)
+
+Po §32.105 rozszerzono fixture `fem_oersted_vector_potential_contract` o dwa
+niezależne pomiary, bez zmiany ABI i bez używania norm z raportu solvera jako
+substytutu obserwabli:
+
+1. wynikowy skalar gauge jest rekonstruowany w tej samej przestrzeni `H^1_0`,
+   a wszystkie boundary true DOF są sprawdzane względem zera (`max |p| <=
+   1e-12`);
+2. z niezależnej kwadratury tetrahedralnej obliczana jest dodatnia forma
+   źródło--potencjał `W_J = 1/2 ∫ J_RT0 · A dV` na tym samym fixture.
+
+Gate wykonano świeżo w zarządzanym obrazie `fem-cpu` (MFEM/HYPRE, CPU/double):
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef2-cpu-contract
+4/4 ConservativeCurrentView serial/MPI/byte-identity ........ PASS
+fem direct tetrahedral Oersted contract ...................... PASS
+fem mixed vector-potential Oersted contract ................... PASS
+OE-F2 target-space max boundary |p|=0
+source-potential energy W_J=9.3886677054942546e-08 J ........ PASS
+```
+
+Dowód zamyka tylko diagnostykę docelowej przestrzeni gauge oraz dodatniości
+kwadratowej formy liniowego solve'u. `W_J` nie jest accepted-state energią
+Zeemana/work `-mu0∫M·H_oe dV`; test nie ma jeszcze magnetyzacji z tego samego
+snapshotu, trzech podobnych rozmiarów airboxa ani kontroli ekstrapolacji pola.
+Nie zmienia to statusu `J_c(m_stage)`, callbacku native RK/FSAL, benchmarku
+FEM↔FDM/MuMax/BORIS, GPU/device-resident i produkcyjnego capability.
