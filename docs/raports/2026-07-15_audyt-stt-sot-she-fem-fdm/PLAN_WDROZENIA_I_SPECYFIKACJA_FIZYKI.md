@@ -8771,3 +8771,204 @@ spójności modelu i UI, nie kwalifikacji numerycznej solverów.
 
 Szczegółowy ledger dowodów i blokad zapisano w
 `docs/raports/2026-08-05-physics-scope-graph-refactor/QUALIFICATION.md`.
+
+## 32.93. Audyt możliwości podłączenia RT0/H(div) do publicznego solved-current Oersted (2026-08-08)
+
+### 32.93.1. Werdykt
+
+Nie ma obecnie bezpiecznej, end-to-end ścieżki od publicznego FEM steady
+transportu do OE-F1/OE-F2 i LLG. Nie dodano testu, który nazywałby ten łańcuch
+„działającym”, ponieważ taki test musiałby albo podać nodalny rzut H1/P1 jako
+RT0/H(div), albo dopisać zewnętrzne zamknięcie obwodu bez danych fizycznych.
+Obie operacje fałszowałyby kontrakt, a test stałby się dowodem błędnego modelu.
+Najwyższy uczciwy status pozostaje:
+
+```text
+public FEM solved-current → dynamic Oersted = development_executable/reference slice
+ConservativeCurrentView OE-T0 + DirectTetraQuadrature OE-F1 + VectorPotential OE-F2
+  = reference_executable w izolowanych kontraktach CPU/double
+public FEM RT0 solved-current → OE-F1/OE-F2 → LLG = blocked
+```
+
+### 32.93.2. Dowód blokera w bieżącym data-path
+
+| Granica | Obecny symbol i dowód | Dlaczego nie można awansować ścieżki |
+|---|---|---|
+| C ABI transportu | `native/include/fullmag_fem.h`: `fullmag_fem_steady_transport_request_v1`, `fullmag_fem_steady_transport_result_v1`, `fullmag_fem_solve_steady_transport_v1`, `fullmag_fem_solve_steady_transport_m2_v1` | Request opisuje mesh tet4, przewodność i H1/Dirichlet; result ma `charge_current_density_xyz_apm2` w węzłach. Brak RT0 DOF-ów, stabilnych ID, ról ścian, source-cut/lead closure, rewizji stage/source i certyfikatu bilansu. Zmiana tailu naruszyłaby `struct_size`/ABI v1. |
+| Native adapter | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp::solve`, `::solve_m2`, `::validate_request` | `copy_by_vdim(oracle.charge_current_density(), 3, ...)` publikuje wyłącznie nodalny rzut H1/P1; adapter nie tworzy `ConservativeCurrentView` i nie ma danych do `Build`/`Import`. `validate_request` jawnie odrzuca `periodic_node_pairs` oraz `periodic_boundary_pair_markers`, więc v1 nie może nawet dostarczyć okresowego source-cut snapshotu. |
+| Wymaganie OE-T0 | `backends/fem/cpu/mfem/transport/conservative_current_view.hpp`: `ConservativeCurrentView::Build`, `::Import` | `Build` odrzuca `raw_single_valued_potential`; dla geometrii zamkniętej wymaga zaakceptowanego okresowego snapshotu i source-cut, a dla leadu — sprzężonego mesha, interfejsów i elektrod. `Import` wymaga prawdziwego `RT_3D_P0`, stabilnych ID i niezależnego certyfikatu. Żaden z tych obiektów nie wynika z v1 result. |
+| Wymaganie OE-F1/F2 | `backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp::DirectTetraQuadrature::Evaluate`; `vector_potential.hpp::VectorPotentialSolver::Evaluate` | Oba operatory przyjmują ten sam immutable `ConservativeCurrentView`; nodalnego bufora nie można przekazać ani przez `Evaluate`, ani przez `EvaluateField` i nazwać RT0. |
+| Publiczny runner | `crates/fullmag-runner/src/native_fem/steady_transport.rs::execute_native_fem_steady_transport_plans`, `::solved_current_midpoint_biot_savart_field` | Runner uśrednia nodalne J w tet4 i stosuje regularizowany midpoint Biot–Savart; provenance jawnie nosi `solved_current_h1_nodal_midpoint_reference`. To jest bounded reference, nie OE-F1/OE-F2. |
+| Wstrzyknięcie pola | `crates/fullmag-runner/src/dispatch.rs::execute_fem_with_context_in_mode` | Dispatcher tylko dodaje gotowy wektor pola do planu przed LLG. Nie może dopisać źródłowego closure, RT0 view, stage revision ani certyfikatu; zgodnie z architekturą nie jest właścicielem nowej numeriki. |
+| Sprzężenie czasowe | `crates/fullmag-plan/src/oersted.rs::resolve_solved_current_source`, `crates/fullmag-plan/src/spin_transport.rs` | FEM jest celowo ograniczony do `steady + one_way + CPU double`; M2/reciprocal i transient/stage coupling są fail-closed. Jeden solve przed pętlą LLG nie daje `J_c(m_stage)` dla każdego RHS, FSAL, odrzuconego kroku i final refresh. |
+
+Wniosek: izolowane recepty `verify-fem-oersted-oet0-cpu-contract`,
+`verify-fem-oersted-oef1-cpu-contract` i
+`verify-fem-oersted-oef2-cpu-contract` są ważnymi dowodami operatorów, lecz
+nie są dowodem publicznego łańcucha transport → RT0 → Oersted → LLG. Nie wolno
+łączyć tych testów w pozorny „E2E” bez nowego ABI i bez danych closure.
+
+### 32.93.3. Append-only patch plan (bez modyfikacji ABI v1)
+
+Poniższe etapy są wymagane w tej kolejności. Każdy etap ma własną bramę i nie
+awansuje capability następnego etapu przed uzyskaniem dowodu.
+
+#### Etap P0 — zamrożenie kontraktu publicznego
+
+**Pliki do zmiany:**
+
+- `docs/physics/0980-dynamic-current-and-oersted-coupling.md` — utrzymać §4.6
+  jako właściciela fizyki i append-only kontraktu;
+- `docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/PLAN_WDROZENIA_I_SPECYFIKACJA_FIZYKI.md` — niniejszy ledger;
+- `native/include/fullmag_fem.h` — wyłącznie nowe typy/symbole po istniejącym
+  ABI v1, bez dopisywania pól do `*_v1`.
+
+**Nowy interfejs:**
+
+```text
+fullmag_fem_steady_transport_rt0_request_v1
+fullmag_fem_steady_transport_rt0_result_v1
+fullmag_fem_solve_steady_transport_rt0_v1(...)
+```
+
+Request zawiera niezmieniony `fullmag_fem_steady_transport_request_v1` jako
+`base` oraz wymagany descriptor closure. Descriptor musi przenosić:
+
+1. `closure_kind`: `closed_geometry` lub `external_lead_extension`;
+2. wersjonowane `stable_mesh_vertex_u64.v1`, boundary-face records z rolami
+   `insulating_outer`, `source_cut`, `closure_interface` i stabilnym
+   `circuit_id`;
+3. uporządkowane source-cut pairs z translacją i signed `potential_drop_v`,
+   albo pełny opis mesha leadu, par interfejsu oraz obu elektrod;
+4. komplet tożsamości: `source_module_id`, `source_state_revision`,
+   `source_field_digest`, `mesh_revision`, `topology_revision`,
+   `geometry_digest`, `closure_revision`, `closure_digest`,
+   `envelope_revision`, `envelope_digest`, multiplier, czas i `stage_identity`;
+5. tolerancje algebraiczne/fizyczne, `execution_lane` i precision policy.
+
+Result zwraca jawne długości i pojemności dla RT0 DOF-ów oraz kanonicznych
+rekordów `(face_vertex_ids[3], flux_a)` sortowanych po stabilnych ID, a także
+`operator_version`, `fe_space`, jednostkę, `canonical_face_digest`,
+`balance_certificate_digest` i `view_identity_digest`. Nodalny bufor może
+pozostać opcjonalnym outputem wizualizacyjnym, ale nigdy nie jest źródłem OE.
+
+**Bramka P0:** test układu C/C++ i Rust potwierdza niezmienność rozmiaru,
+offsetów i symboli v1 oraz obecność wyłącznie nowych symboli RT0. Próba
+podania zerowego/missing closure albo niepełnej identity kończy się błędem
+przed solverem.
+
+#### Etap P1 — native FEM: transport i immutable view
+
+**Pliki i właściciele:**
+
+- utworzyć `backends/fem/cpu/mfem/transport/steady_transport_rt0_c_api.cpp`
+  jako adapter ABI; nie dodawać tej numeriki do `Context` ani
+  `mfem_bridge.cpp`;
+- użyć `ConservativeCurrentView::Build` dla okresowego snapshotu lub
+  sprzężonego leadu, ewentualnie `ConservativeCurrentView::Import` wyłącznie
+  dla niezależnie certyfikowanego RT0;
+- dodać target/test do `backends/fem/CMakeLists.txt` i receptę
+  `verify-fem-steady-transport-rt0-cpu-contract` w `justfile`;
+- dodać `backends/fem/tests/steady_transport_rt0_abi_contract.cpp` z fixture
+  zamkniętego źródła oraz przypadkami rejection: raw H1, stale revision,
+  source-cut mismatch, missing electrode/lead, non-RT0 import.
+
+**Bramka P1:** native adapter zwraca immutable view z `operator_version`
+`fem_conservative_current_rt0_view.v1`, zerowym/bounded divergence i
+bilansami closure w certyfikacie; canonical face digest jest deterministyczny
+przy MPI `-n 1` i `-n 2`. Nie ma konwersji nodalnego J do RT0 przez runner.
+
+#### Etap P2 — FFI, IR i planner
+
+**Pliki:**
+
+- `crates/fullmag-fem-sys/src/lib.rs` — ręcznie utrzymywane repr(C) typy,
+  deklaracja symbolu i layout tests;
+- `crates/fullmag-runner/src/native_fem/steady_transport.rs` — request/result
+  extension i ownership buforów, bez obliczania pola;
+- `crates/fullmag-plan/src/oersted.rs`, `crates/fullmag-plan/src/spin_transport.rs`
+  oraz odpowiednie `fullmag-ir` typy — closure/stage identity jako wymagany
+  semantic input, nie jako domyślny marker;
+- `docs/specs/capability-matrix-v0.json` i powiązany ledger — pozostawić
+  `semantic_only`/`reference_executable` do czasu bram P4/P5.
+
+**Bramka P2:** planner odrzuca solved-current FEM, gdy nie ma kompletnego
+  closure descriptor, stabilnej tożsamości i zgodnego stage policy. Nie ma
+  fallbacku do nodal midpoint po żądaniu RT0/OE-F1/OE-F2; stary v1 pozostaje
+  działającą, jawnie oznaczoną ścieżką referencyjną.
+
+#### Etap P3 — publiczny runner i provenance
+
+**Pliki i symbole:**
+
+- `crates/fullmag-runner/src/native_fem/steady_transport.rs::execute_native_fem_steady_transport_plans`
+  — wywołuje nowy symbol i zachowuje immutable view identity;
+- nowy moduł orkiestrujący OE w `backends/fem/cpu/mfem/interactions/oersted/`
+  lub jawny adapter C ABI — wywołuje `DirectTetraQuadrature::Evaluate` albo
+  `VectorPotentialSolver::Evaluate` na tym samym view;
+- `crates/fullmag-runner/src/dispatch.rs` — pozostaje wyłącznie miejscem
+  wstrzyknięcia zaakceptowanego pola/provenance; nie przenosi solvera;
+- artifact/provenance publisher — publikuje
+  `source_view_identity_digest`, closure/balance certificate digest,
+  `stage_identity`, mesh/topology revision i `source_field_digest`.
+
+**Bramka P3:** artefakt ma `source_kind=fem_conservative_current_rt0_view.v1`
+tylko po otrzymaniu pełnego result/certificate; mismatch którejkolwiek
+rewizji albo digestu odrzuca pole przed LLG. `solved_current_h1_nodal_midpoint_reference`
+pozostaje wyłącznie dla starego bounded path.
+
+#### Etap P4 — stage-consistent coupling
+
+**Wymagane zmiany:**
+
+- zdefiniować w planie, czy transport jest rozwiązywany dla każdego RHS stage,
+  czy legalnie cache'owany dla niezmiennego
+  `(source_state_revision, stage_identity, envelope_revision, time)`;
+- dla RK/FSAL zachować osobną tożsamość zaakceptowanego i odrzuconego kroku;
+  odrzucony krok nie może publikować RT0 view ani pola do LLG;
+- final refresh musi wykonać nowy solve, jeśli stan końcowy różni się od
+  ostatniego zaakceptowanego snapshotu;
+- M2/reciprocal i GPU pozostają fail-closed do czasu osobnych operatorowych
+  kontraktów i zarządzanego runtime proof.
+
+**Bramka P4:** test runnera obejmuje dwa RHS stage, rejected-step rollback,
+FSAL reuse oraz final refresh i sprawdza, że każdy użyty Oersted field ma
+identyczny `stage_identity` z magnetyzacją, z której rozwiązano prąd.
+
+#### Etap P5 — kwalifikacja numeryczna i promocja
+
+**Testy i recepty:**
+
+1. `fem_steady_transport_rt0_abi_contract` — layout, closure, certificate;
+2. `fem_public_solved_current_oersted_rt0_contract` — transport → RT0 view →
+   OE-F1/OE-F2 → provenance na zamkniętym fixture;
+3. trzy poziomy `h` dla direct-tetra oracle, z limitem singularnej kwadratury,
+   kontrolą znaku, bilansu i energii `-mu0 * integral(M dot H_oe)`;
+4. managed `just verify-fem-steady-transport-rt0-cpu-contract` oraz
+   `just verify-fem-solved-current-oersted-rt0-e2e-cpu-contract` z buildem
+   kontenerowym, nie hostowym;
+5. wspólny FEM/FDM CPU double benchmark z tym samym zamkniętym źródłem,
+   stanem, `h`, `dt` i continuum-limit oracle.
+
+Promocja capability/artifact/Python/UI może nastąpić dopiero po przejściu
+wszystkich pięciu bram i po dodaniu runtime/device evidence. Sam compile,
+izolowany OE-T0/F1/F2 contract albo green planner test nie wystarcza.
+
+### 32.93.4. Zakazy implementacyjne
+
+Do czasu ukończenia P0–P5 obowiązują następujące twarde zakazy:
+
+- nie dopisywać pól closure/RT0 do `fullmag_fem_steady_transport_*_v1`;
+- nie wywoływać `ConservativeCurrentView::Import` na nodalnym `J` po
+  niecertyfikowanej projekcji H1→RT0;
+- nie wywoływać `DirectTetraQuadrature::EvaluateField` na nodalnym polu i nie
+  oznaczać wyniku jako OE-F1;
+- nie tworzyć source-cut, return path ani leadu z samego `net_boundary_current_a`;
+- nie relabelować `solved_current_h1_nodal_midpoint_reference` na
+  `fem_conservative_current_rt0_view.v1`;
+- nie podnosić capability do `production_executable` ani nie uruchamiać
+  ścieżki na FEM GPU przez ukryty fallback.
+
+Wynik audytu jest więc blockerem architektoniczno-fizycznym, a nie brakiem
+pojedynczego testu. Najbliższym poprawnym krokiem jest implementacja
+append-only P0/P1, po której dopiero można dodać prawdziwy test end-to-end.
