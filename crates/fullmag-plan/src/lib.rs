@@ -22,6 +22,7 @@ mod material;
 mod material_transition;
 mod mesh;
 mod oersted;
+mod physics_graph;
 pub mod quantities;
 mod region_conflict;
 mod regional_field_drive;
@@ -40,6 +41,7 @@ pub use geometry::{
     FDM_GRID_MAX_CELLS,
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
+pub use physics_graph::resolve_physics_graph;
 pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
     QuantityCapability,
@@ -75,6 +77,11 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     if let Err(validation_errors) = problem.validate() {
         return Err(PlanError {
             reasons: validation_errors,
+        });
+    }
+    if let Err(graph_errors) = resolve_physics_graph(problem) {
+        return Err(PlanError {
+            reasons: graph_errors,
         });
     }
 

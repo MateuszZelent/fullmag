@@ -43,6 +43,7 @@ from fullmag.model.mechanics import (
     MechanicalBoundaryCondition,
     MechanicalLoad,
 )
+from fullmag.model.physics_scope import build_physics_graph
 from fullmag.model.outputs import (
     SaveDispersion,
     SaveField,
@@ -1657,6 +1658,9 @@ class Problem:
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
             "spin_transport_modules": _spin_transport_modules_ir(self),
+            # Presence/scope/activation is canonical and independent of the
+            # constitutive family payloads above.
+            "physics_graph": build_physics_graph(self).to_ir(),
             "excitation_analysis": self.excitation_analysis.to_ir()
             if self.excitation_analysis is not None
             else None,

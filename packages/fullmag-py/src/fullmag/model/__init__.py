@@ -98,6 +98,14 @@ from .problem import (
     RuntimeSelection,
     backend,
 )
+from .physics_scope import (
+    PhysicsActivation,
+    PhysicsEdge,
+    PhysicsGraph,
+    PhysicsModule,
+    PhysicsScope,
+    build_physics_graph,
+)
 from .spin_torque import (
     ConstantEnvelope,
     InterfaceCppSTT,

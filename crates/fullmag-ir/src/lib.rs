@@ -405,6 +405,12 @@ pub struct ProblemIR {
     /// universe policy, per-object policies, and derived solver mesh provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_semantics: Option<MeshSemanticsIR>,
+
+    /// Backend-neutral authored physics presence/scope graph.  Family arrays
+    /// above remain the owners of constitutive parameters; this optional graph
+    /// carries normalized identity, scope, activation and dependency state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics_graph: Option<serde_json::Value>,
 }
 
 impl<'de> Deserialize<'de> for ProblemIR {
@@ -481,6 +487,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             pbc: Option<FdmPeriodicityIR>,
             #[serde(default)]
             mesh_semantics: Option<MeshSemanticsIR>,
+            #[serde(default)]
+            physics_graph: Option<serde_json::Value>,
         }
 
         let wire = ProblemIRWire::deserialize(value).map_err(D::Error::custom)?;
@@ -522,6 +530,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             air_box_policy: wire.air_box_policy,
             pbc: wire.pbc,
             mesh_semantics: wire.mesh_semantics,
+            physics_graph: wire.physics_graph,
         })
     }
 }
@@ -668,6 +677,7 @@ impl ProblemIR {
             air_box_policy: None,
             pbc: None,
             mesh_semantics: None,
+            physics_graph: None,
         }
     }
 
@@ -2024,9 +2034,7 @@ fn validate_absorbing_boundary(
         && layer.ramp_width_m.is_finite()
         && layer.ramp_width_m > layer.total_width_m
     {
-        errors.push(format!(
-            "{path}.ramp_width_m must be <= total_width_m"
-        ));
+        errors.push(format!("{path}.ramp_width_m must be <= total_width_m"));
     }
     if !layer.max_damping.is_finite() || layer.max_damping < 0.0 {
         errors.push(format!("{path}.max_damping must be finite and >= 0"));
@@ -2054,7 +2062,10 @@ mod absorbing_boundary_tests {
             total_width_m: 2.0,
             ramp_width_m: 3.0,
             max_damping: -0.1,
-            faces: vec![AbsorbingBoundaryFaceIR::XPlus, AbsorbingBoundaryFaceIR::XPlus],
+            faces: vec![
+                AbsorbingBoundaryFaceIR::XPlus,
+                AbsorbingBoundaryFaceIR::XPlus,
+            ],
             profile: AbsorbingBoundaryProfileIR::Smootherstep,
             frame: AbsorbingBoundaryFrameIR::Object,
         });
@@ -2062,9 +2073,9 @@ mod absorbing_boundary_tests {
         let errors = problem
             .validate()
             .expect_err("invalid absorbing boundary should fail IR validation");
-        assert!(errors.iter().any(|error| {
-            error.contains("ramp_width_m must be <= total_width_m")
-        }));
+        assert!(errors
+            .iter()
+            .any(|error| { error.contains("ramp_width_m must be <= total_width_m") }));
         assert!(errors
             .iter()
             .any(|error| error.contains("max_damping must be finite and >= 0")));
