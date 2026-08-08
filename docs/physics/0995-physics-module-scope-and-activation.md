@@ -154,6 +154,7 @@ semantic identity jako certyfikatu topologii bez osobnego dowodu.
 | `packages/fullmag-py/src/fullmag/model/physics_scope.py` | `build_physics_graph` | lowering Python |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | bounded FEM artifact provenance |
 | `crates/fullmag-runner/tests/physics_graph_runtime.rs` | `fdm_runtime_artifact_contains_concrete_graph_realization` | hostowy dowód zapisu certyfikatu FDM w artefakcie runnera |
+| `crates/fullmag-runner/tests/physics_graph_runtime.rs` | `fem_runtime_artifact_contains_concrete_graph_realization` | managed CPU FEM/MFEM dowód zapisu rzeczywistych markerów elementów w artefakcie runnera |
 | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `ConservativeCurrentView::Build` | RT0/H(div) current view |
 | `apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx` | `InspectorOverviewFrame` | wspólna kompozycja inspektora |
 

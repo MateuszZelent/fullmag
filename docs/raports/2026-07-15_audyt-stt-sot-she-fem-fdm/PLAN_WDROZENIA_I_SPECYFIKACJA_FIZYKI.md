@@ -9390,3 +9390,35 @@ referencyjnego lane FDM oraz usuwa wcześniejszy fałszywy awans multilayer.
 Pozostają: managed capture FEM, callbacki `J_c(m_stage)` z RK/FSAL,
 niezależne `p`/energia/airbox, benchmarki FEM–FDM–MuMax/BORIS, GPU oraz
 release-clean publiczny Python/UI end-to-end.
+
+## 32.100. Managed capture certyfikatu grafu dla FEM (2026-08-09)
+
+Dodano drugi, lane-specific test publicznego runnera:
+`crates/fullmag-runner/tests/physics_graph_runtime.rs::fem_runtime_artifact_contains_concrete_graph_realization`.
+Fixture używa minimalnego tet4, aktywnego globalnego modułu grafu oraz
+`run_problem`; po wykonaniu sprawdza w artefakcie `resolved`, liczność jednego
+elementu, marker `[1]` i fingerprint konkretnej topologii. Test jest dostępny
+wyłącznie z feature `fem-gpu`, więc nie może przypadkowo przełączyć się na
+hostową implementację referencyjną.
+
+Nowa recepta:
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-physics-graph-runtime` buduje
+`fullmag_fem` w obrazie `fem-gpu`, a następnie uruchamia test z CPU FEM lane
+przy załadowanym managed MFEM/HYPRE ABI. Świeży wynik 2026-08-09:
+
+```text
+running 2 tests
+fem_runtime_artifact_contains_concrete_graph_realization ... ok
+fdm_runtime_artifact_contains_concrete_graph_realization ... ok
+test result: 2 passed; 0 failed
+native FEM backend active: engine=fem_native_gpu ...
+```
+
+Log poprawnie pokazuje, że obraz zawiera CUDA, lecz test żąda publicznej
+ścieżki CPU i dotyczy wyłącznie zapisu certyfikatu zakresu; nie jest to dowód
+GPU/device-resident FEM, zbieżności LLG, transportu RT0/OE-F2 ani parity FEM–FDM.
+W połączeniu z §32.99 zamknięte są managed capture artefaktu grafu dla obu
+lane'ów (CPU/reference FDM oraz native FEM CPU). Nadal otwarte pozostają
+magnetization-dependent `J_c(m_stage)` w rzeczywistym RK/FSAL, niezależne
+`p`/energia/airbox dla solved-current, benchmark z MuMax/BORIS, GPU
+device-resident oraz release-clean publiczny Python/UI end-to-end.

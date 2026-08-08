@@ -102,6 +102,12 @@
       "responsibility": "Exercise the public FDM runner and assert that the persisted artifact contains the concrete realization certificate."
     },
     {
+      "id": "graph-fem-runtime-test",
+      "path": "crates/fullmag-runner/tests/physics_graph_runtime.rs",
+      "symbol": "fem_runtime_artifact_contains_concrete_graph_realization",
+      "responsibility": "Exercise the managed native FEM CPU runner and assert concrete mesh-element marker provenance in the persisted artifact."
+    },
+    {
       "id": "graph-realization-verifier",
       "path": "scripts/verify_physics_scope_graph_runtime.py",
       "symbol": "_validate_concrete_realization",
