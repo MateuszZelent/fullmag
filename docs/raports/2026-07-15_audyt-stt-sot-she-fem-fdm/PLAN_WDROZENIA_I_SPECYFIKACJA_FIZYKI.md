@@ -9546,3 +9546,30 @@ Python → IR → SceneDocument → Python na bieżącym źródle; nie jest to d
 wykonania native FEM/FDM, obecności modułu w runtime ani gotowości UI
 produkcyjnego. W szczególności nie zmienia blokad dynamicznego
 `J_c(m_stage)`, GPU i solved-current Oersted.
+
+## 32.105. Świeży managed CPU OE-F1/OE-F2 operator contract (2026-08-09)
+
+Po zmianach grafu uruchomiono ponownie:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef2-cpu-contract
+```
+
+Recepta `fem-cpu` skonfigurowała MFEM/HYPRE bez CUDA i zakończyła wszystkie
+cztery testy canonical `ConservativeCurrentView`: serial, MPI `-n 1`, MPI
+`-n 2` oraz byte-identity (`4/4 passed`). Następnie bezpośredni OE-F1 wypisał
+zbieżność względem niezależnego fixture:
+
+```text
+coarse = 0.000699174
+medium = 0.000337272
+fine   = 0.000145936
+fem direct tetrahedral Oersted contract: PASS
+fem mixed vector-potential Oersted contract: PASS
+```
+
+To jest świeży managed dowód determinizmu view, signed-current i ograniczonej
+zbieżności operatorów OE-F1/OE-F2 CPU/double. Nie obejmuje jeszcze publicznego
+accepted-time `J_c(m_stage)`, niezależnego target-space `p`, energii
+`-mu0∫M·H_oe dV`, badania rozmiaru airboxa ani GPU/device-resident; capability
+pozostaje `reference_executable`.
