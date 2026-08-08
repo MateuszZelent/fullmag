@@ -1,0 +1,8 @@
+[
+  {"id": "empty", "file": "empty.json"},
+  {"id": "no_current", "file": "no_current.json"},
+  {"id": "object_local_current_chain", "file": "object_local_current_chain.json"},
+  {"id": "global_field_drive", "file": "global_field_drive.json"},
+  {"id": "cross_object_interface", "file": "cross_object_interface.json"},
+  {"id": "unresolved_legacy", "file": "unresolved_legacy.json"}
+]

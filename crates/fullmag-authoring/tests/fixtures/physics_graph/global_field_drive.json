@@ -1,0 +1,13 @@
+{
+  "id": "global_field_drive",
+  "scene": {
+    "version": "scene.v2",
+    "revision": 4,
+    "scene": {"id": "global-field", "name": "Global field"},
+    "objects": [{"id": "film", "name": "Film", "geometry": {"geometry_kind": "box"}, "material_ref": "mat"}],
+    "field_drives": {"drives": [{"id": "field:global", "name": "Global field", "kind": "regional", "enabled": true, "target": {"kind": "global"}, "amplitude_B_T": 0.001, "direction": [0.0, 0.0, 1.0], "spatial_profile": {"kind": "uniform"}, "waveform": {"kind": "constant"}, "time_origin": "stage_local", "activation": {"kind": "all_time_evolution"}}]}
+  },
+  "expected_modules": [{"id": "field:global", "kind": "regional_field_drive", "activation": "active", "scope": {"kind": "global"}}],
+  "expected_edges": [],
+  "expected_explorer_groups": ["global"]
+}

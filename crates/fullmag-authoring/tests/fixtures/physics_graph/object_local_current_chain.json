@@ -1,0 +1,25 @@
+{
+  "id": "object_local_current_chain",
+  "scene": {
+    "version": "scene.v2",
+    "revision": 3,
+    "scene": {"id": "local-chain", "name": "Object local current chain"},
+    "objects": [{"id": "film", "name": "Film", "geometry": {"geometry_kind": "box"}, "material_ref": "mat"}],
+    "current_transports": [{"kind": "current_transport", "name": "current:film", "model": "prescribed_density", "current_density": [0.0, 0.0, 1000000.0], "domain": [{"object_id": "film"}]}],
+    "spin_transports": [{"schema_version": "spin_transport.v1", "id": "spin:film", "current_source_id": "current:film", "mode": "steady", "domain": [{"object_id": "film"}], "materials": [], "solver": {"engine": "cg", "linear": {"relative_tolerance": 1e-8, "absolute_tolerance": 1e-12, "max_iterations": 100}, "physical_residual_version": "transport_residual.v1", "operator_version": "spin_transport.v1", "default_external_boundary": "spin_insulating"}, "requested_execution": {"discretization": "fem", "device": "cpu", "precision": "double", "execution_mode": "strict"}, "constitutive_version": "spin_transport_constitutive.v1"}],
+    "spin_torques": [{"kind": "slonczewski", "id": "torque:free-layer", "formula_version": "slonczewski.fullmag.v2", "current_source": "current:film", "spin_polarization": [0.0, 0.0, 1.0], "degree": 0.4, "lambda_asymmetry": 1.0, "epsilon_prime": 0.0, "target": {"object_id": "film"}}],
+    "oersted_fields": [{"kind": "oersted_field", "id": "oersted:film", "source": "current:film", "model": "from_current_solution"}]
+  },
+  "expected_modules": [
+    {"id": "current:film", "kind": "current_transport", "activation": "active", "scope": {"kind": "object", "object_id": "film"}},
+    {"id": "spin:film", "kind": "spin_transport", "activation": "active", "depends_on": ["current:film"]},
+    {"id": "torque:free-layer", "kind": "spin_torque", "activation": "active", "depends_on": ["current:film"]},
+    {"id": "oersted:film", "kind": "oersted_field", "activation": "active", "depends_on": ["current:film"]}
+  ],
+  "expected_edges": [
+    {"kind": "current_to_spin_transport", "source_id": "current:film", "target_id": "spin:film", "status": "active"},
+    {"kind": "current_to_torque", "source_id": "current:film", "target_id": "torque:free-layer", "status": "active"},
+    {"kind": "current_to_oersted", "source_id": "current:film", "target_id": "oersted:film", "status": "active"}
+  ],
+  "expected_explorer_groups": ["film"]
+}

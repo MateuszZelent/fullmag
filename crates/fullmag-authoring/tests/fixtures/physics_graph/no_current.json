@@ -1,0 +1,15 @@
+{
+  "id": "no_current",
+  "scene": {
+    "version": "scene.v2",
+    "revision": 2,
+    "scene": {"id": "no-current", "name": "No current"},
+    "objects": [{"id": "film", "name": "Film", "geometry": {"geometry_kind": "box"}, "material_ref": "mat"}],
+    "spin_transports": [],
+    "spin_torques": [],
+    "oersted_fields": []
+  },
+  "expected_modules": [],
+  "expected_edges": [],
+  "expected_explorer_groups": []
+}

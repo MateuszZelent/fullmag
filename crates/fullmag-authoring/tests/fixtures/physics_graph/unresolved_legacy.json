@@ -1,0 +1,13 @@
+{
+  "id": "unresolved_legacy",
+  "scene": {
+    "version": "scene.v2",
+    "revision": 6,
+    "scene": {"id": "legacy", "name": "Legacy unresolved"},
+    "objects": [{"id": "film", "name": "Film", "geometry": {"geometry_kind": "box"}, "material_ref": "mat"}],
+    "spin_torques": [{"kind": "legacy_torque", "id": "torque:legacy", "current_source": "missing-current", "legacy_target": "ambiguous"}]
+  },
+  "expected_modules": [{"id": "torque:legacy", "kind": "unsupported", "activation": "unresolved", "reason": "unknown spin torque record or target"}],
+  "expected_edges": [],
+  "expected_explorer_groups": ["unresolved"]
+}

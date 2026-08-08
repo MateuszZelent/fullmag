@@ -1,0 +1,95 @@
+{
+  "document": {
+    "path": "docs/physics/0995-physics-module-scope-and-activation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "Graph semantics are backend-neutral; numerical qualification remains lane- and operator-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "No graph contract promotes an unqualified FEM GPU interaction."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "FDM mask resolution is defined, while cross-backend production parity remains open."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "Capability must be resolved by the planner and cannot be inferred from authored scope."
+    }
+  ],
+  "sources": [
+    {
+      "id": "scene-graph-normalizer",
+      "path": "crates/fullmag-authoring/src/physics_graph.rs",
+      "symbol": "normalize_physics_graph",
+      "responsibility": "Deterministically lower authored family records into modules, scopes and edges."
+    },
+    {
+      "id": "scene-document",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneDocument",
+      "responsibility": "Canonical authoring scene containing explicit module presence."
+    },
+    {
+      "id": "problem-ir",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "ProblemIR",
+      "responsibility": "Canonical lowered physical representation consumed by planning."
+    },
+    {
+      "id": "python-scopes",
+      "path": "packages/fullmag-py/src/fullmag/model/physics_scope.py",
+      "symbol": "PhysicsScope",
+      "responsibility": "Public Python scope/activation vocabulary and round-trip."
+    },
+    {
+      "id": "planner-resolution",
+      "path": "crates/fullmag-plan/src/lib.rs",
+      "symbol": "resolve_problem",
+      "responsibility": "Resolve capability and lane-specific markers without changing graph semantics."
+    },
+    {
+      "id": "runtime-provenance",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "execute_native_fem_steady_transport_plans",
+      "responsibility": "Publish graph identity, source revision and numerical artifact provenance."
+    },
+    {
+      "id": "oersted-view",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp",
+      "symbol": "ConservativeCurrentView",
+      "responsibility": "Canonical immutable RT0/H(div) current source for FEM Oersted coupling."
+    },
+    {
+      "id": "explorer-graph",
+      "path": "apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts",
+      "symbol": "buildPhysicsGraphTree",
+      "responsibility": "Render only authored and semantically resolved modules."
+    },
+    {
+      "id": "inspector-template",
+      "path": "apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx",
+      "symbol": "InspectorOverviewFrame",
+      "responsibility": "Shared responsive Visualization inspector composition."
+    }
+  ],
+  "validation": [
+    {
+      "id": "fixture-contract",
+      "path": "scripts/test_physics_scope_graph_fixtures.py",
+      "symbol": "test_physics_scope_graph_fixture_manifest_is_complete",
+      "responsibility": "Ensure the six normative scenarios remain present and lossless."
+    }
+  ]
+}
