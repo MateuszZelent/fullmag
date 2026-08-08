@@ -3,6 +3,7 @@
 mod adapters;
 mod builder;
 mod geometry;
+mod physics_graph;
 mod region_revisions;
 mod scene;
 mod spin_transport;
@@ -16,6 +17,7 @@ pub use adapters::{
 };
 pub use builder::*;
 pub use geometry::*;
+pub use physics_graph::*;
 pub use region_revisions::*;
 pub use scene::*;
 pub use spin_transport::*;
