@@ -8722,8 +8722,9 @@ Wprowadzone elementy:
    relabelowane jako wykonane.
 8. Runner zapisuje additive `physics/physics_graph_provenance.v1.json` oraz
    wpis `execution_provenance.physics_graph` w `metadata.json`. Artefakt niesie
-   `scene_revision`, digest znormalizowanego grafu, requested/resolved lane,
-   ID modułów, zakresy, zależności i lane-specific semantic marker/mask IDs.
+   `scene_revision`, `mesh_revision`, digest znormalizowanego grafu,
+   requested/resolved lane, ID modułów, zakresy, zależności i lane-specific
+   semantic marker/mask IDs.
    Jest to typed semantic-resolution provenance, nie certyfikat topologii ani
    dowód, że solver wykonał każdy aktywny moduł.
 9. Planner/runtime walidują typed graph provenance fail-closed, a panele

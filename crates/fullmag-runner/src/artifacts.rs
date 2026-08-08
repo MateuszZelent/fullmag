@@ -32,16 +32,6 @@ struct SolverDiagnosticTraceArtifact {
     steps: Vec<StepStats>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct PhysicsGraphRuntimeProvenanceArtifact {
-    schema_version: String,
-    scene_revision: u64,
-    graph_sha256: String,
-    requested_lane: String,
-    resolved_lane: String,
-    modules: Vec<fullmag_plan::ResolvedPhysicsModule>,
-}
-
 /// Materialize the validated semantic graph at the artifact boundary.
 ///
 /// This is deliberately separate from `ExecutionProvenance`: the latter is a
@@ -54,28 +44,20 @@ fn physics_graph_provenance_artifact(
     problem: &fullmag_ir::ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> std::io::Result<Option<crate::types::AuxiliaryArtifact>> {
-    let Some(graph) = problem.physics_graph.as_ref() else {
+    if problem.physics_graph.is_none() {
         return Ok(None);
-    };
-    let modules = fullmag_plan::resolve_physics_modules(problem, plan.common.resolved_backend)
-        .map_err(|reasons| Error::new(ErrorKind::InvalidData, reasons.join("; ")))?;
-    let graph_bytes = serde_json::to_vec(graph).map_err(|error| {
-        Error::new(
-            ErrorKind::InvalidData,
-            format!("physics_graph cannot be serialized for provenance: {error}"),
-        )
-    })?;
-    let scene_revision = graph
-        .get("scene_revision")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_default();
-    let payload = PhysicsGraphRuntimeProvenanceArtifact {
-        schema_version: "physics_graph.runtime_provenance.v1".to_string(),
-        scene_revision,
-        graph_sha256: format!("{:x}", Sha256::digest(graph_bytes)),
-        requested_lane: problem.backend_policy.requested_backend.as_str().to_string(),
-        resolved_lane: plan.common.resolved_backend.as_str().to_string(),
-        modules,
+    }
+    let payload = if let Some(provenance) = plan.provenance.physics_graph.clone() {
+        provenance
+    } else {
+        fullmag_plan::physics_graph_runtime_provenance(problem, &plan.backend_plan)
+            .map_err(|reasons| Error::new(ErrorKind::InvalidData, reasons.join("; ")))?
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "physics_graph runtime provenance could not be resolved",
+                )
+            })?
     };
     let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| {
         Error::new(
@@ -3624,12 +3606,12 @@ mod tests {
             serde_json::from_slice(&artifact.bytes).expect("artifact JSON");
 
         assert_eq!(artifact.relative_path, PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
-        assert_eq!(payload["schema_version"], "physics_graph.runtime_provenance.v1");
+        assert_eq!(payload["schema_version"], "physics_graph.runtime.v1");
         assert_eq!(payload["scene_revision"], 19);
         assert_eq!(payload["requested_lane"], "auto");
         assert_eq!(payload["resolved_lane"], "fem");
         assert_eq!(payload["modules"][1]["depends_on"], serde_json::json!(["current:film"]));
-        assert_eq!(payload["modules"][1]["scope_key"], "object:film");
+        assert_eq!(payload["modules"][1]["scope"], "object:film");
         assert_eq!(payload["modules"][1]["status"], "blocked");
         assert!(payload["graph_sha256"].as_str().is_some_and(|value| value.len() == 64));
     }
@@ -5003,7 +4985,7 @@ mod tests {
         )
         .expect("metadata JSON");
         let metadata_graph = &metadata["execution_provenance"]["physics_graph"];
-        assert_eq!(metadata_graph["schema_version"], "physics_graph.runtime_provenance.v1");
+        assert_eq!(metadata_graph["schema_version"], "physics_graph.runtime.v1");
         assert_eq!(metadata_graph["scene_revision"], 23);
         assert_eq!(metadata_graph["requested_lane"], "auto");
         assert_eq!(metadata_graph["resolved_lane"], "fem");

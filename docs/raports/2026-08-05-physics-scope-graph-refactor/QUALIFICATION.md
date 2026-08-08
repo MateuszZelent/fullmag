@@ -58,7 +58,7 @@ Planner dopisuje stabilne, tekstowe wpisy `physics_graph.v1` do
 serializowanym execution planie. Runner dodatkowo zapisuje
 `physics/physics_graph_provenance.v1.json` oraz kopię typed payloadu w
 `metadata.json.execution_provenance.physics_graph`; payload zawiera rewizję
-sceny, digest grafu, lane, ID modułów, scope, zależności i semantic
+sceny, rewizję siatki, digest grafu, lane, ID modułów, scope, zależności i semantic
 marker/mask IDs. Jest to provenance rozstrzygnięcia semantycznego, nie
 certyfikat konkretnej siatki/gridu ani dowód wykonania solvera.
 
@@ -130,7 +130,7 @@ prąd, authored zero-drive (moduły pozostają `inactive`, ale lista modułów n
 znika), object-local chain, global/cross-object scope, złą scope, brak
 provenance i pominiętą zależność. Wynik lokalny: `10 passed` łącznie z
 `scripts/test_physics_scope_graph_fixtures.py`. Runner ma już własny
-`physics_graph.runtime_provenance.v1` artefakt z testem zapisu, ale nie jest on
+`physics_graph.runtime.v1` artefakt z testem zapisu, ale nie jest on
 jeszcze pełnym capture'em `executed_module_ids` wymaganym przez verifier. Brak
 managed artefaktu runtime oznacza, że ta brama pozostaje gotowa do użycia, lecz
 nie awansuje kwalifikacji solvera w tym snapshotcie.

@@ -21,7 +21,6 @@ pub struct ResolvedPhysicsModule {
     pub requested_lane: String,
     pub resolved_lane: String,
     pub status: String,
-    pub depends_on: Vec<String>,
     pub scope_key: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fem_marker_ids: Vec<u32>,
@@ -185,17 +184,6 @@ pub fn resolve_physics_modules(
             .and_then(Value::as_str)
             .unwrap_or("unsupported")
             .to_string();
-        let depends_on = module_object
-            .get("depends_on")
-            .and_then(Value::as_array)
-            .map(|dependencies| {
-                dependencies
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
         let authored_status = module_object
             .get("activation")
             .and_then(Value::as_str)
@@ -258,7 +246,6 @@ pub fn resolve_physics_modules(
             requested_lane,
             resolved_lane: resolved_lane.as_str().to_string(),
             status,
-            depends_on,
             scope_key,
             fem_marker_ids: marker.into_iter().collect(),
             fdm_cell_mask_id,
