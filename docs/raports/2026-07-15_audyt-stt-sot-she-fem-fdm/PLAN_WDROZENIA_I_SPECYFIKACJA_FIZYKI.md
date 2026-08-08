@@ -9503,3 +9503,26 @@ nie tylko test zgodności znaków. Zakres dotyczy stacjonarnego transportu
 spinowego; nie promuje FEM solved-current/Oersted, nie dostarcza dynamicznego
 `J_c(m_stage)`, nie obejmuje GPU transportu ani równoważności całej trajektorii
 LLG. W ledgerze pozostaje osobno oznaczony jako `reference_executable`.
+
+## 32.103. Świeży managed 3D common-limit M2 SHE/iSHE (2026-08-09)
+
+Uzupełniono poprzedni test płaski o receptę
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-m2-3d-common-limit-contract`.
+Managed obraz `fem-gpu` zbudował natywny FEM, a test
+`reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles` zakończył
+się `1 passed; 0 failed`. Maksymalne błędy profili (względem FDM) wyniosły:
+
+| rozdzielczość | max `|V_FDM - V_FEM|` [V] | max `|mu_s,FDM - mu_s,FEM|` [V] |
+|---|---:|---:|
+| `nxy=2, Nz=4` | `1.1440446880428556e-4` | `1.9328657009760858e-2` |
+| `nxy=4, Nz=8` | `1.5938720605285228e-4` | `6.517590917801991e-3` |
+| `nxy=8, Nz=16` | `5.6548283983631764e-5` | `1.884314775342455e-3` |
+
+Wynik potwierdza trójwymiarowy znak, sprzężenie SHE/iSHE i malejący błąd
+akumulacji spinowej przy zagęszczaniu w osi `z`/płaszczyźnie. Pierwsza
+różnica potencjału nie jest monotoniczna (`1.14e-4 → 1.59e-4 → 5.65e-5`),
+więc gate nie jest dowodem formalnego rzędu zbieżności; do tego potrzebny jest
+osobny study z kontrolą geometrii, normy i kolejności projekcji. Jest to nadal
+stacjonarny, referencyjny common-limit transportu, a nie produkcyjny
+solved-current/Oersted, dynamiczny `J_c(m_stage)`, GPU ani pełna trajektoria
+LLG.
