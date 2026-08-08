@@ -23,6 +23,8 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import type { PhysicsInteractionId } from "./PhysicsInteractionPanelModel";
 import { isUnsupportedSpinAuthoringResource } from "./SpinAuthoringInspectorModel";
 
@@ -406,10 +408,46 @@ function OerstedFields({ draft, identityReadOnly, patch }: { draft: OerstedDraft
 
 export function SpinTorqueInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "spin-torque" ? selection.ref : null;
-  return <SpinAuthoringInspector family="spin_torque" resourceId={ref?.spinTorqueId} resourceIndex={ref?.spinTorqueIndex} />;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "spin_torque",
+        scope: {
+          kind: selection.objectId ? "object" : "global",
+          objectId: selection.objectId,
+          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+        },
+        source: {
+          id: ref?.spinTorqueId ?? "new",
+          kind: "spin_torque",
+          status: "active",
+        },
+        status: "active",
+      })}
+      primary={<SpinAuthoringInspector family="spin_torque" resourceId={ref?.spinTorqueId} resourceIndex={ref?.spinTorqueIndex} />}
+    />
+  );
 }
 
 export function OerstedFieldInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "oersted-field" ? selection.ref : null;
-  return <SpinAuthoringInspector family="oersted_field" resourceId={ref?.oerstedFieldId} resourceIndex={ref?.oerstedFieldIndex} />;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "oersted_field",
+        scope: {
+          kind: selection.objectId ? "object" : "global",
+          objectId: selection.objectId,
+          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+        },
+        source: {
+          id: ref?.oerstedFieldId ?? "new",
+          kind: "oersted_field",
+          status: "active",
+        },
+        status: "active",
+      })}
+      primary={<SpinAuthoringInspector family="oersted_field" resourceId={ref?.oerstedFieldId} resourceIndex={ref?.oerstedFieldIndex} />}
+    />
+  );
 }

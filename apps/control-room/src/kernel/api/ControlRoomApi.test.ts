@@ -3885,11 +3885,13 @@ describe("ControlRoomApi", () => {
     });
 
     await api.model.scene();
+    await api.model.physicsGraph();
     await api.model.universe();
     await api.meshing.sharedDomainManifest();
 
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/model/scene",
+      "http://127.0.0.1:8765/v2/sessions/current/model/physics-graph",
       "http://127.0.0.1:8765/v2/sessions/current/model/universe",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/manifest",
     ]);

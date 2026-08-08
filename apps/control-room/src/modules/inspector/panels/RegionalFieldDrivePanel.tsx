@@ -16,6 +16,8 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import { regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
 import { SincPulsePreview } from "./SincPulsePreview";
 
@@ -124,8 +126,37 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     resetInspectorDraft,
   );
 
+  const driveTarget = draft?.target;
+  const scope = driveTarget?.kind === "region"
+    ? {
+        kind: "region" as const,
+        objectId: driveTarget.object_id,
+        regionId: driveTarget.region_id,
+        stableRef: `region:${driveTarget.object_id}:${driveTarget.region_id}`,
+      }
+    : driveTarget?.kind === "object"
+      ? {
+          kind: "object" as const,
+          objectId: driveTarget.object_id,
+          stableRef: `object:${driveTarget.object_id}`,
+        }
+      : { kind: "global" as const, stableRef: "global:physics" };
+
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        execution: { sceneRevision: model.sceneRevision },
+        family: "field_drive",
+        scope,
+        source: {
+          id: model.driveId ?? "none",
+          kind: "field_drive",
+          status: model.mode === "found" ? "active" : "absent",
+        },
+        status: model.mode === "found" ? "active" : "absent",
+        statusReason: model.mode === "found" ? null : "Selected field drive is unavailable.",
+      })}
+      primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Regional field drive" collapsible defaultOpen>
         {model.mode !== "found" ? <FeedbackBanner kind="warning" message="Selected field drive is unavailable." /> : null}
         <FieldRow label="ID" value={model.driveId ?? "none"} />
@@ -161,7 +192,8 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
         <FormField label="Mode" type="select" disabled={!draft || pending} value={draft?.activation.kind ?? "all_time_evolution"} onChange={(event) => setDraft((value) => value ? { ...value, activation: event.target.value === "stage_ids" ? { kind: "stage_ids", stage_ids: [] } : { kind: "all_time_evolution" } } : value)}><option value="all_time_evolution">All time stages</option><option value="stage_ids">Selected stages</option></FormField>
         {draft?.activation.kind === "stage_ids" ? <div className="grid min-w-0 gap-fm-inspector-row">{selectorOptions.timeEvolutionStages.map((stage) => <FormField key={stage.id} label={stage.label} type="checkbox" disabled={pending} checked={selectedStageIdSet.has(stage.id)} onChange={(event) => setDraft((value) => { if (value?.activation.kind !== "stage_ids") return value; const stageIds = event.target.checked ? [...value.activation.stage_ids, stage.id] : value.activation.stage_ids.filter((id) => id !== stage.id); return { ...value, activation: { kind: "stage_ids", stage_ids: stageIds } }; })} />)}{selectorOptions.timeEvolutionStages.length === 0 ? <FeedbackBanner kind="warning" message="No run stage with a stable ID is available. Add a run stage before assigning this drive." /> : null}</div> : <FieldRow label="Stages" value="all time-evolution stages" />}
       </InspectorGroup>
-    </div>
+    </div>}
+    />
   );
 }
 

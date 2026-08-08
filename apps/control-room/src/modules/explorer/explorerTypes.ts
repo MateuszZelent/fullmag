@@ -29,6 +29,7 @@ type ExplorerNodeKind =
   | "object.antenna"
   | "object.material"
   | "object.physics"
+  | "object.physics.scope"
   | "object.regions"
   | "object.region"
   | "object.region.geometry"
@@ -98,6 +99,10 @@ type ExplorerNodeKind =
   | "physics.spin-torque"
   | "physics.oersted-fields"
   | "physics.oersted-field"
+  | "physics.module"
+  | "physics.scope.global"
+  | "physics.scope.cross-object"
+  | "physics.scope.unresolved"
   | "study.root"
   | "study.execution"
   | "study.recovery"
@@ -322,6 +327,11 @@ export interface ExplorerNode {
   spinTorqueIndex?: number;
   oerstedFieldId?: string;
   oerstedFieldIndex?: number;
+  physicsModuleId?: string;
+  physicsModuleKind?: string;
+  physicsScopeKind?: string;
+  physicsScopeObjectIds?: readonly string[];
+  physicsActivation?: string;
   regionId?: string;
   resourceRef?: string;
   displayUnits?: Record<string, string>;
@@ -465,6 +475,8 @@ export interface ModelTreeSnapshot {
   } | null;
   objects?: readonly ModelTreeObjectSnapshot[];
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
+  /** Canonical physics_graph.v1 resource when the API has resolved it. */
+  physicsGraph?: unknown | null;
   study?: ModelTreeStudySnapshot | null;
   currentTransports?: readonly ModelTreeCurrentTransportSnapshot[];
   spinTransports?: readonly ModelTreeSpinTransportSnapshot[];

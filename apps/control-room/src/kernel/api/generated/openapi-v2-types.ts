@@ -2436,6 +2436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/physics-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_physics_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/realized-regions": {
         parameters: {
             query?: never;
@@ -7079,6 +7095,55 @@ export interface components {
             resolution: components["schemas"]["PlanarResolutionPolicy"];
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
+        };
+        PhysicsGraphActivationResource: "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved";
+        PhysicsGraphEdgeResource: {
+            kind: string;
+            source_id: string;
+            status: components["schemas"]["PhysicsGraphActivationResource"];
+            target_id: string;
+        };
+        PhysicsGraphModuleResource: {
+            activation: components["schemas"]["PhysicsGraphActivationResource"];
+            applies_to: components["schemas"]["PhysicsGraphScopeResource"][];
+            authored_state: string;
+            capability: string;
+            depends_on: string[];
+            id: string;
+            kind: string;
+            solve_domain: components["schemas"]["SceneRegionRef"][];
+            source_path: string;
+        };
+        PhysicsGraphProvenanceResource: {
+            normalizer: string;
+        };
+        PhysicsGraphResource: {
+            edges: components["schemas"]["PhysicsGraphEdgeResource"][];
+            modules: components["schemas"]["PhysicsGraphModuleResource"][];
+            provenance: components["schemas"]["PhysicsGraphProvenanceResource"];
+            schema_version: string;
+            scene_revision: number;
+        };
+        PhysicsGraphScopeResource: {
+            kind: "global";
+        } | {
+            kind: "object";
+            object_id: string;
+        } | {
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        } | {
+            kind: "interface";
+            side_a: components["schemas"]["SceneRegionRef"];
+            side_b: components["schemas"]["SceneRegionRef"];
+        } | {
+            kind: "cross_object";
+            object_ids: string[];
+        } | {
+            kind: "unresolved";
+            reason: string;
+            source_path: string;
         };
         PreparationClockAdjustment: {
             /** Format: int64 */
@@ -16600,6 +16665,40 @@ export interface operations {
             };
             /** @description No active workspace or scene document */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_physics_graph: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Normalized authored physics graph */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicsGraphResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The authored scene cannot be normalized into a graph */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -8679,3 +8679,95 @@ bounded slice, ale nie zmienia jego kwalifikacji: `source_kind` jest jawnie
 `solved_current_h1_nodal_midpoint_reference`, a nie `ConservativeCurrentView`
 RT0/H(div). Nie ma więc jeszcze certyfikatu closure, stage revision ani
 zgodności z OE-F1/OE-F2 w publicznym łańcuchu.
+
+## 32.92. Implementacja grafu zakresu modułów fizycznych (2026-08-08)
+
+### 32.92.1. Zakres wykonanej refaktoryzacji
+
+Zrealizowano zatwierdzony wariant refaktoryzacji, w którym obecność rekordu w
+Python DSL/UI jest jedynym źródłem istnienia modułu. Wartość napędu `j=0` nie
+usuwa modułu; brak rekordu prądu nie tworzy natomiast ukrytego źródła ani
+globalnego fallbacku. `applies_to` i `solve_domain` są rozdzielone w całym
+łańcuchu semantycznym.
+
+Wprowadzone elementy:
+
+1. `PhysicsGraphIR` z deterministyczną normalizacją modułów, zakresów,
+   zależności, ścieżek źródłowych i stanów `configured/active/inactive/
+   blocked/unsupported/unresolved`; sześć fixture'ów kontraktowych pokrywa
+   pustą scenę, brak prądu, łańcuch lokalny, napęd globalny, interfejs
+   cross-object i rekord nierozstrzygnięty.
+2. Python DSL oraz `ProblemIR` przechowują graf wraz z payloadami rodzin.
+   Kolejność list nie wpływa na identyfikatory, a źródła legacy pozostają
+   lossless i diagnostyczne.
+3. Planner waliduje graf i dopisuje do `ProvenancePlanIR.notes` tożsamość
+   modułu, rewizję sceny, zakres, requested/resolved lane oraz stan. FEM i FDM
+   otrzymują różne semantic marker/mask identities; nie są one jeszcze
+   certyfikatem realizacji konkretnej siatki lub gridu.
+4. API v2 udostępnia cienki zasób
+   `GET /v2/sessions/current/model/physics-graph`, z rewizją sceny,
+   normalizer provenance, modułami i krawędziami, bez topologii i próbek pól.
+   Typed facade, resource hook i invalidation używają istniejącej architektury
+   resource-first.
+5. Explorer nie buduje już gałęzi fizyki z list rodzinnych ani z indeksów.
+   Węzły object/region, global, cross-object oraz unresolved są emitowane
+   wyłącznie na podstawie grafu i mają stabilne selekcje.
+6. Panele fizyczne korzystają ze wspólnego `InspectorOverviewFrame` zgodnego
+   z kompozycją Visualization: pasek metryk, karta główna, sekcje nawigacyjne,
+   tokeny `--fm-*` i klasy `fm-*`. `PhysicsGraphModuleInspectorPanel` jest
+   read-only dla semantycznego stanu grafu.
+7. Granica FEM dynamicznego Oersteda została doprecyzowana: publiczny ABI v1
+   pozostaje H1/P1 nodal midpoint reference; przyszły append-only RT0/H(div),
+   closure i stage/source certificate są opisane w §4.6 noty 0980 i nie są
+   relabelowane jako wykonane.
+
+### 32.92.2. Bieżące dowody
+
+| Warstwa | Wynik | Najwyższy uczciwy status |
+|---|---|---|
+| Python graph fixtures | 2 testy walidatora, 6 scenariuszy | `reference_executable` kontraktu |
+| Python scope graph | 5 testów | `reference_executable` authoringu |
+| Planner graph resolution | 6 testów | `development_executable` semantic resolution |
+| API graph resource | 1 test scenariuszowy, `cargo check` | `reference_executable` zasobu |
+| OpenAPI generated surface | 206/206 zgodności JSON/paths | kontrakt statyczny |
+| Explorer/Inspector/resource/API frontend | 10 ukierunkowanych plików Vitest, w tym graf zasobów, invalidation, Explorer, selection, wspólny frame inspektora i DOM overview | 312/312; kontrakt statyczny oraz model/DOM testy |
+| FEM M2 affine transport | managed `PASS` | bounded CPU prerequisite |
+| FEM OE-T0 | managed `PASS`, 4/4 serial/MPI/identity | operator `reference_executable` |
+
+Pełny frontend typecheck i browser smoke nie zostały zaliczone: izolowany
+worktree nie ma kompletnego `node_modules`. Ukierunkowane testy Vitest, w tym
+React DOM overview, uruchomiono na kodzie worktree z repozytoryjnego cache
+pakietów przez tymczasowe aliasy, bez instalacji sieciowej i bez kopiowania
+runtime. Nie traktuje się tego dowodu jako uruchomienia produkcyjnego UI.
+
+### 32.92.3. Granice i bramy pozostałe
+
+Refaktoryzacja nie awansuje fizyki STT/SOT/SHE/Oersteda do produkcji. Nadal
+otwarte są:
+
+- typed runtime provenance z graph ID, zakresem, rewizją sceny/siatki i
+  certyfikatem realizacji marker/mask;
+- podłączenie `ConservativeCurrentView` RT0/H(div) do publicznego FEM
+  solved-current Oersted wraz z closure, direct tetra oracle, energią i
+  zbieżnością `h`;
+- wspólny benchmark FEM/FDM CPU/GPU z tym samym stanem, znakiem, `h/dt` i
+  continuum limit;
+- managed FDM graph-runtime gate oraz browser/Playwright proof pustej sceny,
+  zero-drive, object-local i cross-object;
+- pełny action-bar/edit-session i DOM/accessibility proof wszystkich paneli.
+
+Ciężkie kompilacje pozostają wykonywane przez `just` z trwałym storage pod
+`/zfn2/mateuszz/git/fullmag`; nie należy przenosić buildów na CIFS ani do
+zwykłego `/tmp`.
+
+### 32.92.4. Ocena celu po tej iteracji
+
+Semantyczny scope graph, authoring, planner, API, Explorer i podstawowa
+kompozycja Inspector są zaimplementowane i mają zielone testy kontraktowe.
+Najwyższy uczciwy status całego celu pozostaje **implementacja częściowa**:
+około **91% zakresu refaktoryzacji źródłowej**, lecz tylko około **65%
+gotowości produkcyjnej** dla pełnego FEM/FDM STT/SOT/SHE/Oersted. Wzrost dotyczy
+spójności modelu i UI, nie kwalifikacji numerycznej solverów.
+
+Szczegółowy ledger dowodów i blokad zapisano w
+`docs/raports/2026-08-05-physics-scope-graph-refactor/QUALIFICATION.md`.

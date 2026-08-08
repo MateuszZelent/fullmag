@@ -696,6 +696,11 @@ typedef struct {
     uint64_t struct_size;
     double *electric_potential_v;
     uint64_t electric_potential_v_len;
+    /*
+     * This is an H1/P1 nodal visualization/reference projection. It is not a conservative RT0/H(div) current view and must not be consumed by a
+     * production solved-current Oersted operator. The immutable
+     * ConservativeCurrentView requires a separate closure-aware ABI.
+     */
     double *charge_current_density_xyz_apm2;
     uint64_t charge_current_density_xyz_apm2_len;
     double *spin_potential_xyz_v;

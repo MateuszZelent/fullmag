@@ -23,6 +23,8 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import {
   buildCurrentTransport,
   buildSpinTransport,
@@ -275,7 +277,25 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
   const resourceIndex = selection.ref?.type === "spin-transport"
     ? selection.ref.spinTransportIndex
     : null;
-  return <TransportAuthoringInspector family="spin_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "spin_transport",
+        scope: {
+          kind: selection.objectId ? "object" : "global",
+          objectId: selection.objectId,
+          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+        },
+        source: {
+          id: resourceId ?? "new",
+          kind: "spin_transport",
+          status: "active",
+        },
+        status: "active",
+      })}
+      primary={<TransportAuthoringInspector family="spin_transport" resourceId={resourceId} resourceIndex={resourceIndex} />}
+    />
+  );
 }
 
 export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProps) {
@@ -285,7 +305,25 @@ export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProp
   const resourceIndex = selection.ref?.type === "current-transport"
     ? selection.ref.currentTransportIndex
     : null;
-  return <TransportAuthoringInspector family="current_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "current_transport",
+        scope: {
+          kind: selection.objectId ? "object" : "global",
+          objectId: selection.objectId,
+          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+        },
+        source: {
+          id: resourceId ?? "new",
+          kind: "current_transport",
+          status: "active",
+        },
+        status: "active",
+      })}
+      primary={<TransportAuthoringInspector family="current_transport" resourceId={resourceId} resourceIndex={resourceIndex} />}
+    />
+  );
 }
 
 function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTransportDraft; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {

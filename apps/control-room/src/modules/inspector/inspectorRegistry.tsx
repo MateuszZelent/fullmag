@@ -110,6 +110,7 @@ import {
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
+import { PhysicsGraphModuleInspectorPanel } from "./panels/PhysicsGraphModuleInspectorPanel";
 import { PlanarMonitorDraftInspectorPanel } from "./panels/PlanarMonitorDraftInspectorPanel";
 import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPanel";
 import {
@@ -558,6 +559,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Physics Interaction",
     selectionKinds: ["object.physics"],
     component: PhysicsInteractionPanel,
+  },
+  {
+    id: "physics-graph-module",
+    title: "Physics Module",
+    selectionKinds: ["physics.module"],
+    component: PhysicsGraphModuleInspectorPanel,
   },
   {
     id: "physics-coupling",

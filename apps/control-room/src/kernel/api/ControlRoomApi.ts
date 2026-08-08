@@ -116,6 +116,7 @@ import {
   MODEL_OBJECT_REGIONS_REORDER_PATH,
   MODEL_OBJECT_REGIONS_PATH,
   MODEL_OBJECTS_PATH,
+  MODEL_PHYSICS_GRAPH_PATH,
   MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
   MODEL_PLANAR_MONITOR_PATH,
   MODEL_PLANAR_MONITORS_PATH,
@@ -343,6 +344,7 @@ import type {
   OerstedFieldMutationRequest,
   OerstedFieldCommitResource,
   SpinAuthoringDeleteRequest,
+  PhysicsGraphResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
   ScriptSourceResponse,
@@ -1916,6 +1918,8 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    physicsGraph: (options?: RequestOptions) =>
+      this.requestJson<PhysicsGraphResource>(MODEL_PHYSICS_GRAPH_PATH, options),
     authoringScript: (options?: RequestOptions) =>
       this.requestJson<ScriptSourceResponse>(MODEL_SCRIPT_PATH, options),
     syncAuthoringScript: (

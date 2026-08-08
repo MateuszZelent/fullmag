@@ -73,6 +73,7 @@ interface ModelTreeResourceInputs {
   spinInterfaces?: SpinInterfaceListResource | null;
   spinTorques?: SpinTorqueListResource | null;
   oerstedFields?: OerstedFieldListResource | null;
+  physicsGraph?: unknown | null;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -130,6 +131,9 @@ export function modelTreeSnapshotFromScene(
         }, [])
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
+    ...(resources.physicsGraph !== undefined
+      ? { physicsGraph: resources.physicsGraph }
+      : {}),
     currentTransports: (resources.currentTransports?.items ?? []).map((item, index) => {
       const id = transportIdentity("current_transport", item);
       return {

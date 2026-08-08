@@ -41,7 +41,10 @@ pub use geometry::{
     FDM_GRID_MAX_CELLS,
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
-pub use physics_graph::resolve_physics_graph;
+pub use physics_graph::{
+    physics_graph_provenance_notes, resolve_physics_graph, resolve_physics_modules,
+    ResolvedPhysicsModule,
+};
 pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
     QuantityCapability,
@@ -113,7 +116,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         return Err(PlanError { reasons: errors });
     }
 
-    match resolved_backend {
+    let mut execution_plan = match resolved_backend {
         BackendTarget::Fem => match &problem.study {
             StudyIR::Eigenmodes { .. } => fem::plan_fem_eigen(problem, resolved_backend),
             StudyIR::FrequencyResponse { .. } => {
@@ -151,7 +154,16 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             ],
         }),
         BackendTarget::Auto => unreachable!("auto backend should resolve before dispatch"),
+    }?;
+
+    if problem.physics_graph.is_some() {
+        let notes = physics_graph_provenance_notes(problem, resolved_backend).map_err(|reasons| {
+            PlanError { reasons }
+        })?;
+        execution_plan.provenance.notes.extend(notes);
     }
+
+    Ok(execution_plan)
 }
 
 #[cfg(test)]

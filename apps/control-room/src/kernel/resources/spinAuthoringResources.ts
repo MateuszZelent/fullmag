@@ -16,6 +16,7 @@ import type { ResourceInvalidationController } from "./ResourceInvalidationContr
 import type { ResourceKey } from "./resourceTypes";
 
 import { useResource } from "./useResource";
+import { PHYSICS_GRAPH_RESOURCE_KEY } from "./physicsGraphResources";
 
 export const CURRENT_TRANSPORTS_RESOURCE_KEY = "model.current-transports";
 export const SPIN_TORQUES_RESOURCE_KEY = "model.spin-torques";
@@ -27,8 +28,12 @@ export function transportMutationResourceKeys(
   family: "current_transport" | "spin_transport",
 ): readonly ResourceKey[] {
   return family === "current_transport"
-    ? [CURRENT_TRANSPORTS_RESOURCE_KEY]
-    : [SPIN_TRANSPORTS_RESOURCE_KEY, SPIN_INTERFACES_RESOURCE_KEY];
+    ? [CURRENT_TRANSPORTS_RESOURCE_KEY, PHYSICS_GRAPH_RESOURCE_KEY]
+    : [
+        SPIN_TRANSPORTS_RESOURCE_KEY,
+        SPIN_INTERFACES_RESOURCE_KEY,
+        PHYSICS_GRAPH_RESOURCE_KEY,
+      ];
 }
 
 interface ResourceHookOptions {
@@ -40,7 +45,11 @@ export function invalidateSpinAuthoringResources(
   commit: { scene_revision: number },
   resourceKeys: readonly ResourceKey[],
 ): void {
-  for (const resourceKey of resourceKeys) {
+  const keys = new Set<ResourceKey>([
+    ...resourceKeys,
+    PHYSICS_GRAPH_RESOURCE_KEY,
+  ]);
+  for (const resourceKey of keys) {
     resources.invalidate(resourceKey, commit.scene_revision);
   }
 }

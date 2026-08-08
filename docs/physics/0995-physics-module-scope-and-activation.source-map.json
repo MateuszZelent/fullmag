@@ -38,37 +38,43 @@
     {
       "id": "scene-document",
       "path": "crates/fullmag-authoring/src/scene.rs",
-      "symbol": "SceneDocument",
-      "responsibility": "Canonical authoring scene containing explicit module presence."
+      "symbol": "default_scene_version",
+      "responsibility": "Scene-document schema defaults that carry explicit module presence."
     },
     {
       "id": "problem-ir",
-      "path": "crates/fullmag-ir/src/model.rs",
-      "symbol": "ProblemIR",
-      "responsibility": "Canonical lowered physical representation consumed by planning."
+      "path": "crates/fullmag-ir/src/lib.rs",
+      "symbol": "is_supported_ir_version_for_read",
+      "responsibility": "Versioned canonical IR read boundary consumed by planning."
     },
     {
       "id": "python-scopes",
       "path": "packages/fullmag-py/src/fullmag/model/physics_scope.py",
-      "symbol": "PhysicsScope",
+      "symbol": "build_physics_graph",
       "responsibility": "Public Python scope/activation vocabulary and round-trip."
     },
     {
       "id": "planner-resolution",
       "path": "crates/fullmag-plan/src/lib.rs",
-      "symbol": "resolve_problem",
+      "symbol": "plan",
       "responsibility": "Resolve capability and lane-specific markers without changing graph semantics."
+    },
+    {
+      "id": "planner-graph-resolution",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "resolve_physics_modules",
+      "responsibility": "Resolve graph identity, activation, semantic FEM markers and FDM mask identities for the selected lane."
     },
     {
       "id": "runtime-provenance",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
       "symbol": "execute_native_fem_steady_transport_plans",
-      "responsibility": "Publish graph identity, source revision and numerical artifact provenance."
+      "responsibility": "Publish the bounded solved-current artifact and its numerical provenance; graph identity remains in the serialized execution-plan provenance until typed runtime fields are qualified."
     },
     {
       "id": "oersted-view",
-      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp",
-      "symbol": "ConservativeCurrentView",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "ConservativeCurrentView::Build",
       "responsibility": "Canonical immutable RT0/H(div) current source for FEM Oersted coupling."
     },
     {
@@ -78,12 +84,59 @@
       "responsibility": "Render only authored and semantically resolved modules."
     },
     {
+      "id": "physics-graph-api",
+      "path": "crates/fullmag-api/src/router_v2/mod.rs",
+      "symbol": "build_v2_router",
+      "responsibility": "Expose a thin, revision-scoped normalized graph resource without meshes or field samples."
+    },
+    {
+      "id": "physics-graph-resource",
+      "path": "apps/control-room/src/kernel/resources/physicsGraphResources.ts",
+      "symbol": "usePhysicsGraphResource",
+      "responsibility": "Load and invalidate the typed physics-graph resource through the v2 resource layer."
+    },
+    {
+      "id": "physics-graph-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx",
+      "symbol": "PhysicsGraphModuleInspectorPanel",
+      "responsibility": "Present graph scope, activation, dependency and execution provenance as a read-only semantic inspector."
+    },
+    {
       "id": "inspector-template",
       "path": "apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx",
       "symbol": "InspectorOverviewFrame",
       "responsibility": "Shared responsive Visualization inspector composition."
+      }
+  ],
+  "equations": [
+    {
+      "id": "graph-stage-coupling",
+      "symbols": ["J_c", "H_oe"],
+      "sources": ["scene-graph-normalizer"]
     }
   ],
+  "symbols": [
+    {"id": "J_c", "latex": "j_c", "meaning": "konwencjonalna gęstość prądu", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "H_oe", "latex": "H_\\mathrm{oe}", "meaning": "pole Oersteda użyte w RHS LLG", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "B_ext", "latex": "B_\\mathrm{ext}", "meaning": "zadane pole indukcji", "si_unit": "\\mathrm T"},
+    {"id": "mu_s", "latex": "\\mu_s", "meaning": "potencjał spinowy", "si_unit": "\\mathrm V"},
+    {"id": "lambda_sf", "latex": "\\lambda_\\mathrm{sf}", "meaning": "długość relaksacji spinowej", "si_unit": "\\mathrm m"},
+    {"id": "sigma", "latex": "\\sigma", "meaning": "przewodność elektryczna", "si_unit": "\\mathrm{S\\,m^{-1}}"}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "PhysicsScope.kind",
+        "type": "Literal['global','object','region','interface','cross_object','unresolved']",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "one of the tagged scope variants; unknown values are unresolved",
+        "meaning": "fizyczny zakres modułu",
+        "backend_support": "FEM/FDM wspólna semantyka; realizacja lane-specific",
+        "problem_ir": "physics_graph.modules[].applies_to[].kind"
+      }
+    ]
+  },
   "validation": [
     {
       "id": "fixture-contract",

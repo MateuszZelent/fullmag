@@ -398,6 +398,17 @@ export type SelectionRef =
       type: "oersted-field";
     }
   | {
+      kind: "physics.module";
+      nodeId: string;
+      physicsActivation?: string;
+      physicsModuleId: string;
+      physicsModuleKind: string;
+      physicsScopeKind: string;
+      physicsScopeObjectIds?: readonly string[];
+      regionId?: string;
+      type: "physics-module";
+    }
+  | {
       fieldDriveId: string;
       kind: "physics.field-drives" | "physics.field-drive";
       nodeId: string;
@@ -575,6 +586,15 @@ function nullableStringEquals(
   right: string | null | undefined,
 ): boolean {
   return (left ?? null) === (right ?? null);
+}
+
+function arrayEquals(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 function centroidEquals(
@@ -787,6 +807,18 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.oerstedFieldId === right.oerstedFieldId &&
         left.oerstedFieldIndex === right.oerstedFieldIndex
+      );
+    case "physics-module":
+      return (
+        right.type === "physics-module" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.physicsModuleId === right.physicsModuleId &&
+        left.physicsModuleKind === right.physicsModuleKind &&
+        left.physicsScopeKind === right.physicsScopeKind &&
+        left.physicsActivation === right.physicsActivation &&
+        left.regionId === right.regionId &&
+        arrayEquals(left.physicsScopeObjectIds, right.physicsScopeObjectIds)
       );
     case "physics-field-drive":
       return (

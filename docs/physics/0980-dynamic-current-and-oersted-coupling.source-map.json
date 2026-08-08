@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve and publishes field/source digests; standalone OE-T0/OE-F1/OE-F2 CPU operator contracts pass, but their provenance-preserving end-to-end integration remains open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice now executes after the native FEM transport solve and publishes field/source digests; standalone OE-T0/OE-F1/OE-F2 CPU operator contracts pass, but the v1 public ABI has no closure-aware RT0/stage descriptor and provenance-preserving end-to-end integration remains open."
     },
     {
       "solver": "FEM",
@@ -33,56 +33,21 @@
       "id": "instantaneous-biot-savart-h",
       "symbols": ["J_c", "H_oe", "r", "V_e", "r_reg"],
       "sources": ["physics-biot-savart", "fem-midpoint-reference"]
-    },
-    {
-      "id": "accepted-stage-identity",
-      "symbols": ["t_stage", "m_stage", "J_c", "H_oe"],
-      "sources": ["physics-stage-contract", "fdm-stage-owner"]
     }
   ],
   "symbols": [
-    {
-      "id": "J_c",
-      "latex": "J_c",
-      "meaning": "signed conventional charge-current density",
-      "si_unit": "\\mathrm{A\\,m^{-2}}"
-    },
-    {
-      "id": "H_oe",
-      "latex": "H_{\\mathrm{oe}}",
-      "meaning": "Oersted magnetic field consumed by the LLG RHS",
-      "si_unit": "\\mathrm{A\\,m^{-1}}"
-    },
-    {
-      "id": "r",
-      "latex": "r",
-      "meaning": "target-source displacement",
-      "si_unit": "\\mathrm{m}"
-    },
-    {
-      "id": "V_e",
-      "latex": "V_e",
-      "meaning": "active tetrahedron volume",
-      "si_unit": "\\mathrm{m^3}"
-    },
-    {
-      "id": "r_reg",
-      "latex": "r_{\\mathrm{reg}}",
-      "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice",
-      "si_unit": "\\mathrm{m}"
-    },
-    {
-      "id": "mu_0",
-      "latex": "\\mu_0",
-      "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy",
-      "si_unit": "\\mathrm{H\\,m^{-1}}"
-    }
+    {"id": "J_c", "latex": "J_c", "meaning": "conventional current density", "si_unit": "A/m^2"},
+    {"id": "H_oe", "latex": "H_oe", "meaning": "Oersted field", "si_unit": "A/m"},
+    {"id": "r", "latex": "r", "meaning": "target-source displacement", "si_unit": "m"},
+    {"id": "V_e", "latex": "V_e", "meaning": "active tetrahedron volume", "si_unit": "m^3"},
+    {"id": "r_reg", "latex": "r_reg", "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice", "si_unit": "m"},
+    {"id": "mu_0", "latex": "mu_0", "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy", "si_unit": "H/m"}
   ],
   "sources": [
     {
       "id": "physics-biot-savart",
-      "path": "docs/physics/0980-dynamic-current-and-oersted-coupling.md",
-      "symbol": "Section 2.3 and Section 4.5",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_oersted_term",
       "responsibility": "Freeze the SI Biot-Savart H convention, energy semantics and the bounded FEM reference limits."
     },
     {
@@ -106,13 +71,13 @@
     {
       "id": "fem-dispatch-injection",
       "path": "crates/fullmag-runner/src/dispatch.rs",
-      "symbol": "execute_fem_with_context_in_mode",
+      "symbol": "normalized_fem_plan_for_runtime",
       "responsibility": "Inject the post-transport field into the normalized FEM plan before native LLG construction and reject incompatible cylinders/lengths."
     },
     {
       "id": "fdm-stage-owner",
       "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
-      "symbol": "FdmSpinTransportModuleSnapshot::oersted_field_apm",
+      "symbol": "solve_coupled_module",
       "responsibility": "Own the existing FDM stage-consistent solved-current field snapshot."
     },
     {
@@ -130,31 +95,49 @@
     {
       "id": "fem-oersted-artifact-provenance",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
-      "symbol": "execute_native_fem_steady_transport_plans; sha256_f64_slice; sha256_vec3_slice; sha256_mesh_source",
+      "symbol": "execute_native_fem_steady_transport_plans",
       "responsibility": "Publish the bounded solved-current Oersted field and stable field/source/mesh digests in the v2 transport artifact and transport provenance without implying RT0/H(div) qualification."
     },
     {
+      "id": "fem-public-abi-boundary",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_v1",
+      "responsibility": "Declare the v1 H1/P1 nodal current as visualization/reference-only and forbid treating it as a ConservativeCurrentView RT0/H(div) source; the closure-aware RT0 extension is specified in Section 4.6 but not yet implemented."
+    },
+    {
+      "id": "fem-public-abi-extension-contract",
+      "path": "backends/fem/tests/steady_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Specify the additive RT0/closure-aware request and result contract required before public solved-current Oersted promotion; the descriptor is not implemented by the current v1 ABI."
+    },
+    {
+      "id": "fem-public-abi-boundary-regression",
+      "path": "backends/fem/tests/steady_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Guard the explicit v1 boundary and prevent the bounded runner source kind from being relabelled as the unimplemented RT0 view."
+    },
+    {
       "id": "managed-fem-transport-gate",
-      "path": "justfile",
-      "symbol": "verify-fem-steady-transport-native-contract",
+      "path": "backends/fem/tests/steady_transport_contract.cpp",
+      "symbol": "main",
       "responsibility": "Build and test the native FEM transport lane in the managed MFEM/HYPRE container; this gate is required before promotion."
     },
     {
       "id": "managed-fem-oet0-gate",
-      "path": "justfile",
-      "symbol": "verify-fem-oersted-oet0-cpu-contract",
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "symbol": "main",
       "responsibility": "Managed CPU/MPI proof for immutable conservative RT0/H(div) current-view certificates; this is an operator contract, not end-to-end LLG coupling."
     },
     {
       "id": "managed-fem-oef1-gate",
-      "path": "justfile",
-      "symbol": "verify-fem-oersted-oef1-cpu-contract",
+      "path": "backends/fem/tests/oersted_direct_tetra_contract.cpp",
+      "symbol": "main",
       "responsibility": "Managed CPU FP64 direct tetrahedral Biot-Savart quadrature contract and bounded refinement behavior."
     },
     {
       "id": "managed-fem-oef2-gate",
-      "path": "justfile",
-      "symbol": "verify-fem-oersted-oef2-cpu-contract",
+      "path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
+      "symbol": "main",
       "responsibility": "Managed CPU mixed H(curl)-H1 vector-potential contract with gauge and weak-Ampere diagnostics."
     }
   ],

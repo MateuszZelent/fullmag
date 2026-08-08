@@ -23,6 +23,29 @@
 - Source/unit tests, a successful API response or a TypeScript build do not establish FEM/FDM numerical equivalence; production claims require controlled runtime, convergence and provenance evidence.
 - The current in-app browser bridge failure (`sandboxCwd is not a local file URI`) is recorded as environment evidence and cannot be reported as a product screenshot result.
 
+## Status wykonania 2026-08-08
+
+Poniższy status opisuje faktyczny zakres po implementacji w dedykowanym
+worktree; zielony test kontraktowy nie jest równoznaczny z kwalifikacją
+produkcyjnej fizyki.
+
+| Zadanie | Status | Dowód / pozostała brama |
+|---|---|---|
+| 1. Semantyka i fixture'y | wykonane | sześć fixture'ów, validator i nota 0995 |
+| 2. Authoring graph | wykonane | `fullmag-authoring`, normalizacja deterministyczna |
+| 3. ProblemIR/Python | wykonane | Python scope graph i graph w `ProblemIR` |
+| 4. Planner FEM/FDM | częściowo wykonane | 6 testów; markery/maski są semantic identities, brak typed runtime certificate |
+| 5. API/OpenAPI/resource | wykonane | route v2, generated contract, hook, invalidation, API test |
+| 6. Explorer | wykonane | graph-only tree i selection tests; brak pełnego browser proof |
+| 7. Inspector | częściowo wykonane | wspólny frame, overview i registry; DOM/typecheck/action-session wymagają środowiska zależności |
+| 8. Kwalifikacja/handoff | częściowo wykonane | raport i ledger zapisane; managed FEM CPU gates zielone, FDM/browser/runtime graph gates otwarte |
+
+Najważniejsze ograniczenie fizyczne pozostaje niezmienione: publiczny FEM
+solved-current Oersted używa bounded H1/P1 nodal midpoint reference. Operator
+`ConservativeCurrentView` RT0/H(div) ma zielony test własności operatora, ale
+nie jest jeszcze podłączony do publicznego łańcucha LLG. Żadna część tego planu
+nie awansuje samodzielnie FEM GPU ani równoważności FEM↔FDM.
+
 ## File and responsibility map
 
 The following files are the intended ownership boundaries. Existing files are

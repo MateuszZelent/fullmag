@@ -65,6 +65,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_scene),
         )
         .route(
+            "/v2/sessions/current/model/physics-graph",
+            get(handlers::model::get_physics_graph),
+        )
+        .route(
             "/v2/sessions/current/model/planar-monitors",
             get(handlers::model::list_planar_monitors)
                 .post(handlers::model::create_planar_monitor),

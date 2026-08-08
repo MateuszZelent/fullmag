@@ -4457,6 +4457,38 @@ describe("buildModelTree", () => {
     expect(nodes.find((node) => node.spinTransportId === "future")).not.toHaveProperty("spinTransportIndex");
   });
 
+  it("uses a loaded empty physics graph as the authority for module presence", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      currentTransports: [{
+        id: "legacy-charge",
+        index: 0,
+        label: "legacy-charge",
+        model: "prescribed_density",
+        supported: true,
+      }],
+      spinTransports: [{
+        currentSourceId: "legacy-charge",
+        id: "legacy-spin",
+        index: 0,
+        label: "legacy-spin",
+        mode: "steady",
+        supported: true,
+      }],
+      physicsGraph: {
+        edges: [],
+        modules: [],
+        provenance: { normalizer: "physics_graph.v1" },
+        schema_version: "physics_graph.v1",
+        scene_revision: 3,
+      },
+    }));
+
+    expect(nodes.map((node) => node.kind)).not.toEqual(expect.arrayContaining([
+      "physics.current-transports",
+      "physics.spin-transports",
+    ]));
+  });
+
   it("keeps id-less unknown spin records addressable by their lossless list position", () => {
     const snapshot = modelTreeSnapshotFromScene(null, {
       spinTransports: {

@@ -519,6 +519,10 @@ export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
 );
 
+export const MODEL_PHYSICS_GRAPH_PATH = openApiV2Path(
+  "/v2/sessions/current/model/physics-graph",
+);
+
 export const MODEL_CURRENT_TRANSPORTS_PATH = openApiV2Path(
   "/v2/sessions/current/model/current-transports",
 );

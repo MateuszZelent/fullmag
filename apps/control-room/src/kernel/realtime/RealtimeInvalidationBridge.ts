@@ -62,6 +62,7 @@ import {
   parseCanonicalFieldVectorResourceKey,
 } from "../api/fieldQueryIdentity";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
 const PLANAR_FIELD_RESOURCE_PREFIX = DATA_PLANAR_FIELD_META_PATH.slice(
@@ -838,6 +839,7 @@ export class RealtimeInvalidationBridge {
   ): void {
     if (recommendedFetch !== MODEL_SCENE_PATH) return;
     const dependentRevision = dependentResourceRevision(MODEL_SCENE_PATH, revision);
+    this.resources.invalidate(PHYSICS_GRAPH_RESOURCE_KEY, dependentRevision);
     this.resources.invalidate(MODEL_REGIONS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_REALIZED_REGIONS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);

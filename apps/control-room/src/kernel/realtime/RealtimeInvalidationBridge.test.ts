@@ -65,6 +65,7 @@ import {
 } from "../api/apiPaths";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { resolveFdmRegionMembershipBinaryResourceKey } from "../resources/geometryLifecycleResources";
+import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
 import { RealtimeInvalidationBridge } from "./RealtimeInvalidationBridge";
 
@@ -242,6 +243,9 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(handled).toBe(true);
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(12);
+    expect(resources.getRevision(PHYSICS_GRAPH_RESOURCE_KEY)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
     expect(resources.getRevision(MODEL_REGIONS_PATH)).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );

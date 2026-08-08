@@ -1130,6 +1130,102 @@ async fn test_router_with_scene_document() -> axum::Router {
     build_v2_router().with_state(state)
 }
 
+#[tokio::test]
+async fn physics_graph_resource_exposes_thin_normalized_graph_for_supported_scenes() {
+    const FIXTURES: &[(&str, &str)] = &[
+        (
+            "empty",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/empty.json"),
+        ),
+        (
+            "no_current",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/no_current.json"),
+        ),
+        (
+            "object_local_current_chain",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/object_local_current_chain.json"),
+        ),
+        (
+            "global_field_drive",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/global_field_drive.json"),
+        ),
+        (
+            "cross_object_interface",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/cross_object_interface.json"),
+        ),
+        (
+            "unresolved_legacy",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/unresolved_legacy.json"),
+        ),
+    ];
+
+    for (fixture_id, fixture_source) in FIXTURES {
+        let fixture: serde_json::Value =
+            serde_json::from_str(fixture_source).expect("physics graph fixture must be JSON");
+        let scene: fullmag_authoring::SceneDocument =
+            serde_json::from_value(fixture["scene"].clone())
+                .expect("physics graph fixture scene must deserialize");
+        let expected_scene_revision = scene.revision;
+        let state = test_app_state_with_live_session().await;
+        state
+            .current_live_state
+            .write()
+            .await
+            .as_mut()
+            .expect("test live session")
+            .scene_document = Some(scene);
+
+        let response = build_v2_router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/model/physics-graph")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("physics graph request should complete");
+        assert_eq!(response.status(), StatusCode::OK, "fixture {fixture_id}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("physics graph response body");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("physics graph response must be JSON");
+        assert_eq!(payload["schema_version"], "physics_graph.v1");
+        assert_eq!(payload["scene_revision"], expected_scene_revision);
+        assert!(payload.get("topology").is_none());
+        assert!(payload.get("fields").is_none());
+        assert!(payload.get("field_samples").is_none());
+        assert!(payload["modules"].is_array());
+        assert!(payload["edges"].is_array());
+        assert_eq!(payload["provenance"]["normalizer"], "physics_graph.v1");
+        for expected in fixture["expected_modules"]
+            .as_array()
+            .expect("fixture expected_modules must be an array")
+        {
+            let id = expected["id"].as_str().expect("expected module id");
+            let module = payload["modules"]
+                .as_array()
+                .expect("modules array")
+                .iter()
+                .find(|candidate| candidate["id"].as_str() == Some(id))
+                .unwrap_or_else(|| panic!("missing normalized module {id} for {fixture_id}"));
+            assert_eq!(module["kind"], expected["kind"], "module {id}");
+            assert_eq!(module["activation"], expected["activation"], "module {id}");
+            assert!(
+                module["source_path"]
+                    .as_str()
+                    .is_some_and(|source_path| source_path.starts_with('/')),
+                "module {id} must preserve an absolute source path"
+            );
+            assert!(
+                module.get("family_payload").is_none(),
+                "module {id} must not turn the graph resource into a family payload dump"
+            );
+        }
+    }
+}
+
 async fn test_router_with_scene_document_and_script_file() -> (axum::Router, PathBuf) {
     let state = test_app_state_with_live_session().await;
     let script_dir = std::env::temp_dir().join(format!(

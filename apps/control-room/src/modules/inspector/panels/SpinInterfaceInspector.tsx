@@ -18,6 +18,8 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 
 interface InterfaceDraft {
   absorption: string;
@@ -237,14 +239,36 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   }
 
   const patch = (value: Partial<InterfaceDraft>) => setDraftState({ key: draftKey, value: { ...draft, ...value } });
-  return <div className="fm-inspector-panel"><InspectorGroup title="Spin interface">
+  const selectedRecord = record(selected?.interface);
+  const selectedSideA = region(selectedRecord?.side_a);
+  const selectedSideB = region(selectedRecord?.side_b);
+  const overviewModel = buildPhysicsInspectorOverviewModel({
+    family: "spin_interface",
+    scope: {
+      kind: selectedSideA.object && selectedSideB.object
+        ? "cross_object"
+        : "interface",
+      sideA: selectedSideA.object,
+      sideB: selectedSideB.object,
+      stableRef: selected?.interface_id
+        ? `interface:${selected.interface_id}`
+        : "interface:new",
+    },
+    source: {
+      id: selected?.interface_id ?? "new",
+      kind: "spin_interface",
+      status: readOnly ? "unsupported" : "active",
+    },
+    status: readOnly ? "unsupported" : "active",
+  });
+  return <PhysicsInspectorOverview model={overviewModel} primary={<div className="fm-inspector-panel"><InspectorGroup title="Spin interface">
     {!ref ? <><FormField label="Owning spin transport" type="select" value={ownerId} onChange={(event) => { setLocalOwnerId(event.target.value); setLocalInterfaceId(""); }}><option value="">Select owner</option>{(transports.data?.items ?? []).map((item, index) => { const id = record(item)?.id; return typeof id === "string" ? <option key={`${id}:${index}`} value={id}>{id}</option> : null; })}</FormField><FormField label="Interface" type="select" value={localInterfaceId} onChange={(event) => setLocalInterfaceId(event.target.value)}><option value="">New interface</option>{(projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId).map((item, index) => <option key={`${item.interface_id}:${index}`} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField></> : null}
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields draft={draft} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Owner: {ownerId || "not selected"}</div><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
     {!readOnly ? <Button disabled={pending || !ownerId || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
     {selected && !readOnly ? <Button variant="danger" disabled={pending || !capability?.authoring_allowed || validation?.execution.authoring_allowed !== true} onClick={() => void run("delete")}>Delete</Button> : null}
-  </InspectorGroup></div>;
+  </InspectorGroup></div>} />;
 }
 
 function InterfaceFields({ draft, patch }: { draft: InterfaceDraft; patch: (value: Partial<InterfaceDraft>) => void }) {

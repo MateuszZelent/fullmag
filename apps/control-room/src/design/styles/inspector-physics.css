@@ -1,0 +1,105 @@
+/* Shared Physics overview composition. Values stay in the central token system. */
+.fm-physics-inspector-overview {
+  --fm-physics-overview-gap: var(--fm-space-3);
+}
+
+.fm-physics-inspector-overview .fm-inspector-overview-frame__primary {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  overflow: hidden;
+}
+
+.fm-physics-inspector-overview .fm-inspector-overview-frame__sections {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+  overflow: hidden;
+}
+
+.fm-physics-inspector-overview .fm-inspector-overview-frame__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2) 0 0;
+}
+
+.fm-physics-inspector-overview [data-slot="inspector-group-content"] {
+  min-width: 0;
+}
+
+.fm-physics-scope-ref {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-accent) 4%, var(--fm-bg-panel-raised));
+}
+
+.fm-physics-scope-ref__kind {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fm-physics-scope-ref__value {
+  min-width: 0;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.fm-physics-inspector-status {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border-inline-start: var(--fm-space-1) solid var(--fm-border-default);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
+.fm-physics-inspector-status[data-state="blocked"],
+.fm-physics-inspector-status[data-state="unsupported"],
+.fm-physics-inspector-status[data-state="unresolved"] {
+  border-inline-start-color: var(--fm-warning);
+}
+
+.fm-physics-inspector-status[data-state="inactive"],
+.fm-physics-inspector-status[data-state="absent"] {
+  border-inline-start-color: var(--fm-border-subtle);
+  color: var(--fm-text-muted);
+}
+
+.fm-physics-inspector-status__label {
+  color: var(--fm-text-primary);
+  font-weight: 600;
+}
+
+.fm-physics-inspector-status__reason {
+  overflow-wrap: anywhere;
+}
+
+@container (max-width: 420px) {
+  .fm-physics-inspector-overview .fm-inspector-metric-strip[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fm-physics-inspector-overview .fm-inspector-overview-frame__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fm-physics-inspector-overview .fm-inspector-overview-frame__actions > * {
+    width: 100%;
+  }
+}

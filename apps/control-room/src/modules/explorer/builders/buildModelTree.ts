@@ -20,6 +20,10 @@ import {
   type ExplorerTreeResources,
 } from "./frequencyDomainExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
+import {
+  buildPhysicsGraphObjectNode,
+  buildPhysicsGraphTree,
+} from "./physicsGraphTree";
 
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { PlanarMonitorCollectionResource } from "@/kernel/api/apiTypes";
@@ -144,6 +148,7 @@ interface ModeVisualizationFieldNode {
 function objectNodes(
   object: ModelTreeObjectSnapshot,
   resources: ModelTreeResources = {},
+  physicsGraph?: unknown | null,
 ): ExplorerNode {
   const objectId = object.id;
   const parentId = `model:object:${objectId}`;
@@ -207,6 +212,7 @@ function objectNodes(
             }),
           ]),
         },
+        ...physicsGraphObjectChildren(object, physicsGraph),
       ],
     };
   }
@@ -289,8 +295,20 @@ function objectNodes(
         ]),
       },
       ...objectExtensionNodes(parentId, object),
+      ...physicsGraphObjectChildren(object, physicsGraph),
     ],
   };
+}
+
+function physicsGraphObjectChildren(
+  object: ModelTreeObjectSnapshot,
+  physicsGraph: unknown | null | undefined,
+): ExplorerNode[] {
+  const node = buildPhysicsGraphObjectNode(physicsGraph, {
+    id: object.id,
+    label: object.label,
+  });
+  return node ? [node] : [];
 }
 
 function compactExplorerNodes(
@@ -1571,6 +1589,17 @@ export function buildModelTree(
       : snapshot?.airbox?.resolvedTarget
         ? "resolved"
         : "legacy carrier";
+  const physicsGraphMode =
+    snapshot?.physicsGraph !== undefined && snapshot?.physicsGraph !== null;
+  const physicsGraphNodes = physicsGraphMode
+    ? buildPhysicsGraphTree({
+        graph: snapshot?.physicsGraph,
+        objects,
+      })
+    : [];
+  const sessionPhysicsGraphNodes = physicsGraphNodes.filter(
+    (node) => node.kind !== "object.physics.scope",
+  );
   const sessionChildren: ExplorerNode[] = [
     {
       badge: "authoring",
@@ -1708,7 +1737,9 @@ export function buildModelTree(
       icon: "layers",
       selectable: false,
       status: "ready",
-      children: objects.map((object) => objectNodes(object, resources)),
+      children: objects.map((object) =>
+        objectNodes(object, resources, snapshot?.physicsGraph),
+      ),
     },
   ];
 
@@ -1723,11 +1754,15 @@ export function buildModelTree(
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
   }
-  sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
-  sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
-  sessionChildren.push(spinInterfaceNodes(snapshot?.spinInterfaces ?? []));
-  sessionChildren.push(authoredSourceNodes("spin-torques", snapshot?.spinTorques ?? []));
-  sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
+  if (physicsGraphMode) {
+    sessionChildren.push(...sessionPhysicsGraphNodes);
+  } else {
+    sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
+    sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
+    sessionChildren.push(spinInterfaceNodes(snapshot?.spinInterfaces ?? []));
+    sessionChildren.push(authoredSourceNodes("spin-torques", snapshot?.spinTorques ?? []));
+    sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
+  }
 
   sessionChildren.push(
     domainLane === "fdm"

@@ -44,6 +44,8 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import {
   buildInteractionApplyPatch,
   defaultObjectInteractionResource,
@@ -373,8 +375,40 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     return <SpinAuthoringInspector key={interactionId} family={interactionId} />;
   }
 
+  const physicsStatus = !activeLaneOperation.enabled
+    ? interactionAvailability.status === "unsupported" ? "unsupported" as const : "blocked" as const
+    : draft.enabled ? "active" as const : "inactive" as const;
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        dependency: {
+          requiredSourceIds: interactionId === "oersted_field" || interactionId === "spin_torque"
+            ? ["current_transport"]
+            : [],
+          reason: laneIssue?.error ?? activeLaneOperation.reason,
+          status: physicsStatus,
+        },
+        execution: { requestedLane: interactionDiscretization },
+        family: interactionId,
+        scope: {
+          kind: selectedRegionId ? "region" : objectId ? "object" : "global",
+          objectId,
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId
+            ? `region:${objectId ?? "unresolved"}:${selectedRegionId}`
+            : objectId
+              ? `object:${objectId}`
+              : "global:physics",
+        },
+        source: {
+          id: interactionId,
+          kind: interactionId,
+          status: physicsStatus,
+        },
+        status: physicsStatus,
+        statusReason: laneIssue?.error ?? activeLaneOperation.reason,
+      })}
+      primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <PhysicsInteractionSelectionSection
         interactionId={interactionId}
         activeLane={activeLane}
@@ -457,7 +491,8 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           onOpenChange={(open) => dispatch({ type: "setHelpOpen", open })}
         />
       ) : null}
-    </div>
+    </div>}
+    />
   );
 }
 

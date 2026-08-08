@@ -18,6 +18,7 @@ describe("invalidateSpinAuthoringResources", () => {
     expect(invalidate.mock.calls).toEqual([
       ["model.spin-transports", 42],
       ["model.spin-interfaces", 42],
+      ["model.physics-graph", 42],
     ]);
   });
 });
@@ -27,12 +28,14 @@ describe("transportMutationResourceKeys", () => {
     expect(transportMutationResourceKeys("spin_transport")).toEqual([
       "model.spin-transports",
       "model.spin-interfaces",
+      "model.physics-graph",
     ]);
   });
 
   it("keeps current transport invalidation scoped to the current collection", () => {
     expect(transportMutationResourceKeys("current_transport")).toEqual([
       "model.current-transports",
+      "model.physics-graph",
     ]);
   });
 });

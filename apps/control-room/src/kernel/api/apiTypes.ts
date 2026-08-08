@@ -319,6 +319,8 @@ export type DynamicStructureFactorResource =
   components["schemas"]["DynamicStructureFactorResource"];
 export type FieldDriveListResource =
   components["schemas"]["FieldDriveListResource"];
+export type PhysicsGraphResource =
+  components["schemas"]["PhysicsGraphResource"];
 export type RegionalFieldDriveResource =
   components["schemas"]["RegionalFieldDriveResource"];
 export type FieldDriveCreateRequest =

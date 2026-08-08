@@ -149,6 +149,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}/duplicate",
   "/v2/sessions/current/model/oersted-fields",
   "/v2/sessions/current/model/oersted-fields/{id}",
+  "/v2/sessions/current/model/physics-graph",
   "/v2/sessions/current/model/planar-monitors",
   "/v2/sessions/current/model/planar-monitors/{monitor_id}",
   "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate",

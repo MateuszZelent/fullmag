@@ -470,6 +470,27 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (
+    node.kind === "physics.module" &&
+    node.physicsModuleId &&
+    node.physicsModuleKind &&
+    node.physicsScopeKind
+  ) {
+    return {
+      kind: "physics.module",
+      nodeId: node.id,
+      physicsActivation: node.physicsActivation,
+      physicsModuleId: node.physicsModuleId,
+      physicsModuleKind: node.physicsModuleKind,
+      physicsScopeKind: node.physicsScopeKind,
+      ...(node.physicsScopeObjectIds
+        ? { physicsScopeObjectIds: node.physicsScopeObjectIds }
+        : {}),
+      ...(node.regionId ? { regionId: node.regionId } : {}),
+      type: "physics-module",
+    };
+  }
+
   if (node.kind === "physics.spin-transports" || node.kind === "physics.spin-transport") {
     return {
       kind: node.kind,

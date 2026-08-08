@@ -3,6 +3,7 @@
 Status: kontrakt normatywny dla autora sceny, `ProblemIR`, planera i Control
 Room. Dokument nie podnosi samodzielnie statusu wykonawczego żadnego backendu.
 
+(problem-statement)=
 ## 1. Problem fizyczny
 
 Scena opisuje problem fizyczny, a nie listę struktur danych backendu. Moduł
@@ -17,7 +18,24 @@ mogą zależeć od nazwanego źródła prądu, lecz nie wolno ich awansować do 
 aktywnego, gdy źródło nie istnieje. Zależność niespełniona jest publikowana
 jako `blocked`, nigdy jako cichy domyślny prąd.
 
-## 2. Wielkości i jednostki
+(governing-equations)=
+## 2. Równania i wielkości fizyczne
+
+Graf nie zmienia równań konstytutywnych rodzin fizycznych. Zamraża jedynie
+ich obecność, zakres i zależności. Dla dynamicznego źródła prądu obowiązuje
+etapowe sprzężenie:
+
+```{math}
+:label: graph-stage-coupling
+(m_k,\,j_{c,k},\,t_k) \longrightarrow H_{\mathrm{oe},k}
+\longrightarrow \mathrm{RHS}_{\mathrm{LLG},k}.
+```
+
+Krawędź zależności jest aktywna wyłącznie wtedy, gdy moduł źródłowy i docelowy
+istnieją oraz przechodzą walidację zakresu.
+
+(symbols-and-si-units)=
+### 2.1. Wielkości i jednostki
 
 | Symbol | Znaczenie | Jednostka SI |
 |---|---|---|
@@ -28,19 +46,22 @@ jako `blocked`, nigdy jako cichy domyślny prąd.
 | $\lambda_\mathrm{sf}$ | długość relaksacji spinowej | $\mathrm m$ |
 | $\sigma$ | przewodność elektryczna | $\mathrm{S\,m^{-1}}$ |
 
-Dla źródła dynamicznego obowiązuje etapowa zależność
-
-\[
- (m_k,\,j_{c,k},\,t_k)\ \longrightarrow\ H_{\mathrm{oe},k}
- \ \longrightarrow\ \mathrm{RHS}_{\mathrm{LLG},k}.
-\]
-
 `j_c` jest wielkością podpisaną względem konwencjonalnego kierunku prądu.
 Wartość `0 A/m²` jest fizycznym stanem wyłączenia napędu, nie brakiem modułu.
 Konwersja $\mathbf B=\mu_0\mathbf H$ odbywa się wyłącznie w miejscu, które
 wymaga indukcji lub energii Zeemana.
 
-## 3. Zakres i domena rozwiązania
+(assumptions-and-validity)=
+## 3. Założenia i zakres ważności
+
+Graf jest kontraktem semantycznym, a nie dyskretyzacją. Zakłada stabilne
+identyfikatory obiektów/regionów, deterministyczną normalizację i jawne
+wersjonowanie rewizji sceny. Nie rozstrzyga geometrii zwrotu prądu, siatki,
+kwadratury Biota--Savarta, kroku czasowego ani zbieżności solvera. Te warunki
+muszą być dowiedzione osobnymi bramami FEM/FDM.
+
+(discrete-realization)=
+### 3.1. Zakres i domena rozwiązania
 
 `applies_to` odpowiada temu, na jakie obiekty/regiony działa moduł fizycznie;
 `solve_domain` odpowiada obszarowi, w którym rozwiązywane jest jego równanie.
@@ -63,7 +84,8 @@ a interfejs na parę stron z orientacją normalnej. W FDM mapuje się na maskę
 komórek i maskę ścian. Identyfikatory i proweniencja pozostają wspólne; różna
 jest tylko realizacja dyskretna.
 
-## 4. Obecność, aktywacja i zdolność wykonania
+(round-trip-and-failure-semantics)=
+## 4. Obecność, aktywacja i błędy
 
 | Stan | Znaczenie |
 |---|---|
@@ -77,7 +99,69 @@ jest tylko realizacja dyskretna.
 `development_executable`, `semantic_only`). Nie wolno utożsamiać `active` z
 kwalifikacją produkcyjną.
 
-## 5. Zależności STT/SOT/SHE/Oersted
+(python-api)=
+## 5. Publiczny Python API
+
+Python udostępnia niezmienny opis zakresu i aktywacji. Parametry konstytutywne
+pozostają w klasach rodzinnych; graf przechowuje tylko tożsamość, zakres,
+zależności i stan.
+
+```python
+# %%
+from fullmag import PhysicsScope
+
+local = PhysicsScope(kind="region", object_id="film", region_id="free")
+assert local.to_ir()["kind"] == "region"
+```
+
+| Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `PhysicsScope.kind` | `Literal['global','object','region','interface','cross_object','unresolved']` | `required` | `$1$` | `one of the tagged scope variants; unknown values are unresolved` | `fizyczny zakres modułu` | `FEM/FDM wspólna semantyka; realizacja lane-specific` | `physics_graph.modules[].applies_to[].kind` |
+
+(problem-ir)=
+## 6. ProblemIR i lowering
+
+`ProblemIR.physics_graph` jest opcjonalnym, wersjonowanym członem. Brak członu
+pozostaje kompatybilny ze starym IR, natomiast obecny graf jest walidowany
+przed wyborem backendu. Normalizacja authoringu jest jedynym miejscem, w którym
+rodzinne rekordy są mapowane na moduły i krawędzie.
+
+(implementation-mapping)=
+## 7. Mapowanie implementacyjne
+
+Planner zachowuje wspólną semantykę i dopiero potem tworzy lane-specific
+identities: FEM marker IDs oraz FDM cell-mask IDs. API publikuje cienki zasób
+v2, Explorer używa go do rozmieszczenia węzłów, a Inspector pokazuje scope,
+activation, dependency i capability. Publiczny runtime nie relabeluje
+semantic identity jako certyfikatu topologii bez osobnego dowodu.
+
+(source-code-index)=
+### 7.1. Indeks źródeł
+
+| Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|
+| `crates/fullmag-authoring/src/physics_graph.rs` | `normalize_physics_graph` | normalizacja grafu |
+| `crates/fullmag-ir/src/lib.rs` | `ProblemIR` | kanoniczny IR |
+| `packages/fullmag-py/src/fullmag/model/physics_scope.py` | `PhysicsScope` | publiczny zakres Python |
+| `crates/fullmag-plan/src/lib.rs` | `plan` | planowanie lane |
+| `crates/fullmag-plan/src/physics_graph.rs` | `resolve_physics_modules` | markery/maski semantyczne |
+| `crates/fullmag-api/src/router_v2/mod.rs` | `build_v2_router` | zasób v2 |
+| `apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts` | `buildPhysicsGraphTree` | drzewo Explorera |
+| `apps/control-room/src/kernel/resources/physicsGraphResources.ts` | `usePhysicsGraphResource` | resource hook |
+| `apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx` | `PhysicsGraphModuleInspectorPanel` | inspector semantyczny |
+| `crates/fullmag-authoring/src/scene.rs` | `default_scene_version` | wersja dokumentu sceny |
+| `crates/fullmag-ir/src/lib.rs` | `is_supported_ir_version_for_read` | granica odczytu IR |
+| `packages/fullmag-py/src/fullmag/model/physics_scope.py` | `build_physics_graph` | lowering Python |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | bounded FEM artifact provenance |
+| `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `ConservativeCurrentView::Build` | RT0/H(div) current view |
+| `apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx` | `InspectorOverviewFrame` | wspólna kompozycja inspektora |
+
+W round-trip zachowujemy zarówno `requested intent` autora, jak i `resolved execution`
+wybranego lane. `validation errors` są zwracane przed wykonaniem,
+a `unsupported combinations` pozostają jawne i nie są zastępowane fallbackiem.
+
+(validation)=
+## 8. Zależności STT/SOT/SHE/Oersted
 
 Każdy moduł ma stabilne `id`, ścieżkę źródłową i payload rodziny. Typowe
 krawędzie to:
@@ -92,7 +176,7 @@ tylko wtedy, gdy oba końce istnieją, mają zgodny zakres i przechodzą walidac
 planera. Rekord legacy bez celu pozostaje `unresolved` z przyczyną i wskaźnikiem
 JSON Pointer.
 
-## 6. Lowering Python → ProblemIR → runtime
+## 9. Lowering Python → ProblemIR → runtime
 
 Python DSL zapisuje obecność, zakres, napęd, zależności i parametry
 konstytutywne. Autor sceny normalizuje rekordy do wersjonowanego
@@ -106,7 +190,7 @@ Brak bieżącego modułu w Python IR/UI oznacza pusty zbiór źródeł. `j=0` w
 istniejącym module oznacza natomiast jawnie nieaktywny napęd i nie może usuwać
 inspektora, proweniencji ani zależnych ostrzeżeń.
 
-## 7. Ograniczenia i walidacja
+## 10. Walidacja
 
 Normalizacja musi być deterministyczna względem kolejności wektorów, odrzucać
 duplikaty ID oraz wskazania nieistniejących obiektów/regionów. Nieznane rekordy
@@ -128,7 +212,16 @@ kontrakt grafu nie promuje semantycznego SHE/Oersteda do wykonania, a dla FEM
 Oersted wymaga kanonicznego `ConservativeCurrentView` RT0/H(div), zamknięcia
 bilansu i identyfikacji rewizji źródła.
 
-## 8. Bibliografia lokalna
+(limitations)=
+## 11. Ograniczenia
+
+Graf nie dowodzi równoważności FEM/FDM, poprawności RT0/H(div), domknięcia
+obwodu, zbieżności `h/dt`, działania GPU ani produkcyjnej kwalifikacji
+STT/SOT/SHE/Oersteda. Brak modułu nie może być zastąpiony zerowym napędem,
+a moduł `unresolved` nie może być cicho przypisany do obiektu.
+
+(scientific-bibliography)=
+## 12. Bibliografia lokalna
 
 - Fullmag, `docs/physics/0960-spin-torque-sign-units-and-prescribed-sot.md`.
 - Fullmag, `docs/physics/0970-spin-hall-drift-diffusion-transport.md`.

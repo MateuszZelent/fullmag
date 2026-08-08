@@ -39,8 +39,7 @@ describe("Inspector design-system reference contract", () => {
       "src/modules/inspector/panels/ObjectVisualizationOverview.tsx",
     );
 
-    expect(overview).toContain("InspectorGroup");
-    expect(overview).toContain("InspectorMetricStrip");
+    expect(overview).toContain("InspectorOverviewFrame");
     expect(overview).not.toContain("InspectorSection");
     expect(overview).not.toMatch(/<(?:img|canvas)\b/i);
   });

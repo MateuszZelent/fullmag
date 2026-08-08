@@ -1429,4 +1429,29 @@ describe("selectExplorerNode", () => {
       type: "spin-transport",
     });
   });
+
+  it("selects a graph module without reintroducing family-list identity", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:object:film:physics:module:spin%3Afilm",
+      kind: "physics.module",
+      label: "Spin Transport · spin:film",
+      parentId: "model:object:film:physics",
+      physicsActivation: "active",
+      physicsModuleId: "spin:film",
+      physicsModuleKind: "spin_transport",
+      physicsScopeKind: "object",
+      objectId: "film",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "physics.module",
+      nodeId: "model:object:film:physics:module:spin%3Afilm",
+      physicsActivation: "active",
+      physicsModuleId: "spin:film",
+      physicsModuleKind: "spin_transport",
+      physicsScopeKind: "object",
+      type: "physics-module",
+    });
+  });
 });

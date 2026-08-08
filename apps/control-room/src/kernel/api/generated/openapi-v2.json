@@ -15157,6 +15157,261 @@
         ],
         "type": "object"
       },
+      "PhysicsGraphActivationResource": {
+        "enum": [
+          "configured",
+          "active",
+          "inactive",
+          "blocked",
+          "unsupported",
+          "unresolved"
+        ],
+        "type": "string"
+      },
+      "PhysicsGraphEdgeResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "source_id",
+          "target_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphModuleResource": {
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
+          },
+          "applies_to": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphScopeResource"
+            },
+            "type": "array"
+          },
+          "authored_state": {
+            "type": "string"
+          },
+          "capability": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "solve_domain": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionRef"
+            },
+            "type": "array"
+          },
+          "source_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "applies_to",
+          "solve_domain",
+          "depends_on",
+          "activation",
+          "authored_state",
+          "capability",
+          "source_path"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphProvenanceResource": {
+        "properties": {
+          "normalizer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "normalizer"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphResource": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphEdgeResource"
+            },
+            "type": "array"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphModuleResource"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/PhysicsGraphProvenanceResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "schema_version",
+          "modules",
+          "edges",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphScopeResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "interface"
+                ],
+                "type": "string"
+              },
+              "side_a": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "side_b": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              }
+            },
+            "required": [
+              "side_a",
+              "side_b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "cross_object"
+                ],
+                "type": "string"
+              },
+              "object_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "object_ids",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "source_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "source_path",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "PreparationClockAdjustment": {
         "properties": {
           "backward_delta_ms": {
@@ -36037,6 +36292,32 @@
           },
           "409": {
             "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/physics-graph": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_physics_graph",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicsGraphResource"
+                }
+              }
+            },
+            "description": "Normalized authored physics graph"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          },
+          "409": {
+            "description": "The authored scene cannot be normalized into a graph"
           }
         },
         "tags": [

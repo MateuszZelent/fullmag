@@ -506,6 +506,175 @@ pub struct OerstedFieldListResource {
     pub items: Vec<fullmag_authoring::SceneOerstedField>,
 }
 
+/// Stable scope reference used by the graph-driven model tree.
+///
+/// The graph endpoint intentionally exposes scope and dependency metadata,
+/// while constitutive family payloads remain on the family resources.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PhysicsGraphScopeResource {
+    Global,
+    Object {
+        object_id: String,
+    },
+    Region {
+        object_id: String,
+        region_id: String,
+    },
+    Interface {
+        side_a: fullmag_authoring::SceneRegionRef,
+        side_b: fullmag_authoring::SceneRegionRef,
+    },
+    CrossObject {
+        object_ids: Vec<String>,
+    },
+    Unresolved {
+        reason: String,
+        source_path: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PhysicsGraphActivationResource {
+    Configured,
+    Active,
+    Inactive,
+    Blocked,
+    Unsupported,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PhysicsGraphModuleResource {
+    pub id: String,
+    pub kind: String,
+    pub applies_to: Vec<PhysicsGraphScopeResource>,
+    pub solve_domain: Vec<fullmag_authoring::SceneRegionRef>,
+    pub depends_on: Vec<String>,
+    pub activation: PhysicsGraphActivationResource,
+    pub authored_state: String,
+    pub capability: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PhysicsGraphEdgeResource {
+    pub kind: String,
+    pub source_id: String,
+    pub target_id: String,
+    pub status: PhysicsGraphActivationResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PhysicsGraphProvenanceResource {
+    pub normalizer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PhysicsGraphResource {
+    pub scene_revision: u64,
+    pub schema_version: String,
+    pub modules: Vec<PhysicsGraphModuleResource>,
+    pub edges: Vec<PhysicsGraphEdgeResource>,
+    pub provenance: PhysicsGraphProvenanceResource,
+}
+
+impl PhysicsGraphResource {
+    pub fn from_graph(graph: fullmag_authoring::PhysicsGraphIR) -> Self {
+        Self {
+            scene_revision: graph.scene_revision,
+            schema_version: graph.schema_version,
+            modules: graph
+                .modules
+                .into_iter()
+                .map(PhysicsGraphModuleResource::from)
+                .collect(),
+            edges: graph
+                .edges
+                .into_iter()
+                .map(PhysicsGraphEdgeResource::from)
+                .collect(),
+            provenance: PhysicsGraphProvenanceResource {
+                normalizer: "physics_graph.v1".to_string(),
+            },
+        }
+    }
+}
+
+impl From<fullmag_authoring::PhysicsModuleIR> for PhysicsGraphModuleResource {
+    fn from(module: fullmag_authoring::PhysicsModuleIR) -> Self {
+        Self {
+            id: module.id,
+            kind: module.kind,
+            applies_to: module
+                .applies_to
+                .into_iter()
+                .map(PhysicsGraphScopeResource::from)
+                .collect(),
+            solve_domain: module.solve_domain,
+            depends_on: module.depends_on,
+            activation: module.activation.into(),
+            authored_state: module.authored_state,
+            capability: module.capability,
+            source_path: module.source_path,
+        }
+    }
+}
+
+impl From<fullmag_authoring::PhysicsEdgeIR> for PhysicsGraphEdgeResource {
+    fn from(edge: fullmag_authoring::PhysicsEdgeIR) -> Self {
+        Self {
+            kind: edge.kind,
+            source_id: edge.source_id,
+            target_id: edge.target_id,
+            status: edge.status.into(),
+        }
+    }
+}
+
+impl From<fullmag_authoring::PhysicsScopeRef> for PhysicsGraphScopeResource {
+    fn from(scope: fullmag_authoring::PhysicsScopeRef) -> Self {
+        match scope {
+            fullmag_authoring::PhysicsScopeRef::Global => Self::Global,
+            fullmag_authoring::PhysicsScopeRef::Object { object_id } => Self::Object { object_id },
+            fullmag_authoring::PhysicsScopeRef::Region {
+                object_id,
+                region_id,
+            } => Self::Region {
+                object_id,
+                region_id,
+            },
+            fullmag_authoring::PhysicsScopeRef::Interface { side_a, side_b } => {
+                Self::Interface { side_a, side_b }
+            }
+            fullmag_authoring::PhysicsScopeRef::CrossObject { object_ids } => {
+                Self::CrossObject { object_ids }
+            }
+            fullmag_authoring::PhysicsScopeRef::Unresolved {
+                reason,
+                source_path,
+            } => Self::Unresolved {
+                reason,
+                source_path,
+            },
+        }
+    }
+}
+
+impl From<fullmag_authoring::PhysicsActivation> for PhysicsGraphActivationResource {
+    fn from(activation: fullmag_authoring::PhysicsActivation) -> Self {
+        match activation {
+            fullmag_authoring::PhysicsActivation::Configured => Self::Configured,
+            fullmag_authoring::PhysicsActivation::Active => Self::Active,
+            fullmag_authoring::PhysicsActivation::Inactive => Self::Inactive,
+            fullmag_authoring::PhysicsActivation::Blocked => Self::Blocked,
+            fullmag_authoring::PhysicsActivation::Unsupported => Self::Unsupported,
+            fullmag_authoring::PhysicsActivation::Unresolved => Self::Unresolved,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CurrentTransportMutationRequest {
     pub base_revision: u64,

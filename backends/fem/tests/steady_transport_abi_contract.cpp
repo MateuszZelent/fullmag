@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -14,6 +17,26 @@ void require(bool condition, const char *message)
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path)
+{
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("unable to read " + path.string());
+    }
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    return contents.str();
+}
+
+std::filesystem::path fem_source_root()
+{
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
 fullmag_fem_steady_transport_request_v1 base_request()
@@ -70,6 +93,29 @@ void mixing_fails_closed_before_mesh_import()
         "mixing transport silently used conforming H1");
     require(std::strstr(result.error_message, "broken-H1") != nullptr,
         "mixing rejection diagnostic is missing");
+}
+
+void solved_current_oersted_public_boundary_does_not_claim_rt0()
+{
+    const auto root = fem_source_root();
+    const auto repo = root.parent_path().parent_path();
+    const auto header = read_text_file(repo / "native" / "include" / "fullmag_fem.h");
+    const auto runner = read_text_file(
+        repo / "crates" / "fullmag-runner" / "src" / "native_fem" / "steady_transport.rs");
+    const auto physics = read_text_file(
+        repo / "docs" / "physics" / "0980-dynamic-current-and-oersted-coupling.md");
+
+    require(header.find("not a conservative RT0/H(div) current view") != std::string::npos,
+        "steady transport ABI must label nodal current as non-conservative");
+    require(header.find("FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION 1u") != std::string::npos,
+        "steady transport ABI v1 marker disappeared");
+    require(runner.find("solved_current_h1_nodal_midpoint_reference") != std::string::npos,
+        "bounded runner source kind must remain explicit until RT0 integration");
+    require(runner.find("fem_conservative_current_rt0_view.v1") == std::string::npos,
+        "bounded runner must not claim an unimplemented RT0 source view");
+    require(physics.find("Public ABI boundary and next append-only extension") !=
+            std::string::npos,
+        "physics note must freeze the public ABI blocker and next extension contract");
 }
 
 void cpu_double_transparent_request_materializes_all_transport_fields()
@@ -585,6 +631,7 @@ int main()
         wrong_abi_version_fails_before_mesh_import();
         gpu_fails_closed_before_mesh_import();
         mixing_fails_closed_before_mesh_import();
+        solved_current_oersted_public_boundary_does_not_claim_rt0();
         cpu_double_transparent_request_materializes_all_transport_fields();
         cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed();
         const auto affine_oracle = &cpu_double_reciprocal_m2_affine_constitutive_oracle;

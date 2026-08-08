@@ -51,6 +51,7 @@ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfile
 import {
   useCurrentTransportsResource,
   useOerstedFieldsResource,
+  usePhysicsGraphResource,
   useSpinInterfacesResource,
   useSpinTorquesResource,
   useSpinTransportsResource,
@@ -272,6 +273,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const spinInterfaces = useSpinInterfacesResource({ enabled: modelTabActive });
   const spinTorques = useSpinTorquesResource({ enabled: modelTabActive });
   const oerstedFields = useOerstedFieldsResource({ enabled: modelTabActive });
+  const physicsGraph = usePhysicsGraphResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
@@ -372,6 +374,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           spinInterfaces: spinInterfaces.data,
           spinTorques: spinTorques.data,
           oerstedFields: oerstedFields.data,
+          // Keep legacy family rows only while the canonical graph is still
+          // unresolved. An explicitly loaded empty graph means no electrical
+          // module and therefore no dependent spin/Oersted rows.
+          physicsGraph: physicsGraph.data ?? undefined,
           spinTransports: spinTransports.data,
           meshManifest: manifest.data,
           domainMeta: domainMeta.data,
@@ -522,6 +528,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     spinInterfaces.data,
     spinTorques.data,
     oerstedFields.data,
+    physicsGraph.data,
     spinTransports.data,
     regionMemberships.data,
     stageExecution.data,

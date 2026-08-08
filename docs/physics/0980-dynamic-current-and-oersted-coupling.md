@@ -22,6 +22,7 @@ Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
 formula/operator/realization identifiers. Section 8.1 of the runtime contract
 is the normative registry.
 
+(problem-statement)=
 ## 1. Problem statement
 
 All current-induced physics must consume one signed, conservative current field
@@ -33,7 +34,8 @@ Oersted field/energy semantics, FDM cell-integrated convolution, FEM
 
 It specifies a target contract and does not claim existing lanes satisfy it.
 
-## 2. Physical model
+(governing-equations)=
+## 2. Governing equations and physical model
 
 ### 2.1 Conservative dynamic current
 
@@ -146,6 +148,12 @@ RT0 source or used to satisfy the mixed-solver range condition.
 
 ### 2.3 Magnetoquasistatic Oersted field
 
+```{math}
+:label: instantaneous-biot-savart-h
+H_{\mathrm{oe}}(x,t)=\frac{1}{4\pi}\int_{\Omega_c}
+\frac{J_c(x',t)\times(x-x')}{|x-x'|^3}\,dV'.
+```
+
 For the instantaneous conservative current,
 
 ```text
@@ -215,6 +223,7 @@ transport/Oersted state as accepted. After acceptance, observables are refreshed
 at the accepted state; published `J_charge`, `H_oe`, and work/energy correspond
 to the RHS state they describe.
 
+(symbols-and-si-units)=
 ### 2.7 Symbols and SI units
 
 | Symbol | Meaning | SI unit / condition |
@@ -238,7 +247,12 @@ to the RHS state they describe.
 | `frequency_hz`, `bandwidth_hz` | cyclic frequency and bandwidth | Hz |
 | `phase_rad` | sinusoidal phase | rad (dimensionless) |
 | `center`, `t_on`, `t_off`, `t_i` | envelope times | s |
+| `r` | target-source displacement | m |
+| `V_e` | active tetrahedron volume | m^3 |
+| `r_reg` | equivalent-sphere self regularization radius of the bounded midpoint slice | m |
+| `mu_0` | vacuum permeability used only when converting H to B or evaluating Zeeman energy | H/m |
 
+(assumptions-and-validity)=
 ### 2.8 Assumptions and validity limits
 
 The model excludes displacement current, propagation delay, full-wave
@@ -247,7 +261,8 @@ material response inside the Oersted operator. Unsupported PBC, missing closure,
 nonconservative prescribed current, undefined source time, or strict operation
 outside the regime fail closed rather than selecting a plausible fallback.
 
-## 3. Numerical interpretation
+(discrete-realization)=
+## 3. Numerical interpretation and discrete realization
 
 ### 3.1 FDM current reconstruction and Oersted convolution
 
@@ -949,8 +964,10 @@ requires temporal-order evidence; it cannot claim strict high-order coupling.
 M2 nonlinear failure rejects the LLG step. M3 uses common IMEX rollback for
 `m,V,mu_s,J,H`, cache state, and telemetry.
 
+(implementation-mapping)=
 ## 4. API, IR, planner, runtime, and workspace impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 `CurrentTransport` owns model, domain, drive, one envelope, materials,
@@ -968,6 +985,31 @@ quadrature exposes a tagged deterministic FP64 policy rather than reusing
 Krylov fields. Python and UI script export must preserve every selected policy
 field and reject unavailable lanes before execution.
 
+```python
+# %%
+from fullmag import CurrentTransport, OerstedField
+
+drive = CurrentTransport(name="drive", current_density=(1.0e10, 0.0, 0.0))
+oersted = OerstedField(source=drive.name)
+assert oersted.model == "from_current_solution"
+```
+
+| Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
+| `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
+| `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
+
+(round-trip-and-failure-semantics)=
+#### 4.1.1 Requested intent, resolved execution and failures
+
+Round-trip preserves the author's `requested intent` and the planner's
+`resolved execution`, including source identity, closure, envelope and lane.
+`validation errors` are returned before native execution. `unsupported combinations`
+remain explicit and fail closed; they are never replaced by a
+different current source or a hidden backend fallback.
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 Typed `ResolvedCurrentTransportPlanIR` and `OerstedSourceIR`/
@@ -1085,6 +1127,86 @@ planner and runtime tests cover source identity, FEM M2 fail-closed behavior,
 finite/sign-reversing midpoint fields, and injection length/cylinder guards;
 managed FEM execution is still required before any qualification promotion.
 
+### 4.6. Public ABI boundary and next append-only extension (audyt 2026-08-08)
+
+Audyt publicznego łańcucha wykazał, że obecny
+`fullmag_fem_steady_transport_request_v1`/`result_v1` nie może jeszcze
+materializować kanonicznego prądu dla Oersteda. Żądanie v1 opisuje wyłącznie
+ustalony transport H1 z warunkami Dirichleta, a wynik publikuje
+`charge_current_density_xyz_apm2` jako nodalny rzut P1/H1. Ten bufor jest
+wizualizacją i ograniczonym referencyjnym wynikiem transportu; **nie jest
+konserwatywnym widokiem prądu RT0/H(div)**. W v1 nie ma także stabilnych
+identyfikatorów wierzchołków, ról ścian, par source-cut, interfejsu leadu,
+zaakceptowanego snapshotu okresowego potencjału, rewizji źródła/stage'u ani
+certyfikatu bilansu. Dodanie tych pól do istniejącego tailu v1 zmieniłoby
+`struct_size` i naruszyło kontrakt ABI.
+
+Do czasu zamknięcia poniższego rozszerzenia publiczny runner musi pozostawać
+jawnie oznaczony jako
+`solved_current_h1_nodal_midpoint_reference`. Nie wolno zmieniać tego
+`source_kind` na `fem_conservative_current_rt0_view.v1`, wywoływać OE-F1/OE-F2
+z nodalnego bufora ani promować capability FEM dynamic-Oersted. Istniejące
+managed testy `verify-fem-oersted-oet0-cpu-contract`,
+`verify-fem-oersted-oef1-cpu-contract` i
+`verify-fem-oersted-oef2-cpu-contract` dowodzą operatorów w izolacji; nie są
+dowodem połączenia transport → widok RT0 → Oersted → LLG.
+
+#### 4.6.1. Wymagany kontrakt append-only
+
+Następna implementacja ma być nowym, wersjonowanym symbolem i strukturami;
+nie modyfikuje istniejących struktur ani symboli v1:
+
+```text
+fullmag_fem_steady_transport_rt0_request_v1
+fullmag_fem_steady_transport_rt0_result_v1
+fullmag_fem_solve_steady_transport_rt0_v1(...)
+```
+
+`request_v1` zawiera niezmieniony `base` typu
+`fullmag_fem_steady_transport_request_v1` oraz wymagany
+`conservative_source_descriptor_v1`. Descriptor musi przenosić:
+
+1. `closure_kind` (`closed_geometry` albo `external_lead_extension`) oraz
+   kompletny opis mesha leadu/interfejsów, jeśli wybrano drugi wariant;
+2. `stable_vertex_ids` dla każdego wierzchołka, z wersją
+   `stable_mesh_vertex_u64.v1`, i rekordy boundary-face z rolą
+   `insulating_outer`, `source_cut` albo `closure_interface` oraz stabilnym
+   `circuit_id`;
+3. source-cut face pairs z uporządkowanymi kluczami trójkątów, wektorem
+   translacji i signed `potential_drop_v`, albo jawne pary interfejsu
+   urządzenie–lead oraz obie elektrody zewnętrzne;
+4. pełną tożsamość snapshotu: `source_module_id`,
+   `source_state_revision`, `source_field_digest`, `mesh_revision`,
+   `topology_revision`, `geometry_digest`, `closure_revision`,
+   `closure_digest`, `envelope_revision`, `envelope_digest`,
+   `evaluated_envelope_multiplier`, `evaluation_time_s` i `stage_identity`;
+5. politykę tolerancji algebraicznej/fizycznej oraz jawny tryb CPU/GPU.
+
+`result_v1` musi zwrócić zarówno nodalny bufor pomocniczy (jeśli zażądany),
+jak i immutable RT0 view: scalar RT0 DOFs na własnym meshu, kanoniczne rekordy
+`(face_vertex_ids[3], flux_a)` posortowane po stabilnych ID, bytes certyfikatu
+bilansu oraz pola `operator_version`, `fe_space`, `unit`,
+`canonical_face_digest`, `balance_certificate_digest` i
+`view_identity_digest`. Części wynikowe mają jawne długości i pojemności; brak
+któregokolwiek digestu, closure albo stage identity kończy się błędem przed
+wywołaniem Oersteda.
+
+Implementacja tego symbolu musi wewnątrz backendu wykonać
+`ConservativeCurrentView::Build` (dla snapshotu okresowego lub sprzężonego
+leadu) albo `ConservativeCurrentView::Import` z niezależnym certyfikatem. Ten
+sam immutable view, bez rekonstrukcji z nodalnego P1, jest jedynym wejściem do
+`DirectTetraQuadrature::Evaluate` (OE-F1) lub
+`VectorPotentialSolver::Evaluate` (OE-F2). Runner dopisuje do artefaktu
+`source_view_identity_digest` i `stage_identity`; LLG może przyjąć pole dopiero
+po zgodności wszystkich rewizji. Wersja v1 tego rozszerzenia pozostaje
+`reference_executable` CPU/double do czasu trzech poziomów `h`, oracle
+direct-tetra, testów zamknięcia/znaku/energii i managed end-to-end.
+
+To jest kontrakt projektowy, nie zaimplementowany symbol. Do jego ukończenia
+bounded nodalny midpoint pozostaje jedyną publiczną ścieżką referencyjną i nie
+może być opisywany jako produkcyjny dynamiczny Oersted FEM.
+
+(validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
@@ -1147,6 +1269,7 @@ at least nominal minus `0.25` in the asymptotic range.
 
 Unchecked items remain implementation work.
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 Full Maxwell waves, displacement current, skin/eddy redistribution, magnetic
@@ -1155,6 +1278,28 @@ exact open-boundary FEM treatments, and hybrid source projection require
 separate publications and gates. An expert regime override is provenance, not
 evidence that the approximation is accurate.
 
+(source-code-index)=
+### 7.1. Source-code index
+
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `crates/fullmag-plan/src/oersted.rs` | `resolve_oersted_term` | bind Oersted source |
+| `crates/fullmag-plan/src/oersted.rs` | `resolve_solved_current_source` | solved-current binding |
+| `crates/fullmag-plan/src/spin_transport.rs` | `resolve_m1_fem_spin_transport` | FEM transport descriptor |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solved_current_midpoint_biot_savart_field` | bounded midpoint field |
+| `crates/fullmag-runner/src/dispatch.rs` | `normalized_fem_plan_for_runtime` | FEM field injection |
+| `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `solve_coupled_module` | FDM stage owner |
+| `crates/fullmag-plan/src/spin_transport.rs` | `fem_ohmic_oersted_binds_the_solved_charge_field` | planner regression |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current` | runtime regression |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | artifact provenance |
+| `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_v1` | public v1 ABI boundary |
+| `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |
+| `backends/fem/tests/steady_transport_contract.cpp` | `main` | managed transport contract |
+| `backends/fem/tests/conservative_current_view_contract.cpp` | `main` | OE-T0 contract |
+| `backends/fem/tests/oersted_direct_tetra_contract.cpp` | `main` | OE-F1 contract |
+| `backends/fem/tests/oersted_vector_potential_contract.cpp` | `main` | OE-F2 contract |
+
+(scientific-bibliography)=
 ## 8. References
 
 1. T. Schrefl, `docs/papers/mic_intro.pdf` (local copy, 2016), especially the magnetostatic Ampere/divergence and external-Zeeman conventions.
