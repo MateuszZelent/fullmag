@@ -1,6 +1,6 @@
 "use client";
 
-import type { PhysicsGraphModuleResource, PhysicsGraphScopeResource } from "@/kernel/api/apiTypes";
+import type { PhysicsGraphModuleResource } from "@/kernel/api/apiTypes";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
@@ -62,8 +62,9 @@ function selectedModule(
   selection: Selection,
   modules: readonly PhysicsGraphModuleResource[],
 ): PhysicsGraphModuleResource | null {
-  if (selection.ref?.type !== "physics-module") return null;
-  return modules.find((module) => module.id === selection.ref?.physicsModuleId) ?? null;
+  const ref = selection.ref;
+  if (ref?.type !== "physics-module") return null;
+  return modules.find((module) => module.id === ref.physicsModuleId) ?? null;
 }
 
 export function PhysicsGraphModuleInspectorPanel({ selection }: InspectorPanelProps) {

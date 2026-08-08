@@ -321,6 +321,16 @@ export type FieldDriveListResource =
   components["schemas"]["FieldDriveListResource"];
 export type PhysicsGraphResource =
   components["schemas"]["PhysicsGraphResource"];
+export type PhysicsGraphActivationResource =
+  components["schemas"]["PhysicsGraphActivationResource"];
+export type PhysicsGraphEdgeResource =
+  components["schemas"]["PhysicsGraphEdgeResource"];
+export type PhysicsGraphModuleResource =
+  components["schemas"]["PhysicsGraphModuleResource"];
+export type PhysicsGraphProvenanceResource =
+  components["schemas"]["PhysicsGraphProvenanceResource"];
+export type PhysicsGraphScopeResource =
+  components["schemas"]["PhysicsGraphScopeResource"];
 export type RegionalFieldDriveResource =
   components["schemas"]["RegionalFieldDriveResource"];
 export type FieldDriveCreateRequest =

@@ -51,11 +51,11 @@ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfile
 import {
   useCurrentTransportsResource,
   useOerstedFieldsResource,
-  usePhysicsGraphResource,
   useSpinInterfacesResource,
   useSpinTorquesResource,
   useSpinTransportsResource,
 } from "@/kernel/resources/spinAuthoringResources";
+import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";

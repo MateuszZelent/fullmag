@@ -382,9 +382,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     <PhysicsInspectorOverview
       model={buildPhysicsInspectorOverviewModel({
         dependency: {
-          requiredSourceIds: interactionId === "oersted_field" || interactionId === "spin_torque"
-            ? ["current_transport"]
-            : [],
+          requiredSourceIds: [],
           reason: laneIssue?.error ?? activeLaneOperation.reason,
           status: physicsStatus,
         },
