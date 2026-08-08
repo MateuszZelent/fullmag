@@ -3,11 +3,11 @@
 **Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; implementacja częściowa i niegotowa do integracji  \
 **Wariant:** 3 — pełny model docelowy wdrażany przez niezależnie walidowane kamienie milowe M0–M3  \
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
-**Aktualny kodowy baseline audytu:** `master@70ee4cafc`; dokumentacyjne i gate'owe follow-upy `88e0fcdc4` oraz `0fcff20d1` są już na `origin/master`  \
-**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, ostatni zapisany stan `master@0fcff20d1`; niniejsza korekta planu jest kolejnym zapisem dokumentacji  \
+**Aktualny kodowy baseline audytu:** `master@883ce5650`; implementacja grafu zakresu, typed runtime provenance, artefaktów i paneli Inspector jest scalona lokalnie; promocja fizyki do produkcji pozostaje ograniczona bramami z §32.92–§32.93.  \
+**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, ostatni zapisany stan `master@883ce5650`; niniejsza korekta planu jest zapisem dokumentacji po scaleniu implementacji.  \
 **Merge-base:** bieżący checkout jest już zintegrowany na `master`; wcześniejsze rozjazdy gałęzi pozostają historią audytu, nie aktualnym stanem integracji  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-08-05  \
+**Ostatnia aktualizacja:** 2026-08-08  \
 **Raport źródłowy:** [README.md](./README.md)
 
 **Bieżący stan wykonawczy (snapshot 2026-08-05):** kodowy baseline `master@70ee4cafc`. Brama
