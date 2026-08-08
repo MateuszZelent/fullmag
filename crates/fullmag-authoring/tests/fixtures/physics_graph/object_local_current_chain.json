@@ -12,9 +12,9 @@
   },
   "expected_modules": [
     {"id": "current:film", "kind": "current_transport", "activation": "active", "scope": {"kind": "object", "object_id": "film"}},
-    {"id": "spin:film", "kind": "spin_transport", "activation": "active", "depends_on": ["current:film"]},
-    {"id": "torque:free-layer", "kind": "spin_torque", "activation": "active", "depends_on": ["current:film"]},
-    {"id": "oersted:film", "kind": "oersted_field", "activation": "active", "depends_on": ["current:film"]}
+    {"id": "spin:film", "kind": "spin_transport", "activation": "active", "scope": {"kind": "object", "object_id": "film"}, "depends_on": ["current:film"]},
+    {"id": "torque:free-layer", "kind": "spin_torque", "activation": "active", "scope": {"kind": "object", "object_id": "film"}, "depends_on": ["current:film"]},
+    {"id": "oersted:film", "kind": "oersted_field", "activation": "active", "scope": {"kind": "global"}, "depends_on": ["current:film"]}
   ],
   "expected_edges": [
     {"kind": "current_to_spin_transport", "source_id": "current:film", "target_id": "spin:film", "status": "active"},

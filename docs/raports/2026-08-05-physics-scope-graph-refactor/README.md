@@ -20,6 +20,9 @@ authoring, `ProblemIR`, planner i Control Room dla FEM oraz FDM.
 - rozmieszczenie węzłów Explorera wyłącznie z grafu, w tym gałęzie object,
   global, cross-object i unresolved;
 - wspólna kompozycja inspektora zgodna z szablonem Visualization;
+- fail-closed verifier `scripts/verify_physics_scope_graph_runtime.py`, który
+  porównuje ID, scope, zależności i lane-specific marker/mask po dostarczeniu
+  artefaktu runtime;
 - jawna granica FEM solved-current → Oersted: obecny publiczny ABI pozostaje
   referencyjnym H1/P1 nodal midpoint, a przyszłe RT0/H(div) jest opisane jako
   kontrakt append-only, bez udawania implementacji.
@@ -34,6 +37,10 @@ RT0 end-to-end i browser smoke pozostają otwarte.
 
 Szczegółowe dowody, ograniczenia i kolejne bramy znajdują się w
 [`QUALIFICATION.md`](./QUALIFICATION.md).
+
+Verifier grafu jest dowodem kontraktu porównania, nie dowodem uruchomienia
+solvera. Dopóki managed FEM/FDM runtime nie zapisze wymaganego artefaktu z
+scene revision i `executed_module_ids`, status runtime pozostaje otwarty.
 
 ## Zasady odtwarzalności
 

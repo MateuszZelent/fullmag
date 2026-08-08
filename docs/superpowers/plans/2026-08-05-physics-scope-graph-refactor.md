@@ -713,7 +713,11 @@ git commit -m "feat(inspector): align physics panels with visualization template
 - Create: `docs/raports/2026-08-05-physics-scope-graph-refactor/README.md`
 - Create: `docs/raports/2026-08-05-physics-scope-graph-refactor/QUALIFICATION.md`
 - Create only as captured evidence: `docs/raports/2026-08-05-physics-scope-graph-refactor/fixtures/` and `artifacts/`
-- Test/verification scripts: use existing managed recipes and add a focused `scripts/verify_physics_scope_graph_runtime.py` only if the existing report validators cannot compare graph IDs, scope and dependency omission.
+- Test/verification scripts: use existing managed recipes plus the focused
+  `scripts/verify_physics_scope_graph_runtime.py`. The existing report
+  validators cannot compare graph IDs, scope and dependency omission, so the
+  verifier is now part of the Task 8 evidence contract; it remains fail-closed
+  until a managed FEM/FDM run supplies its JSON payload.
 
 **Interfaces:**
 
