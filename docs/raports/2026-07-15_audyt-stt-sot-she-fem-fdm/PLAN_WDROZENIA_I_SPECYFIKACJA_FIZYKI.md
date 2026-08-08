@@ -8720,6 +8720,16 @@ Wprowadzone elementy:
    pozostaje H1/P1 nodal midpoint reference; przyszły append-only RT0/H(div),
    closure i stage/source certificate są opisane w §4.6 noty 0980 i nie są
    relabelowane jako wykonane.
+8. Runner zapisuje additive `physics/physics_graph_provenance.v1.json` oraz
+   wpis `execution_provenance.physics_graph` w `metadata.json`. Artefakt niesie
+   `scene_revision`, digest znormalizowanego grafu, requested/resolved lane,
+   ID modułów, zakresy, zależności i lane-specific semantic marker/mask IDs.
+   Jest to typed semantic-resolution provenance, nie certyfikat topologii ani
+   dowód, że solver wykonał każdy aktywny moduł.
+9. Planner/runtime walidują typed graph provenance fail-closed, a panele
+   Transport/STT/SOT/SHE/Oersted korzystają ze wspólnego edit-session/action
+   bar. Dodano kontrakty DOM/accessibility; pełny browser smoke nadal pozostaje
+   osobną bramą środowiska produkcyjnego.
 
 ### 32.92.2. Bieżące dowody
 
@@ -8731,6 +8741,9 @@ Wprowadzone elementy:
 | API graph resource | 1 test scenariuszowy, `cargo check` | `reference_executable` zasobu |
 | OpenAPI generated surface | 206/206 zgodności JSON/paths | kontrakt statyczny |
 | Explorer/Inspector/resource/API frontend | 10 ukierunkowanych plików Vitest, w tym graf zasobów, invalidation, Explorer, selection, wspólny frame inspektora i DOM overview | 312/312; kontrakt statyczny oraz model/DOM testy |
+| Inspector edit-session/action bar | 3 suites | 84/84; focused typecheck; SSR/browser nadal otwarte |
+| Typed runtime graph provenance | runner unit + artifact integration | 2/2; zapis pliku i `metadata.json` sprawdzony na fixture, bez managed solver capture |
+| Runtime graph verifier | `scripts/test_verify_physics_scope_graph_runtime.py` + fixtures | 10 passed; verifier gotowy, lecz bez przechwyconego managed runtime |
 | FEM M2 affine transport | managed `PASS` | bounded CPU prerequisite |
 | FEM OE-T0 | managed `PASS`, 4/4 serial/MPI/identity | operator `reference_executable` |
 
@@ -8742,11 +8755,12 @@ runtime. Nie traktuje się tego dowodu jako uruchomienia produkcyjnego UI.
 
 ### 32.92.3. Granice i bramy pozostałe
 
-Refaktoryzacja nie awansuje fizyki STT/SOT/SHE/Oersteda do produkcji. Nadal
-otwarte są:
+Refaktoryzacja nie awansuje fizyki STT/SOT/SHE/Oersteda do produkcji. Typed
+provenance i wspólny action-session są już zaimplementowane, ale nadal otwarte
+są:
 
-- typed runtime provenance z graph ID, zakresem, rewizją sceny/siatki i
-  certyfikatem realizacji marker/mask;
+- certyfikat realizacji marker/mask na konkretnej siatce/gridzie oraz
+  osobne rozróżnienie `resolved` od `executed` w managed lane;
 - podłączenie `ConservativeCurrentView` RT0/H(div) do publicznego FEM
   solved-current Oersted wraz z closure, direct tetra oracle, energią i
   zbieżnością `h`;
@@ -8754,7 +8768,8 @@ otwarte są:
   continuum limit;
 - managed FDM graph-runtime gate oraz browser/Playwright proof pustej sceny,
   zero-drive, object-local i cross-object;
-- pełny action-bar/edit-session i DOM/accessibility proof wszystkich paneli.
+- pełny browser/SSR DOM/accessibility proof wszystkich paneli w kompletnym
+  środowisku Control Room.
 
 Ciężkie kompilacje pozostają wykonywane przez `just` z trwałym storage pod
 `/zfn2/mateuszz/git/fullmag`; nie należy przenosić buildów na CIFS ani do
@@ -8762,12 +8777,14 @@ zwykłego `/tmp`.
 
 ### 32.92.4. Ocena celu po tej iteracji
 
-Semantyczny scope graph, authoring, planner, API, Explorer i podstawowa
-kompozycja Inspector są zaimplementowane i mają zielone testy kontraktowe.
+Semantyczny scope graph, authoring, planner, typed provenance, API, Explorer,
+Inspector action-session i podstawowa kompozycja paneli są zaimplementowane i
+mają zielone testy kontraktowe.
 Najwyższy uczciwy status całego celu pozostaje **implementacja częściowa**:
-około **91% zakresu refaktoryzacji źródłowej**, lecz tylko około **65%
+około **93% zakresu refaktoryzacji źródłowej**, lecz tylko około **68%
 gotowości produkcyjnej** dla pełnego FEM/FDM STT/SOT/SHE/Oersted. Wzrost dotyczy
-spójności modelu i UI, nie kwalifikacji numerycznej solverów.
+spójności modelu, provenance i UI; nie jest jeszcze kwalifikacją numeryczną
+solverów ani dowodem managed runtime.
 
 Szczegółowy ledger dowodów i blokad zapisano w
 `docs/raports/2026-08-05-physics-scope-graph-refactor/QUALIFICATION.md`.

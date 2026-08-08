@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct ResolvedPhysicsModule {
     pub module_id: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
     pub requested_lane: String,
     pub resolved_lane: String,
     pub status: String,
@@ -171,6 +173,17 @@ pub fn resolve_physics_modules(
             .and_then(Value::as_str)
             .unwrap_or("unsupported")
             .to_string();
+        let depends_on = module_object
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .map(|dependencies| {
+                dependencies
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let authored_status = module_object
             .get("activation")
             .and_then(Value::as_str)
@@ -218,6 +231,7 @@ pub fn resolve_physics_modules(
         resolved.push(ResolvedPhysicsModule {
             module_id,
             kind,
+            depends_on,
             requested_lane,
             resolved_lane: resolved_lane.as_str().to_string(),
             status,

@@ -23,11 +23,70 @@ use std::path::Path;
 const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
 
 pub(crate) const SOLVER_DIAGNOSTIC_TRACE_ARTIFACT: &str = "solver/accepted_steps.v1.json";
+pub(crate) const PHYSICS_GRAPH_PROVENANCE_ARTIFACT: &str =
+    "physics/physics_graph_provenance.v1.json";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SolverDiagnosticTraceArtifact {
     schema_version: String,
     steps: Vec<StepStats>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PhysicsGraphRuntimeProvenanceArtifact {
+    schema_version: String,
+    scene_revision: u64,
+    graph_sha256: String,
+    requested_lane: String,
+    resolved_lane: String,
+    modules: Vec<fullmag_plan::ResolvedPhysicsModule>,
+}
+
+/// Materialize the validated semantic graph at the artifact boundary.
+///
+/// This is deliberately separate from `ExecutionProvenance`: the latter is a
+/// long-lived compatibility struct with many constructors, while this graph
+/// certificate is an additive, schema-versioned projection of the exact
+/// ProblemIR graph and the lane resolution used for the run.  Marker/mask IDs
+/// remain semantic identities until a backend supplies a concrete topology
+/// certificate; this artifact must not be read as such a certificate.
+fn physics_graph_provenance_artifact(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> std::io::Result<Option<crate::types::AuxiliaryArtifact>> {
+    let Some(graph) = problem.physics_graph.as_ref() else {
+        return Ok(None);
+    };
+    let modules = fullmag_plan::resolve_physics_modules(problem, plan.common.resolved_backend)
+        .map_err(|reasons| Error::new(ErrorKind::InvalidData, reasons.join("; ")))?;
+    let graph_bytes = serde_json::to_vec(graph).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("physics_graph cannot be serialized for provenance: {error}"),
+        )
+    })?;
+    let scene_revision = graph
+        .get("scene_revision")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let payload = PhysicsGraphRuntimeProvenanceArtifact {
+        schema_version: "physics_graph.runtime_provenance.v1".to_string(),
+        scene_revision,
+        graph_sha256: format!("{:x}", Sha256::digest(graph_bytes)),
+        requested_lane: problem.backend_policy.requested_backend.as_str().to_string(),
+        resolved_lane: plan.common.resolved_backend.as_str().to_string(),
+        modules,
+    };
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("physics graph provenance cannot be serialized: {error}"),
+        )
+    })?;
+    Ok(Some(crate::types::AuxiliaryArtifact {
+        relative_path: PHYSICS_GRAPH_PROVENANCE_ARTIFACT.to_string(),
+        bytes,
+    }))
 }
 
 /// Preserve the accepted-step trace across the execution/artifact boundary.
@@ -1216,6 +1275,20 @@ pub(crate) fn write_artifacts(
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
+    let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan)?;
+    if let Some(artifact) = physics_graph_artifact.as_ref() {
+        let graph_provenance: serde_json::Value = serde_json::from_slice(&artifact.bytes)
+            .map_err(|error| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("physics graph provenance artifact is invalid JSON: {error}"),
+                )
+            })?;
+        execution_provenance_json
+            .as_object_mut()
+            .expect("ExecutionProvenance must serialize to an object")
+            .insert("physics_graph".to_string(), graph_provenance);
+    }
     if let Some(thermal) =
         thermal_execution_provenance(plan, accepted_steps, &execution_provenance)
     {
@@ -1353,6 +1426,9 @@ pub(crate) fn write_artifacts(
     let fdm_region_membership_artifacts = crate::fdm::artifacts::region_membership_artifacts(plan)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     auxiliary_artifacts.extend(fdm_region_membership_artifacts);
+    if let Some(artifact) = physics_graph_artifact {
+        auxiliary_artifacts.push(artifact);
+    }
     for artifact in &auxiliary_artifacts {
         let artifact_path = output_dir.join(&artifact.relative_path);
         if let Some(parent) = artifact_path.parent() {
@@ -3505,6 +3581,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn physics_graph_runtime_provenance_preserves_scope_dependencies_and_lane() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Auto;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 19,
+            "modules": [
+                {
+                    "id": "current:film",
+                    "kind": "current_transport",
+                    "applies_to": [{"kind": "object", "object_id": "film"}],
+                    "solve_domain": [{"object_id": "film"}],
+                    "depends_on": [],
+                    "activation": "active",
+                    "authored_state": "authored",
+                    "capability": "reference_executable",
+                    "source_path": "/current_modules/0",
+                    "family_payload": {}
+                },
+                {
+                    "id": "spin:film",
+                    "kind": "spin_transport",
+                    "applies_to": [{"kind": "object", "object_id": "film"}],
+                    "solve_domain": [{"object_id": "film"}],
+                    "depends_on": ["current:film"],
+                    "activation": "blocked",
+                    "authored_state": "authored",
+                    "capability": "semantic_only",
+                    "source_path": "/spin_transports/0",
+                    "family_payload": {"reason": "source not executed on this lane"}
+                }
+            ],
+            "edges": []
+        }));
+        let plan = test_fem_execution_plan();
+
+        let artifact = physics_graph_provenance_artifact(&problem, &plan)
+            .expect("graph provenance must resolve")
+            .expect("authored graph must emit a runtime artifact");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("artifact JSON");
+
+        assert_eq!(artifact.relative_path, PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
+        assert_eq!(payload["schema_version"], "physics_graph.runtime_provenance.v1");
+        assert_eq!(payload["scene_revision"], 19);
+        assert_eq!(payload["requested_lane"], "auto");
+        assert_eq!(payload["resolved_lane"], "fem");
+        assert_eq!(payload["modules"][1]["depends_on"], serde_json::json!(["current:film"]));
+        assert_eq!(payload["modules"][1]["scope_key"], "object:film");
+        assert_eq!(payload["modules"][1]["status"], "blocked");
+        assert!(payload["graph_sha256"].as_str().is_some_and(|value| value.len() == 64));
+    }
+
+    #[test]
     fn strict_gpu_artifact_provenance_requires_loaded_mfem_version() {
         let plan = test_fem_execution_plan();
         let provenance = ExecutionProvenance {
@@ -4816,6 +4946,72 @@ mod tests {
             })
         );
 
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn metadata_and_auxiliary_file_persist_physics_graph_runtime_provenance() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Auto;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 23,
+            "modules": [{
+                "id": "current:film",
+                "kind": "current_transport",
+                "applies_to": [{"kind": "object", "object_id": "film"}],
+                "solve_domain": [{"object_id": "film"}],
+                "depends_on": [],
+                "activation": "active",
+                "authored_state": "authored",
+                "capability": "reference_executable",
+                "source_path": "/current_modules/0",
+                "family_payload": {}
+            }],
+            "edges": []
+        }));
+        let plan = test_fem_execution_plan();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-physics-graph-provenance-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance::default(),
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("graph provenance artifacts should be written");
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata"),
+        )
+        .expect("metadata JSON");
+        let metadata_graph = &metadata["execution_provenance"]["physics_graph"];
+        assert_eq!(metadata_graph["schema_version"], "physics_graph.runtime_provenance.v1");
+        assert_eq!(metadata_graph["scene_revision"], 23);
+        assert_eq!(metadata_graph["requested_lane"], "auto");
+        assert_eq!(metadata_graph["resolved_lane"], "fem");
+        assert_eq!(metadata_graph["modules"][0]["module_id"], "current:film");
+
+        let artifact_path = output_dir.join(PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
+        let artifact: serde_json::Value = serde_json::from_slice(
+            &fs::read(&artifact_path).expect("physics graph artifact file"),
+        )
+        .expect("physics graph artifact JSON");
+        assert_eq!(artifact, *metadata_graph);
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
 

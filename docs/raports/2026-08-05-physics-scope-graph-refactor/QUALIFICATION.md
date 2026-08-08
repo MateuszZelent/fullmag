@@ -28,6 +28,9 @@ mask identities; nie są one jeszcze certyfikatami konkretnej siatki/gridu.
 | API check | `cargo check -p fullmag-api` | zielony, tylko istniejące ostrzeżenia | nie zastępuje browser smoke |
 | OpenAPI | walidacja JSON i zgodności wygenerowanych ścieżek | 206/206 | statyczny kontrakt |
 | Explorer/Inspector/resource/API frontend | 10 ukierunkowanych plików Vitest, w tym graf zasobów, invalidation, Explorer, selection, wspólny frame inspektora i DOM overview | 312 passed | test uruchomiony z repozytoryjnego cache zależności przez tymczasowe aliasy; pełny typecheck worktree nadal wymaga kompletnego `node_modules` |
+| Inspector edit-session/action bar | 3 ukierunkowane suites oraz focused typecheck | 84/84 | SSR/browser proof pozostaje otwarty |
+| Runner typed graph provenance | unit + integration test artefaktów | 2/2 | fixture zapisuje plik i wpis w `metadata.json`; brak managed solver capture |
+| Graph runtime verifier | `scripts/test_verify_physics_scope_graph_runtime.py` + fixture tests | 10 passed | kontrakt fail-closed, brak przechwyconego artefaktu managed |
 
 Testy Rust i Python wykonano z task-specific targetami Cargo na zarządzanym
 storage. W worktree Control Room nie ma kompletnego `node_modules`, dlatego pełny
@@ -52,9 +55,12 @@ ręcznie.
 
 Planner dopisuje stabilne, tekstowe wpisy `physics_graph.v1` do
 `ProvenancePlanIR.notes`, dzięki czemu tożsamość grafu jest obecna w
-serializowanym execution planie. Publiczny `TransportExecutionProvenance` dla
-FEM nadal ma przede wszystkim bounded Oersted field/source/mesh digests. Nie
-udajemy, że obecny runner ma już osobne, typed RT0 graph certificate.
+serializowanym execution planie. Runner dodatkowo zapisuje
+`physics/physics_graph_provenance.v1.json` oraz kopię typed payloadu w
+`metadata.json.execution_provenance.physics_graph`; payload zawiera rewizję
+sceny, digest grafu, lane, ID modułów, scope, zależności i semantic
+marker/mask IDs. Jest to provenance rozstrzygnięcia semantycznego, nie
+certyfikat konkretnej siatki/gridu ani dowód wykonania solvera.
 
 ## 4. FEM/FDM i dynamiczny Oersted
 
@@ -123,9 +129,11 @@ Testy `scripts/test_verify_physics_scope_graph_runtime.py` obejmują pusty
 prąd, authored zero-drive (moduły pozostają `inactive`, ale lista modułów nie
 znika), object-local chain, global/cross-object scope, złą scope, brak
 provenance i pominiętą zależność. Wynik lokalny: `10 passed` łącznie z
-`scripts/test_physics_scope_graph_fixtures.py`. Brak przechwyconego artefaktu
-runtime oznacza, że ta brama pozostaje gotowa do użycia, lecz nie awansuje
-kwalifikacji w tym snapshotcie.
+`scripts/test_physics_scope_graph_fixtures.py`. Runner ma już własny
+`physics_graph.runtime_provenance.v1` artefakt z testem zapisu, ale nie jest on
+jeszcze pełnym capture'em `executed_module_ids` wymaganym przez verifier. Brak
+managed artefaktu runtime oznacza, że ta brama pozostaje gotowa do użycia, lecz
+nie awansuje kwalifikacji solvera w tym snapshotcie.
 
 ## 5. Explorer i Inspector
 
@@ -139,14 +147,15 @@ Explorer tworzy gałęzie tylko wtedy, gdy graf ma odpowiednie moduły:
 Inspector używa wspólnego `InspectorOverviewFrame` z metrykami, kartą główną,
 sekcjami nawigacyjnymi i tokenami `--fm-*`. `PhysicsGraphModuleInspectorPanel`
 pokazuje zakres, aktywację, zależności i stan wykonania. Edytory payloadów rodzin
-pozostają osobne. Pełna migracja wspólnego action bar/edit-session dla każdego
-panelu oraz DOM/browser proof są jeszcze bramą UI, a nie wykonanym faktem.
+pozostają osobne, ale panele Transport/STT/SOT/SHE/Oersted są już podłączone do
+wspólnego edit-session/action bar z kontraktami DOM/accessibility. Pełny SSR i
+browser smoke nie zostały wykonane z powodu niekompletnego `node_modules`.
 
 ## 6. Otwarte blokery produkcyjne
 
-1. Typed runtime provenance musi przejąć graph module ID, scope, scene/mesh
-   revision i certyfikat realizacji marker/mask; obecne notes są warstwą
-   kompatybilności.
+1. Semantic typed provenance jest zaimplementowane; nadal brakuje certyfikatu
+   realizacji marker/mask na konkretnej siatce/gridzie oraz managed rozróżnienia
+   `resolved` od `executed_module_ids`.
 2. FEM RT0/H(div) musi zostać podłączony do publicznego solved-current Oersted
    z closure, direct tetra oracle, kontrolą znaku/energii oraz sweepem `h`.
 3. FDM CPU/GPU i FEM CPU/GPU potrzebują wspólnego benchmarku ze stanem,
