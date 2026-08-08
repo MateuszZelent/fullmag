@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Activity,
   CircleAlert,
@@ -7,6 +9,10 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import {
+  useRegisterInspectorEditSession,
+  type InspectorEditSession,
+} from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorOverviewFrame } from "../primitives/InspectorOverviewFrame";
@@ -22,9 +28,33 @@ import {
 export interface PhysicsInspectorOverviewProps {
   actions?: ReactNode;
   children?: ReactNode;
+  /** Optional staged/live session registered with the InspectorShell action bar. */
+  editSession?: InspectorEditSession;
   model: PhysicsInspectorOverviewModel | PhysicsInspectorOverviewInput;
   primary?: ReactNode;
   primaryTitle?: string;
+}
+
+/**
+ * Registers an overview-owned session without clobbering a session owned by a
+ * nested authoring panel. Keeping the hook in a separate component lets the
+ * overview omit the bridge entirely for read-only and delegated panels.
+ */
+function PhysicsInspectorEditSessionBridge({
+  session,
+}: {
+  session: InspectorEditSession;
+}) {
+  useRegisterInspectorEditSession(
+    session.mode,
+    session.applying,
+    session.dirty,
+    session.valid,
+    session.lockReason,
+    session.apply,
+    session.reset,
+  );
+  return null;
 }
 
 function modelValue(value: number | string | null | undefined): string {
@@ -105,6 +135,7 @@ function DiagnosticsSection({ model }: { model: PhysicsInspectorOverviewModel })
 export function PhysicsInspectorOverview({
   actions,
   children,
+  editSession,
   model: inputModel,
   primary,
   primaryTitle = "Drive",
@@ -127,7 +158,7 @@ export function PhysicsInspectorOverview({
       ))}
     </div>
   ) : null;
-  return (
+  const overview = (
     <InspectorOverviewFrame
       actions={actions}
       className="fm-physics-inspector-overview"
@@ -171,6 +202,12 @@ export function PhysicsInspectorOverview({
         },
       ]}
     />
+  );
+  return (
+    <>
+      {editSession ? <PhysicsInspectorEditSessionBridge session={editSession} /> : null}
+      {overview}
+    </>
   );
 }
 

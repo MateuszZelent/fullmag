@@ -50,7 +50,16 @@ describe("PhysicsInspectorOverview", () => {
     expect(html).toContain("A/m²");
     expect(html).toContain("No current transport module is present.");
     expect(html).toContain('data-slot="inspector-overview-actions"');
+    expect(html).toContain('aria-label="Inspector overview actions"');
+    expect(html).toContain('role="group"');
     expect(html).toContain('data-state="blocked"');
+
+    const disclosureTriggers = html.match(/data-slot="inspector-group-trigger"/g) ?? [];
+    const disclosureControls = html.match(/aria-controls="[^"]+"/g) ?? [];
+    expect(disclosureTriggers).toHaveLength(5);
+    expect(disclosureControls).toHaveLength(5);
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-expanded="false"');
   });
 
   it("renders an explicit absent state without an editable default payload", () => {

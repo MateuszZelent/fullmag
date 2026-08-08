@@ -95,8 +95,10 @@ export function InspectorOverviewFrame({
 
       {actions ? (
         <div
+          aria-label="Inspector overview actions"
           className="fm-inspector-overview-frame__actions"
           data-slot="inspector-overview-actions"
+          role="group"
         >
           {actions}
         </div>

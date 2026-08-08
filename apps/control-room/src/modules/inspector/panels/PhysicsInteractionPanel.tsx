@@ -264,13 +264,13 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     });
   }
 
-  async function applyInteraction(): Promise<void> {
+  async function applyInteraction(): Promise<boolean> {
     if (!activeLaneOperation.enabled) {
       dispatch({
         type: "setFeedback",
         feedback: { kind: "error", message: activeLaneOperation.reason },
       });
-      return;
+      return false;
     }
     const currentLaneIssue = validateInteractionDraftForDiscretization(
       draft,
@@ -281,14 +281,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         type: "setFeedback",
         feedback: { kind: "error", message: currentLaneIssue.error },
       });
-      return;
+      return false;
     }
     if (isWritableObjectInteraction(interactionId) && !objectId) {
       dispatch({
         type: "setFeedback",
         feedback: { kind: "error", message: "No selected scene object." },
       });
-      return;
+      return false;
     }
 
     const result = buildInteractionApplyPatch(draft);
@@ -297,7 +297,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         type: "setFeedback",
         feedback: { kind: "error", message: result.error },
       });
-      return;
+      return false;
     }
 
     dispatch({ type: "setPending", pending: true });
@@ -331,11 +331,13 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         message: `${spec?.label ?? interactionId} updated.`,
         },
       });
+      return true;
     } catch (error) {
       dispatch({
         type: "setFeedback",
         feedback: { kind: "error", message: errorMessage(error) },
       });
+      return false;
     } finally {
       dispatch({ type: "setPending", pending: false });
     }
@@ -378,8 +380,33 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const physicsStatus = !activeLaneOperation.enabled
     ? interactionAvailability.status === "unsupported" ? "unsupported" as const : "blocked" as const
     : draft.enabled ? "active" as const : "inactive" as const;
+  const draftDirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const editSessionValid = Boolean(
+    spec &&
+      activeLaneOperation.enabled &&
+      !laneIssue &&
+      !isDeferredInteraction(interactionId) &&
+      (isWritableStudyInteraction(interactionId) ||
+        (Boolean(objectId) && isWritableObjectInteraction(interactionId))),
+  );
+  const editSessionLockReason = !activeLaneOperation.enabled
+    ? activeLaneOperation.reason
+    : laneIssue?.error;
+  const resetInteractionDraft = () => {
+    setDraftState({ draft: baseDraft, key: draftKey });
+    dispatch({ type: "setFeedback", feedback: null });
+  };
   return (
     <PhysicsInspectorOverview
+      editSession={{
+        apply: applyInteraction,
+        applying: state.pending,
+        dirty: draftDirty,
+        lockReason: editSessionLockReason,
+        mode: "staged",
+        reset: resetInteractionDraft,
+        valid: editSessionValid,
+      }}
       model={buildPhysicsInspectorOverviewModel({
         dependency: {
           requiredSourceIds: [],

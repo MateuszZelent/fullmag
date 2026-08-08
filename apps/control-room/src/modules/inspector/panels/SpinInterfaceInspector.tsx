@@ -14,6 +14,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
@@ -177,6 +178,24 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const validation = validationState.key === validationKey ? validationState.response : null;
   const readOnly = selected ? !selected.known : false;
   const capability = useSessionStatusSelector((status) => status.data?.capabilities.transport_authoring?.m1_one_way_steady ?? null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const valid = Boolean(
+    !readOnly &&
+      ownerId &&
+      transports.status === "ready" &&
+      capability?.authoring_allowed &&
+      validation?.semantic.valid === true &&
+      validation?.execution.authoring_allowed === true,
+  );
+  const lockReason = readOnly
+    ? "Unknown interface payloads are read-only."
+    : !ownerId
+      ? "Select the owning spin transport before applying."
+      : transports.status !== "ready"
+        ? "Spin transport resources are not ready."
+        : !capability?.authoring_allowed
+          ? capability?.reason ?? "Authoring capability is unavailable."
+          : undefined;
 
   const validationRequest = (): TransportValidationRequest => {
     if (!ownerId || transports.data?.scene_revision === undefined) throw new Error("Select the owning spin transport.");
@@ -215,7 +234,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     if (!response.semantic.valid || !response.execution.authoring_allowed) throw new Error(response.semantic.issues[0]?.message ?? response.execution.reason ?? "Owner update is not authoring-ready.");
   }
 
-  async function run(action: "save" | "delete") {
+  async function run(action: "save" | "delete"): Promise<boolean> {
     setPending(true);
     setFeedback(null);
     try {
@@ -234,9 +253,25 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
         SPIN_INTERFACES_RESOURCE_KEY,
       ]);
       setFeedback({ kind: "success", message: action === "delete" ? "Interface deleted through its owning spin transport." : "Interface committed through its owning spin transport." });
-    } catch (error) { setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) }); }
+      return true;
+    } catch (error) { setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) }); return false; }
     finally { setPending(false); }
   }
+
+  function resetDraft(): void {
+    setDraftState({ key: draftKey, value: baseDraft });
+    setFeedback(null);
+  }
+
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    valid,
+    lockReason,
+    () => run("save"),
+    resetDraft,
+  );
 
   const patch = (value: Partial<InterfaceDraft>) => setDraftState({ key: draftKey, value: { ...draft, ...value } });
   const selectedRecord = record(selected?.interface);

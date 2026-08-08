@@ -19,6 +19,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -112,6 +113,21 @@ export function TransportAuthoringInspector({
     { enabled: true },
   );
   const capability = requestedCapability(family, draft, capabilities);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const valid = Boolean(
+    known &&
+      active.status === "ready" &&
+      capability?.authoring_allowed &&
+      validation?.semantic.valid === true &&
+      validation.execution.authoring_allowed === true,
+  );
+  const lockReason = !known
+    ? "Unknown transport variants are read-only."
+    : active.status !== "ready"
+      ? "Transport resources are not ready."
+      : !capability?.authoring_allowed
+        ? capability?.reason ?? "Transport authoring capability is unavailable."
+        : undefined;
 
   function validationRequest(): TransportValidationRequest {
     if (active.data?.scene_revision === undefined) {
@@ -173,8 +189,8 @@ export function TransportAuthoringInspector({
     key: draftKey,
   });
 
-  async function save(): Promise<void> {
-    if (active.data?.scene_revision === undefined) return;
+  async function save(): Promise<boolean> {
+    if (active.data?.scene_revision === undefined) return false;
     setPending(true);
     setFeedback(null);
     try {
@@ -202,11 +218,18 @@ export function TransportAuthoringInspector({
       }
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setFeedback({ kind: "success", message: "Transport resource committed." });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+      return false;
     } finally {
       setPending(false);
     }
+  }
+
+  function resetDraft(): void {
+    setDraftState({ draft: baseDraft, key: draftKey });
+    setFeedback(null);
   }
 
   async function remove(): Promise<void> {
@@ -229,6 +252,16 @@ export function TransportAuthoringInspector({
       setPending(false);
     }
   }
+
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    valid,
+    lockReason,
+    save,
+    resetDraft,
+  );
 
   return (
     <div className="fm-inspector-panel">

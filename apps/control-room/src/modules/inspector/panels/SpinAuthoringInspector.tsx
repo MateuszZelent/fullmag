@@ -19,6 +19,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
@@ -271,6 +272,21 @@ export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
   const [validationState, setValidationState] = useState<{ key: string; response: TransportValidationResponse | null }>({ key: "", response: null });
   const validation = validationState.key === validationKey ? validationState.response : null;
   const capability = useSessionStatusSelector((status) => status.data?.capabilities.transport_authoring?.m1_one_way_steady ?? null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const valid = Boolean(
+    !readOnly &&
+      active.status === "ready" &&
+      capability?.authoring_allowed &&
+      validation?.semantic.valid === true &&
+      validation?.execution.authoring_allowed === true,
+  );
+  const lockReason = readOnly
+    ? "Unknown authoring records are read-only."
+    : active.status !== "ready"
+      ? "Authoring resources are not ready."
+      : !capability?.authoring_allowed
+        ? capability?.reason ?? "Authoring capability is unavailable."
+        : undefined;
 
   const resourceFromDraft = () => family === "spin_torque" ? buildTorque(draft as TorqueDraft) : buildOersted(draft as OerstedDraft);
   const validationRequest = (): TransportValidationRequest => {
@@ -302,7 +318,7 @@ export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
 
   const patch = (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => setDraftState({ key: draftKey, value: Object.assign({}, draft, value) as TorqueDraft | OerstedDraft });
 
-  async function save(): Promise<void> {
+  async function save(): Promise<boolean> {
     setPending(true);
     setFeedback(null);
     try {
@@ -323,9 +339,16 @@ export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
       }
       invalidateSpinAuthoringResources(resources, commit, [family === "spin_torque" ? SPIN_TORQUES_RESOURCE_KEY : OERSTED_FIELDS_RESOURCE_KEY]);
       setFeedback({ kind: "success", message: "Authoring resource committed." });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+      return false;
     } finally { setPending(false); }
+  }
+
+  function resetDraft(): void {
+    setDraftState({ key: draftKey, value: baseDraft });
+    setFeedback(null);
   }
 
   async function remove(): Promise<void> {
@@ -344,6 +367,16 @@ export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     } finally { setPending(false); }
   }
+
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    valid,
+    lockReason,
+    save,
+    resetDraft,
+  );
 
   return <div className="fm-inspector-panel"><InspectorGroup title={family === "spin_torque" ? "Spin torque" : "Oersted field"}>
     {resourceId === undefined && resourceIndex === undefined ? <FormField label="Resource" type="select" value={localSelectedId} onChange={(event) => setLocalSelectedId(event.target.value)}><option value="">New resource</option>{items.map((item, index) => <option key={`${identity(item)}:${index}`} value={identity(item)}>{identity(item) || `Unknown ${index + 1}`}</option>)}</FormField> : null}
