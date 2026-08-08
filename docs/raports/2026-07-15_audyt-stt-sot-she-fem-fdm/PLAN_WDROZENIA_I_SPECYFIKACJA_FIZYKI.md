@@ -9004,7 +9004,8 @@ wykonany kod i dowody, ale nie awansuje capability bez bram P4/P5.
 | P0 — ABI append-only | **zrealizowany w kodzie** | `native/include/fullmag_fem.h` oraz `crates/fullmag-fem-sys/src/lib.rs` dodają wyłącznie nowe typy/symbole RT0 i RT0/OE-F1; istniejący `fullmag_fem_steady_transport_*_v1` pozostaje bez zmian. Layout test utrzymuje rozmiary/offsety bazowego ABI i rozszerzeń. |
 | P1 — native immutable view | **zrealizowany dla CPU/double** | `steady_transport_c_api.cpp::solve_rt0` wymaga closure, stabilnych ID, ról ścian, identity/pins i tolerancji, a następnie buduje `ConservativeCurrentView::Build`. Wynik publikuje DOF-y RT0, rekordy kanoniczne, bilanse i digesty. |
 | P2 — Python → IR → planner | **zrealizowany dla `closed_geometry`** | Publiczny Python i flat-script API mają jawne typy `ConservativeCurrentView`, identity/pins, klasyfikację wszystkich ścian i source-cut; scene-document dekoder, Rust `SceneCurrentTransport`/authoring validation, OpenAPI v2 oraz panel inspektora (pełny JSON descriptoru) zachowują i walidują wszystkie pola. `ChargeTransportDefinitionIR` przenosi descriptor, planner sprawdza zgodność z mesh/stable IDs, role, piny i closure oraz odrzuca `external_lead` i M2 bez fallbacku. Dla jednokierunkowego `closed_geometry` planner rozwiązuje jawne `stage_coupling=steady_source_invariant.v1`; test obejmuje zachowanie descriptoru przez scenę/API/UI i odrzucenie nieobsługiwanych kombinacji. Pełny magnetization-dependent stage snapshot nadal nie jest generowany automatycznie. |
-| P3 — OE-F1/provenance | **zrealizowany dla zaakceptowanego descriptoru CPU/double** | Nowy `fullmag_fem_solve_steady_transport_rt0_oersted_v1` wywołuje `DirectTetraQuadrature::Evaluate` na tym samym immutable view. Runner sprawdza digest RT0/OE-F1, skończoność, długość i publikuje diagnostykę; nie ma projekcji H1→RT0. Dla jednokierunkowego `closed_geometry` publikuje także `steady_source_invariant.v1`, SHA-256 klucza oraz hit/miss/invalidation counters; zmiana tożsamości wymaga świeżego solve. Ścieżka bez descriptoru nadal publikuje `solved_current_h1_nodal_midpoint_reference`. |
+| P3 — OE-F1/provenance | **zrealizowany dla zaakceptowanego descriptoru CPU/double; OE-F2 ABI/native fixture zrealizowany** | Nowy `fullmag_fem_solve_steady_transport_rt0_oersted_v1` wywołuje `DirectTetraQuadrature::Evaluate`, a append-only `fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1` wywołuje `VectorPotentialSolver::Evaluate` na tym samym immutable view. Runner sprawdza digest RT0/OE-F1, skończoność, długość i publikuje diagnostykę; nie ma projekcji H1→RT0. OE-F2 nie ma jeszcze wyboru metody w IR/plannerze ani normalnego runtime publication. Dla jednokierunkowego `closed_geometry` publikuje także `steady_source_invariant.v1`, SHA-256 klucza oraz hit/miss/invalidation counters; zmiana tożsamości wymaga świeżego solve. Ścieżka bez descriptoru nadal publikuje `solved_current_h1_nodal_midpoint_reference`. |
+| P4 — stage-consistent coupling | **kontrakt runnera zrealizowany; callback native RK otwarty** | `SteadySourceStageCoordinator` checkpointuje zaakceptowany cache, wymaga jawnego publish, odtwarza stan po reject i wymusza final refresh dla zmienionej tożsamości. Managed CUDA-hosted test ma `2 passed; 0 failed`; nie jest to jeszcze dowód wywołania tych przejść przez RK4/RK23/RK45/FSAL. |
 
 ### 32.94.2. Wykonany dowód zarządzany
 
@@ -9088,10 +9089,11 @@ Do produkcyjnego solved-current Oersted FEM nadal brakuje:
    zmianie tożsamości i jawny final refresh. Nie jest to jeszcze snapshot
    `J_c(m_stage)` dla magnetyzacji; `external_lead` pozostaje fail-closed i nie
    ma domyślnego source-cut;
-2. testu etapowego dla pełnego RK/FSAL: dwa różne RHS stage, rejected-step
+2. callbacku native RK/FSAL wykonującego dwa różne RHS stage, rejected-step
    rollback i final refresh, z zgodnym `stage_identity` prądu i magnetyzacji.
-   Obecny test cache obejmuje tylko dwa odczyty tego samego immutable key oraz
-   odrzucenie zmienionej tożsamości;
+   Warstwa runnera ma już kontrakt checkpoint/publish/rollback oraz managed
+   test odrzuconej próby; nie jest on jeszcze wywoływany przez granice RHS
+   natywnego integratora;
 3. niezależnej zbieżności `p` (bramka `h` dla OE-F1 i certyfikat bilansu są już
    objęte kontraktami CPU), kontroli energii oraz porównania z FDM/MuMax/BORIS
    na tym samym źródle;
