@@ -72,6 +72,12 @@
       "responsibility": "Resolve authored scopes onto concrete FEM element markers or FDM cell masks and distinguish resolved from observed execution."
     },
     {
+      "id": "planner-multilayer-mask-realization",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "multilayer_global_mask",
+      "responsibility": "Materialize a common-grid FDM multilayer mask only for aligned identity layers; keep push/pull or shifted topology semantic_only."
+    },
+    {
       "id": "graph-realization-ir",
       "path": "crates/fullmag-ir/src/plan.rs",
       "symbol": "PhysicsGraphRealizationProvenanceIR",

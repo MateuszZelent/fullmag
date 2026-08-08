@@ -748,7 +748,6 @@ fn realize_fdm_multilayer_modules(
             .collect());
     };
     let topology = certificate.grid_fingerprint.clone();
-    let cell_count = certificate.active_cells;
     let mut realized = Vec::with_capacity(modules.len());
     for module in modules {
         if !matches!(module.status.as_str(), "active" | "configured") {
@@ -767,20 +766,81 @@ fn realize_fdm_multilayer_modules(
             ));
             continue;
         }
-        let digest = fdm_mask_digest(certificate, &[], &[]);
+        let Ok(mask) = multilayer_global_mask(plan) else {
+            realized.push(semantic_only_realization(
+                module,
+                &topology,
+                "FDM multilayer global scope has no unambiguous common-grid cell mask",
+            ));
+            continue;
+        };
+        let cell_count = mask.iter().filter(|selected| **selected).count() as u64;
+        if cell_count == 0 {
+            realized.push(semantic_only_realization(
+                module,
+                &topology,
+                "multilayer common-grid mask has no active cells",
+            ));
+            continue;
+        }
+        let digest = fdm_mask_digest(certificate, &mask, &[]);
         realized.push(PhysicsGraphModuleRealizationIR {
             module_id: module.module_id.clone(),
-            state: realization_state(module, executed, cell_count > 0),
+            state: realization_state(module, executed, true),
             topology_fingerprint: topology.clone(),
             realized_fem_marker_ids: Vec::new(),
             realized_fdm_mask_digest: Some(digest),
             realized_cell_count: cell_count,
             realized_fdm_region_ids: Vec::new(),
-            reason: (cell_count == 0)
-                .then(|| "multilayer certificate has no active cells".to_string()),
+            reason: None,
         });
     }
     Ok(realized)
+}
+
+/// Return a concrete mask for the common convolution grid only when every
+/// layer is already aligned with that grid.  A push/pull transfer, a shifted
+/// origin, or a malformed layer mask would require a separate mapping
+/// certificate; silently treating the whole common grid as active would make
+/// graph provenance claim a topology that the runtime has not materialized.
+fn multilayer_global_mask(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Vec<bool>, String> {
+    let total_cells = plan
+        .common_cells
+        .iter()
+        .try_fold(1usize, |product, count| {
+            product
+                .checked_mul(*count as usize)
+                .ok_or_else(|| "common-grid cell count overflows usize".to_string())
+        })?;
+    let first_origin = plan
+        .layers
+        .first()
+        .map(|layer| layer.native_origin)
+        .ok_or_else(|| "multilayer plan has no layers".to_string())?;
+    let mut mask = vec![false; total_cells];
+    for layer in &plan.layers {
+        if layer.transfer_kind != "identity"
+            || layer.native_grid != plan.common_cells
+            || layer.native_origin != first_origin
+            || layer.convolution_origin != first_origin
+        {
+            return Err("layer is not aligned with the common identity grid".to_string());
+        }
+        let layer_mask = match layer.native_active_mask.as_deref() {
+            Some(layer_mask) if layer_mask.len() == total_cells => layer_mask,
+            Some(_) => return Err("layer active mask length differs from common grid".to_string()),
+            None => {
+                for selected in &mut mask {
+                    *selected = true;
+                }
+                continue;
+            }
+        };
+        for (selected, layer_selected) in mask.iter_mut().zip(layer_mask) {
+            *selected |= *layer_selected;
+        }
+    }
+    Ok(mask)
 }
 
 fn fdm_scope_mask(
@@ -1093,4 +1153,126 @@ fn scope_key(scope: &Value) -> String {
 fn stable_marker_id(value: &str) -> u32 {
     let digest = Sha256::digest(value.as_bytes());
     u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(
+        transfer_kind: &str,
+        origin: [f64; 3],
+        active_mask: Option<Vec<bool>>,
+    ) -> fullmag_ir::FdmLayerPlanIR {
+        fullmag_ir::FdmLayerPlanIR {
+            magnet_name: "layer".to_string(),
+            native_grid: [2, 1, 1],
+            native_cell_size: [1.0, 1.0, 1.0],
+            native_origin: origin,
+            native_active_mask: active_mask,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
+            material: fullmag_ir::FdmMaterialIR::default(),
+            convolution_grid: [2, 1, 1],
+            convolution_cell_size: [1.0, 1.0, 1.0],
+            convolution_origin: origin,
+            transfer_kind: transfer_kind.to_string(),
+        }
+    }
+
+    fn multilayer_plan(layers: Vec<fullmag_ir::FdmLayerPlanIR>) -> fullmag_ir::FdmMultilayerPlanIR {
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&layers);
+        let certificate = fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0; 3],
+            [2, 1, 1],
+            [1.0; 3],
+            2,
+            1,
+            None,
+            &topology_tokens,
+        )
+        .expect("test certificate");
+        fullmag_ir::FdmMultilayerPlanIR {
+            mode: "multilayer_convolution".to_string(),
+            common_cells: [2, 1, 1],
+            grid_certificate: Some(certificate),
+            layers,
+            enable_exchange: false,
+            enable_demag: false,
+            external_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            gyromagnetic_ratio: 1.0,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
+            periodicity: None,
+            resolved_periodic_images: None,
+            integrator: fullmag_ir::IntegratorChoice::Heun,
+            fixed_timestep: Some(1.0e-13),
+            field_refresh: None,
+            relaxation: None,
+            planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
+                requested_strategy: "multilayer_convolution".to_string(),
+                selected_strategy: "multilayer_convolution".to_string(),
+                eligibility: "test".to_string(),
+                estimated_pair_kernels: 1,
+                estimated_unique_kernels: 1,
+                estimated_kernel_bytes: 0,
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    fn active_global_module() -> ResolvedPhysicsModule {
+        ResolvedPhysicsModule {
+            module_id: "current:global".to_string(),
+            kind: "current_transport".to_string(),
+            depends_on: Vec::new(),
+            requested_lane: "fdm".to_string(),
+            resolved_lane: "fdm".to_string(),
+            status: "active".to_string(),
+            scope_key: "global".to_string(),
+            fem_marker_ids: Vec::new(),
+            fdm_cell_mask_id: Some("physics-mask.v1:current:global:global".to_string()),
+            reason: None,
+            source_path: "/current_modules/0".to_string(),
+        }
+    }
+
+    #[test]
+    fn multilayer_graph_realization_requires_a_common_identity_mask() {
+        let module = active_global_module();
+        let no_execution = BTreeSet::new();
+        let shifted = multilayer_plan(vec![
+            layer("identity", [0.0, 0.0, 0.0], Some(vec![true, false])),
+            layer("identity", [0.0, 0.0, 1.0], Some(vec![true, true])),
+        ]);
+        let shifted_realization =
+            realize_fdm_multilayer_modules(&shifted, std::slice::from_ref(&module), &no_execution)
+                .expect("shifted multilayer realization");
+        assert_eq!(
+            shifted_realization[0].state,
+            PhysicsGraphRealizationStateIR::SemanticOnly
+        );
+        assert!(shifted_realization[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("common-grid cell mask")));
+
+        let aligned = multilayer_plan(vec![
+            layer("identity", [0.0, 0.0, 0.0], Some(vec![true, false])),
+            layer("identity", [0.0, 0.0, 0.0], Some(vec![false, true])),
+        ]);
+        let aligned_realization =
+            realize_fdm_multilayer_modules(&aligned, std::slice::from_ref(&module), &no_execution)
+                .expect("aligned multilayer realization");
+        assert_eq!(
+            aligned_realization[0].state,
+            PhysicsGraphRealizationStateIR::Resolved
+        );
+        assert_eq!(aligned_realization[0].realized_cell_count, 2);
+        assert!(aligned_realization[0]
+            .realized_fdm_mask_digest
+            .as_deref()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
 }

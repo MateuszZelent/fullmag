@@ -177,6 +177,12 @@ pozostaje tylko tożsamością semantyczną. Przejście do `executed` następuje
 wyłącznie na podstawie jawnego rekordu wykonania, bez heurystyki wynikającej z
 wartości prądu, obecności modułu lub samego wyboru backendu.
 
+Dla FDM multilayer stan `resolved` jest dozwolony tylko wtedy, gdy wszystkie
+warstwy są wyrównane z tym samym wspólnym gridem i można z nich jednoznacznie
+zbudować unię aktywnych komórek. Warstwa z transferem `push_pull`, przesuniętym
+originem albo niezgodnym rozmiarem maski pozostaje `semantic_only`; liczba
+komórek z certyfikatu wspólnego gridu nie jest zamiennikiem takiej maski.
+
 W round-trip zachowujemy zarówno `requested intent` autora, jak i `resolved execution`
 wybranego lane. `validation errors` są zwracane przed wykonaniem,
 a `unsupported combinations` pozostają jawne i nie są zastępowane fallbackiem.

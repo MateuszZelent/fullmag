@@ -253,6 +253,15 @@ verify-fdm-transient-spin-m3-reference:
     TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
       python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
 
+# Managed CPU FDM graph-realization gate.  The fixture executes the public
+# ProblemIR -> planner -> runner path inside the managed FEM/CPU image and
+# checks that the emitted artifact contains a concrete cell-mask digest.  It
+# is a provenance/runtime gate, not a CUDA performance or physics-equivalence
+# qualification.
+verify-fdm-physics-graph-runtime:
+    docker compose build fem-cpu
+    docker compose run --rm --no-deps fem-cpu bash -lc 'cd /workspace && FULLMAG_FDM_EXECUTION=cpu CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-physics-graph-runtime CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_graph_runtime -- --nocapture'
+
 # Cross-layer authoring parity only.  This gate intentionally does not promote
 # any FEM/FDM, GPU, or external-solver capability.
 verify-spin-transport-authoring-parameter-parity:

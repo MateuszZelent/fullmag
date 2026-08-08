@@ -9340,3 +9340,53 @@ FEM–FDM–zewnętrzne orakle oraz GPU/device-resident. Po tej iteracji ocena
 części źródłowej refaktoryzacji grafu wynosi **~96%**, lecz cała gotowość
 produkcyjna STT/SOT/SHE/Oersted pozostaje **~50%**; wzrost dotyczy wyłącznie
 sprawdzalności zakresu i provenance, nie kwalifikacji fizycznej solvera.
+
+## 32.99. Zaostrzenie realizacji FDM multilayer i managed capture grafu (2026-08-09)
+
+Audyt certyfikatu z §32.98 wykazał, że wcześniejsza ścieżka FDM multilayer
+oznaczała globalny moduł jako `resolved` na podstawie samego
+`certificate.active_cells`. W planie multilayer certyfikat opisuje jednak
+wspólny grid konwolucji, a warstwy mogą być przesuwane przez `push_pull`; sama
+liczba komórek nie jest wtedy konkretną maską, którą można przypisać modułowi.
+Byłoby to utożsamienie topology capacity z topology realization.
+
+W `crates/fullmag-plan/src/physics_graph.rs` dodano fail-closed materializację
+`multilayer_global_mask`:
+
+- globalny zakres otrzymuje `resolved` dopiero dla warstw wyrównanych do tego
+  samego common gridu (`identity`, identyczny grid i origin) oraz dla masek o
+  zgodnej długości;
+- maski warstw są łączone operacją OR, a digest `physics_graph.realization.v1`
+  obejmuje rzeczywiste bity tej maski;
+- transfer `push_pull`, przesunięty origin, brak warstwy albo niezgodna maska
+  pozostają `semantic_only` z jawnym powodem; nie ma awansu na podstawie
+  `active_cells` z certyfikatu.
+
+Dodano regresję jednostkową obejmującą warstwy przesunięte oraz wyrównane:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-multilayer \\
+CARGO_INCREMENTAL=0 cargo test -p fullmag-plan \\
+  physics_graph::tests::multilayer_graph_realization_requires_a_common_identity_mask \\
+  -- --exact --nocapture
+1 passed; 0 failed
+```
+
+Dodano też jawny managed gate FDM:
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fdm-physics-graph-runtime`. Recepta buduje
+obraz `fem-cpu`, uruchamia publiczny ProblemIR → planner → runner w zarządzanym
+kontenerze z `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/...` i sprawdza zapis
+konkretnego digestu maski w artefakcie. Świeży wynik z 2026-08-09:
+
+```text
+1 passed; 0 failed
+fdm_runtime_artifact_contains_concrete_graph_realization
+```
+
+Jest to dowód managed CPU/reference FDM i provenance, nie dowód CUDA,
+device-resident execution, zbieżności fizycznej ani FEM↔FDM parity. Nie zmienia
+capability `production_executable`; zamyka tylko bramę managed capture dla
+referencyjnego lane FDM oraz usuwa wcześniejszy fałszywy awans multilayer.
+Pozostają: managed capture FEM, callbacki `J_c(m_stage)` z RK/FSAL,
+niezależne `p`/energia/airbox, benchmarki FEM–FDM–MuMax/BORIS, GPU oraz
+release-clean publiczny Python/UI end-to-end.
