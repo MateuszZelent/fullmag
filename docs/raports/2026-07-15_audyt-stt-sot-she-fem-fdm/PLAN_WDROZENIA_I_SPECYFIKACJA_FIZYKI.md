@@ -9324,11 +9324,17 @@ CARGO_INCREMENTAL=0 cargo test -p fullmag-runner \
 
 python3 -m pytest -q --capture=no scripts/test_verify_physics_scope_graph_runtime.py
 10 passed; 0 failed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-runtime \\
+CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_graph_runtime
+1 passed; 0 failed
 ```
 
 Granica pozostaje jawna: certyfikat `resolved` nie jest dowodem zbieżności
 solvera, a `executed` dotyczy tylko modułów, dla których runtime opublikował
-rekord. Nadal otwarte są managed capture dla obu lane'ów, callbacki
+rekord. Dodany test uruchamia rzeczywisty FDM CPU runner i sprawdza zapis
+artefaktu realizacji, ale jest dowodem hostowym/reference-only; nie zastępuje
+managed capture dla obu lane'ów. Nadal otwarte są callbacki
 `J_c(m_stage)` w natywnym RK/FSAL, niezależne `p`/energia/airbox, benchmark
 FEM–FDM–zewnętrzne orakle oraz GPU/device-resident. Po tej iteracji ocena
 części źródłowej refaktoryzacji grafu wynosi **~96%**, lecz cała gotowość
