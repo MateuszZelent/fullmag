@@ -13,6 +13,7 @@ pub(crate) const STEADY_SOURCE_CACHE_POLICY: &str = "steady_source_invariant.v1"
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SteadySourceCacheKey {
+    pub source_module_id: String,
     pub source_state_revision: String,
     pub source_field_digest: String,
     pub conductivity_digest: String,
@@ -51,6 +52,7 @@ impl SteadySourceCacheKey {
             });
         }
         Ok(Self {
+            source_module_id: view.identity.source_module_id.clone(),
             source_state_revision: view.identity.source_state_revision.clone(),
             source_field_digest: view.identity.source_field_digest.clone(),
             conductivity_digest: view.identity.conductivity_digest.clone(),
@@ -262,9 +264,17 @@ impl SteadySourceStageCoordinator {
                 message: "steady source stage cannot reject without an open attempt".into(),
             });
         }
+        // Counters are telemetry, not speculative state. Preserve their
+        // monotonic history while restoring the accepted source identity.
+        let hits = self.cache.hits;
+        let misses = self.cache.misses;
+        let invalidations = self.cache.invalidations;
         if let Some(checkpoint) = self.checkpoint.take() {
             self.cache = checkpoint;
         }
+        self.cache.hits = hits;
+        self.cache.misses = misses;
+        self.cache.invalidations = invalidations;
         self.pending_solve = None;
         self.attempt_open = false;
         Ok(())
@@ -391,6 +401,12 @@ mod tests {
         let changed_source_key =
             SteadySourceCacheKey::from_view(&changed_source).expect("changed source key");
         assert!(cache.reuse(&changed_source_key, "view-3").is_err());
+        let mut changed_module = view();
+        changed_module.identity.source_module_id = "other-charge".into();
+        let changed_module_key =
+            SteadySourceCacheKey::from_view(&changed_module).expect("changed module key");
+        assert_ne!(key, changed_module_key);
+        assert!(cache.reuse(&changed_module_key, "view-4").is_err());
         assert_eq!(cache.hits(), 2);
         assert_eq!(cache.misses(), 1);
         assert_eq!(cache.invalidations(), 0);
@@ -431,6 +447,9 @@ mod tests {
             .publish_solve(stage_two.clone(), "view-2".into())
             .expect("candidate publish");
         coordinator.reject_attempt().expect("rollback");
+        assert_eq!(coordinator.cache().hits(), 0);
+        assert_eq!(coordinator.cache().misses(), 2);
+        assert_eq!(coordinator.cache().invalidations(), 1);
 
         coordinator.begin_attempt().expect("accepted retry");
         assert_eq!(
@@ -440,6 +459,7 @@ mod tests {
             CacheObservation::Hit
         );
         coordinator.accept_attempt().expect("retry accept");
+        assert_eq!(coordinator.cache().hits(), 1);
 
         coordinator.begin_attempt().expect("final refresh");
         assert_eq!(
@@ -452,6 +472,9 @@ mod tests {
             .publish_solve(stage_two, "view-2".into())
             .expect("final refresh publish");
         coordinator.accept_attempt().expect("final refresh accept");
+        assert_eq!(coordinator.cache().hits(), 1);
+        assert_eq!(coordinator.cache().misses(), 3);
+        assert_eq!(coordinator.cache().invalidations(), 2);
         assert_eq!(
             coordinator.cache().current_identity().map(|(_, digest)| digest),
             Some("view-2")

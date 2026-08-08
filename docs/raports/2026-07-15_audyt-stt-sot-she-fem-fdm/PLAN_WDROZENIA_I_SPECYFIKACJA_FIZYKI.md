@@ -9134,14 +9134,17 @@ Adapter `steady_transport_c_api.cpp` tworzy dokładnie jeden
 `ConservativeCurrentView` i przekazuje go bez rekonstrukcji do
 `VectorPotentialSolver::Evaluate`. Brak closure, zły ABI, niezgodny digest lub
 za mały bufor kończą się błędem przed publikacją pola. Nodalny H1 current nie
-może wejść do tej funkcji.
+może wejść do tej funkcji. Ścieżka błędu jest atomowa: po nieudanej walidacji
+zeruje status, długości payloadów, liczbowe certyfikaty, identity strings i
+diagnostykę RT0/OE-F2, więc częściowo zapisany wynik nie może zostać pomylony z
+ważnym polem; konsument publikuje wyłącznie wynik z `converged != 0`.
 
 ### Dowody
 
 | Gate | Wynik | Granica |
 |---|---|---|
-| `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-rt0-cpu-contract` | **PASS** | zarządzany kontener `fem-cpu`, MFEM/HYPRE CPU/double; fixture transport → RT0 → OE-F1 → OE-F2, finite fields, digest equality i residuale; nie jest to jeszcze normalny runtime LLG |
-| `cargo test -p fullmag-fem-sys tests::steady_transport_rt0_extension_layout_is_frozen_and_append_only` | **PASS** | append-only layout/FFI smoke; kompilacja hostowa z task-specific targetem, bez twierdzenia o runtime FEM |
+| `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract` | **PASS** | świeży zarządzany kontener `fem-cpu`, MFEM/HYPRE CPU/double; trzy kontrakty obejmują transport → RT0 → OE-F1 → OE-F2, finite fields, digest equality, residuale oraz regresję zbyt małego bufora bez stale opublikowanych długości ani diagnostyk; nie jest to jeszcze normalny runtime LLG |
+| `cargo test -p fullmag-fem-sys tests::steady_transport_rt0_extension_layout_is_frozen_and_append_only -- --exact` | **PASS** | exact append-only FFI layout: request `824 B`, result `3432 B`, wszystkie pola OE-F2 mają zamrożone offsety; kompilacja z task-specific targetem, bez twierdzenia o runtime FEM |
 | `fem_steady_transport_rt0_contract` | **PASS** | `tangential_A_h1_0.v1`, `harmonic_count=0`, residuale poniżej `1e-7`, kompatybilne `H` skończone; jeden zamknięty fixture |
 
 ### Granica kwalifikacji
@@ -9151,7 +9154,9 @@ Ta zmiana podnosi dowód implementacyjny OE-F2 z „izolowany solver C++” do
 `field.oersted.fem_vector_potential`: IR/planner nie ma wyboru metody,
 runner nadal publikuje OE-F1 jako domyślną ścieżkę, a OE-F2 nie jest podłączone
 do accepted/stage LLG, airbox sequence, porównania direct/FDM, GPU ani
-produkcji. Ocena produkcyjna pozostaje **45%**; ocena publicznego łańcucha
+produkcji. Flaga `converged` i residua są wyłącznie surowym certyfikatem
+ograniczonego fixture CPU/double, a nie produkcyjnym certyfikatem
+preconditioned/projected LLG-field. Ocena produkcyjna pozostaje **45%**; ocena publicznego łańcucha
 Python/IR → RT0 → Oersted → LLG pozostaje **~82%** do czasu P4 i normalnego
 runtime.
 
@@ -9165,7 +9170,7 @@ z `OerstedField`, a widok RT0/H(div) przeszedł walidację. `M2`,
 `external_lead`, brak widoku, GPU i inne kombinacje nadal są odrzucane bez
 fallbacku.
 
-`SteadySourceCacheKey` obejmuje `source_state_revision`, digest pola i
+`SteadySourceCacheKey` obejmuje `source_module_id`, `source_state_revision`, digest pola i
 przewodności, rewizje mesha/topologii/geometrii, envelope, closure, czas,
 wartość envelope oraz deklarowaną `stage_identity`. Klucz jest serializowany
 deterministycznie i publikowany jako SHA-256. Runner publikuje cache dopiero po
@@ -9177,7 +9182,8 @@ kandydat nie jest publikowany, a zmiana klucza wymaga final refresh.
 `SteadySourceStageCoordinator` dodaje jawny checkpoint na początku próby,
 rejestrację `Miss`, wymóg publikacji solve przed akceptacją oraz odtworzenie
 ostatniego zaakceptowanego cache po odrzuceniu próby. Koordynator jest
-kontraktem warstwy runnera; callback natywnego integratora musi jeszcze
+kontraktem warstwy runnera; liczniki hit/miss/invalidation pozostają monotoniczną
+telemetrią także po rollbacku; callback natywnego integratora musi jeszcze
 wywołać te przejścia na rzeczywistych granicach RHS/accept/reject.
 
 Dowód zarządzany wykonano przez receptę kontenerową, bez hostowego buildu

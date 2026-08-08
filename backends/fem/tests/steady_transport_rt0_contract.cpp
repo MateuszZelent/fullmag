@@ -374,6 +374,47 @@ void run_closed_geometry_rt0_contract()
                 "fem_oersted_hcurl_h1_gauge.v1") != std::string::npos,
         "public RT0 OE-F2 diagnostics schema is missing");
 
+    auto failed_vector_potential_result = vector_potential_result;
+    failed_vector_potential_result.a_dofs_t_m_capacity = 0;
+    failed_vector_potential_result.a_dofs_t_m_len = a_dofs_t_m.size();
+    failed_vector_potential_result.gauge_dofs_apm_len = gauge_dofs_apm.size();
+    failed_vector_potential_result.compatible_b_dofs_t_len =
+        compatible_b_dofs_t.size();
+    failed_vector_potential_result.compatible_h_dofs_apm_len =
+        compatible_h_dofs_apm.size();
+    failed_vector_potential_result.rt0.rt0_dof_values_len =
+        result.rt0_dof_values_len;
+    failed_vector_potential_result.rt0.canonical_face_records_len =
+        result.canonical_face_records_len;
+    failed_vector_potential_result.rt0.max_element_divergence_a = 1.0;
+    failed_vector_potential_result.rt0.max_internal_face_jump_a = 1.0;
+    failed_vector_potential_result.rt0.net_outer_flux_a = 1.0;
+    failed_vector_potential_result.rt0.electrode_balance_relative = 1.0;
+    failed_vector_potential_result.rt0.max_closure_interface_mismatch_a = 1.0;
+    failed_vector_potential_result.rt0.scaled_kkt_residual = 1.0;
+    failed_vector_potential_result.rt0.correction_norm_mw = 1.0;
+    const int failed_vector_potential_status =
+        fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+            &vector_potential_request, &failed_vector_potential_result);
+    require(failed_vector_potential_status == FULLMAG_FEM_ERR_INVALID,
+        "public RT0 OE-F2 capacity failure did not return invalid");
+    require(failed_vector_potential_result.converged == 0 &&
+            failed_vector_potential_result.a_dofs_t_m_len == 0 &&
+            failed_vector_potential_result.gauge_dofs_apm_len == 0 &&
+            failed_vector_potential_result.compatible_b_dofs_t_len == 0 &&
+            failed_vector_potential_result.compatible_h_dofs_apm_len == 0 &&
+            failed_vector_potential_result.rt0.converged == 0 &&
+            failed_vector_potential_result.rt0.rt0_dof_values_len == 0 &&
+            failed_vector_potential_result.rt0.canonical_face_records_len == 0 &&
+            failed_vector_potential_result.rt0.max_element_divergence_a == 0.0 &&
+            failed_vector_potential_result.rt0.max_internal_face_jump_a == 0.0 &&
+            failed_vector_potential_result.rt0.net_outer_flux_a == 0.0 &&
+            failed_vector_potential_result.rt0.electrode_balance_relative == 0.0 &&
+            failed_vector_potential_result.rt0.max_closure_interface_mismatch_a == 0.0 &&
+            failed_vector_potential_result.rt0.scaled_kkt_residual == 0.0 &&
+            failed_vector_potential_result.rt0.correction_norm_mw == 0.0,
+        "public RT0 OE-F2 failure published stale payload lengths");
+
     require(std::isfinite(result.max_element_divergence_a) &&
             std::isfinite(result.max_internal_face_jump_a) &&
             std::isfinite(result.net_outer_flux_a) &&

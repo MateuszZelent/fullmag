@@ -958,7 +958,13 @@ must construct one immutable `ConservativeCurrentView` and pass that exact
 object to `VectorPotentialSolver::Evaluate`; a nodal H1 current or a second
 reconstruction is invalid.  This wrapper is CPU/double reference execution
 only until its managed airbox, p/refinement, cross-method, and device-resident
-gates have passed.
+gates have passed.  The exported `converged` flag and residuals are the bounded
+CPU fixture certificate: their norms are raw mixed-system diagnostics, not the
+production preconditioned/projected LLG-field certificate.  They must not be
+used to promote OE-F2 beyond `semantic_only` until the missing physical and
+runtime gates are independently measured.  On any failed call, payload lengths,
+status, numeric certificates and identity strings are cleared before the error
+is returned; consumers must treat `converged == 0` as non-publishable.
 
 ### 3.5 SI, sign, energy and accepted work snapshot
 

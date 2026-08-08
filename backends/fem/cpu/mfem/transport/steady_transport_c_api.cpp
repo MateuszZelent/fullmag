@@ -51,6 +51,21 @@ void set_error(fullmag_fem_steady_transport_rt0_result_v1 *result, const char *m
     std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
     result->diagnostics_json[0] = '\0';
     result->converged = 0;
+    result->rt0_dof_values_len = 0;
+    result->canonical_face_records_len = 0;
+    result->max_element_divergence_a = 0.0;
+    result->max_internal_face_jump_a = 0.0;
+    result->net_outer_flux_a = 0.0;
+    result->electrode_balance_relative = 0.0;
+    result->max_closure_interface_mismatch_a = 0.0;
+    result->scaled_kkt_residual = 0.0;
+    result->correction_norm_mw = 0.0;
+    result->operator_version[0] = '\0';
+    result->fe_space[0] = '\0';
+    result->flux_unit[0] = '\0';
+    result->canonical_face_digest[0] = '\0';
+    result->balance_certificate_digest[0] = '\0';
+    result->view_identity_digest[0] = '\0';
 }
 
 void set_error(
@@ -62,6 +77,13 @@ void set_error(
     }
     std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
     result->diagnostics_json[0] = '\0';
+    result->h_xyz_apm_len = 0;
+    result->source_target_pairs = 0;
+    result->refined_pairs = 0;
+    result->unconverged_pair_count = 0;
+    result->maximum_pair_error_apm = 0.0;
+    result->operator_version[0] = '\0';
+    result->source_view_identity_digest[0] = '\0';
     set_error(&result->rt0, message);
 }
 
@@ -75,6 +97,21 @@ void set_error(
     std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
     result->diagnostics_json[0] = '\0';
     result->converged = 0;
+    result->a_dofs_t_m_len = 0;
+    result->gauge_dofs_apm_len = 0;
+    result->compatible_b_dofs_t_len = 0;
+    result->compatible_h_dofs_apm_len = 0;
+    result->harmonic_count = 0;
+    result->essential_nd_dof_count = 0;
+    result->essential_h1_dof_count = 0;
+    result->first_block_residual = 0.0;
+    result->constraint_residual = 0.0;
+    result->weak_ampere_residual = 0.0;
+    result->compatible_divergence_residual = 0.0;
+    result->source_pairing_norm = 0.0;
+    result->operator_version[0] = '\0';
+    result->source_view_identity_digest[0] = '\0';
+    result->boundary_gauge_variant[0] = '\0';
     set_error(&result->rt0, message);
 }
 
