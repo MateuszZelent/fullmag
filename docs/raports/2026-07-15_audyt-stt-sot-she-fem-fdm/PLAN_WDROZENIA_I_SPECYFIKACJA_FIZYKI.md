@@ -9477,3 +9477,29 @@ reference solved-current/Oersted contracts: PASS
 observed accepted-time H_oe for current HEAD: blocked until managed export is free
 production FEM solved-current Oersted: nadal niezakwalifikowany
 ```
+
+## 32.102. Świeży managed common-limit FEM↔FDM dla reciprocal M2 (2026-08-09)
+
+Uruchomiono w kontenerze `fem-gpu`:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-m2-common-limit-contract
+```
+
+Recepta skonfigurowała i zbudowała `fullmag_fem` z MFEM/HYPRE, a następnie
+wykonała test runnera na trzech zgodnych rozdzielczościach. Test zakończył się
+`1 passed; 0 failed` i wypisał maksymalne różnice względem tego samego
+referencyjnego profilu FDM:
+
+| `Nz` | max `|V_FDM - V_FEM|` [V] | max `|mu_s,FDM - mu_s,FEM|` [V] |
+|---:|---:|---:|
+| 8 | `5.602702602479637e-4` | `6.7222990578735264e-3` |
+| 16 | `1.6232446439556902e-4` | `1.9477183162976974e-3` |
+| 32 | `4.359865754688386e-5` | `5.231586951655598e-4` |
+
+Błąd maleje przy zagęszczaniu siatki, więc jest to rzeczywisty, zarządzany
+dowód zbieżności common-limit M2 (FEM conforming-H1/P1 kontra FDM reference),
+nie tylko test zgodności znaków. Zakres dotyczy stacjonarnego transportu
+spinowego; nie promuje FEM solved-current/Oersted, nie dostarcza dynamicznego
+`J_c(m_stage)`, nie obejmuje GPU transportu ani równoważności całej trajektorii
+LLG. W ledgerze pozostaje osobno oznaczony jako `reference_executable`.
