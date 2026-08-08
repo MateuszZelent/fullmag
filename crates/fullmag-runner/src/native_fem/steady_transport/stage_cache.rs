@@ -82,7 +82,7 @@ pub(crate) enum CacheObservation {
     Hit,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct SteadySourceCache {
     key: Option<SteadySourceCacheKey>,
     view_identity_digest: Option<String>,
@@ -92,6 +92,11 @@ pub(crate) struct SteadySourceCache {
 }
 
 impl SteadySourceCache {
+    fn matches(&self, key: &SteadySourceCacheKey, view_identity_digest: &str) -> bool {
+        self.key.as_ref() == Some(key)
+            && self.view_identity_digest.as_deref() == Some(view_identity_digest)
+    }
+
     pub(crate) fn publish_solve(
         &mut self,
         key: SteadySourceCacheKey,
@@ -129,15 +134,19 @@ impl SteadySourceCache {
         key: &SteadySourceCacheKey,
         view_identity_digest: &str,
     ) -> Result<CacheObservation, RunError> {
-        if self.key.as_ref() != Some(key)
-            || self.view_identity_digest.as_deref() != Some(view_identity_digest)
-        {
+        if !self.matches(key, view_identity_digest) {
             return Err(RunError {
                 message: "steady source cache identity changed; a fresh transport solve is required before publishing Oersted".into(),
             });
         }
         self.hits = self.hits.saturating_add(1);
         Ok(CacheObservation::Hit)
+    }
+
+    pub(crate) fn current_identity(&self) -> Option<(&SteadySourceCacheKey, &str)> {
+        self.key
+            .as_ref()
+            .zip(self.view_identity_digest.as_deref())
     }
 
     pub(crate) fn hits(&self) -> u64 {
@@ -150,6 +159,119 @@ impl SteadySourceCache {
 
     pub(crate) fn invalidations(&self) -> u64 {
         self.invalidations
+    }
+}
+
+/// Coordinates one accepted/rejected RK attempt around the invariant-source
+/// cache.  A candidate source is never left visible after rollback: the cache
+/// is restored to the checkpoint captured at `begin_attempt`.  The coordinator
+/// is intentionally agnostic about the native integrator; the native callback
+/// still has to call these transitions at the actual RHS boundaries.
+#[derive(Debug, Default)]
+pub(crate) struct SteadySourceStageCoordinator {
+    cache: SteadySourceCache,
+    checkpoint: Option<SteadySourceCache>,
+    attempt_open: bool,
+    pending_solve: Option<(SteadySourceCacheKey, String)>,
+}
+
+impl SteadySourceStageCoordinator {
+    pub(crate) fn begin_attempt(&mut self) -> Result<(), RunError> {
+        if self.attempt_open {
+            return Err(RunError {
+                message: "steady source stage attempt is already open".into(),
+            });
+        }
+        self.checkpoint = Some(self.cache.clone());
+        self.pending_solve = None;
+        self.attempt_open = true;
+        Ok(())
+    }
+
+    pub(crate) fn observe_stage(
+        &mut self,
+        key: &SteadySourceCacheKey,
+        view_identity_digest: &str,
+    ) -> Result<CacheObservation, RunError> {
+        if !self.attempt_open {
+            return Err(RunError {
+                message: "steady source stage must begin an attempt before observing an RHS".into(),
+            });
+        }
+        if view_identity_digest.trim().is_empty() {
+            return Err(RunError {
+                message: "steady source stage cannot observe an empty view identity digest".into(),
+            });
+        }
+        if self.cache.matches(key, view_identity_digest) {
+            return self.cache.reuse(key, view_identity_digest);
+        }
+        if let Some((pending_key, pending_digest)) = self.pending_solve.as_ref() {
+            if pending_key != key || pending_digest != view_identity_digest {
+                return Err(RunError {
+                    message: "steady source stage changed identity before publishing its solve".into(),
+                });
+            }
+            return Err(RunError {
+                message: "steady source stage observed an unresolved solve twice".into(),
+            });
+        }
+        self.pending_solve = Some((key.clone(), view_identity_digest.to_string()));
+        Ok(CacheObservation::Miss)
+    }
+
+    pub(crate) fn publish_solve(
+        &mut self,
+        key: SteadySourceCacheKey,
+        view_identity_digest: String,
+    ) -> Result<CacheObservation, RunError> {
+        if !self.attempt_open {
+            return Err(RunError {
+                message: "steady source solve cannot publish outside an open attempt".into(),
+            });
+        }
+        if self.pending_solve.as_ref() != Some(&(key.clone(), view_identity_digest.clone())) {
+            return Err(RunError {
+                message: "steady source solve identity does not match the observed RHS stage".into(),
+            });
+        }
+        let observation = self.cache.publish_solve(key, view_identity_digest)?;
+        self.pending_solve = None;
+        Ok(observation)
+    }
+
+    pub(crate) fn accept_attempt(&mut self) -> Result<(), RunError> {
+        if !self.attempt_open {
+            return Err(RunError {
+                message: "steady source stage cannot accept without an open attempt".into(),
+            });
+        }
+        if self.pending_solve.is_some() {
+            return Err(RunError {
+                message: "steady source stage cannot accept before publishing its solve".into(),
+            });
+        }
+        self.checkpoint = None;
+        self.attempt_open = false;
+        Ok(())
+    }
+
+    pub(crate) fn reject_attempt(&mut self) -> Result<(), RunError> {
+        if !self.attempt_open {
+            return Err(RunError {
+                message: "steady source stage cannot reject without an open attempt".into(),
+            });
+        }
+        if let Some(checkpoint) = self.checkpoint.take() {
+            self.cache = checkpoint;
+        }
+        self.pending_solve = None;
+        self.attempt_open = false;
+        Ok(())
+    }
+
+    pub(crate) fn cache(&self) -> &SteadySourceCache {
+        &self.cache
     }
 }
 
@@ -272,6 +394,68 @@ mod tests {
         assert_eq!(cache.hits(), 2);
         assert_eq!(cache.misses(), 1);
         assert_eq!(cache.invalidations(), 0);
+    }
+
+    #[test]
+    fn stage_coordinator_rolls_back_rejected_source_and_requires_final_refresh() {
+        let stage_one = SteadySourceCacheKey::from_view(&view()).expect("stage one key");
+        let mut stage_two_view = view();
+        stage_two_view.identity.stage_identity = 8;
+        let stage_two =
+            SteadySourceCacheKey::from_view(&stage_two_view).expect("stage two key");
+        let mut coordinator = SteadySourceStageCoordinator::default();
+
+        coordinator.begin_attempt().expect("initial attempt");
+        assert_eq!(
+            coordinator
+                .observe_stage(&stage_one, "view-1")
+                .expect("initial miss"),
+            CacheObservation::Miss
+        );
+        assert_eq!(
+            coordinator
+                .publish_solve(stage_one.clone(), "view-1".into())
+                .expect("initial publish"),
+            CacheObservation::Miss
+        );
+        coordinator.accept_attempt().expect("initial accept");
+
+        coordinator.begin_attempt().expect("rejected attempt");
+        assert_eq!(
+            coordinator
+                .observe_stage(&stage_two, "view-2")
+                .expect("changed stage miss"),
+            CacheObservation::Miss
+        );
+        coordinator
+            .publish_solve(stage_two.clone(), "view-2".into())
+            .expect("candidate publish");
+        coordinator.reject_attempt().expect("rollback");
+
+        coordinator.begin_attempt().expect("accepted retry");
+        assert_eq!(
+            coordinator
+                .observe_stage(&stage_one, "view-1")
+                .expect("rollback must restore stage one"),
+            CacheObservation::Hit
+        );
+        coordinator.accept_attempt().expect("retry accept");
+
+        coordinator.begin_attempt().expect("final refresh");
+        assert_eq!(
+            coordinator
+                .observe_stage(&stage_two, "view-2")
+                .expect("final refresh must miss"),
+            CacheObservation::Miss
+        );
+        coordinator
+            .publish_solve(stage_two, "view-2".into())
+            .expect("final refresh publish");
+        coordinator.accept_attempt().expect("final refresh accept");
+        assert_eq!(
+            coordinator.cache().current_identity().map(|(_, digest)| digest),
+            Some("view-2")
+        );
     }
 
 }

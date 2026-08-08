@@ -878,6 +878,55 @@ typedef struct {
     char diagnostics_json[1024];
 } fullmag_fem_steady_transport_rt0_oersted_result_v1;
 
+/* Mixed H(curl) x H1 OE-F2 evaluation on the exact immutable RT0 view.  This
+ * is an append-only wrapper: the nested RT0 request/result and all legacy
+ * transport layouts remain byte-for-byte stable. */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_request_v1 rt0;
+    double mu0_si;
+    double relative_tolerance;
+    int32_t maximum_nd_dofs;
+    int32_t maximum_h1_dofs;
+    const char *boundary_gauge_variant;
+} fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_result_v1 rt0;
+    double *a_dofs_t_m;
+    uint64_t a_dofs_t_m_capacity;
+    uint64_t a_dofs_t_m_len;
+    double *gauge_dofs_apm;
+    uint64_t gauge_dofs_apm_capacity;
+    uint64_t gauge_dofs_apm_len;
+    double *compatible_b_dofs_t;
+    uint64_t compatible_b_dofs_t_capacity;
+    uint64_t compatible_b_dofs_t_len;
+    double *compatible_h_dofs_apm;
+    uint64_t compatible_h_dofs_apm_capacity;
+    uint64_t compatible_h_dofs_apm_len;
+    int converged;
+    int32_t harmonic_count;
+    int32_t essential_nd_dof_count;
+    int32_t essential_h1_dof_count;
+    double first_block_residual;
+    double constraint_residual;
+    double weak_ampere_residual;
+    double compatible_divergence_residual;
+    double source_pairing_norm;
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char source_view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char boundary_gauge_variant[64];
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t reserved_flags;
@@ -1652,6 +1701,10 @@ int fullmag_fem_solve_steady_transport_rt0_v1(
 int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
     const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
     fullmag_fem_steady_transport_rt0_oersted_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result
 );
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 int fullmag_fem_get_frequency_domain_availability_info(

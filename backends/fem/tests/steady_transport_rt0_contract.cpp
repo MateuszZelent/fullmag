@@ -304,6 +304,76 @@ void run_closed_geometry_rt0_contract()
                 [](double value) { return std::isfinite(value); }),
         "public RT0 OE-F1 field contains a non-finite value");
 
+    std::vector<double> a_dofs_t_m(8192, 0.0);
+    std::vector<double> gauge_dofs_apm(4096, 0.0);
+    std::vector<double> compatible_b_dofs_t(8192, 0.0);
+    std::vector<double> compatible_h_dofs_apm(8192, 0.0);
+    auto vector_potential_request =
+        fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1{};
+    vector_potential_request.abi_version =
+        FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION;
+    vector_potential_request.struct_size = sizeof(vector_potential_request);
+    vector_potential_request.rt0 = request;
+    vector_potential_request.mu0_si = 1.25663706212e-6;
+    vector_potential_request.relative_tolerance = 1.0e-9;
+    vector_potential_request.maximum_nd_dofs = 8192;
+    vector_potential_request.maximum_h1_dofs = 4096;
+    vector_potential_request.boundary_gauge_variant = "tangential_A_h1_0.v1";
+
+    auto vector_potential_result =
+        fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1{};
+    vector_potential_result.abi_version =
+        FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION;
+    vector_potential_result.struct_size = sizeof(vector_potential_result);
+    vector_potential_result.rt0 = result;
+    vector_potential_result.a_dofs_t_m = a_dofs_t_m.data();
+    vector_potential_result.a_dofs_t_m_capacity = a_dofs_t_m.size();
+    vector_potential_result.gauge_dofs_apm = gauge_dofs_apm.data();
+    vector_potential_result.gauge_dofs_apm_capacity = gauge_dofs_apm.size();
+    vector_potential_result.compatible_b_dofs_t = compatible_b_dofs_t.data();
+    vector_potential_result.compatible_b_dofs_t_capacity = compatible_b_dofs_t.size();
+    vector_potential_result.compatible_h_dofs_apm = compatible_h_dofs_apm.data();
+    vector_potential_result.compatible_h_dofs_apm_capacity = compatible_h_dofs_apm.size();
+    const int vector_potential_status =
+        fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+            &vector_potential_request, &vector_potential_result);
+    if (vector_potential_status != FULLMAG_FEM_OK) {
+        std::cerr << "RT0 OE-F2 solve error: "
+                  << vector_potential_result.error_message << '\n';
+    }
+    require(vector_potential_status == FULLMAG_FEM_OK,
+        "public RT0 OE-F2 solved-current contract failed");
+    require(vector_potential_result.converged != 0 &&
+            vector_potential_result.a_dofs_t_m_len > 0 &&
+            vector_potential_result.gauge_dofs_apm_len > 0 &&
+            vector_potential_result.compatible_b_dofs_t_len > 0 &&
+            vector_potential_result.compatible_h_dofs_apm_len > 0,
+        "public RT0 OE-F2 result did not publish the mixed fields");
+    require(std::string(vector_potential_result.operator_version) ==
+            "fem_oersted_hcurl_h1_gauge.v1",
+        "public RT0 OE-F2 operator identity is wrong");
+    require(std::string(vector_potential_result.source_view_identity_digest) ==
+            std::string(result.view_identity_digest),
+        "public RT0 OE-F2 source view digest is not bound to RT0");
+    require(std::string(vector_potential_result.boundary_gauge_variant) ==
+            "tangential_A_h1_0.v1",
+        "public RT0 OE-F2 gauge identity is wrong");
+    require(vector_potential_result.harmonic_count == 0 &&
+            vector_potential_result.first_block_residual < 1.0e-7 &&
+            vector_potential_result.constraint_residual < 1.0e-7 &&
+            vector_potential_result.compatible_divergence_residual < 1.0e-7,
+        "public RT0 OE-F2 residual certificate is outside the fixture tolerance");
+    require(std::all_of(a_dofs_t_m.begin(),
+                a_dofs_t_m.begin() + vector_potential_result.a_dofs_t_m_len,
+                [](double value) { return std::isfinite(value); }) &&
+            std::all_of(compatible_h_dofs_apm.begin(),
+                compatible_h_dofs_apm.begin() + vector_potential_result.compatible_h_dofs_apm_len,
+                [](double value) { return std::isfinite(value); }),
+        "public RT0 OE-F2 field contains a non-finite value");
+    require(std::string(vector_potential_result.diagnostics_json).find(
+                "fem_oersted_hcurl_h1_gauge.v1") != std::string::npos,
+        "public RT0 OE-F2 diagnostics schema is missing");
+
     require(std::isfinite(result.max_element_divergence_a) &&
             std::isfinite(result.max_internal_face_jump_a) &&
             std::isfinite(result.net_outer_flux_a) &&

@@ -137,9 +137,17 @@ void solved_current_oersted_public_boundary_exposes_append_only_rt0()
     require(header.find("FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION 1u") !=
             std::string::npos,
         "RT0 OE-F1 ABI marker disappeared");
-    require(physics.find("Public ABI boundary and next append-only extension") !=
+    require(header.find(
+                "FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION 1u") !=
             std::string::npos,
-        "physics note must freeze the public ABI blocker and next extension contract");
+        "RT0 OE-F2 ABI marker disappeared");
+    require(physics.find(
+                "fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1") !=
+            std::string::npos,
+        "physics note must describe the append-only OE-F2 ABI symbol");
+    require(physics.find("Public ABI boundary and implemented append-only RT0/OE-F1 extension") !=
+            std::string::npos,
+        "physics note must freeze the public ABI boundary and extension contract");
 }
 
 void cpu_double_transparent_request_materializes_all_transport_fields()

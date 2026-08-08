@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1 CPU/double ABI and native contract now execute when a public closed_geometry descriptor is supplied, and the planner/runner now expose the exact-key steady_source_invariant.v1 cache gate. This is not magnetization-dependent RK coupling; external-lead closure, full stage coupling, OE-F2, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1/OE-F2 CPU/double ABI and native contract now execute when a public closed_geometry descriptor is supplied, and the planner/runner now expose the exact-key steady_source_invariant.v1 cache gate. This is not magnetization-dependent RK coupling; external-lead closure, full stage coupling, normal-runtime OE-F2 selection, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -99,10 +99,16 @@
       "responsibility": "Append-only closure-aware RT0 request/result and direct OE-F1 public C ABI; legacy transport v1 remains byte-stable."
     },
     {
+      "id": "fem-rt0-oersted-vector-potential-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1",
+      "responsibility": "Append-only OE-F2 mixed H(curl) x H1 request/result on the exact RT0 view; publishes coefficients, compatible fields, residuals, gauge and source identity without modifying legacy ABI."
+    },
+    {
       "id": "fem-rt0-oersted-native-adapter",
       "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
       "symbol": "solve_rt0",
-      "responsibility": "Build the immutable ConservativeCurrentView and evaluate direct tetrahedral Oersted field on the same view, publishing balance and quadrature digests."
+      "responsibility": "Build the immutable ConservativeCurrentView and evaluate direct tetrahedral OE-F1 or mixed vector-potential OE-F2 on the same view, publishing balance, field and residual digests."
     },
     {
       "id": "fem-rt0-oersted-runner",
@@ -117,10 +123,16 @@
       "responsibility": "Require an exact immutable source/view identity for the bounded one-way closed-geometry cache and fail closed when a fresh transport solve is required."
     },
     {
+      "id": "fem-steady-source-stage-coordinator",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs",
+      "symbol": "begin_attempt",
+      "responsibility": "Checkpoint accepted source state around an RK attempt, require explicit solve publication, restore the cache after rejection and prevent unresolved stage-identity changes from reaching Oersted."
+    },
+    {
       "id": "fem-rt0-oersted-contract",
       "path": "backends/fem/tests/steady_transport_rt0_contract.cpp",
       "symbol": "main",
-      "responsibility": "Managed CPU-only transport→RT0→direct OE-F1 contract including source-view digest equality and finite target field."
+      "responsibility": "Managed CPU-only transport→RT0→OE-F1/OE-F2 contract including source-view digest equality, finite fields and residual certificate."
     },
     {
       "id": "fem-dispatch-injection",

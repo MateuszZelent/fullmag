@@ -13,6 +13,7 @@
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
 #include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
+#include "cpu/mfem/interactions/oersted/vector_potential.hpp"
 
 #include <mfem.hpp>
 
@@ -61,6 +62,19 @@ void set_error(
     }
     std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
     result->diagnostics_json[0] = '\0';
+    set_error(&result->rt0, message);
+}
+
+void set_error(
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result,
+    const char *message)
+{
+    if (result == nullptr) {
+        return;
+    }
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+    result->diagnostics_json[0] = '\0';
+    result->converged = 0;
     set_error(&result->rt0, message);
 }
 
@@ -1114,7 +1128,11 @@ int solve_rt0(
     const fullmag_fem_steady_transport_rt0_request_v1 &request,
     fullmag_fem_steady_transport_rt0_result_v1 &result,
     fullmag_fem_steady_transport_rt0_oersted_result_v1 *oersted_result = nullptr,
-    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *oersted_request = nullptr)
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *oersted_request = nullptr,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1
+        *vector_potential_result = nullptr,
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1
+        *vector_potential_request = nullptr)
 {
     validate_rt0_header(request, result);
     const MeshView device_mesh_view = make_mesh_view(request.base.mesh, true);
@@ -1331,6 +1349,93 @@ int solve_rt0(
             static_cast<unsigned long long>(oersted_result->unconverged_pair_count),
             oersted_result->maximum_pair_error_apm);
     }
+    if (vector_potential_result != nullptr || vector_potential_request != nullptr) {
+        rt0_require(vector_potential_result != nullptr &&
+                vector_potential_request != nullptr,
+            "OE-F2 request and result must be supplied together");
+        const auto gauge = rt0_string(
+            vector_potential_request->boundary_gauge_variant,
+            "OE-F2 boundary gauge variant");
+        fullmag::fem::oersted::VectorPotentialOptions options;
+        options.mu0_si = vector_potential_request->mu0_si;
+        options.relative_tolerance = vector_potential_request->relative_tolerance;
+        options.maximum_nd_dofs = vector_potential_request->maximum_nd_dofs;
+        options.maximum_h1_dofs = vector_potential_request->maximum_h1_dofs;
+        options.boundary_gauge_variant = gauge;
+        const auto mixed = fullmag::fem::oersted::VectorPotentialSolver::Evaluate(
+            *view, options);
+        rt0_require(vector_potential_result->a_dofs_t_m != nullptr &&
+                vector_potential_result->a_dofs_t_m_capacity >= mixed.a_dofs_t_m.size(),
+            "OE-F2 A output capacity is smaller than the mixed ND solution");
+        rt0_require(vector_potential_result->gauge_dofs_apm != nullptr &&
+                vector_potential_result->gauge_dofs_apm_capacity >= mixed.gauge_dofs_apm.size(),
+            "OE-F2 gauge output capacity is smaller than the mixed H1 solution");
+        rt0_require(vector_potential_result->compatible_b_dofs_t != nullptr &&
+                vector_potential_result->compatible_b_dofs_t_capacity >=
+                    mixed.compatible_b_dofs_t.size(),
+            "OE-F2 compatible B output capacity is smaller than the RT0 field");
+        rt0_require(vector_potential_result->compatible_h_dofs_apm != nullptr &&
+                vector_potential_result->compatible_h_dofs_apm_capacity >=
+                    mixed.compatible_h_dofs_apm.size(),
+            "OE-F2 compatible H output capacity is smaller than the RT0 field");
+        std::copy(mixed.a_dofs_t_m.begin(), mixed.a_dofs_t_m.end(),
+            vector_potential_result->a_dofs_t_m);
+        std::copy(mixed.gauge_dofs_apm.begin(), mixed.gauge_dofs_apm.end(),
+            vector_potential_result->gauge_dofs_apm);
+        std::copy(mixed.compatible_b_dofs_t.begin(), mixed.compatible_b_dofs_t.end(),
+            vector_potential_result->compatible_b_dofs_t);
+        std::copy(mixed.compatible_h_dofs_apm.begin(), mixed.compatible_h_dofs_apm.end(),
+            vector_potential_result->compatible_h_dofs_apm);
+        vector_potential_result->a_dofs_t_m_len = mixed.a_dofs_t_m.size();
+        vector_potential_result->gauge_dofs_apm_len = mixed.gauge_dofs_apm.size();
+        vector_potential_result->compatible_b_dofs_t_len = mixed.compatible_b_dofs_t.size();
+        vector_potential_result->compatible_h_dofs_apm_len = mixed.compatible_h_dofs_apm.size();
+        vector_potential_result->converged = 1;
+        vector_potential_result->harmonic_count = mixed.diagnostics.harmonic_count;
+        vector_potential_result->essential_nd_dof_count =
+            mixed.diagnostics.essential_nd_dof_count;
+        vector_potential_result->essential_h1_dof_count =
+            mixed.diagnostics.essential_h1_dof_count;
+        vector_potential_result->first_block_residual =
+            mixed.diagnostics.first_block_residual;
+        vector_potential_result->constraint_residual =
+            mixed.diagnostics.constraint_residual;
+        vector_potential_result->weak_ampere_residual =
+            mixed.diagnostics.weak_ampere_residual;
+        vector_potential_result->compatible_divergence_residual =
+            mixed.diagnostics.compatible_divergence_residual;
+        vector_potential_result->source_pairing_norm =
+            mixed.diagnostics.source_pairing_norm;
+        copy_rt0_text(vector_potential_result->operator_version,
+            sizeof(vector_potential_result->operator_version), mixed.operator_version,
+            "OE-F2 operator version");
+        copy_rt0_text(vector_potential_result->source_view_identity_digest,
+            sizeof(vector_potential_result->source_view_identity_digest),
+            mixed.source_view_identity_digest, "OE-F2 source view digest");
+        copy_rt0_text(vector_potential_result->boundary_gauge_variant,
+            sizeof(vector_potential_result->boundary_gauge_variant),
+            mixed.boundary_gauge_variant, "OE-F2 boundary gauge variant");
+        vector_potential_result->error_message[0] = '\0';
+        std::snprintf(
+            vector_potential_result->diagnostics_json,
+            sizeof(vector_potential_result->diagnostics_json),
+            "{\"schema_version\":\"fem_oersted_hcurl_h1_gauge.v1\","
+            "\"operator_version\":\"%s\","
+            "\"source_view_identity_digest\":\"%s\","
+            "\"boundary_gauge_variant\":\"%s\","
+            "\"converged\":true,\"nd_dofs\":%d,\"h1_dofs\":%d,"
+            "\"harmonic_count\":%d,\"first_block_residual\":%.17g,"
+            "\"constraint_residual\":%.17g,\"compatible_divergence_residual\":%.17g}",
+            vector_potential_result->operator_version,
+            vector_potential_result->source_view_identity_digest,
+            vector_potential_result->boundary_gauge_variant,
+            mixed.diagnostics.nd_dofs,
+            mixed.diagnostics.h1_dofs,
+            mixed.diagnostics.harmonic_count,
+            mixed.diagnostics.first_block_residual,
+            mixed.diagnostics.constraint_residual,
+            mixed.diagnostics.compatible_divergence_residual);
+    }
     return FULLMAG_FEM_OK;
 }
 
@@ -1473,6 +1578,55 @@ extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
 #else
     set_error(result,
         "FEM RT0 Oersted requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "RT0 OE-F2 transport requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        if (request->abi_version !=
+                FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION ||
+            request->struct_size !=
+                sizeof(fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1) ||
+            request->reserved_flags != 0) {
+            throw std::invalid_argument("RT0 OE-F2 request ABI header mismatch");
+        }
+        if (result->abi_version !=
+                FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION ||
+            result->struct_size !=
+                sizeof(fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1) ||
+            result->reserved_flags != 0) {
+            throw std::invalid_argument("RT0 OE-F2 result ABI header mismatch");
+        }
+        validate_rt0_header(request->rt0, result->rt0);
+        return solve_rt0(
+            request->rt0,
+            result->rt0,
+            nullptr,
+            nullptr,
+            result,
+            request);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result,
+        "FEM RT0 OE-F2 requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
 }

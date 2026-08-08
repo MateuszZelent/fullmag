@@ -18,6 +18,7 @@ pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD: u32 = 2;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_INSULATING_OUTER: u32 = 1;
@@ -945,6 +946,55 @@ pub struct fullmag_fem_steady_transport_rt0_oersted_result_v1 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub rt0: fullmag_fem_steady_transport_rt0_request_v1,
+    pub mu0_si: f64,
+    pub relative_tolerance: f64,
+    pub maximum_nd_dofs: i32,
+    pub maximum_h1_dofs: i32,
+    pub boundary_gauge_variant: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub rt0: fullmag_fem_steady_transport_rt0_result_v1,
+    pub a_dofs_t_m: *mut f64,
+    pub a_dofs_t_m_capacity: u64,
+    pub a_dofs_t_m_len: u64,
+    pub gauge_dofs_apm: *mut f64,
+    pub gauge_dofs_apm_capacity: u64,
+    pub gauge_dofs_apm_len: u64,
+    pub compatible_b_dofs_t: *mut f64,
+    pub compatible_b_dofs_t_capacity: u64,
+    pub compatible_b_dofs_t_len: u64,
+    pub compatible_h_dofs_apm: *mut f64,
+    pub compatible_h_dofs_apm_capacity: u64,
+    pub compatible_h_dofs_apm_len: u64,
+    pub converged: i32,
+    pub harmonic_count: i32,
+    pub essential_nd_dof_count: i32,
+    pub essential_h1_dof_count: i32,
+    pub first_block_residual: f64,
+    pub constraint_residual: f64,
+    pub weak_ampere_residual: f64,
+    pub compatible_divergence_residual: f64,
+    pub source_pairing_norm: f64,
+    pub operator_version: [c_char; 96],
+    pub source_view_identity_digest: [c_char; 65],
+    pub boundary_gauge_variant: [c_char; 64],
+    pub error_message: [c_char; 256],
+    pub diagnostics_json: [c_char; 1024],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_steady_transport_result_v1 {
     pub abi_version: u32,
     pub reserved_flags: u32,
@@ -1817,6 +1867,10 @@ extern "C" {
         request: *const fullmag_fem_steady_transport_rt0_oersted_request_v1,
         result: *mut fullmag_fem_steady_transport_rt0_oersted_result_v1,
     ) -> i32;
+    pub fn fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+        request: *const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
+        result: *mut fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+    ) -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
@@ -2527,6 +2581,34 @@ mod tests {
         assert_eq!(
             std::mem::size_of::<fullmag_fem_steady_transport_rt0_oersted_result_v1>(),
             3272
+        );
+        assert_eq!(
+            FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION,
+            1
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
+                rt0
+            ),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+                rt0
+            ),
+            16
+        );
+        assert!(
+            std::mem::size_of::<
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
+            >() > std::mem::size_of::<fullmag_fem_steady_transport_rt0_request_v1>()
+        );
+        assert!(
+            std::mem::size_of::<
+                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
+            >() > std::mem::size_of::<fullmag_fem_steady_transport_rt0_result_v1>()
         );
     }
 

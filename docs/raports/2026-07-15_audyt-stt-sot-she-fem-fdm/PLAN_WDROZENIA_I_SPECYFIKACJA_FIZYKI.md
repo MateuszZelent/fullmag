@@ -9095,8 +9095,10 @@ Do produkcyjnego solved-current Oersted FEM nadal brakuje:
 3. niezależnej zbieżności `p` (bramka `h` dla OE-F1 i certyfikat bilansu są już
    objęte kontraktami CPU), kontroli energii oraz porównania z FDM/MuMax/BORIS
    na tym samym źródle;
-4. OE-F2 na tym samym view, integracji pola z LLG i publikacji w normalnym
-   runtime, a nie tylko fixture C++;
+4. normalnego runtime OE-F2 na tym samym view, wyboru metody w IR/plannerze,
+   integracji pola z LLG i publikacji poza fixture C++; append-only ABI/native
+   kontrakt OE-F2 jest już zaimplementowany, ale nie jest jeszcze domyślnie
+   wywoływany przez runner;
 5. managed FEM GPU/device-resident realizacji i osobnego dowodu parity.
 
 Dlatego bieżąca ocena celu po tej iteracji wynosi:
@@ -9112,6 +9114,44 @@ porównania solverów i GPU)
 Wartości są rozdzielone celowo: zielony kontrakt natywny nie oznacza jeszcze,
 że UI/Python potrafi autoryzować fizyczne zamknięcie ani że każdy etap LLG ma
 świeży, certyfikowany prąd.
+
+## 32.96. Append-only OE-F2 ABI na tym samym immutable RT0 view (2026-08-08)
+
+Po zamknięciu OE-T0/OE-F1 dodano brakujący most natywny OE-F2 bez naruszania
+istniejącego ABI transportu. Nowe typy i symbol
+`fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1` są
+wyłącznie append-only i zawierają zagnieżdżony request/result RT0, parametry
+`mu0`, tolerancję, limity DOF oraz jawny wariant gauge. Result publikuje:
+
+- współczynniki `A` w przestrzeni Nédélec `H(curl)` i skalar gauge `H1`;
+- kompatybilne pola RT0 `B` oraz `H=B/mu0`;
+- residual pierwszego bloku, więzu `B^T A`, słabego Ampère'a i dywergencji;
+- operator, wariant gauge i `source_view_identity_digest`.
+
+Adapter `steady_transport_c_api.cpp` tworzy dokładnie jeden
+`ConservativeCurrentView` i przekazuje go bez rekonstrukcji do
+`VectorPotentialSolver::Evaluate`. Brak closure, zły ABI, niezgodny digest lub
+za mały bufor kończą się błędem przed publikacją pola. Nodalny H1 current nie
+może wejść do tej funkcji.
+
+### Dowody
+
+| Gate | Wynik | Granica |
+|---|---|---|
+| `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-rt0-cpu-contract` | **PASS** | zarządzany kontener `fem-cpu`, MFEM/HYPRE CPU/double; fixture transport → RT0 → OE-F1 → OE-F2, finite fields, digest equality i residuale; nie jest to jeszcze normalny runtime LLG |
+| `cargo test -p fullmag-fem-sys tests::steady_transport_rt0_extension_layout_is_frozen_and_append_only` | **PASS** | append-only layout/FFI smoke; kompilacja hostowa z task-specific targetem, bez twierdzenia o runtime FEM |
+| `fem_steady_transport_rt0_contract` | **PASS** | `tangential_A_h1_0.v1`, `harmonic_count=0`, residuale poniżej `1e-7`, kompatybilne `H` skończone; jeden zamknięty fixture |
+
+### Granica kwalifikacji
+
+Ta zmiana podnosi dowód implementacyjny OE-F2 z „izolowany solver C++” do
+„wykonywalny append-only ABI na tym samym view”. Nie promuje jeszcze capability
+`field.oersted.fem_vector_potential`: IR/planner nie ma wyboru metody,
+runner nadal publikuje OE-F1 jako domyślną ścieżkę, a OE-F2 nie jest podłączone
+do accepted/stage LLG, airbox sequence, porównania direct/FDM, GPU ani
+produkcji. Ocena produkcyjna pozostaje **45%**; ocena publicznego łańcucha
+Python/IR → RT0 → Oersted → LLG pozostaje **~82%** do czasu P4 i normalnego
+runtime.
 
 ## 32.95. Bramka invariant-source cache dla FEM closed_geometry (2026-08-08)
 
@@ -9131,8 +9171,12 @@ udanym solve RT0/OE-F1; `reuse` akceptuje wyłącznie identyczny klucz i
 `view_identity_digest`, a zmiana tożsamości zwraca błąd wymagający świeżego
 solve. Artefakt/provenance zawiera politykę, digest klucza, obserwację
 hit/miss oraz liczniki hit/miss/invalidation; deklaruje też, że odrzucony
-kandydat nie jest publikowany, a zmiana klucza wymaga final refresh. Sam
-callback rejected-step w natywnym integratorze pozostaje jeszcze otwarty.
+kandydat nie jest publikowany, a zmiana klucza wymaga final refresh.
+`SteadySourceStageCoordinator` dodaje jawny checkpoint na początku próby,
+rejestrację `Miss`, wymóg publikacji solve przed akceptacją oraz odtworzenie
+ostatniego zaakceptowanego cache po odrzuceniu próby. Koordynator jest
+kontraktem warstwy runnera; callback natywnego integratora musi jeszcze
+wywołać te przejścia na rzeczywistych granicach RHS/accept/reject.
 
 Dowód zarządzany wykonano przez receptę kontenerową, bez hostowego buildu
 FEM:
@@ -9141,8 +9185,12 @@ FEM:
 FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-stage-cache-contract
 ```
 
-Wynik: `native_fem::steady_transport::stage_cache::tests::cache_reuses_two_rhs_and_rejects_changed_final_refresh_identity ... ok`,
-`1 passed; 0 failed`. Test sprawdza pierwszy `Miss`, dwa odczyty `Hit` tego
-samego immutable view oraz fail-closed po zmianie `source_state_revision`.
-Nie jest to jeszcze dowód różnych stage identities w RK, callbacku native
-integratora, rejected-step rollback, FSAL, OE-F2, GPU ani produkcyjnego LLG.
+Wynik: oba testy modułu `native_fem::steady_transport::stage_cache::tests`
+zakończyły się `2 passed; 0 failed`: `cache_reuses_two_rhs_and_rejects_changed_final_refresh_identity`
+oraz `stage_coordinator_rolls_back_rejected_source_and_requires_final_refresh`.
+Dowód obejmuje pierwszy `Miss`, dwa odczyty `Hit` tego samego immutable view,
+fail-closed po zmianie `source_state_revision`, rollback odrzuconej próby,
+ponowne użycie zaakceptowanego źródła i wymagany final refresh. Nie jest to
+jeszcze dowód callbacku native RK4/RK23/RK45, wielu odmiennych stage identities
+w rzeczywistym integratorze, FSAL w runtime, normalnego OE-F2, GPU ani
+produkcyjnego LLG.

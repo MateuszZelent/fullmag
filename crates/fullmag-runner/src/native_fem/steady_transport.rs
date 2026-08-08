@@ -24,7 +24,8 @@ mod stage_cache;
 use descriptor::preflight_transport_plans;
 use publication::transport_field_snapshots;
 use stage_cache::{
-    validate_plan as validate_stage_cache_plan, SteadySourceCache, STEADY_SOURCE_CACHE_POLICY,
+    validate_plan as validate_stage_cache_plan, SteadySourceStageCoordinator,
+    STEADY_SOURCE_CACHE_POLICY,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,7 +162,7 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
     let mut field_snapshots = Vec::new();
     let mut oersted_field_xyz: Option<Vec<f64>> = None;
     let mut aggregate_oersted_source_kinds = Vec::new();
-    let mut steady_source_cache = SteadySourceCache::default();
+    let mut steady_source_stages = SteadySourceStageCoordinator::default();
     for prepared in prepared {
         let resolved = prepared.resolved;
         let stage_cache_key = validate_stage_cache_plan(resolved)?;
@@ -192,24 +193,32 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             transport_provenance.conservative_current_balance_certificate_digest =
                 Some(rt0.balance_certificate_digest.clone());
             if let Some(key) = stage_cache_key.as_ref() {
-                let _initial_observation = steady_source_cache.publish_solve(
-                    key.clone(),
-                    rt0.view_identity_digest.clone(),
-                )?;
-                // The native FEM integrator consumes this immutable field on
-                // every RHS.  Bind the first RHS explicitly so a future
-                // stage callback cannot silently reuse a changed source.
-                let observation = steady_source_cache
-                    .reuse(key, &rt0.view_identity_digest)?;
+                steady_source_stages.begin_attempt()?;
+                let initial_observation = steady_source_stages
+                    .observe_stage(key, &rt0.view_identity_digest)?;
+                if initial_observation == stage_cache::CacheObservation::Miss {
+                    steady_source_stages.publish_solve(
+                        key.clone(),
+                        rt0.view_identity_digest.clone(),
+                    )?;
+                }
+                // Bind the first RHS explicitly. A future native stage
+                // callback must repeat this identity check before reusing the
+                // immutable source; a changed key cannot cross the boundary.
+                let observation = steady_source_stages
+                    .observe_stage(key, &rt0.view_identity_digest)?;
+                steady_source_stages.accept_attempt()?;
                 transport_provenance.stage_cache_policy =
                     Some(STEADY_SOURCE_CACHE_POLICY.into());
                 transport_provenance.stage_cache_key_digest = Some(key.digest());
                 transport_provenance.stage_cache_last_observation =
                     Some(format!("{observation:?}").to_ascii_lowercase());
-                transport_provenance.stage_cache_hit_count = Some(steady_source_cache.hits());
-                transport_provenance.stage_cache_miss_count = Some(steady_source_cache.misses());
+                transport_provenance.stage_cache_hit_count =
+                    Some(steady_source_stages.cache().hits());
+                transport_provenance.stage_cache_miss_count =
+                    Some(steady_source_stages.cache().misses());
                 transport_provenance.stage_cache_invalidation_count =
-                    Some(steady_source_cache.invalidations());
+                    Some(steady_source_stages.cache().invalidations());
             }
         }
         if let Some(descriptor) = resolved.fem_cpu_double.as_ref() {
@@ -298,9 +307,9 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                 "rhs_reuse": "same immutable source view for every magnetic RHS",
                 "rejected_step": "does_not_publish",
                 "final_refresh": "required_if_key_changes",
-                "hit_count": steady_source_cache.hits(),
-                "miss_count": steady_source_cache.misses(),
-                "invalidation_count": steady_source_cache.invalidations(),
+                "hit_count": steady_source_stages.cache().hits(),
+                "miss_count": steady_source_stages.cache().misses(),
+                "invalidation_count": steady_source_stages.cache().invalidations(),
             })),
             "oersted": module_oersted_field_xyz.as_ref().map(|field| {
                 let direct_rt0 = rt0_view.as_ref().is_some_and(|view| {

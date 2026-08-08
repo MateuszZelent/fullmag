@@ -949,6 +949,17 @@ This path resolves operator `fem_oersted_hcurl_h1_gauge.v1`, realization
 `fem_oersted_hcurl_h1_gauge_v1` /
 `fem_oersted_hcurl_h1_gauge_device_v1` respectively.
 
+The public solved-current bridge keeps the legacy transport ABI byte-for-byte
+stable.  The OE-F2 execution surface is therefore an append-only wrapper around
+the existing closure-aware RT0 request: it returns the mixed-system `A` and
+gauge coefficients, the compatible RT0 `B`/`H` fields, residual diagnostics,
+the selected gauge variant, and the source-view identity digest.  The backend
+must construct one immutable `ConservativeCurrentView` and pass that exact
+object to `VectorPotentialSolver::Evaluate`; a nodal H1 current or a second
+reconstruction is invalid.  This wrapper is CPU/double reference execution
+only until its managed airbox, p/refinement, cross-method, and device-resident
+gates have passed.
+
 ### 3.5 SI, sign, energy and accepted work snapshot
 
 The two FEM realizations consume the same signed conventional `J_c [A/m^2]`
@@ -1088,10 +1099,12 @@ scoped to named workload, geometry/BC, lane, precision, and frequency envelope.
 Native CPU contracts for OE-T0 and OE-F1 now exist, and the canonical planner
 accepts the explicit closed-geometry descriptor. For that descriptor it resolves
 `stage_coupling=steady_source_invariant.v1`; the runner validates and publishes
-the exact cache identity. This is a static-source reuse guard, not a promotion
-of the ordinary cylinder/nodal-midpoint path or a stage-coupled run:
-external-lead materialization, magnetization-dependent LLG coupling, OE-F2, GPU
-and production convergence gates remain open.
+the exact cache identity. The append-only native ABI now also exposes OE-F2 on
+that same immutable view, but method selection and normal-runtime publication
+remain deferred. This is a static-source reuse guard, not a promotion of the
+ordinary cylinder/nodal-midpoint path or a stage-coupled run: external-lead
+materialization, magnetization-dependent LLG coupling, normal-runtime OE-F2,
+GPU and production convergence gates remain open.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1193,14 +1206,19 @@ successful RT0/OE-F1 solve is a cache miss; subsequent reads are accepted only
 when both the key and `view_identity_digest` match exactly. A changed identity
 returns a fail-closed error until a fresh transport solve is completed. The
 artifact declares the policy that rejected candidates do not publish and that
-a final refresh is required after a key change; the native rejected-step
-callback is still open.
+a final refresh is required after a key change. `SteadySourceStageCoordinator`
+now checkpoints the cache at attempt start, rejects an unresolved identity
+change, restores the accepted cache on rollback, and requires an explicit
+publish before accepting a new candidate. This coordinator is a runner
+contract; the native RK callback still has to invoke these transitions.
 
 This gate protects the static one-way source already injected before native LLG;
-it is not a callback that solves transport for each magnetization stage. It does
-not yet prove RK4/RK23/RK45 or FSAL across distinct stage identities, device
-rollback, external-lead closure, reciprocal M2, OE-F2, or GPU execution. The
-capability therefore remains `development_executable`/`semantic_only` as
+it is not a callback that solves transport for each magnetization stage. The
+managed gate runs both the exact-key cache test and the coordinator test
+covering a changed stage, rejected-attempt rollback, retry/FSAL-style reuse and
+final refresh. It does not yet prove native RK4/RK23/RK45 callback wiring,
+external-lead closure, reciprocal M2, normal-runtime OE-F2, or GPU execution.
+The capability therefore remains `development_executable`/`semantic_only` as
 documented in the matrix.
 
 ### 4.6. Public ABI boundary and implemented append-only RT0/OE-F1 extension (audyt 2026-08-08)
@@ -1290,10 +1308,13 @@ end-to-end. Bramka OE-F1 ma już kontrolę `h=1/2/4/16` dla liniowo zmiennego
 
 W kodzie natywnym `fullmag_fem_solve_steady_transport_rt0_oersted_v1` buduje
 `ConservativeCurrentView`, a następnie wywołuje
-`DirectTetraQuadrature::Evaluate` na dokładnie tym samym immutable view. Runner
-kopiuje digest widoku, digest certyfikatu bilansu, pole `H_oe` w punktach
-docelowych i diagnostykę kwadratury; sprawdza też, że digest OE-F1 jest równy
-digestowi RT0. Nie ma konwersji H1→RT0. Managed
+`DirectTetraQuadrature::Evaluate` na dokładnie tym samym immutable view.
+Append-only symbol
+`fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1` wykonuje
+analogiczny krok przez `VectorPotentialSolver::Evaluate` i publikuje `A`,
+gauge, kompatybilne `B/H`, residuale oraz ten sam digest widoku. Oba symbole
+odrzucają brak closure, niezgodny ABI i zbyt małe bufory; nie ma konwersji
+H1→RT0. Managed
 `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract`
 wykonuje trzy kontrakty transportu, ABI i RT0→OE-F1 w obrazie CPU-only
 (`FULLMAG_USE_MFEM_STACK=ON`). Kontrakt RT0 sprawdza również skończoność,
@@ -1393,13 +1414,15 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `execute_native_fem_steady_transport_plans` | artifact provenance |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_v1` | public v1 ABI boundary |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_v1` | append-only RT0/OE-F1 ABI |
-| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and direct OE-F1 adapter |
+| `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1` | append-only RT0/OE-F2 ABI |
+| `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and OE-F1/OE-F2 adapters |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
 | `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
+| `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |
 | `backends/fem/tests/steady_transport_contract.cpp` | `main` | managed transport contract |
