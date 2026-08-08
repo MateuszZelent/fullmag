@@ -9603,3 +9603,34 @@ Zeemana/work `-mu0∫M·H_oe dV`; test nie ma jeszcze magnetyzacji z tego samego
 snapshotu, trzech podobnych rozmiarów airboxa ani kontroli ekstrapolacji pola.
 Nie zmienia to statusu `J_c(m_stage)`, callbacku native RK/FSAL, benchmarku
 FEM↔FDM/MuMax/BORIS, GPU/device-resident i produkcyjnego capability.
+
+## 32.107. Zarządzany 3-D common-limit operator FEM↔FDM dla Oersteda (2026-08-09)
+
+Do testu `backends/fem/tests/oersted_direct_tetra_contract.cpp` dodano
+referencyjny, niezależny od runtime'u benchmark tego samego problemu ciągłego:
+jednostkowy sześcian z jednorodnym signed `J_c=(4,0,0) A/m²` i punktem
+obserwacji `(2.5,0.37,0.61)`. FEM używa bezpośredniej kwadratury tetraedralnej
+na conforming `RT0`, a FDM niezależnej sumy midpoint po pełnej siatce 3-D.
+Rozdzielczości `n=1,2,4,8` zachowują ten sam obszar fizyczny; wynik FEM `n=8`
+jest wyłącznie wysokorozdzielczym oracle fixture.
+
+Świeże wykonanie zarządzanej recepty:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-oersted-oef1-cpu-contract
+4/4 ConservativeCurrentView serial/MPI/byte-identity ........ PASS
+OE-F1 h-refinement errors: coarse=0.000699174 medium=0.000337272 fine=0.000145936
+FEM/FDM Oersted common-limit diagnostics:
+  FEM coarse=3.62144e-10 medium=1.41058e-14 fine=1.59939e-17
+  FDM coarse=8.31533e-05 medium=4.6295e-06 fine=2.90329e-07 finest=1.81739e-08
+  cross coarse=8.31532e-05 fine=2.90329e-07
+fem direct tetrahedral Oersted contract: PASS
+```
+
+Wszystkie rozbieżności są w `A/m` (norma euklidesowa pola w punkcie). Gate
+potwierdza tylko zbieżność dwóch niezależnych operatorów do wspólnego limitu
+dla tego jednorodnego fixture i malejącą rozbieżność FEM↔FDM przy pełnym
+zagęszczeniu 3-D. Nie jest to dowód produkcyjnej FDM cell-integrated
+convolution, solved-current/Oersted w normalnym runtime, projekcji źródła,
+airbox sequence, GPU/device-resident transportu ani dynamicznego
+`J_c(m_stage)`; te bramy pozostają otwarte.

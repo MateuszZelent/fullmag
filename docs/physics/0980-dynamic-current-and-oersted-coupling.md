@@ -1003,6 +1003,17 @@ No hybrid Oersted lane is validated here. Any future cross-discretization
 source projection must conserve total and local current, report projection
 error, retain closure, and converge to the same direct Biot–Savart oracle.
 
+A bounded reference-only common-limit contract now exercises the same uniform
+unit cube, constant signed current, and far target with two independent
+discretizations: conforming FEM `RT0` direct tetrahedral quadrature and an FDM
+uniform-cell midpoint Biot–Savart sum.  The FEM `n=8` result is used only as a
+high-resolution oracle for the fixture; both families are evaluated at
+`n=1,2,4,8`, and the contract requires decreasing FEM error, FDM error, and
+cross-method discrepancy under 3-D `h` refinement.  This is operator-level
+evidence for a common continuum limit, not validation of the production FDM
+cell-integrated convolution, solved-current runtime, source projection,
+airbox sequence, GPU lane, or magnetization-dependent stage coupling.
+
 `refresh=stage_consistent` is strict. `separable_scale` is exact only after the
 planner proves separability. `accepted_step_approx` is explicitly degraded and
 requires temporal-order evidence; it cannot claim strict high-order coupling.
@@ -1465,6 +1476,7 @@ at least nominal minus `0.25` in the asymptotic range.
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
 - [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; h-refinement and balance gates for RT0/OE-F1 are covered; p, cross-backend and production gates remain open)
+- [x] Reference-only 3-D FEM/FDM midpoint common-limit operator contract (same uniform cube and far target; production FDM convolution and solved-current coupling remain open)
 - [x] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate (bounded CPU/double solver and nodal LLG bridge; GPU, p/airbox and production gates remain open)
 - [x] Invariant-source cache gate for one-way closed_geometry (exact-key RHS reuse and changed-identity rejection)
 - [ ] Magnetization-dependent stage coupling, FSAL, rollback, final refresh
