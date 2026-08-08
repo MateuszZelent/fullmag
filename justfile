@@ -765,8 +765,13 @@ verify-fem-oersted-observable-runtime:
       root=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_obs_003_oersted_observable_v1; \
       mkdir -p "$root"; \
       for device in cpu gpu; do \
-        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_driven.log"; \
-        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_zero.log"; \
+        run_root="$(mktemp -d "$root/.${device}.run.XXXXXX")"; \
+        trap 'rm -rf -- "$run_root"' EXIT; \
+        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$run_root/driven.log"; \
+        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$run_root/zero.log"; \
+        mv "$run_root/driven.log" "$root/${device}_driven.log"; \
+        mv "$run_root/zero.log" "$root/${device}_zero.log"; \
+        trap - EXIT; rmdir "$run_root"; \
       done; \
       python3 scripts/validate_fem_oersted_observable_artifacts.py \
         --cpu-driven "$root/cpu_driven.log" --cpu-zero "$root/cpu_zero.log" \

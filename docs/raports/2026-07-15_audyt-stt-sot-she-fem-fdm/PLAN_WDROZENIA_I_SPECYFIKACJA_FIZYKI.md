@@ -9422,3 +9422,58 @@ lane'ów (CPU/reference FDM oraz native FEM CPU). Nadal otwarte pozostają
 magnetization-dependent `J_c(m_stage)` w rzeczywistym RK/FSAL, niezależne
 `p`/energia/airbox dla solved-current, benchmark z MuMax/BORIS, GPU
 device-resident oraz release-clean publiczny Python/UI end-to-end.
+
+## 32.101. Świeży reference gate solved-current oraz atomowość obserwowalnego artefaktu (2026-08-09)
+
+### 32.101.1. Managed solved-current reference
+
+Po akceptacji planu ponownie uruchomiono zarządzaną receptę
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-solved-current-oersted-reference`.
+Kontener `fem-gpu` zbudował `fullmag_fem` w ścieżce MFEM/CUDA, a następnie
+przeszły wszystkie trzy części gate'u:
+
+```text
+fullmag-plan: 10 Oersted/planner tests ........ PASS
+solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current ... PASS
+solved_current_oersted_identity_digests_are_stable_and_source_bound ...... PASS
+```
+
+Dowód dotyczy bounded, regularizowanego midpoint Biot--Savarta i tożsamości
+źródła; nie jest to OE-F1/OE-F2, nie rozwiązuje `J_c(m_stage)` i nie jest
+kwalifikacją GPU/device-resident ani testem niezależnej energii/airboxa.
+
+### 32.101.2. Obserwowalny `H_oe` CPU/GPU: granica dowodu
+
+Próba świeżego `verify-fem-oersted-observable-runtime` została zatrzymana przed
+uruchomieniem workloadu, ponieważ `ensure-managed-fem-runtime` czekał na
+istniejący globalny eksport runtime. Nie przerwano ani nie usunięto właściciela
+blokady. Bieżący managed bundle jest oznaczony jako `dirty` i pochodzi z
+wcześniejszego snapshotu; nie wolno używać tego rerunu jako dowodu zgodności
+z HEAD.
+
+Historyczny PASS z 2026-07-12 pozostaje opisany w
+`.fullmag/audits/2026-07-09-backend-llg/remediation/tasks/fem-td-obs-003-report.md`:
+`H_oe=H_eff(I)-H_eff(0)` dla strict-double CPU/GPU, z residualami `0.0` oraz
+tolerancjami `1e-12`/`1e-10`. Ten raport jest dowodem wcześniejszego snapshotu,
+nie świeżym dowodem obecnego dirty worktree. Ponieważ próba z 2026-08-09
+została zatrzymana podczas przygotowania, kanoniczny zestaw logów musi zostać
+odtworzony po zwolnieniu eksportu i ponownie sprawdzony przez
+`validate_fem_oersted_observable_artifacts.py`; capability pozostaje bez
+awansu.
+
+### 32.101.3. Korekta recepty kwalifikacyjnej
+
+`verify-fem-oersted-observable-runtime` zapisuje teraz każdy przebieg do
+tymczasowego katalogu `.cpu.run.*`/`.gpu.run.*` i dopiero po przejściu obu
+przebiegów wykonuje atomowe `mv` do kanonicznych nazw logów. `SIGINT`, błąd
+eksportu albo błąd workloadu nie może już wyzerować poprzedniego artefaktu
+przed walidacją. Po każdej podmianie nadal wykonywane są walidator oraz
+`SHA256SUMS.txt`; tymczasowy zapis nie jest dowodem fizycznym.
+
+Granica celu pozostaje:
+
+```text
+reference solved-current/Oersted contracts: PASS
+observed accepted-time H_oe for current HEAD: blocked until managed export is free
+production FEM solved-current Oersted: nadal niezakwalifikowany
+```
