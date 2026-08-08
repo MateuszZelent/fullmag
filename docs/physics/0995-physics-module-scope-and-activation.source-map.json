@@ -90,6 +90,12 @@
       "responsibility": "Derive executed graph-module IDs only from explicit transport/Oersted execution provenance before writing the graph artifact."
     },
     {
+      "id": "graph-fdm-runtime-test",
+      "path": "crates/fullmag-runner/tests/physics_graph_runtime.rs",
+      "symbol": "fdm_runtime_artifact_contains_concrete_graph_realization",
+      "responsibility": "Exercise the public FDM runner and assert that the persisted artifact contains the concrete realization certificate."
+    },
+    {
       "id": "graph-realization-verifier",
       "path": "scripts/verify_physics_scope_graph_runtime.py",
       "symbol": "_validate_concrete_realization",
