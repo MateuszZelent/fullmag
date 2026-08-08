@@ -66,10 +66,34 @@
       "responsibility": "Resolve graph identity, activation, semantic FEM markers and FDM mask identities for the selected lane."
     },
     {
+      "id": "planner-graph-realization",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "physics_graph_realization_provenance",
+      "responsibility": "Resolve authored scopes onto concrete FEM element markers or FDM cell masks and distinguish resolved from observed execution."
+    },
+    {
+      "id": "graph-realization-ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "PhysicsGraphRealizationProvenanceIR",
+      "responsibility": "Typed physics_graph.realization.v1 provenance contract with semantic_only, resolved and executed states."
+    },
+    {
       "id": "runtime-provenance",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
       "symbol": "execute_native_fem_steady_transport_plans",
-      "responsibility": "Publish the bounded solved-current artifact and its numerical provenance; graph identity remains in the serialized execution-plan provenance until typed runtime fields are qualified."
+      "responsibility": "Publish the bounded solved-current artifact and its numerical provenance; graph realization is added separately at the runner artifact boundary."
+    },
+    {
+      "id": "graph-execution-observation",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "observed_physics_graph_module_ids",
+      "responsibility": "Derive executed graph-module IDs only from explicit transport/Oersted execution provenance before writing the graph artifact."
+    },
+    {
+      "id": "graph-realization-verifier",
+      "path": "scripts/verify_physics_scope_graph_runtime.py",
+      "symbol": "_validate_concrete_realization",
+      "responsibility": "Validate lane-specific concrete markers/masks, state transitions and executed-subset invariants in runtime fixtures."
     },
     {
       "id": "oersted-view",

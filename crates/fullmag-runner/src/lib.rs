@@ -1600,6 +1600,19 @@ pub(crate) fn require_physics_graph_runtime_provenance(
             });
         }
     }
+    let expected_realization = fullmag_plan::physics_graph_realization_provenance(
+        problem,
+        &plan.backend_plan,
+        &[],
+    )
+    .map_err(|reasons| RunError {
+        message: reasons.join("; "),
+    })?;
+    if provenance.realization != expected_realization {
+        return Err(RunError {
+            message: "physics_graph runtime provenance concrete realization does not match the resolved mesh/grid".to_string(),
+        });
+    }
     Ok(())
 }
 

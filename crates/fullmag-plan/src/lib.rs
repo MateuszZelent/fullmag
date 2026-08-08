@@ -42,8 +42,9 @@ pub use geometry::{
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 pub use physics_graph::{
-    physics_graph_provenance_notes, physics_graph_runtime_provenance, physics_graph_sha256,
-    resolve_physics_graph, resolve_physics_modules, ResolvedPhysicsModule,
+    physics_graph_provenance_notes, physics_graph_realization_provenance,
+    physics_graph_runtime_provenance, physics_graph_sha256, resolve_physics_graph,
+    resolve_physics_modules, ResolvedPhysicsModule,
 };
 pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,

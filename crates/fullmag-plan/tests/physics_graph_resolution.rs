@@ -1,5 +1,6 @@
 use fullmag_ir::ProblemIR;
 use fullmag_ir::BackendTarget;
+use fullmag_ir::PhysicsGraphRealizationStateIR;
 use fullmag_plan::{resolve_physics_graph, resolve_physics_modules};
 
 #[test]
@@ -191,4 +192,90 @@ fn planned_graph_has_typed_runtime_provenance_with_scene_and_mesh_revisions() {
     assert_eq!(module.resolved_lane, BackendTarget::Fdm);
     assert_eq!(module.status, "unsupported");
     assert!(module.depends_on.is_empty());
+}
+
+#[test]
+fn planned_graph_realization_distinguishes_resolved_from_executed() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = BackendTarget::Fdm;
+    problem.physics_graph = Some(serde_json::json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 43,
+        "modules": [{
+            "id": "current:film",
+            "kind": "current_transport",
+            "applies_to": [{"kind": "object", "object_id": "strip"}],
+            "solve_domain": [{"object_id": "strip"}],
+            "depends_on": [],
+            "activation": "active",
+            "authored_state": "authored",
+            "capability": "reference_executable",
+            "source_path": "/current_modules/0",
+            "family_payload": {}
+        }],
+        "edges": []
+    }));
+
+    let plan = fullmag_plan::plan(&problem).expect("graph-bearing FDM plan");
+    let realization = plan
+        .provenance
+        .physics_graph
+        .as_ref()
+        .and_then(|provenance| provenance.realization.as_ref())
+        .expect("concrete realization provenance");
+    assert_eq!(realization.executed_module_ids, Vec::<String>::new());
+    assert_eq!(realization.resolved_module_ids, vec!["current:film"]);
+    assert_eq!(
+        realization.modules[0].state,
+        PhysicsGraphRealizationStateIR::Resolved
+    );
+    assert!(realization.modules[0]
+        .realized_fdm_mask_digest
+        .as_deref()
+        .is_some_and(|digest| digest.starts_with("sha256:")));
+    assert!(realization.modules[0].realized_cell_count > 0);
+
+    let executed = fullmag_plan::physics_graph_realization_provenance(
+        &problem,
+        &plan.backend_plan,
+        &["current:film".to_string()],
+    )
+    .expect("runtime realization")
+    .expect("graph realization");
+    assert_eq!(executed.executed_module_ids, vec!["current:film"]);
+    assert_eq!(
+        executed.modules[0].state,
+        PhysicsGraphRealizationStateIR::Executed
+    );
+}
+
+#[test]
+fn graph_realization_rejects_unknown_execution_observation() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = BackendTarget::Fdm;
+    problem.physics_graph = Some(serde_json::json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 44,
+        "modules": [{
+            "id": "current:film",
+            "kind": "current_transport",
+            "applies_to": [{"kind": "object", "object_id": "strip"}],
+            "solve_domain": [{"object_id": "strip"}],
+            "depends_on": [],
+            "activation": "active",
+            "authored_state": "authored",
+            "capability": "reference_executable",
+            "source_path": "/current_modules/0",
+            "family_payload": {}
+        }],
+        "edges": []
+    }));
+    let plan = fullmag_plan::plan(&problem).expect("graph-bearing FDM plan");
+    let errors = fullmag_plan::physics_graph_realization_provenance(
+        &problem,
+        &plan.backend_plan,
+        &["missing-module".to_string()],
+    )
+    .expect_err("unknown execution observations must fail closed");
+    assert!(errors[0].contains("unknown module IDs"));
 }

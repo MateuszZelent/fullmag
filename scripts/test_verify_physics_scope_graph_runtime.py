@@ -140,6 +140,54 @@ class PhysicsScopeGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(len(graph["modules"]), 4)
         self.assertEqual(payload["lanes"]["fem"]["executed_module_ids"], [])
 
+    def test_concrete_realization_distinguishes_resolved_and_executed(self) -> None:
+        payload = _runtime(self.local, "fem")
+        lane = payload["lanes"]["fem"]
+        modules = []
+        for module in lane["modules"]:
+            module_id = module["module_id"]
+            status = module["status"]
+            state = "executed" if module_id in lane["executed_module_ids"] else "semantic_only"
+            record = {
+                "module_id": module_id,
+                "state": state,
+                "topology_fingerprint": "sha256:fem-topology",
+                "realized_cell_count": 4 if state == "executed" else 0,
+            }
+            if state == "executed":
+                record["realized_fem_marker_ids"] = [1]
+            modules.append(record)
+        lane["realization"] = {
+            "schema_version": "physics_graph.realization.v1",
+            "topology_fingerprint": "sha256:fem-topology",
+            "resolved_module_ids": list(lane["executed_module_ids"]),
+            "executed_module_ids": list(lane["executed_module_ids"]),
+            "modules": modules,
+        }
+        validate_runtime_payload(self.local, payload, lanes=("fem",))
+
+    def test_concrete_realization_rejects_semantic_marker_as_execution_proof(self) -> None:
+        payload = _runtime(self.local, "fem")
+        lane = payload["lanes"]["fem"]
+        modules = []
+        for module in lane["modules"]:
+            modules.append({
+                "module_id": module["module_id"],
+                "state": "resolved" if module["status"] in {"active", "configured"} else "semantic_only",
+                "topology_fingerprint": "sha256:fem-topology",
+                "realized_cell_count": 4 if module["status"] in {"active", "configured"} else 0,
+                "realized_fem_marker_ids": [module["module_id"]],
+            })
+        lane["realization"] = {
+            "schema_version": "physics_graph.realization.v1",
+            "topology_fingerprint": "sha256:fem-topology",
+            "resolved_module_ids": [module["module_id"] for module in modules if module["state"] == "resolved"],
+            "executed_module_ids": [],
+            "modules": modules,
+        }
+        with self.assertRaisesRegex(QualificationError, "marker IDs"):
+            validate_runtime_payload(self.local, payload, lanes=("fem",))
+
 
 if __name__ == "__main__":
     unittest.main()

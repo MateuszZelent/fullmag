@@ -1597,6 +1597,62 @@ pub struct IntegratorResolutionProvenanceIR {
 /// before a runner realizes operators on a concrete mesh/grid.
 pub const PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA: &str = "physics_graph.runtime.v1";
 
+/// Versioned certificate for the transition from semantic graph scope to the
+/// concrete topology consumed by one backend lane.  A runtime plan may carry
+/// semantic marker/mask identities even when this certificate is absent; that
+/// distinction is deliberate and prevents a planner identity from being
+/// mistaken for an element/cell realization.
+pub const PHYSICS_GRAPH_REALIZATION_SCHEMA: &str = "physics_graph.realization.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhysicsGraphRealizationStateIR {
+    /// The authored scope could not be mapped unambiguously to the resolved
+    /// mesh/grid.  The semantic module remains visible, but no backend mask is
+    /// legal to consume.
+    SemanticOnly,
+    /// The authored scope was mapped to concrete marker/cell identities in the
+    /// resolved plan.  This is a resolution proof, not an execution proof.
+    Resolved,
+    /// The backend emitted an execution record for the module in this run.
+    /// This state is written only after the solver returns a matching runtime
+    /// observation; it is never inferred from planning alone.
+    Executed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphModuleRealizationIR {
+    pub module_id: String,
+    pub state: PhysicsGraphRealizationStateIR,
+    /// Fingerprint of the exact mesh/grid used for this resolution.
+    pub topology_fingerprint: String,
+    /// Concrete FEM element markers selected by the module scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realized_fem_marker_ids: Vec<u32>,
+    /// Digest of the concrete FDM cell mask selected by the module scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_fdm_mask_digest: Option<String>,
+    /// Number of active cells/elements selected by the concrete scope.
+    pub realized_cell_count: u64,
+    /// Numeric FDM region IDs consumed by the selected mask, when applicable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realized_fdm_region_ids: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphRealizationProvenanceIR {
+    pub schema_version: String,
+    pub topology_fingerprint: String,
+    pub resolved_module_ids: Vec<String>,
+    /// Empty during planning.  The runner replaces this with an observed set
+    /// only after the corresponding backend execution record is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executed_module_ids: Vec<String>,
+    pub modules: Vec<PhysicsGraphModuleRealizationIR>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhysicsGraphRuntimeProvenanceIR {
     pub schema_version: String,
@@ -1606,6 +1662,11 @@ pub struct PhysicsGraphRuntimeProvenanceIR {
     pub requested_lane: BackendTarget,
     pub resolved_lane: BackendTarget,
     pub modules: Vec<PhysicsGraphModuleProvenanceIR>,
+    /// Concrete mesh/grid realization.  This is optional for compatibility
+    /// with pre-certificate plan artifacts and becomes required by the runner
+    /// for newly planned graph-bearing executions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization: Option<PhysicsGraphRealizationProvenanceIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

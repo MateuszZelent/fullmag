@@ -37,17 +37,19 @@ struct SolverDiagnosticTraceArtifact {
 /// This is deliberately separate from `ExecutionProvenance`: the latter is a
 /// long-lived compatibility struct with many constructors, while this graph
 /// certificate is an additive, schema-versioned projection of the exact
-/// ProblemIR graph and the lane resolution used for the run.  Marker/mask IDs
-/// remain semantic identities until a backend supplies a concrete topology
-/// certificate; this artifact must not be read as such a certificate.
+/// ProblemIR graph and the lane resolution used for the run.  The additive
+/// `realization` member carries the concrete topology certificate; the
+/// marker/mask IDs in the legacy module records remain semantic identities and
+/// must not be read as element/cell coordinates.
 fn physics_graph_provenance_artifact(
     problem: &fullmag_ir::ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
+    executed: Option<&ExecutedRun>,
 ) -> std::io::Result<Option<crate::types::AuxiliaryArtifact>> {
     if problem.physics_graph.is_none() {
         return Ok(None);
     }
-    let payload = if let Some(provenance) = plan.provenance.physics_graph.clone() {
+    let mut payload = if let Some(provenance) = plan.provenance.physics_graph.clone() {
         provenance
     } else {
         fullmag_plan::physics_graph_runtime_provenance(problem, &plan.backend_plan)
@@ -59,6 +61,15 @@ fn physics_graph_provenance_artifact(
                 )
             })?
     };
+    let observed_module_ids = executed
+        .map(|run| observed_physics_graph_module_ids(problem, &run.provenance))
+        .unwrap_or_default();
+    payload.realization = fullmag_plan::physics_graph_realization_provenance(
+        problem,
+        &plan.backend_plan,
+        &observed_module_ids,
+    )
+    .map_err(|reasons| Error::new(ErrorKind::InvalidData, reasons.join("; ")))?;
     let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| {
         Error::new(
             ErrorKind::InvalidData,
@@ -69,6 +80,58 @@ fn physics_graph_provenance_artifact(
         relative_path: PHYSICS_GRAPH_PROVENANCE_ARTIFACT.to_string(),
         bytes,
     }))
+}
+
+/// Return only module IDs backed by an execution observation.  Transport
+/// provenance identifies the solved spin module and its bound current source;
+/// an Oersted graph node is accepted only when the same transport record
+/// explicitly contains a solved-current field.  Other graph nodes remain
+/// `resolved` rather than being promoted from planning heuristics.
+fn observed_physics_graph_module_ids(
+    problem: &fullmag_ir::ProblemIR,
+    provenance: &crate::types::ExecutionProvenance,
+) -> Vec<String> {
+    let Some(graph) = problem.physics_graph.as_ref() else {
+        return Vec::new();
+    };
+    let Some(modules) = graph.get("modules").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let graph_ids = modules
+        .iter()
+        .filter_map(|module| module.get("id").and_then(serde_json::Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut observed = BTreeSet::new();
+    for transport in &provenance.transport_modules {
+        for candidate in [transport.module_id.as_str(), transport.current_source_id.as_str()] {
+            if graph_ids.contains(candidate) {
+                observed.insert(candidate.to_string());
+            }
+        }
+        if transport.oersted_source_kind.is_some() {
+            for module in modules {
+                let Some(object) = module.as_object() else {
+                    continue;
+                };
+                if object.get("kind").and_then(serde_json::Value::as_str)
+                    != Some("oersted_field")
+                {
+                    continue;
+                }
+                let source = object
+                    .get("family_payload")
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|payload| payload.get("source"))
+                    .and_then(serde_json::Value::as_str);
+                if source == Some(transport.current_source_id.as_str()) {
+                    if let Some(module_id) = object.get("id").and_then(serde_json::Value::as_str) {
+                        observed.insert(module_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    observed.into_iter().collect()
 }
 
 /// Preserve the accepted-step trace across the execution/artifact boundary.
@@ -1257,7 +1320,7 @@ pub(crate) fn write_artifacts(
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
-    let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan)?;
+    let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan, Some(executed))?;
     if let Some(artifact) = physics_graph_artifact.as_ref() {
         let graph_provenance: serde_json::Value = serde_json::from_slice(&artifact.bytes)
             .map_err(|error| {
@@ -3599,7 +3662,7 @@ mod tests {
         }));
         let plan = test_fem_execution_plan();
 
-        let artifact = physics_graph_provenance_artifact(&problem, &plan)
+        let artifact = physics_graph_provenance_artifact(&problem, &plan, None)
             .expect("graph provenance must resolve")
             .expect("authored graph must emit a runtime artifact");
         let payload: serde_json::Value =
@@ -3618,6 +3681,16 @@ mod tests {
         assert_eq!(payload["modules"][1]["scope"], "object:film");
         assert_eq!(payload["modules"][1]["status"], "blocked");
         assert!(payload["graph_sha256"].as_str().is_some_and(|value| value.len() == 64));
+        assert_eq!(
+            payload["realization"]["schema_version"],
+            fullmag_ir::PHYSICS_GRAPH_REALIZATION_SCHEMA
+        );
+        assert_eq!(
+            payload["realization"]["modules"]
+                .as_array()
+                .map(|values| values.len()),
+            Some(2)
+        );
     }
 
     #[test]

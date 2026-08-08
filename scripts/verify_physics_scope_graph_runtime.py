@@ -297,6 +297,84 @@ def _provenance_revision(provenance: Mapping[str, Any]) -> int:
     return revision
 
 
+def _validate_concrete_realization(
+    lane_payload: Mapping[str, Any],
+    graph_modules: Mapping[str, Mapping[str, Any]],
+    lane: str,
+) -> None:
+    """Validate the optional mesh/grid realization certificate.
+
+    Older qualification captures do not carry this field and remain valid
+    semantic fixtures.  When present, the certificate must make the
+    resolved/executed boundary explicit and must not reuse semantic marker or
+    mask IDs as concrete topology evidence.
+    """
+
+    raw = lane_payload.get("realization")
+    if raw is None:
+        return
+    realization = _mapping(raw, f"runtime.{lane}.realization")
+    _require(
+        realization.get("schema_version") == "physics_graph.realization.v1",
+        f"runtime.{lane}.realization.schema_version is unsupported",
+    )
+    _string(realization.get("topology_fingerprint"), f"runtime.{lane}.realization.topology_fingerprint")
+    resolved = [
+        _string(module_id, f"runtime.{lane}.realization.resolved_module_ids[]")
+        for module_id in _list(
+            realization.get("resolved_module_ids"),
+            f"runtime.{lane}.realization.resolved_module_ids",
+        )
+    ]
+    executed = [
+        _string(module_id, f"runtime.{lane}.realization.executed_module_ids[]")
+        for module_id in _list(
+            realization.get("executed_module_ids", []),
+            f"runtime.{lane}.realization.executed_module_ids",
+        )
+    ]
+    _require(len(resolved) == len(set(resolved)), f"runtime.{lane}.realization.resolved_module_ids contains duplicates")
+    _require(len(executed) == len(set(executed)), f"runtime.{lane}.realization.executed_module_ids contains duplicates")
+    _require(set(executed).issubset(set(resolved)), f"runtime.{lane}.realization executed IDs are not resolved")
+    for module_id in (*resolved, *executed):
+        _require(module_id in graph_modules, f"runtime.{lane}.realization contains unknown module '{module_id}'")
+
+    records = _list(realization.get("modules"), f"runtime.{lane}.realization.modules")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for index, raw_module in enumerate(records):
+        module = _mapping(raw_module, f"runtime.{lane}.realization.modules[{index}]")
+        module_id = _module_id(module, f"runtime.{lane}.realization.modules[{index}]")
+        _require(module_id not in by_id, f"runtime.{lane}.realization has duplicate module '{module_id}'")
+        _require(module_id in graph_modules, f"runtime.{lane}.realization contains unknown module '{module_id}'")
+        by_id[module_id] = module
+        state = _string(module.get("state"), f"runtime.{lane}.realization.modules[{index}].state")
+        _require(state in {"semantic_only", "resolved", "executed"}, f"runtime.{lane}.realization module '{module_id}' has invalid state '{state}'")
+        _string(module.get("topology_fingerprint"), f"runtime.{lane}.realization.modules[{index}].topology_fingerprint")
+        cell_count = module.get("realized_cell_count")
+        _require(isinstance(cell_count, int) and not isinstance(cell_count, bool) and cell_count >= 0, f"runtime.{lane}.realization module '{module_id}' has invalid realized_cell_count")
+        if state == "semantic_only":
+            _require(module_id not in resolved and module_id not in executed, f"semantic-only realization '{module_id}' is listed as resolved/executed")
+            _require(not module.get("realized_fem_marker_ids"), f"semantic-only FEM realization '{module_id}' carries markers")
+            _require(not module.get("realized_fdm_mask_digest"), f"semantic-only FDM realization '{module_id}' carries a mask digest")
+            continue
+        _require(module_id in resolved, f"resolved realization '{module_id}' is missing from resolved_module_ids")
+        _require(cell_count > 0, f"resolved realization '{module_id}' has no selected cells/elements")
+        if state == "executed":
+            _require(module_id in executed, f"executed realization '{module_id}' is missing from executed_module_ids")
+        if lane == "fem":
+            marker_ids = module.get("realized_fem_marker_ids")
+            _require(isinstance(marker_ids, list) and bool(marker_ids), f"resolved FEM realization '{module_id}' has no concrete marker IDs")
+            _require(all(isinstance(marker, int) and not isinstance(marker, bool) and marker >= 0 for marker in marker_ids), f"resolved FEM realization '{module_id}' has non-numeric marker IDs")
+            _require(not module.get("realized_fdm_mask_digest"), f"FEM realization '{module_id}' carries an FDM mask digest")
+        else:
+            mask_digest = module.get("realized_fdm_mask_digest")
+            _require(isinstance(mask_digest, str) and bool(mask_digest), f"resolved FDM realization '{module_id}' has no concrete mask digest")
+            _require(not module.get("realized_fem_marker_ids"), f"FDM realization '{module_id}' carries FEM markers")
+    _require(set(by_id) == set(graph_modules), f"runtime.{lane}.realization module IDs differ from graph")
+    _require(set(resolved) == {module_id for module_id, module in by_id.items() if module.get("state") in {"resolved", "executed"}}, f"runtime.{lane}.realization resolved IDs disagree with module states")
+    _require(set(executed) == {module_id for module_id, module in by_id.items() if module.get("state") == "executed"}, f"runtime.{lane}.realization executed IDs disagree with module states")
+
+
 def validate_runtime_lane(
     fixture: Mapping[str, Any],
     graph: Mapping[str, Any],
@@ -353,6 +431,7 @@ def validate_runtime_lane(
         _require(status in {"active", "configured"}, f"runtime.{lane} executes non-executable module '{module_id}'")
         for dependency in by_id[module_id].get("depends_on", []):
             _require(dependency in executed_ids, f"runtime.{lane} executes '{module_id}' without dependency '{dependency}'")
+    _validate_concrete_realization(lane_payload, graph_modules, lane)
 
 
 def validate_runtime_payload(fixture: Mapping[str, Any], payload: Mapping[str, Any], lanes: Sequence[str] = ("fem", "fdm")) -> None:

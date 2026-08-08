@@ -8760,8 +8760,10 @@ Refaktoryzacja nie awansuje fizyki STT/SOT/SHE/Oersteda do produkcji. Typed
 provenance i wspólny action-session są już zaimplementowane, ale nadal otwarte
 są:
 
-- certyfikat realizacji marker/mask na konkretnej siatce/gridzie oraz
-  osobne rozróżnienie `resolved` od `executed` w managed lane;
+- managed lane capture certyfikatu `physics_graph.realization.v1` oraz
+  osobne rozróżnienie `resolved` od `executed` w rzeczywistym przebiegu;
+  plannerowa materializacja na konkretnej siatce/gridzie jest zamknięta w
+  §32.98 i nie może być zastępowana fixture'em syntetycznym;
 - podłączenie `ConservativeCurrentView` RT0/H(div) do publicznego FEM
   solved-current Oersted wraz z closure, direct tetra oracle, energią i
   zbieżnością `h`;
@@ -8781,11 +8783,12 @@ zwykłego `/tmp`.
 Semantyczny scope graph, authoring, planner, typed provenance, API, Explorer,
 Inspector action-session i podstawowa kompozycja paneli są zaimplementowane i
 mają zielone testy kontraktowe.
-Najwyższy uczciwy status całego celu pozostaje **implementacja częściowa**:
-około **93% zakresu refaktoryzacji źródłowej**, lecz tylko około **68%
-gotowości produkcyjnej** dla pełnego FEM/FDM STT/SOT/SHE/Oersted. Wzrost dotyczy
-spójności modelu, provenance i UI; nie jest jeszcze kwalifikacją numeryczną
-solverów ani dowodem managed runtime.
+Najwyższy uczciwy status całego celu pozostaje **implementacja częściowa**.
+Wartości `93% / 68%` zapisane w tym podrozdziale są snapshotem sprzed
+§32.98; po rozszerzeniu kryterium o konkretną topologię aktualny ledger podaje
+`~96%` dla źródłowej refaktoryzacji grafu oraz `~50%` dla pełnej gotowości
+produkcyjnej STT/SOT/SHE/Oersted. Żaden z tych procentów nie jest kwalifikacją
+numeryczną solvera ani dowodem managed runtime.
 
 Szczegółowy ledger dowodów i blokad zapisano w
 `docs/raports/2026-08-05-physics-scope-graph-refactor/QUALIFICATION.md`.
@@ -9276,3 +9279,58 @@ Podniesienie dotyczy implementacji i wykonywalnego wyboru metody, nie samego
 statusu `validated_workloads` ani capability GPU. Do awansu produkcyjnego
 potrzebny jest osobny artefakt kwalifikacyjny obejmujący wszystkie powyższe
 otwarte bramy.
+
+## 32.98. Certyfikat realizacji zakresu grafu na konkretnej topologii (2026-08-08)
+
+Zamknięto pierwszy otwarty punkt z §32.92.3 bez utożsamiania planowania z
+wykonaniem. `ProblemIR` otrzymał append-only typowany kontrakt
+`physics_graph.realization.v1`, osadzony opcjonalnie w
+`PhysicsGraphRuntimeProvenanceIR`. Certyfikat przechowuje:
+
+- fingerprint dokładnego FEM mesh albo FDM gridu;
+- stan każdego modułu: `semantic_only`, `resolved` albo `executed`;
+- rzeczywiste markery elementów FEM oraz digest konkretnej maski komórek FDM;
+- liczbę wybranych elementów/komórek i numeryczne ID regionów FDM;
+- osobne listy `resolved_module_ids` i `executed_module_ids`.
+
+Planner buduje certyfikat wyłącznie z materializowanego planu. Dla FEM zakres
+object/cross-object/region jest sprawdzany przez `FemObjectSegmentIR`,
+`FemMeshPartIR` i `MeshIR.element_markers`; dla FDM certyfikat gridu jest
+ponownie walidowany względem `active_mask` i `region_mask`, a zakres jest
+wybierany przez canonical `region_legend`. Brak jednoznacznej tożsamości
+pozostaje `semantic_only` z jawnym powodem; nie istnieje marker/maska
+wywnioskowana z pozycji listy.
+
+Runner wymaga zgodności certyfikatu z planem przed uruchomieniem. Po wykonaniu
+aktualizuje artefakt `physics/physics_graph_provenance.v1.json` tylko na
+podstawie obserwowanego `TransportExecutionProvenance`: identyfikuje rozwiązany
+moduł transportu, jego związane źródło prądu oraz Oersted tylko wtedy, gdy
+rekord transportu zawiera rzeczywiście opublikowane pole. Moduły interfejsów i
+torque bez własnego runtime recordu nie są awansowane heurystycznie.
+
+Dodano testy plannerowe rozróżniające plan `resolved` od stanu `executed` oraz
+test artefaktu runnera. Zweryfikowano:
+
+```text
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-realization \
+CARGO_INCREMENTAL=0 cargo test -p fullmag-plan --test physics_graph_resolution
+9 passed; 0 failed
+
+CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/physics-graph-realization \
+CARGO_INCREMENTAL=0 cargo test -p fullmag-runner \
+  artifacts::tests::physics_graph_runtime_provenance_preserves_scope_dependencies_and_lane \
+  -- --exact
+1 passed; 0 failed
+
+python3 -m pytest -q --capture=no scripts/test_verify_physics_scope_graph_runtime.py
+10 passed; 0 failed
+```
+
+Granica pozostaje jawna: certyfikat `resolved` nie jest dowodem zbieżności
+solvera, a `executed` dotyczy tylko modułów, dla których runtime opublikował
+rekord. Nadal otwarte są managed capture dla obu lane'ów, callbacki
+`J_c(m_stage)` w natywnym RK/FSAL, niezależne `p`/energia/airbox, benchmark
+FEM–FDM–zewnętrzne orakle oraz GPU/device-resident. Po tej iteracji ocena
+części źródłowej refaktoryzacji grafu wynosi **~96%**, lecz cała gotowość
+produkcyjna STT/SOT/SHE/Oersted pozostaje **~50%**; wzrost dotyczy wyłącznie
+sprawdzalności zakresu i provenance, nie kwalifikacji fizycznej solvera.

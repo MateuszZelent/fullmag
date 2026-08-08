@@ -156,6 +156,26 @@ semantic identity jako certyfikatu topologii bez osobnego dowodu.
 | `backends/fem/cpu/mfem/transport/conservative_current_view.cpp` | `ConservativeCurrentView::Build` | RT0/H(div) current view |
 | `apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx` | `InspectorOverviewFrame` | wspólna kompozycja inspektora |
 
+### 7.2. Certyfikat realizacji na konkretnej topologii
+
+Semantyczny marker FEM ani identyfikator maski FDM nie jest jeszcze dowodem,
+że zakres został wskazany na aktualnej siatce. Planner tworzy więc osobny,
+wersjonowany certyfikat `physics_graph.realization.v1`. Certyfikat rozróżnia
+trzy stany:
+
+| Stan | Znaczenie | Dowód lane-specific |
+|---|---|---|
+| `semantic_only` | moduł istnieje w IR, lecz nie ma jednoznacznego odwzorowania na topologię | brak konkretnego markera/maski |
+| `resolved` | zakres został rozwiązany na wybranej topologii, ale nie ma dowodu wykonania | FEM: numeryczne `element_markers`; FDM: digest maski komórek |
+| `executed` | rozwiązany zakres został zaobserwowany w provenance wykonania | ten sam dowód topologii oraz identyfikator modułu w wykonaniu |
+
+W FEM certyfikat przechowuje fingerprint topologii, zbiór rzeczywistych
+`element_markers` i liczbę wybranych elementów. W FDM przechowuje fingerprint
+siatki, digest aktywnej maski komórek oraz legendę regionów; sam `mask_id` z IR
+pozostaje tylko tożsamością semantyczną. Przejście do `executed` następuje
+wyłącznie na podstawie jawnego rekordu wykonania, bez heurystyki wynikającej z
+wartości prądu, obecności modułu lub samego wyboru backendu.
+
 W round-trip zachowujemy zarówno `requested intent` autora, jak i `resolved execution`
 wybranego lane. `validation errors` są zwracane przed wykonaniem,
 a `unsupported combinations` pozostają jawne i nie są zastępowane fallbackiem.

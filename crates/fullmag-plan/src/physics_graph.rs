@@ -1,6 +1,8 @@
 use fullmag_ir::{
-    BackendPlanIR, BackendTarget, PhysicsGraphModuleProvenanceIR, PhysicsGraphRuntimeProvenanceIR,
-    ProblemIR, PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA,
+    BackendPlanIR, BackendTarget, PhysicsGraphModuleProvenanceIR, PhysicsGraphModuleRealizationIR,
+    PhysicsGraphRealizationProvenanceIR, PhysicsGraphRealizationStateIR,
+    PhysicsGraphRuntimeProvenanceIR, ProblemIR, PHYSICS_GRAPH_REALIZATION_SCHEMA,
+    PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -299,6 +301,7 @@ pub fn physics_graph_runtime_provenance(
         .get("scene_revision")
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    let realization = physics_graph_realization_provenance(problem, backend_plan, &[])?;
     Ok(Some(PhysicsGraphRuntimeProvenanceIR {
         schema_version: PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA.to_string(),
         graph_sha256,
@@ -307,7 +310,603 @@ pub fn physics_graph_runtime_provenance(
         requested_lane: problem.backend_policy.requested_backend,
         resolved_lane,
         modules: typed_modules,
+        realization,
     }))
+}
+
+/// Resolve graph scopes against the concrete FEM mesh or FDM grid carried by a
+/// backend plan.  The function is intentionally independent of solver
+/// execution: `executed_module_ids` must come from an observed runtime record,
+/// while an empty slice is the planner's honest "resolved, not executed"
+/// state.
+pub fn physics_graph_realization_provenance(
+    problem: &ProblemIR,
+    backend_plan: &BackendPlanIR,
+    executed_module_ids: &[String],
+) -> Result<Option<PhysicsGraphRealizationProvenanceIR>, Vec<String>> {
+    let Some(_graph) = resolve_physics_graph(problem)? else {
+        return Ok(None);
+    };
+    let resolved_lane = backend_lane(backend_plan);
+    let modules = resolve_physics_modules(problem, resolved_lane)?;
+    let known_module_ids = modules
+        .iter()
+        .map(|module| module.module_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let unknown_executed = executed_module_ids
+        .iter()
+        .filter(|module_id| !known_module_ids.contains(module_id.as_str()))
+        .map(|module_id| module_id.as_str())
+        .collect::<Vec<_>>();
+    if !unknown_executed.is_empty() {
+        return Err(vec![format!(
+            "physics_graph realization contains execution observations for unknown module IDs: {}",
+            unknown_executed.join(", ")
+        )]);
+    }
+    let executed = executed_module_ids.iter().collect::<BTreeSet<_>>();
+    let (topology_fingerprint, realizations) = match backend_plan {
+        BackendPlanIR::Fem(plan) => (
+            plan.mesh.topology_fingerprint_v6(),
+            realize_fem_modules(plan, &modules, &executed),
+        ),
+        BackendPlanIR::FemEigen(plan) => (
+            plan.mesh.topology_fingerprint_v6(),
+            realize_fem_modules_for_eigen(plan, &modules, &executed),
+        ),
+        BackendPlanIR::FemFrequencyResponse(plan) => (
+            plan.mesh.topology_fingerprint_v6(),
+            realize_fem_modules_for_frequency(plan, &modules, &executed),
+        ),
+        BackendPlanIR::Fdm(plan) => (
+            plan.grid_certificate
+                .as_ref()
+                .map(|certificate| certificate.grid_fingerprint.clone())
+                .unwrap_or_else(|| "unavailable".to_string()),
+            realize_fdm_modules(plan, &modules, &executed),
+        ),
+        BackendPlanIR::FdmMultilayer(plan) => (
+            plan.grid_certificate
+                .as_ref()
+                .map(|certificate| certificate.grid_fingerprint.clone())
+                .unwrap_or_else(|| "unavailable".to_string()),
+            realize_fdm_multilayer_modules(plan, &modules, &executed),
+        ),
+    };
+    let realizations = realizations.map_err(|reasons| {
+        reasons
+            .into_iter()
+            .map(|reason| format!("physics_graph realization: {reason}"))
+            .collect::<Vec<_>>()
+    })?;
+    let resolved_module_ids = realizations
+        .iter()
+        .filter(|module| module.state != PhysicsGraphRealizationStateIR::SemanticOnly)
+        .map(|module| module.module_id.clone())
+        .collect::<Vec<_>>();
+    let executed_module_ids = realizations
+        .iter()
+        .filter(|module| module.state == PhysicsGraphRealizationStateIR::Executed)
+        .map(|module| module.module_id.clone())
+        .collect::<Vec<_>>();
+    Ok(Some(PhysicsGraphRealizationProvenanceIR {
+        schema_version: PHYSICS_GRAPH_REALIZATION_SCHEMA.to_string(),
+        topology_fingerprint,
+        resolved_module_ids,
+        executed_module_ids,
+        modules: realizations,
+    }))
+}
+
+fn realization_state(
+    module: &ResolvedPhysicsModule,
+    executed: &BTreeSet<&String>,
+    resolved: bool,
+) -> PhysicsGraphRealizationStateIR {
+    if !resolved {
+        PhysicsGraphRealizationStateIR::SemanticOnly
+    } else if executed.contains(&module.module_id) {
+        PhysicsGraphRealizationStateIR::Executed
+    } else {
+        PhysicsGraphRealizationStateIR::Resolved
+    }
+}
+
+fn semantic_only_realization(
+    module: &ResolvedPhysicsModule,
+    topology_fingerprint: &str,
+    reason: impl Into<String>,
+) -> PhysicsGraphModuleRealizationIR {
+    PhysicsGraphModuleRealizationIR {
+        module_id: module.module_id.clone(),
+        state: PhysicsGraphRealizationStateIR::SemanticOnly,
+        topology_fingerprint: topology_fingerprint.to_string(),
+        realized_fem_marker_ids: Vec::new(),
+        realized_fdm_mask_digest: None,
+        realized_cell_count: 0,
+        realized_fdm_region_ids: Vec::new(),
+        reason: Some(reason.into()),
+    }
+}
+
+fn realize_fem_modules(
+    plan: &fullmag_ir::FemPlanIR,
+    modules: &[ResolvedPhysicsModule],
+    executed: &BTreeSet<&String>,
+) -> Result<Vec<PhysicsGraphModuleRealizationIR>, Vec<String>> {
+    realize_fem_modules_from_parts(
+        &plan.mesh,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        modules,
+        executed,
+    )
+}
+
+fn realize_fem_modules_for_eigen(
+    plan: &fullmag_ir::FemEigenPlanIR,
+    modules: &[ResolvedPhysicsModule],
+    executed: &BTreeSet<&String>,
+) -> Result<Vec<PhysicsGraphModuleRealizationIR>, Vec<String>> {
+    realize_fem_modules_from_parts(
+        &plan.mesh,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        modules,
+        executed,
+    )
+}
+
+fn realize_fem_modules_for_frequency(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    modules: &[ResolvedPhysicsModule],
+    executed: &BTreeSet<&String>,
+) -> Result<Vec<PhysicsGraphModuleRealizationIR>, Vec<String>> {
+    realize_fem_modules_from_parts(
+        &plan.mesh,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        modules,
+        executed,
+    )
+}
+
+fn realize_fem_modules_from_parts(
+    mesh: &fullmag_ir::MeshIR,
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    modules: &[ResolvedPhysicsModule],
+    executed: &BTreeSet<&String>,
+) -> Result<Vec<PhysicsGraphModuleRealizationIR>, Vec<String>> {
+    let topology_fingerprint = mesh.topology_fingerprint_v6();
+    let mut realized = Vec::with_capacity(modules.len());
+    for module in modules {
+        if !matches!(module.status.as_str(), "active" | "configured") {
+            realized.push(semantic_only_realization(
+                module,
+                &topology_fingerprint,
+                format!("module status '{}' is not executable", module.status),
+            ));
+            continue;
+        }
+        match fem_scope_markers(mesh, object_segments, mesh_parts, &module.scope_key) {
+            Ok((markers, cell_count)) if cell_count > 0 => {
+                realized.push(PhysicsGraphModuleRealizationIR {
+                    module_id: module.module_id.clone(),
+                    state: realization_state(module, executed, true),
+                    topology_fingerprint: topology_fingerprint.clone(),
+                    realized_fem_marker_ids: markers,
+                    realized_fdm_mask_digest: None,
+                    realized_cell_count: cell_count,
+                    realized_fdm_region_ids: Vec::new(),
+                    reason: None,
+                });
+            }
+            Ok((_markers, _cell_count)) => realized.push(semantic_only_realization(
+                module,
+                &topology_fingerprint,
+                "module scope resolves to zero FEM elements",
+            )),
+            Err(reason) => realized.push(semantic_only_realization(
+                module,
+                &topology_fingerprint,
+                reason,
+            )),
+        }
+    }
+    Ok(realized)
+}
+
+fn fem_scope_markers(
+    mesh: &fullmag_ir::MeshIR,
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    scope: &str,
+) -> Result<(Vec<u32>, u64), String> {
+    if mesh.element_markers.len() != mesh.cell_count() {
+        return Err("FEM element marker count differs from cell count".to_string());
+    }
+    let mut selected_elements = BTreeSet::new();
+    match parse_scope(scope)? {
+        ParsedScope::Global => {
+            selected_elements.extend(0..mesh.cell_count());
+        }
+        ParsedScope::Objects(objects) => {
+            for object in objects {
+                let before = selected_elements.len();
+                for segment in object_segments
+                    .iter()
+                    .filter(|segment| segment.object_id == object)
+                {
+                    add_element_range(
+                        &mut selected_elements,
+                        segment.element_start,
+                        segment.element_count,
+                        mesh.cell_count(),
+                    )?;
+                }
+                if selected_elements.len() == before {
+                    for part in mesh_parts
+                        .iter()
+                        .filter(|part| part.object_id.as_deref() == Some(object.as_str()))
+                    {
+                        add_selector_elements(
+                            &mut selected_elements,
+                            &part.element_selector,
+                            mesh,
+                        )?;
+                    }
+                }
+                if selected_elements.len() == before {
+                    return Err(format!(
+                        "FEM object scope '{}' has no realized mesh elements",
+                        object
+                    ));
+                }
+            }
+        }
+        ParsedScope::Region { object, region } => {
+            let mut matched = false;
+            for segment in object_segments.iter().filter(|segment| {
+                segment.object_id == object
+                    && segment.geometry_id.as_deref() == Some(region.as_str())
+            }) {
+                matched = true;
+                add_element_range(
+                    &mut selected_elements,
+                    segment.element_start,
+                    segment.element_count,
+                    mesh.cell_count(),
+                )?;
+            }
+            for part in mesh_parts.iter().filter(|part| {
+                part.object_id.as_deref() == Some(object.as_str())
+                    && part.geometry_id.as_deref() == Some(region.as_str())
+            }) {
+                matched = true;
+                add_selector_elements(&mut selected_elements, &part.element_selector, mesh)?;
+            }
+            if !matched {
+                return Err(format!(
+                    "FEM region scope '{}:{}' has no concrete geometry/mesh-part identity",
+                    object, region
+                ));
+            }
+        }
+        ParsedScope::Unresolved => return Err("graph scope is unresolved".to_string()),
+    }
+    let markers = selected_elements
+        .iter()
+        .map(|index| mesh.element_markers[*index])
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    Ok((markers, selected_elements.len() as u64))
+}
+
+fn add_element_range(
+    selected: &mut BTreeSet<usize>,
+    start: u32,
+    count: u32,
+    element_count: usize,
+) -> Result<(), String> {
+    let start = usize::try_from(start).map_err(|_| "FEM element range start overflows usize")?;
+    let count = usize::try_from(count).map_err(|_| "FEM element range count overflows usize")?;
+    let end = start
+        .checked_add(count)
+        .ok_or_else(|| "FEM element range overflows usize".to_string())?;
+    if end > element_count {
+        return Err(format!(
+            "FEM element range [{start}, {end}) exceeds element count {element_count}"
+        ));
+    }
+    selected.extend(start..end);
+    Ok(())
+}
+
+fn add_selector_elements(
+    selected: &mut BTreeSet<usize>,
+    selector: &fullmag_ir::FemMeshPartSelector,
+    mesh: &fullmag_ir::MeshIR,
+) -> Result<(), String> {
+    match selector {
+        fullmag_ir::FemMeshPartSelector::ElementMarkerSet { markers } => {
+            let marker_set = markers.iter().copied().collect::<BTreeSet<_>>();
+            for (index, marker) in mesh.element_markers.iter().copied().enumerate() {
+                if marker_set.contains(&marker) {
+                    selected.insert(index);
+                }
+            }
+            Ok(())
+        }
+        fullmag_ir::FemMeshPartSelector::ElementRange { start, count } => {
+            add_element_range(selected, *start, *count, mesh.cell_count())
+        }
+        other => Err(format!(
+            "FEM mesh part selector {other:?} is not an element selector"
+        )),
+    }
+}
+
+fn realize_fdm_modules(
+    plan: &fullmag_ir::FdmPlanIR,
+    modules: &[ResolvedPhysicsModule],
+    executed: &BTreeSet<&String>,
+) -> Result<Vec<PhysicsGraphModuleRealizationIR>, Vec<String>> {
+    let Some(certificate) = plan.grid_certificate.as_ref() else {
+        return Ok(modules
+            .iter()
+            .map(|module| {
+                semantic_only_realization(
+                    module,
+                    "unavailable",
+                    "FDM plan has no resolved grid certificate",
+                )
+            })
+            .collect());
+    };
+    let total_cells = plan
+        .grid
+        .cells
+        .iter()
+        .try_fold(1usize, |product, count| {
+            product.checked_mul(usize::try_from(*count).ok()?)
+        })
+        .ok_or_else(|| vec!["FDM grid cell count overflows usize".to_string()])?;
+    if plan.region_mask.len() != total_cells
+        || plan
+            .active_mask
+            .as_ref()
+            .is_some_and(|mask| mask.len() != total_cells)
+    {
+        return Err(vec![
+            "FDM graph realization requires region_mask/active_mask lengths to match the grid"
+                .to_string(),
+        ]);
+    }
+    certificate
+        .validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+        .map_err(|reason| vec![format!("invalid FDM grid certificate: {reason}")])?;
+    let mut realized = Vec::with_capacity(modules.len());
+    for module in modules {
+        if !matches!(module.status.as_str(), "active" | "configured") {
+            realized.push(semantic_only_realization(
+                module,
+                &certificate.grid_fingerprint,
+                format!("module status '{}' is not executable", module.status),
+            ));
+            continue;
+        }
+        match fdm_scope_mask(plan, certificate, &module.scope_key) {
+            Ok((mask, region_ids)) => {
+                let cell_count = mask.iter().filter(|selected| **selected).count() as u64;
+                if cell_count == 0 {
+                    realized.push(semantic_only_realization(
+                        module,
+                        &certificate.grid_fingerprint,
+                        "module scope resolves to zero active FDM cells",
+                    ));
+                    continue;
+                }
+                let digest = fdm_mask_digest(certificate, &mask, &region_ids);
+                realized.push(PhysicsGraphModuleRealizationIR {
+                    module_id: module.module_id.clone(),
+                    state: realization_state(module, executed, true),
+                    topology_fingerprint: certificate.grid_fingerprint.clone(),
+                    realized_fem_marker_ids: Vec::new(),
+                    realized_fdm_mask_digest: Some(digest),
+                    realized_cell_count: cell_count,
+                    realized_fdm_region_ids: region_ids,
+                    reason: None,
+                });
+            }
+            Err(reason) => realized.push(semantic_only_realization(
+                module,
+                &certificate.grid_fingerprint,
+                reason,
+            )),
+        }
+    }
+    Ok(realized)
+}
+
+fn realize_fdm_multilayer_modules(
+    plan: &fullmag_ir::FdmMultilayerPlanIR,
+    modules: &[ResolvedPhysicsModule],
+    executed: &BTreeSet<&String>,
+) -> Result<Vec<PhysicsGraphModuleRealizationIR>, Vec<String>> {
+    let Some(certificate) = plan.grid_certificate.as_ref() else {
+        return Ok(modules
+            .iter()
+            .map(|module| {
+                semantic_only_realization(
+                    module,
+                    "unavailable",
+                    "FDM multilayer plan has no resolved grid certificate",
+                )
+            })
+            .collect());
+    };
+    let topology = certificate.grid_fingerprint.clone();
+    let cell_count = certificate.active_cells;
+    let mut realized = Vec::with_capacity(modules.len());
+    for module in modules {
+        if !matches!(module.status.as_str(), "active" | "configured") {
+            realized.push(semantic_only_realization(
+                module,
+                &topology,
+                format!("module status '{}' is not executable", module.status),
+            ));
+            continue;
+        }
+        if module.scope_key != "global" {
+            realized.push(semantic_only_realization(
+                module,
+                &topology,
+                "FDM multilayer topology has no unambiguous object/region mask identity",
+            ));
+            continue;
+        }
+        let digest = fdm_mask_digest(certificate, &[], &[]);
+        realized.push(PhysicsGraphModuleRealizationIR {
+            module_id: module.module_id.clone(),
+            state: realization_state(module, executed, cell_count > 0),
+            topology_fingerprint: topology.clone(),
+            realized_fem_marker_ids: Vec::new(),
+            realized_fdm_mask_digest: Some(digest),
+            realized_cell_count: cell_count,
+            realized_fdm_region_ids: Vec::new(),
+            reason: (cell_count == 0)
+                .then(|| "multilayer certificate has no active cells".to_string()),
+        });
+    }
+    Ok(realized)
+}
+
+fn fdm_scope_mask(
+    plan: &fullmag_ir::FdmPlanIR,
+    certificate: &fullmag_ir::FdmGridCertificateIR,
+    scope: &str,
+) -> Result<(Vec<bool>, Vec<u32>), String> {
+    let total_cells = plan.region_mask.len();
+    let region_ids = plan.region_mask.iter().copied().collect::<BTreeSet<_>>();
+    let selected_region_ids = match parse_scope(scope)? {
+        ParsedScope::Global => region_ids,
+        ParsedScope::Objects(objects) => {
+            let mut selected = BTreeSet::new();
+            for object in objects {
+                let matches = certificate
+                    .region_legend
+                    .iter()
+                    .filter(|entry| entry.object_id == object)
+                    .map(|entry| entry.numeric_id)
+                    .collect::<BTreeSet<_>>();
+                if matches.is_empty()
+                    && certificate.object_ids.len() == 1
+                    && certificate.object_ids[0] == object
+                {
+                    selected.extend(region_ids.iter().copied());
+                } else if matches.is_empty() {
+                    return Err(format!(
+                        "FDM object scope '{}' has no region-legend identity",
+                        object
+                    ));
+                } else {
+                    selected.extend(matches);
+                }
+            }
+            selected
+        }
+        ParsedScope::Region { object, region } => {
+            let matches = certificate
+                .region_legend
+                .iter()
+                .filter(|entry| entry.object_id == object && entry.region_id == region)
+                .map(|entry| entry.numeric_id)
+                .collect::<BTreeSet<_>>();
+            if matches.is_empty() {
+                return Err(format!(
+                    "FDM region scope '{}:{}' has no region-legend identity",
+                    object, region
+                ));
+            }
+            matches
+        }
+        ParsedScope::Unresolved => return Err("graph scope is unresolved".to_string()),
+    };
+    let active = plan
+        .active_mask
+        .as_deref()
+        .map_or_else(|| vec![true; total_cells], ToOwned::to_owned);
+    let mask = plan
+        .region_mask
+        .iter()
+        .copied()
+        .zip(active)
+        .map(|(region, active)| active && selected_region_ids.contains(&region))
+        .collect::<Vec<_>>();
+    Ok((mask, selected_region_ids.into_iter().collect::<Vec<_>>()))
+}
+
+fn fdm_mask_digest(
+    certificate: &fullmag_ir::FdmGridCertificateIR,
+    selected_cells: &[bool],
+    region_ids: &[u32],
+) -> String {
+    let payload = serde_json::json!({
+        "schema_version": PHYSICS_GRAPH_REALIZATION_SCHEMA,
+        "grid_fingerprint": certificate.grid_fingerprint,
+        "region_legend_fingerprint": certificate.region_legend_fingerprint,
+        "selected_cells": selected_cells,
+        "region_ids": region_ids,
+    });
+    let bytes = serde_json::to_vec(&payload).expect("FDM graph mask digest payload serializes");
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParsedScope {
+    Global,
+    Objects(Vec<String>),
+    Region { object: String, region: String },
+    Unresolved,
+}
+
+fn parse_scope(scope: &str) -> Result<ParsedScope, String> {
+    if scope == "global" {
+        return Ok(ParsedScope::Global);
+    }
+    if let Some(object) = scope.strip_prefix("object:") {
+        if object.is_empty() || object == "unresolved" {
+            return Ok(ParsedScope::Unresolved);
+        }
+        return Ok(ParsedScope::Objects(vec![object.to_string()]));
+    }
+    if let Some(objects) = scope.strip_prefix("cross_object:") {
+        if objects.is_empty() || objects == "unresolved" {
+            return Ok(ParsedScope::Unresolved);
+        }
+        return Ok(ParsedScope::Objects(
+            objects.split(',').map(str::to_string).collect(),
+        ));
+    }
+    if let Some(region) = scope.strip_prefix("region:") {
+        let mut parts = region.splitn(2, ':');
+        let object = parts.next().unwrap_or_default();
+        let region = parts.next().unwrap_or_default();
+        if object.is_empty()
+            || region.is_empty()
+            || object == "unresolved"
+            || region == "unresolved"
+        {
+            return Ok(ParsedScope::Unresolved);
+        }
+        return Ok(ParsedScope::Region {
+            object: object.to_string(),
+            region: region.to_string(),
+        });
+    }
+    Ok(ParsedScope::Unresolved)
 }
 
 /// Return the digest used to bind a runtime plan to the exact normalized graph
