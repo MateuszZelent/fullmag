@@ -140,9 +140,7 @@ export function PhysicsInspectorOverview({
   primary,
   primaryTitle = "Drive",
 }: PhysicsInspectorOverviewProps) {
-  const model = "family" in inputModel && "scope" in inputModel && "source" in inputModel
-    ? inputModel as PhysicsInspectorOverviewModel
-    : buildPhysicsInspectorOverviewModel(inputModel as PhysicsInspectorOverviewInput);
+  const model: PhysicsInspectorOverviewModel = buildPhysicsInspectorOverviewModel(inputModel);
   const body = primary ?? children ?? (
     <FeedbackBanner kind="warning" message="No editable physics module is selected." />
   );
