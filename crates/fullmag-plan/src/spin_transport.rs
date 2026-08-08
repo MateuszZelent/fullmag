@@ -24,7 +24,13 @@ fn resolve_fem_stage_coupling(
     oersted_source_bound: bool,
     conservative_current_view: Option<&fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
 ) -> &'static str {
-    if !reciprocal && oersted_source_bound && conservative_current_view.is_some() {
+    let closed_geometry = conservative_current_view.is_some_and(|view| {
+        matches!(
+            view.closure,
+            fullmag_ir::ConservativeCurrentClosureIR::ClosedGeometry { .. }
+        )
+    });
+    if !reciprocal && oersted_source_bound && closed_geometry {
         FEM_STEADY_SOURCE_CACHE_POLICY
     } else {
         "none"
@@ -3608,13 +3614,32 @@ mod tests {
 
     #[test]
     fn closed_one_way_oersted_view_resolves_to_invariant_source_cache() {
-        let (_, view) = valid_rt0_view_for_planner();
+        let (mesh, view) = valid_rt0_view_for_planner();
         assert_eq!(
             resolve_fem_stage_coupling(false, true, Some(&view)),
             FEM_STEADY_SOURCE_CACHE_POLICY
         );
         assert_eq!(resolve_fem_stage_coupling(false, false, Some(&view)), "none");
         assert_eq!(resolve_fem_stage_coupling(true, true, Some(&view)), "none");
+        let mut external_lead = view;
+        external_lead.closure = fullmag_ir::ConservativeCurrentClosureIR::ExternalLead {
+            operator_version: "lead.v1".into(),
+            revision: "lead-1".into(),
+            digest: "lead-digest".into(),
+            drive_id: "drive".into(),
+            outer_electrode_potential_drop_v: 1.0,
+            lead_mesh: mesh,
+            lead_conductivity_spm_per_element: vec![],
+            lead_stable_vertex_ids: vec![],
+            interface_pairs: vec![],
+            minus_outer_electrode_face_vertex_ids: vec![],
+            plus_outer_electrode_face_vertex_ids: vec![],
+            lead_conductivity_digest: "lead-sigma".into(),
+        };
+        assert_eq!(
+            resolve_fem_stage_coupling(false, true, Some(&external_lead)),
+            "none"
+        );
     }
 
     #[test]
