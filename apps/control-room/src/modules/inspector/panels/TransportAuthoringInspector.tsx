@@ -365,6 +365,7 @@ function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTrans
     <FormField label="Name" readOnly={identityReadOnly} value={draft.name} onChange={field("name")} />
     <FormField label="Model" type="select" value={draft.model} onChange={field("model")}><option value="prescribed_density">Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
     <FormField label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
+    <FormField label="Conservative RT0 current view (JSON; closed_geometry)" rows={12} type="textarea" value={draft.conservativeCurrentView} onChange={field("conservativeCurrentView")} />
     {draft.model === "prescribed_density" ? <FormField label="Current density vector" unit="A/m²" type="textarea" value={draft.currentDensity} onChange={field("currentDensity")} /> : <>
       <FormField label="Domain region refs" type="textarea" rows={5} value={draft.domain} onChange={field("domain")} />
       <FormField label="Material assignments (sigma_Spm; M2: sigma_parallel_Spm, sigma_perpendicular_Spm, sigma_AHE_Spm)" type="textarea" rows={9} value={draft.materials} onChange={field("materials")} />

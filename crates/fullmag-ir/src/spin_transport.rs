@@ -38,6 +38,8 @@ pub struct ChargeTransportDefinitionIR {
     pub boundaries: Vec<ChargeBoundaryIR>,
     pub gauge: ChargePotentialGaugeIR,
     pub solver: ChargeSolverPolicyIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view: Option<ResolvedFemConservativeCurrentViewIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

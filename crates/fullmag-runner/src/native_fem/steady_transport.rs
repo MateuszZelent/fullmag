@@ -1534,6 +1534,7 @@ mod tests {
             boundaries: vec![],
             gauge: ChargePotentialGaugeIR::DirichletReference,
             solver: charge_solver.clone(),
+            conservative_current_view: None,
         };
         ResolvedSpinTransportPlanIR {
             module_id: "spin".into(),

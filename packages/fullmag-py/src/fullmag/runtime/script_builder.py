@@ -2134,6 +2134,125 @@ def _render_charge_solver_payload(payload: object) -> str:
     return f"fm.ChargeSolverPolicy({', '.join(kwargs)})"
 
 
+def _render_int_triplet(value: object, context: str) -> str:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 3:
+        raise ValueError(f"{context} must contain three integer values")
+    values = tuple(value)
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in values):
+        raise ValueError(f"{context} must contain three integer values")
+    return "(" + ", ".join(str(item) for item in values) + ")"
+
+
+def _render_conservative_current_view_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    stable_ids = entry.get("stable_vertex_ids")
+    if not isinstance(stable_ids, list) or not stable_ids:
+        raise ValueError("conservative current view stable_vertex_ids is incomplete")
+    stable_expr = "[" + ", ".join(str(item) for item in stable_ids) + "]"
+
+    boundary_value = entry.get("boundary_faces")
+    if not isinstance(boundary_value, list) or not boundary_value:
+        raise ValueError("conservative current view boundary_faces is incomplete")
+    boundary_exprs = []
+    for raw_face in boundary_value:
+        face = _normalize_mapping(raw_face)
+        face_ids = _render_int_triplet(face.get("face_vertex_ids"), "boundary face_vertex_ids")
+        role = face.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("conservative current view boundary role is incomplete")
+        kwargs = [f"role={_py_repr(role)}"]
+        circuit = face.get("circuit_id")
+        if circuit is not None:
+            kwargs.append(f"circuit_id={_py_repr(str(circuit))}")
+        boundary_exprs.append(
+            "fm.ConservativeCurrentBoundaryFace("
+            f"{face_ids}, {', '.join(kwargs)})"
+        )
+
+    identity = _normalize_mapping(entry.get("identity"))
+    identity_fields = (
+        "source_module_id",
+        "source_state_revision",
+        "source_field_digest",
+        "conductivity_digest",
+        "mesh_revision",
+        "topology_revision",
+        "geometry_digest",
+        "envelope_revision",
+        "envelope_digest",
+    )
+    identity_kwargs = [
+        f"{field}={_py_repr(str(identity.get(field) or ''))}" for field in identity_fields
+    ]
+    identity_kwargs.extend(
+        [
+            f"evaluated_envelope_multiplier={_py_number(_number_or_none(identity.get('evaluated_envelope_multiplier')) or 0.0)}",
+            f"evaluation_time_s={_py_number(_number_or_none(identity.get('evaluation_time_s')) or 0.0)}",
+            f"stage_identity={int(identity.get('stage_identity') or 0)}",
+        ]
+    )
+    identity_expr = f"fm.ConservativeCurrentIdentity({', '.join(identity_kwargs)})"
+
+    pins = _normalize_mapping(entry.get("pins"))
+    pin_fields = (
+        "required_source_state_revision",
+        "required_source_field_digest",
+        "required_mesh_revision",
+        "required_topology_revision",
+    )
+    pins_expr = "fm.ConservativeCurrentPins(" + ", ".join(
+        f"{field}={_py_repr(str(pins.get(field) or ''))}" for field in pin_fields
+    ) + ")"
+
+    closure = _normalize_mapping(entry.get("closure"))
+    if closure.get("kind") != "closed_geometry":
+        raise ValueError("canonical script export supports only closed_geometry current closure")
+    cuts = closure.get("source_cuts")
+    if not isinstance(cuts, list) or not cuts:
+        raise ValueError("conservative current view source_cuts is incomplete")
+    cut_exprs = []
+    for raw_cut in cuts:
+        cut = _normalize_mapping(raw_cut)
+        pairs = cut.get("face_pairs")
+        if not isinstance(pairs, list) or not pairs:
+            raise ValueError("conservative current view source-cut face_pairs is incomplete")
+        pair_exprs = []
+        for raw_pair in pairs:
+            pair = _normalize_mapping(raw_pair)
+            pair_exprs.append(
+                "fm.ConservativeCurrentSourceCutFacePair("
+                f"{_render_int_triplet(pair.get('minus_face_vertex_ids'), 'minus face IDs')}, "
+                f"{_render_int_triplet(pair.get('plus_face_vertex_ids'), 'plus face IDs')})"
+            )
+        cut_exprs.append(
+            "fm.ConservativeCurrentSourceCut("
+            f"{_py_repr(str(cut.get('id') or ''))}, "
+            f"{_py_tuple3(_optional_vec3(cut.get('translation_m')) or (0.0, 0.0, 0.0))}, "
+            f"{_py_number(_number_or_none(cut.get('potential_drop_v')) or 0.0)}, "
+            f"[{', '.join(pair_exprs)}])"
+        )
+    closure_expr = (
+        "fm.ConservativeCurrentClosedGeometry("
+        f"{_py_repr(str(closure.get('operator_version') or ''))}, "
+        f"{_py_repr(str(closure.get('revision') or ''))}, "
+        f"{_py_repr(str(closure.get('digest') or ''))}, "
+        f"[{', '.join(cut_exprs)}])"
+    )
+    view_kwargs = [
+        f"stable_vertex_ids={stable_expr}",
+        f"boundary_faces=[{', '.join(boundary_exprs)}]",
+        f"identity={identity_expr}",
+        f"pins={pins_expr}",
+        f"closure={closure_expr}",
+        f"algebraic_relative_tolerance={_py_number(_number_or_none(entry.get('algebraic_relative_tolerance')) or 0.0)}",
+        f"physical_relative_gate={_py_number(_number_or_none(entry.get('physical_relative_gate')) or 0.0)}",
+        f"physical_absolute_gate_a={_py_number(_number_or_none(entry.get('physical_absolute_gate_a')) or 0.0)}",
+    ]
+    if bool(entry.get("reference_mpi_gather_broadcast", False)):
+        view_kwargs.append("reference_mpi_gather_broadcast=True")
+    return f"fm.ConservativeCurrentView({', '.join(view_kwargs)})"
+
+
 def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     entry = _normalize_mapping(payload)
     kwargs = [f"name={_py_repr(str(entry.get('name') or 'transport'))}"]
@@ -2181,6 +2300,12 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     solver = entry.get("solver")
     if isinstance(solver, Mapping):
         kwargs.append(f"solver={_render_charge_solver_payload(solver)}")
+    conservative_view = entry.get("conservative_current_view")
+    if isinstance(conservative_view, Mapping):
+        kwargs.append(
+            "conservative_current_view="
+            + _render_conservative_current_view_payload(conservative_view)
+        )
     return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
 
 

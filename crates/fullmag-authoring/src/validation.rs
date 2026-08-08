@@ -1294,7 +1294,360 @@ fn validate_current_transport(
             validate_scene_charge_contract(index, transport, object_ids)?;
         }
     }
+    if let Some(view) = transport.conservative_current_view.as_ref() {
+        if transport.model != CurrentTransportModel::OhmicPoisson
+            || transport.coupling != SceneTransportCoupling::OneWay
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "current_transports[{index}].conservative_current_view requires model=ohmic_poisson and coupling=one_way"
+            )));
+        }
+        validate_scene_conservative_current_view(index, view)?;
+    }
     Ok(())
+}
+
+fn validate_scene_conservative_current_view(
+    index: usize,
+    view: &BTreeMap<String, Value>,
+) -> Result<(), SceneDocumentValidationError> {
+    let prefix = format!("current_transports[{index}].conservative_current_view");
+    let object = view;
+
+    let stable_vertex_ids = object
+        .get("stable_vertex_ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.stable_vertex_ids must be a non-empty array"
+            ))
+        })?;
+    if stable_vertex_ids.is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.stable_vertex_ids must be a non-empty array"
+        )));
+    }
+    let mut stable_ids = BTreeSet::new();
+    for (position, value) in stable_vertex_ids.iter().enumerate() {
+        let id = value.as_u64().filter(|id| *id > 0).ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.stable_vertex_ids[{position}] must be a positive integer"
+            ))
+        })?;
+        if !stable_ids.insert(id) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.stable_vertex_ids contains duplicate id {id}"
+            )));
+        }
+    }
+
+    let boundary_faces = object
+        .get("boundary_faces")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.boundary_faces must be a non-empty array"
+            ))
+        })?;
+    if boundary_faces.is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.boundary_faces must be a non-empty array"
+        )));
+    }
+    let mut boundary_ids = BTreeSet::new();
+    let mut source_cut_faces = BTreeSet::new();
+    for (position, value) in boundary_faces.iter().enumerate() {
+        let path = format!("{prefix}.boundary_faces[{position}]");
+        let face = value.as_object().ok_or_else(|| {
+            SceneDocumentValidationError::new(format!("{path} must be a JSON object"))
+        })?;
+        let ids = parse_scene_face_vertex_ids(
+            face.get("face_vertex_ids"),
+            &format!("{path}.face_vertex_ids"),
+        )?;
+        if !boundary_ids.insert(ids) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.face_vertex_ids duplicates another boundary face"
+            )));
+        }
+        let role = face
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                SceneDocumentValidationError::new(format!("{path}.role must be a string"))
+            })?;
+        if !matches!(role, "insulating_outer" | "source_cut" | "closure_interface") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.role is unsupported"
+            )));
+        }
+        let circuit = face.get("circuit_id");
+        if role == "insulating_outer" {
+            if circuit.is_some() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.circuit_id is forbidden for insulating_outer"
+                )));
+            }
+        } else {
+            let circuit = circuit
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            if circuit.is_none() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.circuit_id is required for driven boundary roles"
+                )));
+            }
+        }
+        if role == "source_cut" {
+            source_cut_faces.insert(ids);
+        }
+    }
+
+    let identity = required_scene_object(object.get("identity"), &format!("{prefix}.identity"))?;
+    let identity_fields = [
+        "source_module_id",
+        "source_state_revision",
+        "source_field_digest",
+        "conductivity_digest",
+        "mesh_revision",
+        "topology_revision",
+        "geometry_digest",
+        "envelope_revision",
+        "envelope_digest",
+    ];
+    for field in identity_fields {
+        require_scene_string(identity.get(field), &format!("{prefix}.identity.{field}"))?;
+    }
+    require_scene_finite_number(
+        identity.get("evaluated_envelope_multiplier"),
+        &format!("{prefix}.identity.evaluated_envelope_multiplier"),
+    )?;
+    require_scene_finite_number(
+        identity.get("evaluation_time_s"),
+        &format!("{prefix}.identity.evaluation_time_s"),
+    )?;
+    require_scene_positive_integer(
+        identity.get("stage_identity"),
+        &format!("{prefix}.identity.stage_identity"),
+    )?;
+
+    let pins = required_scene_object(object.get("pins"), &format!("{prefix}.pins"))?;
+    let pin_fields = [
+        "required_source_state_revision",
+        "required_source_field_digest",
+        "required_mesh_revision",
+        "required_topology_revision",
+    ];
+    for field in pin_fields {
+        require_scene_string(pins.get(field), &format!("{prefix}.pins.{field}"))?;
+    }
+    for (pin, identity_field) in [
+        ("required_source_state_revision", "source_state_revision"),
+        ("required_source_field_digest", "source_field_digest"),
+        ("required_mesh_revision", "mesh_revision"),
+        ("required_topology_revision", "topology_revision"),
+    ] {
+        if pins.get(pin).and_then(Value::as_str) != identity.get(identity_field).and_then(Value::as_str)
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.pins.{pin} must match identity.{identity_field}"
+            )));
+        }
+    }
+
+    let closure = required_scene_object(object.get("closure"), &format!("{prefix}.closure"))?;
+    let closure_kind = require_scene_string(
+        closure.get("kind"),
+        &format!("{prefix}.closure.kind"),
+    )?;
+    if closure_kind != "closed_geometry" {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.closure.kind '{closure_kind}' is not executable; external_lead remains fail-closed"
+        )));
+    }
+    for field in ["operator_version", "revision", "digest"] {
+        require_scene_string(closure.get(field), &format!("{prefix}.closure.{field}"))?;
+    }
+    let source_cuts = closure
+        .get("source_cuts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.source_cuts must be a non-empty array"
+            ))
+        })?;
+    if source_cuts.is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.closure.source_cuts must be a non-empty array"
+        )));
+    }
+    let mut source_cut_ids = BTreeSet::new();
+    for (position, value) in source_cuts.iter().enumerate() {
+        let path = format!("{prefix}.closure.source_cuts[{position}]");
+        let cut = required_scene_object(Some(value), &path)?;
+        let id = require_scene_string(cut.get("id"), &format!("{path}.id"))?;
+        if !source_cut_ids.insert(id) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.id duplicates another source cut"
+            )));
+        }
+        let translation = cut
+            .get("translation_m")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "{path}.translation_m must contain three finite values"
+                ))
+            })?;
+        if translation.len() != 3
+            || translation
+                .iter()
+                .any(|value| value.as_f64().is_none_or(|component| !component.is_finite()))
+            || translation
+                .iter()
+                .all(|value| value.as_f64().is_some_and(|component| component == 0.0))
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.translation_m must contain a finite nonzero vector"
+            )));
+        }
+        require_scene_finite_number(
+            cut.get("potential_drop_v"),
+            &format!("{path}.potential_drop_v"),
+        )?;
+        let pairs = cut
+            .get("face_pairs")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "{path}.face_pairs must be a non-empty array"
+                ))
+            })?;
+        if pairs.is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.face_pairs must be a non-empty array"
+            )));
+        }
+        for (pair_position, pair_value) in pairs.iter().enumerate() {
+            let pair_path = format!("{path}.face_pairs[{pair_position}]");
+            let pair = required_scene_object(Some(pair_value), &pair_path)?;
+            let mut pair_faces = Vec::with_capacity(2);
+            for field in ["minus_face_vertex_ids", "plus_face_vertex_ids"] {
+                let ids = parse_scene_face_vertex_ids(
+                    pair.get(field),
+                    &format!("{pair_path}.{field}"),
+                )?;
+                pair_faces.push(ids);
+                if !source_cut_faces.contains(&ids) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{pair_path}.{field} must reference a boundary face with role source_cut"
+                    )));
+                }
+            }
+            if pair_faces[0] == pair_faces[1] {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{pair_path} must pair distinct minus and plus faces"
+                )));
+            }
+        }
+    }
+
+    for field in [
+        "algebraic_relative_tolerance",
+        "physical_relative_gate",
+        "physical_absolute_gate_a",
+    ] {
+        let value = require_scene_finite_number(object.get(field), &format!("{prefix}.{field}"))?;
+        if value <= 0.0 {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.{field} must be > 0"
+            )));
+        }
+    }
+    if let Some(value) = object.get("reference_mpi_gather_broadcast") {
+        if !value.is_boolean() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.reference_mpi_gather_broadcast must be boolean"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn required_scene_object<'a>(
+    value: Option<&'a Value>,
+    path: &str,
+) -> Result<&'a serde_json::Map<String, Value>, SceneDocumentValidationError> {
+    value
+        .and_then(Value::as_object)
+        .ok_or_else(|| SceneDocumentValidationError::new(format!("{path} must be a JSON object")))
+}
+
+fn require_scene_string<'a>(
+    value: Option<&'a Value>,
+    path: &str,
+) -> Result<&'a str, SceneDocumentValidationError> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            SceneDocumentValidationError::new(format!("{path} must be a non-empty string"))
+        })
+}
+
+fn require_scene_finite_number(
+    value: Option<&Value>,
+    path: &str,
+) -> Result<f64, SceneDocumentValidationError> {
+    let value = value.and_then(Value::as_f64).ok_or_else(|| {
+        SceneDocumentValidationError::new(format!("{path} must be a finite number"))
+    })?;
+    if !value.is_finite() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be a finite number"
+        )));
+    }
+    Ok(value)
+}
+
+fn require_scene_positive_integer(
+    value: Option<&Value>,
+    path: &str,
+) -> Result<u64, SceneDocumentValidationError> {
+    let value = value.and_then(Value::as_u64).filter(|value| *value > 0).ok_or_else(|| {
+        SceneDocumentValidationError::new(format!("{path} must be a positive integer"))
+    })?;
+    Ok(value)
+}
+
+fn parse_scene_face_vertex_ids(
+    value: Option<&Value>,
+    path: &str,
+) -> Result<[u64; 3], SceneDocumentValidationError> {
+    let values = value.and_then(Value::as_array).ok_or_else(|| {
+        SceneDocumentValidationError::new(format!("{path} must contain three positive integers"))
+    })?;
+    if values.len() != 3 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must contain three positive integers"
+        )));
+    }
+    let parsed = values
+        .iter()
+        .map(|value| value.as_u64().filter(|value| *value > 0))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "{path} must contain three positive integers"
+            ))
+        })?;
+    let ids = [parsed[0], parsed[1], parsed[2]];
+    if ids[0] >= ids[1] || ids[1] >= ids[2] {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} must be strictly ascending"
+        )));
+    }
+    Ok(ids)
 }
 
 fn validate_scene_charge_contract(
@@ -2394,6 +2747,56 @@ mod tests {
         .expect("test scene should deserialize")
     }
 
+    fn valid_closed_current_view_value() -> Value {
+        serde_json::json!({
+            "stable_vertex_ids": [1, 2, 3, 4],
+            "boundary_faces": [
+                {"face_vertex_ids": [1, 2, 3], "role": "source_cut", "circuit_id": "drive"},
+                {"face_vertex_ids": [1, 2, 4], "role": "source_cut", "circuit_id": "drive"},
+                {"face_vertex_ids": [1, 3, 4], "role": "insulating_outer"}
+            ],
+            "identity": {
+                "source_module_id": "charge",
+                "source_state_revision": "state-1",
+                "source_field_digest": "field-digest",
+                "conductivity_digest": "sigma-digest",
+                "mesh_revision": "mesh-1",
+                "topology_revision": "topology-1",
+                "geometry_digest": "geometry-digest",
+                "envelope_revision": "envelope-1",
+                "envelope_digest": "envelope-digest",
+                "evaluated_envelope_multiplier": 1.0,
+                "evaluation_time_s": 0.0,
+                "stage_identity": 1
+            },
+            "pins": {
+                "required_source_state_revision": "state-1",
+                "required_source_field_digest": "field-digest",
+                "required_mesh_revision": "mesh-1",
+                "required_topology_revision": "topology-1"
+            },
+            "closure": {
+                "kind": "closed_geometry",
+                "operator_version": "fem_rt0_closed_current.v1",
+                "revision": "closure-1",
+                "digest": "closure-digest",
+                "source_cuts": [{
+                    "id": "cut-x",
+                    "translation_m": [1.0e-6, 0.0, 0.0],
+                    "potential_drop_v": 0.1,
+                    "face_pairs": [{
+                        "minus_face_vertex_ids": [1, 2, 3],
+                        "plus_face_vertex_ids": [1, 2, 4]
+                    }]
+                }]
+            },
+            "algebraic_relative_tolerance": 1.0e-10,
+            "physical_relative_gate": 1.0e-8,
+            "physical_absolute_gate_a": 1.0e-12,
+            "reference_mpi_gather_broadcast": false
+        })
+    }
+
     #[test]
     fn scene_document_validation_accepts_region_owned_payloads() {
         validate_scene_document(&region_owned_scene()).expect("region-owned scene should validate");
@@ -2876,6 +3279,109 @@ mod tests {
         .unwrap();
 
         validate_scene_document(&scene).expect("complete ohmic charge contract must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_and_round_trips_closed_current_view() {
+        let descriptor = valid_closed_current_view_value();
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "dirichlet_reference",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            },
+            "conservative_current_view": descriptor
+        }]))
+        .unwrap();
+
+        validate_scene_document(&scene).expect("closed current view must validate");
+        let serialized = serde_json::to_value(&scene.current_transports).unwrap();
+        assert_eq!(serialized[0]["conservative_current_view"], descriptor);
+        let decoded: Vec<crate::SceneCurrentTransport> =
+            serde_json::from_value(serialized).expect("descriptor must survive scene round-trip");
+        assert_eq!(decoded, scene.current_transports);
+    }
+
+    #[test]
+    fn scene_document_validation_rejects_unsupported_current_view_closure() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0],
+            "conservative_current_view": valid_closed_current_view_value()
+        }]))
+        .unwrap();
+        let error = validate_scene_document(&scene)
+            .expect_err("a solved-current descriptor on prescribed density must fail closed");
+        assert!(
+            error
+                .message
+                .contains("requires model=ohmic_poisson and coupling=one_way"),
+            "{}",
+            error.message
+        );
+
+        let descriptor = valid_closed_current_view_value();
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "dirichlet_reference",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            },
+            "conservative_current_view": descriptor
+        }]))
+        .unwrap();
+        let view = scene.current_transports[0]
+            .known_mut()
+            .expect("known transport")
+            .conservative_current_view
+            .as_mut()
+            .expect("descriptor");
+        view.get_mut("closure")
+            .and_then(Value::as_object_mut)
+            .expect("closure object")
+            .insert("kind".to_string(), Value::String("external_lead".to_string()));
+        let error = validate_scene_document(&scene)
+            .expect_err("external-lead closure must remain fail-closed at authoring boundary");
+        assert!(error.message.contains("external_lead remains fail-closed"), "{error}");
     }
 
     #[test]

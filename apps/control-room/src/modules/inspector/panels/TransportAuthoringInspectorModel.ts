@@ -14,6 +14,7 @@ const ELEMENTARY_CHARGE_C = 1.602176634e-19;
 export interface CurrentTransportDraft {
   boundaries: string;
   conductivity: string;
+  conservativeCurrentView: string;
   coupling: "one_way" | "bidirectional";
   currentDensity: string;
   domain: string;
@@ -64,6 +65,7 @@ export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
       "name",
       "model",
       "currentDensity",
+      "conservativeCurrentView",
       "solveRegion",
       "coupling",
       "gauge",
@@ -162,6 +164,7 @@ export function currentTransportDraft(value?: KnownSceneCurrentTransport | null)
   return {
     boundaries: pretty(value?.boundaries ?? []),
     conductivity: value?.conductivity_s_per_m?.toString() ?? "",
+    conservativeCurrentView: pretty(value?.conservative_current_view ?? {}),
     coupling: value?.coupling ?? "one_way",
     currentDensity: pretty(value?.current_density ?? [0, 0, 0]),
     domain: pretty(value?.domain ?? []),
@@ -222,6 +225,15 @@ function json<T>(value: string, label: string): T {
   catch { throw new Error(`${label} must be valid JSON.`); }
 }
 
+function optionalJsonObject(value: string, label: string): Record<string, unknown> | undefined {
+  if (!value.trim() || value.trim() === "{}") return undefined;
+  const parsed = json<unknown>(value, label);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurrentTransport {
   if (!draft.name.trim()) throw new Error("Name is required.");
   const model = draft.coupling === "bidirectional"
@@ -236,6 +248,11 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
   if (model === "prescribed_density") {
     resource.current_density = json<number[]>(draft.currentDensity, "Current density");
     if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
+    const conservativeCurrentView = optionalJsonObject(
+      draft.conservativeCurrentView,
+      "Conservative current view",
+    );
+    if (conservativeCurrentView) resource.conservative_current_view = conservativeCurrentView;
     return resource;
   }
   resource.domain = json(draft.domain, "Charge domain");
@@ -274,6 +291,11 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
   };
   if (draft.conductivity.trim()) resource.conductivity_s_per_m = finite(draft.conductivity, "Conductivity");
   if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
+  const conservativeCurrentView = optionalJsonObject(
+    draft.conservativeCurrentView,
+    "Conservative current view",
+  );
+  if (conservativeCurrentView) resource.conservative_current_view = conservativeCurrentView;
   return resource;
 }
 

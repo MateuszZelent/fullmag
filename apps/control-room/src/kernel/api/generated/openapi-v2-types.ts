@@ -5629,6 +5629,14 @@ export interface components {
             boundaries?: components["schemas"]["SceneChargeBoundary"][];
             /** Format: double */
             conductivity_s_per_m?: number | null;
+            /**
+             * @description Optional explicit accepted RT0/H(div) source descriptor.  It remains a
+             *     JSON object at the scene boundary so every closure field survives UI
+             *     round-trip; the planner performs mesh-exact typed validation.
+             */
+            conservative_current_view?: {
+                [key: string]: unknown;
+            } | null;
             coupling?: components["schemas"]["SceneTransportCoupling"];
             current_density?: number[] | null;
             domain?: components["schemas"]["SceneRegionRef"][];

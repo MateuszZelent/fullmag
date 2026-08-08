@@ -69,6 +69,75 @@ describe("transport authoring drafts", () => {
     })).toBe(false);
   });
 
+  it("round-trips the explicit conservative RT0 current view without dropping closure fields", () => {
+    const conservativeCurrentView = {
+      stable_vertex_ids: [1, 2, 3, 4],
+      boundary_faces: [{
+        face_vertex_ids: [1, 2, 3],
+        role: "source_cut",
+        circuit_id: "drive",
+      }],
+      identity: {
+        source_module_id: "charge",
+        source_state_revision: "state-1",
+        source_field_digest: "field-digest",
+        conductivity_digest: "sigma-digest",
+        mesh_revision: "mesh-1",
+        topology_revision: "topology-1",
+        geometry_digest: "geometry-digest",
+        envelope_revision: "envelope-1",
+        envelope_digest: "envelope-digest",
+        evaluated_envelope_multiplier: 1,
+        evaluation_time_s: 0,
+        stage_identity: 1,
+      },
+      pins: {
+        required_source_state_revision: "state-1",
+        required_source_field_digest: "field-digest",
+        required_mesh_revision: "mesh-1",
+        required_topology_revision: "topology-1",
+      },
+      closure: {
+        kind: "closed_geometry",
+        operator_version: "fem_rt0_closed_current.v1",
+        revision: "closure-1",
+        digest: "closure-digest",
+        source_cuts: [{
+          id: "cut-x",
+          translation_m: [1e-6, 0, 0],
+          potential_drop_v: 0.1,
+          face_pairs: [{
+            minus_face_vertex_ids: [1, 2, 3],
+            plus_face_vertex_ids: [1, 2, 4],
+          }],
+        }],
+      },
+      algebraic_relative_tolerance: 1e-10,
+      physical_relative_gate: 1e-8,
+      physical_absolute_gate_a: 1e-12,
+      reference_mpi_gather_broadcast: false,
+    };
+    const resource = {
+      kind: "current_transport" as const,
+      model: "ohmic_poisson" as const,
+      name: "charge",
+      coupling: "one_way" as const,
+      domain: [{ object_id: "stack" }],
+      materials: [{ region: { object_id: "stack" }, material: { sigma_Spm: 5.8e7 } }],
+      boundaries: [{ id: "left", kind: "voltage_electrode" as const, potential_V: 0.1, surfaces: [{ object_id: "stack", surface_id: "x_min", orientation: [-1, 0, 0] }] }],
+      gauge: "dirichlet_reference" as const,
+      solver: { engine: "cg", linear: { relative_tolerance: 1e-10, absolute_tolerance: 1e-14, max_iterations: 123 }, operator_version: "fv_charge_harmonic_v1", physical_residual_version: "charge_balance_integrated_l2.v1" },
+      conservative_current_view: conservativeCurrentView,
+    };
+    expect(isKnownCurrentTransport(resource)).toBe(true);
+    const draft = currentTransportDraft(resource);
+    expect(JSON.parse(draft.conservativeCurrentView)).toEqual(conservativeCurrentView);
+    expect(buildCurrentTransport(draft)).toEqual(resource);
+
+    draft.conservativeCurrentView = "[]";
+    expect(() => buildCurrentTransport(draft)).toThrow(/JSON object/);
+  });
+
   it("round-trips every spin-transport field including requested execution", () => {
     const resource = {
       schema_version: "spin_transport.v1",

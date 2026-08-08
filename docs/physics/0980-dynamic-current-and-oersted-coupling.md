@@ -977,7 +977,10 @@ gauge, invalid source/closure, unsupported PBC, unsigned vector reduction,
 missing bandwidth, and ambiguous thickness/regions. Canonical script export
 preserves all envelope data, including complete piecewise-linear points.
 OE-T0 introduces no independently authored current object: the conservative
-view is a resolved product of the named current source. `direct_biot_savart`
+view is a resolved product of the named current source, but its accepted
+snapshot identity and closure are explicit inputs to the public FEM descriptor.
+There is no default source-cut and no implicit H1-to-RT0 conversion.
+`direct_biot_savart`
 and `fem_vector_potential` remain explicit method choices. FEM vector-potential
 policy exposes the boundary/gauge variant; omission resolves only to the
 baseline `tangential_A_h1_0.v1`, never to the zero-mean variant. Direct tetra
@@ -994,11 +997,36 @@ oersted = OerstedField(source=drive.name)
 assert oersted.model == "from_current_solution"
 ```
 
+Dla ograniczonego FEM CPU/double `ohmic_poisson` można przekazać już
+zaakceptowany, zamknięty snapshot RT0. Wszystkie identyfikatory i rekordy są
+obowiązkowe; brak descriptoru pozostawia ścieżkę H1/P1 jako jawny reference
+lane, a `external_lead` i sprzężenie etapowe są odrzucane przez planner.
+
+```python
+view = ConservativeCurrentView(
+    stable_vertex_ids=[10, 20, 30, 40],
+    boundary_faces=[...],
+    identity=ConservativeCurrentIdentity(..., stage_identity=1),
+    pins=ConservativeCurrentPins(...),
+    closure=ConservativeCurrentClosedGeometry(
+        "fem_charge_rt0.v1", "closure-1", "sha256:...", source_cuts=[...]
+    ),
+    algebraic_relative_tolerance=1e-10,
+    physical_relative_gate=1e-8,
+    physical_absolute_gate_a=1e-12,
+)
+drive = CurrentTransport(
+    name="drive", model="ohmic_poisson", coupling="one_way",
+    conservative_current_view=view,
+)
+```
+
 | Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
+| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; external lead and stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
 
 (round-trip-and-failure-semantics)=
 #### 4.1.1 Requested intent, resolved execution and failures
@@ -1017,10 +1045,12 @@ Typed `ResolvedCurrentTransportPlanIR` and `OerstedSourceIR`/
 electrodes/BC, closure, method/operator versions, validity assessment,
 refresh/coupling, energy semantics, mesh/source revisions, and requested lane.
 Authored `OerstedSourceIR` carries `current_source_id` plus geometry/meshing
-intent only; it cannot carry a current-view reference, artifact revision,
-face-record count or digest. The resolved plan obtains
-`ConservativeCurrentViewRef` only from the executed named source revision and
-its verified data-plane artifact.
+intent only. The optional `CurrentTransport.conservative_current_view` carries
+an explicit accepted snapshot descriptor through the flattened charge
+definition; the planner verifies it against the resolved FEM mesh and refuses
+missing/duplicate faces, mismatched pins, unsupported closure, or reciprocal
+coupling. Runtime artifacts still carry the authoritative data-plane face
+records and digests.
 Legacy flat fields are accepted only by a versioned migrator that cannot drop
 parameters. Normalized four-path authoring round-trip is field-for-field equal.
 `ResolvedOerstedPlanIR` additionally pins the conservative-current-view
@@ -1039,9 +1069,9 @@ cadence. Planner verifies continuity, closure, regime, topology, PBC, method,
 lane/device/precision, cache identity, solver availability, and strict
 residency. Requested and resolved selections remain visible. Validation is
 scoped to named workload, geometry/BC, lane, precision, and frequency envelope.
-Native CPU contracts for OE-T0 and OE-F1 now exist, but the canonical FEM
-direct-tetra and vector-potential capabilities still cannot be promoted from
-the ordinary cylinder or nodal-midpoint execution: planner/stage descriptor
+Native CPU contracts for OE-T0 and OE-F1 now exist, and the canonical planner
+accepts the explicit closed-geometry descriptor. It still cannot promote the
+ordinary cylinder/nodal-midpoint path or any stage-coupled run: external-lead
 materialization, snapshot-consistent LLG coupling, OE-F2, GPU and production
 convergence gates remain open.
 
@@ -1149,9 +1179,10 @@ append-only ścieżkę `rt0_request_v1` oraz osobny symbol OE-F1. Jest ona
 aktywna wyłącznie wtedy, gdy resolved plan dostarczy kompletny descriptor
 `conservative_current_view`; brak tego descriptoru zachowuje jawny
 `solved_current_h1_nodal_midpoint_reference`. Sama obecność nowego symbolu nie
-promuje jeszcze ogólnej capability FEM dynamic-Oersted, ponieważ planner nie
-generuje automatycznie closure/stage snapshotu, a etapowe sprzężenie z LLG oraz
-OE-F2 pozostają otwarte. Managed testy operatorów i nowy natywny kontrakt
+promuje jeszcze ogólnej capability FEM dynamic-Oersted. Planner akceptuje
+wyłącznie jawnie dostarczony `closed_geometry`; nie generuje automatycznie
+closure/stage snapshotu, a etapowe sprzężenie z LLG oraz OE-F2 pozostają otwarte.
+Managed testy operatorów i nowy natywny kontrakt
 RT0→OE-F1 są dowodem wykonania kontrolowanej ścieżki CPU/double, nie dowodem
 kwalifikacji produkcyjnego łańcucha.
 
@@ -1218,8 +1249,8 @@ digestowi RT0. Nie ma konwersji H1→RT0. Managed
 `FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-cpu-only-contract`
 wykonuje trzy kontrakty transportu, ABI i RT0→OE-F1 w obrazie CPU-only
 (`FULLMAG_USE_MFEM_STACK=ON`). Jest to implementacja natywnego adaptera i
-kontraktu FFI, ale nie produkcyjna kwalifikacja: planner nadal nie wytwarza
-automatycznie closure/stage snapshotu, OE-F2, etapowego sprzężenia LLG,
+kontraktu FFI, ale nie produkcyjna kwalifikacja: planner nie wytwarza
+automatycznie stage snapshotu ani `external_lead`, a OE-F2, etapowe sprzężenie LLG,
 niezależnych badań `h`/airbox ani lane GPU.
 
 (validation)=
@@ -1270,7 +1301,8 @@ at least nominal minus `0.25` in the asymptotic range.
 ## 6. Completeness checklist
 
 - [x] Bounded FEM steady one-way solved-current midpoint reference slice (not OE-T0/F1/F2)
-- [ ] Python current/Oersted model and complete envelope export
+- [ ] Python current/Oersted model and complete envelope export (`closed_geometry`
+  descriptor round-trip is implemented; full stage/envelope coupling remains open)
 - [ ] ProblemIR, planner, migration, and scoped capabilities
 - [ ] Conservative FDM charge and face-to-cell publication
 - [ ] FDM direct oracle and cell-integrated CPU/CUDA FFT
@@ -1311,6 +1343,10 @@ evidence that the approximation is accurate.
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_v1` | public v1 ABI boundary |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_v1` | append-only RT0/OE-F1 ABI |
 | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and direct OE-F1 adapter |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
+| `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
+| `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
+| `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
 | `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |

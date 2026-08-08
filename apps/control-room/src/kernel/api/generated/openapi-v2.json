@@ -9132,6 +9132,14 @@
               "null"
             ]
           },
+          "conservative_current_view": {
+            "additionalProperties": true,
+            "description": "Optional explicit accepted RT0/H(div) source descriptor.  It remains a\nJSON object at the scene boundary so every closure field survives UI\nround-trip; the planner performs mesh-exact typed validation.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "coupling": {
             "$ref": "#/components/schemas/SceneTransportCoupling"
           },

@@ -236,7 +236,11 @@ pub(super) fn validate_conservative_current_view_descriptor(
                     cut.id.trim().is_empty()
                         || cut.face_pairs.is_empty()
                         || !cut.potential_drop_v.is_finite()
+                        || cut.translation_m.iter().any(|value| !value.is_finite())
                         || cut.translation_m.iter().all(|value| *value == 0.0)
+                        || cut.face_pairs.iter().any(|pair| {
+                            pair.minus_face_vertex_ids == pair.plus_face_vertex_ids
+                        })
                 })
             {
                 return Err(RunError {

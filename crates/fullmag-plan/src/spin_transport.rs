@@ -689,6 +689,13 @@ fn materialize_fem_descriptor(
     )?;
     require_full_fem_domain(&charge_domain, "charge domain")?;
     require_full_fem_domain(&spin_domain, "spin domain")?;
+    let conservative_current_view = validate_conservative_current_view(
+        charge.conservative_current_view.as_ref(),
+        &module.id,
+        &module.current_source_id,
+        mesh,
+        reciprocal,
+    )?;
 
     let mut conductivity = vec![f64::NAN; mesh.cell_count()];
     for assignment in &charge.materials {
@@ -976,8 +983,204 @@ fn materialize_fem_descriptor(
                     if source == &module.current_source_id
             )
         }),
-        conservative_current_view: None,
+        conservative_current_view,
     })
+}
+
+fn validate_conservative_current_view(
+    view: Option<&fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
+    module_id: &str,
+    current_source_id: &str,
+    mesh: &MeshIR,
+    reciprocal: bool,
+) -> Result<Option<fullmag_ir::ResolvedFemConservativeCurrentViewIR>, Vec<String>> {
+    let Some(view) = view else {
+        return Ok(None);
+    };
+    let prefix = format!("FEM spin transport '{}' conservative current view", module_id);
+    if reciprocal {
+        return Err(vec![format!(
+            "{prefix} is only executable on the one-way Ohmic lane; reciprocal M2 must fail closed"
+        )]);
+    }
+    if view.stable_vertex_ids.len() != mesh.nodes.len()
+        || view.stable_vertex_ids.iter().any(|id| *id == 0)
+        || view
+            .stable_vertex_ids
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != view.stable_vertex_ids.len()
+    {
+        return Err(vec![format!(
+            "{prefix} stable_vertex_ids must be a non-empty, unique, positive identity for every FEM node"
+        )]);
+    }
+    if view.identity.source_module_id != current_source_id {
+        return Err(vec![format!(
+            "{prefix} identity.source_module_id '{}' does not match current_source_id '{}'",
+            view.identity.source_module_id, current_source_id
+        )]);
+    }
+    if view.pins.required_source_state_revision != view.identity.source_state_revision
+        || view.pins.required_source_field_digest != view.identity.source_field_digest
+        || view.pins.required_mesh_revision != view.identity.mesh_revision
+        || view.pins.required_topology_revision != view.identity.topology_revision
+    {
+        return Err(vec![format!(
+            "{prefix} pins must exactly match the accepted source, mesh, and topology identities"
+        )]);
+    }
+    for (label, value) in [
+        ("source_state_revision", &view.identity.source_state_revision),
+        ("source_field_digest", &view.identity.source_field_digest),
+        ("conductivity_digest", &view.identity.conductivity_digest),
+        ("mesh_revision", &view.identity.mesh_revision),
+        ("topology_revision", &view.identity.topology_revision),
+        ("geometry_digest", &view.identity.geometry_digest),
+        ("envelope_revision", &view.identity.envelope_revision),
+        ("envelope_digest", &view.identity.envelope_digest),
+        ("required_source_state_revision", &view.pins.required_source_state_revision),
+        ("required_source_field_digest", &view.pins.required_source_field_digest),
+        ("required_mesh_revision", &view.pins.required_mesh_revision),
+        ("required_topology_revision", &view.pins.required_topology_revision),
+    ] {
+        if value.trim().is_empty() {
+            return Err(vec![format!("{prefix} {label} must not be empty")]);
+        }
+    }
+    if !view.identity.evaluated_envelope_multiplier.is_finite()
+        || !view.identity.evaluation_time_s.is_finite()
+        || view.identity.stage_identity == 0
+        || !view.algebraic_relative_tolerance.is_finite()
+        || view.algebraic_relative_tolerance <= 0.0
+        || !view.physical_relative_gate.is_finite()
+        || view.physical_relative_gate <= 0.0
+        || !view.physical_absolute_gate_a.is_finite()
+        || view.physical_absolute_gate_a <= 0.0
+    {
+        return Err(vec![format!(
+            "{prefix} identity, stage, or physical gates contain invalid values"
+        )]);
+    }
+    if mesh.facets.types.len() != mesh.facets.roles.len()
+        || mesh.facets.types.len() + 1 != mesh.facets.offsets.len()
+    {
+        return Err(vec![format!("{prefix} mesh facet connectivity is malformed")]);
+    }
+    let mesh_faces = mesh
+        .facets
+        .require_tri3()
+        .map_err(|reason| vec![format!("{prefix} requires a Tri3 boundary mesh: {reason}")])?;
+    let mut expected_faces = BTreeSet::new();
+    for (ordinal, face) in mesh_faces.iter().enumerate() {
+        if !matches!(
+            mesh.facets.roles.get(ordinal),
+            Some(fullmag_ir::FemFacetRoleIR::Exterior | fullmag_ir::FemFacetRoleIR::PeriodicSeam)
+        ) {
+            continue;
+        }
+        let mut stable = [0_u64; 3];
+        for (slot, local) in face.iter().enumerate() {
+            let index = *local as usize;
+            stable[slot] = *view.stable_vertex_ids.get(index).ok_or_else(|| {
+                vec![format!("{prefix} boundary facet {ordinal} references an unknown FEM node")]
+            })?;
+        }
+        stable.sort_unstable();
+        if stable[0] == 0 || stable[0] == stable[1] || stable[1] == stable[2] {
+            return Err(vec![format!("{prefix} mesh boundary facet {ordinal} has non-canonical stable IDs")]);
+        }
+        expected_faces.insert(stable);
+    }
+    if view.boundary_faces.len() != expected_faces.len() {
+        return Err(vec![format!(
+            "{prefix} must classify every exterior/periodic Tri3 facet exactly once (authored {}, mesh {})",
+            view.boundary_faces.len(), expected_faces.len()
+        )]);
+    }
+    let mut authored_faces = BTreeSet::new();
+    let mut roles = BTreeMap::new();
+    for face in &view.boundary_faces {
+        let ids = face.face_vertex_ids;
+        if ids[0] == 0 || ids[0] >= ids[1] || ids[1] >= ids[2] || !expected_faces.contains(&ids) {
+            return Err(vec![format!(
+                "{prefix} boundary face {:?} is not a canonical mesh boundary facet",
+                ids
+            )]);
+        }
+        if !authored_faces.insert(ids) {
+            return Err(vec![format!("{prefix} contains a duplicate boundary face {:?}", ids)]);
+        }
+        match face.role {
+            fullmag_ir::ConservativeCurrentBoundaryRoleIR::InsulatingOuter => {
+                if face.circuit_id.is_some() {
+                    return Err(vec![format!("{prefix} insulating_outer face {:?} carries circuit_id", ids)]);
+                }
+            }
+            fullmag_ir::ConservativeCurrentBoundaryRoleIR::SourceCut
+            | fullmag_ir::ConservativeCurrentBoundaryRoleIR::ClosureInterface => {
+                if face.circuit_id.as_deref().is_none_or(str::is_empty) {
+                    return Err(vec![format!("{prefix} driven face {:?} requires circuit_id", ids)]);
+                }
+            }
+        }
+        roles.insert(ids, face.role);
+    }
+    if authored_faces != expected_faces {
+        return Err(vec![format!("{prefix} does not cover the complete mesh boundary")]);
+    }
+    let fullmag_ir::ConservativeCurrentClosureIR::ClosedGeometry {
+        operator_version,
+        revision,
+        digest,
+        source_cuts,
+    } = &view.closure
+    else {
+        return Err(vec![format!(
+            "{prefix} external-lead closure is not yet executable in the public FEM planner"
+        )]);
+    };
+    if operator_version.trim().is_empty()
+        || revision.trim().is_empty()
+        || digest.trim().is_empty()
+        || source_cuts.is_empty()
+    {
+        return Err(vec![format!("{prefix} closed_geometry identity/source_cuts are incomplete")]);
+    }
+    let mut cut_ids = BTreeSet::new();
+    for cut in source_cuts {
+        if cut.id.trim().is_empty()
+            || !cut.potential_drop_v.is_finite()
+            || cut.translation_m.iter().all(|value| *value == 0.0)
+            || cut.face_pairs.is_empty()
+            || !cut_ids.insert(cut.id.as_str())
+        {
+            return Err(vec![format!("{prefix} contains an invalid or duplicate source cut")]);
+        }
+        for pair in &cut.face_pairs {
+            if pair.minus_face_vertex_ids == pair.plus_face_vertex_ids {
+                return Err(vec![format!(
+                    "{prefix} source cut '{}' must pair distinct minus and plus faces",
+                    cut.id
+                )]);
+            }
+            for face in [pair.minus_face_vertex_ids, pair.plus_face_vertex_ids] {
+                if face[0] == 0
+                    || face[0] >= face[1]
+                    || face[1] >= face[2]
+                    || roles.get(&face)
+                        != Some(&fullmag_ir::ConservativeCurrentBoundaryRoleIR::SourceCut)
+                {
+                    return Err(vec![format!(
+                        "{prefix} source cut '{}' references a face that is not authored as source_cut",
+                        cut.id
+                    )]);
+                }
+            }
+        }
+    }
+    Ok(Some(view.clone()))
 }
 
 fn fem_domain_mask(
@@ -2105,6 +2308,7 @@ mod tests {
                     physical_residual_version: "charge_balance_integrated_l2.v1".into(),
                     operator_version: "fv_charge_harmonic_v1".into(),
                 },
+                conservative_current_view: None,
             }),
         }];
         problem.spin_transport_modules = vec![SpinTransportModuleIR {
@@ -3281,5 +3485,162 @@ mod tests {
                 normal_spin_flux_apm2: [1.0, 0.0, 0.0],
             });
         assert_rejected(spin_flux, "specified spin flux");
+    }
+
+    fn valid_rt0_view_for_planner() -> (MeshIR, ResolvedFemConservativeCurrentViewIR) {
+        let mesh = MeshIR::from_legacy_tet4(
+            "rt0".into(),
+            vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            vec![[0, 1, 2, 3]],
+            vec![1],
+            vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+            vec![1, 1, 1, 1],
+            vec![],
+            vec![],
+            std::collections::HashMap::new(),
+        );
+        let identity = ConservativeCurrentIdentityIR {
+            source_module_id: "drive".into(),
+            source_state_revision: "state-1".into(),
+            source_field_digest: "field-1".into(),
+            conductivity_digest: "sigma-1".into(),
+            mesh_revision: "mesh-1".into(),
+            topology_revision: "topology-1".into(),
+            geometry_digest: "geometry-1".into(),
+            envelope_revision: "envelope-1".into(),
+            envelope_digest: "envelope-digest-1".into(),
+            evaluated_envelope_multiplier: 1.0,
+            evaluation_time_s: 0.0,
+            stage_identity: 1,
+        };
+        let boundary_faces = vec![
+            ConservativeCurrentBoundaryFaceIR {
+                face_vertex_ids: [10, 20, 30],
+                role: ConservativeCurrentBoundaryRoleIR::SourceCut,
+                circuit_id: Some("cut".into()),
+            },
+            ConservativeCurrentBoundaryFaceIR {
+                face_vertex_ids: [10, 20, 40],
+                role: ConservativeCurrentBoundaryRoleIR::SourceCut,
+                circuit_id: Some("cut".into()),
+            },
+            ConservativeCurrentBoundaryFaceIR {
+                face_vertex_ids: [10, 30, 40],
+                role: ConservativeCurrentBoundaryRoleIR::InsulatingOuter,
+                circuit_id: None,
+            },
+            ConservativeCurrentBoundaryFaceIR {
+                face_vertex_ids: [20, 30, 40],
+                role: ConservativeCurrentBoundaryRoleIR::InsulatingOuter,
+                circuit_id: None,
+            },
+        ];
+        let view = ResolvedFemConservativeCurrentViewIR {
+            stable_vertex_ids: vec![10, 20, 30, 40],
+            boundary_faces,
+            identity: identity.clone(),
+            pins: ConservativeCurrentPinsIR {
+                required_source_state_revision: identity.source_state_revision.clone(),
+                required_source_field_digest: identity.source_field_digest.clone(),
+                required_mesh_revision: identity.mesh_revision.clone(),
+                required_topology_revision: identity.topology_revision.clone(),
+            },
+            closure: ConservativeCurrentClosureIR::ClosedGeometry {
+                operator_version: "fem_charge_rt0.v1".into(),
+                revision: "closure-1".into(),
+                digest: "closure-digest-1".into(),
+                source_cuts: vec![ConservativeCurrentSourceCutIR {
+                    id: "cut".into(),
+                    translation_m: [1.0, 0.0, 0.0],
+                    potential_drop_v: 0.1,
+                    face_pairs: vec![ConservativeCurrentSourceCutFacePairIR {
+                        minus_face_vertex_ids: [10, 20, 30],
+                        plus_face_vertex_ids: [10, 20, 40],
+                    }],
+                }],
+            },
+            algebraic_relative_tolerance: 1.0e-10,
+            physical_relative_gate: 1.0e-8,
+            physical_absolute_gate_a: 1.0e-12,
+            reference_mpi_gather_broadcast: false,
+        };
+        (mesh, view)
+    }
+
+    #[test]
+    fn planner_accepts_complete_closed_geometry_rt0_view() {
+        let (mesh, view) = valid_rt0_view_for_planner();
+        let resolved = validate_conservative_current_view(
+            Some(&view),
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect("valid RT0 view should lower");
+        assert_eq!(resolved, Some(view));
+    }
+
+    #[test]
+    fn planner_rejects_duplicate_boundary_and_external_lead_views() {
+        let (mesh, mut view) = valid_rt0_view_for_planner();
+        view.boundary_faces[1] = view.boundary_faces[0].clone();
+        let duplicate = validate_conservative_current_view(
+            Some(&view),
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect_err("duplicate boundary must fail closed");
+        assert!(duplicate.join(" ").contains("duplicate"));
+
+        let (mesh, mut same_face_view) = valid_rt0_view_for_planner();
+        if let ConservativeCurrentClosureIR::ClosedGeometry { source_cuts, .. } =
+            &mut same_face_view.closure
+        {
+            source_cuts[0].face_pairs[0].plus_face_vertex_ids =
+                source_cuts[0].face_pairs[0].minus_face_vertex_ids;
+        }
+        let same_face = validate_conservative_current_view(
+            Some(&same_face_view),
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect_err("source cut must pair distinct faces");
+        assert!(same_face.join(" ").contains("distinct"));
+
+        let (_, valid_view) = valid_rt0_view_for_planner();
+        view = valid_view;
+        view.closure = ConservativeCurrentClosureIR::ExternalLead {
+            operator_version: "lead.v1".into(),
+            revision: "lead-1".into(),
+            digest: "lead-digest".into(),
+            drive_id: "drive".into(),
+            outer_electrode_potential_drop_v: 0.1,
+            lead_mesh: mesh.clone(),
+            lead_conductivity_spm_per_element: vec![1.0],
+            lead_stable_vertex_ids: vec![1, 2, 3, 4],
+            interface_pairs: vec![([10, 20, 30], [10, 20, 40])],
+            minus_outer_electrode_face_vertex_ids: vec![[10, 20, 30]],
+            plus_outer_electrode_face_vertex_ids: vec![[10, 20, 40]],
+            lead_conductivity_digest: "lead-sigma".into(),
+        };
+        let external = validate_conservative_current_view(
+            Some(&view),
+            "spin",
+            "drive",
+            &mesh,
+            false,
+        )
+        .expect_err("external lead must remain planner-blocked");
+        assert!(external.join(" ").contains("external-lead"));
     }
 }

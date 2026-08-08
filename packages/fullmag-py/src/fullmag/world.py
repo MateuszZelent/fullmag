@@ -60,6 +60,7 @@ from fullmag.model.current_transport import (
     ChargePotentialGauge,
     ChargeSolverPolicy,
     ChargeTransportMaterialAssignment,
+    ConservativeCurrentView,
     CurrentTransport,
 )
 from fullmag.model.energy import (
@@ -5355,6 +5356,7 @@ class StudyBuilder:
         boundaries: Sequence[ChargeBoundary] = (),
         gauge: ChargePotentialGauge | None = None,
         solver: ChargeSolverPolicy | None = None,
+        conservative_current_view: ConservativeCurrentView | None = None,
     ) -> CurrentTransport:
         return current_transport(
             name=name,
@@ -5368,6 +5370,7 @@ class StudyBuilder:
             boundaries=boundaries,
             gauge=gauge,
             solver=solver,
+            conservative_current_view=conservative_current_view,
         )
 
     def spin_torque(self, module: SpinTorqueModule) -> SpinTorqueModule:
@@ -7473,6 +7476,7 @@ def current_transport(
     boundaries: Sequence[ChargeBoundary] = (),
     gauge: ChargePotentialGauge | None = None,
     solver: ChargeSolverPolicy | None = None,
+    conservative_current_view: ConservativeCurrentView | None = None,
 ) -> CurrentTransport:
     module = CurrentTransport(
         name=name,
@@ -7486,6 +7490,7 @@ def current_transport(
         boundaries=boundaries,
         gauge=gauge,
         solver=solver,
+        conservative_current_view=conservative_current_view,
     )
     _state._current_modules.append(module)
     return module

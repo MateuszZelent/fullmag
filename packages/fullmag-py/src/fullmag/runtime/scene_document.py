@@ -6,6 +6,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fullmag.model.current_transport import (
+    ConservativeCurrentBoundaryFace,
+    ConservativeCurrentClosedGeometry,
+    ConservativeCurrentIdentity,
+    ConservativeCurrentPins,
+    ConservativeCurrentSourceCut,
+    ConservativeCurrentSourceCutFacePair,
+    ConservativeCurrentView,
     ChargeInsulating,
     ChargePotentialGauge,
     ChargeSolverPolicy,
@@ -290,6 +297,7 @@ def _decode_current_transport(value: object) -> CurrentTransport:
                 "current_transport.solver.operator_version",
             ),
         )
+    conservative_view_value = entry.get("conservative_current_view")
     return CurrentTransport(
         name=_nonempty_string(entry.get("name"), "current_transport.name"),
         model=_nonempty_string(entry.get("model", "prescribed_density"), "current_transport.model"),
@@ -322,6 +330,114 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             else None
         ),
         solver=solver,
+        conservative_current_view=(
+            _decode_conservative_current_view(conservative_view_value)
+            if conservative_view_value is not None
+            else None
+        ),
+    )
+
+
+def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
+    entry = _mapping(value, "current_transport.conservative_current_view")
+    stable_ids = entry.get("stable_vertex_ids")
+    if not isinstance(stable_ids, list):
+        raise ValueError("current_transport.conservative_current_view.stable_vertex_ids must be a list")
+
+    boundary_value = entry.get("boundary_faces")
+    if not isinstance(boundary_value, list):
+        raise ValueError("current_transport.conservative_current_view.boundary_faces must be a list")
+    boundary_faces = []
+    for index, raw_face in enumerate(boundary_value):
+        face = _mapping(raw_face, f"current_transport.conservative_current_view.boundary_faces[{index}]")
+        face_ids = face.get("face_vertex_ids")
+        if not isinstance(face_ids, list):
+            raise ValueError(f"current_transport.conservative_current_view.boundary_faces[{index}].face_vertex_ids must be a list")
+        boundary_faces.append(
+            ConservativeCurrentBoundaryFace(
+                face_ids,
+                _nonempty_string(face.get("role"), f"current_transport.conservative_current_view.boundary_faces[{index}].role"),
+                circuit_id=(
+                    _nonempty_string(face.get("circuit_id"), f"current_transport.conservative_current_view.boundary_faces[{index}].circuit_id")
+                    if face.get("circuit_id") is not None
+                    else None
+                ),
+            )
+        )
+
+    identity_value = _mapping(entry.get("identity"), "current_transport.conservative_current_view.identity")
+    identity = ConservativeCurrentIdentity(
+        source_module_id=_nonempty_string(identity_value.get("source_module_id"), "conservative_current_view.identity.source_module_id"),
+        source_state_revision=_nonempty_string(identity_value.get("source_state_revision"), "conservative_current_view.identity.source_state_revision"),
+        source_field_digest=_nonempty_string(identity_value.get("source_field_digest"), "conservative_current_view.identity.source_field_digest"),
+        conductivity_digest=_nonempty_string(identity_value.get("conductivity_digest"), "conservative_current_view.identity.conductivity_digest"),
+        mesh_revision=_nonempty_string(identity_value.get("mesh_revision"), "conservative_current_view.identity.mesh_revision"),
+        topology_revision=_nonempty_string(identity_value.get("topology_revision"), "conservative_current_view.identity.topology_revision"),
+        geometry_digest=_nonempty_string(identity_value.get("geometry_digest"), "conservative_current_view.identity.geometry_digest"),
+        envelope_revision=_nonempty_string(identity_value.get("envelope_revision"), "conservative_current_view.identity.envelope_revision"),
+        envelope_digest=_nonempty_string(identity_value.get("envelope_digest"), "conservative_current_view.identity.envelope_digest"),
+        evaluated_envelope_multiplier=_finite_number(identity_value.get("evaluated_envelope_multiplier"), "conservative_current_view.identity.evaluated_envelope_multiplier"),
+        evaluation_time_s=_finite_number(identity_value.get("evaluation_time_s"), "conservative_current_view.identity.evaluation_time_s"),
+        stage_identity=_positive_integer(identity_value.get("stage_identity"), "conservative_current_view.identity.stage_identity"),
+    )
+
+    pins_value = _mapping(entry.get("pins"), "current_transport.conservative_current_view.pins")
+    pins = ConservativeCurrentPins(
+        required_source_state_revision=_nonempty_string(pins_value.get("required_source_state_revision"), "conservative_current_view.pins.required_source_state_revision"),
+        required_source_field_digest=_nonempty_string(pins_value.get("required_source_field_digest"), "conservative_current_view.pins.required_source_field_digest"),
+        required_mesh_revision=_nonempty_string(pins_value.get("required_mesh_revision"), "conservative_current_view.pins.required_mesh_revision"),
+        required_topology_revision=_nonempty_string(pins_value.get("required_topology_revision"), "conservative_current_view.pins.required_topology_revision"),
+    )
+
+    closure_value = _mapping(entry.get("closure"), "current_transport.conservative_current_view.closure")
+    if closure_value.get("kind") != "closed_geometry":
+        raise ValueError(
+            "current_transport.conservative_current_view currently supports only closed_geometry closure"
+        )
+    source_cuts_value = closure_value.get("source_cuts")
+    if not isinstance(source_cuts_value, list):
+        raise ValueError("conservative_current_view.closure.source_cuts must be a list")
+    source_cuts = []
+    for index, raw_cut in enumerate(source_cuts_value):
+        cut = _mapping(raw_cut, f"conservative_current_view.closure.source_cuts[{index}]")
+        pairs_value = cut.get("face_pairs")
+        if not isinstance(pairs_value, list):
+            raise ValueError(f"conservative_current_view.closure.source_cuts[{index}].face_pairs must be a list")
+        pairs = []
+        for pair_index, raw_pair in enumerate(pairs_value):
+            pair = _mapping(raw_pair, f"conservative_current_view.closure.source_cuts[{index}].face_pairs[{pair_index}]")
+            minus = pair.get("minus_face_vertex_ids")
+            plus = pair.get("plus_face_vertex_ids")
+            if not isinstance(minus, list) or not isinstance(plus, list):
+                raise ValueError("source-cut face-pair vertex IDs must be lists")
+            pairs.append(ConservativeCurrentSourceCutFacePair(minus, plus))
+        source_cuts.append(
+            ConservativeCurrentSourceCut(
+                _nonempty_string(cut.get("id"), f"conservative_current_view.closure.source_cuts[{index}].id"),
+                _vec3(cut.get("translation_m"), f"conservative_current_view.closure.source_cuts[{index}].translation_m"),
+                _finite_number(cut.get("potential_drop_v"), f"conservative_current_view.closure.source_cuts[{index}].potential_drop_v"),
+                pairs,
+            )
+        )
+    closure = ConservativeCurrentClosedGeometry(
+        _nonempty_string(closure_value.get("operator_version"), "conservative_current_view.closure.operator_version"),
+        _nonempty_string(closure_value.get("revision"), "conservative_current_view.closure.revision"),
+        _nonempty_string(closure_value.get("digest"), "conservative_current_view.closure.digest"),
+        source_cuts,
+    )
+    reference_mpi = entry.get("reference_mpi_gather_broadcast", False)
+    if not isinstance(reference_mpi, bool):
+        raise ValueError("conservative_current_view.reference_mpi_gather_broadcast must be boolean")
+    return ConservativeCurrentView(
+        stable_vertex_ids=stable_ids,
+        boundary_faces=boundary_faces,
+        identity=identity,
+        pins=pins,
+        closure=closure,
+        algebraic_relative_tolerance=_finite_number(entry.get("algebraic_relative_tolerance"), "conservative_current_view.algebraic_relative_tolerance"),
+        physical_relative_gate=_finite_number(entry.get("physical_relative_gate"), "conservative_current_view.physical_relative_gate"),
+        physical_absolute_gate_a=_finite_number(entry.get("physical_absolute_gate_a"), "conservative_current_view.physical_absolute_gate_a"),
+        reference_mpi_gather_broadcast=reference_mpi,
     )
 
 

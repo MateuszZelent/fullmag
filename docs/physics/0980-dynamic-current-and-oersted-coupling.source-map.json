@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1 CPU/double ABI and native contract now execute when a resolved descriptor is supplied, while planner materialization, stage-consistent LLG coupling, OE-F2, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains the default public lane; an append-only closure-aware RT0/OE-F1 CPU/double ABI and native contract now execute when a public closed_geometry descriptor is supplied, while stage-consistent LLG coupling, external-lead closure, OE-F2, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -61,6 +61,30 @@
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "resolve_m1_fem_spin_transport",
       "responsibility": "Publish the resolved FEM transport descriptor bit and fail closed for reciprocal FEM Oersted stage coupling."
+    },
+    {
+      "id": "python-conservative-current-view",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentView",
+      "responsibility": "Expose the explicit closed-geometry RT0 identity, boundary classification, source-cut closure and physical gates through Python and canonical script round-trip; never invent a return path."
+    },
+    {
+      "id": "planner-conservative-current-view",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "validate_conservative_current_view",
+      "responsibility": "Validate stable IDs, exact Tri3 boundary ownership, identity/pins and closed source-cut references; reject reciprocal or external-lead descriptors before native execution."
+    },
+    {
+      "id": "scene-authoring-conservative-current-view",
+      "path": "crates/fullmag-authoring/src/validation.rs",
+      "symbol": "validate_scene_conservative_current_view",
+      "responsibility": "Validate the public SceneDocument descriptor shape and preserve explicit closure fields through API/UI round-trip; reject non-Ohmic, reciprocal and external-lead descriptors before planning."
+    },
+    {
+      "id": "control-room-conservative-current-view",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "buildCurrentTransport",
+      "responsibility": "Expose the full conservative-current descriptor as an explicit JSON editor and retain it when the current transport resource is replaced."
     },
     {
       "id": "fem-midpoint-reference",
@@ -196,6 +220,16 @@
         "meaning": "bind Oersted to the named solved current",
         "backend_support": "FEM/FDM according to capability matrix",
         "problem_ir": "energy_terms[].model"
+      },
+      {
+        "python": "CurrentTransport.conservative_current_view",
+        "type": "ConservativeCurrentView | None",
+        "default": "None",
+        "si_unit": "stable IDs: 1",
+        "validation": "For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.",
+        "meaning": "accepted RT0/H(div) source view for OE-T0/OE-F1",
+        "backend_support": "FEM CPU/double closed_geometry; external lead and stage coupling remain fail-closed",
+        "problem_ir": "current_modules[].conservative_current_view"
       }
     ]
   }

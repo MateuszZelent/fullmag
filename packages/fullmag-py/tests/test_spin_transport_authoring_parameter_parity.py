@@ -81,6 +81,48 @@ def build_parity_fixtures() -> dict[tuple[str, str], list[dict[str, object]]]:
     target = _region()
     normal = fm.RegionRef("stack", "normal_metal")
     top = _surface()
+    closed_view = fm.ConservativeCurrentView(
+        stable_vertex_ids=[10, 20, 30, 40],
+        boundary_faces=[
+            fm.ConservativeCurrentBoundaryFace((10, 20, 30), "source_cut", "drive"),
+            fm.ConservativeCurrentBoundaryFace((10, 20, 40), "source_cut", "drive"),
+            fm.ConservativeCurrentBoundaryFace((10, 30, 40), "insulating_outer"),
+        ],
+        identity=fm.ConservativeCurrentIdentity(
+            source_module_id="charge-ohmic",
+            source_state_revision="state-1",
+            source_field_digest="field-1",
+            conductivity_digest="sigma-1",
+            mesh_revision="mesh-1",
+            topology_revision="topology-1",
+            geometry_digest="geometry-1",
+            envelope_revision="envelope-1",
+            envelope_digest="envelope-1",
+            evaluated_envelope_multiplier=1.0,
+            evaluation_time_s=0.0,
+            stage_identity=1,
+        ),
+        pins=fm.ConservativeCurrentPins(
+            required_source_state_revision="state-1",
+            required_source_field_digest="field-1",
+            required_mesh_revision="mesh-1",
+            required_topology_revision="topology-1",
+        ),
+        closure=fm.ConservativeCurrentClosedGeometry(
+            "fem_charge_rt0.v1",
+            "closure-1",
+            "closure-1",
+            [fm.ConservativeCurrentSourceCut(
+                "cut-x",
+                (1.0, 0.0, 0.0),
+                0.1,
+                [fm.ConservativeCurrentSourceCutFacePair((10, 20, 30), (10, 20, 40))],
+            )],
+        ),
+        algebraic_relative_tolerance=1.0e-10,
+        physical_relative_gate=1.0e-8,
+        physical_absolute_gate_a=1.0e-12,
+    )
     charge_one_way = fm.CurrentTransport(
         name="charge-ohmic",
         model="ohmic_poisson",
@@ -98,6 +140,7 @@ def build_parity_fixtures() -> dict[tuple[str, str], list[dict[str, object]]]:
             absolute_tolerance=3.0e-12,
             max_iterations=321,
         ),
+        conservative_current_view=closed_view,
     )
     charge_reciprocal = fm.CurrentTransport(
         name="charge-m2",
