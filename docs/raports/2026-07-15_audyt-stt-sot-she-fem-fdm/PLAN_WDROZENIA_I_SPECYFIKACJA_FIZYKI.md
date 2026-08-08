@@ -9526,3 +9526,23 @@ osobny study z kontrolą geometrii, normy i kolejności projekcji. Jest to nadal
 stacjonarny, referencyjny common-limit transportu, a nie produkcyjny
 solved-current/Oersted, dynamiczny `J_c(m_stage)`, GPU ani pełna trajektoria
 LLG.
+
+## 32.104. Publiczny Python/IR round-trip po zmianach grafu (2026-08-09)
+
+Po zmianach provenance grafu wykonano z repozytoryjnym layoutem src:
+
+```text
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest -q --disable-warnings \
+  packages/fullmag-py/tests/test_current_transport.py \
+  packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py \
+  packages/fullmag-py/tests/test_spin_transport_authoring_parameter_parity.py
+41 passed, 45 subtests passed in 0.36s
+```
+
+Zakres obejmuje current-transport/Oersted authoring, dekodowanie
+`SceneDocument`, flat-script eksport, zachowanie parametrów solvera i
+rozróżnienie typed `current_transports` od legacy modules. Jest to dowód
+Python → IR → SceneDocument → Python na bieżącym źródle; nie jest to dowód
+wykonania native FEM/FDM, obecności modułu w runtime ani gotowości UI
+produkcyjnego. W szczególności nie zmienia blokad dynamicznego
+`J_c(m_stage)`, GPU i solved-current Oersted.
