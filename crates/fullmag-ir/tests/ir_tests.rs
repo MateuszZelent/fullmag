@@ -73,6 +73,21 @@ fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples
         .iter()
         .any(|reason| reason == "eigenmodes.bias_field_sweep_requires_alpha_zero"));
 
+    let mut infinite = parsed.clone();
+    let StudyIR::Eigenmodes {
+        bias_field_sweep: Some(sweep),
+        ..
+    } = &mut infinite.study
+    else {
+        panic!("fixture must retain an active bias-field sweep");
+    };
+    sweep.samples_a_per_m[0][0] = f64::INFINITY;
+    assert!(infinite
+        .validate()
+        .expect_err("infinite bias-field sample must fail closed")
+        .iter()
+        .any(|reason| reason.contains("samples_a_per_m[0]")));
+
     for (mut invalid_value, token) in [
         (
             {
@@ -94,6 +109,7 @@ fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples
             {
                 let mut value = serde_json::to_value(&parsed).unwrap();
                 value["pbc"]["axes"] = serde_json::json!(["periodic", "periodic", "periodic"]);
+                value["pbc"]["demag"] = serde_json::json!("periodic_airbox_k0");
                 value
             },
             "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d",
@@ -113,6 +129,31 @@ fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples
                 value
             },
             "eigenmodes.bias_field_sweep_requires_demag",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["magnetostatic_bc"] = serde_json::json!("open");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["validation_profile"]["execution_mode"] = serde_json::json!("extended");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_strict_execution_mode",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["pbc"]["axes"] = serde_json::json!(["open", "periodic", "open"]);
+                value["pbc"]["demag"] = serde_json::json!("periodic_airbox_k0");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z",
         ),
     ] {
         let invalid: ProblemIR = serde_json::from_value(invalid_value.take()).unwrap();
