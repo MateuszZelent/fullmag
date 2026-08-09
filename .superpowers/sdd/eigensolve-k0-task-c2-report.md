@@ -49,6 +49,8 @@ Celowo pominięte, niestage’owane hunki C1/niezależne to przede wszystkim: `F
 
 Fix checkpoint: `b5be917de` (`fix(eigen): fail closed bias-field sweep planning`).
 
+Material-alpha fix: `fa7e1dd85` (`fix(eigen): reject material damping in bias sweeps`); IR validates `MaterialIR.damping == 0` independently of `damping_policy`, and the focused test mutates a real material to `alpha=0.1` and checks the stable token.
+
 - Domyślny `DEFAULT_RUN_STAGE_DRAFT` ma komplet wartości `biasFieldSamplesApm`, `biasFieldEquilibriumPolicy` i `biasFieldContinuationSeed`, więc wszystkie merge paths `StudyStageDraft` zachowują poprawny typ.
 - Planner i walidacja IR fail-closed wymagają dla skanu: demagu, `periodic_airbox_k0`, exact Gamma, `ignore` damping, double precision, strict execution i PBC `[periodic, periodic, open]`; fully-periodic 3D dostaje osobny stabilny token, każdy z plannerskich tokenów kończy się `fallback=none`.
 - Każdy `FemEigenBiasFieldSamplePlanIR` dostaje własne, sklonowane `FemEigenExecutionResolutionIR`, przez co CPU/GPU requested/resolved provenance jest związane z próbą, a nie tylko planem nadrzędnym.
