@@ -2105,6 +2105,7 @@ mod tests {
         let cells = nz;
         let descriptor = ResolvedFdmCoupledSpinTransportIR {
             descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            time_envelope: None,
             active_cells: vec![true; cells],
             reciprocal_materials: vec![ResolvedReciprocalMaterialIR {
                 sigma_spm: 4.0,

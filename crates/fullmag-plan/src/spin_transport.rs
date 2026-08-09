@@ -188,13 +188,6 @@ pub(crate) fn resolve_spin_transport(
             ));
             continue;
         };
-        if time_envelope.is_some() && reciprocal {
-            errors.push(format!(
-                "spin transport '{}' dynamic current time_envelope is currently executable only for one-way FDM charge stages; reciprocal M2 stage scaling remains fail-closed",
-                module.id
-            ));
-            continue;
-        }
         let descriptor = materialize_fdm_descriptor(
             problem,
             module,
@@ -453,6 +446,7 @@ fn materialize_m2_descriptor(
         .collect();
     Ok(ResolvedFdmCoupledSpinTransportIR {
         descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".to_string(),
+        time_envelope: base.time_envelope,
         active_cells: base.charge_active_cells,
         reciprocal_materials,
         reactions: base.reactions,
@@ -2606,6 +2600,35 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability == "transport.spin.inverse_she"));
+    }
+
+    #[test]
+    fn reciprocal_m2_preserves_authored_current_time_envelope() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let mut problem = reciprocal_problem(ExecutionDevice::Cpu);
+        let CurrentModuleIR::CurrentTransport { time_envelope, .. } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *time_envelope = Some(TimeEnvelopeIR::Constant { value: 2.0 });
+
+        let plans = resolve_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect("reciprocal M2 with a prescribed envelope should resolve");
+        assert_eq!(
+            plans[0]
+                .fdm_cpu_double_reciprocal
+                .as_ref()
+                .and_then(|descriptor| descriptor.time_envelope.as_ref()),
+            Some(&TimeEnvelopeIR::Constant { value: 2.0 })
+        );
     }
 
     #[test]

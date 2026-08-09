@@ -9831,3 +9831,25 @@ implementacji i niezależnego dowodu:
 
 Status pozostaje zatem: **implemented + bounded CPU contract-tested** dla
 one-way stage envelope; **not production-qualified** dla pełnego celu planu.
+
+## 32.111. FDM CPU reciprocal M2: stage-time envelope, `J_c(m_stage)` i torque (2026-08-09)
+
+Domknięto ograniczoną bramę FDM CPU/double dla wzajemnego transportu M2.
+Descriptor `ResolvedFdmCoupledSpinTransportIR` przechowuje teraz ten sam
+canonicalny `time_envelope`, który pochodzi z `CurrentTransport`. Przy każdym
+wywołaniu `evaluate_stage` runner ewaluje mnożnik dla dokładnego
+`t_stage`, skaluje wyłącznie źródłowe warunki Voltage/NormalCurrent, a następnie
+wykonuje pełny sprzężony solve ładunek--spin z bieżącym `m_stage`. Otrzymany
+`J_c(m_stage,t_stage)`, potencjał spinowy i `transport_torque_per_s` pochodzą z
+jednego solve'u; torque pozostaje dodawany do FDM RHS przez istniejący kontrakt
+transportu. `Insulating` i wewnętrzne warunki spinowe nie są skalowane.
+
+Dodano test planera zachowujący envelope po obniżeniu M2 oraz test runnera
+porównujący bazowy i podwojony stage (potencjał i każda składowa prądu muszą
+być liniowo przeskalowane, a snapshot publikuje `evaluated_envelope_multiplier`).
+Jest to dowód kadencji stage i spójności wejścia do M2 na FDM CPU; nie jest to
+jeszcze dowód FEM M2, GPU/device-resident, `external_lead`, resolvera tabel,
+airbox/energii ani cross-backend production qualification.
+
+Status bramy: **implemented + unit/runner contract-tested (FDM CPU/double)**;
+globalny cel STT/SOT/SHE/Oersted nadal **not production-qualified**.

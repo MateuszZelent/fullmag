@@ -778,6 +778,7 @@ impl FdmSpinTransportWorkflow {
                     resolved,
                     descriptor,
                     magnetization,
+                    stage_time_s,
                     accepted,
                     stage_error_budget,
                     previous_module,
@@ -1467,12 +1468,15 @@ fn solve_coupled_module(
     resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
     descriptor: &ResolvedFdmCoupledSpinTransportIR,
     magnetization: &[[f64; 3]],
+    stage_time_s: f64,
     accepted: Option<&FdmSpinTransportModuleSnapshot>,
     stage_error_budget: Option<TransportStageErrorBudget>,
     previous_stage: Option<&FdmSpinTransportModuleSnapshot>,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
     let state_revision = state_revision(magnetization);
     let operator_revision = descriptor_revision(descriptor)?;
+    let evaluated_envelope_multiplier =
+        source_envelope_multiplier(descriptor.time_envelope.as_ref(), stage_time_s)?;
     let materials = CoupledChargeSpinMaterialFields {
         reciprocal: descriptor
             .reciprocal_materials
@@ -1504,7 +1508,10 @@ fn solve_coupled_module(
         materials,
         Some(descriptor.active_cells.clone()),
         CoupledChargeSpinBoundaryConditions {
-            charge: charge_boundary_conditions(&descriptor.charge_boundaries, 1.0)?,
+            charge: charge_boundary_conditions(
+                &descriptor.charge_boundaries,
+                evaluated_envelope_multiplier,
+            )?,
             spin: spin_boundary_conditions(&descriptor.spin_boundaries)?,
         },
     )
@@ -1638,7 +1645,7 @@ fn solve_coupled_module(
         charge_operator_version: descriptor.operator_version.clone(),
         spin_operator_version: descriptor.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
-        evaluated_envelope_multiplier: 1.0,
+        evaluated_envelope_multiplier,
         state_revision,
         operator_revision,
     })
@@ -1967,7 +1974,8 @@ fn solve_module(
     magnetization: &[[f64; 3]],
     stage_time_s: f64,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
-    let evaluated_envelope_multiplier = source_envelope_multiplier(descriptor, stage_time_s)?;
+    let evaluated_envelope_multiplier =
+        source_envelope_multiplier(descriptor.time_envelope.as_ref(), stage_time_s)?;
     let (charge_solution, current_density_apm2, spin_problem) = materialize_one_way_problem(
         grid,
         cell_size,
@@ -2008,7 +2016,8 @@ fn solve_transient_module(
     failure_injection: Option<CoupledFailureInjection>,
 ) -> Result<(FdmSpinTransportModuleSnapshot, TransientStageCandidate), RunError> {
     let steady = &descriptor.steady_operator;
-    let evaluated_envelope_multiplier = source_envelope_multiplier(steady, stage_time_s)?;
+    let evaluated_envelope_multiplier =
+        source_envelope_multiplier(steady.time_envelope.as_ref(), stage_time_s)?;
     let (charge_solution, current_density_apm2, spin_problem) = materialize_one_way_problem(
         grid,
         cell_size,
@@ -2329,12 +2338,10 @@ fn materialize_one_way_problem(
 }
 
 fn source_envelope_multiplier(
-    descriptor: &ResolvedFdmSpinTransportIR,
+    envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
     stage_time_s: f64,
 ) -> Result<f64, RunError> {
-    descriptor
-        .time_envelope
-        .as_ref()
+    envelope
         .map(|envelope| evaluate_time_envelope(envelope, stage_time_s))
         .transpose()
         .map_err(run_error)
@@ -2755,6 +2762,7 @@ mod tests {
         ];
         resolved.fdm_cpu_double_reciprocal = Some(ResolvedFdmCoupledSpinTransportIR {
             descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            time_envelope: None,
             active_cells: one_way.charge_active_cells,
             reciprocal_materials: (0..count)
                 .map(|_| ResolvedReciprocalMaterialIR {
@@ -3476,6 +3484,51 @@ mod tests {
         }
         for (cell, potential) in module.potential_volts.iter().enumerate() {
             assert!((*potential - 2.0 * (cell as f64 + 0.5) / 4.0).abs() < 1.0e-10);
+        }
+    }
+
+    #[test]
+    fn reciprocal_m2_current_envelope_is_re_evaluated_at_each_fdm_stage() {
+        let plan = reciprocal_plan();
+        let mut scaled_plan = plan.clone();
+        scaled_plan
+            .spin_transport_plans[0]
+            .fdm_cpu_double_reciprocal
+            .as_mut()
+            .expect("reciprocal descriptor")
+            .time_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 2.0 });
+
+        let mut baseline = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("baseline workflow construction")
+            .expect("baseline spin workflow");
+        let baseline_evaluation = baseline
+            .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
+            .expect("baseline reciprocal stage solve");
+        let mut scaled = FdmSpinTransportWorkflow::from_plan(&scaled_plan)
+            .expect("scaled workflow construction")
+            .expect("scaled spin workflow");
+        let scaled_evaluation = scaled
+            .evaluate_stage(&scaled_plan.initial_magnetization, 2.5e-12)
+            .expect("scaled reciprocal stage solve");
+
+        let baseline_module = &baseline_evaluation.modules[0];
+        let scaled_module = &scaled_evaluation.modules[0];
+        assert_eq!(scaled_module.evaluated_envelope_multiplier, 2.0);
+        for (scaled, baseline) in scaled_module
+            .potential_volts
+            .iter()
+            .zip(&baseline_module.potential_volts)
+        {
+            assert!((scaled - 2.0 * baseline).abs() < 1.0e-9);
+        }
+        for (scaled, baseline) in scaled_module
+            .current_density_apm2
+            .iter()
+            .zip(&baseline_module.current_density_apm2)
+        {
+            for component in 0..3 {
+                assert!((scaled[component] - 2.0 * baseline[component]).abs() < 1.0e-9);
+            }
         }
     }
 

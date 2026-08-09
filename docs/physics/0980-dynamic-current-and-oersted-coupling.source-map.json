@@ -198,7 +198,7 @@
       "id": "fdm-stage-envelope",
       "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
       "symbol": "source_envelope_multiplier",
-      "responsibility": "Re-evaluate the resolved current-source envelope before every FDM CPU one-way charge solve and publish the finite multiplier in the accepted snapshot."
+      "responsibility": "Re-evaluate the resolved current-source envelope before every FDM CPU one-way or reciprocal M2 charge solve, publish the finite multiplier in the accepted snapshot, and keep the M2 solve/torque stage-consistent with m_stage."
     },
     {
       "id": "planner-regression",

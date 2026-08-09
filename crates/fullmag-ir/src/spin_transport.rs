@@ -674,6 +674,12 @@ pub struct ResolvedReciprocalMaterialIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmCoupledSpinTransportIR {
     pub descriptor_schema: String,
+    /// Authored charge-source envelope evaluated at each coupled transport
+    /// stage.  It scales only prescribed charge drives; the reciprocal
+    /// constitutive solve still uses the stage magnetization to determine
+    /// `J_c(m_stage)` and the resulting spin torque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
     pub active_cells: Vec<bool>,
     pub reciprocal_materials: Vec<ResolvedReciprocalMaterialIR>,
     pub reactions: Vec<ResolvedSpinReactionLengthsIR>,

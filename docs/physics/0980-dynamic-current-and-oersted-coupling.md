@@ -1502,11 +1502,20 @@ razem z czasem oceny. Wspólny evaluator obsługuje Constant, Sinusoidal, Pulse,
 PiecewiseLinear i Sinc. `Tabulated` wymaga jeszcze resolvera artefaktu; nie ma
 niejawnego zera, interpolacji ani hold.
 
+Wzajemny FDM M2 używa tego samego mnożnika przed monolitycznym solve'em
+ładunek--spin. Dla ustalonego `m_stage` rozwiązanie jest liniowe względem
+źródłowego napięcia/prądu, ale współczynniki konstytutywne nadal są budowane z
+aktualnego `m_stage`; z tego samego solve'u publikowane są `J_c(m_stage,t)` oraz
+`transport_torque_per_s`. Torque jest składnikiem RHS FDM, a nie polem
+post-hoc. Descriptor M2 przechowuje envelope z jawnym `serde(default)`, więc
+stare zapisane plany zachowują semantykę `a(t)=1`.
+
 Planner normalizuje sinusoidę/puls do istniejącego kontraktu czasowego dla
 cylindrycznych, jawnych źródeł Oersteda. Dynamiczne PWL/Sinc/Tabulated w tym
-obniżeniu, non-cylindrical static midpoint, reciprocal M2, `external_lead`,
-torque RHS, FEM GPU i FDM GPU pozostają fail-closed. Ta implementacja jest
-wykonywalną bramą one-way CPU, nie kwalifikacją produkcyjnego STT/SOT/SHE.
+obniżeniu, non-cylindrical static midpoint, `external_lead`, torque RHS FEM,
+FEM GPU i FDM GPU pozostają fail-closed. Ta implementacja jest wykonywalną
+bramą one-way oraz reciprocal M2 FDM CPU, nie kwalifikacją produkcyjnego
+STT/SOT/SHE.
 
 Świeże dowody zarządzane:
 
