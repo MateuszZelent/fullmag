@@ -23,6 +23,36 @@ def test_eigenmodes_periodic_airbox_k0_serializes_canonical_intent() -> None:
     assert ir["k_sampling"] == {"kind": "single", "k_vector": [0.0, 0.0, 0.0]}
 
 
+def test_eigenmodes_bias_field_sweep_serializes_declared_si_samples() -> None:
+    study = fm.Eigenmodes(
+        outputs=[fm.SaveSpectrum()],
+        include_demag=True,
+        magnetostatic_bc="periodic_airbox_k0",
+        k_vector=(0.0, 0.0, 0.0),
+        spin_wave_bc="periodic",
+        bias_field_sweep=fm.BiasFieldSweep(
+            samples_a_per_m=[
+                (12_500.0, 0.0, 0.0),
+                (25_000.0, 0.0, 0.0),
+                (50_000.0, 0.0, 0.0),
+            ],
+            equilibrium_policy="continuation",
+            continuation_seed="previous_accepted_equilibrium",
+        ),
+    )
+
+    assert study.to_ir()["bias_field_sweep"] == {
+        "samples_a_per_m": [
+            [12_500.0, 0.0, 0.0],
+            [25_000.0, 0.0, 0.0],
+            [50_000.0, 0.0, 0.0],
+        ],
+        "equilibrium_policy": "continuation",
+        "ordering": "declared",
+        "continuation_seed": "previous_accepted_equilibrium",
+    }
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

@@ -1093,6 +1093,7 @@ impl ProblemIR {
                 target,
                 equilibrium,
                 k_sampling,
+                bias_field_sweep,
                 damping_policy,
                 spin_wave_bc,
                 magnetostatic_bc,
@@ -1163,6 +1164,35 @@ impl ProblemIR {
                         *closed,
                         &mut errors,
                     );
+                }
+                if let Some(sweep) = bias_field_sweep {
+                    if sweep.samples_a_per_m.is_empty() {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep.samples_a_per_m must not be empty"
+                                .to_string(),
+                        );
+                    }
+                    for (sample_index, sample) in sweep.samples_a_per_m.iter().enumerate() {
+                        if !sample.iter().all(|value| value.is_finite()) {
+                            errors.push(format!(
+                                "eigenmodes.bias_field_sweep.samples_a_per_m[{sample_index}] must contain finite A/m values"
+                            ));
+                        }
+                    }
+                    if sweep.ordering != "declared" {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep.ordering must be 'declared'".to_string(),
+                        );
+                    }
+                    if !matches!(
+                        k_sampling,
+                        Some(KSamplingIR::Single {
+                            k_vector: [0.0, 0.0, 0.0]
+                        })
+                    ) {
+                        errors
+                            .push("eigenmodes.bias_field_sweep_requires_single_gamma".to_string());
+                    }
                 }
                 if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
                     if !operator.include_demag {

@@ -170,6 +170,9 @@ export interface StudyStageDraft {
   algorithm: string;
   artifactName: string;
   autosave: StudyAutosaveStageDraft;
+  biasFieldContinuationSeed: string;
+  biasFieldEquilibriumPolicy: string;
+  biasFieldSamplesApm: string;
   bc: string;
   calculationMode: string;
   count: string;
@@ -359,6 +362,9 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
   autosave: DEFAULT_AUTOSAVE,
+  biasFieldContinuationSeed: "initial_state",
+  biasFieldEquilibriumPolicy: "relax_each",
+  biasFieldSamplesApm: "",
   bc: "free",
   calculationMode: "",
   count: "10",
@@ -1731,6 +1737,7 @@ export function validateStudyStageDraft(
     }
     validateOptionalVector3(issues, draft.kVector, "k vector");
     validateOptionalJson(issues, draft.kSampling, "k sampling");
+    validateBiasFieldSweepDraft(issues, draft);
     validateJsonOrString(issues, draft.bc, "BC");
     validateSupportedText(
       issues,
@@ -3387,8 +3394,24 @@ function spectralDraft(
   index: number,
   kind: "eigenmodes" | "frequency_response",
 ): StudyStageDraft {
+  const biasFieldSweep = asRecord(
+    kind === "eigenmodes"
+      ? spectralRecordValue(record, kind, "bias_field_sweep")
+      : undefined,
+  );
   return {
     ...base,
+    biasFieldContinuationSeed: scalarText(
+      biasFieldSweep?.continuation_seed,
+      base.biasFieldContinuationSeed,
+    ),
+    biasFieldEquilibriumPolicy: scalarText(
+      biasFieldSweep?.equilibrium_policy,
+      base.biasFieldEquilibriumPolicy,
+    ),
+    biasFieldSamplesApm: biasFieldSweepSamplesText(
+      biasFieldSweep?.samples_a_per_m,
+    ),
     bc: scalarOrObjectText(
       spectralRecordValue(record, kind, "spin_wave_bc") ?? record?.bc,
       base.bc,
@@ -3510,6 +3533,11 @@ function spectralSceneStage(
     stage.eigen_damping_policy = stage.damping_policy;
     if (kVector) stage.eigen_k_vector = kVector;
     if (kSampling) stage.eigen_k_sampling = kSampling;
+    const biasFieldSweep = optionalBiasFieldSweep(draft);
+    if (biasFieldSweep) {
+      stage.bias_field_sweep = biasFieldSweep;
+      stage.eigen_bias_field_sweep = biasFieldSweep;
+    }
     stage.eigen_spin_wave_bc = stage.bc;
   } else {
     stage.magnetostatic_bc = requiredText(draft.magnetostaticBc, "open");
@@ -3594,6 +3622,71 @@ function vectorText(value: unknown, fallback: string): string {
   return Array.isArray(value) && value.length === 3
     ? value.join(", ")
     : scalarText(value, fallback);
+}
+
+function biasFieldSweepSamplesText(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value
+    .filter((sample): sample is unknown[] => Array.isArray(sample))
+    .map((sample) => sample.join(", "))
+    .join("\n");
+}
+
+function optionalBiasFieldSweep(draft: StudyStageDraft): JsonObject | null {
+  if (!draft.biasFieldSamplesApm.trim()) return null;
+  return {
+    samples_a_per_m: parseBiasFieldSweepSamples(draft.biasFieldSamplesApm),
+    equilibrium_policy: requiredText(
+      draft.biasFieldEquilibriumPolicy,
+      "relax_each",
+    ),
+    ordering: "declared",
+    continuation_seed: requiredText(
+      draft.biasFieldContinuationSeed,
+      "initial_state",
+    ),
+  };
+}
+
+function parseBiasFieldSweepSamples(value: string): JsonValue[] {
+  const rows = value.split(/\n|;/).map((row) => row.trim()).filter(Boolean);
+  if (rows.length === 0) {
+    throw new Error("bias_field_sweep requires at least one [Hx, Hy, Hz] sample.");
+  }
+  return rows.map((row) => requiredVector3(row, "bias_field_sweep sample"));
+}
+
+function validateBiasFieldSweepDraft(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  if (!draft.biasFieldSamplesApm.trim()) return;
+  try {
+    parseBiasFieldSweepSamples(draft.biasFieldSamplesApm);
+  } catch (error) {
+    issues.push({
+      message: error instanceof Error ? error.message : "Bias field scan is invalid.",
+      severity: "error",
+    });
+  }
+  if (draft.kVector.trim() !== "0,0,0" && draft.kVector.trim() !== "0, 0, 0") {
+    issues.push({
+      message: "Bias field scan requires a single Gamma point k=(0,0,0).",
+      severity: "error",
+    });
+  }
+  if (draft.kSampling.trim() || draft.kPath.trim()) {
+    issues.push({
+      message: "Bias field scan cannot be combined with k-path sampling.",
+      severity: "error",
+    });
+  }
+  if (!new Set(["relax_each", "continuation"]).has(draft.biasFieldEquilibriumPolicy)) {
+    issues.push({ message: "Bias field scan equilibrium policy is invalid.", severity: "error" });
+  }
+  if (!new Set(["initial_state", "previous_accepted_equilibrium"]).has(draft.biasFieldContinuationSeed)) {
+    issues.push({ message: "Bias field scan continuation seed is invalid.", severity: "error" });
+  }
 }
 
 function legacyVectorSweepToMilliteslaRange(

@@ -6,7 +6,7 @@ import re
 from typing import Mapping, Sequence
 
 from fullmag.model.dynamics import LLG
-from fullmag.model.eigen import ModeTracking, coerce_k_sampling
+from fullmag.model.eigen import BiasFieldSweep, ModeTracking, coerce_k_sampling
 from fullmag.model.outputs import (
     SaveDispersion,
     SaveEigenDiagnostics,
@@ -1011,6 +1011,7 @@ class Eigenmodes:
     include_demag: bool = True
     k_sampling: object | None = None
     k_vector: tuple[float, float, float] | None = None
+    bias_field_sweep: BiasFieldSweep | None = None
     mode_tracking: ModeTracking | None = None
     normalization: str = "unit_l2"
     damping_policy: str = "ignore"
@@ -1079,7 +1080,12 @@ class Eigenmodes:
             if self.damping_policy != "ignore":
                 raise ValueError("periodic_airbox_k0 requires damping_policy='ignore'")
         # Validate alias / primary representation early to fail loudly.
-        coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+        sampling = coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+        if self.bias_field_sweep is not None:
+            if not isinstance(self.bias_field_sweep, BiasFieldSweep):
+                raise TypeError("bias_field_sweep must be a BiasFieldSweep")
+            if sampling != {"kind": "single", "k_vector": [0.0, 0.0, 0.0]}:
+                raise ValueError("bias_field_sweep requires k_sampling at single Gamma")
 
     def to_ir(self) -> dict[str, object]:
         target: dict[str, object]
@@ -1127,6 +1133,8 @@ class Eigenmodes:
         }
         if self.mode_tracking is not None:
             payload["mode_tracking"] = self.mode_tracking.to_ir()
+        if self.bias_field_sweep is not None:
+            payload["bias_field_sweep"] = self.bias_field_sweep.to_ir()
         return payload
 
 

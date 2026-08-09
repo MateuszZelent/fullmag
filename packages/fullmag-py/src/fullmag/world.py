@@ -144,7 +144,7 @@ from fullmag.model.problem import (
 )
 from fullmag.model.discretization import FDM, FDMGrid, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.geometry import Box, Translate
-from fullmag.model.eigen import serialize_dispersion_validation, serialize_k0_kittel_validation
+from fullmag.model.eigen import BiasFieldSweep, serialize_dispersion_validation, serialize_k0_kittel_validation
 
 _MESH_SIZE_CALIBRATIONS = (
     "general_physics",
@@ -2399,6 +2399,7 @@ class EigenmodesStageSpec:
     damping_policy: str = "ignore"
     k_vector: tuple[float, float, float] | None = None
     k_sampling: object | None = None
+    bias_field_sweep: BiasFieldSweep | None = None
     bc: str | dict[str, object] = "free"
     magnetostatic_bc: str = "open"
 
@@ -2827,6 +2828,7 @@ def eigenmodes_stage(
     damping_policy: str = "ignore",
     k_vector: tuple[float, float, float] | None = None,
     k_sampling: object | None = None,
+    bias_field_sweep: BiasFieldSweep | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
 ) -> EigenmodesStageSpec:
@@ -2844,6 +2846,7 @@ def eigenmodes_stage(
         damping_policy=damping_policy,
         k_vector=k_vector,
         k_sampling=k_sampling,
+        bias_field_sweep=bias_field_sweep,
         bc=bc,
         magnetostatic_bc=magnetostatic_bc,
     )
@@ -3029,6 +3032,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_damping_policy=stage_spec.damping_policy,
                 eigen_k_vector=stage_spec.k_vector,
                 eigen_k_sampling=stage_spec.k_sampling,
+                eigen_bias_field_sweep=stage_spec.bias_field_sweep,
                 eigen_spin_wave_bc=stage_spec.bc,
                 eigen_magnetostatic_bc=stage_spec.magnetostatic_bc,
             ),
@@ -4045,6 +4049,7 @@ class StudyStagesBuilder:
         damping_policy: str = "ignore",
         k_vector: tuple[float, float, float] | None = None,
         k_sampling: object | None = None,
+        bias_field_sweep: BiasFieldSweep | None = None,
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
     ) -> "StudyStagesBuilder":
@@ -4063,6 +4068,7 @@ class StudyStagesBuilder:
                 damping_policy=damping_policy,
                 k_vector=k_vector,
                 k_sampling=k_sampling,
+                bias_field_sweep=bias_field_sweep,
                 bc=bc,
                 magnetostatic_bc=magnetostatic_bc,
             )
@@ -5427,6 +5433,7 @@ class StudyBuilder:
         damping_policy: str = "ignore",
         k_vector: tuple[float, float, float] | None = None,
         k_sampling: object | None = None,
+        bias_field_sweep: BiasFieldSweep | None = None,
         bc: str = "free",
         magnetostatic_bc: str = "open",
     ) -> Any:
@@ -5444,6 +5451,7 @@ class StudyBuilder:
             damping_policy=damping_policy,
             k_vector=k_vector,
             k_sampling=k_sampling,
+            bias_field_sweep=bias_field_sweep,
             bc=bc,
             magnetostatic_bc=magnetostatic_bc,
         )
@@ -6204,7 +6212,13 @@ def dispersion_validation(validation: object) -> None:
 
 
 def k0_kittel_validation(validation: object) -> None:
-    """Attach modal k=0 Kittel field-sweep validation intent."""
+    """Attach post-solve modal k=0 Kittel validation metadata."""
+    warnings.warn(
+        "k0_kittel_validation is post-solve validation metadata; "
+        "use BiasFieldSweep to request a physical bias-field scan",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     runtime_metadata(
         "k0_kittel_validation",
         serialize_k0_kittel_validation(validation),
@@ -7822,6 +7836,7 @@ def _build_problem(
     eigen_damping_policy: str = "ignore",
     eigen_k_vector: tuple[float, float, float] | None = None,
     eigen_k_sampling: object | None = None,
+    eigen_bias_field_sweep: BiasFieldSweep | None = None,
     eigen_spin_wave_bc: str | dict[str, object] = "free",
     eigen_magnetostatic_bc: str = "open",
     frequency_frequencies_hz: Sequence[float] = (1.0e9,),
@@ -8007,6 +8022,7 @@ def _build_problem(
             magnetostatic_bc=eigen_magnetostatic_bc,
             k_sampling=eigen_k_sampling,
             k_vector=eigen_k_vector,
+            bias_field_sweep=eigen_bias_field_sweep,
             dynamics=dynamics,
         )
     elif study_kind == "frequency_response":
@@ -8473,6 +8489,7 @@ def eigenmodes(
     damping_policy: str = "ignore",
     k_vector: tuple[float, float, float] | None = None,
     k_sampling: object | None = None,
+    bias_field_sweep: BiasFieldSweep | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
 ) -> Any:
@@ -8518,6 +8535,7 @@ def eigenmodes(
         eigen_normalization=normalization,
         eigen_damping_policy=damping_policy,
         eigen_k_sampling=k_sampling,
+        eigen_bias_field_sweep=bias_field_sweep,
         eigen_k_vector=k_vector,
         eigen_spin_wave_bc=bc,
         eigen_magnetostatic_bc=magnetostatic_bc,

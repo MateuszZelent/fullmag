@@ -35,6 +35,62 @@ fn planar_monitor_previous_payload_defaults_to_no_monitors() {
 }
 
 #[test]
+fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples() {
+    let mut encoded = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    encoded["study"] = serde_json::json!({
+        "kind": "eigenmodes",
+        "dynamics": {"kind": "llg", "gyromagnetic_ratio": 221100.0, "integrator": "auto"},
+        "operator": {"kind": "linearized_llg", "include_demag": true},
+        "count": 1,
+        "target": {"kind": "lowest"},
+        "equilibrium": {"kind": "provided"},
+        "k_sampling": {"kind": "single", "k_vector": [0.0, 0.0, 0.0]},
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "spin_wave_bc": {"kind": "periodic", "pair_ids": []},
+        "magnetostatic_bc": "periodic_airbox_k0",
+        "sampling": {"outputs": []},
+        "bias_field_sweep": {
+            "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+            "equilibrium_policy": "relax_each",
+            "ordering": "declared",
+            "continuation_seed": "initial_state"
+        }
+    });
+
+    let parsed: ProblemIR = serde_json::from_value(encoded.clone())
+        .expect("bias-field sweep is canonical Eigenmodes IR");
+    assert_eq!(
+        serde_json::to_value(parsed).unwrap()["study"]["bias_field_sweep"],
+        encoded["study"]["bias_field_sweep"],
+    );
+
+    encoded["study"]["bias_field_sweep"]["samples_a_per_m"] = serde_json::json!([]);
+    let invalid: ProblemIR = serde_json::from_value(encoded.clone())
+        .expect("empty sample payload still reaches canonical validation");
+    assert!(invalid
+        .validate()
+        .expect_err("empty bias field sweep must fail closed")
+        .iter()
+        .any(|reason| reason.contains("eigenmodes.bias_field_sweep")),);
+
+    encoded["study"]["bias_field_sweep"]["samples_a_per_m"] =
+        serde_json::json!([["NaN", 0.0, 0.0]]);
+    assert!(
+        serde_json::from_value::<ProblemIR>(encoded.clone()).is_err(),
+        "NaN bias-field samples must fail closed"
+    );
+
+    encoded["study"]["bias_field_sweep"]["samples_a_per_m"] =
+        serde_json::json!([[12500.0, 0.0, 0.0]]);
+    encoded["study"]["bias_field_sweep"]["field_units"] = serde_json::json!("T");
+    assert!(
+        serde_json::from_value::<ProblemIR>(encoded).is_err(),
+        "bias-field sweep accepts A/m only"
+    );
+}
+
+#[test]
 fn planar_monitor_validation_accepts_physical_targets_and_all_operators() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.planar_monitors = vec![
@@ -761,8 +817,7 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
         ["density_of_states_per_spin_Jinv_m3"] = serde_json::json!(2.0);
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
-        ["capacitance_formula_version"] =
-            serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
+        ["capacitance_formula_version"] = serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
     let transient: ProblemIR =
         serde_json::from_value(transient_value.clone()).expect("transient M3 IR should decode");
     let mut transient = transient;
@@ -801,8 +856,9 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
         .any(|error| error.contains("unsupported capacitance_formula_version")));
 
     let mut unsupported_sml = transient.clone();
-    if let SpinInterfaceIR::MixingConductance { formula_version, .. } =
-        &mut unsupported_sml.spin_transport_modules[0].interfaces[0]
+    if let SpinInterfaceIR::MixingConductance {
+        formula_version, ..
+    } = &mut unsupported_sml.spin_transport_modules[0].interfaces[0]
     {
         *formula_version = "magnetoelectronic.fullmag.v1".to_string();
     }
@@ -4219,9 +4275,23 @@ fn managed_runtime_device_override_has_a_separate_validated_identity() {
         .validate()
         .expect("a typed managed launcher override must preserve valid authored intent");
 
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".into(),
+        serde_json::json!({
+            "device": "cpu",
+            "source": "managed_launcher",
+            "fallback_reason": "gpu_modal_device_krylov_unavailable",
+        }),
+    );
+    problem
+        .validate()
+        .expect("a managed CPU fallback may carry an explicit stable reason");
+
     for invalid in [
         serde_json::json!({"device": "auto", "source": "managed_launcher"}),
         serde_json::json!({"device": "cpu", "source": "unknown"}),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher", "fallback_reason": ""}),
+        serde_json::json!({"device": "gpu", "source": "managed_launcher", "fallback_reason": "gpu_modal_device_krylov_unavailable"}),
         serde_json::json!("cpu"),
     ] {
         let mut rejected = problem.clone();
@@ -4520,6 +4590,7 @@ fn execution_plan_ir_serializes() {
         provenance: ProvenancePlanIR {
             notes: vec!["planner stub".to_string()],
             integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
         },
     };
 
@@ -4563,6 +4634,7 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
         k_sampling: Some(KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
@@ -4608,6 +4680,7 @@ fn unsampled_time_evolution_is_valid_but_eigenmodes_require_outputs() {
         k_sampling: Some(KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
@@ -4675,6 +4748,7 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
             samples_per_segment: vec![2],
             closed: false,
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
@@ -4767,6 +4841,7 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
         },
         equilibrium: EquilibriumSourceIR::Provided,
         k_sampling: Some(sampling),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
@@ -4821,6 +4896,7 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
             samples_per_segment: vec![2, 3],
             closed: true,
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
@@ -5732,6 +5808,7 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         target: EigenTargetIR::Lowest,
         equilibrium: EquilibriumSourceIR::Provided,
         k_sampling: None,
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
@@ -5800,9 +5877,9 @@ fn canonical_mumax3_zhang_li_requires_source_g_factor() {
     let errors = ir
         .validate()
         .expect_err("MuMax3-compatible Zhang-Li must reject non-source g");
-    assert!(errors.iter().any(|error| {
-        error.contains("zhang_li.mumax3.v1") && error.contains("lande_g=2.0")
-    }));
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("zhang_li.mumax3.v1") && error.contains("lande_g=2.0") }));
 }
 
 #[test]

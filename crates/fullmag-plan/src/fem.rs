@@ -1,7 +1,8 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, DomainFrameIR,
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
-    FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
+    FemEigenBiasFieldSamplePlanIR, FemEigenDispersionValidationIR, FemEigenEngineIR,
+    FemEigenExecutionResolutionIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
     MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
@@ -482,19 +483,6 @@ fn k_sampling_is_gamma_only(k_sampling: &Option<fullmag_ir::KSamplingIR>) -> boo
     })
 }
 
-fn allows_k0_kittel_synthetic_demag_factor(
-    validation: &Option<FemEigenK0KittelValidationIR>,
-    k_sampling: &Option<fullmag_ir::KSamplingIR>,
-) -> bool {
-    validation.as_ref().is_some_and(|validation| {
-        validation.kind == "k0_kittel_field_sweep"
-            && validation.case_id.as_deref() == Some("K0-3")
-            && validation.demag_kind.as_deref() == Some("synthetic_demag_factor")
-            && validation.model == "thin_film_in_plane"
-            && k_sampling_is_gamma_only(k_sampling)
-    })
-}
-
 fn vector_dot(lhs: [f64; 3], rhs: [f64; 3]) -> f64 {
     lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2]
 }
@@ -943,8 +931,7 @@ fn materialize_fem_spin_torque_target_masks(
         }
         element_mask[start..end].fill(true);
     }
-    if !node_mask.iter().any(|selected| *selected)
-        || !element_mask.iter().any(|selected| *selected)
+    if !node_mask.iter().any(|selected| *selected) || !element_mask.iter().any(|selected| *selected)
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -960,7 +947,13 @@ fn materialize_fem_spin_torque_target_masks(
 mod spin_torque_target_tests {
     use super::*;
 
-    fn segment(object_id: &str, node_start: u32, node_count: u32, element_start: u32, element_count: u32) -> fullmag_ir::FemObjectSegmentIR {
+    fn segment(
+        object_id: &str,
+        node_start: u32,
+        node_count: u32,
+        element_start: u32,
+        element_count: u32,
+    ) -> fullmag_ir::FemObjectSegmentIR {
         fullmag_ir::FemObjectSegmentIR {
             object_id: object_id.to_string(),
             geometry_id: None,
@@ -981,16 +974,14 @@ mod spin_torque_target_tests {
         };
         let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
 
-        let (nodes, elements) = materialize_fem_spin_torque_target_masks(
-            &target,
-            8,
-            2,
-            &segments,
-            &[],
-        )
-        .expect("resolved FEM object target");
+        let (nodes, elements) =
+            materialize_fem_spin_torque_target_masks(&target, 8, 2, &segments, &[])
+                .expect("resolved FEM object target");
 
-        assert_eq!(nodes, vec![false, false, false, false, true, true, true, true]);
+        assert_eq!(
+            nodes,
+            vec![false, false, false, false, true, true, true, true]
+        );
         assert_eq!(elements, vec![false, true]);
     }
 
@@ -2954,7 +2945,133 @@ pub(crate) fn plan_fem(
                     resolved_integrator: integrator,
                 }
             }),
+            fem_eigen_execution_resolution: None,
         },
+    })
+}
+
+fn parse_fem_eigen_runtime_device(
+    value: Option<&str>,
+    metadata_key: &str,
+) -> Result<fullmag_ir::ExecutionDevice, PlanError> {
+    match value.unwrap_or("auto") {
+        "auto" => Ok(fullmag_ir::ExecutionDevice::Auto),
+        "cpu" => Ok(fullmag_ir::ExecutionDevice::Cpu),
+        "cuda" | "gpu" => Ok(fullmag_ir::ExecutionDevice::Gpu),
+        value => Err(PlanError {
+            reasons: vec![format!(
+                "fem_eigen.k0_periodic_airbox_unsupported_device: {metadata_key}.device='{value}'; expected auto, cpu, cuda, or gpu; fallback=none"
+            )],
+        }),
+    }
+}
+
+fn resolve_k0_periodic_airbox_execution(
+    problem: &ProblemIR,
+) -> Result<FemEigenExecutionResolutionIR, PlanError> {
+    const GPU_UNAVAILABLE_FALLBACK_REASON: &str = "gpu_modal_device_krylov_unavailable";
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.k0_periodic_airbox_requires_strict_execution_mode; fallback=none"
+                    .to_string(),
+            ],
+        });
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.k0_periodic_airbox_requires_double_precision; fallback=none".to_string(),
+            ],
+        });
+    }
+
+    let requested_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_selection",
+    )?;
+    let runtime_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_device_override")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_device_override",
+    )?;
+    let runtime_fallback_reason = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(|value| value.get("fallback_reason"))
+        .and_then(serde_json::Value::as_str);
+
+    let (resolved_device, resolved_engine, fallback_reason, selection_reason) =
+        match requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => (
+                fullmag_ir::ExecutionDevice::Cpu,
+                FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                None,
+                "fem_eigen.k0_periodic_airbox.explicit_cpu",
+            ),
+            fullmag_ir::ExecutionDevice::Gpu => (
+                fullmag_ir::ExecutionDevice::Gpu,
+                FemEigenEngineIR::GpuModalDeviceKrylov,
+                None,
+                "fem_eigen.k0_periodic_airbox.explicit_gpu",
+            ),
+            fullmag_ir::ExecutionDevice::Auto => match runtime_device {
+                fullmag_ir::ExecutionDevice::Gpu => (
+                    fullmag_ir::ExecutionDevice::Gpu,
+                    FemEigenEngineIR::GpuModalDeviceKrylov,
+                    None,
+                    "fem_eigen.k0_periodic_airbox.auto_runtime_gpu",
+                ),
+                fullmag_ir::ExecutionDevice::Cpu => match runtime_fallback_reason {
+                    None => (
+                        fullmag_ir::ExecutionDevice::Cpu,
+                        FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                        None,
+                        "fem_eigen.k0_periodic_airbox.auto_runtime_cpu",
+                    ),
+                    Some(GPU_UNAVAILABLE_FALLBACK_REASON) => (
+                        fullmag_ir::ExecutionDevice::Cpu,
+                        FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                        Some(GPU_UNAVAILABLE_FALLBACK_REASON.to_string()),
+                        "fem_eigen.k0_periodic_airbox.auto_gpu_unavailable_cpu_fallback",
+                    ),
+                    Some(reason) => {
+                        return Err(PlanError {
+                        reasons: vec![format!(
+                            "fem_eigen.k0_periodic_airbox_unsupported_fallback_reason: '{reason}'; fallback=none"
+                        )],
+                        });
+                    }
+                },
+                fullmag_ir::ExecutionDevice::Auto => (
+                    fullmag_ir::ExecutionDevice::Cpu,
+                    FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                    None,
+                    "fem_eigen.k0_periodic_airbox.auto_default_cpu",
+                ),
+            },
+        };
+
+    Ok(FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device,
+        requested_precision: problem.backend_policy.execution_precision,
+        resolved_precision: ExecutionPrecision::Double,
+        requested_engine: FemEigenEngineIR::Auto,
+        resolved_engine,
+        fallback_used: fallback_reason.is_some(),
+        fallback_reason,
+        selection_reason: selection_reason.to_string(),
     })
 }
 
@@ -2983,9 +3100,11 @@ pub(crate) fn plan_fem_eigen(
         target,
         equilibrium,
         k_sampling,
+        bias_field_sweep,
         normalization,
         damping_policy,
         spin_wave_bc,
+        magnetostatic_bc,
         mode_tracking,
         ..
     } = &problem.study
@@ -3244,7 +3363,6 @@ pub(crate) fn plan_fem_eigen(
             fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         )
         && !allows_low_k_de_bv_analytic_reference(&dispersion_validation)
-        && !allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
     {
         errors.push(
             "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary."
@@ -3540,6 +3658,31 @@ pub(crate) fn plan_fem_eigen(
         });
     }
 
+    let execution_resolution =
+        if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+            Some(resolve_k0_periodic_airbox_execution(problem)?)
+        } else {
+            None
+        };
+    let bias_field_samples = bias_field_sweep
+        .as_ref()
+        .map(|sweep| {
+            sweep
+                .samples_a_per_m
+                .iter()
+                .enumerate()
+                .map(
+                    |(sample_index, field_a_per_m)| FemEigenBiasFieldSamplePlanIR {
+                        sample_index: sample_index as u32,
+                        field_a_per_m: *field_a_per_m,
+                        equilibrium_policy: sweep.equilibrium_policy,
+                        continuation_seed: sweep.continuation_seed,
+                    },
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+
     let fem_plan = FemEigenPlanIR {
         mesh_name: mesh_name.clone(),
         mesh_source,
@@ -3558,6 +3701,7 @@ pub(crate) fn plan_fem_eigen(
         target: target.clone(),
         equilibrium: equilibrium.clone(),
         k_sampling: k_sampling.clone(),
+        bias_field_samples,
         normalization: *normalization,
         damping_policy: *damping_policy,
         enable_exchange,
@@ -3597,8 +3741,18 @@ pub(crate) fn plan_fem_eigen(
             external_field.is_some()
         ),
         study_note,
-        "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work"
-            .to_string(),
+        execution_resolution.as_ref().map_or_else(
+            || "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work".to_string(),
+            |resolution| format!(
+                "FEM K0 periodic-airbox execution resolved: requested_device={:?}, resolved_device={:?}, requested_engine={:?}, resolved_engine={:?}, fallback_used={}, selection_reason={}",
+                resolution.requested_device,
+                resolution.resolved_device,
+                resolution.requested_engine,
+                resolution.resolved_engine,
+                resolution.fallback_used,
+                resolution.selection_reason,
+            ),
+        ),
     ];
     for field_plan in &material_field_plans {
         provenance_notes.extend(field_plan.warnings.iter().cloned());
@@ -3619,6 +3773,7 @@ pub(crate) fn plan_fem_eigen(
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
             integrator_resolution: None,
+            fem_eigen_execution_resolution: execution_resolution,
         },
     })
 }
@@ -3743,6 +3898,7 @@ pub(crate) fn plan_fem_frequency_response(
         target: fullmag_ir::EigenTargetIR::Lowest,
         equilibrium: equilibrium.clone(),
         k_sampling: eigen_proxy_k_sampling,
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: *damping_policy,
         spin_wave_bc: eigen_proxy_spin_wave_bc,
@@ -3848,6 +4004,7 @@ pub(crate) fn plan_fem_frequency_response(
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
             integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
         },
     })
 }

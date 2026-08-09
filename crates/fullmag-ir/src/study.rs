@@ -1320,6 +1320,29 @@ pub enum KSamplingIR {
     },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BiasFieldSweepEquilibriumPolicyIR {
+    RelaxEach,
+    Continuation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BiasFieldSweepContinuationSeedIR {
+    PreviousAcceptedEquilibrium,
+    InitialState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BiasFieldSweepIR {
+    pub samples_a_per_m: Vec<[f64; 3]>,
+    pub equilibrium_policy: BiasFieldSweepEquilibriumPolicyIR,
+    pub ordering: String,
+    pub continuation_seed: BiasFieldSweepContinuationSeedIR,
+}
+
 impl KSamplingIR {
     pub fn is_single_gamma(&self) -> bool {
         matches!(
@@ -1425,6 +1448,8 @@ pub enum StudyIR {
         equilibrium: EquilibriumSourceIR,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         k_sampling: Option<KSamplingIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bias_field_sweep: Option<BiasFieldSweepIR>,
         normalization: EigenNormalizationIR,
         damping_policy: EigenDampingPolicyIR,
         /// Spin-wave boundary condition applied to the eigenvalue operator.

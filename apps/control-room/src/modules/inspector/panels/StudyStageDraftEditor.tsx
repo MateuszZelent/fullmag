@@ -484,15 +484,35 @@ function EigenmodesStageDraftFields({
           value={draft.target}
           onChange={(event) => onUpdate({ target: event.target.value })}
         >
+          <option value="lowest">Lowest frequency</option>
+          <option value="nearest">Nearest frequency</option>
+          <option value="frequency_window">Frequency window</option>
           <option value="smallest_magnitude">Smallest magnitude</option>
           <option value="largest_magnitude">Largest magnitude</option>
           <option value="smallest_real">Smallest real</option>
           <option value="largest_real">Largest real</option>
           <option value="smallest_imaginary">Smallest imaginary</option>
           <option value="largest_imaginary">Largest imaginary</option>
-          <option value="near_frequency">Near frequency</option>
+          {draft.target === "near_frequency" ? (
+            <option value="near_frequency">Near frequency (legacy)</option>
+          ) : null}
         </FormField>
-        {draft.target === "near_frequency" ? (
+        {draft.target === "frequency_window" ? (
+          <>
+            <FormField
+              label="Frequency min"
+              unit="Hz"
+              value={draft.frequencyMin}
+              onChange={(event) => onUpdate({ frequencyMin: event.target.value })}
+            />
+            <FormField
+              label="Frequency max"
+              unit="Hz"
+              value={draft.frequencyMax}
+              onChange={(event) => onUpdate({ frequencyMax: event.target.value })}
+            />
+          </>
+        ) : draft.target === "nearest" || draft.target === "near_frequency" ? (
           <FormField
             label="Shift frequency"
             hint={frequencyDraftPreview(draft.targetFrequency)}
@@ -520,6 +540,43 @@ function EigenmodesStageDraftFields({
         view="overview"
       />
       <FormField
+        label="Bias field scan"
+        type="textarea"
+        unit="A/m"
+        hint="One declared row per line: [Hx, Hy, Hz] A/m. Leave empty for a single calculation."
+        rows={3}
+        value={draft.biasFieldSamplesApm}
+        onChange={(event) => onUpdate({ biasFieldSamplesApm: event.target.value })}
+      />
+      {draft.biasFieldSamplesApm.trim() ? (
+        <>
+          <FormField
+            label="Equilibrium policy"
+            type="select"
+            value={draft.biasFieldEquilibriumPolicy}
+            onChange={(event) =>
+              onUpdate({ biasFieldEquilibriumPolicy: event.target.value })
+            }
+          >
+            <option value="relax_each">Relax each sample</option>
+            <option value="continuation">Continuation</option>
+          </FormField>
+          <FormField
+            label="Continuation seed"
+            type="select"
+            value={draft.biasFieldContinuationSeed}
+            onChange={(event) =>
+              onUpdate({ biasFieldContinuationSeed: event.target.value })
+            }
+          >
+            <option value="initial_state">Initial state</option>
+            <option value="previous_accepted_equilibrium">
+              Previous accepted equilibrium
+            </option>
+          </FormField>
+        </>
+      ) : null}
+      <FormField
         label="Mode count"
         value={draft.count}
         onChange={(event) => onUpdate({ count: event.target.value })}
@@ -530,15 +587,35 @@ function EigenmodesStageDraftFields({
         value={draft.target}
         onChange={(event) => onUpdate({ target: event.target.value })}
       >
+        <option value="lowest">Lowest frequency</option>
+        <option value="nearest">Nearest frequency</option>
+        <option value="frequency_window">Frequency window</option>
         <option value="smallest_magnitude">Smallest magnitude</option>
         <option value="largest_magnitude">Largest magnitude</option>
         <option value="smallest_real">Smallest real</option>
         <option value="largest_real">Largest real</option>
         <option value="smallest_imaginary">Smallest imaginary</option>
         <option value="largest_imaginary">Largest imaginary</option>
-        <option value="near_frequency">Near frequency</option>
+        {draft.target === "near_frequency" ? (
+          <option value="near_frequency">Near frequency (legacy)</option>
+        ) : null}
       </FormField>
-      {draft.target === "near_frequency" ? (
+      {draft.target === "frequency_window" ? (
+        <>
+          <FormField
+            label="Frequency min"
+            unit="Hz"
+            value={draft.frequencyMin}
+            onChange={(event) => onUpdate({ frequencyMin: event.target.value })}
+          />
+          <FormField
+            label="Frequency max"
+            unit="Hz"
+            value={draft.frequencyMax}
+            onChange={(event) => onUpdate({ frequencyMax: event.target.value })}
+          />
+        </>
+      ) : draft.target === "nearest" || draft.target === "near_frequency" ? (
         <FormField
           label="Shift frequency"
           hint={frequencyDraftPreview(draft.targetFrequency)}
@@ -770,27 +847,10 @@ function SpectralStageDraftFields({
             </FormField>
           ) : null}
           {draft.kind === "frequency_response" ? (
-            <FormField
-              label="Solver method"
-              type="select"
-              value={draft.solverMethod}
-              onChange={(event) =>
-                onUpdate({ solverMethod: event.target.value })
-              }
-            >
-              <option value="auto">Auto</option>
-              <option value="dense_reference">Dense reference</option>
-              <option value="cpu_sparse_direct">CPU sparse direct</option>
-              <option value="full_coupled_field_split">
-                Full coupled field split
-              </option>
-              <option value="schur_reduced">Schur reduced</option>
-              <option value="modal_reduced">Modal reduced</option>
-              <option value="gpu_operator_host_krylov">
-                GPU operator host Krylov
-              </option>
-              <option value="gpu_device_krylov">GPU device Krylov</option>
-            </FormField>
+            <div className="fm-study-stage-note">
+              Solver implementation is resolved from device, precision,
+              certificates, and active capabilities.
+            </div>
           ) : null}
           <FormField
             label="Include demag"

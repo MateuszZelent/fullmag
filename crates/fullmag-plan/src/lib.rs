@@ -115,6 +115,18 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
             _ => fem::plan_fem(problem, resolved_backend),
         },
         BackendTarget::Fdm => {
+            if let StudyIR::Eigenmodes {
+                bias_field_sweep: Some(_),
+                ..
+            } = problem.study
+            {
+                return Err(PlanError {
+                    reasons: vec![
+                        "eigenmodes.bias_field_sweep_requires_fem_backend; fallback=none"
+                            .to_string(),
+                    ],
+                });
+            }
             if matches!(problem.study, StudyIR::Eigenmodes { .. }) {
                 return Err(PlanError {
                     reasons: vec![

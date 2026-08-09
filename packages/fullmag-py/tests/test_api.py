@@ -4963,6 +4963,56 @@ class ProblemApiTests(unittest.TestCase):
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('operator="full_2x2"', rewritten)
 
+    def test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent(self) -> None:
+        for device in ("cpu", "cuda"):
+            script = f"""
+            import fullmag as fm
+
+            study = fm.study("stage_bias_field_sweep_{device}")
+            study.engine("fem")
+            study.device("{device}", precision="double")
+            body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+            body.Ms = 800e3
+            body.Aex = 13e-12
+            body.alpha = 0.0
+            body.m = fm.texture.uniform(1, 0, 0)
+            study.save("spectrum")
+            study.stages.add_eigenmodes(
+                count=4,
+                target="frequency_window",
+                frequency_min=100e6,
+                frequency_max=5e9,
+                include_demag=True,
+                k_vector=(0.0, 0.0, 0.0),
+                bc="periodic",
+                magnetostatic_bc="periodic_airbox_k0",
+                bias_field_sweep=fm.BiasFieldSweep(
+                    samples_a_per_m=[(12_500.0, 0.0, 0.0), (25_000.0, 0.0, 0.0)],
+                    equilibrium_policy="relax_each",
+                    continuation_seed="initial_state",
+                ),
+            )
+            """
+            with TemporaryDirectory() as tmp_dir:
+                path = Path(tmp_dir) / f"bias_field_sweep_{device}.py"
+                path.write_text(textwrap.dedent(script), encoding="utf-8")
+                loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            study_ir = loaded.stages[0].problem.to_ir()["study"]
+            self.assertEqual(study_ir["bias_field_sweep"]["samples_a_per_m"], [
+                [12_500.0, 0.0, 0.0],
+                [25_000.0, 0.0, 0.0],
+            ])
+            self.assertEqual(
+                loaded.stages[0].problem.to_ir()["problem_meta"]["runtime_metadata"]
+                ["runtime_selection"]["device"],
+                device,
+            )
+            self.assertIn(
+                "BiasFieldSweep(",
+                rewrite_loaded_problem_script(loaded)["rendered_source"],
+            )
+
     def test_study_builder_eigenmodes_forwards_operator(self) -> None:
         builder = flat_world.study("immediate_eigen_operator")
 

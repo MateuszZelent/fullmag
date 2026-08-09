@@ -25,6 +25,31 @@ def test_scene_document_round_trips_eigenmode_periodic_airbox_k0() -> None:
     assert rebuilt["stages"][0]["eigen_magnetostatic_bc"] == "periodic_airbox_k0"
 
 
+def test_scene_document_preserves_declared_bias_field_sweep_order() -> None:
+    builder = {
+        "stages": [
+            {
+                "kind": "eigenmodes",
+                "bias_field_sweep": {
+                    "samples_a_per_m": [
+                        [12_500.0, 0.0, 0.0],
+                        [25_000.0, 0.0, 0.0],
+                        [50_000.0, 0.0, 0.0],
+                    ],
+                    "equilibrium_policy": "continuation",
+                    "ordering": "declared",
+                    "continuation_seed": "previous_accepted_equilibrium",
+                },
+            }
+        ]
+    }
+
+    scene = build_scene_document_from_builder(builder)
+    rebuilt = build_builder_from_scene_document(scene)
+
+    assert rebuilt["stages"][0]["bias_field_sweep"] == builder["stages"][0]["bias_field_sweep"]
+
+
 def test_scene_document_exports_and_reloads_canonical_k0_problem_ir(tmp_path: Path) -> None:
     source = tmp_path / "k0.py"
     source.write_text(
