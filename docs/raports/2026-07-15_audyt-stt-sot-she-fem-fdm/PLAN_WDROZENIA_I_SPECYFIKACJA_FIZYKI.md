@@ -9634,3 +9634,42 @@ zagęszczeniu 3-D. Nie jest to dowód produkcyjnej FDM cell-integrated
 convolution, solved-current/Oersted w normalnym runtime, projekcji źródła,
 airbox sequence, GPU/device-resident transportu ani dynamicznego
 `J_c(m_stage)`; te bramy pozostają otwarte.
+
+## 32.108. Native CPU stage-provider callback RK/FSAL/rollback (2026-08-09)
+
+Zrealizowano mechanizm P4 na granicy natywnego CPU RK, bez zmiany istniejących
+struktur `*_v1` planu FEM. Nowy append-only symbol
+`fullmag_fem_backend_set_stage_oersted_callback_v1` przyjmuje wersjonowany
+callback, który dla każdego RHS dostaje dokładne `m_stage`, `t_stage` oraz
+`stage_identity` i musi zwrócić kompletny nodalny `H_oe [A/m]` oraz rewizję
+źródła. Opcjonalne hooki `begin_attempt`, `commit_attempt` i
+`rollback_attempt` są własnością interakcji Oersteda; `RkStepTransaction`
+przywraca przy odrzuceniu pola, tożsamość i cache, a GPU odrzuca callback
+fail-closed do czasu realizacji device-resident.
+
+Dowód wykonano w zarządzanym obrazie `fem-cpu`:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-cpu-only-contract
+fem_oersted_contract ........ PASS
+fem_state_io_contract ...... PASS
+fem_snapshot_contract ...... PASS
+fem_rk_explicit_contract ... PASS
+fem_stt_contract ........... PASS
+fem_thermal_brown_contract . PASS
+fem_relaxation_* ........... PASS
+```
+
+`fem_rk_explicit_contract` sprawdza trzy niezależne przypadki: (1) RK4
+wywołuje callback dla wszystkich stage i zaakceptowanego endpointu, a stan
+magnetyzacji zgadza się z niezależną dynamiczną referencją; (2) adaptacyjny
+RK23 wykonuje `begin = rejected + 1`, dokładnie jeden `commit` i jeden
+`rollback` na każdą odrzuconą próbę, z ciągłymi identyfikatorami prób; (3)
+awaria po kandydacie zachowuje magnetyzację i wykonuje rollback callbacku.
+
+Jest to zielona bramka mechanizmu natywnego callbacku i transakcji, nie pełne
+P4/P5: publiczny planner nadal nie wiąże callbacku z rzeczywistym
+`ConservativeCurrentView`/RT0 transportem `J_c(m_stage)`, nie ma jeszcze
+provenance stage-source w artefakcie, GPU/device-resident, M2/`external_lead`,
+airbox/energia ani porównania solved-current FEM↔FDM/MuMax/BORIS. Capability
+pozostaje `reference_executable`/`semantic_only` zgodnie z macierzą.

@@ -23,6 +23,7 @@ bool evaluate_rk_stage_rhs(
     Context &ctx,
     const std::vector<double> &m_state,
     double evaluation_time_s,
+    uint64_t stage_identity,
     StepperWorkspace &ws,
     std::vector<double> &out_k,
     double *out_max_rhs,
@@ -42,7 +43,8 @@ bool evaluate_rk_stage_rhs(
             out_demag_energy,
             true,
             timings,
-            error)) {
+            error,
+            stage_identity)) {
         return false;
     }
     double max_rhs = 0.0;

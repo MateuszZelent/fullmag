@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,7 @@ bool evaluate_rk_stage_rhs(
     Context &ctx,
     const std::vector<double> &m_state,
     double evaluation_time_s,
+    uint64_t stage_identity,
     StepperWorkspace &ws,
     std::vector<double> &out_k,
     double *out_max_rhs,

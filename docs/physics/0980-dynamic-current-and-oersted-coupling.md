@@ -235,9 +235,22 @@ to the RHS state they describe.
 
 The current FEM invariant-source gate is deliberately weaker than this full
 stage contract. It allows repeated RHS reads only for one exact immutable view
-identity and rejects a changed key; it does not yet provide a callback into the
-native RK tableau, FSAL across distinct stage identities, device rollback, or a
-magnetization-dependent refresh. Those remain qualification gates.
+identity and rejects a changed key; it does not provide the transport solve,
+RT0 certificate, device callback, or magnetization-dependent planner binding
+required for production. Those remain qualification gates.
+
+The native CPU path now exposes an append-only stage-provider hook outside the
+legacy plan ABI. Its evaluator receives the exact `m_stage`, `t_stage`, and a
+deterministic `stage_identity`, and must return a complete nodal `H_oe [A/m]`
+buffer plus a source-state revision. Optional `begin_attempt`,
+`commit_attempt`, and `rollback_attempt` hooks surround the adaptive RK
+attempt; a rejected attempt therefore cannot leave a solved-current cache
+published. The hook is exercised for every CPU tableau stage and accepted
+endpoint refresh, with FSAL reusing only the already accepted endpoint field.
+The GPU path rejects the hook until a device-resident implementation is
+qualified. This closes the native transaction/cadence mechanism, but it is not
+itself a transport solve, RT0 certificate, public `J_c(m_stage)` planner
+binding, or production capability promotion.
 
 (symbols-and-si-units)=
 ### 2.7 Symbols and SI units
@@ -1352,6 +1365,11 @@ source-cut. Jest to implementacja natywnego adaptera i kontraktu FFI, ale nie
 kwalifikacja produkcyjna: planner nie wytwarza
 automatycznie stage snapshotu ani `external_lead`, a OE-F2, etapowe sprzężenie LLG,
 niezależnych badań `h`/airbox ani lane GPU.
+
+Append-only native CPU hook `fullmag_fem_backend_set_stage_oersted_callback_v1`
+jest już właścicielem samego mechanizmu stage cadence/FSAL/rollback, ale nie
+jest jeszcze wywoływany przez publiczny planner jako rozwiązanie transportu
+`J_c(m_stage)`; ten binding i certyfikowana provenance pozostają osobną bramą.
 
 ### 4.6.2. OE-F2 w normalnym runtime FEM CPU/double (zaimplementowana ścieżka ograniczona, 2026-08-08)
 

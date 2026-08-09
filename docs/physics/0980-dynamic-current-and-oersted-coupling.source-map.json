@@ -111,6 +111,18 @@
       "responsibility": "Append-only OE-F2 mixed H(curl) x H1 request/result on the exact RT0 view; publishes coefficients, compatible element fields, nodal H1 projection, residuals, gauge and source identity without modifying legacy ABI."
     },
     {
+      "id": "fem-stage-oersted-callback-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_set_stage_oersted_callback_v1",
+      "responsibility": "Append-only native CPU RK stage-provider hook with exact magnetization/time/stage identity and transactional begin/commit/rollback callbacks; GPU remains fail-closed."
+    },
+    {
+      "id": "fem-stage-oersted-callback-runtime",
+      "path": "backends/fem/cpu/mfem/interactions/oersted.cpp",
+      "symbol": "materialize_oersted_stage_field",
+      "responsibility": "Evaluate the stage provider, validate finite nodal H_oe, retain source revision and stage identity, and own attempt transaction hooks."
+    },
+    {
       "id": "fem-rt0-oersted-native-adapter",
       "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
       "symbol": "solve_rt0",
