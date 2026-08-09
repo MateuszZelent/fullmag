@@ -9930,3 +9930,32 @@ GPU/device-resident i brak transferów w hot loop, FDM GPU, airbox/energia/p,
 zbieżność h/p, porównanie ilościowe FEM↔FDM oraz MuMax/BORIS/NeuralMag, a także
 aktualizacja macierzy capability. Do tych bram status pozostaje
 **bounded CPU/double, not production-qualified**.
+
+## 32.113. Publiczny Python/ProblemIR dla FEM M2 (2026-08-09)
+
+Zamknięto konkretny drift authoringu, który uniemożliwiał nawet utworzenie
+publicznego problemu FEM M2. `ChargeSolverPolicy` akceptuje teraz wyłącznie
+pary operator--residual z dwóch jawnych rodzin: FDM (`fv_charge_harmonic_v1`
+lub `fdm_coupled_charge_spin_fv_block_gmres.v1`) oraz FEM
+(`fem_charge_conforming_h1_p1.transparent.v1` lub
+`fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1`). `Problem.__post_init__`
+utrzymuje identyczność operatora ładunku i spinu; FDM M2 nadal wymaga
+`reciprocal_nonlinear`, natomiast ograniczony FEM M2 jest jednym liniowym
+solve'em i odrzuca tę politykę przed plannerem.
+
+Dodano publiczny fixture `fem_reciprocal_problem` obejmujący geometrię, materiał
+anizotropowy, elektrodę, spin transport, `DriftDiffusionSpinTorque`, jawny
+operator FEM i `Problem.to_ir(requested_backend=fem)`. Fixture sprawdza, że
+operator i wersja pozostają w obu gałęziach IR oraz że polityka Picarda nie jest
+przemycana do FEM.
+
+Dowody:
+
+```text
+packages/fullmag-py transport/current/authoring/runtime tests   55 passed, 45 subtests passed
+Python compileall (zmienione moduły i fixture)                   PASS
+```
+
+To zamyka tylko authoring gate. Nie zmienia kwalifikacji runtime: nadal
+wymagany jest publiczny fixture Python/IR → planner → świeży managed FEM M2
+solve, pełny provenance i niezależna walidacja ilościowa.

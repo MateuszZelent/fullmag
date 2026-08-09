@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 import fullmag as fm
@@ -25,6 +26,159 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             gauge=fm.ChargePotentialGauge("dirichlet_reference"),
             solver=fm.ChargeSolverPolicy(),
         )
+
+    def fem_reciprocal_problem(self) -> fm.Problem:
+        """Build the smallest public FEM M2 authoring fixture."""
+
+        geometry = fm.Box(size=(30e-9, 20e-9, 2e-9), name="layer")
+        magnet = fm.Ferromagnet(
+            name="layer",
+            geometry=geometry,
+            material=fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01),
+        )
+        charge_operator = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+        charge = fm.CurrentTransport(
+            name="charge",
+            model="ohmic_poisson",
+            coupling="bidirectional",
+            domain=[self.fm],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    self.fm,
+                    fm.ChargeTransportMaterial(
+                        4.0e6,
+                        sigma_parallel_Spm=4.0e6,
+                        sigma_perpendicular_Spm=4.0e6,
+                        sigma_AHE_Spm=0.0,
+                    ),
+                )
+            ],
+            boundaries=[fm.VoltageElectrode("top", [self.top], potential_V=0.01)],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(
+                engine="block_gmres",
+                operator_version=charge_operator,
+            ),
+        )
+        spin = fm.SpinDriftDiffusion(
+            id="spin",
+            current_source_id="charge",
+            domain=[self.fm],
+            materials=[
+                fm.SpinTransportMaterialAssignment(
+                    self.fm,
+                    fm.SpinTransportMaterial(
+                        sigma_s_Spm=3.0e6,
+                        polarization_p=0.2,
+                        theta_sh=0.1,
+                        lambda_sf_m=4.0e-9,
+                        lambda_j_m=1.0e-9,
+                        lambda_phi_m=1.0e-9,
+                    ),
+                )
+            ],
+            solver=fm.SpinSolverPolicy(
+                engine="block_gmres",
+                operator_version=charge_operator,
+            ),
+            requested_execution=fm.TransportExecution(
+                discretization="fem",
+                device="cpu",
+                precision="double",
+                execution_mode="strict",
+            ),
+        )
+        return fm.Problem(
+            name="fem_m2_authoring",
+            magnets=[magnet],
+            energy=[fm.Exchange()],
+            current_modules=[charge],
+            spin_transports=[spin],
+            spin_torques=[fm.DriftDiffusionSpinTorque("torque", "spin", self.fm)],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(),
+                outputs=[fm.SaveScalar("E_total", every=1.0e-12)],
+            ),
+            discretization=fm.DiscretizationHints(
+                fem=fm.FEM(order=1, maximum_element_size=20e-9),
+            ),
+        )
+
+    def test_public_problem_accepts_bounded_fem_m2_operator_without_nonlinear_policy(self) -> None:
+        problem = self.fem_reciprocal_problem()
+        ir = problem.to_ir(
+            requested_backend=fm.BackendTarget.FEM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            include_geometry_assets=False,
+        )
+        self.assertEqual(
+            ir["current_modules"][0]["solver"]["operator_version"],
+            "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1",
+        )
+        self.assertEqual(
+            ir["spin_transport_modules"][0]["solver"]["operator_version"],
+            "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1",
+        )
+        self.assertNotIn(
+            "reciprocal_nonlinear",
+            ir["spin_transport_modules"][0]["solver"],
+        )
+
+    def test_public_fem_m2_rejects_fdm_nonlinear_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not accept reciprocal_nonlinear"):
+            fm.Problem(
+                name="invalid_fem_m2_authoring",
+                magnets=self.fem_reciprocal_problem().magnets,
+                energy=[fm.Exchange()],
+                current_modules=[
+                    fm.CurrentTransport(
+                        name="charge",
+                        model="ohmic_poisson",
+                        coupling="bidirectional",
+                        domain=[self.fm],
+                        materials=[
+                            fm.ChargeTransportMaterialAssignment(
+                                self.fm,
+                                fm.ChargeTransportMaterial(
+                                    4.0e6,
+                                    sigma_parallel_Spm=4.0e6,
+                                    sigma_perpendicular_Spm=4.0e6,
+                                    sigma_AHE_Spm=0.0,
+                                ),
+                            )
+                        ],
+                        boundaries=[
+                            fm.VoltageElectrode(
+                                "top", [self.top], potential_V=0.01
+                            )
+                        ],
+                        gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+                        solver=fm.ChargeSolverPolicy(
+                            engine="block_gmres",
+                            operator_version=(
+                                "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                            ),
+                        ),
+                    )
+                ],
+                spin_transports=[
+                    replace(
+                        self.fem_reciprocal_problem().spin_transports[0],
+                        solver=fm.SpinSolverPolicy(
+                            engine="block_gmres",
+                            operator_version=(
+                                "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                            ),
+                            reciprocal_nonlinear=fm.ReciprocalNonlinearSolverPolicy(),
+                        ),
+                    )
+                ],
+                study=fm.TimeEvolution(
+                    dynamics=fm.LLG(),
+                    outputs=[fm.SaveScalar("E_total", every=1.0e-12)],
+                ),
+            )
 
     def test_m1_module_serializes_canonical_typed_contract(self) -> None:
         solve = fm.SpinDriftDiffusion(

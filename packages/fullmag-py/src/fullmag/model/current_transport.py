@@ -35,6 +35,9 @@ CONSERVATIVE_CURRENT_BOUNDARY_ROLES = {
     "closure_interface",
 }
 
+_FEM_CHARGE_OPERATOR_VERSION = "fem_charge_conforming_h1_p1.transparent.v1"
+_FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+
 _TIME_ENVELOPE_TYPES = (
     ConstantEnvelope,
     SinusoidalEnvelope,
@@ -252,14 +255,20 @@ class ChargeSolverPolicy:
         absolute = require_finite(self.absolute_tolerance, "absolute_tolerance")
         if relative <= 0.0 or absolute < 0.0:
             raise ValueError("charge solver requires relative_tolerance > 0 and absolute_tolerance >= 0")
-        expected_operator = (
-            "fv_charge_harmonic_v1"
-            if engine == "cg"
-            else "fdm_coupled_charge_spin_fv_block_gmres.v1"
-        )
-        if self.operator_version != expected_operator:
+        if engine == "cg":
+            allowed_operators = {
+                "fv_charge_harmonic_v1",
+                _FEM_CHARGE_OPERATOR_VERSION,
+            }
+        else:
+            allowed_operators = {
+                "fdm_coupled_charge_spin_fv_block_gmres.v1",
+                _FEM_M2_OPERATOR_VERSION,
+            }
+        if self.operator_version not in allowed_operators:
+            expected = " or ".join(sorted(allowed_operators))
             raise ValueError(
-                f"charge solver engine '{engine}' requires operator_version='{expected_operator}'"
+                f"charge solver engine '{engine}' requires operator_version in {{{expected}}}"
             )
         object.__setattr__(self, "engine", engine)
         object.__setattr__(self, "relative_tolerance", relative)
@@ -267,7 +276,7 @@ class ChargeSolverPolicy:
         object.__setattr__(self, "max_iterations", require_positive_int(self.max_iterations, "max_iterations"))
         expected_residual = (
             "charge_balance_integrated_l2.v1"
-            if engine == "cg"
+            if self.operator_version in {"fv_charge_harmonic_v1", _FEM_CHARGE_OPERATOR_VERSION}
             else "transport_balance_integrated_l2.v1"
         )
         physical_residual = self.physical_residual_version
@@ -278,11 +287,6 @@ class ChargeSolverPolicy:
         if physical_residual != expected_residual:
             raise ValueError("unsupported charge physical_residual_version for engine")
         object.__setattr__(self, "physical_residual_version", physical_residual)
-        if self.operator_version not in {
-            "fv_charge_harmonic_v1",
-            "fdm_coupled_charge_spin_fv_block_gmres.v1",
-        }:
-            raise ValueError("unsupported charge operator_version")
 
     def to_ir(self) -> dict[str, object]:
         return {

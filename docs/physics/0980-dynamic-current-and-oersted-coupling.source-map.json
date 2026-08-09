@@ -89,6 +89,18 @@
       "responsibility": "Own the optional canonical dimensionless time envelope for prescribed and complete current sources and preserve it in ProblemIR/script round-trip."
     },
     {
+      "id": "python-charge-solver-fem-operators",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ChargeSolverPolicy",
+      "responsibility": "Accept only the versioned FDM or FEM charge operators paired with their residual contract; FEM M1/M2 authoring cannot be rejected as an FDM-only policy."
+    },
+    {
+      "id": "python-fem-m2-problem-validation",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "Keep reciprocal FEM M2 on the linear conforming-H1 operator without FDM reciprocal_nonlinear policy, while preserving the FDM M2 policy and charge/spin operator identity."
+    },
+    {
       "id": "runner-time-envelope-evaluator",
       "path": "crates/fullmag-runner/src/time_envelope.rs",
       "symbol": "evaluate_time_envelope",
@@ -320,6 +332,16 @@
         "meaning": "dimensionless source multiplier evaluated at the exact stage time",
         "backend_support": "Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU/external-lead remain open",
         "problem_ir": "current_modules[].time_envelope"
+      },
+      {
+        "python": "SpinDriftDiffusion.solver.operator_version",
+        "type": "str",
+        "default": "backend-specific, explicit",
+        "si_unit": "1",
+        "validation": "FDM M2 wymaga fdm_coupled_charge_spin_fv_block_gmres.v1; ograniczony FEM M2 wymaga fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1; operator ładunku i spinu muszą być identyczne.",
+        "meaning": "versioned charge--spin operator identity",
+        "backend_support": "FDM CPU/double reference lub FEM CPU/double bounded callback; GPU remains fail-closed",
+        "problem_ir": "spin_transport_modules[].solver.operator_version"
       },
       {
         "python": "OerstedField.source",

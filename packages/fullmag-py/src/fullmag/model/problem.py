@@ -66,6 +66,9 @@ IR_VERSION = "0.3.0"
 API_VERSION = "0.3.0"
 SERIALIZER_VERSION = "0.3.0"
 
+_FDM_M2_OPERATOR_VERSION = "fdm_coupled_charge_spin_fv_block_gmres.v1"
+_FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+
 _FEM_MESH_CACHE_VERSION = "v5"
 
 
@@ -1447,18 +1450,51 @@ class Problem:
                     raise ValueError(
                         "bidirectional charge-spin transport currently requires mode='steady'"
                     )
-                if module.solver.reciprocal_nonlinear is None:
-                    raise ValueError(
-                        "bidirectional charge-spin transport requires reciprocal_nonlinear solver policy"
+                fem_m2 = (
+                    module.solver.operator_version == _FEM_M2_OPERATOR_VERSION
+                    or (
+                        source_module.solver is not None
+                        and source_module.solver.operator_version == _FEM_M2_OPERATOR_VERSION
                     )
-                if (
-                    module.solver.operator_version
-                    != "fdm_coupled_charge_spin_fv_block_gmres.v1"
-                ):
-                    raise ValueError(
-                        "bidirectional charge-spin transport requires operator_version="
-                        "'fdm_coupled_charge_spin_fv_block_gmres.v1'"
-                    )
+                )
+                if fem_m2:
+                    if module.solver.operator_version != _FEM_M2_OPERATOR_VERSION:
+                        raise ValueError(
+                            "FEM bidirectional charge-spin transport requires spin "
+                            f"operator_version='{_FEM_M2_OPERATOR_VERSION}'"
+                        )
+                    if (
+                        source_module.solver is None
+                        or source_module.solver.operator_version != _FEM_M2_OPERATOR_VERSION
+                    ):
+                        raise ValueError(
+                            "FEM bidirectional charge-spin transport requires charge "
+                            f"operator_version='{_FEM_M2_OPERATOR_VERSION}'"
+                        )
+                    if module.solver.reciprocal_nonlinear is not None:
+                        raise ValueError(
+                            "bounded FEM bidirectional charge-spin transport does not "
+                            "accept reciprocal_nonlinear solver policy"
+                        )
+                else:
+                    if module.solver.reciprocal_nonlinear is None:
+                        raise ValueError(
+                            "FDM bidirectional charge-spin transport requires "
+                            "reciprocal_nonlinear solver policy"
+                        )
+                    if module.solver.operator_version != _FDM_M2_OPERATOR_VERSION:
+                        raise ValueError(
+                            "FDM bidirectional charge-spin transport requires "
+                            f"operator_version='{_FDM_M2_OPERATOR_VERSION}'"
+                        )
+                    if (
+                        source_module.solver is None
+                        or source_module.solver.operator_version != _FDM_M2_OPERATOR_VERSION
+                    ):
+                        raise ValueError(
+                            "FDM bidirectional charge-spin transport requires charge "
+                            f"operator_version='{_FDM_M2_OPERATOR_VERSION}'"
+                        )
             elif module.solver.reciprocal_nonlinear is not None:
                 raise ValueError(
                     "reciprocal_nonlinear solver policy requires a bidirectional CurrentTransport source"

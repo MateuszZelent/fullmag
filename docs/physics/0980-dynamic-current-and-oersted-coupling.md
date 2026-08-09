@@ -1122,6 +1122,15 @@ quadrature exposes a tagged deterministic FP64 policy rather than reusing
 Krylov fields. Python and UI script export must preserve every selected policy
 field and reject unavailable lanes before execution.
 
+Wzajemny M2 ma rozdzielone polityki numeryczne zależnie od jawnie wybranego
+operatora. FDM używa `fdm_coupled_charge_spin_fv_block_gmres.v1` wraz z
+`reciprocal_nonlinear`; ograniczony FEM CPU/double używa
+`fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1` jako jednego liniowego
+operatora blokowego i nie przyjmuje polityki Picarda. `ChargeSolverPolicy` oraz
+`Problem` sprawdzają zgodność operatora ładunku i spinu, więc poprawny FEM M2
+nie jest odrzucany jako konfiguracja FDM, a mieszanie tych wersji kończy się
+walidacją przed plannerem.
+
 ```python
 # %%
 from fullmag import CurrentTransport, OerstedField, SinusoidalEnvelope
@@ -1163,6 +1172,7 @@ drive = CurrentTransport(
 |---|---|---|---|---|---|---|---|
 | `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
 | `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` (`a(t)=1`) | `1` (multiplier); time fields `s`, frequency `Hz` | `All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.` | `dimensionless source multiplier evaluated at the exact stage time` | `Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU/external-lead remain open` | `current_modules[].time_envelope` |
+| `SpinDriftDiffusion.solver.operator_version` | `str` | `backend-specific, explicit` | `1` | FDM M2 wymaga fdm_coupled_charge_spin_fv_block_gmres.v1; ograniczony FEM M2 wymaga fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1; operator ładunku i spinu muszą być identyczne. | `versioned charge--spin operator identity` | `FDM CPU/double reference lub FEM CPU/double bounded callback; GPU remains fail-closed` | `spin_transport_modules[].solver.operator_version` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
 | `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; invariant-source cache is bounded and exact-key; external lead and magnetization-dependent stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
@@ -1731,6 +1741,8 @@ evidence that the approximation is accurate.
 | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and OE-F1/OE-F2 adapters |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | public current source and canonical time-envelope owner |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ChargeSolverPolicy` | versioned FDM/FEM charge-operator and residual validation |
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | preserve FDM M2 nonlinear policy versus bounded FEM M2 linear operator identity |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
 | `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
