@@ -1,0 +1,29 @@
+{
+  "schema_version": "fdm_multilayer_thresholds.v1",
+  "qualification_scope": "SP4-derived, not canonical SP4 qualification",
+  "units": {
+    "field": "A/m",
+    "dimensionless": "1"
+  },
+  "cpu_fp64_vs_direct": {
+    "rtol": 1e-10,
+    "atol_a_per_m": 1e-6
+  },
+  "cuda_fp64_vs_cpu": {
+    "rtol": 1e-8,
+    "atol_a_per_m": 1e-4
+  },
+  "cuda_fp32_vs_cuda_fp64": {
+    "weighted_rms_max": 2e-4,
+    "max_max": 5e-4
+  },
+  "transfer_moment_residual": {
+    "fp64": 1e-12,
+    "fp32": 5e-6
+  },
+  "energy_finite_difference_residual": {
+    "fp64": 1e-8,
+    "fp32": 5e-4
+  },
+  "field_floor": "max(1 A/m, 1e-8*H_scale)"
+}
