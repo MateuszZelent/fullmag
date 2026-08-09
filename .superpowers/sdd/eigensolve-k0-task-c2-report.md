@@ -44,3 +44,11 @@ env CARGO_TARGET_DIR=/dev/shm/fullmag-c2-target CARGO_INCREMENTAL=0 \
 Checkpoint C1+C2: `c3e18cf9a` (`feat(eigen): add canonical bias-field sweep contract`). Selektywny staging wymagał objęcia wspólnego hunku w `crates/fullmag-plan/src/fem.rs`, który łączy materializację C2 `bias_field_samples` z C1 `execution_resolution`. C2 korzysta również z dodanych przez C1 typów provenance w `crates/fullmag-ir/src/plan.rs`; commit C2 względem wcześniejszego `HEAD` bez nich nie kompilowałby się.
 
 Celowo pominięte, niestage’owane hunki C1/niezależne to przede wszystkim: `FemEigenEngineIR`, `FemEigenExecutionResolutionIR`, `resolve_k0_periodic_airbox_execution`, zmiany `ProvenancePlanIR`, fixture `k0_periodic_airbox_fem_eigen_ir`, rozszerzenia testów runtime-device oraz współdzielone hunki UI w `StudyStageAuthoringModel.ts` i `StudyStageDraftEditor.tsx`. Bez uprzedniego commitu C1 albo zgody na commit zależny od C1 nie istnieje technicznie spójny commit „wyłącznie C2”.
+
+## Poprawka review
+
+- Domyślny `DEFAULT_RUN_STAGE_DRAFT` ma komplet wartości `biasFieldSamplesApm`, `biasFieldEquilibriumPolicy` i `biasFieldContinuationSeed`, więc wszystkie merge paths `StudyStageDraft` zachowują poprawny typ.
+- Planner i walidacja IR fail-closed wymagają dla skanu: demagu, `periodic_airbox_k0`, exact Gamma, `ignore` damping, double precision, strict execution i PBC `[periodic, periodic, open]`; fully-periodic 3D dostaje osobny stabilny token, każdy z plannerskich tokenów kończy się `fallback=none`.
+- Każdy `FemEigenBiasFieldSamplePlanIR` dostaje własne, sklonowane `FemEigenExecutionResolutionIR`, przez co CPU/GPU requested/resolved provenance jest związane z próbą, a nie tylko planem nadrzędnym.
+- Inspector używa tabeli edytowalnych wierszy `[Hx, Hy, Hz] A/m` z Add sample/Remove zamiast textarea; walidacja modelu pozostaje inline i wymusza skończone wektory, kolejność deklaracji oraz Gamma-only.
+- `pnpm` nadal nie jest dostępny w środowisku (`command not found`), więc typecheck UI pozostaje zablokowany środowiskowo; nie zastępuje go twierdzenie o zielonym typechecku.

@@ -1193,6 +1193,50 @@ impl ProblemIR {
                         errors
                             .push("eigenmodes.bias_field_sweep_requires_single_gamma".to_string());
                     }
+                    if !operator.include_demag
+                        || !self
+                            .energy_terms
+                            .iter()
+                            .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+                    {
+                        errors.push("eigenmodes.bias_field_sweep_requires_demag".to_string());
+                    }
+                    if *magnetostatic_bc != MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0".to_string(),
+                        );
+                    }
+                    if *damping_policy != EigenDampingPolicyIR::Ignore {
+                        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
+                    }
+                    if self.backend_policy.execution_precision != ExecutionPrecision::Double {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep_requires_double_precision".to_string(),
+                        );
+                    }
+                    if self.validation_profile.execution_mode != ExecutionMode::Strict {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep_requires_strict_execution_mode"
+                                .to_string(),
+                        );
+                    }
+                    match &self.pbc {
+                        Some(periodicity)
+                            if periodicity.axes
+                                == [
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Open,
+                                ] => {}
+                        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
+                            errors.push(
+                                "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d".to_string(),
+                            );
+                        }
+                        _ => errors.push(
+                            "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z".to_string(),
+                        ),
+                    }
                 }
                 if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
                     if !operator.include_demag {

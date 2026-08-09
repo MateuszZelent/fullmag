@@ -1311,6 +1311,7 @@ pub struct FemEigenBiasFieldSamplePlanIR {
     pub field_a_per_m: [f64; 3],
     pub equilibrium_policy: crate::BiasFieldSweepEquilibriumPolicyIR,
     pub continuation_seed: crate::BiasFieldSweepContinuationSeedIR,
+    pub execution: FemEigenExecutionResolutionIR,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -539,15 +539,7 @@ function EigenmodesStageDraftFields({
         onUpdate={onUpdate}
         view="overview"
       />
-      <FormField
-        label="Bias field scan"
-        type="textarea"
-        unit="A/m"
-        hint="One declared row per line: [Hx, Hy, Hz] A/m. Leave empty for a single calculation."
-        rows={3}
-        value={draft.biasFieldSamplesApm}
-        onChange={(event) => onUpdate({ biasFieldSamplesApm: event.target.value })}
-      />
+      <BiasFieldSweepTable draft={draft} onUpdate={onUpdate} />
       {draft.biasFieldSamplesApm.trim() ? (
         <>
           <FormField
@@ -624,6 +616,65 @@ function EigenmodesStageDraftFields({
         />
       ) : null}
     </>
+  );
+}
+
+function BiasFieldSweepTable({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  const rows = draft.biasFieldSamplesApm
+    .split(/\n|;/)
+    .map((row) => row.trim())
+    .filter(Boolean)
+    .map((row) => row.split(",").map((value) => value.trim()));
+  const updateRows = (nextRows: string[][]) =>
+    onUpdate({ biasFieldSamplesApm: nextRows.map((row) => row.join(", ")).join("\n") });
+  return (
+    <div className="fm-study-bias-field-table" aria-label="Bias field scan">
+      <div className="fm-study-bias-field-table__header">
+        <strong>Bias field scan</strong>
+        <span>[Hx, Hy, Hz] A/m</span>
+        <button
+          type="button"
+          className="fm-button fm-button--secondary"
+          onClick={() => updateRows([...rows, ["0", "0", "0"]])}
+        >
+          Add sample
+        </button>
+      </div>
+      {rows.map((row, rowIndex) => (
+        <div className="fm-study-bias-field-table__row" key={`${row.join(":")}:${rowIndex}`}>
+          {["Hx", "Hy", "Hz"].map((label, component) => (
+            <label key={label}>
+              {label}
+              <input
+                aria-label={`${label} sample ${rowIndex + 1} A/m`}
+                value={row[component] ?? ""}
+                onChange={(event) => {
+                  const nextRows = rows.map((candidate) => [...candidate]);
+                  nextRows[rowIndex][component] = event.target.value;
+                  updateRows(nextRows);
+                }}
+              />
+            </label>
+          ))}
+          <button
+            type="button"
+            className="fm-button fm-button--secondary"
+            onClick={() => updateRows(rows.filter((_, index) => index !== rowIndex))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <p className="fm-study-bias-field-table__hint">
+        Samples retain declared order and must contain finite A/m values.
+      </p>
+    </div>
   );
 }
 

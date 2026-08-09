@@ -1086,6 +1086,14 @@ class Eigenmodes:
                 raise TypeError("bias_field_sweep must be a BiasFieldSweep")
             if sampling != {"kind": "single", "k_vector": [0.0, 0.0, 0.0]}:
                 raise ValueError("bias_field_sweep requires k_sampling at single Gamma")
+            if not self.include_demag:
+                raise ValueError("bias_field_sweep requires include_demag=True")
+            if magnetostatic_bc != "periodic_airbox_k0":
+                raise ValueError("bias_field_sweep requires magnetostatic_bc='periodic_airbox_k0'")
+            if _spin_wave_bc_kind(self.spin_wave_bc) != "periodic":
+                raise ValueError("bias_field_sweep requires spin_wave_bc='periodic'")
+            if self.damping_policy != "ignore":
+                raise ValueError("bias_field_sweep requires damping_policy='ignore'")
 
     def to_ir(self) -> dict[str, object]:
         target: dict[str, object]

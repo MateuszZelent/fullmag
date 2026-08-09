@@ -466,23 +466,6 @@ fn allows_low_k_de_bv_analytic_reference(
     })
 }
 
-fn k_sampling_is_gamma_only(k_sampling: &Option<fullmag_ir::KSamplingIR>) -> bool {
-    k_sampling.as_ref().is_none_or(|sampling| match sampling {
-        fullmag_ir::KSamplingIR::Single { k_vector } => k_vector
-            .iter()
-            .all(|component| component.is_finite() && component.abs() <= 1.0e-12),
-        fullmag_ir::KSamplingIR::Path { points, .. } => {
-            !points.is_empty()
-                && points.iter().all(|point| {
-                    point
-                        .k_vector
-                        .iter()
-                        .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
-                })
-        }
-    })
-}
-
 fn vector_dot(lhs: [f64; 3], rhs: [f64; 3]) -> f64 {
     lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2]
 }
@@ -3112,6 +3095,71 @@ pub(crate) fn plan_fem_eigen(
         unreachable!("plan_fem_eigen is only called for StudyIR::Eigenmodes");
     };
 
+    if bias_field_sweep.is_some() {
+        let mut reasons = Vec::new();
+        if !operator.include_demag
+            || !problem
+                .energy_terms
+                .iter()
+                .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+        {
+            reasons.push("eigenmodes.bias_field_sweep_requires_demag; fallback=none".to_string());
+        }
+        if *magnetostatic_bc != fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0; fallback=none"
+                    .to_string(),
+            );
+        }
+        if !matches!(
+            k_sampling,
+            Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0]
+            })
+        ) {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_single_gamma; fallback=none".to_string(),
+            );
+        }
+        if *damping_policy != fullmag_ir::EigenDampingPolicyIR::Ignore {
+            reasons
+                .push("eigenmodes.bias_field_sweep_requires_alpha_zero; fallback=none".to_string());
+        }
+        if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_double_precision; fallback=none".to_string(),
+            );
+        }
+        if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_strict_execution_mode; fallback=none"
+                    .to_string(),
+            );
+        }
+        match &problem.pbc {
+            Some(periodicity)
+                if periodicity.axes
+                    == [
+                        fullmag_ir::AxisBoundary::Periodic,
+                        fullmag_ir::AxisBoundary::Periodic,
+                        fullmag_ir::AxisBoundary::Open,
+                    ] => {}
+            Some(periodicity) if periodicity.axes[2] == fullmag_ir::AxisBoundary::Periodic => {
+                reasons.push(
+                    "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d; fallback=none"
+                        .to_string(),
+                );
+            }
+            _ => reasons.push(
+                "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z; fallback=none"
+                    .to_string(),
+            ),
+        }
+        if !reasons.is_empty() {
+            return Err(PlanError { reasons });
+        }
+    }
+
     let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
         .geometry
         .entries
@@ -3664,6 +3712,12 @@ pub(crate) fn plan_fem_eigen(
         } else {
             None
         };
+    let bias_execution = bias_field_sweep.as_ref().map(|_| {
+        execution_resolution
+            .as_ref()
+            .expect("validated bias-field sweeps always resolve periodic-airbox K0 execution")
+            .clone()
+    });
     let bias_field_samples = bias_field_sweep
         .as_ref()
         .map(|sweep| {
@@ -3677,6 +3731,9 @@ pub(crate) fn plan_fem_eigen(
                         field_a_per_m: *field_a_per_m,
                         equilibrium_policy: sweep.equilibrium_policy,
                         continuation_seed: sweep.continuation_seed,
+                        execution: bias_execution
+                            .clone()
+                            .expect("bias-field sample has an execution binding"),
                     },
                 )
                 .collect()
