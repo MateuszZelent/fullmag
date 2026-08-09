@@ -1241,6 +1241,12 @@ fn validate_current_transport(
             &format!("current_transports[{index}].conductivity_s_per_m"),
         )?;
     }
+    if let Some(envelope) = transport.time_envelope.as_ref() {
+        validate_time_envelope_path(
+            &format!("current_transports[{index}].time_envelope"),
+            envelope,
+        )?;
+    }
     match transport.model {
         CurrentTransportModel::PrescribedDensity => {
             if !transport.domain.is_empty()
@@ -2150,7 +2156,13 @@ fn validate_time_envelope(
     index: usize,
     envelope: &SceneTimeEnvelope,
 ) -> Result<(), SceneDocumentValidationError> {
-    let path = format!("spin_torques[{index}].drive.envelope");
+    validate_time_envelope_path(&format!("spin_torques[{index}].drive.envelope"), envelope)
+}
+
+fn validate_time_envelope_path(
+    path: &str,
+    envelope: &SceneTimeEnvelope,
+) -> Result<(), SceneDocumentValidationError> {
     match envelope {
         SceneTimeEnvelope::Constant { value } => finite(*value, &format!("{path}.value"))?,
         SceneTimeEnvelope::Sinusoidal {
@@ -3079,6 +3091,28 @@ mod tests {
         .unwrap();
 
         validate_scene_document(&scene).expect("complete graph must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_current_transport_time_envelope() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "transport",
+            "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0],
+            "time_envelope": {
+                "kind": "sinusoidal",
+                "amplitude": 0.25,
+                "frequency_hz": 2.0e9,
+                "phase_rad": 0.1,
+                "offset": 1.0
+            },
+            "solve_region": "body"
+        }]))
+        .unwrap();
+
+        validate_scene_document(&scene).expect("finite current source envelope must validate");
     }
 
     #[test]

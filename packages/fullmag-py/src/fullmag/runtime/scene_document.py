@@ -330,6 +330,11 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             else None
         ),
         solver=solver,
+        time_envelope=(
+            _decode_sot_envelope(entry["time_envelope"])
+            if entry.get("time_envelope") is not None
+            else None
+        ),
         conservative_current_view=(
             _decode_conservative_current_view(conservative_view_value)
             if conservative_view_value is not None

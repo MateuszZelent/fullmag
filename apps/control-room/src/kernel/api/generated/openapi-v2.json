@@ -9199,6 +9199,16 @@
                 "$ref": "#/components/schemas/SceneChargeSolverPolicy"
               }
             ]
+          },
+          "time_envelope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneTimeEnvelope"
+              }
+            ]
           }
         },
         "required": [

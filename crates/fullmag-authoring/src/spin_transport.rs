@@ -58,6 +58,8 @@ pub struct KnownSceneCurrentTransport {
     pub gauge: Option<SceneChargePotentialGauge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver: Option<SceneChargeSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<SceneTimeEnvelope>,
     /// Optional explicit accepted RT0/H(div) source descriptor.  It remains a
     /// JSON object at the scene boundary so every closure field survives UI
     /// round-trip; the planner performs mesh-exact typed validation.

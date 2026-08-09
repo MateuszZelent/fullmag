@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::time_envelope::evaluate_time_envelope;
 use fullmag_engine::fdm::cpu::transport::{
     biot_savart_midpoint_field, ChargeBoundaryCondition, ChargeBoundaryConditions, ChargeSolution,
     ChargeSolverConfig, CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields,
@@ -98,6 +99,7 @@ pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub charge_operator_version: String,
     pub spin_operator_version: String,
     pub torque_formula_version: Option<String>,
+    pub evaluated_envelope_multiplier: f64,
     pub state_revision: u64,
     pub operator_revision: u64,
 }
@@ -751,6 +753,7 @@ impl FdmSpinTransportWorkflow {
                     resolved,
                     descriptor,
                     magnetization,
+                    stage_time_s,
                 )?
             } else {
                 let descriptor = resolved
@@ -1501,7 +1504,7 @@ fn solve_coupled_module(
         materials,
         Some(descriptor.active_cells.clone()),
         CoupledChargeSpinBoundaryConditions {
-            charge: charge_boundary_conditions(&descriptor.charge_boundaries)?,
+            charge: charge_boundary_conditions(&descriptor.charge_boundaries, 1.0)?,
             spin: spin_boundary_conditions(&descriptor.spin_boundaries)?,
         },
     )
@@ -1635,6 +1638,7 @@ fn solve_coupled_module(
         charge_operator_version: descriptor.operator_version.clone(),
         spin_operator_version: descriptor.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
+        evaluated_envelope_multiplier: 1.0,
         state_revision,
         operator_revision,
     })
@@ -1961,9 +1965,16 @@ fn solve_module(
     resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
     descriptor: &ResolvedFdmSpinTransportIR,
     magnetization: &[[f64; 3]],
+    stage_time_s: f64,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
-    let (charge_solution, current_density_apm2, spin_problem) =
-        materialize_one_way_problem(grid, cell_size, descriptor, magnetization)?;
+    let evaluated_envelope_multiplier = source_envelope_multiplier(descriptor, stage_time_s)?;
+    let (charge_solution, current_density_apm2, spin_problem) = materialize_one_way_problem(
+        grid,
+        cell_size,
+        descriptor,
+        magnetization,
+        evaluated_envelope_multiplier,
+    )?;
     solve_one_way_snapshot(
         grid,
         cell_size,
@@ -1972,6 +1983,7 @@ fn solve_module(
         charge_solution,
         current_density_apm2,
         spin_problem,
+        evaluated_envelope_multiplier,
         state_revision(magnetization),
     )
 }
@@ -1996,8 +2008,14 @@ fn solve_transient_module(
     failure_injection: Option<CoupledFailureInjection>,
 ) -> Result<(FdmSpinTransportModuleSnapshot, TransientStageCandidate), RunError> {
     let steady = &descriptor.steady_operator;
-    let (charge_solution, current_density_apm2, spin_problem) =
-        materialize_one_way_problem(grid, cell_size, steady, magnetization)?;
+    let evaluated_envelope_multiplier = source_envelope_multiplier(steady, stage_time_s)?;
+    let (charge_solution, current_density_apm2, spin_problem) = materialize_one_way_problem(
+        grid,
+        cell_size,
+        steady,
+        magnetization,
+        evaluated_envelope_multiplier,
+    )?;
     if failure_injection == Some(CoupledFailureInjection::ChargeSolve)
         && stage == CoupledImexArk2Stage::ImplicitStageOne
     {
@@ -2165,6 +2183,7 @@ fn solve_transient_module(
         charge_operator_version: steady.charge_solver.operator_version.clone(),
         spin_operator_version: steady.spin_solver.operator_version.clone(),
         torque_formula_version: steady.torque_formula_version.clone(),
+        evaluated_envelope_multiplier,
         state_revision: candidate.state_revision,
         operator_revision: 0,
     };
@@ -2182,8 +2201,10 @@ fn materialize_one_way_problem(
     cell_size: CellSize,
     descriptor: &ResolvedFdmSpinTransportIR,
     magnetization: &[[f64; 3]],
+    envelope_multiplier: f64,
 ) -> Result<(ChargeSolution, Vec<[f64; 3]>, SpinDriftDiffusionProblem), RunError> {
-    let charge_boundary = charge_boundary_conditions(&descriptor.charge_boundaries)?;
+    let charge_boundary =
+        charge_boundary_conditions(&descriptor.charge_boundaries, envelope_multiplier)?;
     let charge_problem = StructuredChargeProblem::new(
         grid,
         cell_size,
@@ -2307,6 +2328,19 @@ fn materialize_one_way_problem(
     Ok((charge_solution, current_density_apm2, spin_problem))
 }
 
+fn source_envelope_multiplier(
+    descriptor: &ResolvedFdmSpinTransportIR,
+    stage_time_s: f64,
+) -> Result<f64, RunError> {
+    descriptor
+        .time_envelope
+        .as_ref()
+        .map(|envelope| evaluate_time_envelope(envelope, stage_time_s))
+        .transpose()
+        .map_err(run_error)
+        .map(|value| value.unwrap_or(1.0))
+}
+
 fn solve_one_way_snapshot(
     grid: GridShape,
     cell_size: CellSize,
@@ -2315,6 +2349,7 @@ fn solve_one_way_snapshot(
     charge_solution: ChargeSolution,
     current_density_apm2: Vec<[f64; 3]>,
     spin_problem: SpinDriftDiffusionProblem,
+    evaluated_envelope_multiplier: f64,
     state_revision_value: u64,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
     let spin_solution = spin_problem
@@ -2427,6 +2462,7 @@ fn solve_one_way_snapshot(
         charge_operator_version: descriptor.charge_solver.operator_version.clone(),
         spin_operator_version: descriptor.spin_solver.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
+        evaluated_envelope_multiplier,
         state_revision: state_revision_value,
         operator_revision: 0,
     })
@@ -2434,16 +2470,36 @@ fn solve_one_way_snapshot(
 
 fn charge_boundary_conditions(
     boundaries: &[fullmag_ir::ResolvedChargeBoundaryFaceIR],
+    source_multiplier: f64,
 ) -> Result<ChargeBoundaryConditions, RunError> {
+    if !source_multiplier.is_finite() {
+        return Err(run_error(
+            "FDM current-source time envelope evaluated to a non-finite multiplier",
+        ));
+    }
     let mut result = ChargeBoundaryConditions::default();
     for boundary in boundaries {
         let condition = match boundary.condition {
             ResolvedChargeBoundaryConditionIR::Voltage { potential_v } => {
-                ChargeBoundaryCondition::Voltage(potential_v)
+                let value = potential_v * source_multiplier;
+                if !value.is_finite() {
+                    return Err(run_error(
+                        "FDM current-source time envelope produced a non-finite voltage drive",
+                    ));
+                }
+                ChargeBoundaryCondition::Voltage(value)
             }
             ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
                 current_density_apm2,
-            } => ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(current_density_apm2),
+            } => {
+                let value = current_density_apm2 * source_multiplier;
+                if !value.is_finite() {
+                    return Err(run_error(
+                        "FDM current-source time envelope produced a non-finite current drive",
+                    ));
+                }
+                ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(value)
+            }
             ResolvedChargeBoundaryConditionIR::Insulating => ChargeBoundaryCondition::Insulating,
         };
         set_charge_face(&mut result, boundary.face, condition);
@@ -2545,6 +2601,7 @@ mod tests {
         let cells = 4;
         let descriptor = ResolvedFdmSpinTransportIR {
             descriptor_schema: "fullmag.fdm.spin_transport_descriptor.v1".into(),
+            time_envelope: None,
             charge_active_cells: vec![true; cells],
             charge_conductivity_spm: vec![2.0; cells],
             charge_boundaries: vec![
@@ -3396,6 +3453,30 @@ mod tests {
         assert_eq!(workflow.accepted().unwrap().revision, 1);
         workflow.rollback();
         assert_eq!(workflow.accepted().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn one_way_current_envelope_is_re_evaluated_at_each_fdm_stage() {
+        let mut plan = plan();
+        plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor")
+            .time_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 2.0 });
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("workflow construction")
+            .expect("spin workflow");
+        let evaluation = workflow
+            .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
+            .expect("stage solve");
+        let module = &evaluation.modules[0];
+        assert_eq!(module.evaluated_envelope_multiplier, 2.0);
+        for current in &module.current_density_apm2 {
+            assert!((current[0] + 1.0).abs() < 1.0e-10);
+        }
+        for (cell, potential) in module.potential_volts.iter().enumerate() {
+            assert!((*potential - 2.0 * (cell as f64 + 0.5) / 4.0).abs() < 1.0e-10);
+        }
     }
 
     fn analytical_direct_she_evaluation(nz: usize) -> (FdmPlanIR, FdmSpinTransportEvaluation) {

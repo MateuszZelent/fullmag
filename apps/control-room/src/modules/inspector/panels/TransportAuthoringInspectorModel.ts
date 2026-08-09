@@ -29,6 +29,7 @@ export interface CurrentTransportDraft {
   solverOperatorVersion: string;
   solverPhysicalResidualVersion: string;
   solverRelativeTolerance: string;
+  timeEnvelope: string;
 }
 
 export interface SpinTransportDraft {
@@ -65,6 +66,7 @@ export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
       "name",
       "model",
       "currentDensity",
+      "timeEnvelope",
       "conservativeCurrentView",
       "solveRegion",
       "coupling",
@@ -179,6 +181,7 @@ export function currentTransportDraft(value?: KnownSceneCurrentTransport | null)
     solverOperatorVersion: value?.solver?.operator_version ?? "fv_charge_harmonic_v1",
     solverPhysicalResidualVersion: value?.solver?.physical_residual_version ?? "charge_balance_integrated_l2.v1",
     solverRelativeTolerance: value?.solver?.linear.relative_tolerance.toString() ?? "1e-10",
+    timeEnvelope: pretty(value?.time_envelope ?? {}),
   };
 }
 
@@ -247,6 +250,8 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
   };
   if (model === "prescribed_density") {
     resource.current_density = json<number[]>(draft.currentDensity, "Current density");
+    const timeEnvelope = optionalJsonObject(draft.timeEnvelope, "Time envelope");
+    if (timeEnvelope) resource.time_envelope = timeEnvelope as NonNullable<KnownSceneCurrentTransport["time_envelope"]>;
     if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
     const conservativeCurrentView = optionalJsonObject(
       draft.conservativeCurrentView,
@@ -278,6 +283,8 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
     });
   }
   resource.boundaries = json(draft.boundaries, "Charge boundaries");
+  const timeEnvelope = optionalJsonObject(draft.timeEnvelope, "Time envelope");
+  if (timeEnvelope) resource.time_envelope = timeEnvelope as NonNullable<KnownSceneCurrentTransport["time_envelope"]>;
   resource.gauge = draft.gauge;
   resource.solver = {
     engine: draft.solverEngine.trim(),

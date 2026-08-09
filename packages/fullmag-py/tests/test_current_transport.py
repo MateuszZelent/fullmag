@@ -226,6 +226,54 @@ class CurrentTransportTests(unittest.TestCase):
         self.assertEqual(ir["gauge"], "dirichlet_reference")
         self.assertEqual(ir["solver"]["engine"], "cg")  # type: ignore[index]
 
+    def test_current_transport_time_envelope_round_trips_through_ir_scene_and_script(self) -> None:
+        conductor = fm.RegionRef("layer")
+        x_min = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
+        x_max = fm.SurfaceRef("layer", "x_max", (1.0, 0.0, 0.0))
+        transport = fm.CurrentTransport(
+            name="charge-envelope",
+            model="ohmic_poisson",
+            domain=[conductor],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    conductor,
+                    fm.ChargeTransportMaterial(sigma_Spm=5.8e7),
+                )
+            ],
+            boundaries=[
+                fm.VoltageElectrode("ground", [x_min], potential_V=0.0),
+                fm.VoltageElectrode("drive", [x_max], potential_V=0.1),
+            ],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(),
+            time_envelope=fm.SinusoidalEnvelope(
+                amplitude=0.25,
+                frequency_hz=2.0e9,
+                phase_rad=0.3,
+                offset=0.75,
+            ),
+        )
+        expected = {
+            "kind": "sinusoidal",
+            "amplitude": 0.25,
+            "frequency_hz": 2.0e9,
+            "phase_rad": 0.3,
+            "offset": 0.75,
+        }
+        self.assertEqual(transport.to_ir()["time_envelope"], expected)
+        scene = build_scene_document_from_builder(
+            {"revision": 3, "geometries": [], "current_modules": [transport.to_ir()]}
+        )
+        self.assertEqual(
+            build_builder_from_scene_document(scene)["current_modules"],
+            [transport.to_ir()],
+        )
+        rendered = _render_current_modules(
+            _base_problem(current_modules=[transport]), overrides={}, surface="flat"
+        )
+        rebuilt = eval(rendered[1], {"fm": fm})
+        self.assertEqual(rebuilt.to_ir(), transport.to_ir())
+
     def test_ohmic_poisson_rejects_ambiguous_legacy_definition(self) -> None:
         with self.assertRaisesRegex(ValueError, "complete charge contract"):
             fm.CurrentTransport(

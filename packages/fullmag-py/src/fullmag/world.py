@@ -82,6 +82,7 @@ from fullmag.model.spin_torque import (
     SlonczewskiSTT,
     SpinOrbitTorque,
     SpinTorqueModule,
+    TimeEnvelope,
     ZhangLiSTT,
     RegionRef,
 )
@@ -5356,6 +5357,7 @@ class StudyBuilder:
         boundaries: Sequence[ChargeBoundary] = (),
         gauge: ChargePotentialGauge | None = None,
         solver: ChargeSolverPolicy | None = None,
+        time_envelope: TimeEnvelope | None = None,
         conservative_current_view: ConservativeCurrentView | None = None,
     ) -> CurrentTransport:
         return current_transport(
@@ -5370,6 +5372,7 @@ class StudyBuilder:
             boundaries=boundaries,
             gauge=gauge,
             solver=solver,
+            time_envelope=time_envelope,
             conservative_current_view=conservative_current_view,
         )
 
@@ -7476,6 +7479,7 @@ def current_transport(
     boundaries: Sequence[ChargeBoundary] = (),
     gauge: ChargePotentialGauge | None = None,
     solver: ChargeSolverPolicy | None = None,
+    time_envelope: TimeEnvelope | None = None,
     conservative_current_view: ConservativeCurrentView | None = None,
 ) -> CurrentTransport:
     module = CurrentTransport(
@@ -7490,6 +7494,7 @@ def current_transport(
         boundaries=boundaries,
         gauge=gauge,
         solver=solver,
+        time_envelope=time_envelope,
         conservative_current_view=conservative_current_view,
     )
     _state._current_modules.append(module)

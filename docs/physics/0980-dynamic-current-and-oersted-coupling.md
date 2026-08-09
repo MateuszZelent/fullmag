@@ -1067,9 +1067,13 @@ field and reject unavailable lanes before execution.
 
 ```python
 # %%
-from fullmag import CurrentTransport, OerstedField
+from fullmag import CurrentTransport, OerstedField, SinusoidalEnvelope
 
-drive = CurrentTransport(name="drive", current_density=(1.0e10, 0.0, 0.0))
+drive = CurrentTransport(
+    name="drive",
+    current_density=(1.0e10, 0.0, 0.0),
+    time_envelope=SinusoidalEnvelope(amplitude=0.2, frequency_hz=2.0e9, offset=1.0),
+)
 oersted = OerstedField(source=drive.name)
 assert oersted.model == "from_current_solution"
 ```
@@ -1101,6 +1105,7 @@ drive = CurrentTransport(
 | Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
+| `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` (`a(t)=1`) | `1` (multiplier); time fields `s`, frequency `Hz` | `All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.` | `dimensionless source multiplier evaluated at the exact stage time` | `Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU/external-lead remain open` | `current_modules[].time_envelope` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
 | `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; invariant-source cache is bounded and exact-key; external lead and magnetization-dependent stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
@@ -1154,9 +1159,10 @@ RK callback evaluates the selected OE-F1 or OE-F2 realization on that view and
 publishes a bounded stage observation. The older
 `steady_source_invariant.v1` policy remains only for compatibility fixtures and
 is not the public stage-coupling resolution. The callback still carries a
-one-way charge solve: it is not reciprocal M2, does not publish `torque_stt`
-into LLG, and does not re-evaluate an authored transient envelope. External
-leads, device-resident execution and production convergence remain open.
+one-way charge solve: it is not reciprocal M2 and does not publish `torque_stt`
+into LLG. A supported `CurrentTransport.time_envelope` is evaluated at the
+exact callback stage time. External leads, device-resident execution and
+production convergence remain open.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1272,8 +1278,8 @@ fixtures. The managed gate runs both the exact-key cache test and the
 coordinator test covering a changed stage, rejected-attempt rollback,
 retry/FSAL-style reuse and final refresh. The native callback contract and the
 public planner binding are now separately qualified; they still do not prove
-external-lead closure, reciprocal M2, transient envelope re-evaluation,
-device-resident execution, or production capability.
+external-lead closure, reciprocal M2, torque RHS, Tabulated artifact
+resolution, device-resident execution, or production capability.
 
 ### 4.6. Public ABI boundary and implemented append-only RT0/OE-F1 extension (audyt 2026-08-08)
 
@@ -1298,8 +1304,8 @@ aktywna wyłącznie wtedy, gdy resolved plan dostarczy kompletny descriptor
 promuje jeszcze ogólnej capability FEM dynamic-Oersted. Planner akceptuje
 wyłącznie jawnie dostarczony `closed_geometry` i dla one-way Oersted wiąże go z
 `fem_stage_oersted_callback.v1`; callback nie tworzy jednak reciprocal
-magnetization-dependent transportu ani torque RHS. Pełne M2, envelope stage,
-external-lead i GPU pozostają otwarte.
+magnetization-dependent transportu ani torque RHS. Pełne M2, torque RHS,
+tabulowane envelope'y, external-lead i GPU pozostają otwarte.
 Managed testy operatorów i nowy natywny kontrakt
 RT0→OE-F1 są dowodem wykonania kontrolowanej ścieżki CPU/double, nie dowodem
 kwalifikacji produkcyjnego łańcucha.
@@ -1474,9 +1480,33 @@ ostatnią zaakceptowaną obserwację, `source_view_identity_digest` i hash pola.
 Przy żądaniu GPU, reciprocal M2, `external_lead` albo transportowego
 `torque_stt` planner/runtime kończy się fail-closed. Callback zwraca wyłącznie
 `H_oe`; `torque_stt` pozostaje opublikowanym wynikiem transportu i nie jest
-jeszcze składnikiem RHS LLG. Brak tu również ponownej ewaluacji autorskiego
-czasowego envelope'u prądu; ten parametr wymaga osobnej, jawnej reprezentacji
-źródła stage.
+jeszcze składnikiem RHS LLG.
+
+### 4.6.4. Stage-time envelope dla one-way FEM/FDM CPU
+
+`CurrentTransport.time_envelope` jest jednym, bezwymiarowym mnożnikiem źródła
+`a(t)`. Python, SceneDocument, `ProblemIR` i planner przechowują ten sam
+tagged union; brak envelope'u oznacza `a(t)=1`. W ograniczonej ścieżce FEM
+CPU/double `StageOerstedProvider` ewaluje `a(t_stage)` przed solve'em. Dla
+`closed_geometry` skaluje wyłącznie bazowe source-cut `potential_drop_v`, a
+nie wartości referencyjne Dirichleta używane do wyboru gauge'u. Solver zwraca
+więc `J_c(t_stage)=a(t_stage)J_c^0`, a operator OE-F1/OE-F2 liczy
+`H_oe(t_stage)` z tego samego zamkniętego widoku. To zachowuje SI, konserwację
+RT0 i tożsamość źródła; każde stage ma nowy digest rewizji.
+
+FDM CPU one-way stosuje ten sam evaluator w `materialize_one_way_problem`.
+Mnożnik skaluje warunki Voltage i OutwardNormalCurrentDensity przed solve'em,
+pozostawiając Insulating bez zmian; wynik publikuje
+`evaluated_envelope_multiplier` w `transport/spin_transport_accepted.json`,
+razem z czasem oceny. Wspólny evaluator obsługuje Constant, Sinusoidal, Pulse,
+PiecewiseLinear i Sinc. `Tabulated` wymaga jeszcze resolvera artefaktu; nie ma
+niejawnego zera, interpolacji ani hold.
+
+Planner normalizuje sinusoidę/puls do istniejącego kontraktu czasowego dla
+cylindrycznych, jawnych źródeł Oersteda. Dynamiczne PWL/Sinc/Tabulated w tym
+obniżeniu, non-cylindrical static midpoint, reciprocal M2, `external_lead`,
+torque RHS, FEM GPU i FDM GPU pozostają fail-closed. Ta implementacja jest
+wykonywalną bramą one-way CPU, nie kwalifikacją produkcyjnego STT/SOT/SHE.
 
 Świeże dowody zarządzane:
 
@@ -1540,8 +1570,8 @@ at least nominal minus `0.25` in the asymptotic range.
 ## 6. Completeness checklist
 
 - [x] Bounded FEM steady one-way solved-current midpoint reference slice (not OE-T0/F1/F2)
-- [ ] Python current/Oersted model and complete envelope export (`closed_geometry`
-  descriptor round-trip is implemented; full stage/envelope coupling remains open)
+- [x] Python current/Oersted model and complete envelope export (`closed_geometry`
+  descriptor round-trip plus one-way CPU stage evaluation)
 - [ ] ProblemIR, planner, migration, and scoped capabilities
 - [ ] Conservative FDM charge and face-to-cell publication
 - [ ] FDM direct oracle and cell-integrated CPU/CUDA FFT
@@ -1552,7 +1582,8 @@ at least nominal minus `0.25` in the asymptotic range.
 - [x] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate (bounded CPU/double solver and nodal LLG bridge; GPU, p/airbox and production gates remain open)
 - [x] Invariant-source cache gate for one-way closed_geometry (exact-key RHS reuse and changed-identity rejection)
 - [x] Native CPU stage-provider cadence, FSAL, rollback, and accepted observation
-- [ ] Magnetization-dependent/reciprocal `J_c(m_stage)`, envelope re-evaluation, and torque RHS
+- [x] One-way CPU FEM/FDM stage-time envelope evaluation and multiplier provenance
+- [ ] Magnetization-dependent/reciprocal `J_c(m_stage)` and torque RHS
 - [ ] Correct external/nonvariational energy semantics
 - [ ] Quantities, provenance, typed API, and UI inspectors
 - [ ] Cross-backend convergence and managed/browser proof
@@ -1590,6 +1621,7 @@ evidence that the approximation is accurate.
 | `backends/fem/cpu/mfem/interactions/oersted.cpp` | `materialize_oersted_stage_field` | native stage callback evaluation and transaction ownership |
 | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and OE-F1/OE-F2 adapters |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | public current source and canonical time-envelope owner |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
 | `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
@@ -1598,6 +1630,8 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
 | `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `from_plan` | public CPU stage binding to the RT0/OE-F1/OE-F2 adapter, exact stage identity and fail-closed transaction callbacks |
+| `crates/fullmag-runner/src/time_envelope.rs` | `evaluate_time_envelope` | shared exact-stage evaluation of source envelopes; unresolved tabulated artifacts fail closed |
+| `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `source_envelope_multiplier` | FDM CPU one-way source scaling and accepted multiplier provenance |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | append-only callback provenance artifact with accepted/last stage observation and field digest |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |

@@ -140,6 +140,12 @@ def build_parity_fixtures() -> dict[tuple[str, str], list[dict[str, object]]]:
             absolute_tolerance=3.0e-12,
             max_iterations=321,
         ),
+        time_envelope=fm.SinusoidalEnvelope(
+            amplitude=0.35,
+            frequency_hz=1.2e9,
+            phase_rad=-0.4,
+            offset=0.9,
+        ),
         conservative_current_view=closed_view,
     )
     charge_reciprocal = fm.CurrentTransport(
@@ -361,10 +367,20 @@ def build_parity_fixtures() -> dict[tuple[str, str], list[dict[str, object]]]:
                 name="drive",
                 current_density=(-4.2e10, 1.5e10, -2.0e9),
                 solve_region="film",
+                time_envelope=fm.PulseEnvelope(
+                    amplitude=0.8,
+                    t_on_s=2.0e-12,
+                    t_off_s=5.0e-12,
+                ),
             )}, fm.CurrentTransport(
                 name="drive",
                 current_density=(-4.2e10, 1.5e10, -2.0e9),
                 solve_region="film",
+                time_envelope=fm.PulseEnvelope(
+                    amplitude=0.8,
+                    t_on_s=2.0e-12,
+                    t_off_s=5.0e-12,
+                ),
             ))
         ],
         ("current_transport", "ohmic_poisson"): [

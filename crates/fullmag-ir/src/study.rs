@@ -232,6 +232,12 @@ pub enum CurrentModuleIR {
         conductivity_s_per_m: Option<f64>,
         #[serde(default)]
         coupling: crate::TransportCouplingIR,
+        /// Dimensionless source multiplier evaluated at each accepted stage
+        /// time.  The base prescribed density or charge boundary values stay
+        /// in SI units; the runtime applies this multiplier to the source
+        /// before solving transport and deriving Oersted fields.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time_envelope: Option<crate::TimeEnvelopeIR>,
         /// Complete executable charge solve. Legacy records without this
         /// payload remain readable but fail closed for `ohmic_poisson`.
         #[serde(default, flatten, skip_serializing_if = "Option::is_none")]

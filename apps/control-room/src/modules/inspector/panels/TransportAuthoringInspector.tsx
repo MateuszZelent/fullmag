@@ -373,6 +373,7 @@ function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTrans
       <FormField label="Gauge" type="select" value={draft.gauge} onChange={field("gauge")}><option value="dirichlet_reference">Dirichlet reference</option><option value="zero_mean">Zero mean</option></FormField>
       <SolverFields draft={draft} field={field} patch={patch} />
     </>}
+    <FormField label="Current-source time envelope (JSON; dimensionless)" rows={7} type="textarea" value={draft.timeEnvelope} onChange={field("timeEnvelope")} />
     <FormField label="Legacy solve region" value={draft.solveRegion} onChange={field("solveRegion")} />
     <FormField label="Legacy conductivity" unit="S/m" value={draft.conductivity} onChange={field("conductivity")} />
   </>;

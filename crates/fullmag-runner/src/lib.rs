@@ -52,6 +52,7 @@ pub mod spin_wave_sampling;
 pub mod table_autosave;
 mod timestep_qualification;
 mod time_dependence;
+mod time_envelope;
 mod time_events;
 mod types;
 
@@ -5515,6 +5516,7 @@ mod tests {
             solve_region: None,
             conductivity_s_per_m: None,
             coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            time_envelope: None,
             definition: Some(descriptor.charge_definition.clone()),
         }];
         fem.spin_transport_plans = vec![resolved];
@@ -8050,6 +8052,7 @@ mod tests {
                 solve_region: None,
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
         let unique_suffix = SystemTime::now()

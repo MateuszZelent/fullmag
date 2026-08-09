@@ -1,4 +1,7 @@
-use fullmag_ir::{AntennaFieldSourceModelIR, CurrentModuleIR, CurrentTransportModelIR, ProblemIR};
+use fullmag_ir::{
+    AntennaFieldSourceModelIR, CurrentModuleIR, CurrentTransportModelIR, ProblemIR,
+    TimeEnvelopeIR,
+};
 
 use crate::error::PlanError;
 
@@ -7,6 +10,7 @@ pub(crate) struct ResolvedCurrentTransport {
     pub name: String,
     pub current_density: [f64; 3],
     pub solve_region: Option<String>,
+    pub time_envelope: Option<TimeEnvelopeIR>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,12 +54,14 @@ pub(crate) fn resolve_current_transports(
                 model: CurrentTransportModelIR::PrescribedDensity,
                 current_density,
                 solve_region,
+                time_envelope,
                 ..
             } => match current_density {
                 Some(current_density) => resolved.push(ResolvedCurrentTransport {
                     name: name.clone(),
                     current_density: *current_density,
                     solve_region: solve_region.clone(),
+                    time_envelope: time_envelope.clone(),
                 }),
                 None => reasons.push(format!(
                     "current_modules[{index}] current_transport prescribed_density requires current_density"
@@ -109,6 +115,7 @@ mod tests {
                 solve_region: None,
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
 
@@ -132,6 +139,7 @@ mod tests {
                 solve_region: None,
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
 

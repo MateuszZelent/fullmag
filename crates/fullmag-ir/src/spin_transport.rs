@@ -330,6 +330,11 @@ pub struct ResolvedSpinTransportPlanIR {
 pub struct ResolvedFemSpinTransportIR {
     pub descriptor_schema: String,
     pub charge_definition: ChargeTransportDefinitionIR,
+    /// Authored charge-source envelope copied from the owning current module.
+    /// It is evaluated at every native stage; it is not a solver tolerance or
+    /// a post-hoc field scaling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
     pub charge_domain: ResolvedFemTransportDomainIR,
     pub spin_domain: ResolvedFemTransportDomainIR,
     pub charge_insulating_boundaries: Vec<ResolvedFemBoundaryMarkerSetIR>,
@@ -609,6 +614,10 @@ pub struct ResolvedSpinReactionLengthsIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmSpinTransportIR {
     pub descriptor_schema: String,
+    /// Authored dimensionless charge-source multiplier evaluated at each FDM
+    /// transport stage.  `None` means the source is constant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
     pub charge_active_cells: Vec<bool>,
     #[serde(rename = "charge_conductivity_Spm")]
     pub charge_conductivity_spm: Vec<f64>,

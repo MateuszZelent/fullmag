@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available, while a closure-aware RT0/OE-F1/OE-F2 CPU/double path now selects the fem_stage_oersted_callback.v1 policy for a public closed_geometry descriptor, evaluates the field through the native RK stage provider, publishes callback provenance and injects nodal H before native LLG. This is not reciprocal magnetization-dependent transport or torque RHS; external-lead closure, envelope re-evaluation, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available, while a closure-aware RT0/OE-F1/OE-F2 CPU/double path now selects the fem_stage_oersted_callback.v1 policy for a public closed_geometry descriptor, evaluates the field through the native RK stage provider, re-evaluates the supported source envelope at each stage, publishes callback provenance and injects nodal H before native LLG. This is not reciprocal magnetization-dependent transport or torque RHS; external-lead closure, tabulated-artifact resolution, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -19,7 +19,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "semantic_only",
-      "reason": "The FDM stage workflow has a separate current/Oersted path, but this page does not promote the canonical FFT/closure contract."
+      "reason": "FDM CPU one-way transport now re-evaluates supported source envelopes at each stage and publishes the multiplier, but the canonical FFT/closure, solved-current Oersted and cross-backend production contract remain unqualified."
     },
     {
       "solver": "FDM",
@@ -75,6 +75,18 @@
       "responsibility": "Expose the explicit closed-geometry RT0 identity, boundary classification, source-cut closure and physical gates through Python and canonical script round-trip; never invent a return path."
     },
     {
+      "id": "python-current-transport-envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class CurrentTransport",
+      "responsibility": "Own the optional canonical dimensionless time envelope for prescribed and complete current sources and preserve it in ProblemIR/script round-trip."
+    },
+    {
+      "id": "runner-time-envelope-evaluator",
+      "path": "crates/fullmag-runner/src/time_envelope.rs",
+      "symbol": "evaluate_time_envelope",
+      "responsibility": "Evaluate Constant, Sinusoidal, Pulse, PiecewiseLinear and Sinc source multipliers at exact stage time; fail closed for unresolved artifact-backed tables."
+    },
+    {
       "id": "planner-conservative-current-view",
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "validate_conservative_current_view",
@@ -90,7 +102,7 @@
       "id": "control-room-conservative-current-view",
       "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
       "symbol": "buildCurrentTransport",
-      "responsibility": "Expose the full conservative-current descriptor as an explicit JSON editor and retain it when the current transport resource is replaced."
+      "responsibility": "Expose the full conservative-current descriptor and dimensionless time envelope as explicit JSON editor fields and retain them when the current transport resource is replaced."
     },
     {
       "id": "fem-midpoint-reference",
@@ -183,6 +195,12 @@
       "responsibility": "Own the existing FDM stage-consistent solved-current field snapshot."
     },
     {
+      "id": "fdm-stage-envelope",
+      "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
+      "symbol": "source_envelope_multiplier",
+      "responsibility": "Re-evaluate the resolved current-source envelope before every FDM CPU one-way charge solve and publish the finite multiplier in the accepted snapshot."
+    },
+    {
       "id": "planner-regression",
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "fem_ohmic_oersted_binds_the_solved_charge_field",
@@ -254,6 +272,16 @@
         "meaning": "charge solve producing the source current",
         "backend_support": "FEM CPU bounded reference; other lanes remain capability-scoped",
         "problem_ir": "current_modules[].model"
+      },
+      {
+        "python": "CurrentTransport.time_envelope",
+        "type": "TimeEnvelope",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.",
+        "meaning": "dimensionless source multiplier evaluated at the exact stage time",
+        "backend_support": "Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU/external-lead remain open",
+        "problem_ir": "current_modules[].time_envelope"
       },
       {
         "python": "OerstedField.source",

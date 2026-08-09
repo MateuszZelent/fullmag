@@ -1797,6 +1797,7 @@ mod tests {
             fem_cpu_double: Some(ResolvedFemSpinTransportIR {
                 descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
                 charge_definition,
+                time_envelope: None,
                 charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
                     regions: vec![region.clone()],
                     element_mask: vec![true],
@@ -1889,6 +1890,7 @@ mod tests {
         let cells = nz;
         let descriptor = ResolvedFdmSpinTransportIR {
             descriptor_schema: "fullmag.fdm.spin_transport_descriptor.v1".into(),
+            time_envelope: None,
             charge_active_cells: vec![true; cells],
             charge_conductivity_spm: vec![3.0; cells],
             charge_boundaries: vec![
@@ -3041,6 +3043,7 @@ mod tests {
             solve_region: None,
             conductivity_s_per_m: None,
             coupling: TransportCouplingIR::OneWay,
+            time_envelope: None,
             definition: Some(descriptor.charge_definition.clone()),
         };
         descriptor::validate_bound_current_source_modules(
@@ -3078,6 +3081,7 @@ mod tests {
                 solve_region: None,
                 conductivity_s_per_m: None,
                 coupling: TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: Some(descriptor.charge_definition.clone()),
             }
         };

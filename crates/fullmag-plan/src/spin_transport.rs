@@ -137,14 +137,15 @@ pub(crate) fn resolve_spin_transport(
                     name,
                     model,
                     coupling,
+                    time_envelope,
                     definition,
                     ..
                 } if name == &module.current_source_id => {
-                    Some((*model, *coupling, definition.as_ref()))
+                    Some((*model, *coupling, time_envelope.as_ref(), definition.as_ref()))
                 }
                 _ => None,
             });
-        let Some((source_model, coupling, charge_definition)) = source else {
+        let Some((source_model, coupling, time_envelope, charge_definition)) = source else {
             errors.push(format!(
                 "spin transport '{}' references missing current source '{}'",
                 module.id, module.current_source_id
@@ -187,7 +188,20 @@ pub(crate) fn resolve_spin_transport(
             ));
             continue;
         };
-        let descriptor = materialize_fdm_descriptor(problem, module, charge_definition, context);
+        if time_envelope.is_some() && reciprocal {
+            errors.push(format!(
+                "spin transport '{}' dynamic current time_envelope is currently executable only for one-way FDM charge stages; reciprocal M2 stage scaling remains fail-closed",
+                module.id
+            ));
+            continue;
+        }
+        let descriptor = materialize_fdm_descriptor(
+            problem,
+            module,
+            charge_definition,
+            context,
+            time_envelope,
+        );
         let (fdm_cpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) = match descriptor
         {
             Ok(_descriptor) if transient && reciprocal => {
@@ -544,14 +558,15 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                     name,
                     model,
                     coupling,
+                    time_envelope,
                     definition,
                     ..
                 } if name == &module.current_source_id => {
-                    Some((*model, *coupling, definition.as_ref()))
+                    Some((*model, *coupling, time_envelope.as_ref(), definition.as_ref()))
                 }
                 _ => None,
             });
-        let Some((model, coupling, Some(charge))) = source else {
+        let Some((model, coupling, time_envelope, Some(charge))) = source else {
             errors.push(format!(
                 "{prefix} requires a complete CurrentTransportIR source '{}'",
                 module.current_source_id
@@ -653,6 +668,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             saturation_magnetization_apm,
             gamma0_m_per_a_s,
             reciprocal,
+            time_envelope,
         );
         match descriptor {
             Ok(descriptor) => plans.push(ResolvedSpinTransportPlanIR {
@@ -708,6 +724,7 @@ fn materialize_fem_descriptor(
     saturation_magnetization_apm: f64,
     gamma0_m_per_a_s: f64,
     reciprocal: bool,
+    time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
 ) -> Result<ResolvedFemSpinTransportIR, Vec<String>> {
     let charge_domain = fem_domain_mask(
         &charge.domain,
@@ -984,6 +1001,7 @@ fn materialize_fem_descriptor(
             "fullmag.fem.spin_transport_descriptor.v1".into()
         },
         charge_definition: charge.clone(),
+        time_envelope: time_envelope.cloned(),
         charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
             regions: charge.domain.clone(),
             element_mask: charge_domain,
@@ -1693,6 +1711,7 @@ fn materialize_fdm_descriptor(
     module: &fullmag_ir::SpinTransportModuleIR,
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     context: &FdmSpinTransportResolutionContext<'_>,
+    time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
 ) -> Result<ResolvedFdmSpinTransportIR, Vec<String>> {
     let count = context.region_mask.len();
     if count == 0
@@ -1823,6 +1842,7 @@ fn materialize_fdm_descriptor(
     });
     Ok(ResolvedFdmSpinTransportIR {
         descriptor_schema: "fullmag.fdm.spin_transport_descriptor.v1".to_string(),
+        time_envelope: time_envelope.cloned(),
         charge_active_cells,
         charge_conductivity_spm,
         charge_boundaries,
@@ -2307,6 +2327,7 @@ mod tests {
             solve_region: Some("strip".into()),
             conductivity_s_per_m: Some(4.0e6),
             coupling: TransportCouplingIR::OneWay,
+            time_envelope: None,
             definition: Some(ChargeTransportDefinitionIR {
                 domain: vec![region.clone()],
                 materials: vec![ChargeTransportMaterialAssignmentIR {

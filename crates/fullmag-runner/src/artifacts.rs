@@ -2979,6 +2979,7 @@ fn write_prescribed_current_transport_artifacts(
             model: fullmag_ir::CurrentTransportModelIR::PrescribedDensity,
             current_density: Some(current_density),
             solve_region,
+            time_envelope,
             ..
         } = module
         else {
@@ -3048,6 +3049,7 @@ fn write_prescribed_current_transport_artifacts(
             "distribution": "uniform_prescribed",
             "coverage": coverage,
             "solve_region": solve_region,
+            "time_envelope": time_envelope,
             "layout": context.layout.clone(),
             "provenance": artifact_provenance_json(context, provenance),
             "values": values,
@@ -6383,6 +6385,7 @@ mod tests {
                 solve_region: Some("pillar_region".to_string()),
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
         problem.regions = vec![fullmag_ir::RegionIR {
@@ -6503,6 +6506,7 @@ mod tests {
                 solve_region: Some("pillar_region".to_string()),
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
         problem.regions = vec![fullmag_ir::RegionIR {

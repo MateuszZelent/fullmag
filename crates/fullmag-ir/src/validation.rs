@@ -980,9 +980,18 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                 current_density,
                 solve_region,
                 conductivity_s_per_m,
+                time_envelope,
                 definition,
                 ..
             } => {
+                if let Some(envelope) = time_envelope {
+                    validate_time_envelope(
+                        format!("current_modules[{index}] current_transport time_envelope")
+                            .as_str(),
+                        envelope,
+                        errors,
+                    );
+                }
                 if let Some(region) = solve_region {
                     if region.trim().is_empty() {
                         errors.push(format!(

@@ -11070,6 +11070,7 @@ fn fdm_cuda_general_oersted_field_plans() {
         solve_region: Some("strip".to_string()),
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     });
     ir.energy_terms.push(EnergyTermIR::OerstedField {

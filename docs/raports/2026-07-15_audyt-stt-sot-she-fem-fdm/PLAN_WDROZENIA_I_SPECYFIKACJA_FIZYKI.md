@@ -9715,8 +9715,7 @@ od `m_stage`. Zapewnia więc prawidłową kadencję stage, FSAL i rollback oraz
 provenance, ale nie jest jeszcze wzajemnym M2 `J_c(m_stage)`. `torque_stt`
 pozostaje diagnostyczny i nie jest dodawany do prawej strony LLG.
 
-Nadal fail-closed pozostają: ponowna ewaluacja obwiedni czasowej (descriptor
-przechowuje tylko jej snapshot), M2/`external_lead`, callback torque, GPU/
+Nadal fail-closed pozostają: M2/`external_lead`, callback torque, GPU/
 device-resident, pełny publiczny fixture end-to-end, obliczenia `p`/energii/
 airbox oraz porównanie solved-current FEM↔FDM/MuMax/BORIS. Capability pozostaje
 `reference_executable`/`semantic_only` do czasu przejścia tych bram.
@@ -9766,3 +9765,69 @@ ale nie zamyka celu produkcyjnego STT/SOT/SHE/Oersted. Następne bramy muszą
 objąć zależność prądu od magnetyzacji, torque callback, envelope/external-lead,
 GPU, `p`/energię/airbox i ilościową walidację FEM↔FDM oraz względem solverów
 zewnętrznych.
+
+## 32.110. Stage-time envelope prądu: wspólny evaluator FEM/FDM CPU (2026-08-09)
+
+Zrealizowano kolejny krok planu bez promowania niekwalifikowanych capability.
+`CurrentTransport.time_envelope` jest teraz jednym polem canonicalnego modelu
+Python → SceneDocument → `CurrentModuleIR` → planner. Pole zachowuje zarówno
+źródła `prescribed_density`, jak i kompletne źródła transportowe; jego wartość
+jest bezwymiarowym mnożnikiem SI, a brak pola oznacza `1`. UI Inspector ma
+jawne pole JSON, model draftu wykonuje walidowany round-trip, a wygenerowane
+typy OpenAPI zawierają `SceneTimeEnvelope`.
+
+Runner posiada jeden wspólny evaluator `evaluate_time_envelope` dla
+Constant/Sinusoidal/Pulse/PiecewiseLinear/Sinc. `Tabulated` wymaga jeszcze
+resolvera artefaktu i kończy się fail-closed. W FEM CPU/double provider
+`StageOerstedProvider` ewaluje envelope dla dokładnego `t_stage`, skaluje
+source-cut `potential_drop_v` w `closed_geometry`, ponownie rozwiązuje RT0 i
+publikuje nowy digest rewizji wraz z `envelope_multiplier`. Nie skaluje
+referencyjnych wartości Dirichleta/gauge. W FDM CPU one-way ten sam evaluator
+skaluje warunki Voltage i OutwardNormalCurrentDensity przed każdym solve'em;
+`evaluated_envelope_multiplier` jest częścią snapshotu i artefaktu
+`transport/spin_transport_accepted.json`. Reciprocal M2 pozostaje odrzucone,
+ponieważ wymaga wspólnego solve'u `J_c(m_stage)` i osobnego torque RHS.
+
+### 32.110.1. Dowody testowe
+
+Wykonano testy jednostkowe i kontraktowe:
+
+```text
+Python current-transport tests                       19 passed
+Control Room TransportAuthoringInspector tests       28 passed
+fullmag-runner::evaluate_time_envelope                PASS
+fullmag-runner::one_way_current_envelope_is_re_evaluated_at_each_fdm_stage PASS
+fullmag-runner::analytical_one_way_bar_materializes_charge_and_spin_quantities PASS
+fullmag-plan::current_source_envelope_normalizes...   PASS
+fullmag-plan::non_cylindrical_dynamic_source_fails_closed PASS
+fullmag-authoring library tests                       71 passed
+authoring parity manifest + Python fixtures            3 passed
+managed FEM CPU time-domain contract                  PASS
+```
+
+Źródło mapy dokumentacji przechodzi walidator kontraktu naukowego po dodaniu
+symboli `CurrentTransport`, `evaluate_time_envelope` i
+`source_envelope_multiplier`. Świeża recepta
+`FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-cpu-only-contract`
+przeszła wraz z budową obrazu `fem-cpu` i kontraktem natywnego callbacku;
+nie jest to jeszcze end-to-end dowód envelope'u z publicznego fixture ani
+kwalifikacja produkcyjna FEM.
+
+### 32.110.2. Pozostałe bramy — cel nadal otwarty
+
+Ten etap nie zamyka produkcyjnego STT/SOT/SHE/Oersted. Nadal wymagają
+implementacji i niezależnego dowodu:
+
+1. wzajemny M2 z magnetyzacją `J_c(m_stage)`, konsekwentnym solve'em ładunku i
+   spinu oraz torque RHS LLG;
+2. `external_lead`, tabulowanego envelope'u z resolverem artefaktów i pełnej
+   semantyki energii/mocy;
+3. FEM GPU/device-resident, FDM GPU oraz brak transferów w hot loop;
+4. pełny fixture publicznego Python/IR/UI → planner → runtime z finalnym
+   provenance stage-source;
+5. airbox, `p`, zbieżność h/p i ilościowe FEM↔FDM oraz porównanie z
+   MuMax/BORIS/NeuralMag;
+6. aktualizacja macierzy capability dopiero po przejściu powyższych bram.
+
+Status pozostaje zatem: **implemented + bounded CPU contract-tested** dla
+one-way stage envelope; **not production-qualified** dla pełnego celu planu.

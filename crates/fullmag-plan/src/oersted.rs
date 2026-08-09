@@ -4,7 +4,7 @@ use std::f64::consts::PI;
 use fullmag_ir::{
     CurrentModuleIR, CurrentTransportModelIR, EnergyTermIR, FemMeshPartIR, FemMeshPartSelector,
     FemObjectSegmentIR, GeometryEntryIR, MeshIR, OerstedFieldModelIR, ProblemIR,
-    SpinTransportModeIR, TimeDependenceIR, TransportCouplingIR,
+    SpinTransportModeIR, TimeDependenceIR, TimeEnvelopeIR, TransportCouplingIR,
 };
 
 use crate::current_transport::ResolvedCurrentTransport;
@@ -268,13 +268,19 @@ fn resolve_oersted_from_current_solution_cylinder(
         axis,
     )?;
     let current = axial_current_density * PI * radius * radius;
+    let (current, time_dependence) = apply_current_source_envelope(
+        current,
+        resolved.transport.time_envelope.as_ref(),
+        term_index,
+        source,
+    )?;
 
     Ok(ResolvedOerstedCylinder {
         current,
         radius,
         center,
         axis,
-        time_dependence: None,
+        time_dependence,
     })
 }
 
@@ -298,14 +304,26 @@ fn resolve_fem_oersted_from_current_solution(
             axis,
         )?;
         let current = axial_current_density * PI * radius * radius;
+        let (current, time_dependence) = apply_current_source_envelope(
+            current,
+            resolved.transport.time_envelope.as_ref(),
+            term_index,
+            source,
+        )?;
         return Ok(ResolvedOerstedTerm::Cylinder(ResolvedOerstedCylinder {
             current,
             radius,
             center,
             axis,
-            time_dependence: None,
+            time_dependence,
         }));
     }
+
+    reject_dynamic_source_for_field(
+        resolved.transport.time_envelope.as_ref(),
+        term_index,
+        source,
+    )?;
 
     let source_elements =
         source_element_indices(resolved.geometry_name, mesh, object_segments, mesh_parts)?;
@@ -324,7 +342,12 @@ fn resolve_fem_oersted_from_current_solution(
         field_xyz: midpoint_biot_savart_field(
             mesh,
             &source_elements,
-            resolved.transport.current_density,
+            scale_static_current_density(
+                resolved.transport.current_density,
+                resolved.transport.time_envelope.as_ref(),
+                term_index,
+                source,
+            )?,
         )?,
     }))
 }
@@ -349,14 +372,26 @@ fn resolve_fdm_oersted_from_current_solution(
             axis,
         )?;
         let current = axial_current_density * PI * radius * radius;
+        let (current, time_dependence) = apply_current_source_envelope(
+            current,
+            resolved.transport.time_envelope.as_ref(),
+            term_index,
+            source,
+        )?;
         return Ok(ResolvedOerstedTerm::Cylinder(ResolvedOerstedCylinder {
             current,
             radius,
             center,
             axis,
-            time_dependence: None,
+            time_dependence,
         }));
     }
+
+    reject_dynamic_source_for_field(
+        resolved.transport.time_envelope.as_ref(),
+        term_index,
+        source,
+    )?;
 
     let realized_geometry_name = problem
         .geometry
@@ -385,12 +420,140 @@ fn resolve_fdm_oersted_from_current_solution(
             grid_cells,
             cell_size,
             active_mask,
-            resolved.transport.current_density,
+            scale_static_current_density(
+                resolved.transport.current_density,
+                resolved.transport.time_envelope.as_ref(),
+                term_index,
+                source,
+            )?,
         )?
         .into_iter()
         .flat_map(|value| value.into_iter())
         .collect(),
     }))
+}
+
+fn apply_current_source_envelope(
+    base_current: f64,
+    envelope: Option<&TimeEnvelopeIR>,
+    term_index: usize,
+    source: &str,
+) -> Result<(f64, Option<TimeDependenceIR>), PlanError> {
+    let Some(envelope) = envelope else {
+        return Ok((
+            checked_scale_current(base_current, 1.0, term_index, source)?,
+            None,
+        ));
+    };
+    match envelope {
+        TimeEnvelopeIR::Constant { value } => Ok((
+            checked_scale_current(base_current, *value, term_index, source)?,
+            None,
+        )),
+        TimeEnvelopeIR::Sinusoidal {
+            amplitude,
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            if *amplitude == 0.0 {
+                return Ok((0.0, None));
+            }
+            let normalized_offset = offset / amplitude;
+            if !normalized_offset.is_finite() {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "energy_terms[{term_index}] oersted_field source '{source}' sinusoidal current envelope has an unrepresentable offset/amplitude ratio"
+                    )],
+                });
+            }
+            Ok((
+                checked_scale_current(base_current, *amplitude, term_index, source)?,
+                Some(TimeDependenceIR::Sinusoidal {
+                    frequency_hz: *frequency_hz,
+                    phase_rad: *phase_rad,
+                    offset: normalized_offset,
+                }),
+            ))
+        }
+        TimeEnvelopeIR::Pulse {
+            amplitude,
+            t_on_s,
+            t_off_s,
+        } => Ok((
+            checked_scale_current(base_current, *amplitude, term_index, source)?,
+            Some(TimeDependenceIR::Pulse {
+                t_on: *t_on_s,
+                t_off: *t_off_s,
+            }),
+        )),
+        TimeEnvelopeIR::PiecewiseLinear { .. } | TimeEnvelopeIR::Sinc { .. } => {
+            Err(PlanError {
+                reasons: vec![format!(
+                    "energy_terms[{term_index}] oersted_field source '{source}' requires a full stage envelope evaluator; FDM/FEM cylindrical lowering currently supports constant, sinusoidal, or pulse envelopes only"
+                )],
+            })
+        }
+        TimeEnvelopeIR::Tabulated { artifact_ref, .. } => Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' tabulated current envelope requires materialized artifact '{artifact_ref}'"
+            )],
+        }),
+    }
+}
+
+fn reject_dynamic_source_for_field(
+    envelope: Option<&TimeEnvelopeIR>,
+    term_index: usize,
+    source: &str,
+) -> Result<(), PlanError> {
+    if envelope.is_some_and(|value| !matches!(value, TimeEnvelopeIR::Constant { .. })) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' has a dynamic current envelope but its non-cylindrical Biot-Savart field lowering is static"
+            )],
+        });
+    }
+    Ok(())
+}
+
+fn scale_static_current_density(
+    current_density: [f64; 3],
+    envelope: Option<&TimeEnvelopeIR>,
+    term_index: usize,
+    source: &str,
+) -> Result<[f64; 3], PlanError> {
+    let multiplier = envelope.map_or(1.0, |value| match value {
+        TimeEnvelopeIR::Constant { value } => *value,
+        _ => 1.0,
+    });
+    current_density
+        .into_iter()
+        .map(|component| checked_scale_current(component, multiplier, term_index, source))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' current density must have exactly three components"
+            )],
+        })
+}
+
+fn checked_scale_current(
+    base_current: f64,
+    multiplier: f64,
+    term_index: usize,
+    source: &str,
+) -> Result<f64, PlanError> {
+    let value = base_current * multiplier;
+    if !value.is_finite() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{source}' current envelope produced a non-finite current"
+            )],
+        });
+    }
+    Ok(value)
 }
 
 struct ResolvedCurrentSolutionGeometry<'a> {
@@ -837,6 +1000,7 @@ mod tests {
                 name: "drive".to_string(),
                 current_density: [0.0, 0.0, 5e10],
                 solve_region: Some("pillar_region".to_string()),
+                time_envelope: None,
             }],
         )
         .unwrap()
@@ -871,6 +1035,7 @@ mod tests {
                 name: "drive".to_string(),
                 current_density: [1e10, 0.0, 5e10],
                 solve_region: Some("pillar".to_string()),
+                time_envelope: None,
             }],
         )
         .unwrap_err();
@@ -936,6 +1101,7 @@ mod tests {
                 name: "drive".to_string(),
                 current_density: [1.0, 0.0, 0.0],
                 solve_region: Some("wire".to_string()),
+                time_envelope: None,
             }],
             &mesh,
             &[],
@@ -977,6 +1143,7 @@ mod tests {
                 name: "drive".to_string(),
                 current_density: [1.0, 0.0, 0.0],
                 solve_region: Some("wire_region".to_string()),
+                time_envelope: None,
             }],
             [2, 2, 1],
             [1.0, 1.0, 1.0],
@@ -992,5 +1159,45 @@ mod tests {
             }
             other => panic!("expected midpoint field lowering, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn current_source_envelope_normalizes_into_existing_cylinder_time_contract() {
+        let (current, waveform) = apply_current_source_envelope(
+            10.0,
+            Some(&TimeEnvelopeIR::Sinusoidal {
+                amplitude: 0.25,
+                frequency_hz: 2.0e9,
+                phase_rad: 0.3,
+                offset: 0.75,
+            }),
+            0,
+            "drive",
+        )
+        .expect("sinusoidal source envelope should lower");
+        assert_eq!(current, 2.5);
+        assert!(matches!(
+            waveform,
+            Some(TimeDependenceIR::Sinusoidal {
+                frequency_hz: 2.0e9,
+                phase_rad: 0.3,
+                offset,
+            }) if (offset - 3.0).abs() < 1.0e-12
+        ));
+    }
+
+    #[test]
+    fn non_cylindrical_dynamic_source_fails_closed() {
+        let error = reject_dynamic_source_for_field(
+            Some(&TimeEnvelopeIR::Pulse {
+                amplitude: 1.0,
+                t_on_s: 0.0,
+                t_off_s: 1.0,
+            }),
+            0,
+            "drive",
+        )
+        .expect_err("static midpoint lowering must not erase a dynamic source");
+        assert!(error.reasons[0].contains("dynamic current envelope"));
     }
 }

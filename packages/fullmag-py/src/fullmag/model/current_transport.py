@@ -11,7 +11,16 @@ from fullmag._validation import (
     require_positive,
     require_positive_int,
 )
-from fullmag.model.spin_torque import RegionRef
+from fullmag.model.spin_torque import (
+    ConstantEnvelope,
+    PiecewiseLinearEnvelope,
+    PulseEnvelope,
+    RegionRef,
+    SincEnvelope,
+    SinusoidalEnvelope,
+    TabulatedEnvelope,
+    TimeEnvelope,
+)
 from fullmag.model.spin_transport import SurfaceRef
 
 CURRENT_TRANSPORT_MODELS = {
@@ -25,6 +34,15 @@ CONSERVATIVE_CURRENT_BOUNDARY_ROLES = {
     "source_cut",
     "closure_interface",
 }
+
+_TIME_ENVELOPE_TYPES = (
+    ConstantEnvelope,
+    SinusoidalEnvelope,
+    PulseEnvelope,
+    PiecewiseLinearEnvelope,
+    SincEnvelope,
+    TabulatedEnvelope,
+)
 
 
 def _finite_vector3(value: Sequence[float], field_name: str) -> tuple[float, float, float]:
@@ -594,6 +612,7 @@ class CurrentTransport:
     boundaries: tuple[ChargeBoundary, ...] = ()
     gauge: ChargePotentialGauge | None = None
     solver: ChargeSolverPolicy | None = None
+    time_envelope: TimeEnvelope | None = None
     conservative_current_view: ConservativeCurrentView | None = None
 
     def __init__(
@@ -610,6 +629,7 @@ class CurrentTransport:
         boundaries: Sequence[ChargeBoundary] = (),
         gauge: ChargePotentialGauge | None = None,
         solver: ChargeSolverPolicy | None = None,
+        time_envelope: TimeEnvelope | None = None,
         conservative_current_view: ConservativeCurrentView | None = None,
     ) -> None:
         raw_model = require_non_empty(model, "model").lower()
@@ -642,6 +662,11 @@ class CurrentTransport:
         object.__setattr__(self, "boundaries", normalized_boundaries)
         object.__setattr__(self, "gauge", gauge)
         object.__setattr__(self, "solver", solver)
+        if time_envelope is not None and not isinstance(time_envelope, _TIME_ENVELOPE_TYPES):
+            raise TypeError(
+                "time_envelope must be one of the canonical TimeEnvelope values"
+            )
+        object.__setattr__(self, "time_envelope", time_envelope)
         if conservative_current_view is not None and not isinstance(
             conservative_current_view, ConservativeCurrentView
         ):
@@ -755,6 +780,8 @@ class CurrentTransport:
             ir["gauge"] = self.gauge.to_ir()
         if self.solver is not None:
             ir["solver"] = self.solver.to_ir()
+        if self.time_envelope is not None:
+            ir["time_envelope"] = self.time_envelope.to_ir()
         if self.conservative_current_view is not None:
             ir["conservative_current_view"] = self.conservative_current_view.to_ir()
         return ir

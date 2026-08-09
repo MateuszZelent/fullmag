@@ -8,9 +8,10 @@ use super::steady_transport::{
     preflight_transport_plans, solve_native_fem_steady_transport_rt0,
     NativeFemSteadyTransportOerstedMethod, NativeFemSteadyTransportRequest,
 };
+use crate::time_envelope::evaluate_time_envelope;
 use crate::types::RunError;
 use fullmag_fem_sys as ffi;
-use fullmag_ir::{FemPlanIR, ResolvedFemConservativeCurrentViewIR};
+use fullmag_ir::{FemPlanIR, ResolvedFemConservativeCurrentViewIR, TimeEnvelopeIR};
 use sha2::{Digest, Sha256};
 use std::ffi::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -30,6 +31,7 @@ pub(crate) fn plan_requests_stage_oersted_callback(plan: &FemPlanIR) -> bool {
 pub(crate) struct StageOerstedObservation {
     pub stage_identity: u64,
     pub evaluation_time_s: f64,
+    pub envelope_multiplier: f64,
     pub source_state_revision: u64,
     pub source_view_identity_digest: String,
     pub field_sha256: String,
@@ -38,6 +40,7 @@ pub(crate) struct StageOerstedObservation {
 pub(crate) struct StageOerstedProvider {
     request_template: NativeFemSteadyTransportRequest,
     view_template: ResolvedFemConservativeCurrentViewIR,
+    time_envelope: Option<TimeEnvelopeIR>,
     method: NativeFemSteadyTransportOerstedMethod,
     target_points: Option<Vec<[f64; 3]>>,
     attempt_active: bool,
@@ -71,6 +74,7 @@ impl StageOerstedProvider {
                 message: "FEM stage Oersted callback requires a resolved conservative RT0 view"
                     .into(),
             })?;
+        let time_envelope = descriptor.time_envelope.clone();
         let method = match plan.oersted_realization {
             Some(fullmag_ir::OerstedRealization::FemVectorPotential) => {
                 NativeFemSteadyTransportOerstedMethod::FemVectorPotential
@@ -88,6 +92,7 @@ impl StageOerstedProvider {
         Ok(Some(Self {
             request_template: prepared.request,
             view_template: view,
+            time_envelope,
             method,
             target_points,
             attempt_active: false,
@@ -176,6 +181,35 @@ impl StageOerstedProvider {
         let mut request = self.request_template.clone();
         request.magnetization = magnetization;
         let mut view = self.view_template.clone();
+        let envelope_multiplier = self
+            .time_envelope
+            .as_ref()
+            .map(|envelope| evaluate_time_envelope(envelope, evaluation_time_s))
+            .transpose()?
+            .unwrap_or(1.0);
+        match &mut view.closure {
+            fullmag_ir::ConservativeCurrentClosureIR::ClosedGeometry { source_cuts, .. } => {
+                for cut in source_cuts {
+                    cut.potential_drop_v *= envelope_multiplier;
+                    if !cut.potential_drop_v.is_finite() {
+                        return Err(
+                            "stage Oersted envelope produced a non-finite source-cut potential"
+                                .into(),
+                        );
+                    }
+                }
+            }
+            fullmag_ir::ConservativeCurrentClosureIR::ExternalLead { .. } => {
+                return Err(
+                    "stage Oersted envelope requires closed_geometry; external_lead is not stage-qualified"
+                        .into(),
+                );
+            }
+        }
+        if !envelope_multiplier.is_finite() {
+            return Err("stage Oersted time envelope evaluated to a non-finite multiplier".into());
+        }
+        view.identity.evaluated_envelope_multiplier = envelope_multiplier;
         view.identity.evaluation_time_s = evaluation_time_s;
         view.identity.stage_identity = stage_identity;
         let result = solve_native_fem_steady_transport_rt0(
@@ -199,13 +233,23 @@ impl StageOerstedProvider {
         }
         unsafe {
             ptr::copy_nonoverlapping(field.as_ptr(), out_h_xyz_apm, field.len());
-            *out_source_state_revision =
-                source_state_revision(&view.identity.source_state_revision);
+            *out_source_state_revision = source_state_revision(
+                &view.identity.source_state_revision,
+                evaluation_time_s,
+                stage_identity,
+                envelope_multiplier,
+            );
         }
         let observation = StageOerstedObservation {
             stage_identity,
             evaluation_time_s,
-            source_state_revision: source_state_revision(&view.identity.source_state_revision),
+            envelope_multiplier,
+            source_state_revision: source_state_revision(
+                &view.identity.source_state_revision,
+                evaluation_time_s,
+                stage_identity,
+                envelope_multiplier,
+            ),
             source_view_identity_digest,
             field_sha256: sha256_f64_slice(&field),
         };
@@ -398,8 +442,18 @@ fn write_error(buffer: *mut c_char, capacity: u64, message: &str) {
     }
 }
 
-fn source_state_revision(value: &str) -> u64 {
-    let digest = Sha256::digest(value.as_bytes());
+fn source_state_revision(
+    value: &str,
+    evaluation_time_s: f64,
+    stage_identity: u64,
+    envelope_multiplier: f64,
+) -> u64 {
+    let mut preimage = Vec::with_capacity(value.len() + 24);
+    preimage.extend_from_slice(value.as_bytes());
+    preimage.extend_from_slice(&evaluation_time_s.to_le_bytes());
+    preimage.extend_from_slice(&stage_identity.to_le_bytes());
+    preimage.extend_from_slice(&envelope_multiplier.to_le_bytes());
+    let digest = Sha256::digest(preimage);
     u64::from_le_bytes(digest[..8].try_into().expect("sha256 has eight bytes"))
 }
 

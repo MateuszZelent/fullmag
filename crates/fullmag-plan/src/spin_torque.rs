@@ -636,6 +636,7 @@ mod tests {
                     name: "drive".to_string(),
                     current_density: [jx, 4.0e9, 0.0],
                     solve_region: None,
+                    time_envelope: None,
                 }],
                 false,
             )
@@ -961,6 +962,7 @@ mod tests {
                 name: "drive".to_string(),
                 current_density: [1e11, 0.0, 0.0],
                 solve_region: None,
+                time_envelope: None,
             }],
         )
         .unwrap();
@@ -993,6 +995,7 @@ mod tests {
                 name: "drive".to_string(),
                 current_density: [0.0, 0.0, 5e10],
                 solve_region: Some("pillar".to_string()),
+                time_envelope: None,
             }],
         )
         .unwrap();

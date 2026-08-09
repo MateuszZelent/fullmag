@@ -138,6 +138,24 @@ describe("transport authoring drafts", () => {
     expect(() => buildCurrentTransport(draft)).toThrow(/JSON object/);
   });
 
+  it("round-trips the canonical current-source time envelope", () => {
+    const resource = {
+      kind: "current_transport" as const,
+      model: "prescribed_density" as const,
+      name: "drive",
+      coupling: "one_way" as const,
+      current_density: [1e10, 0, 0],
+      time_envelope: {
+        kind: "sinusoidal" as const,
+        amplitude: 0.5,
+        frequency_hz: 2e9,
+        phase_rad: 0.25,
+        offset: 1,
+      },
+    };
+    expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
+  });
+
   it("round-trips every spin-transport field including requested execution", () => {
     const resource = {
       schema_version: "spin_transport.v1",

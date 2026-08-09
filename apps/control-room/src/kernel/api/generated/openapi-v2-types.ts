@@ -5647,6 +5647,7 @@ export interface components {
             name: string;
             solve_region?: string | null;
             solver?: null | components["schemas"]["SceneChargeSolverPolicy"];
+            time_envelope?: null | components["schemas"]["SceneTimeEnvelope"];
         };
         KnownSceneOerstedField: {
             axis: number[];

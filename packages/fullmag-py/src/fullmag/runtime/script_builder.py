@@ -2300,6 +2300,9 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     solver = entry.get("solver")
     if isinstance(solver, Mapping):
         kwargs.append(f"solver={_render_charge_solver_payload(solver)}")
+    time_envelope = entry.get("time_envelope")
+    if isinstance(time_envelope, Mapping):
+        kwargs.append("time_envelope=" + _render_sot_envelope(time_envelope))
     conservative_view = entry.get("conservative_current_view")
     if isinstance(conservative_view, Mapping):
         kwargs.append(

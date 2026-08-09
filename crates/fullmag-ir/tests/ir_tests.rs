@@ -694,6 +694,8 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
             ], "potential_V": 0.1}
         ],
         "gauge": "dirichlet_reference",
+        "time_envelope": {"kind": "sinusoidal", "amplitude": 0.25,
+            "frequency_hz": 2.0e9, "phase_rad": 0.3, "offset": 0.75},
         "solver": {"engine": "cg", "linear": {"relative_tolerance": 1.0e-10,
             "absolute_tolerance": 0.0, "max_iterations": 1000},
             "physical_residual_version": "charge_balance_integrated_l2.v1",
@@ -743,6 +745,13 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     decoded.validate().expect("typed M1 IR should validate");
     assert_eq!(decoded.spin_transport_modules.len(), 1);
     let encoded = serde_json::to_value(decoded).expect("typed M1 IR should encode");
+    assert_eq!(
+        encoded["current_modules"][0]["time_envelope"],
+        serde_json::json!({
+            "kind": "sinusoidal", "amplitude": 0.25,
+            "frequency_hz": 2.0e9, "phase_rad": 0.3, "offset": 0.75
+        })
+    );
     assert_eq!(
         encoded["current_modules"][0]["gauge"],
         "dirichlet_reference"
@@ -1357,6 +1366,7 @@ fn prescribed_sot_v1_accepts_nonunit_vector_source_axes_and_rejects_near_paralle
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     }];
     let module = |drive_direction, interface_normal| SpinTorqueModuleIR::PrescribedSot {
@@ -6043,6 +6053,7 @@ fn excitation_analysis_source_must_reference_antenna_module() {
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     });
     ir.excitation_analysis = Some(ExcitationAnalysisIR {
@@ -6143,6 +6154,7 @@ fn validation_rejects_multiple_oersted_terms() {
         solve_region: Some("box".to_string()),
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     });
     ir.energy_terms = vec![
