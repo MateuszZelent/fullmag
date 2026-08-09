@@ -73,6 +73,59 @@ fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples
         .iter()
         .any(|reason| reason == "eigenmodes.bias_field_sweep_requires_alpha_zero"));
 
+    for (mut invalid_value, token) in [
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["k_sampling"] = serde_json::json!({"kind":"path","points":[],"samples_per_segment":[],"closed":false});
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_single_gamma",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["k_sampling"]["k_vector"] = serde_json::json!([1.0, 0.0, 0.0]);
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_single_gamma",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["pbc"]["axes"] = serde_json::json!(["periodic", "periodic", "periodic"]);
+                value
+            },
+            "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["backend_policy"]["execution_precision"] = serde_json::json!("single");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_double_precision",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["operator"]["include_demag"] = serde_json::json!(false);
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_demag",
+        ),
+    ] {
+        let invalid: ProblemIR = serde_json::from_value(invalid_value.take()).unwrap();
+        assert!(
+            invalid
+                .validate()
+                .expect_err("K0 bias-field legality must fail closed")
+                .iter()
+                .any(|reason| reason == token),
+            "missing {token}"
+        );
+    }
+
     encoded["study"]["bias_field_sweep"]["samples_a_per_m"] = serde_json::json!([]);
     let invalid: ProblemIR = serde_json::from_value(encoded.clone())
         .expect("empty sample payload still reaches canonical validation");
