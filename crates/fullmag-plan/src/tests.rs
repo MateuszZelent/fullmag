@@ -7762,13 +7762,48 @@ fn fem_eigen_bias_field_sweep_plans_declared_samples_with_resolved_execution() {
 
 #[test]
 fn fdm_eigenmodes_remain_explicitly_not_executable() {
-    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir()).unwrap();
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+        "equilibrium_policy": "relax_each",
+        "ordering": "declared",
+        "continuation_seed": "initial_state"
+    });
+    let mut ir: ProblemIR = serde_json::from_value(encoded).unwrap();
     ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
 
-    let error = plan(&ir).expect_err("FDM modal eigensolve must remain unavailable");
+    let error = plan(&ir).expect_err("FDM bias-field sweep must fail closed");
     assert!(error.reasons.iter().any(|reason| {
-        reason.contains("StudyIR::Eigenmodes is currently executable only with backend='fem'")
+        reason == "eigenmodes.bias_field_sweep_requires_fem_backend; fallback=none"
     }));
+}
+
+#[test]
+fn fem_eigen_bias_field_samples_bind_cpu_and_gpu_execution() {
+    for device in ["cpu", "gpu"] {
+        let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir()).unwrap();
+        encoded["study"]["bias_field_sweep"] = serde_json::json!({
+            "samples_a_per_m": [[12500.0, 0.0, 0.0], [25000.0, 0.0, 0.0]],
+            "equilibrium_policy": "relax_each",
+            "ordering": "declared",
+            "continuation_seed": "initial_state"
+        });
+        let mut ir: ProblemIR = serde_json::from_value(encoded).unwrap();
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device, "precision": "double"}),
+        );
+        let value = serde_json::to_value(plan(&ir).unwrap()).unwrap();
+        for sample in value["backend_plan"]["bias_field_samples"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(sample["execution"]["requested_device"], device);
+            assert_eq!(sample["execution"]["resolved_device"], device);
+            assert_eq!(sample["execution"]["requested_precision"], "double");
+            assert_eq!(sample["execution"]["resolved_precision"], "double");
+        }
+    }
 }
 
 fn planned_k0_eigen_execution_resolution(
