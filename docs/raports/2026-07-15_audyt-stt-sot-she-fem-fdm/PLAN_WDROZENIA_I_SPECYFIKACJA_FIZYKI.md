@@ -9785,8 +9785,9 @@ publikuje nowy digest rewizji wraz z `envelope_multiplier`. Nie skaluje
 referencyjnych wartości Dirichleta/gauge. W FDM CPU one-way ten sam evaluator
 skaluje warunki Voltage i OutwardNormalCurrentDensity przed każdym solve'em;
 `evaluated_envelope_multiplier` jest częścią snapshotu i artefaktu
-`transport/spin_transport_accepted.json`. Reciprocal M2 pozostaje odrzucone,
-ponieważ wymaga wspólnego solve'u `J_c(m_stage)` i osobnego torque RHS.
+`transport/spin_transport_accepted.json`. Reciprocal M2 FDM CPU korzysta już z
+tego samego solve'u `J_c(m_stage)` i publikuje torque RHS; analogiczna ścieżka
+FEM została dodana jako ograniczony callback CPU/double opisany w §32.112.
 
 ### 32.110.1. Dowody testowe
 
@@ -9818,8 +9819,9 @@ kwalifikacja produkcyjna FEM.
 Ten etap nie zamyka produkcyjnego STT/SOT/SHE/Oersted. Nadal wymagają
 implementacji i niezależnego dowodu:
 
-1. wzajemny M2 z magnetyzacją `J_c(m_stage)`, konsekwentnym solve'em ładunku i
-   spinu oraz torque RHS LLG;
+1. pełny publiczny i kwalifikowany FEM M2 z magnetyzacją `J_c(m_stage)`,
+   konsekwentnym solve'em ładunku i spinu oraz torque RHS LLG; obecny callback
+   CPU/double jest jeszcze bramą bounded, bez GPU i bez połączonego Oersteda;
 2. `external_lead`, tabulowanego envelope'u z resolverem artefaktów i pełnej
    semantyki energii/mocy;
 3. FEM GPU/device-resident, FDM GPU oraz brak transferów w hot loop;
@@ -9830,7 +9832,9 @@ implementacji i niezależnego dowodu:
 6. aktualizacja macierzy capability dopiero po przejściu powyższych bram.
 
 Status pozostaje zatem: **implemented + bounded CPU contract-tested** dla
-one-way stage envelope; **not production-qualified** dla pełnego celu planu.
+one-way stage envelope i reciprocal M2 FDM; **implemented + bounded CPU
+contract-tested** dla reciprocal FEM torque callback; **not
+production-qualified** dla pełnego celu planu.
 
 ## 32.111. FDM CPU reciprocal M2: stage-time envelope, `J_c(m_stage)` i torque (2026-08-09)
 
@@ -9847,9 +9851,82 @@ transportu. `Insulating` i wewnętrzne warunki spinowe nie są skalowane.
 Dodano test planera zachowujący envelope po obniżeniu M2 oraz test runnera
 porównujący bazowy i podwojony stage (potencjał i każda składowa prądu muszą
 być liniowo przeskalowane, a snapshot publikuje `evaluated_envelope_multiplier`).
-Jest to dowód kadencji stage i spójności wejścia do M2 na FDM CPU; nie jest to
-jeszcze dowód FEM M2, GPU/device-resident, `external_lead`, resolvera tabel,
-airbox/energii ani cross-backend production qualification.
+Jest to dowód kadencji stage i spójności wejścia do M2 na FDM CPU; osobna
+brama FEM M2 torque callback jest opisana w §32.112. Nie jest to jeszcze
+publiczny end-to-end dowód FEM, GPU/device-resident, `external_lead`,
+resolvera tabel, airbox/energii ani cross-backend production qualification.
 
 Status bramy: **implemented + unit/runner contract-tested (FDM CPU/double)**;
 globalny cel STT/SOT/SHE/Oersted nadal **not production-qualified**.
+
+## 32.112. FEM CPU reciprocal M2: stage callback torque RHS (2026-08-09)
+
+Zaimplementowano brakującą, ale nadal ograniczoną bramę FEM dla wzajemnego
+transportu M2 z jawnie żądanym `DriftDiffusionSpinTorque`. Planner wybiera
+`fem_stage_transport_callback.v1` tylko dla reciprocal FEM M2 z targetem
+torque. One-way torque pozostaje fail-closed, a reciprocal M2 połączone z
+Oerstedem jest odrzucane do czasu kwalifikacji jednego callbacku publikującego
+jednocześnie pole i torque.
+
+### 32.112.1. Definicja fizyczna i jednostki
+
+Na każdym RHS RK obowiązuje jeden stan:
+
+```text
+t_stage = t_n + c_i dt,
+m_stage = m_i,
+(J_c, J_s, mu_s) = Solve_M2(m_stage, t_stage, a(t_stage)),
+tau_tr = T(J_c, J_s, mu_s, m_stage) [1/s],
+dm/dt = RHS_LLG + tau_tr.
+```
+
+M2 rozwiązuje sprzężony, konformny H1/P1 problem ładunku i spinu z
+magnetyzacją w operatorze konstytutywnym, a nie post-hoc korektę prądu
+one-way. `a(t_stage)` skaluje tylko różnice napięcia względem wybranej
+elektrody referencyjnej (albo źródło normal-current); wartość referencyjna/
+gauge pozostaje niezmieniona. `tau_tr` jest bezpośrednim wkładem
+do RHS w `1/s`, nie polem `H` w `A/m`; natywny integrator dodaje go po LLG,
+STT i SOT, po czym wykonuje standardową normalizację magnetyzacji.
+
+### 32.112.2. Implementacja cross-layer
+
+1. **ABI/native:** dodano append-only
+   `fullmag_fem_backend_set_stage_transport_callback_v1` oraz osobny typ
+   callbacku. Otrzymuje pełne `m_xyz`, dokładny czas i `stage_identity`, zwraca
+   nodalny `torque_xyz_per_s` oraz rewizję źródła. Hooki begin/commit/rollback
+   są niezależne od istniejącego ABI Oersteda.
+2. **FEM CPU RK:** `TransportStageRuntimeState` waliduje skończoność, dodaje
+   torque po standardowych składnikach RHS, a `RkStepTransaction` obejmuje
+   torque, rewizję i identyfikator stage. Odrzucona próba i awaria natywna
+   przywracają stan; GPU kończy się jawnie fail-closed przed wywołaniem.
+3. **Planner/runner:** `StageTransportProvider` kopiuje `m_stage` do
+   `NativeFemSteadyTransportRequest`, ewaluje wspólny `time_envelope`, skaluje
+   różnice `charge_dirichlet` względem elektrody referencyjnej, wykonuje pełny
+   solve reciprocal M2, publikuje digest/L2 obserwacji i instaluje
+   callback tylko na FEM CPU/double. Finalizacja zapisuje
+   `transport/fem_stage_transport_callback.v1.json`.
+4. **FDM bez regresji:** istniejąca ścieżka FDM M2 nadal wykonuje wspólny solve
+   `J_c(m_stage)` + torque i pozostaje osobną, kwalifikowaną tylko na poziomie
+   bounded CPU bramą.
+
+### 32.112.3. Dowody
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-cpu-only-contract  # PASS
+fullmag-plan spin_transport::tests (24 passed; 0 failed)               # PASS
+cargo check -p fullmag-runner --features fem-gpu --lib               # PASS (diagnostic)
+```
+
+Zarządzany kontrakt `fem_rk_explicit_contract` obejmuje niezależny RK4,
+adaptacyjny RK23 z rollbackiem, awarię po kandydacie oraz GPU fail-closed.
+Dowód potwierdza implementację i wykonanie CPU/double; nie jest promocją
+capability produkcyjnej.
+
+### 32.112.4. Bramy pozostałe
+
+Otwierają się nadal: publiczny Python/IR/UI → planner → runtime fixture z
+rzeczywistym M2 FEM, pełne `external_lead`, wspólny solve Oersted+torque,
+GPU/device-resident i brak transferów w hot loop, FDM GPU, airbox/energia/p,
+zbieżność h/p, porównanie ilościowe FEM↔FDM oraz MuMax/BORIS/NeuralMag, a także
+aktualizacja macierzy capability. Do tych bram status pozostaje
+**bounded CPU/double, not production-qualified**.

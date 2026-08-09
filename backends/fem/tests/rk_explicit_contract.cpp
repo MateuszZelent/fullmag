@@ -365,6 +365,7 @@ void rk_transaction_payload_inventory_covers_owned_vectors() {
              "dmi.h_interfacial_xyz",
              "effective_field.h_xyz",
              "oersted.h_basis_per_ampere_xyz",
+             "stage_transport.torque_xyz_per_s",
              "thermal_brown.xi_xyz",
              "gpu_hybrid_stage_m",
              "cpu_k0",
@@ -788,6 +789,325 @@ void gpu_requested_stage_oersted_callback_fails_closed()
         "GPU callback rejection must happen before any stage invocation");
 }
 
+struct StageTransportCallbackProbe {
+    std::vector<double> evaluation_times;
+    std::vector<uint64_t> stage_identities;
+    std::vector<uint64_t> begin_identities;
+    uint32_t begin_count = 0;
+    uint32_t commit_count = 0;
+    uint32_t rollback_count = 0;
+};
+
+extern "C" int stage_transport_probe_evaluate(
+    void *user_data,
+    const double *m_xyz,
+    uint64_t m_xyz_len,
+    double evaluation_time_s,
+    uint64_t stage_identity,
+    double *out_torque_xyz_per_s,
+    uint64_t out_torque_xyz_len,
+    uint64_t *out_source_state_revision,
+    char *,
+    uint64_t)
+{
+    auto *probe = static_cast<StageTransportCallbackProbe *>(user_data);
+    if (probe == nullptr || m_xyz == nullptr || out_torque_xyz_per_s == nullptr ||
+        m_xyz_len != out_torque_xyz_len || (m_xyz_len % 3u) != 0u) {
+        return 1;
+    }
+    probe->evaluation_times.push_back(evaluation_time_s);
+    probe->stage_identities.push_back(stage_identity);
+    for (uint64_t index = 0; index < m_xyz_len; index += 3u) {
+        out_torque_xyz_per_s[index] =
+            0.63 + 0.31 * m_xyz[index + 2u] + 0.17 * evaluation_time_s;
+        out_torque_xyz_per_s[index + 1u] =
+            -0.27 + 0.19 * m_xyz[index] - 0.11 * evaluation_time_s;
+        out_torque_xyz_per_s[index + 2u] =
+            0.14 - 0.23 * m_xyz[index + 1u] + 0.07 * evaluation_time_s;
+    }
+    if (out_source_state_revision != nullptr) {
+        *out_source_state_revision = 23u;
+    }
+    return 0;
+}
+
+extern "C" int stage_transport_probe_begin(
+    void *user_data,
+    uint64_t,
+    uint64_t attempt_identity,
+    double,
+    double,
+    char *,
+    uint64_t)
+{
+    auto *probe = static_cast<StageTransportCallbackProbe *>(user_data);
+    if (probe == nullptr) return 1;
+    probe->begin_count += 1u;
+    probe->begin_identities.push_back(attempt_identity);
+    return 0;
+}
+
+extern "C" int stage_transport_probe_commit(
+    void *user_data,
+    uint64_t,
+    uint64_t,
+    double,
+    double,
+    char *,
+    uint64_t)
+{
+    auto *probe = static_cast<StageTransportCallbackProbe *>(user_data);
+    if (probe == nullptr) return 1;
+    probe->commit_count += 1u;
+    return 0;
+}
+
+extern "C" int stage_transport_probe_rollback(
+    void *user_data,
+    uint64_t,
+    uint64_t,
+    double,
+    double,
+    char *,
+    uint64_t)
+{
+    auto *probe = static_cast<StageTransportCallbackProbe *>(user_data);
+    if (probe == nullptr) return 1;
+    probe->rollback_count += 1u;
+    return 0;
+}
+
+fullmag_fem_stage_transport_callback_v1 make_stage_transport_probe_callback(
+    StageTransportCallbackProbe &probe)
+{
+    fullmag_fem_stage_transport_callback_v1 callback{};
+    callback.abi_version = FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION;
+    callback.struct_size = sizeof(callback);
+    callback.user_data = &probe;
+    callback.evaluate = &stage_transport_probe_evaluate;
+    callback.begin_attempt = &stage_transport_probe_begin;
+    callback.commit_attempt = &stage_transport_probe_commit;
+    callback.rollback_attempt = &stage_transport_probe_rollback;
+    return callback;
+}
+
+std::vector<double> stage_transport_probe_rhs(
+    const fullmag::fem::Context &ctx,
+    const std::vector<double> &m,
+    double time_s)
+{
+    std::vector<double> h(m.size(), 0.0);
+    std::vector<double> rhs;
+    double max_rhs = 0.0;
+    fullmag::fem::llg_rhs_aos(
+        m,
+        h,
+        ctx.material_fields.material.gyromagnetic_ratio,
+        ctx.material_fields.material.damping,
+        nullptr,
+        ctx.base_plan.precession_enabled,
+        rhs,
+        max_rhs);
+    for (size_t index = 0; index < m.size(); index += 3u) {
+        rhs[index] += 0.63 + 0.31 * m[index + 2u] + 0.17 * time_s;
+        rhs[index + 1u] += -0.27 + 0.19 * m[index] - 0.11 * time_s;
+        rhs[index + 2u] += 0.14 - 0.23 * m[index + 1u] + 0.07 * time_s;
+    }
+    return rhs;
+}
+
+std::vector<double> stage_transport_probe_rk_step(
+    const fullmag::fem::Context &ctx,
+    const fullmag::fem::ExplicitTableau &tableau,
+    const std::vector<double> &m_initial,
+    double time_initial,
+    double dt)
+{
+    std::vector<std::vector<double>> stages(
+        static_cast<size_t>(tableau.stages),
+        std::vector<double>(m_initial.size(), 0.0));
+    for (int stage = 0; stage < tableau.stages; ++stage) {
+        std::vector<double> m_stage = m_initial;
+        if (stage > 0) {
+            for (size_t index = 0; index < m_stage.size(); ++index) {
+                double increment = 0.0;
+                for (int prior = 0; prior < stage; ++prior) {
+                    increment += tableau.a[stage][prior] * stages[prior][index];
+                }
+                m_stage[index] += dt * increment;
+            }
+            fullmag::fem::normalize_aos_field(m_stage);
+        }
+        stages[stage] = stage_transport_probe_rhs(
+            ctx,
+            m_stage,
+            time_initial + tableau.c[stage] * dt);
+    }
+    std::vector<double> accepted = m_initial;
+    for (size_t index = 0; index < accepted.size(); ++index) {
+        double increment = 0.0;
+        for (int stage = 0; stage < tableau.stages; ++stage) {
+            increment += tableau.b_hi[stage] * stages[stage][index];
+        }
+        accepted[index] += dt * increment;
+    }
+    fullmag::fem::normalize_aos_field(accepted);
+    return accepted;
+}
+
+void cpu_stage_transport_callback_samples_exact_stages_and_commits()
+{
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    ctx.oersted = {};
+    StageTransportCallbackProbe probe;
+    const auto callback = make_stage_transport_probe_callback(probe);
+    std::string error;
+    check(
+        fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        error.c_str());
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_RK4);
+    const auto expected = stage_transport_probe_rk_step(
+        ctx, tableau, ctx.state.m_xyz, ctx.state.current_time, 0.19);
+    fullmag_fem_step_stats stats{};
+    check(
+        fullmag::fem::run_backend_step(ctx, 0.19, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check_vector_near(
+        ctx.state.m_xyz,
+        expected,
+        2e-13,
+        "stage transport callback must add the exact dynamic torque RHS");
+    check(probe.begin_count == 1u, "stage transport callback must begin one attempt");
+    check(probe.commit_count == 1u, "stage transport callback must commit one attempt");
+    check(probe.rollback_count == 0u, "accepted stage transport callback must not roll back");
+    check(
+        probe.evaluation_times.size() == static_cast<size_t>(tableau.stages + 1),
+        "stage transport callback must include every RK stage and endpoint refresh");
+    check(
+        probe.stage_identities.back() != probe.stage_identities.front() &&
+            (probe.stage_identities.back() & 0xffffu) == 0xffffu,
+        "accepted transport endpoint refresh must have a distinct reserved stage identity");
+    check(
+        ctx.stage_transport.stage_source_state_revision == 23u,
+        "accepted transport callback must publish the source-state revision");
+    check(!ctx.stage_transport.stage_attempt_active,
+        "accepted stage transport callback attempt must close");
+}
+
+void cpu_stage_transport_callback_rolls_back_adaptive_retries()
+{
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    ctx.oersted = {};
+    ctx.adaptive_dt.enabled = true;
+    ctx.adaptive_dt.atol = 1e-10;
+    ctx.adaptive_dt.rtol = 1e-10;
+    ctx.adaptive_dt.dt_min = 1e-9;
+    ctx.adaptive_dt.dt_max = 1.0;
+    ctx.adaptive_dt.safety_factor = 0.8;
+    ctx.adaptive_dt.dt_grow_max = 2.0;
+    ctx.adaptive_dt.dt_shrink_min = 0.2;
+    ctx.adaptive_dt.max_reject = 30;
+    StageTransportCallbackProbe probe;
+    const auto callback = make_stage_transport_probe_callback(probe);
+    std::string error;
+    check(
+        fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        error.c_str());
+    fullmag_fem_step_stats stats{};
+    check(
+        fullmag::fem::run_backend_step(ctx, 0.8, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check(stats.rejected_attempts > 0u,
+        "dynamic stage transport fixture must reject an initial attempt");
+    check(
+        probe.begin_count == stats.rejected_attempts + 1u,
+        "every adaptive transport attempt must have a begin hook");
+    check(
+        probe.rollback_count == stats.rejected_attempts,
+        "every rejected transport attempt must roll back");
+    check(probe.commit_count == 1u,
+        "only the accepted dynamic transport attempt may commit");
+    check(!ctx.stage_transport.stage_attempt_active,
+        "adaptive transport callback attempt must close after acceptance");
+    for (size_t index = 1; index < probe.begin_identities.size(); ++index) {
+        check(
+            probe.begin_identities[index] == probe.begin_identities[index - 1] + 1u,
+            "adaptive transport attempt identities must be contiguous");
+    }
+}
+
+void cpu_stage_transport_callback_rolls_back_native_failure()
+{
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    ctx.oersted = {};
+    StageTransportCallbackProbe probe;
+    const auto callback = make_stage_transport_probe_callback(probe);
+    std::string error;
+    check(
+        fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        error.c_str());
+    const auto m_before = ctx.state.m_xyz;
+    const double time_before = ctx.state.current_time;
+    const uint64_t step_before = ctx.state.step_count;
+    const auto torque_before = ctx.stage_transport.torque_xyz_per_s;
+    ctx.stepper.failure_injection.next =
+        fullmag::fem::RkStepFailurePoint::AfterCandidateMagnetization;
+    fullmag_fem_step_stats stats{};
+    check(
+        fullmag::fem::run_backend_step(ctx, 0.19, stats, error) != FULLMAG_FEM_OK,
+        "native RK transport failure fixture must fail");
+    check(probe.rollback_count == 1u,
+        "native RK failure must roll back the stage transport callback");
+    check(probe.commit_count == 0u,
+        "failed native RK transport attempt must not commit");
+    check_vector_near(
+        ctx.state.m_xyz,
+        m_before,
+        0.0,
+        "stage transport native failure must preserve magnetization");
+    check_near(
+        ctx.state.current_time,
+        time_before,
+        0.0,
+        "stage transport native failure must preserve time");
+    check(
+        ctx.state.step_count == step_before,
+        "stage transport native failure must preserve step count");
+    check_vector_near(
+        ctx.stage_transport.torque_xyz_per_s,
+        torque_before,
+        0.0,
+        "stage transport native failure must restore torque state");
+    check(!ctx.stage_transport.stage_attempt_active,
+        "failed stage transport callback attempt must close");
+}
+
+void gpu_requested_stage_transport_callback_fails_closed()
+{
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    ctx.oersted = {};
+    ctx.mfem_device.device_string_override = "cuda";
+    StageTransportCallbackProbe probe;
+    const auto callback = make_stage_transport_probe_callback(probe);
+    std::string error;
+    check(
+        fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        error.c_str());
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag_fem_step_stats stats{};
+    check(
+        !fullmag::fem::context_step_explicit_rk_mfem(
+            ctx, tableau, 0.01, stats, error),
+        "GPU-requested stage transport callback must fail closed");
+    check(
+        error.find("CPU-only stage transport callback") != std::string::npos,
+        "GPU transport rejection must identify the missing device-resident lane");
+    check(probe.begin_count == 0u && probe.evaluation_times.empty(),
+        "GPU transport rejection must happen before any stage invocation");
+}
+
 void set_step_profile(fullmag::fem::Context &ctx, bool enabled) {
     ctx.gpu_state.rk_phase_timings.override_configured = true;
     ctx.gpu_state.rk_phase_timings.override_enabled = enabled;
@@ -1153,6 +1473,7 @@ struct PublishedRkStateSnapshot {
     fullmag::fem::DmiRuntimeState dmi;
     fullmag::fem::ZeemanRuntimeState zeeman;
     fullmag::fem::OerstedRuntimeState oersted;
+    fullmag::fem::TransportStageRuntimeState stage_transport;
     fullmag::fem::ThermalBrownRuntimeState thermal;
     bool fsal_valid = false;
     std::vector<double> fsal_k0;
@@ -1175,6 +1496,7 @@ PublishedRkStateSnapshot capture_published_rk_state(
         ctx.dmi,
         ctx.zeeman,
         ctx.oersted,
+        ctx.stage_transport,
         ctx.thermal_brown,
         ctx.stepper.workspace.fsal_valid,
         ctx.stepper.workspace.k[0],
@@ -1213,6 +1535,21 @@ void assert_published_rk_state_equal(
     check_vector_near(ctx.zeeman.h_drive_xyz, before.zeeman.h_drive_xyz, 0.0, label);
     check_near(ctx.zeeman.last_evaluation_time_s, before.zeeman.last_evaluation_time_s, 0.0, label);
     check_vector_near(ctx.oersted.h_xyz, before.oersted.h_xyz, 0.0, label);
+    check(ctx.stage_transport.has_stage_callback == before.stage_transport.has_stage_callback, label);
+    check_vector_near(
+        ctx.stage_transport.torque_xyz_per_s,
+        before.stage_transport.torque_xyz_per_s,
+        0.0,
+        label);
+    check(ctx.stage_transport.stage_identity == before.stage_transport.stage_identity, label);
+    check(
+        ctx.stage_transport.stage_source_state_revision ==
+            before.stage_transport.stage_source_state_revision,
+        label);
+    check(
+        ctx.stage_transport.stage_attempt_active ==
+            before.stage_transport.stage_attempt_active,
+        label);
     check_vector_near(ctx.thermal_brown.h_xyz, before.thermal.h_xyz, 0.0, label);
     check(ctx.stepper.workspace.fsal_valid == before.fsal_valid, label);
     check_vector_near(ctx.stepper.workspace.k[0], before.fsal_k0, 0.0, label);
@@ -1622,6 +1959,10 @@ int main() {
     cpu_stage_oersted_callback_rolls_back_adaptive_retries();
     cpu_stage_oersted_callback_rolls_back_native_failure();
     gpu_requested_stage_oersted_callback_fails_closed();
+    cpu_stage_transport_callback_samples_exact_stages_and_commits();
+    cpu_stage_transport_callback_rolls_back_adaptive_retries();
+    cpu_stage_transport_callback_rolls_back_native_failure();
+    gpu_requested_stage_transport_callback_fails_closed();
     gpu_requested_oersted_only_step_rejects_host_rk_fallback();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
     cpu_rk_guard_failures_preserve_committed_state();

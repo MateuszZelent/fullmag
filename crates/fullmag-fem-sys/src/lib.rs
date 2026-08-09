@@ -15,6 +15,8 @@ pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
 pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY: usize = 256;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION: u32 = 1;
@@ -349,6 +351,46 @@ pub struct fullmag_fem_stage_oersted_callback_v1 {
     pub begin_attempt: fullmag_fem_stage_oersted_attempt_fn,
     pub commit_attempt: fullmag_fem_stage_oersted_attempt_fn,
     pub rollback_attempt: fullmag_fem_stage_oersted_attempt_fn,
+}
+
+pub type fullmag_fem_stage_transport_evaluate_fn = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        m_xyz: *const f64,
+        m_xyz_len: u64,
+        evaluation_time_s: f64,
+        stage_identity: u64,
+        out_torque_xyz_per_s: *mut f64,
+        out_torque_xyz_len: u64,
+        out_source_state_revision: *mut u64,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32,
+>;
+
+pub type fullmag_fem_stage_transport_attempt_fn = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        target_step: u64,
+        attempt_identity: u64,
+        time_start_s: f64,
+        dt_seconds: f64,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32,
+>;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct fullmag_fem_stage_transport_callback_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub user_data: *mut c_void,
+    pub evaluate: fullmag_fem_stage_transport_evaluate_fn,
+    pub begin_attempt: fullmag_fem_stage_transport_attempt_fn,
+    pub commit_attempt: fullmag_fem_stage_transport_attempt_fn,
+    pub rollback_attempt: fullmag_fem_stage_transport_attempt_fn,
 }
 
 pub const FULLMAG_FEM_MESH_DESC_ABI_VERSION: u32 = 2;
@@ -2004,6 +2046,10 @@ extern "C" {
     pub fn fullmag_fem_backend_set_stage_oersted_callback_v1(
         handle: *mut fullmag_fem_backend,
         callback: *const fullmag_fem_stage_oersted_callback_v1,
+    ) -> i32;
+    pub fn fullmag_fem_backend_set_stage_transport_callback_v1(
+        handle: *mut fullmag_fem_backend,
+        callback: *const fullmag_fem_stage_transport_callback_v1,
     ) -> i32;
 
     pub fn fullmag_fem_backend_step(

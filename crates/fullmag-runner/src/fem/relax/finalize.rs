@@ -327,6 +327,14 @@ pub(crate) fn finalize_native_fem_relaxation(
             })?,
         });
     }
+    if let Some(telemetry) = backend.stage_transport_telemetry() {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "transport/fem_stage_transport_callback.v1.json".into(),
+            bytes: serde_json::to_vec_pretty(&telemetry).map_err(|error| RunError {
+                message: format!("failed to encode FEM stage transport telemetry: {error}"),
+            })?,
+        });
+    }
     field_snapshots.extend(diagnostic_field_snapshots);
     let finalization_wall_time_ns = elapsed_ns(finalization_start);
     final_stats.finalization_wall_time_ns = finalization_wall_time_ns;

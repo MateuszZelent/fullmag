@@ -361,6 +361,46 @@ typedef struct {
     fullmag_fem_stage_oersted_attempt_fn rollback_attempt;
 } fullmag_fem_stage_oersted_callback_v1;
 
+/* Append-only native CPU RK hook for a reciprocal charge--spin solve.  The
+ * callback receives the exact stage magnetization and returns a direct LLG
+ * torque in 1/s.  The torque is added to the native RHS after the standard
+ * LLG, STT and SOT terms; GPU execution rejects this hook until a
+ * device-resident implementation is qualified. */
+#define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION 1u
+#define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY 256u
+
+typedef int (*fullmag_fem_stage_transport_evaluate_fn)(
+    void *user_data,
+    const double *m_xyz,
+    uint64_t m_xyz_len,
+    double evaluation_time_s,
+    uint64_t stage_identity,
+    double *out_torque_xyz_per_s,
+    uint64_t out_torque_xyz_len,
+    uint64_t *out_source_state_revision,
+    char *error_message,
+    uint64_t error_message_capacity);
+
+typedef int (*fullmag_fem_stage_transport_attempt_fn)(
+    void *user_data,
+    uint64_t target_step,
+    uint64_t attempt_identity,
+    double time_start_s,
+    double dt_seconds,
+    char *error_message,
+    uint64_t error_message_capacity);
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    void *user_data;
+    fullmag_fem_stage_transport_evaluate_fn evaluate;
+    fullmag_fem_stage_transport_attempt_fn begin_attempt;
+    fullmag_fem_stage_transport_attempt_fn commit_attempt;
+    fullmag_fem_stage_transport_attempt_fn rollback_attempt;
+} fullmag_fem_stage_transport_callback_v1;
+
 /* Canonical typed P1 mesh descriptor. Wire values are stable ABI, not Gmsh IDs. */
 #define FULLMAG_FEM_MESH_DESC_ABI_VERSION 2u
 #define FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT \
@@ -1853,6 +1893,12 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle);
 int fullmag_fem_backend_set_stage_oersted_callback_v1(
     fullmag_fem_backend *handle,
     const fullmag_fem_stage_oersted_callback_v1 *callback);
+
+/* Install or clear the append-only CPU reciprocal transport torque callback.
+ * Passing NULL clears the hook and invalidates FSAL. */
+int fullmag_fem_backend_set_stage_transport_callback_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_stage_transport_callback_v1 *callback);
 
 int fullmag_fem_backend_step(
     fullmag_fem_backend *handle,

@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available, while a closure-aware RT0/OE-F1/OE-F2 CPU/double path now selects the fem_stage_oersted_callback.v1 policy for a public closed_geometry descriptor, evaluates the field through the native RK stage provider, re-evaluates the supported source envelope at each stage, publishes callback provenance and injects nodal H before native LLG. This is not reciprocal magnetization-dependent transport or torque RHS; external-lead closure, tabulated-artifact resolution, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available. The closure-aware RT0/OE-F1/OE-F2 CPU/double path selects fem_stage_oersted_callback.v1 for public closed_geometry, while the reciprocal M2 torque path selects fem_stage_transport_callback.v1 and adds the solved torque RHS at exact RK stages. Both remain bounded CPU contracts: external-lead closure, combined reciprocal Oersted, tabulated-artifact resolution, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -19,7 +19,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "semantic_only",
-      "reason": "FDM CPU one-way transport now re-evaluates supported source envelopes at each stage and publishes the multiplier, but the canonical FFT/closure, solved-current Oersted and cross-backend production contract remain unqualified."
+      "reason": "FDM CPU one-way and reciprocal M2 transport re-evaluate supported source envelopes at each stage; reciprocal M2 publishes charge/spin/torque from one solve. Canonical FFT/closure, solved-current Oersted and cross-backend production qualification remain unqualified."
     },
     {
       "solver": "FDM",
@@ -33,15 +33,23 @@
       "id": "instantaneous-biot-savart-h",
       "symbols": ["J_c", "H_oe", "r", "V_e", "r_reg"],
       "sources": ["physics-biot-savart", "fem-midpoint-reference"]
+    },
+    {
+      "id": "reciprocal-transport-torque-rhs",
+      "symbols": ["J_c", "mu_s", "m_stage", "tau_tr"],
+      "sources": ["fem-stage-transport-callback-runner", "fem-stage-transport-contract"]
     }
   ],
   "symbols": [
     {"id": "J_c", "latex": "J_c", "meaning": "conventional current density", "si_unit": "A/m^2"},
+    {"id": "mu_s", "latex": "mu_s", "meaning": "spin accumulation potential", "si_unit": "V"},
     {"id": "H_oe", "latex": "H_oe", "meaning": "Oersted field", "si_unit": "A/m"},
     {"id": "r", "latex": "r", "meaning": "target-source displacement", "si_unit": "m"},
     {"id": "V_e", "latex": "V_e", "meaning": "active tetrahedron volume", "si_unit": "m^3"},
     {"id": "r_reg", "latex": "r_reg", "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice", "si_unit": "m"},
-    {"id": "mu_0", "latex": "mu_0", "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy", "si_unit": "H/m"}
+    {"id": "mu_0", "latex": "mu_0", "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy", "si_unit": "H/m"},
+    {"id": "m_stage", "latex": "m_stage", "meaning": "normalized magnetization at an RK stage", "si_unit": "1"},
+    {"id": "tau_tr", "latex": "tau_tr", "meaning": "direct reciprocal transport contribution to `dm/dt`", "si_unit": "s^-1"}
   ],
   "sources": [
     {
@@ -60,7 +68,7 @@
       "id": "fem-transport-descriptor",
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "resolve_m1_fem_spin_transport",
-      "responsibility": "Publish the resolved FEM transport descriptor and resolve fem_stage_oersted_callback.v1 for one-way closed_geometry Oersted with a validated RT0 view; fail closed for reciprocal, torque-RHS or unsupported stage coupling."
+      "responsibility": "Publish the resolved FEM transport descriptor; resolve fem_stage_oersted_callback.v1 for one-way closed_geometry Oersted and fem_stage_transport_callback.v1 for reciprocal M2 torque, while failing closed for combined reciprocal Oersted and unsupported coupling."
     },
     {
       "id": "fem-oef2-planner-selection",
@@ -147,6 +155,30 @@
       "responsibility": "Persist callback counters, accepted/last stage observation, source-view digest and field digest as an auxiliary transport artifact."
     },
     {
+      "id": "fem-stage-transport-callback-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_set_stage_transport_callback_v1",
+      "responsibility": "Append-only native CPU RK hook for reciprocal FEM M2: receive exact m_stage/time/stage identity and return a complete direct torque RHS in 1/s with transactional attempt hooks; GPU remains fail-closed."
+    },
+    {
+      "id": "fem-stage-transport-callback-runtime",
+      "path": "backends/fem/cpu/mfem/interactions/transport_stage.cpp",
+      "symbol": "materialize_transport_stage_rhs",
+      "responsibility": "Validate and materialize the callback torque, add it after LLG/STT/SOT, and keep stage/attempt state in the RK transaction without changing the Oersted ABI."
+    },
+    {
+      "id": "fem-stage-transport-callback-runner",
+      "path": "crates/fullmag-runner/src/native_fem/stage_transport.rs",
+      "symbol": "evaluate",
+      "responsibility": "Run the reciprocal FEM M2 charge--spin solve for each exact m_stage and t_stage, apply the canonical envelope to source-cut voltage, publish torque digest/revision and expose accepted/last observations."
+    },
+    {
+      "id": "fem-stage-transport-callback-provenance",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Persist reciprocal stage-transport callback counters and observations as an auxiliary artifact when the public FEM run reaches finalization."
+    },
+    {
       "id": "fem-rt0-oersted-native-adapter",
       "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
       "symbol": "solve_rt0",
@@ -199,6 +231,12 @@
       "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
       "symbol": "source_envelope_multiplier",
       "responsibility": "Re-evaluate the resolved current-source envelope before every FDM CPU one-way or reciprocal M2 charge solve, publish the finite multiplier in the accepted snapshot, and keep the M2 solve/torque stage-consistent with m_stage."
+    },
+    {
+      "id": "fem-stage-transport-contract",
+      "path": "backends/fem/tests/rk_explicit_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed CPU/double RK4 direct-torque reference, adaptive rollback, native-failure rollback and GPU fail-closed contract for the reciprocal FEM stage callback."
     },
     {
       "id": "planner-regression",

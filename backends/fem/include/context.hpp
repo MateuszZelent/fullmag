@@ -16,6 +16,7 @@
 #include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "cpu/mfem/interactions/sot.hpp"
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
@@ -83,6 +84,7 @@ struct Context {
 
     // ── Oersted field (cylindrical conductor or explicit nodal H field) ──
     OerstedRuntimeState oersted{};
+    TransportStageRuntimeState stage_transport{};
 
     ThermalBrownRuntimeState thermal_brown{};
 

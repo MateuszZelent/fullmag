@@ -18,6 +18,7 @@ use crate::surface_selectors::resolve_fem_surface_selector;
 use crate::PlanError;
 
 const FEM_STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
+const FEM_STAGE_TRANSPORT_CALLBACK_POLICY: &str = "fem_stage_transport_callback.v1";
 
 #[cfg(test)]
 fn resolve_fem_stage_coupling(
@@ -533,17 +534,6 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 "{prefix} mixing/SML requires the unavailable broken-H1 mortar realization"
             ));
         }
-        if problem.spin_torque_modules.iter().any(|torque| {
-            matches!(
-                torque,
-                SpinTorqueModuleIR::DriftDiffusionSpinTorque { solve_id, .. }
-                    if solve_id == &module.id
-            )
-        }) {
-            errors.push(format!(
-                "{prefix} transport torque stage coupling into native LLG is not implemented; the FEM lane cannot publish torque_stt as an RHS without a torque callback"
-            ));
-        }
         let source = problem
             .current_modules
             .iter()
@@ -568,18 +558,6 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             continue;
         };
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
-        let oersted_source_bound = problem.energy_terms.iter().any(|term| {
-            matches!(
-                term,
-                fullmag_ir::EnergyTermIR::OerstedField { source, .. }
-                    if source == &module.current_source_id
-            )
-        });
-        if oersted_source_bound && reciprocal {
-            errors.push(format!(
-                "{prefix} FEM reciprocal M2 Oersted coupling is not stage-consistent; use one-way Ohmic transport or the FDM coupled lane"
-            ));
-        }
         let expected_model = if reciprocal {
             fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
         } else {
@@ -720,6 +698,7 @@ fn materialize_fem_descriptor(
     reciprocal: bool,
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
 ) -> Result<ResolvedFemSpinTransportIR, Vec<String>> {
+    let prefix = format!("FEM spin transport '{}'", module.id);
     let charge_domain = fem_domain_mask(
         &charge.domain,
         mesh.cell_count(),
@@ -944,6 +923,11 @@ fn materialize_fem_descriptor(
             })
         })
         .transpose()?;
+    if torque_target.is_some() && !reciprocal {
+        return Err(vec![format!(
+            "{prefix} transport torque RHS currently requires reciprocal FEM M2 stage transport; one-way torque remains fail-closed"
+        )]);
+    }
     match charge.gauge {
         fullmag_ir::ChargePotentialGaugeIR::DirichletReference if charge_dirichlet.is_empty() => {
             return Err(vec![
@@ -976,12 +960,24 @@ fn materialize_fem_descriptor(
                 if source == &module.current_source_id
         )
     });
-    let stage_coupling = resolve_fem_stage_coupling_for_stage(
-        reciprocal,
-        oersted_source_bound,
-        conservative_current_view.as_ref(),
-    );
-    if torque_target.is_some() && stage_coupling != FEM_STAGE_OERSTED_CALLBACK_POLICY {
+    if reciprocal && oersted_source_bound {
+        let reason = if torque_target.is_some() {
+            "reciprocal M2 stage transport currently publishes torque RHS only; Oersted must use the FDM coupled lane until the FEM combined field callback is qualified"
+        } else {
+            "reciprocal FEM Oersted requires a combined magnetization-dependent field callback; the current FEM lane is fail-closed"
+        };
+        return Err(vec![format!("{prefix} {reason}")]);
+    }
+    let stage_coupling = if reciprocal && torque_target.is_some() {
+        FEM_STAGE_TRANSPORT_CALLBACK_POLICY
+    } else {
+        resolve_fem_stage_coupling_for_stage(
+            reciprocal,
+            oersted_source_bound,
+            conservative_current_view.as_ref(),
+        )
+    };
+    if torque_target.is_some() && !reciprocal && stage_coupling != FEM_STAGE_OERSTED_CALLBACK_POLICY {
         return Err(vec![format!(
             "FEM spin transport '{}' stage coupling requires one-way closed_geometry Oersted with a validated RT0 view",
             module.id
@@ -3075,7 +3071,7 @@ mod tests {
         assert!(error
             .reasons
             .iter()
-            .any(|reason| reason.contains("stage-consistent")));
+            .any(|reason| reason.contains("combined magnetization-dependent field callback")));
     }
 
     #[test]
@@ -3152,6 +3148,79 @@ mod tests {
         assert!(plan
             .capabilities
             .contains(&"transport.spin.inverse_she".to_string()));
+    }
+
+    #[test]
+    fn resolves_bounded_fem_m2_torque_to_stage_transport_callback() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.spin_transport_modules[0]
+            .requested_execution
+            .discretization = BackendTarget::Fem;
+        let CurrentModuleIR::CurrentTransport {
+            model,
+            coupling,
+            definition: Some(charge),
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        *model = CurrentTransportModelIR::MagnetoresistivePoisson;
+        *coupling = TransportCouplingIR::Bidirectional;
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        let material = &mut charge.materials[0].material;
+        material.sigma_parallel_spm = Some(4.4e6);
+        material.sigma_perpendicular_spm = Some(4.0e6);
+        material.sigma_ahe_spm = Some(0.2e6);
+        charge.solver.engine = "block_gmres".into();
+        charge.solver.operator_version = FEM_M2_OPERATOR_VERSION.into();
+        charge.solver.physical_residual_version = FEM_RESIDUAL_VERSION.into();
+        problem.spin_transport_modules[0].constitutive_version =
+            FEM_M2_CONSTITUTIVE_VERSION.into();
+        problem.spin_transport_modules[0].solver.operator_version =
+            FEM_M2_OPERATOR_VERSION.into();
+        problem.spin_torque_modules.push(SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+            schema_version: "drift_diffusion_spin_torque.v1".into(),
+            id: "transport_torque".into(),
+            solve_id: "spin".into(),
+            target: RegionRefIR {
+                object_id: "strip".into(),
+                region_id: None,
+            },
+            formula_version: "transport_torque_angular_momentum.fullmag.v1".into(),
+        });
+        problem
+            .validate()
+            .expect("bounded FEM M2 torque fixture should satisfy canonical IR validation");
+
+        let plans = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 8],
+            8.0e5,
+            2.211e5,
+        )
+        .expect("bounded FEM M2 torque descriptor");
+        let descriptor = plans[0]
+            .fem_cpu_double
+            .as_ref()
+            .expect("executable FEM M2 torque descriptor");
+        assert_eq!(
+            descriptor.stage_coupling,
+            FEM_STAGE_TRANSPORT_CALLBACK_POLICY
+        );
+        assert!(descriptor.torque_target.is_some());
+        assert_eq!(
+            descriptor.validation_scope,
+            "fem_cpu_double_conforming_h1_p1_reciprocal_m2"
+        );
     }
 
     #[test]
@@ -3512,7 +3581,7 @@ mod tests {
                 },
                 formula_version: "transport_torque_angular_momentum.fullmag.v1".into(),
             });
-        assert_rejected(coupled, "stage coupling");
+        assert_rejected(coupled, "requires reciprocal FEM M2 stage transport");
 
         let mut transient = fem_problem();
         transient.spin_transport_modules[0].mode = SpinTransportModeIR::Transient;

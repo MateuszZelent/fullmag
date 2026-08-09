@@ -17,6 +17,7 @@
 #include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -77,8 +78,16 @@ int run_backend_step_attempt(
     auto rollback = [&]() {
         const std::string original_error = error;
         std::string callback_error;
+        if (!rollback_transport_stage_attempt(ctx, callback_error)) {
+            error = original_error + "; stage transport rollback failed: " + callback_error;
+        }
+        callback_error.clear();
         if (!rollback_oersted_stage_attempt(ctx, callback_error)) {
-            error = original_error + "; stage Oersted rollback failed: " + callback_error;
+            if (error.empty() || error == original_error) {
+                error = original_error + "; stage Oersted rollback failed: " + callback_error;
+            } else {
+                error += "; stage Oersted rollback failed: " + callback_error;
+            }
         }
         std::string rollback_error;
         if (!transaction.rollback(rollback_error)) {
@@ -207,7 +216,8 @@ int run_backend_step_attempt(
             return FULLMAG_FEM_OK;
         }
     }
-    if (!commit_oersted_stage_attempt(ctx, error)) {
+    if (!commit_transport_stage_attempt(ctx, error) ||
+        !commit_oersted_stage_attempt(ctx, error)) {
         rollback();
         set_stage_completion(
             ctx,

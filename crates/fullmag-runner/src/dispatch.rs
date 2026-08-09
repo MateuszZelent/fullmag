@@ -5607,6 +5607,8 @@ fn execute_native_fem(
     artifact_writer: Option<ArtifactPipelineSender>,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_transport_callback_requested =
+        crate::native_fem::plan_requests_stage_transport_callback(plan);
     let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -5640,6 +5642,18 @@ fn execute_native_fem(
             });
         }
         backend.install_stage_oersted_provider(Box::new(provider))?;
+    }
+    if let Some(provider) = crate::native_fem::StageTransportProvider::from_plan(plan)? {
+        if engine != FemEngine::CpuNative {
+            return Err(RunError {
+                message: "native FEM stage transport callback is qualified only on the CPU lane; refusing GPU fallback".into(),
+            });
+        }
+        backend.install_stage_transport_provider(Box::new(provider))?;
+    } else if stage_transport_callback_requested {
+        return Err(RunError {
+            message: "FEM stage transport callback was requested by the planner but no provider could be materialized".into(),
+        });
     }
     backend.begin_stage(plan.time_stage.start_time_s)?;
     let device_info = backend.device_info()?;
@@ -6473,6 +6487,7 @@ mod tests {
             solve_region: None,
             conductivity_s_per_m: None,
             coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            time_envelope: None,
             definition: Some(descriptor.charge_definition.clone()),
         }];
         plan.spin_transport_plans = vec![resolved];
@@ -9903,6 +9918,7 @@ mod tests {
                 solve_region: Some("free".to_string()),
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
 

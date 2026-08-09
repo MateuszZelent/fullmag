@@ -14,6 +14,7 @@
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "cpu/mfem/interactions/sot.hpp"
+#include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
@@ -112,6 +113,10 @@ bool context_step_explicit_rk_mfem(
             error = "GPU RK cannot use the CPU-only stage Oersted callback before a device-resident lane is qualified";
             return false;
         }
+        if (ctx.stage_transport.has_stage_callback) {
+            error = "GPU RK cannot use the CPU-only stage transport callback before a device-resident lane is qualified";
+            return false;
+        }
         std::string gpu_rk_reason;
         const auto gpu_rk_plan = gpu_rk_plan_device_resident(ctx, gpu_rk_reason);
         if (!gpu_rk_plan.enabled) {
@@ -156,6 +161,17 @@ bool context_step_explicit_rk_mfem(
                 ctx.state.current_time,
                 dt,
                 error)) {
+            return false;
+        }
+        if (!begin_transport_stage_attempt(
+                ctx,
+                target_step,
+                attempt_identity,
+                ctx.state.current_time,
+                dt,
+                error)) {
+            std::string rollback_error;
+            rollback_oersted_stage_attempt(ctx, rollback_error);
             return false;
         }
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
@@ -330,7 +346,8 @@ bool context_step_explicit_rk_mfem(
             if (result.kind == adaptive::AdaptiveDecisionKind::retry) {
                 ctx.state.m_xyz = ws.m_backup;
                 attempt_cache->restore_preserving_attempt_counters();
-                if (!rollback_oersted_stage_attempt(ctx, error)) {
+                if (!rollback_transport_stage_attempt(ctx, error) ||
+                    !rollback_oersted_stage_attempt(ctx, error)) {
                     ws.fsal_valid = false;
                     return false;
                 }
@@ -470,6 +487,15 @@ bool context_step_explicit_rk_mfem(
     if (final_stage_cache_valid) {
         max_rhs_final = max_norm_aos(ws.k[0]);
     } else {
+        if (!materialize_transport_stage_rhs(
+                ctx,
+                ctx.state.m_xyz,
+                ctx.state.current_time,
+                stage_identity(target_step, attempt_identity, 0xffffu),
+                error)) {
+            ws.fsal_valid = false;
+            return false;
+        }
         ScopedPhaseTimer timer(&timings.rhs_wall_time_ns);
         llg_rhs_aos(ctx.state.m_xyz, ctx.effective_field.h_xyz,
                     ctx.material_fields.material.gyromagnetic_ratio, ctx.material_fields.material.damping,
@@ -484,6 +510,7 @@ bool context_step_explicit_rk_mfem(
             max_rhs_final,
             ctx.state.current_time,
             ctx.zeeman.stage_start_time_s);
+        add_transport_stage_rhs(ctx, ws.k[0], max_rhs_final);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;

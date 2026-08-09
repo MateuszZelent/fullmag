@@ -109,6 +109,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/magnetoelastic_field.cpp
     cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp
     cpu/mfem/interactions/oersted.cpp
+    cpu/mfem/interactions/transport_stage.cpp
     cpu/mfem/interactions/oersted_cylinder.cpp
     cpu/mfem/interactions/oersted_explicit.cpp
     cpu/mfem/interactions/stt.cpp

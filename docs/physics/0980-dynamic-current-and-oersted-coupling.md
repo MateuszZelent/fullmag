@@ -17,7 +17,8 @@
   `oersted_direct_biot_savart.v1`,
   `oersted_analytic_return_additive.v1`,
   `oersted_fem_vector_potential.v1`
-- Stage-provider policy: `fem_stage_oersted_callback.v1`
+- Stage-provider policies: `fem_stage_oersted_callback.v1`,
+  `fem_stage_transport_callback.v1`
 
 Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
 formula/operator/realization identifiers. Section 8.1 of the runtime contract
@@ -260,6 +261,58 @@ transaction/cadence mechanism and its public CPU binding, but it is not a
 reciprocal `J_c(m_stage)` solve, does not feed `torque_stt` into LLG, and does
 not promote a production capability.
 
+### 2.6.1 Reciprocal FEM M2 torque at an RK stage (bounded CPU contract)
+
+For the reciprocal FEM lane the charge--spin problem is solved again for the
+same normalized `m_stage` and exact `t_stage`. In condensed notation the
+monolithic constitutive system is
+
+```text
+div J_c = 0,                         div J_s = -R_sf(mu_s),
+[J_c, J_s] = C(m_stage) [E, -grad(mu_s)] + S_SHE(m_stage),
+E = -grad(V).
+```
+
+The symmetric charge/spin blocks, spin-flip/dephasing terms, boundary fluxes
+and spin-Hall source are those of the resolved FEM M2 descriptor; they are not
+reconstructed from a one-way current after the solve. The transport result is
+then projected through the declared torque target and its SI constants to a
+direct Gilbert right-hand-side contribution
+
+```{math}
+:label: reciprocal-transport-torque-rhs
+\begin{aligned}
+\tau_{tr} &= \mathcal{T}(J_c,J_s,\mu_s,m_{stage};p,M_s,\lambda_{sf},\lambda_j,\lambda_\phi),\\
+\frac{d m}{d t} &= \mathrm{RHS}_{LLG}+\tau_{tr}.
+\end{aligned}
+```
+
+```text
+tau_tr(m_stage,t_stage) = T[J_c,J_s,mu_s,m_stage;
+                            p, M_s, lambda_sf, lambda_j, lambda_phi],
+dm/dt = rhs_LLG + tau_tr.
+```
+
+`tau_tr` is returned as a complete nodal vector in `1/s`, not as `H` in A/m
+and not as a post-hoc field. The native RK owner adds it after the ordinary
+LLG, STT and SOT terms, then normalizes the candidate magnetization. The
+source envelope `a(t_stage)` scales only the authored voltage differences about
+the selected Dirichlet reference (or a normal-current drive); the
+reference/gauge value is not scaled. Thus a change in `m_stage` changes the
+constitutive operator, while a change in `a(t_stage)` changes the external
+drive, and both effects are represented in the same charge--spin solve.
+
+The append-only policy `fem_stage_transport_callback.v1` transports
+`m_stage`, `t_stage`, `stage_identity`, `tau_tr` and a source revision across
+the native ABI. `begin_attempt`, `commit_attempt` and `rollback_attempt` are
+transactional: a rejected RK attempt cannot publish a torque observation or
+leave a tentative source revision as accepted. This bounded implementation is
+CPU/double only. A reciprocal M2 request that also asks for Oersted is rejected
+until a combined field-plus-torque callback exists; the current FDM coupled
+lane remains the only executable combined M2 route. GPU/device-resident,
+external-lead, full public end-to-end and production qualification are still
+open gates.
+
 (symbols-and-si-units)=
 ### 2.7 Symbols and SI units
 
@@ -269,6 +322,10 @@ not promote a production capability.
 | `E` | electric field | V/m |
 | `sigma` | conductivity | S/m, positive definite |
 | `J_c` | conventional current density | A/m^2 |
+| `J_s` | spin-current tensor/vector used by the drift--diffusion solve | A/m^2 (spin-angular-momentum convention is fixed by the operator version) |
+| `mu_s` | spin accumulation potential | V |
+| `m_stage` | normalized magnetization at an RK stage | 1 |
+| `tau_tr` | direct reciprocal transport contribution to `dm/dt` | s^-1 |
 | `H_oe` | Oersted field | A/m |
 | `B_oe` | magnetic flux density | T |
 | `A` | magnetic vector potential | T m |
@@ -1162,7 +1219,12 @@ is not the public stage-coupling resolution. The callback still carries a
 one-way charge solve: it is not reciprocal M2 and does not publish `torque_stt`
 into LLG. A supported `CurrentTransport.time_envelope` is evaluated at the
 exact callback stage time. External leads, device-resident execution and
-production convergence remain open.
+production convergence remain open. Separately, a reciprocal FEM descriptor
+with an explicit drift-diffusion torque target resolves
+`fem_stage_transport_callback.v1`; this callback performs one M2 charge--spin
+solve for the supplied `m_stage` and returns the direct `tau_tr [1/s]` RHS.
+Combined reciprocal Oersted is rejected until a single callback can publish
+both the field and torque from the same solve.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1195,6 +1257,11 @@ A stage-bound run adds the separate
 accepted/last stage observation, source-view identity digest and field digest.
 These records describe the exact immutable view and native transaction; they
 must not be interpreted as proof of reciprocal M2 or a `torque_stt` RHS.
+For reciprocal FEM M2 with a torque target, finalization additionally writes
+`transport/fem_stage_transport_callback.v1.json` with callback counters,
+accepted/last stage identity, envelope multiplier, source revision and torque
+SHA-256/L2 observations. The artifact proves publication of the bounded CPU
+callback, not GPU residency, combined Oersted or production convergence.
 
 Until the public runner consumes the immutable RT0/H(div) view, its bounded
 steady FEM reference path is intentionally versioned separately as
@@ -1512,10 +1579,11 @@ stare zapisane plany zachowują semantykę `a(t)=1`.
 
 Planner normalizuje sinusoidę/puls do istniejącego kontraktu czasowego dla
 cylindrycznych, jawnych źródeł Oersteda. Dynamiczne PWL/Sinc/Tabulated w tym
-obniżeniu, non-cylindrical static midpoint, `external_lead`, torque RHS FEM,
-FEM GPU i FDM GPU pozostają fail-closed. Ta implementacja jest wykonywalną
-bramą one-way oraz reciprocal M2 FDM CPU, nie kwalifikacją produkcyjnego
-STT/SOT/SHE.
+obniżeniu, non-cylindrical static midpoint, `external_lead`, połączone
+Oersted+torque FEM, FEM GPU i FDM GPU pozostają fail-closed. Torque-only FEM
+M2 ma osobną bounded ścieżkę CPU/double opisaną w §4.6.5. Ta implementacja jest
+wykonywalną bramą one-way, reciprocal M2 FDM CPU i bounded reciprocal FEM
+torque, nie kwalifikacją produkcyjnego STT/SOT/SHE.
 
 Świeże dowody zarządzane:
 
@@ -1530,6 +1598,36 @@ runner, API, provenance, `cargo check --features fem-gpu` i wspólny limit
 FEM↔FDM. To jest dowód implementacji i kompilacji zarządzanego runtime'u;
 nie jest jeszcze ilościową kwalifikacją pełnego M2, GPU ani produkcyjnego
 dynamicznego STT/SOT/SHE.
+
+### 4.6.5. Reciprocal FEM M2 stage torque callback (CPU/double, bounded)
+
+Planner tworzy `fem_stage_transport_callback.v1` wyłącznie dla wzajemnego
+FEM M2 z jawnym `DriftDiffusionSpinTorque` wskazującym ten sam moduł. Dla
+każdego RHS provider kopiuje `m_stage` do requestu, ewaluje wspólny envelope
+na `t_stage`, skaluje różnice `charge_dirichlet` względem elektrody
+referencyjnej, a następnie wywołuje
+`solve_native_fem_steady_transport` z konstytutywnym modelem
+`ReciprocalM2`. Wynikowy `torque_xyz_per_s` jest kopiowany do ABI i dodawany
+do RHS LLG przez natywny integrator po standardowych składnikach LLG/STT/SOT.
+
+Append-only ABI `fullmag_fem_backend_set_stage_transport_callback_v1` nie
+zmienia istniejących struktur FEM/Oersteda. `TransportStageRuntimeState`
+przechowuje wektor torque, `stage_identity`, rewizję źródła i stan próby;
+`RkStepTransaction` obejmuje ten payload, a hooki begin/commit/rollback
+zapobiegają publikacji odrzuconego solve'u. `NativeFemBackend` odłącza
+callback przed zniszczeniem providera. Finalizacja zapisuje
+`transport/fem_stage_transport_callback.v1.json` z licznikami i digestami
+obserwacji.
+
+Kontrakt zarządzany `fem_rk_explicit_contract` potwierdza niezależną referencję
+RK4, próbki wszystkich stage i endpointu, rollback adaptacyjnych RK23,
+rollback awarii natywnej oraz jawne odrzucenie ścieżki GPU. Testy planera
+potwierdzają wybór polityki dla reciprocal M2 torque i odrzucenie kombinacji
+reciprocal Oersted bez kwalifikowanego callbacku łączonego. To jest
+**bounded CPU/double implementation**, nie awans do capability produkcyjnej:
+pozostają publiczny fixture end-to-end, `external_lead`, wspólny Oersted plus
+torque, GPU/device-resident, h/p/airbox/energia oraz ilościowa walidacja
+FEM↔FDM i względem solverów zewnętrznych.
 
 (validation)=
 ## 5. Validation strategy
@@ -1627,7 +1725,9 @@ evidence that the approximation is accurate.
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_v1` | append-only RT0/OE-F1 ABI |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1` | append-only RT0/OE-F2 ABI |
 | `native/include/fullmag_fem.h` | `fullmag_fem_backend_set_stage_oersted_callback_v1` | append-only CPU stage callback ABI |
+| `native/include/fullmag_fem.h` | `fullmag_fem_backend_set_stage_transport_callback_v1` | append-only CPU reciprocal M2 torque callback ABI |
 | `backends/fem/cpu/mfem/interactions/oersted.cpp` | `materialize_oersted_stage_field` | native stage callback evaluation and transaction ownership |
+| `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `materialize_transport_stage_rhs` | validate and add reciprocal transport torque RHS in 1/s |
 | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and OE-F1/OE-F2 adapters |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | public current source and canonical time-envelope owner |
@@ -1639,8 +1739,10 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
 | `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `from_plan` | public CPU stage binding to the RT0/OE-F1/OE-F2 adapter, exact stage identity and fail-closed transaction callbacks |
+| `crates/fullmag-runner/src/native_fem/stage_transport.rs` | `StageTransportProvider::evaluate` | public CPU reciprocal M2 stage solve, envelope scaling, torque digest and exact stage identity |
 | `crates/fullmag-runner/src/time_envelope.rs` | `evaluate_time_envelope` | shared exact-stage evaluation of source envelopes; unresolved tabulated artifacts fail closed |
 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `source_envelope_multiplier` | FDM CPU one-way source scaling and accepted multiplier provenance |
+| `crates/fullmag-runner/src/fem/relax/finalize.rs` | `stage_transport_telemetry` | persist reciprocal stage-transport callback telemetry artifact |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | append-only callback provenance artifact with accepted/last stage observation and field digest |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |
@@ -1648,6 +1750,7 @@ evidence that the approximation is accurate.
 | `backends/fem/tests/conservative_current_view_contract.cpp` | `main` | OE-T0 contract |
 | `backends/fem/tests/oersted_direct_tetra_contract.cpp` | `main` | OE-F1 contract |
 | `backends/fem/tests/oersted_vector_potential_contract.cpp` | `main` | OE-F2 contract |
+| `backends/fem/tests/rk_explicit_contract.cpp` | `main` | managed reciprocal FEM M2 torque/RK stage contract |
 
 (scientific-bibliography)=
 ## 8. References

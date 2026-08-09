@@ -41,6 +41,7 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
         || ctx.oersted.has_cylinder
         || ctx.oersted.has_explicit_field
         || ctx.oersted.has_stage_callback
+        || ctx.stage_transport.has_stage_callback
         || ctx.magnetoelastic.enabled
         || ctx.stt.zhang_li_enabled
         || ctx.stt.slonczewski_enabled
