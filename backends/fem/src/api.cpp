@@ -27,6 +27,7 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "frequency_domain/driven_response_solver.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/modal_gpu_krylov.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 #include "frequency_domain/operator_terms.hpp"
 #include "frequency_domain/tangent_frame.hpp"
@@ -46,6 +47,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -1077,11 +1079,29 @@ FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
     result.mode_cluster_ids = duplicate_u64_values(native_result.modal_eigen.mode_cluster_ids);
     result.resolved_execution_target = FULLMAG_FEM_MODAL_EXECUTION_AUTO;
     result.resolved_scalar_representation = FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE;
-    result.resolved_spectral_transform_kind = 0;
+    result.resolved_spectral_transform_kind =
+        FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO;
+    result.resolved_execution_target =
+        static_cast<fullmag_fem_modal_execution_target>(
+            native_result.modal_execution.execution_target);
+    result.resolved_scalar_representation =
+        static_cast<fullmag_fem_modal_scalar_representation>(
+            native_result.modal_execution.scalar_representation);
+    result.resolved_spectral_transform_kind =
+        static_cast<fullmag_fem_modal_spectral_transform_kind>(
+            native_result.modal_execution.spectral_transform_kind);
+    result.resolved_fallback_state =
+        static_cast<std::uint32_t>(native_result.modal_execution.fallback_state);
+    result.resolved_engine_id =
+        duplicate_c_string(native_result.modal_execution.engine_id.c_str());
+    result.resolved_fallback_reason =
+        duplicate_c_string(native_result.modal_execution.fallback_reason.c_str());
     if (result.error_message == nullptr ||
         result.diagnostics_json == nullptr ||
         result.result_json == nullptr ||
         result.artifact_manifest_path == nullptr ||
+        result.resolved_engine_id == nullptr ||
+        result.resolved_fallback_reason == nullptr ||
         (result.mode_lambda_count != 0 && result.mode_lambda == nullptr) ||
         (result.mode_q_complex_count != 0 && result.mode_q_complex == nullptr) ||
         (result.mode_phi_complex_count != 0 && result.mode_phi_complex == nullptr) ||
@@ -1093,6 +1113,8 @@ FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
         delete[] result.diagnostics_json;
         delete[] result.result_json;
         delete[] result.artifact_manifest_path;
+        delete[] result.resolved_engine_id;
+        delete[] result.resolved_fallback_reason;
         release_modal_buffers(result);
         result = {};
         result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
@@ -1108,8 +1130,44 @@ FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
             "{\"schema_version\":\"frequency_domain_contract_result.v1\","
             "\"status\":\"artifact_error\"}");
         result.artifact_manifest_path = duplicate_c_string("");
+        result.resolved_engine_id = duplicate_c_string("artifact_error");
+        result.resolved_fallback_reason = duplicate_c_string("none");
     }
     return result;
+}
+
+void resolve_modal_execution_provenance(
+    fullmag::fem::frequency_domain::FrequencyDomainContractResult &result)
+{
+    namespace fd = fullmag::fem::frequency_domain;
+    auto &provenance = result.modal_execution;
+    provenance.fallback_state = fd::ModalResolvedFallbackState::none;
+    provenance.fallback_reason = "none";
+    if (result.status != fd::FrequencyDomainStatus::ok) {
+        provenance.engine_id = fd::status_to_string(result.status);
+        return;
+    }
+
+    const std::string evidence = result.diagnostics_json + result.result_json;
+    if (evidence.find("gpu_") != std::string::npos ||
+        evidence.find("\"execution_lane\":\"gpu") != std::string::npos) {
+        provenance.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
+        provenance.engine_id = "gpu_modal_eigen";
+    } else if (evidence.find("tiny_validation") != std::string::npos) {
+        provenance.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU;
+        provenance.engine_id = "synthetic_tiny_validation";
+    } else if (evidence.find("cpu_") != std::string::npos ||
+               evidence.find("\"execution_lane\":\"cpu") != std::string::npos) {
+        provenance.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU;
+        provenance.engine_id = "cpu_modal_eigen";
+    } else {
+        provenance.engine_id = "resolved_modal_engine_unspecified";
+    }
+    provenance.scalar_representation = FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE;
+    provenance.spectral_transform_kind =
+        evidence.find("shift_invert") != std::string::npos
+            ? FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT
+            : FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO;
 }
 
 bool frequency_domain_cancel_requested_from_c_abi(void *user_data) noexcept
@@ -1659,6 +1717,106 @@ int fullmag_fem_get_frequency_domain_abi_layout(
         sizeof(fullmag_fem_frequency_domain_solve_result);
     out_layout->solve_result_artifact_manifest_path_offset =
         offsetof(fullmag_fem_frequency_domain_solve_result, artifact_manifest_path);
+    out_layout->modal_abi_schema = 1u;
+    out_layout->modal_abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    out_layout->modal_eigen_request_size = sizeof(FullmagFemModalEigenRequest);
+    out_layout->modal_eigen_request_struct_size_offset =
+        offsetof(FullmagFemModalEigenRequest, struct_size);
+    out_layout->modal_eigen_request_shared_domain_payload_offset =
+        offsetof(FullmagFemModalEigenRequest, shared_domain_payload);
+    out_layout->modal_shared_domain_payload_size = sizeof(FullmagFemModalSharedDomainPayload);
+    out_layout->modal_shared_domain_payload_struct_size_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, struct_size);
+    out_layout->modal_shared_domain_payload_mesh_certificate_digest_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, mesh_certificate_digest);
+    out_layout->modal_shared_domain_payload_map_binding_digest_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, mesh_certificate_map_binding_digest);
+    out_layout->modal_shared_domain_payload_bias_field_sample_id_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, bias_field_sample_id);
+    out_layout->modal_frequency_domain_result_size = sizeof(FullmagFemFrequencyDomainResult);
+    out_layout->modal_frequency_domain_result_struct_size_offset =
+        offsetof(FullmagFemFrequencyDomainResult, struct_size);
+    out_layout->modal_frequency_domain_result_resolved_engine_id_offset =
+        offsetof(FullmagFemFrequencyDomainResult, resolved_engine_id);
+    out_layout->modal_csr_matrix_view_size = sizeof(FullmagFemCsrMatrixView);
+    out_layout->modal_csr_matrix_view_values_len_offset =
+        offsetof(FullmagFemCsrMatrixView, values_len);
+    out_layout->modal_eigen_request_abi_version_offset =
+        offsetof(FullmagFemModalEigenRequest, abi_version);
+    out_layout->modal_eigen_request_operator_request_offset =
+        offsetof(FullmagFemModalEigenRequest, operator_request);
+    out_layout->modal_eigen_request_spectral_transform_kind_offset =
+        offsetof(FullmagFemModalEigenRequest, spectral_transform_kind);
+    out_layout->modal_eigen_request_execution_target_offset =
+        offsetof(FullmagFemModalEigenRequest, execution_target);
+    out_layout->modal_eigen_request_scalar_representation_offset =
+        offsetof(FullmagFemModalEigenRequest, scalar_representation);
+    out_layout->modal_eigen_request_result_field_representation_offset =
+        offsetof(FullmagFemModalEigenRequest, result_field_representation);
+    out_layout->modal_shared_domain_payload_abi_version_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, abi_version);
+    out_layout->modal_shared_domain_payload_mesh_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, mesh);
+    out_layout->modal_shared_domain_payload_magnetic_a_qq_csr_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, magnetic_a_qq_csr);
+    out_layout->modal_shared_domain_payload_scalar_reduced_node_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, scalar_reduced_node);
+    out_layout->modal_shared_domain_payload_magnetic_reduced_node_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, magnetic_reduced_node);
+    out_layout->modal_shared_domain_payload_magnetic_pair_count_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, magnetic_pair_count);
+    out_layout->modal_shared_domain_payload_airbox_pair_count_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, airbox_pair_count);
+    out_layout->modal_shared_domain_payload_boundary_marker_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, boundary_marker);
+    out_layout->modal_shared_domain_payload_mesh_certificate_schema_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, mesh_certificate_schema);
+    out_layout->modal_shared_domain_payload_equilibrium_digest_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, equilibrium_digest);
+    out_layout->modal_shared_domain_payload_linearization_state_digest_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, linearization_state_digest);
+    out_layout->modal_shared_domain_payload_boundary_gauge_digest_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, boundary_gauge_digest);
+    out_layout->modal_shared_domain_payload_bias_field_sample_index_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, bias_field_sample_index);
+    out_layout->modal_shared_domain_payload_bias_field_sample_signature_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, bias_field_sample_signature);
+    out_layout->modal_shared_domain_payload_magnetic_part_identity_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, magnetic_part_identity);
+    out_layout->modal_shared_domain_payload_airbox_part_identity_offset =
+        offsetof(FullmagFemModalSharedDomainPayload, airbox_part_identity);
+    out_layout->modal_frequency_domain_result_abi_version_offset =
+        offsetof(FullmagFemFrequencyDomainResult, abi_version);
+    out_layout->modal_frequency_domain_result_status_offset =
+        offsetof(FullmagFemFrequencyDomainResult, status);
+    out_layout->modal_frequency_domain_result_error_message_offset =
+        offsetof(FullmagFemFrequencyDomainResult, error_message);
+    out_layout->modal_frequency_domain_result_mode_lambda_offset =
+        offsetof(FullmagFemFrequencyDomainResult, mode_lambda);
+    out_layout->modal_frequency_domain_result_resolved_execution_target_offset =
+        offsetof(FullmagFemFrequencyDomainResult, resolved_execution_target);
+    out_layout->modal_frequency_domain_result_resolved_scalar_representation_offset =
+        offsetof(FullmagFemFrequencyDomainResult, resolved_scalar_representation);
+    out_layout->modal_frequency_domain_result_resolved_spectral_transform_kind_offset =
+        offsetof(FullmagFemFrequencyDomainResult, resolved_spectral_transform_kind);
+    out_layout->modal_frequency_domain_result_resolved_fallback_state_offset =
+        offsetof(FullmagFemFrequencyDomainResult, resolved_fallback_state);
+    out_layout->modal_frequency_domain_result_resolved_fallback_reason_offset =
+        offsetof(FullmagFemFrequencyDomainResult, resolved_fallback_reason);
+    out_layout->modal_csr_matrix_view_row_count_offset =
+        offsetof(FullmagFemCsrMatrixView, row_count);
+    out_layout->modal_csr_matrix_view_column_count_offset =
+        offsetof(FullmagFemCsrMatrixView, column_count);
+    out_layout->modal_csr_matrix_view_row_offsets_offset =
+        offsetof(FullmagFemCsrMatrixView, row_offsets);
+    out_layout->modal_csr_matrix_view_row_offsets_len_offset =
+        offsetof(FullmagFemCsrMatrixView, row_offsets_len);
+    out_layout->modal_csr_matrix_view_column_indices_offset =
+        offsetof(FullmagFemCsrMatrixView, column_indices);
+    out_layout->modal_csr_matrix_view_column_indices_len_offset =
+        offsetof(FullmagFemCsrMatrixView, column_indices_len);
+    out_layout->modal_csr_matrix_view_values_offset =
+        offsetof(FullmagFemCsrMatrixView, values);
     return FULLMAG_FEM_OK;
 }
 
@@ -2340,6 +2498,158 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     }
 
     namespace fd = fullmag::fem::frequency_domain;
+    const auto validation_error = [](const char *message, const char *reason) {
+        fd::FrequencyDomainContractResult invalid{};
+        invalid.status = fd::FrequencyDomainStatus::validation_error;
+        invalid.modal_execution.engine_id = "validation_error";
+        invalid.modal_execution.fallback_reason = "none";
+        invalid.error_message = message;
+        invalid.diagnostics_json =
+            std::string("{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\",") +
+            "\"study_product\":\"modal_eigen\",\"status\":\"validation_error\",\"reason\":\"" +
+            reason + "\"}";
+        invalid.result_json =
+            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+            "\"status\":\"validation_error\"}";
+        return copy_frequency_domain_contract_result(invalid);
+    };
+    constexpr std::size_t kModalV15MinimumStructSize =
+        offsetof(FullmagFemModalEigenRequest, result_field_representation) +
+        sizeof(fullmag_fem_modal_result_field_representation);
+    const bool has_modal_v15_tail =
+        request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION - 1u &&
+        (request->struct_size == 0u ||
+         request->struct_size >= kModalV15MinimumStructSize);
+    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION - 1u &&
+        request->struct_size != 0u &&
+        request->struct_size < kModalV15MinimumStructSize) {
+        return validation_error(
+            "native FEM modal_eigen request has a struct_size shorter than the v15 typed tail",
+            "struct_size_too_small");
+    }
+    constexpr std::size_t kModalV16SharedPayloadRequestSize =
+        offsetof(FullmagFemModalEigenRequest, shared_domain_payload) +
+        sizeof(request->shared_domain_payload);
+    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+        request->struct_size != 0u &&
+        request->struct_size < kModalV16SharedPayloadRequestSize) {
+        return validation_error(
+            "native FEM modal_eigen request has a struct_size shorter than the v16 shared payload tail",
+            "struct_size_too_small");
+    }
+    const bool has_shared_payload_tail =
+        request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+        (request->struct_size == 0u ||
+         request->struct_size >= kModalV16SharedPayloadRequestSize);
+    if (has_shared_payload_tail && request->shared_domain_payload != nullptr) {
+        const FullmagFemModalSharedDomainPayload *payload = request->shared_domain_payload;
+        constexpr std::size_t kModalPayloadCertificateTailSize =
+            offsetof(FullmagFemModalSharedDomainPayload, airbox_part_identity) +
+            sizeof(payload->airbox_part_identity);
+        const auto nonempty = [](const char *value) {
+            return value != nullptr && value[0] != '\0';
+        };
+        const auto sha256_digest = [](const char *value) {
+            if (value == nullptr || std::strlen(value) != 71u ||
+                std::strncmp(value, "sha256:", 7) != 0) {
+                return false;
+            }
+            for (std::size_t index = 7; index < 71; ++index) {
+                const unsigned char character = static_cast<unsigned char>(value[index]);
+                if (!std::isxdigit(character)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (payload->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION ||
+            payload->struct_size < kModalPayloadCertificateTailSize) {
+            return validation_error(
+                "native FEM shared-domain payload has an incompatible ABI prefix",
+                "shared_payload_struct_size_too_small");
+        }
+        if (payload->mesh_certificate_schema == nullptr ||
+            std::strcmp(payload->mesh_certificate_schema, "periodic_mesh_certificate.v6") != 0) {
+            return validation_error(
+                "native FEM shared-domain payload has an unknown certificate schema",
+                "unknown_mesh_certificate_schema");
+        }
+        if (request->poisson_airbox_periodic_mesh_certificate_schema != nullptr &&
+            std::strcmp(
+                request->poisson_airbox_periodic_mesh_certificate_schema,
+                payload->mesh_certificate_schema) != 0) {
+            return validation_error(
+                "native FEM modal_eigen request and shared-domain payload disagree on certificate schema",
+                "mesh_certificate_schema_mismatch");
+        }
+        if (!sha256_digest(payload->mesh_certificate_digest)) {
+            return validation_error(
+                "native FEM shared-domain payload has an invalid or stale certificate digest",
+                "invalid_mesh_certificate_digest");
+        }
+        if (!sha256_digest(payload->mesh_certificate_map_binding_digest)) {
+            return validation_error(
+                "native FEM shared-domain payload has an invalid map-binding digest",
+                "invalid_mesh_certificate_map_binding_digest");
+        }
+        if (!sha256_digest(payload->equilibrium_digest) ||
+            !sha256_digest(payload->linearization_state_digest)) {
+            return validation_error(
+                "native FEM shared-domain payload has an invalid equilibrium identity digest",
+                "invalid_equilibrium_identity_digest");
+        }
+        if (!sha256_digest(payload->boundary_gauge_digest)) {
+            return validation_error(
+                "native FEM shared-domain payload has an invalid boundary or gauge digest",
+                "invalid_boundary_gauge_digest");
+        }
+        if (!sha256_digest(payload->bias_field_sample_signature)) {
+            return validation_error(
+                "native FEM shared-domain payload has an invalid bias-field sample signature",
+                "invalid_bias_field_sample_signature");
+        }
+        if (!nonempty(payload->mesh_certificate_digest) ||
+            !nonempty(payload->mesh_certificate_map_binding_digest) ||
+            !nonempty(payload->equilibrium_digest) ||
+            !nonempty(payload->linearization_state_digest) ||
+            !nonempty(payload->boundary_gauge_digest) ||
+            !nonempty(payload->bias_field_sample_id) ||
+            !nonempty(payload->bias_field_sample_signature) ||
+            !nonempty(payload->magnetic_part_identity) ||
+            !nonempty(payload->airbox_part_identity)) {
+            return validation_error(
+                "native FEM shared-domain payload is missing a certificate-bound identity",
+                "missing_certificate_identity");
+        }
+        if (payload->mesh == nullptr || payload->boundary_kind == nullptr ||
+            payload->boundary_kind[0] == '\0') {
+            return validation_error(
+                "native FEM shared-domain payload is missing mesh or boundary identity",
+                "missing_shared_domain_mesh_or_boundary_identity");
+        }
+        if (payload->scalar_reduced_node == nullptr ||
+            payload->scalar_reduced_node_count == 0u ||
+            payload->magnetic_reduced_node == nullptr ||
+            payload->magnetic_reduced_node_count == 0u) {
+            return validation_error(
+                "native FEM shared-domain payload is missing certificate-bound reduction maps",
+                "missing_certificate_map_binding_data");
+        }
+        if (payload->magnetic_pair_count == 0u || payload->airbox_pair_count == 0u ||
+            (request->poisson_airbox_magnetic_pair_count != 0u &&
+             request->poisson_airbox_magnetic_pair_count != payload->magnetic_pair_count) ||
+            (request->poisson_airbox_airbox_pair_count != 0u &&
+             request->poisson_airbox_airbox_pair_count != payload->airbox_pair_count)) {
+            return validation_error(
+                "native FEM shared-domain payload has a certificate pair-count mismatch",
+                "certificate_pair_count_mismatch");
+        }
+        if (payload->boundary_marker == 0u) {
+            return validation_error(
+                "native FEM shared-domain payload has an unknown airbox boundary marker",
+                "unknown_airbox_marker");
+        }
+    }
     fd::ModalEigenRequest native_request{};
     native_request.abi_version = request->abi_version;
     native_request.operator_request.abi_version =
@@ -2381,7 +2691,6 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     native_request.write_partial_artifacts = request->write_partial_artifacts;
     native_request.completeness_policy = request->completeness_policy;
     native_request.eigensolver_family = request->eigensolver_family;
-    native_request.spectral_transform_kind = request->spectral_transform_kind;
     native_request.cancel_user_data = request->cancel_user_data;
     native_request.cancel_requested = request->cancel_requested;
     native_request.progress_user_data = request->progress_user_data;
@@ -2641,7 +2950,7 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->dynamic_demag_k_tangent_matrix_row_major;
     native_request.dynamic_demag_k_tangent_matrix_value_count =
         request->dynamic_demag_k_tangent_matrix_value_count;
-    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION - 1u) {
+    if (has_modal_v15_tail) {
         native_request.struct_size = request->struct_size;
         switch (request->execution_target) {
         case FULLMAG_FEM_MODAL_EXECUTION_AUTO:
@@ -2723,27 +3032,44 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
             return copy_frequency_domain_contract_result(invalid_fields);
         }
         }
+        switch (request->spectral_transform_kind) {
+        case FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO:
+            native_request.spectral_transform_kind =
+                fd::ModalSpectralTransformKind::auto_select;
+            break;
+        case FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT:
+            native_request.spectral_transform_kind =
+                fd::ModalSpectralTransformKind::shift_invert;
+            break;
+        default:
+            return validation_error(
+                "native FEM modal_eigen request uses an unknown spectral transform kind",
+                "unknown_spectral_transform_kind");
+        }
     }
-    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
-        request->shared_domain_payload != nullptr &&
-        (request->struct_size == 0u ||
-         request->struct_size >=
-             offsetof(FullmagFemModalEigenRequest, shared_domain_payload) +
-                 sizeof(request->shared_domain_payload))) {
+    if (has_shared_payload_tail && request->shared_domain_payload != nullptr) {
         native_request.poisson_airbox_shared_domain_enabled = 1;
         native_request.poisson_airbox_shared_domain_payload =
             request->shared_domain_payload;
     }
 
-    FullmagFemFrequencyDomainResult result = copy_frequency_domain_contract_result(
-        fd::solve_modal_eigen_contract(native_request));
-    if (request->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION) {
-        result.resolved_execution_target = request->execution_target;
-        result.resolved_scalar_representation = request->scalar_representation;
-        result.resolved_spectral_transform_kind =
-            static_cast<std::uint32_t>(request->spectral_transform_kind);
-    }
-    return result;
+    fd::FrequencyDomainContractResult native_result =
+        fd::solve_modal_eigen_contract(native_request);
+    resolve_modal_execution_provenance(native_result);
+    return copy_frequency_domain_contract_result(native_result);
+}
+
+int fullmag_fem_modal_eigen_gpu_runtime_finalize(void)
+{
+#if FULLMAG_FEM_WITH_SLEPC && FULLMAG_HAS_CUDA_RUNTIME
+    return fullmag::fem::frequency_domain::
+                   finalize_poisson_airbox_modal_eigen_gpu_petsc_slepc_runtime() ==
+               fullmag::fem::frequency_domain::FrequencyDomainStatus::ok
+        ? FULLMAG_FEM_OK
+        : FULLMAG_FEM_ERR_INTERNAL;
+#else
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
 }
 
 FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
@@ -2814,6 +3140,8 @@ void fullmag_fem_frequency_domain_result_destroy(
     delete[] result->diagnostics_json;
     delete[] result->result_json;
     delete[] result->artifact_manifest_path;
+    delete[] result->resolved_engine_id;
+    delete[] result->resolved_fallback_reason;
     release_modal_buffers(*result);
     *result = {};
 }

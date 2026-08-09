@@ -197,9 +197,191 @@ void modal_v13_extension_rejects_unknown_enum_and_releases_zero_result()
           "modal v13 reports the unknown execution target reason");
     fullmag_fem_frequency_domain_result_destroy(&invalid_result);
 
+    invalid = base_request();
+    invalid.scalar_representation =
+        static_cast<fullmag_fem_modal_scalar_representation>(99);
+    invalid_result = fullmag_fem_modal_eigen_solve(&invalid);
+    check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal typed tail rejects an unknown scalar representation");
+    check(contains(invalid_result.diagnostics_json, "unknown_scalar_representation"),
+          "modal typed tail reports the unknown scalar representation reason");
+    fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+
+    invalid = base_request();
+    invalid.result_field_representation =
+        static_cast<fullmag_fem_modal_result_field_representation>(99);
+    invalid_result = fullmag_fem_modal_eigen_solve(&invalid);
+    check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal typed tail rejects an unknown result field representation");
+    check(contains(invalid_result.diagnostics_json,
+                   "unknown_result_field_representation"),
+          "modal typed tail reports the unknown result field representation reason");
+    fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+
     FullmagFemFrequencyDomainResult zeroed{};
     fullmag_fem_frequency_domain_result_destroy(&zeroed);
     fullmag_fem_frequency_domain_result_destroy(&zeroed);
+}
+
+void modal_v16_extension_rejects_unknown_spectral_transform_and_short_prefix()
+{
+    FullmagFemModalEigenRequest unknown_transform = base_request();
+    unknown_transform.struct_size = sizeof(FullmagFemModalEigenRequest);
+    unknown_transform.spectral_transform_kind =
+        static_cast<fullmag_fem_modal_spectral_transform_kind>(99);
+    FullmagFemFrequencyDomainResult unknown_result =
+        fullmag_fem_modal_eigen_solve(&unknown_transform);
+    check(unknown_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal v16 rejects an unknown spectral transform kind");
+    check(contains(unknown_result.diagnostics_json, "unknown_spectral_transform_kind"),
+          "modal v16 reports the unknown spectral transform reason");
+    fullmag_fem_frequency_domain_result_destroy(&unknown_result);
+
+    FullmagFemModalEigenRequest short_prefix = base_request();
+    short_prefix.struct_size =
+        offsetof(FullmagFemModalEigenRequest, result_field_representation);
+    FullmagFemFrequencyDomainResult short_result =
+        fullmag_fem_modal_eigen_solve(&short_prefix);
+    check(short_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal v16 rejects a struct prefix shorter than its typed tail");
+    check(contains(short_result.diagnostics_json, "struct_size_too_small"),
+          "modal v16 reports the short struct prefix reason");
+    fullmag_fem_frequency_domain_result_destroy(&short_result);
+}
+
+void modal_abi_layout_publishes_versioned_modal_structs()
+{
+    fullmag_fem_frequency_domain_abi_layout layout{};
+    check(
+        fullmag_fem_get_frequency_domain_abi_layout(&layout) == FULLMAG_FEM_OK,
+        "modal ABI layout query succeeds");
+    check(layout.modal_abi_schema == 1u,
+          "modal ABI layout publishes its schema");
+    check(layout.modal_abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+          "modal ABI layout publishes the current ABI version");
+    check(layout.modal_eigen_request_size == sizeof(FullmagFemModalEigenRequest),
+          "modal ABI layout reports modal request size");
+    check(layout.modal_eigen_request_shared_domain_payload_offset ==
+              offsetof(FullmagFemModalEigenRequest, shared_domain_payload),
+          "modal ABI layout reports modal request payload offset");
+    check(layout.modal_shared_domain_payload_size == sizeof(FullmagFemModalSharedDomainPayload),
+          "modal ABI layout reports shared-domain payload size");
+    check(layout.modal_shared_domain_payload_struct_size_offset ==
+              offsetof(FullmagFemModalSharedDomainPayload, struct_size),
+          "modal ABI layout reports shared-domain payload prefix");
+    check(layout.modal_frequency_domain_result_size == sizeof(FullmagFemFrequencyDomainResult),
+          "modal ABI layout reports modal result size");
+    check(layout.modal_frequency_domain_result_struct_size_offset ==
+              offsetof(FullmagFemFrequencyDomainResult, struct_size),
+          "modal ABI layout reports modal result tail");
+    check(layout.modal_csr_matrix_view_size == sizeof(FullmagFemCsrMatrixView),
+          "modal ABI layout reports CSR view size");
+    check(layout.modal_csr_matrix_view_values_len_offset ==
+              offsetof(FullmagFemCsrMatrixView, values_len),
+          "modal ABI layout reports CSR nested field offset");
+}
+
+FullmagFemModalSharedDomainPayload certificate_payload()
+{
+    FullmagFemModalSharedDomainPayload payload{};
+    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    payload.struct_size = sizeof(payload);
+    payload.magnetic_pair_count = 1;
+    payload.airbox_pair_count = 1;
+    payload.boundary_kind = "periodic";
+    payload.boundary_marker = 1;
+    payload.equilibrium_digest =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.mesh_certificate_digest =
+        "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    payload.linearization_state_digest =
+        "sha256:2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.mesh_certificate_map_binding_digest =
+        "sha256:3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.boundary_gauge_digest =
+        "sha256:4123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.bias_field_sample_index = 0;
+    payload.bias_field_sample_id = "bias_sample:0";
+    payload.bias_field_sample_signature =
+        "sha256:5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.magnetic_part_identity = "part:magnetic";
+    payload.airbox_part_identity = "part:airbox";
+    return payload;
+}
+
+void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
+{
+    FullmagFemModalEigenRequest request = base_request();
+    request.struct_size = sizeof(request);
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_periodic_mesh_certificate_schema =
+        "periodic_mesh_certificate.v5";
+
+    FullmagFemModalSharedDomainPayload payload = certificate_payload();
+    request.shared_domain_payload = &payload;
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects request/payload certificate schema disagreement");
+    check(contains(result.diagnostics_json, "mesh_certificate_schema_mismatch"),
+          "modal C ABI reports stable certificate schema mismatch reason");
+    check(result.resolved_fallback_state == 0u,
+          "certificate rejection must not select a fallback lane");
+    check(contains(result.resolved_fallback_reason, "none"),
+          "certificate rejection records fallback=none");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    request.poisson_airbox_periodic_mesh_certificate_schema =
+        "periodic_mesh_certificate.v6";
+    payload.mesh_certificate_digest = "stale-certificate";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects stale certificate identity before solve");
+    check(contains(result.diagnostics_json, "invalid_mesh_certificate_digest"),
+          "modal C ABI reports stable stale certificate identity reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload = certificate_payload();
+    payload.struct_size =
+        static_cast<std::uint32_t>(offsetof(FullmagFemModalSharedDomainPayload,
+                                            mesh_certificate_map_binding_digest));
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a shared payload shorter than its certificate tail");
+    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
+          "modal C ABI reports stable short payload reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_result_provenance_is_resolved_or_explicitly_unavailable()
+{
+    FullmagFemModalEigenRequest request = base_request();
+    request.struct_size = sizeof(request);
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "unsolved modal request remains unavailable");
+    check(contains(result.resolved_engine_id, "unavailable"),
+          "unavailable modal result exposes resolved engine state instead of requested AUTO");
+    check(result.resolved_fallback_state == 0u,
+          "unavailable modal result must not claim a fallback");
+    check(contains(result.resolved_fallback_reason, "none"),
+          "unavailable modal result records fallback=none");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_result_destroy_is_safe_for_partial_allocation_and_repeated_calls()
+{
+    FullmagFemFrequencyDomainResult partial{};
+    partial.error_message = new char[1]{'\0'};
+    partial.mode_lambda = new FullmagFemComplex64[1]{};
+    partial.mode_lambda_count = 1;
+    partial.resolved_engine_id = new char[1]{'\0'};
+    fullmag_fem_frequency_domain_result_destroy(&partial);
+    check(partial.error_message == nullptr && partial.mode_lambda == nullptr &&
+              partial.resolved_engine_id == nullptr,
+          "destroy clears a partially allocated modal result");
+    fullmag_fem_frequency_domain_result_destroy(&partial);
 }
 
 void modal_shift_invert_finds_macrospin_mode()
@@ -1285,7 +1467,7 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
-void modal_poisson_airbox_tail_payload_reaches_full_coupled_solver()
+void modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver()
 {
     constexpr double omega0 = 6.283185307179586476925286766559 * 2.0e9;
     const double a_qq[4] = {0.0, -omega0, omega0, 0.0};
@@ -1342,17 +1524,20 @@ void modal_poisson_airbox_tail_payload_reaches_full_coupled_solver()
             result.result_json != nullptr ? result.result_json : "");
     }
     check(result.status == FULLMAG_FEM_FD_OK,
-          "modal Poisson-airbox tail payload must solve through full-coupled SLEPc");
+          "modal Poisson-airbox tail payload must solve through the certified Schur SLEPc lane");
     check(contains(result.diagnostics_json,
-                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
-          "modal Poisson-airbox tail diagnostics name the full-coupled adapter");
+                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\""),
+          "modal Poisson-airbox tail diagnostics name the resolved Schur adapter");
     check(contains(result.diagnostics_json, "\"demag_kind\":\"periodic_airbox_k0\""),
           "modal Poisson-airbox tail diagnostics preserve periodic_airbox_k0");
     check(contains(result.diagnostics_json, "\"gauge_policy\":\"mean_zero_augmented\""),
           "modal Poisson-airbox tail diagnostics preserve mean-zero gauge");
     check(contains(result.result_json,
-                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
-          "modal Poisson-airbox tail result names the full-coupled adapter");
+                   "\"requested_solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
+          "modal Poisson-airbox tail result preserves the requested full-coupled adapter");
+    check(contains(result.result_json,
+                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\""),
+          "modal Poisson-airbox tail result names the resolved Schur adapter");
     check(contains(result.result_json, "\"demag_kind\":\"periodic_airbox_k0\""),
           "modal Poisson-airbox tail result preserves periodic_airbox_k0");
     check(contains(result.result_json, "\"phi_dof_count\":2"),
@@ -1583,6 +1768,11 @@ int main()
     modal_dependency_info_is_reported();
     modal_invalid_abi_returns_validation_error();
     modal_v13_extension_rejects_unknown_enum_and_releases_zero_result();
+    modal_v16_extension_rejects_unknown_spectral_transform_and_short_prefix();
+    modal_abi_layout_publishes_versioned_modal_structs();
+    modal_certificate_boundary_rejects_stale_and_mismatched_identity();
+    modal_result_provenance_is_resolved_or_explicitly_unavailable();
+    modal_result_destroy_is_safe_for_partial_allocation_and_repeated_calls();
     modal_shift_invert_finds_macrospin_mode();
     modal_shift_invert_residual_below_tolerance();
     modal_shift_invert_validation_reports_slepc_adapter_configuration();
@@ -1603,7 +1793,7 @@ int main()
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
     modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable();
-    modal_poisson_airbox_tail_payload_reaches_full_coupled_solver();
+    modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver();
     modal_poisson_airbox_tail_shift_invert_action_writes_artifact();
     modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact();
     return 0;

@@ -311,6 +311,7 @@ pub(crate) struct NativeModalEigenSharedDomainProblem<'a> {
     pub equilibrium_digest: String,
     pub mesh_certificate_digest: String,
     pub mesh_certificate_schema: String,
+    pub mesh_certificate_map_binding_digest: String,
     pub linearization_state_digest: String,
     pub(crate) _marker: std::marker::PhantomData<&'a fullmag_ir::MeshIR>,
 }
@@ -324,6 +325,7 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
         equilibrium_digest: &'b CString,
         mesh_certificate_digest: &'b CString,
         mesh_certificate_schema: &'b CString,
+        mesh_certificate_map_binding_digest: &'b CString,
         linearization_state_digest: &'b CString,
         equilibrium_id: &'b CString,
         mesh_snapshot_id: &'b CString,
@@ -378,6 +380,13 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             equilibrium_digest: equilibrium_digest.as_ptr(),
             mesh_certificate_digest: mesh_certificate_digest.as_ptr(),
             mesh_certificate_schema: mesh_certificate_schema.as_ptr(),
+            mesh_certificate_map_binding_digest: mesh_certificate_map_binding_digest.as_ptr(),
+            boundary_gauge_digest: boundary_snapshot_id.as_ptr(),
+            bias_field_sample_index: 0,
+            bias_field_sample_id: equilibrium_id.as_ptr(),
+            bias_field_sample_signature: equilibrium_content_sha256.as_ptr(),
+            magnetic_part_identity: c"part:magnetic".as_ptr(),
+            airbox_part_identity: c"part:airbox".as_ptr(),
             linearization_state_digest: linearization_state_digest.as_ptr(),
             equilibrium_id: equilibrium_id.as_ptr(),
             mesh_snapshot_id: mesh_snapshot_id.as_ptr(),
@@ -541,6 +550,12 @@ pub(crate) fn solve_native_modal_eigen(
 ) -> Result<NativeFrequencyDomainContractResult, String> {
     #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     super::configure_managed_openmpi_environment();
+    // The native GPU adapter owns a process-local PETSc/SLEPc context and
+    // registers an atexit cleanup handler.  Do not finalize it after every
+    // request: doing so destroys the cached Schur/PETSc CUDA context and makes
+    // a second request indistinguishable from a cold start.  The explicit FFI
+    // finalizer remains available to controlled shutdowns and native contract
+    // tests; normal runner requests must preserve context reuse/invalidation.
     solve_native_modal_eigen_impl(request)
 }
 
@@ -1235,6 +1250,12 @@ fn solve_native_modal_eigen_impl(
         .map(|problem| CString::new(problem.mesh_certificate_schema.as_bytes()))
         .transpose()
         .map_err(|_| "native FEM modal_eigen mesh certificate schema contains NUL".to_string())?;
+    let shared_mesh_certificate_map_binding_digest = shared_domain
+        .map(|problem| CString::new(problem.mesh_certificate_map_binding_digest.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen mesh certificate map binding digest contains NUL".to_string()
+        })?;
     let shared_linearization_state_digest = shared_domain
         .map(|problem| CString::new(problem.linearization_state_digest.as_bytes()))
         .transpose()
@@ -1280,6 +1301,7 @@ fn solve_native_modal_eigen_impl(
         shared_equilibrium_digest.as_ref(),
         shared_mesh_certificate_digest.as_ref(),
         shared_mesh_certificate_schema.as_ref(),
+        shared_mesh_certificate_map_binding_digest.as_ref(),
         shared_linearization_state_digest.as_ref(),
         shared_equilibrium_id.as_ref(),
         shared_mesh_snapshot_id.as_ref(),
@@ -1297,6 +1319,7 @@ fn solve_native_modal_eigen_impl(
             Some(equilibrium_digest),
             Some(mesh_certificate_digest),
             Some(mesh_certificate_schema),
+            Some(mesh_certificate_map_binding_digest),
             Some(linearization_state_digest),
             Some(equilibrium_id),
             Some(mesh_snapshot_id),
@@ -1312,6 +1335,7 @@ fn solve_native_modal_eigen_impl(
             equilibrium_digest,
             mesh_certificate_digest,
             mesh_certificate_schema,
+            mesh_certificate_map_binding_digest,
             linearization_state_digest,
             equilibrium_id,
             mesh_snapshot_id,
@@ -1414,7 +1438,17 @@ fn solve_native_modal_eigen_impl(
         write_partial_artifacts: i32::from(request.write_partial_artifacts),
         completeness_policy: request.completeness_policy,
         eigensolver_family: request.eigensolver_family,
-        spectral_transform_kind: request.spectral_transform_kind,
+        spectral_transform_kind: match request.spectral_transform_kind {
+            0 => ffi::fullmag_fem_modal_spectral_transform_kind::
+                FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO,
+            1 => ffi::fullmag_fem_modal_spectral_transform_kind::
+                FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT,
+            other => {
+                return Err(format!(
+                    "native FEM modal_eigen request uses an unknown spectral transform kind: {other}"
+                ));
+            }
+        },
         cancel_user_data,
         cancel_requested,
         progress_user_data,
@@ -1905,7 +1939,9 @@ impl Default for NativeFrequencyDomainContractFfiResult {
                     ffi::fullmag_fem_modal_execution_target::FULLMAG_FEM_MODAL_EXECUTION_AUTO,
                 resolved_scalar_representation:
                     ffi::fullmag_fem_modal_scalar_representation::FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE,
-                resolved_spectral_transform_kind: 0,
+                resolved_spectral_transform_kind:
+                    ffi::fullmag_fem_modal_spectral_transform_kind::
+                        FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO,
                 result_flags: 0,
                 struct_size: std::mem::size_of::<ffi::FullmagFemFrequencyDomainResult>() as u64,
             },
@@ -1945,7 +1981,8 @@ impl NativeFrequencyDomainContractFfiResult {
                 ),
                 resolved_execution_target: self.inner.resolved_execution_target as u32,
                 resolved_scalar_representation: self.inner.resolved_scalar_representation as u32,
-                resolved_spectral_transform_kind: self.inner.resolved_spectral_transform_kind,
+                resolved_spectral_transform_kind: self.inner.resolved_spectral_transform_kind
+                    as u32,
             })
         };
         NativeFrequencyDomainContractResult {

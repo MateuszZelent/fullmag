@@ -20,6 +20,20 @@ struct ModalEigenTypedResult {
     std::vector<std::uint64_t> mode_cluster_ids{};
 };
 
+enum class ModalResolvedFallbackState : std::uint32_t {
+    none = 0,
+    explicit_fallback = 1,
+};
+
+struct ModalExecutionProvenance {
+    std::uint32_t execution_target = 0;
+    std::uint32_t scalar_representation = 1;
+    std::uint32_t spectral_transform_kind = 0;
+    ModalResolvedFallbackState fallback_state = ModalResolvedFallbackState::none;
+    std::string engine_id = "unavailable";
+    std::string fallback_reason = "none";
+};
+
 struct FrequencyDomainContractResult {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
     std::string error_message;
@@ -27,6 +41,7 @@ struct FrequencyDomainContractResult {
     std::string result_json;
     std::string artifact_manifest_path;
     ModalEigenTypedResult modal_eigen{};
+    ModalExecutionProvenance modal_execution{};
 };
 
 } // namespace fullmag::fem::frequency_domain

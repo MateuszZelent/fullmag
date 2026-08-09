@@ -904,6 +904,11 @@ typedef enum {
 } fullmag_fem_modal_result_field_representation;
 
 typedef enum {
+    FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO = 0,
+    FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT = 1,
+} fullmag_fem_modal_spectral_transform_kind;
+
+typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS = 2,
@@ -1223,6 +1228,15 @@ typedef struct {
     const char *demag_model;
     double m0_norm_tolerance;
     double equilibrium_torque_relative_tolerance;
+    /* v16 append-only certificate binding.  Every identity is required by
+       the modal boundary before the payload may enter a shared-domain solve. */
+    const char *mesh_certificate_map_binding_digest;
+    const char *boundary_gauge_digest;
+    uint64_t bias_field_sample_index;
+    const char *bias_field_sample_id;
+    const char *bias_field_sample_signature;
+    const char *magnetic_part_identity;
+    const char *airbox_part_identity;
 } FullmagFemModalSharedDomainPayload;
 
 typedef struct {
@@ -1240,7 +1254,7 @@ typedef struct {
     int write_partial_artifacts;
     int completeness_policy;
     int eigensolver_family;
-    int spectral_transform_kind;
+    fullmag_fem_modal_spectral_transform_kind spectral_transform_kind;
     void *cancel_user_data;
     int (*cancel_requested)(void *user_data);
     void *progress_user_data;
@@ -1351,9 +1365,13 @@ typedef struct {
     uint64_t *mode_cluster_ids;
     fullmag_fem_modal_execution_target resolved_execution_target;
     fullmag_fem_modal_scalar_representation resolved_scalar_representation;
-    uint32_t resolved_spectral_transform_kind;
+    fullmag_fem_modal_spectral_transform_kind resolved_spectral_transform_kind;
     uint32_t result_flags;
     uint64_t struct_size;
+    /* v16 append-only executed-path provenance. */
+    uint32_t resolved_fallback_state;
+    char *resolved_engine_id;
+    char *resolved_fallback_reason;
 } FullmagFemFrequencyDomainResult;
 
 typedef struct {
@@ -1405,6 +1423,62 @@ typedef struct {
     uint64_t driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset;
     uint64_t solve_result_size;
     uint64_t solve_result_artifact_manifest_path_offset;
+    /* Append-only modal ABI manifest (schema v1). */
+    uint64_t modal_abi_schema;
+    uint64_t modal_abi_version;
+    uint64_t modal_eigen_request_size;
+    uint64_t modal_eigen_request_struct_size_offset;
+    uint64_t modal_eigen_request_shared_domain_payload_offset;
+    uint64_t modal_shared_domain_payload_size;
+    uint64_t modal_shared_domain_payload_struct_size_offset;
+    uint64_t modal_shared_domain_payload_mesh_certificate_digest_offset;
+    uint64_t modal_shared_domain_payload_map_binding_digest_offset;
+    uint64_t modal_shared_domain_payload_bias_field_sample_id_offset;
+    uint64_t modal_frequency_domain_result_size;
+    uint64_t modal_frequency_domain_result_struct_size_offset;
+    uint64_t modal_frequency_domain_result_resolved_engine_id_offset;
+    uint64_t modal_csr_matrix_view_size;
+    uint64_t modal_csr_matrix_view_values_len_offset;
+    /* v16 modal manifest completion: every public modal envelope exposes
+       its prefix, identity tail, resolved provenance, and every CSR member. */
+    uint64_t modal_eigen_request_abi_version_offset;
+    uint64_t modal_eigen_request_operator_request_offset;
+    uint64_t modal_eigen_request_spectral_transform_kind_offset;
+    uint64_t modal_eigen_request_execution_target_offset;
+    uint64_t modal_eigen_request_scalar_representation_offset;
+    uint64_t modal_eigen_request_result_field_representation_offset;
+    uint64_t modal_shared_domain_payload_abi_version_offset;
+    uint64_t modal_shared_domain_payload_mesh_offset;
+    uint64_t modal_shared_domain_payload_magnetic_a_qq_csr_offset;
+    uint64_t modal_shared_domain_payload_scalar_reduced_node_offset;
+    uint64_t modal_shared_domain_payload_magnetic_reduced_node_offset;
+    uint64_t modal_shared_domain_payload_magnetic_pair_count_offset;
+    uint64_t modal_shared_domain_payload_airbox_pair_count_offset;
+    uint64_t modal_shared_domain_payload_boundary_marker_offset;
+    uint64_t modal_shared_domain_payload_mesh_certificate_schema_offset;
+    uint64_t modal_shared_domain_payload_equilibrium_digest_offset;
+    uint64_t modal_shared_domain_payload_linearization_state_digest_offset;
+    uint64_t modal_shared_domain_payload_boundary_gauge_digest_offset;
+    uint64_t modal_shared_domain_payload_bias_field_sample_index_offset;
+    uint64_t modal_shared_domain_payload_bias_field_sample_signature_offset;
+    uint64_t modal_shared_domain_payload_magnetic_part_identity_offset;
+    uint64_t modal_shared_domain_payload_airbox_part_identity_offset;
+    uint64_t modal_frequency_domain_result_abi_version_offset;
+    uint64_t modal_frequency_domain_result_status_offset;
+    uint64_t modal_frequency_domain_result_error_message_offset;
+    uint64_t modal_frequency_domain_result_mode_lambda_offset;
+    uint64_t modal_frequency_domain_result_resolved_execution_target_offset;
+    uint64_t modal_frequency_domain_result_resolved_scalar_representation_offset;
+    uint64_t modal_frequency_domain_result_resolved_spectral_transform_kind_offset;
+    uint64_t modal_frequency_domain_result_resolved_fallback_state_offset;
+    uint64_t modal_frequency_domain_result_resolved_fallback_reason_offset;
+    uint64_t modal_csr_matrix_view_row_count_offset;
+    uint64_t modal_csr_matrix_view_column_count_offset;
+    uint64_t modal_csr_matrix_view_row_offsets_offset;
+    uint64_t modal_csr_matrix_view_row_offsets_len_offset;
+    uint64_t modal_csr_matrix_view_column_indices_offset;
+    uint64_t modal_csr_matrix_view_column_indices_len_offset;
+    uint64_t modal_csr_matrix_view_values_offset;
 } fullmag_fem_frequency_domain_abi_layout;
 
 typedef struct {
@@ -1546,6 +1620,7 @@ void fullmag_fem_frequency_domain_solve_result_release(
 FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     const FullmagFemModalEigenRequest *request
 );
+int fullmag_fem_modal_eigen_gpu_runtime_finalize(void);
 FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
     const FullmagFemDrivenResponseRequest *request
 );

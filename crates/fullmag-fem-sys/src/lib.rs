@@ -1009,6 +1009,13 @@ pub enum fullmag_fem_modal_result_field_representation {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_spectral_transform_kind {
+    FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO = 0,
+    FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_frequency_domain_drive_kind {
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
@@ -1362,6 +1369,13 @@ pub struct FullmagFemModalSharedDomainPayload {
     pub demag_model: *const c_char,
     pub m0_norm_tolerance: f64,
     pub equilibrium_torque_relative_tolerance: f64,
+    pub mesh_certificate_map_binding_digest: *const c_char,
+    pub boundary_gauge_digest: *const c_char,
+    pub bias_field_sample_index: u64,
+    pub bias_field_sample_id: *const c_char,
+    pub bias_field_sample_signature: *const c_char,
+    pub magnetic_part_identity: *const c_char,
+    pub airbox_part_identity: *const c_char,
 }
 
 #[repr(C)]
@@ -1381,7 +1395,7 @@ pub struct FullmagFemModalEigenRequest {
     pub write_partial_artifacts: i32,
     pub completeness_policy: i32,
     pub eigensolver_family: i32,
-    pub spectral_transform_kind: i32,
+    pub spectral_transform_kind: fullmag_fem_modal_spectral_transform_kind,
     pub cancel_user_data: *mut c_void,
     pub cancel_requested: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub progress_user_data: *mut c_void,
@@ -1499,9 +1513,12 @@ pub struct FullmagFemFrequencyDomainResult {
     pub mode_cluster_ids: *mut u64,
     pub resolved_execution_target: fullmag_fem_modal_execution_target,
     pub resolved_scalar_representation: fullmag_fem_modal_scalar_representation,
-    pub resolved_spectral_transform_kind: u32,
+    pub resolved_spectral_transform_kind: fullmag_fem_modal_spectral_transform_kind,
     pub result_flags: u32,
     pub struct_size: u64,
+    pub resolved_fallback_state: u32,
+    pub resolved_engine_id: *mut c_char,
+    pub resolved_fallback_reason: *mut c_char,
 }
 
 #[repr(C)]
@@ -1555,6 +1572,59 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset: u64,
     pub solve_result_size: u64,
     pub solve_result_artifact_manifest_path_offset: u64,
+    pub modal_abi_schema: u64,
+    pub modal_abi_version: u64,
+    pub modal_eigen_request_size: u64,
+    pub modal_eigen_request_struct_size_offset: u64,
+    pub modal_eigen_request_shared_domain_payload_offset: u64,
+    pub modal_shared_domain_payload_size: u64,
+    pub modal_shared_domain_payload_struct_size_offset: u64,
+    pub modal_shared_domain_payload_mesh_certificate_digest_offset: u64,
+    pub modal_shared_domain_payload_map_binding_digest_offset: u64,
+    pub modal_shared_domain_payload_bias_field_sample_id_offset: u64,
+    pub modal_frequency_domain_result_size: u64,
+    pub modal_frequency_domain_result_struct_size_offset: u64,
+    pub modal_frequency_domain_result_resolved_engine_id_offset: u64,
+    pub modal_csr_matrix_view_size: u64,
+    pub modal_csr_matrix_view_values_len_offset: u64,
+    pub modal_eigen_request_abi_version_offset: u64,
+    pub modal_eigen_request_operator_request_offset: u64,
+    pub modal_eigen_request_spectral_transform_kind_offset: u64,
+    pub modal_eigen_request_execution_target_offset: u64,
+    pub modal_eigen_request_scalar_representation_offset: u64,
+    pub modal_eigen_request_result_field_representation_offset: u64,
+    pub modal_shared_domain_payload_abi_version_offset: u64,
+    pub modal_shared_domain_payload_mesh_offset: u64,
+    pub modal_shared_domain_payload_magnetic_a_qq_csr_offset: u64,
+    pub modal_shared_domain_payload_scalar_reduced_node_offset: u64,
+    pub modal_shared_domain_payload_magnetic_reduced_node_offset: u64,
+    pub modal_shared_domain_payload_magnetic_pair_count_offset: u64,
+    pub modal_shared_domain_payload_airbox_pair_count_offset: u64,
+    pub modal_shared_domain_payload_boundary_marker_offset: u64,
+    pub modal_shared_domain_payload_mesh_certificate_schema_offset: u64,
+    pub modal_shared_domain_payload_equilibrium_digest_offset: u64,
+    pub modal_shared_domain_payload_linearization_state_digest_offset: u64,
+    pub modal_shared_domain_payload_boundary_gauge_digest_offset: u64,
+    pub modal_shared_domain_payload_bias_field_sample_index_offset: u64,
+    pub modal_shared_domain_payload_bias_field_sample_signature_offset: u64,
+    pub modal_shared_domain_payload_magnetic_part_identity_offset: u64,
+    pub modal_shared_domain_payload_airbox_part_identity_offset: u64,
+    pub modal_frequency_domain_result_abi_version_offset: u64,
+    pub modal_frequency_domain_result_status_offset: u64,
+    pub modal_frequency_domain_result_error_message_offset: u64,
+    pub modal_frequency_domain_result_mode_lambda_offset: u64,
+    pub modal_frequency_domain_result_resolved_execution_target_offset: u64,
+    pub modal_frequency_domain_result_resolved_scalar_representation_offset: u64,
+    pub modal_frequency_domain_result_resolved_spectral_transform_kind_offset: u64,
+    pub modal_frequency_domain_result_resolved_fallback_state_offset: u64,
+    pub modal_frequency_domain_result_resolved_fallback_reason_offset: u64,
+    pub modal_csr_matrix_view_row_count_offset: u64,
+    pub modal_csr_matrix_view_column_count_offset: u64,
+    pub modal_csr_matrix_view_row_offsets_offset: u64,
+    pub modal_csr_matrix_view_row_offsets_len_offset: u64,
+    pub modal_csr_matrix_view_column_indices_offset: u64,
+    pub modal_csr_matrix_view_column_indices_len_offset: u64,
+    pub modal_csr_matrix_view_values_offset: u64,
 }
 
 #[repr(C)]
@@ -1727,6 +1797,7 @@ extern "C" {
     pub fn fullmag_fem_modal_eigen_solve(
         request: *const FullmagFemModalEigenRequest,
     ) -> FullmagFemFrequencyDomainResult;
+    pub fn fullmag_fem_modal_eigen_gpu_runtime_finalize() -> i32;
     pub fn fullmag_fem_driven_response_solve(
         request: *const FullmagFemDrivenResponseRequest,
     ) -> FullmagFemFrequencyDomainResult;
@@ -2197,10 +2268,8 @@ mod tests {
                 > former_tail_offset
         );
         assert!(
-            std::mem::offset_of!(
-                fullmag_fem_step_stats,
-                demag_recovered_field_energy_joules
-            ) > former_tail_offset
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_recovered_field_energy_joules)
+                > former_tail_offset
         );
     }
 
@@ -2471,6 +2540,68 @@ mod tests {
         type DmiElement = fullmag_fem_frequency_domain_dmi_element;
         type DrivenRequest = fullmag_fem_frequency_domain_driven_response_request;
         type SolveResult = fullmag_fem_frequency_domain_solve_result;
+        type ModalRequest = FullmagFemModalEigenRequest;
+        type ModalPayload = FullmagFemModalSharedDomainPayload;
+        type ModalResult = FullmagFemFrequencyDomainResult;
+        type ModalCsr = FullmagFemCsrMatrixView;
+
+        assert_eq!(layout.modal_abi_schema, 1);
+        assert_eq!(
+            layout.modal_abi_version,
+            FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION as u64
+        );
+        assert_eq!(
+            layout.modal_eigen_request_size,
+            std::mem::size_of::<ModalRequest>() as u64
+        );
+        assert_eq!(
+            layout.modal_eigen_request_shared_domain_payload_offset,
+            std::mem::offset_of!(ModalRequest, shared_domain_payload) as u64
+        );
+        assert_eq!(
+            layout.modal_shared_domain_payload_size,
+            std::mem::size_of::<ModalPayload>() as u64
+        );
+        assert_eq!(
+            layout.modal_shared_domain_payload_struct_size_offset,
+            std::mem::offset_of!(ModalPayload, struct_size) as u64
+        );
+        assert_eq!(
+            layout.modal_frequency_domain_result_size,
+            std::mem::size_of::<ModalResult>() as u64
+        );
+        assert_eq!(
+            layout.modal_frequency_domain_result_struct_size_offset,
+            std::mem::offset_of!(ModalResult, struct_size) as u64
+        );
+        assert_eq!(
+            layout.modal_csr_matrix_view_size,
+            std::mem::size_of::<ModalCsr>() as u64
+        );
+        assert_eq!(
+            layout.modal_csr_matrix_view_values_len_offset,
+            std::mem::offset_of!(ModalCsr, values_len) as u64
+        );
+        assert_eq!(
+            layout.modal_eigen_request_execution_target_offset,
+            std::mem::offset_of!(ModalRequest, execution_target) as u64
+        );
+        assert_eq!(
+            layout.modal_shared_domain_payload_magnetic_a_qq_csr_offset,
+            std::mem::offset_of!(ModalPayload, magnetic_a_qq_csr) as u64
+        );
+        assert_eq!(
+            layout.modal_shared_domain_payload_airbox_part_identity_offset,
+            std::mem::offset_of!(ModalPayload, airbox_part_identity) as u64
+        );
+        assert_eq!(
+            layout.modal_frequency_domain_result_resolved_fallback_reason_offset,
+            std::mem::offset_of!(ModalResult, resolved_fallback_reason) as u64
+        );
+        assert_eq!(
+            layout.modal_csr_matrix_view_column_indices_len_offset,
+            std::mem::offset_of!(ModalCsr, column_indices_len) as u64
+        );
 
         assert_eq!(
             layout.availability_request_size,
@@ -2848,6 +2979,16 @@ mod tests {
         assert_eq!(request.execution_target as u32, 0);
         assert_eq!(request.scalar_representation as u32, 0);
         assert_eq!(request.result_field_representation as u32, 0);
+        assert_eq!(
+            fullmag_fem_modal_spectral_transform_kind::FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO
+                as u32,
+            0
+        );
+        assert_eq!(
+            fullmag_fem_modal_spectral_transform_kind::FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT
+                as u32,
+            1
+        );
         let dynamic_count =
             std::mem::offset_of!(Request, dynamic_demag_k_tangent_matrix_value_count);
         let request_struct_size = std::mem::offset_of!(Request, struct_size);
