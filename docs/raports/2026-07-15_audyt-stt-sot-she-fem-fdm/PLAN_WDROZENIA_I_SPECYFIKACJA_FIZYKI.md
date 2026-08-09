@@ -9959,3 +9959,35 @@ Python compileall (zmienione moduły i fixture)                   PASS
 To zamyka tylko authoring gate. Nie zmienia kwalifikacji runtime: nadal
 wymagany jest publiczny fixture Python/IR → planner → świeży managed FEM M2
 solve, pełny provenance i niezależna walidacja ilościowa.
+
+## 32.114. Publiczny flat/study/UI round-trip dla SpinDriftDiffusion (2026-08-09)
+
+Usunięto kolejną lukę w ścieżce authoringu. Canonicalny
+`SpinDriftDiffusion` można teraz zarejestrować zarówno przez
+`fm.spin_transport(...)`, jak i przez `fm.study(...).spin_transport(...)`;
+`Problem` z płaskiego skryptu przechowuje moduł oraz powiązany
+`DriftDiffusionSpinTorque` w tych samych gałęziach `ProblemIR`. Eksporter
+skryptu odtwarza wszystkie parametry transportu: materiały spinowe,
+interfejsy transparent/mixing-conductance wraz z SML, warunki brzegowe,
+solver i tolerancje, operator, żądane wykonanie, tryb oraz jawne powiązanie
+torque z solve'em.
+
+`SceneDocument` zachowuje zwalidowany payload `spin_transports` i canonicalny
+torque podczas przejścia builder → scena → builder → overrides. Nie dodano
+drugiej semantyki UI ani domyślnego fallbacku backendu; niekwalifikowane
+urządzenia i sprzężenia nadal odrzuca planner.
+
+Dowody:
+
+```text
+test_spin_transport_runtime_roundtrip.py             23 passed, 45 subtests passed
+canonical FEM transport + torque flat-script reload  PASS
+SceneDocument builder/inverse/override              PASS
+```
+
+Ten etap zamyka publiczny authoring/UI round-trip dla kanonicznego modułu, ale
+nie zamyka bramy wykonawczej. Nadal wymagany jest świeży managed fixture
+Python/IR → planner → rzeczywisty FEM M2 solve z finalnym provenance,
+`external_lead`, wspólnym Oersted+torque, GPU/device-resident hot loop,
+FDM GPU, airbox/energia/p, zbieżnością h/p oraz ilościową walidacją FEM↔FDM i
+zewnętrznymi solverami.

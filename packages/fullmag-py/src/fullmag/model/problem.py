@@ -1171,6 +1171,8 @@ def _builder_editable_scopes(
         scopes.append("current_transport")
     if problem.field_drives:
         scopes.append("field_drives")
+    if problem.spin_transports:
+        scopes.append("spin_transport")
     if mesh_workflow is not None or (
         problem.discretization is not None and problem.discretization.fem is not None
     ):

@@ -16,10 +16,12 @@ from fullmag.runtime.scene_document import (
 from fullmag.runtime import script_builder
 from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
-from fullmag.runtime.script_builder import _render_spin_torques
+from fullmag.runtime.script_builder import _render_spin_torques, _render_spin_transports
 
 
-def _problem(*, spin_torques=(), oersted_terms=(), runtime_metadata=None) -> fm.Problem:
+def _problem(
+    *, spin_torques=(), spin_transports=(), oersted_terms=(), runtime_metadata=None
+) -> fm.Problem:
     geometry = fm.Box(size=(30e-9, 20e-9, 2e-9), name="layer")
     material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
     magnet = fm.Ferromagnet(name="layer", geometry=geometry, material=material)
@@ -35,6 +37,7 @@ def _problem(*, spin_torques=(), oersted_terms=(), runtime_metadata=None) -> fm.
             )
         ],
         spin_torques=spin_torques,
+        spin_transports=spin_transports,
         runtime_metadata=runtime_metadata or {},
         study=fm.TimeEvolution(
             dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]
@@ -51,6 +54,147 @@ def _eval_rendered(lines: list[str]) -> object:
 
 
 class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
+    def test_spin_transport_round_trip_preserves_full_boundary_and_solver_policy(self) -> None:
+        top = fm.SurfaceRef("layer", "top", (0.0, 0.0, 2.0))
+        bottom = fm.SurfaceRef("layer", "bottom", (0.0, 0.0, -3.0))
+        side = fm.SurfaceRef("layer", "side", (4.0, 0.0, 0.0))
+        spin = fm.SpinDriftDiffusion(
+            id="spin-full",
+            current_source_id="transport",
+            domain=[fm.RegionRef("layer", "active")],
+            materials=[
+                fm.SpinTransportMaterialAssignment(
+                    fm.RegionRef("layer", "active"),
+                    fm.SpinTransportMaterial(
+                        sigma_s_Spm=1.2e6,
+                        polarization_p=-0.25,
+                        theta_sh=-0.08,
+                        lambda_sf_m=2.0e-9,
+                        lambda_j_m=1.5e-9,
+                        lambda_phi_m=0.9e-9,
+                        spin_capacitance_As_per_V_m3=3.0e-3,
+                        capacitance_formula_version="dos_isotropic_nonmagnetic.fullmag.v1",
+                    ),
+                )
+            ],
+            interfaces=[
+                fm.TransparentSpinInterface(
+                    "transparent", fm.RegionRef("layer", "active"), fm.RegionRef("layer"), (0.0, 0.0, 2.0)
+                ),
+                fm.MixingConductanceSpinInterface(
+                    id="mixing",
+                    normal_to_ferromagnet=(0.0, 3.0, 0.0),
+                    normal_side=fm.RegionRef("layer", "active"),
+                    ferromagnet_side=fm.RegionRef("layer"),
+                    g_up_Spm2=1.0e14,
+                    g_down_Spm2=2.0e13,
+                    g_r_Spm2=8.0e13,
+                    g_i_Spm2=-2.0e12,
+                    spin_memory_loss=fm.SpinMemoryLossReservoir(
+                        g_n_Spm2=1.0e12, g_f_Spm2=2.0e12, g_lattice_Spm2=3.0e12
+                    ),
+                ),
+            ],
+            boundaries=[
+                fm.SpinInsulating("insulating", [top]),
+                fm.SpinSink("sink", [bottom]),
+                fm.SpecifiedSpinPotential("potential", [side], (1e-6, -2e-6, 3e-6)),
+                fm.SpecifiedSpinFlux("flux", [top], (1.0, 2.0, -3.0)),
+                fm.PeriodicSpin("periodic", bottom, top, (30e-9, 0.0, 0.0)),
+            ],
+            solver=fm.SpinSolverPolicy(
+                engine="block_gmres",
+                relative_tolerance=2e-7,
+                absolute_tolerance=3e-12,
+                max_iterations=321,
+                operator_version="fdm_coupled_charge_spin_fv_block_gmres.v1",
+                default_external_boundary="reject_unassigned",
+                reciprocal_nonlinear=fm.ReciprocalNonlinearSolverPolicy(
+                    gmres_restart=17,
+                    max_picard_iterations=3,
+                    relative_update_tolerance=4e-8,
+                    eta_transport=0.6,
+                ),
+            ),
+            requested_execution=fm.TransportExecution(
+                discretization="fdm", device="cpu", precision="single", execution_mode="extended"
+            ),
+            mode="transient",
+        )
+        expected = spin.to_ir(coupling="one_way")
+        rebuilt = _eval_rendered(
+            _render_spin_transports(
+                _problem(),
+                surface="flat",
+                overrides={"spin_transports": [expected]},
+            )
+        )
+        self.assertEqual(rebuilt.to_ir(coupling="one_way"), expected)
+
+    def test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script(self) -> None:
+        spin = fm.SpinDriftDiffusion(
+            id="spin",
+            current_source_id="transport",
+            domain=[fm.RegionRef("layer")],
+            materials=[
+                fm.SpinTransportMaterialAssignment(
+                    fm.RegionRef("layer"),
+                    fm.SpinTransportMaterial(
+                        sigma_s_Spm=1.2e6,
+                        polarization_p=0.35,
+                        theta_sh=0.12,
+                        lambda_sf_m=2.0e-9,
+                    ),
+                )
+            ],
+            requested_execution=fm.TransportExecution(
+                discretization="fem", device="cpu", precision="double"
+            ),
+            solver=fm.SpinSolverPolicy(
+                operator_version="fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+            ),
+        )
+        torque = fm.DriftDiffusionSpinTorque(
+            id="transport-torque", solve_id="spin", target=fm.RegionRef("layer")
+        )
+        direct = _problem(spin_transports=[spin], spin_torques=[torque])
+        expected_transport = spin.to_ir(coupling="one_way")
+
+        rendered_transport = _render_spin_transports(direct, surface="flat")
+        rebuilt_transport = _eval_rendered(rendered_transport)
+        self.assertEqual(rebuilt_transport.to_ir(coupling="one_way"), expected_transport)
+
+        rendered_torque = _render_spin_torques(direct, surface="flat")
+        rebuilt_torque = _eval_rendered(rendered_torque)
+        self.assertEqual(rebuilt_torque.to_ir_module(), torque.to_ir_module())
+
+        with TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "direct.py"
+            source_path.write_text("# source placeholder\n", encoding="utf-8")
+            loaded = LoadedProblem(
+                problem=direct,
+                source_path=source_path,
+                script_source=source_path.read_text(encoding="utf-8"),
+                entrypoint_kind="problem",
+                default_until_seconds=1e-12,
+            )
+            builder = export_builder_draft(loaded)
+            self.assertEqual(builder["spin_transports"], [expected_transport])
+            scene = build_scene_document_from_builder(builder)
+            self.assertEqual(scene["spin_transports"], [expected_transport])
+            inverse = build_builder_from_scene_document(scene)
+            overrides = builder_overrides_from_scene_document(scene)
+            self.assertEqual(inverse["spin_transports"], [expected_transport])
+            self.assertEqual(overrides["spin_transports"], [expected_transport])
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = Path(tmpdir) / "rewritten.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = load_problem_from_script(rewritten_path)
+
+        reloaded_ir = reloaded.problem.to_ir()
+        self.assertEqual(reloaded_ir["spin_transport_modules"], [expected_transport])
+        self.assertEqual(reloaded_ir["spin_torque_modules"], [torque.to_ir_module()])
+
     def test_legacy_slonczewski_round_trip_preserves_fixed_layer_semantics(self) -> None:
         module = fm.SlonczewskiSTT(
             current_density=(0.0, 0.0, -2e11),

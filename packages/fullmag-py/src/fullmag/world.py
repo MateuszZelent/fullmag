@@ -86,6 +86,10 @@ from fullmag.model.spin_torque import (
     ZhangLiSTT,
     RegionRef,
 )
+from fullmag.model.spin_transport import (
+    DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
+    SpinDriftDiffusion,
+)
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
     INTEGRATOR_ALIASES,
@@ -2400,6 +2404,7 @@ class _WorldState:
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
+    _spin_transports: list[SpinDriftDiffusion] = field(default_factory=list)
     _oersted_terms: list[OerstedCylinder | OerstedField] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
@@ -5379,6 +5384,9 @@ class StudyBuilder:
     def spin_torque(self, module: SpinTorqueModule) -> SpinTorqueModule:
         return spin_torque(module)
 
+    def spin_transport(self, module: SpinDriftDiffusion) -> SpinDriftDiffusion:
+        return spin_transport(module)
+
     def oersted(
         self, term: OerstedCylinder | OerstedField
     ) -> OerstedCylinder | OerstedField:
@@ -7509,12 +7517,21 @@ def spin_torque(module: SpinTorqueModule) -> SpinTorqueModule:
             ZhangLiSTT,
             InterfaceCppSTT,
             DriftDiffusionSpinTorque,
+            CanonicalDriftDiffusionSpinTorque,
             PrescribedSpinOrbitTorque,
             SpinOrbitTorque,
         ),
     ):
         raise TypeError("spin_torque() requires a canonical spin-torque module")
     _state._spin_torques.append(module)
+    return module
+
+
+def spin_transport(module: SpinDriftDiffusion) -> SpinDriftDiffusion:
+    """Register a canonical steady/transient spin-transport solve."""
+    if not isinstance(module, SpinDriftDiffusion):
+        raise TypeError("spin_transport() requires a SpinDriftDiffusion module")
+    _state._spin_transports.append(module)
     return module
 
 
@@ -8143,6 +8160,7 @@ def _build_problem(
         field_drives=tuple(s._field_drives),
         monitors=tuple(s._planar_monitors),
         spin_torques=tuple(s._spin_torques),
+        spin_transports=tuple(s._spin_transports),
         couplings=s._couplings.items(),
         temperature=s._thermal_noise.temperature if s._thermal_noise is not None else None,
         excitation_analysis=s._excitation_analysis,

@@ -36,12 +36,16 @@ from fullmag.model.antenna import (
 from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.spin_torque import (
-    DriftDiffusionSpinTorque,
+    DriftDiffusionSpinTorque as LegacyDriftDiffusionSpinTorque,
     InterfaceCppSTT,
     PrescribedSpinOrbitTorque,
     SlonczewskiSTT,
     SpinOrbitTorque,
     ZhangLiSTT,
+)
+from fullmag.model.spin_transport import (
+    DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
+    SpinDriftDiffusion,
 )
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import (
@@ -325,6 +329,10 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "current_modules": [
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
+        "spin_transports": [
+            _export_spin_transport_entry(base_problem, module)
+            for module in base_problem.spin_transports
+        ],
         "field_drives": [drive.to_ir() for drive in base_problem.field_drives],
         "planar_monitors": [monitor.to_ir() for monitor in base_problem.monitors],
         "spin_torques": [
@@ -450,6 +458,13 @@ def render_loaded_problem_as_script(
     if current_module_lines:
         lines.append("")
         lines.extend(current_module_lines)
+
+    spin_transport_lines = _render_spin_transports(
+        base_problem, surface=surface, overrides=overrides
+    )
+    if spin_transport_lines:
+        lines.append("")
+        lines.extend(spin_transport_lines)
 
     field_drive_lines = _render_field_drives(base_problem, surface=surface)
     if field_drive_lines:
@@ -2134,6 +2149,266 @@ def _render_charge_solver_payload(payload: object) -> str:
     return f"fm.ChargeSolverPolicy({', '.join(kwargs)})"
 
 
+def _render_spin_material_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    required = (
+        "sigma_s_Spm",
+        "polarization_p",
+        "theta_sh",
+        "lambda_sf_m",
+    )
+    kwargs: list[str] = []
+    for key in required:
+        value = _number_or_none(entry.get(key))
+        if value is None:
+            raise ValueError(f"spin transport material requires {key}")
+        kwargs.append(f"{key}={_py_number(value)}")
+    for key in ("lambda_j_m", "lambda_phi_m"):
+        value = _number_or_none(entry.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    for key in ("spin_capacitance_As_per_V_m3", "density_of_states_per_spin_Jinv_m3"):
+        value = _number_or_none(entry.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    formula = entry.get("capacitance_formula_version")
+    if isinstance(formula, str) and formula:
+        kwargs.append(f"capacitance_formula_version={_py_repr(formula)}")
+    return f"fm.SpinTransportMaterial({', '.join(kwargs)})"
+
+
+def _render_spin_material_assignment_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    return (
+        "fm.SpinTransportMaterialAssignment("
+        f"{_render_region_ref_payload(entry.get('region'))}, "
+        f"{_render_spin_material_payload(entry.get('material'))})"
+    )
+
+
+def _render_spin_interface_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kind = str(entry.get("kind") or "")
+    interface_id = str(entry.get("id") or "")
+    if not interface_id:
+        raise ValueError("spin transport interface requires id")
+    if kind == "transparent":
+        normal = _optional_vec3(entry.get("normal_a_to_b"))
+        if normal is None:
+            raise ValueError("transparent spin interface requires normal_a_to_b")
+        return (
+            "fm.TransparentSpinInterface("
+            f"id={_py_repr(interface_id)}, "
+            f"side_a={_render_region_ref_payload(entry.get('side_a'))}, "
+            f"side_b={_render_region_ref_payload(entry.get('side_b'))}, "
+            f"normal_a_to_b={_py_tuple3(normal)})"
+        )
+    if kind != "mixing_conductance":
+        raise ValueError(f"unsupported spin transport interface kind {kind!r}")
+    normal = _optional_vec3(entry.get("normal_to_ferromagnet"))
+    if normal is None:
+        raise ValueError("mixing-conductance interface requires normal_to_ferromagnet")
+    kwargs = [
+        f"id={_py_repr(interface_id)}",
+        f"normal_to_ferromagnet={_py_tuple3(normal)}",
+        f"normal_side={_render_region_ref_payload(entry.get('normal_side'))}",
+        f"ferromagnet_side={_render_region_ref_payload(entry.get('ferromagnet_side'))}",
+    ]
+    for key in ("g_up_Spm2", "g_down_Spm2", "g_r_Spm2", "g_i_Spm2"):
+        value = _number_or_none(entry.get(key))
+        if value is None:
+            raise ValueError(f"mixing-conductance interface requires {key}")
+        kwargs.append(f"{key}={_py_number(value)}")
+    sml = entry.get("spin_memory_loss")
+    if isinstance(sml, Mapping):
+        sml_entry = _normalize_mapping(sml)
+        sml_kwargs: list[str] = []
+        for key in ("g_n_Spm2", "g_f_Spm2", "g_lattice_Spm2"):
+            value = _number_or_none(sml_entry.get(key))
+            if value is None:
+                raise ValueError(f"spin-memory-loss reservoir requires {key}")
+            sml_kwargs.append(f"{key}={_py_number(value)}")
+        formula = sml_entry.get("formula_version")
+        if isinstance(formula, str) and formula:
+            sml_kwargs.append(f"formula_version={_py_repr(formula)}")
+        kwargs.append(
+            "spin_memory_loss=fm.SpinMemoryLossReservoir("
+            + ", ".join(sml_kwargs)
+            + ")"
+        )
+    return f"fm.MixingConductanceSpinInterface({', '.join(kwargs)})"
+
+
+def _render_spin_boundary_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kind = str(entry.get("kind") or "")
+    boundary_id = str(entry.get("id") or "")
+    surfaces = entry.get("surfaces")
+    if not boundary_id or not isinstance(surfaces, list) or not surfaces:
+        raise ValueError("spin transport boundary is incomplete")
+    surfaces_expr = "[" + ", ".join(_render_surface_ref_payload(item) for item in surfaces) + "]"
+    if kind == "spin_insulating":
+        return f"fm.SpinInsulating({_py_repr(boundary_id)}, {surfaces_expr})"
+    if kind == "spin_sink":
+        return f"fm.SpinSink({_py_repr(boundary_id)}, {surfaces_expr})"
+    if kind == "specified_spin_potential":
+        value = _optional_vec3(entry.get("spin_potential_V"))
+        if value is None:
+            raise ValueError("specified spin potential requires spin_potential_V")
+        return (
+            f"fm.SpecifiedSpinPotential({_py_repr(boundary_id)}, {surfaces_expr}, "
+            f"{_py_tuple3(value)})"
+        )
+    if kind == "specified_spin_flux":
+        value = _optional_vec3(entry.get("normal_spin_flux_Apm2"))
+        if value is None:
+            raise ValueError("specified spin flux requires normal_spin_flux_Apm2")
+        return (
+            f"fm.SpecifiedSpinFlux({_py_repr(boundary_id)}, {surfaces_expr}, "
+            f"{_py_tuple3(value)})"
+        )
+    raise ValueError(f"unsupported spin transport boundary kind {kind!r}")
+
+
+def _render_periodic_spin_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    boundary_id = str(entry.get("id") or "")
+    translation = _optional_vec3(entry.get("translation_m"))
+    if not boundary_id or translation is None:
+        raise ValueError("periodic spin boundary is incomplete")
+    return (
+        "fm.PeriodicSpin("
+        f"{_py_repr(boundary_id)}, "
+        f"minus_surface={_render_surface_ref_payload(entry.get('minus_surface'))}, "
+        f"plus_surface={_render_surface_ref_payload(entry.get('plus_surface'))}, "
+        f"translation_m={_py_tuple3(translation)})"
+    )
+
+
+def _render_spin_solver_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    linear = _normalize_mapping(entry.get("linear"))
+    kwargs: list[str] = []
+    for key in ("engine", "operator_version", "default_external_boundary"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            kwargs.append(f"{key}={_py_repr(value)}")
+    for key in ("relative_tolerance", "absolute_tolerance"):
+        value = _number_or_none(linear.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    max_iterations = linear.get("max_iterations")
+    if isinstance(max_iterations, int):
+        kwargs.append(f"max_iterations={max_iterations}")
+    nonlinear = entry.get("reciprocal_nonlinear")
+    if isinstance(nonlinear, Mapping):
+        nonlinear_entry = _normalize_mapping(nonlinear)
+        nonlinear_kwargs: list[str] = []
+        for key in ("gmres_restart", "max_picard_iterations"):
+            value = nonlinear_entry.get(key)
+            if isinstance(value, int):
+                nonlinear_kwargs.append(f"{key}={value}")
+        for key in ("relative_update_tolerance", "eta_transport"):
+            value = _number_or_none(nonlinear_entry.get(key))
+            if value is not None:
+                nonlinear_kwargs.append(f"{key}={_py_number(value)}")
+        kwargs.append(
+            "reciprocal_nonlinear=fm.ReciprocalNonlinearSolverPolicy("
+            + ", ".join(nonlinear_kwargs)
+            + ")"
+        )
+    return f"fm.SpinSolverPolicy({', '.join(kwargs)})"
+
+
+def _render_transport_execution_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kwargs: list[str] = []
+    for key in ("discretization", "device", "precision", "execution_mode"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            kwargs.append(f"{key}={_py_repr(value)}")
+    return f"fm.TransportExecution({', '.join(kwargs)})"
+
+
+def _render_spin_transport_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    module_id = str(entry.get("id") or "")
+    source_id = str(entry.get("current_source_id") or "")
+    domain = entry.get("domain")
+    materials = entry.get("materials")
+    if not module_id or not source_id or not isinstance(domain, list) or not domain:
+        raise ValueError("spin transport requires id, current_source_id, and domain")
+    if not isinstance(materials, list) or not materials:
+        raise ValueError("spin transport requires materials")
+    kwargs = [
+        f"id={_py_repr(module_id)}",
+        f"current_source_id={_py_repr(source_id)}",
+        "domain=[" + ", ".join(_render_region_ref_payload(item) for item in domain) + "]",
+        "materials=["
+        + ", ".join(_render_spin_material_assignment_payload(item) for item in materials)
+        + "]",
+    ]
+    interfaces = entry.get("interfaces")
+    if isinstance(interfaces, list) and interfaces:
+        kwargs.append(
+            "interfaces=[" + ", ".join(_render_spin_interface_payload(item) for item in interfaces) + "]"
+        )
+    boundaries = entry.get("boundaries")
+    if isinstance(boundaries, list) and boundaries:
+        rendered_boundaries = []
+        for item in boundaries:
+            item_map = _normalize_mapping(item)
+            if item_map.get("kind") == "periodic_spin":
+                rendered_boundaries.append(_render_periodic_spin_payload(item))
+            else:
+                rendered_boundaries.append(_render_spin_boundary_payload(item))
+        kwargs.append("boundaries=[" + ", ".join(rendered_boundaries) + "]")
+    solver = entry.get("solver")
+    if isinstance(solver, Mapping):
+        kwargs.append(f"solver={_render_spin_solver_payload(solver)}")
+    requested_execution = entry.get("requested_execution")
+    if isinstance(requested_execution, Mapping):
+        kwargs.append(
+            f"requested_execution={_render_transport_execution_payload(requested_execution)}"
+        )
+    mode = entry.get("mode")
+    if isinstance(mode, str) and mode != "steady":
+        kwargs.append(f"mode={_py_repr(mode)}")
+    return f"fm.SpinDriftDiffusion({', '.join(kwargs)})"
+
+
+def _render_spin_transports(
+    problem: Problem,
+    *,
+    surface: str,
+    overrides: dict[str, object] | None = None,
+) -> list[str]:
+    resolved_overrides = overrides or {}
+    if "spin_transports" in resolved_overrides:
+        override_modules = resolved_overrides["spin_transports"]
+        if not isinstance(override_modules, list):
+            raise ValueError("spin_transports override must be a list")
+        modules: Sequence[object] = override_modules
+    else:
+        modules = problem.spin_transports
+    if not modules:
+        return []
+    lines = ["# Spin transport"]
+    for module in modules:
+        if isinstance(module, SpinDriftDiffusion):
+            payload = _export_spin_transport_entry(problem, module)
+        elif isinstance(module, Mapping):
+            payload = dict(module)
+        else:
+            raise ValueError(
+                "canonical flat-script rewrite does not yet support spin transport "
+                f"{type(module).__name__}"
+            )
+        lines.append(_render_spin_transport_payload(payload))
+    register = _surface_call(surface, "spin_transport")
+    return [lines[0], *(f"{register}({expression})" for expression in lines[1:])]
+
+
 def _render_int_triplet(value: object, context: str) -> str:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 3:
         raise ValueError(f"{context} must contain three integer values")
@@ -2809,7 +3084,15 @@ def _render_spin_torques(
                 kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
             lines.append(f"fm.InterfaceCppSTT({', '.join(kwargs)})")
             continue
-        if isinstance(module, DriftDiffusionSpinTorque):
+        if isinstance(module, CanonicalDriftDiffusionSpinTorque):
+            lines.append(
+                "fm.DriftDiffusionSpinTorque("
+                f"id={_py_repr(module.id)}, "
+                f"solve_id={_py_repr(module.solve_id)}, "
+                f"target={_render_region_ref_payload(module.target.to_ir())})"
+            )
+            continue
+        if isinstance(module, LegacyDriftDiffusionSpinTorque):
             kwargs = []
             if module.current_density is not None:
                 kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
@@ -3117,6 +3400,28 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
     kind = _required_entry(entry, "kind", context="spin_torque")
     if kind == "prescribed_sot":
         return _render_prescribed_sot_entry(entry)
+    if kind == "drift_diffusion_spin_torque":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "schema_version", "id", "solve_id", "target", "formula_version"},
+            context="drift_diffusion_spin_torque",
+        )
+        if entry.get("schema_version") != "drift_diffusion_spin_torque.v1":
+            raise ValueError("unsupported drift-diffusion spin-torque schema_version")
+        if entry.get("formula_version") != "transport_torque_angular_momentum.fullmag.v1":
+            raise ValueError("unsupported drift-diffusion spin-torque formula_version")
+        module_id = _required_nonempty_string(
+            entry, "id", context="drift_diffusion_spin_torque"
+        )
+        solve_id = _required_nonempty_string(
+            entry, "solve_id", context="drift_diffusion_spin_torque"
+        )
+        target = _required_mapping(entry, "target", context="drift_diffusion_spin_torque")
+        return (
+            "fm.DriftDiffusionSpinTorque("
+            f"id={_py_repr(module_id)}, solve_id={_py_repr(solve_id)}, "
+            f"target={_render_region_ref_payload(target)})"
+        )
     constructors = {
         "slonczewski": "SlonczewskiSTT",
         "zhang_li": "ZhangLiSTT",
@@ -6455,6 +6760,24 @@ def _export_excitation_analysis(problem: Problem) -> dict[str, object] | None:
     if analysis is None:
         return None
     return analysis.to_ir()
+
+
+def _export_spin_transport_entry(
+    problem: Problem,
+    module: SpinDriftDiffusion,
+) -> dict[str, object]:
+    """Export a spin-transport solve with its source-owned coupling."""
+    source = next(
+        (
+            candidate
+            for candidate in problem.current_modules
+            if isinstance(candidate, CurrentTransport)
+            and candidate.name == module.current_source_id
+        ),
+        None,
+    )
+    coupling = source.coupling if isinstance(source, CurrentTransport) else None
+    return copy.deepcopy(module.to_ir(coupling=coupling))
 
 
 def _export_spin_torque_entry(module: object) -> dict[str, object]:

@@ -46,7 +46,10 @@ from fullmag.model.spin_torque import (
     VectorCurrentDrive,
     ZhangLiSTT,
 )
-from fullmag.model.spin_transport import SurfaceRef
+from fullmag.model.spin_transport import (
+    DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
+    SurfaceRef,
+)
 
 
 def _material_id(name: str) -> str:
@@ -560,6 +563,18 @@ def _decode_prescribed_sot(entry: dict[str, object]) -> PrescribedSpinOrbitTorqu
 def _decode_spin_torque(value: object) -> object:
     entry = _mapping(value, "spin_torque")
     kind = entry.get("kind")
+    if kind == "drift_diffusion_spin_torque":
+        if entry.get("schema_version") != "drift_diffusion_spin_torque.v1":
+            raise ValueError("unsupported drift-diffusion spin-torque schema_version")
+        if entry.get("formula_version") != "transport_torque_angular_momentum.fullmag.v1":
+            raise ValueError("unsupported drift-diffusion spin-torque formula_version")
+        return CanonicalDriftDiffusionSpinTorque(
+            id=_nonempty_string(entry.get("id"), "drift_diffusion_spin_torque.id"),
+            solve_id=_nonempty_string(
+                entry.get("solve_id"), "drift_diffusion_spin_torque.solve_id"
+            ),
+            target=_region_ref(entry.get("target"), "drift_diffusion_spin_torque.target"),
+        )
     if kind == "prescribed_sot":
         return _decode_prescribed_sot(entry)
     if kind not in {"slonczewski", "zhang_li"}:
@@ -700,6 +715,28 @@ def _canonical_current_transports(values: object) -> list[dict[str, object]]:
     if not isinstance(values, list):
         raise ValueError("current_transports must be a list")
     return [_decode_current_transport(value).to_ir() for value in values]
+
+
+def _canonical_spin_transports(values: object, *, scene_ids: bool) -> list[dict[str, object]]:
+    """Preserve the validated ProblemIR payload for UI round-trip."""
+    if not isinstance(values, list):
+        raise ValueError("spin_transports must be a list")
+    result: list[dict[str, object]] = []
+    for index, value in enumerate(values):
+        entry = _mapping(copy.deepcopy(value), f"spin_transports[{index}]")
+        if entry.get("schema_version") != "spin_transport.v1":
+            raise ValueError("spin transport schema_version must be spin_transport.v1")
+        for key in ("id", "current_source_id"):
+            if not isinstance(entry.get(key), str) or not str(entry[key]).strip():
+                raise ValueError(f"spin_transports[{index}].{key} must be a non-empty string")
+        for key in ("domain", "materials"):
+            if not isinstance(entry.get(key), list) or not entry[key]:
+                raise ValueError(f"spin_transports[{index}].{key} must be a non-empty list")
+        canonical = entry
+        if scene_ids and "id" not in canonical:
+            canonical = {"id": f"spin-transport:{index}", **canonical}
+        result.append(canonical)
+    return result
 
 
 def _canonical_spin_torques(values: object, *, scene_ids: bool) -> list[dict[str, object]]:
@@ -1046,6 +1083,10 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         document["spin_torques"] = _canonical_spin_torques(
             builder["spin_torques"], scene_ids=True
         )
+    if "spin_transports" in builder:
+        document["spin_transports"] = _canonical_spin_transports(
+            builder["spin_transports"], scene_ids=True
+        )
     if "oersted_terms" in builder:
         document["oersted_fields"] = _canonical_oersted_fields(
             builder["oersted_terms"], scene_ids=True
@@ -1191,6 +1232,10 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     if "spin_torques" in scene:
         builder["spin_torques"] = _canonical_spin_torques(
             scene["spin_torques"], scene_ids=False
+        )
+    if "spin_transports" in scene:
+        builder["spin_transports"] = _canonical_spin_transports(
+            scene["spin_transports"], scene_ids=False
         )
     if "oersted_fields" in scene:
         builder["oersted_terms"] = _canonical_oersted_fields(
@@ -1358,6 +1403,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "excitation_analysis": builder.get("excitation_analysis"),
     }
     _copy_present_collection(builder, overrides, "spin_torques")
+    _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
     return overrides
 

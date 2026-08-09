@@ -1131,6 +1131,16 @@ operatora blokowego i nie przyjmuje polityki Picarda. `ChargeSolverPolicy` oraz
 nie jest odrzucany jako konfiguracja FDM, a mieszanie tych wersji kończy się
 walidacją przed plannerem.
 
+Kanoniczny moduł `SpinDriftDiffusion` i powiązany
+`DriftDiffusionSpinTorque` są również dostępne w obu powierzchniach
+skryptowych: `fm.spin_transport(...)` oraz
+`fm.study(...).spin_transport(...)` rejestrują moduł w tym samym `ProblemIR`.
+Eksport płaskiego skryptu zachowuje materiały, interfejsy, warunki brzegowe,
+operator, tolerancje, wykonanie i tryb. Rozszerzony `SceneDocument` przenosi
+ten sam payload bez zmiany identyfikatorów, więc ścieżka Python → UI → Python
+nie tworzy drugiej semantyki transportu. Rejestracja jest authoringiem; planner
+nadal odrzuca niekwalifikowane urządzenia i sprzężenia.
+
 ```python
 # %%
 from fullmag import CurrentTransport, OerstedField, SinusoidalEnvelope
@@ -1172,7 +1182,11 @@ drive = CurrentTransport(
 |---|---|---|---|---|---|---|---|
 | `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
 | `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` (`a(t)=1`) | `1` (multiplier); time fields `s`, frequency `Hz` | `All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.` | `dimensionless source multiplier evaluated at the exact stage time` | `Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU/external-lead remain open` | `current_modules[].time_envelope` |
+| `SpinDriftDiffusion.id`, `.current_source_id`, `.domain`, `.mode` | `str`, `str`, `Sequence[RegionRef]`, `Literal['steady','transient']` | `required`, `required`, `required`, `steady` | `1`, `1`, `1`, `1` | `IDs and domain are non-empty; transient mode requires a physical spin capacitance/DOS contract.` | `named spin solve, charge-source binding, solved region set and temporal regime` | `Python/IR/UI authoring; runtime lane remains planner-scoped` | `spin_transport_modules[].id/current_source_id/domain/mode` |
+| `SpinDriftDiffusion.materials`, `.interfaces`, `.boundaries` | `Sequence[SpinTransportMaterialAssignment]`, `Sequence[...Interface]`, `Sequence[...Boundary]` | `required`, `[]`, `[]` | `sigma: S/m`, `lambda: m`, conductances `S/m²`, flux `A/m²`, potential `V` | `Material/interface/boundary variants validate finite SI values, normalized normals and explicit external-boundary policy.` | `constitutive coefficients and trace conditions for charge-coupled spin accumulation` | `Python/IR/UI round-trip; FEM M2 bounded CPU/double for the qualified subset` | `spin_transport_modules[].materials/interfaces/boundaries` |
+| `SpinDriftDiffusion.requested_execution` | `TransportExecution` | `fdm/cpu/double/strict` | `1` | `Discretization, device, precision and mode are explicit; unsupported resolutions fail closed.` | `requested numerical realization and execution policy` | `Planner-visible; FEM GPU remains unqualified` | `spin_transport_modules[].requested_execution` |
 | `SpinDriftDiffusion.solver.operator_version` | `str` | `backend-specific, explicit` | `1` | FDM M2 wymaga fdm_coupled_charge_spin_fv_block_gmres.v1; ograniczony FEM M2 wymaga fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1; operator ładunku i spinu muszą być identyczne. | `versioned charge--spin operator identity` | `FDM CPU/double reference lub FEM CPU/double bounded callback; GPU remains fail-closed` | `spin_transport_modules[].solver.operator_version` |
+| `DriftDiffusionSpinTorque.id`, `.solve_id`, `.target` | `str`, `str`, `RegionRef` | `required` | `1` | `Torque must reference an existing `SpinDriftDiffusion`; its RHS contribution is angular rate in `s^-1`, not an H-field.` | `explicit transport-to-LLG torque binding` | `FEM CPU/double callback bounded; other lanes fail closed or remain semantic-only` | `spin_torque_modules[]` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
 | `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; invariant-source cache is bounded and exact-key; external lead and magnetization-dependent stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
@@ -1290,7 +1304,10 @@ Resource-first API projects revisioned Current Transport and Oersted Field
 models while heavy fields remain in `/data/fields`. Dedicated Explorer and
 Inspector nodes show source, signed current, closure, method, refresh, SI units,
 regime, freshness, residual, and capability scope. UI Apply shares canonical
-validation and export emits canonical Python.
+validation and export emits canonical Python. Spin-transport payloads and
+canonical drift-diffusion torque are preserved in the same scene document and
+script-builder round-trip; no GPU or production capability is implied by this
+authoring path.
 
 ### 4.5 Bounded executable solved-current FEM slice (2026-08-05)
 
@@ -1743,6 +1760,8 @@ evidence that the approximation is accurate.
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | public current source and canonical time-envelope owner |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ChargeSolverPolicy` | versioned FDM/FEM charge-operator and residual validation |
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | preserve FDM M2 nonlinear policy versus bounded FEM M2 linear operator identity |
+| `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `class SpinDriftDiffusion` | canonical spin transport materials, interfaces, boundaries, solver and execution request |
+| `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `class DriftDiffusionSpinTorque` | explicit transport-to-LLG torque binding and angular-rate contract |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
 | `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
@@ -1754,6 +1773,10 @@ evidence that the approximation is accurate.
 | `crates/fullmag-runner/src/native_fem/stage_transport.rs` | `StageTransportProvider::evaluate` | public CPU reciprocal M2 stage solve, envelope scaling, torque digest and exact stage identity |
 | `crates/fullmag-runner/src/time_envelope.rs` | `evaluate_time_envelope` | shared exact-stage evaluation of source envelopes; unresolved tabulated artifacts fail closed |
 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `source_envelope_multiplier` | FDM CPU one-way source scaling and accepted multiplier provenance |
+| `packages/fullmag-py/src/fullmag/world.py` | `spin_transport` | flat/study registration of canonical spin transport into ProblemIR |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_spin_transports` | canonical Python export of spin transport and torque parameters |
+| `packages/fullmag-py/src/fullmag/runtime/scene_document.py` | `_canonical_spin_transports` | preserve validated spin-transport payload across UI scene round-trip |
+| `packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script` | Python, SceneDocument and flat-script regression |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `stage_transport_telemetry` | persist reciprocal stage-transport callback telemetry artifact |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | append-only callback provenance artifact with accepted/last stage observation and field digest |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |

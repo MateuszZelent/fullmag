@@ -101,6 +101,36 @@
       "responsibility": "Keep reciprocal FEM M2 on the linear conforming-H1 operator without FDM reciprocal_nonlinear policy, while preserving the FDM M2 policy and charge/spin operator identity."
     },
     {
+      "id": "python-spin-transport-model",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinDriftDiffusion",
+      "responsibility": "Define the canonical spin drift-diffusion materials, interfaces, boundary conditions, solver policy, execution request and mode used by both FDM and FEM authoring."
+    },
+    {
+      "id": "python-spin-transport-torque-model",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class DriftDiffusionSpinTorque",
+      "responsibility": "Bind a named spin-transport solve to the LLG torque RHS with an explicit angular-rate convention."
+    },
+    {
+      "id": "python-spin-transport-script-builder",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_spin_transports",
+      "responsibility": "Round-trip all canonical spin-transport materials, interfaces, boundaries, solver, execution and mode parameters into Python."
+    },
+    {
+      "id": "scene-spin-transport-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document.py",
+      "symbol": "_canonical_spin_transports",
+      "responsibility": "Preserve validated spin-transport and drift-diffusion torque payloads through the SceneDocument/UI builder round-trip."
+    },
+    {
+      "id": "python-spin-transport-roundtrip-test",
+      "path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "symbol": "test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script",
+      "responsibility": "Regression proof for Python, SceneDocument, flat-script and canonical FEM M2 torque authoring round-trip."
+    },
+    {
       "id": "runner-time-envelope-evaluator",
       "path": "crates/fullmag-runner/src/time_envelope.rs",
       "symbol": "evaluate_time_envelope",
@@ -334,6 +364,36 @@
         "problem_ir": "current_modules[].time_envelope"
       },
       {
+        "python": "SpinDriftDiffusion.id`, `.current_source_id`, `.domain`, `.mode",
+        "type": "str`, `str`, `Sequence[RegionRef]`, `Literal['steady','transient']",
+        "default": "required`, `required`, `required`, `steady",
+        "si_unit": "1`, `1`, `1`, `1",
+        "validation": "IDs and domain are non-empty; transient mode requires a physical spin capacitance/DOS contract.",
+        "meaning": "named spin solve, charge-source binding, solved region set and temporal regime",
+        "backend_support": "Python/IR/UI authoring; runtime lane remains planner-scoped",
+        "problem_ir": "spin_transport_modules[].id/current_source_id/domain/mode"
+      },
+      {
+        "python": "SpinDriftDiffusion.materials`, `.interfaces`, `.boundaries",
+        "type": "Sequence[SpinTransportMaterialAssignment]`, `Sequence[...Interface]`, `Sequence[...Boundary]",
+        "default": "required`, `[]`, `[]",
+        "si_unit": "sigma: S/m`, `lambda: m`, conductances `S/m²`, flux `A/m²`, potential `V",
+        "validation": "Material/interface/boundary variants validate finite SI values, normalized normals and explicit external-boundary policy.",
+        "meaning": "constitutive coefficients and trace conditions for charge-coupled spin accumulation",
+        "backend_support": "Python/IR/UI round-trip; FEM M2 bounded CPU/double for the qualified subset",
+        "problem_ir": "spin_transport_modules[].materials/interfaces/boundaries"
+      },
+      {
+        "python": "SpinDriftDiffusion.requested_execution",
+        "type": "TransportExecution",
+        "default": "fdm/cpu/double/strict",
+        "si_unit": "1",
+        "validation": "Discretization, device, precision and mode are explicit; unsupported resolutions fail closed.",
+        "meaning": "requested numerical realization and execution policy",
+        "backend_support": "Planner-visible; FEM GPU remains unqualified",
+        "problem_ir": "spin_transport_modules[].requested_execution"
+      },
+      {
         "python": "SpinDriftDiffusion.solver.operator_version",
         "type": "str",
         "default": "backend-specific, explicit",
@@ -342,6 +402,16 @@
         "meaning": "versioned charge--spin operator identity",
         "backend_support": "FDM CPU/double reference lub FEM CPU/double bounded callback; GPU remains fail-closed",
         "problem_ir": "spin_transport_modules[].solver.operator_version"
+      },
+      {
+        "python": "DriftDiffusionSpinTorque.id`, `.solve_id`, `.target",
+        "type": "str`, `str`, `RegionRef",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Torque must reference an existing `SpinDriftDiffusion`; its RHS contribution is angular rate in `s^-1`, not an H-field.",
+        "meaning": "explicit transport-to-LLG torque binding",
+        "backend_support": "FEM CPU/double callback bounded; other lanes fail closed or remain semantic-only",
+        "problem_ir": "spin_torque_modules[]"
       },
       {
         "python": "OerstedField.source",

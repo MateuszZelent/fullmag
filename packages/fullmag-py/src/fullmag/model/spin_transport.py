@@ -303,11 +303,14 @@ class SpecifiedSpinPotential(_SurfaceBoundary):
     spin_potential_V: tuple[float, float, float]
 
     def __init__(self, id: str, surfaces: Sequence[SurfaceRef], spin_potential_V: Sequence[float]) -> None:
-        super().__init__(id, surfaces, kind="specified_spin_potential")
+        _SurfaceBoundary.__init__(self, id, surfaces, kind="specified_spin_potential")
         object.__setattr__(self, "spin_potential_V", as_vector3(spin_potential_V, "spin_potential_V"))
 
     def to_ir(self) -> dict[str, object]:
-        return {**super().to_ir(), "spin_potential_V": list(self.spin_potential_V)}
+        return {
+            **_SurfaceBoundary.to_ir(self),
+            "spin_potential_V": list(self.spin_potential_V),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,11 +318,14 @@ class SpecifiedSpinFlux(_SurfaceBoundary):
     normal_spin_flux_Apm2: tuple[float, float, float]
 
     def __init__(self, id: str, surfaces: Sequence[SurfaceRef], normal_spin_flux_Apm2: Sequence[float]) -> None:
-        super().__init__(id, surfaces, kind="specified_spin_flux")
+        _SurfaceBoundary.__init__(self, id, surfaces, kind="specified_spin_flux")
         object.__setattr__(self, "normal_spin_flux_Apm2", as_vector3(normal_spin_flux_Apm2, "normal_spin_flux_Apm2"))
 
     def to_ir(self) -> dict[str, object]:
-        return {**super().to_ir(), "normal_spin_flux_Apm2": list(self.normal_spin_flux_Apm2)}
+        return {
+            **_SurfaceBoundary.to_ir(self),
+            "normal_spin_flux_Apm2": list(self.normal_spin_flux_Apm2),
+        }
 
 
 @dataclass(frozen=True, slots=True)
