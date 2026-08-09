@@ -61,9 +61,17 @@ fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples
     let parsed: ProblemIR = serde_json::from_value(encoded.clone())
         .expect("bias-field sweep is canonical Eigenmodes IR");
     assert_eq!(
-        serde_json::to_value(parsed).unwrap()["study"]["bias_field_sweep"],
+        serde_json::to_value(&parsed).unwrap()["study"]["bias_field_sweep"],
         encoded["study"]["bias_field_sweep"],
     );
+
+    let mut damped = parsed.clone();
+    damped.materials[0].damping = 0.1;
+    assert!(damped
+        .validate()
+        .expect_err("material alpha must fail closed for a bias-field sweep")
+        .iter()
+        .any(|reason| reason == "eigenmodes.bias_field_sweep_requires_alpha_zero"));
 
     encoded["study"]["bias_field_sweep"]["samples_a_per_m"] = serde_json::json!([]);
     let invalid: ProblemIR = serde_json::from_value(encoded.clone())

@@ -1209,6 +1209,13 @@ impl ProblemIR {
                     if *damping_policy != EigenDampingPolicyIR::Ignore {
                         errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
                     }
+                    if self
+                        .materials
+                        .iter()
+                        .any(|material| material.damping != 0.0)
+                    {
+                        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
+                    }
                     if self.backend_policy.execution_precision != ExecutionPrecision::Double {
                         errors.push(
                             "eigenmodes.bias_field_sweep_requires_double_precision".to_string(),

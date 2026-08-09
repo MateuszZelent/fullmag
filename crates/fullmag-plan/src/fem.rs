@@ -3559,6 +3559,13 @@ pub(crate) fn plan_fem_eigen(
 
     let material =
         selected_material.expect("validation should have caught missing FEM eigen material");
+    if bias_field_sweep.is_some() && material.damping != 0.0 {
+        return Err(PlanError {
+            reasons: vec![
+                "eigenmodes.bias_field_sweep_requires_alpha_zero; fallback=none".to_string(),
+            ],
+        });
+    }
     let geometry_to_object_id = geometry_to_object_id_map(&magnet_entries);
     let (mesh, raw_object_segments, mesh_source, equilibrium_magnetization) =
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
