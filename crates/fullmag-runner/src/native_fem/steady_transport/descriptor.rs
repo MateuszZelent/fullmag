@@ -12,14 +12,15 @@ use fullmag_ir::{
 use std::collections::BTreeSet;
 
 const STEADY_SOURCE_CACHE_POLICY: &str = "steady_source_invariant.v1";
+const STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
 
-pub(super) struct PreparedTransportPlan<'a> {
+pub(crate) struct PreparedTransportPlan<'a> {
     pub resolved: &'a ResolvedSpinTransportPlanIR,
     pub request: NativeFemSteadyTransportRequest,
     pub provenance: TransportExecutionProvenance,
 }
 
-pub(super) fn preflight_transport_plans(
+pub(crate) fn preflight_transport_plans(
     plan: &FemPlanIR,
 ) -> Result<Vec<PreparedTransportPlan<'_>>, RunError> {
     if plan.spin_transport_plans.len() > 1 {
@@ -598,13 +599,20 @@ fn resolved_fem_descriptor_contradiction(
     } else {
         matches!(descriptor.charge_solver.engine.as_str(), "auto" | "cg")
     };
-    let expected_stage_coupling = if !reciprocal
+    let closed_geometry_view = descriptor
+        .conservative_current_view
+        .as_ref()
+        .is_some_and(|view| matches!(view.closure, ConservativeCurrentClosureIR::ClosedGeometry { .. }));
+    let stage_coupling_valid = if !reciprocal
         && descriptor.oersted_source_bound
-        && descriptor.conservative_current_view.is_some()
+        && closed_geometry_view
     {
-        STEADY_SOURCE_CACHE_POLICY
+        matches!(
+            descriptor.stage_coupling.as_str(),
+            STEADY_SOURCE_CACHE_POLICY | STAGE_OERSTED_CALLBACK_POLICY
+        )
     } else {
-        "none"
+        descriptor.stage_coupling == "none"
     };
     let reciprocal_material_valid = match (reciprocal, descriptor.reciprocal_material.as_ref()) {
         (false, None) => true,
@@ -693,7 +701,7 @@ fn resolved_fem_descriptor_contradiction(
             .iter()
             .any(|interface| interface.law != "transparent" || reciprocal)
         || descriptor.interface_realization != "transparent_conforming_h1"
-        || descriptor.stage_coupling != expected_stage_coupling
+        || !stage_coupling_valid
         || descriptor.capability_status != "reference_executable"
         || descriptor.implementation_state != "executable"
         || descriptor.validation_state != "algebra_validated"

@@ -1,13 +1,13 @@
 # Plan wdrożenia i kompletna specyfikacja fizyczno-numeryczna STT, SOT, SHE i dynamicznego pola Oersteda
 
-**Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; implementacja częściowa i niegotowa do integracji  \
+**Status:** zatwierdzony kierunek; audyt fizyczno-numeryczny 2026-07-28 wykonany; ograniczony callback stage Oersteda CPU/double zintegrowany na `master`, pełna kwalifikacja produkcyjna nadal otwarta  \
 **Wariant:** 3 — pełny model docelowy wdrażany przez niezależnie walidowane kamienie milowe M0–M3  \
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
-**Aktualny kodowy baseline audytu:** `master@883ce5650`; implementacja grafu zakresu, typed runtime provenance, artefaktów i paneli Inspector jest scalona lokalnie; promocja fizyki do produkcji pozostaje ograniczona bramami z §32.92–§32.93.  \
-**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`, ostatni zapisany stan `master@883ce5650`; niniejsza korekta planu jest zapisem dokumentacji po scaleniu implementacji.  \
+**Aktualny kodowy baseline audytu (historyczny):** `master@883ce5650`; implementacja grafu zakresu, typed runtime provenance, artefaktów i paneli Inspector jest scalona lokalnie; promocja fizyki do produkcji pozostaje ograniczona bramami z §32.92–§32.93.  \
+**Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`; bounded callback stage tego etapu zapisano w §32.109, a wcześniejszy baseline pozostaje historycznym punktem odniesienia.  \
 **Merge-base:** bieżący checkout jest już zintegrowany na `master`; wcześniejsze rozjazdy gałęzi pozostają historią audytu, nie aktualnym stanem integracji  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-08-08  \
+**Ostatnia aktualizacja:** 2026-08-09  \
 **Raport źródłowy:** [README.md](./README.md)
 
 **Bieżący stan wykonawczy (snapshot 2026-08-05):** kodowy baseline `master@70ee4cafc`. Brama
@@ -9635,7 +9635,7 @@ convolution, solved-current/Oersted w normalnym runtime, projekcji źródła,
 airbox sequence, GPU/device-resident transportu ani dynamicznego
 `J_c(m_stage)`; te bramy pozostają otwarte.
 
-## 32.108. Native CPU stage-provider callback RK/FSAL/rollback (2026-08-09)
+## 32.108. Native CPU stage-provider callback RK/FSAL/rollback — stan przed publicznym bindingiem (2026-08-09)
 
 Zrealizowano mechanizm P4 na granicy natywnego CPU RK, bez zmiany istniejących
 struktur `*_v1` planu FEM. Nowy append-only symbol
@@ -9673,3 +9673,96 @@ P4/P5: publiczny planner nadal nie wiąże callbacku z rzeczywistym
 provenance stage-source w artefakcie, GPU/device-resident, M2/`external_lead`,
 airbox/energia ani porównania solved-current FEM↔FDM/MuMax/BORIS. Capability
 pozostaje `reference_executable`/`semantic_only` zgodnie z macierzą.
+
+## 32.109. Publiczny binding stage Oersteda do planera i runnera (2026-08-09)
+
+Sekcja §32.108 opisywała stan przed podłączeniem callbacku do publicznego
+planu. Ten etap został wykonany w ograniczonym, jawnie fail-closed zakresie
+CPU/double.
+
+### 32.109.1. Zakres zrealizowany
+
+Planner `resolve_m1_fem_spin_transport` wybiera
+`stage_coupling=fem_stage_oersted_callback.v1` wyłącznie wtedy, gdy spełnione
+są wszystkie warunki:
+
+1. problem jest one-way, steady i należy do lane FEM CPU/double;
+2. Oersted wskazuje dokładnie to samo źródło prądu co przygotowany plan
+   transportu;
+3. istnieje zwalidowany `ConservativeCurrentViewIR` z geometrią zamkniętą,
+   identyfikacją RT0 i kompletem pinów;
+4. nie ma modułu `torque_stt`, ponieważ dla niego nie istnieje jeszcze
+   osobny callback prawej strony LLG.
+
+`StageOerstedProvider::from_plan` przygotowuje adapter runnera. Dla każdego
+stage aktualizuje czas, identyfikator stage i rewizję źródła, wywołuje solver
+RT0, wybiera OE-F1 albo OE-F2 zgodnie z realizacją planu, sprawdza skończoność
+i digest pola oraz zapisuje obserwację zaakceptowanego źródła. Transakcje
+`begin_attempt`/`commit_attempt`/`rollback_attempt` są przekazywane do
+natywnego integratora RK/FSAL. `NativeFemBackend` instaluje callback przed
+`begin_stage`, a przy niszczeniu backendu jawnie go odłącza.
+
+Wynik jest publikowany jako artefakt
+`transport/fem_stage_oersted_callback.v1.json`, zawierający politykę,
+urządzenie, liczniki prób i zaakceptowanych obserwacji, rewizję źródła,
+tożsamość widoku oraz digest pola. Jest to dowód wykonania ścieżki, a nie
+deklaracja kwalifikacji produkcyjnej.
+
+### 32.109.2. Granica fizyczna i świadome blokady
+
+Aktualny callback liczy pole Oersteda z one-way prądu, którego `J_c` nie zależy
+od `m_stage`. Zapewnia więc prawidłową kadencję stage, FSAL i rollback oraz
+provenance, ale nie jest jeszcze wzajemnym M2 `J_c(m_stage)`. `torque_stt`
+pozostaje diagnostyczny i nie jest dodawany do prawej strony LLG.
+
+Nadal fail-closed pozostają: ponowna ewaluacja obwiedni czasowej (descriptor
+przechowuje tylko jej snapshot), M2/`external_lead`, callback torque, GPU/
+device-resident, pełny publiczny fixture end-to-end, obliczenia `p`/energii/
+airbox oraz porównanie solved-current FEM↔FDM/MuMax/BORIS. Capability pozostaje
+`reference_executable`/`semantic_only` do czasu przejścia tych bram.
+
+### 32.109.3. Dowody wykonania
+
+Zarządzane recepty zakończyły się `exit_code=0`:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-cpu-only-contract
+fem_oersted_contract ........ PASS
+fem_state_io_contract ...... PASS
+fem_snapshot_contract ...... PASS
+fem_rk_explicit_contract ... PASS
+fem_stt_contract ........... PASS
+fem_thermal_brown_contract . PASS
+fem_relaxation_* ........... PASS
+
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-native-contract
+managed MFEM/HYPRE/CUDA build ........ PASS
+native ABI + RT0/OE-F1/OE-F2 ........ PASS
+planner/runner/API/provenance ........ PASS
+direct-SHE common-SI limit ........... PASS
+cargo check -p fullmag-runner --features fem-gpu ... PASS
+```
+
+Dodatkowo lokalne testy `fullmag-plan` dla `spin_transport` (22 testy) oraz
+`cargo check -p fullmag-runner --features fem-gpu --lib` są zielone. Lokalny
+check Cargo jest wyłącznie diagnostyczny; autorytatywnym dowodem FEM pozostaje
+recepta `just`. Nie wykonano jeszcze pełnego managed publicznego przebiegu z
+zamkniętym fixture RT0 i stage-source zapisanym w finalnym artefakcie, dlatego
+nie podnoszę statusu do produkcyjnego.
+
+### 32.109.4. Status względem celu
+
+| Brama | Stan |
+|---|---|
+| Native CPU callback stage, FSAL, rollback | `managed-green` |
+| Python/IR/planner one-way closed RT0 | `implemented + contract-tested` |
+| RT0 → OE-F1/OE-F2 → nodal `H_oe` → LLG | `bounded CPU/double` |
+| Reciprocal M2 `J_c(m_stage)` | `fail-closed / open` |
+| STT torque w RHS LLG | `fail-closed / open` |
+| FEM GPU i pełna brama produkcyjna | `not qualified` |
+
+Ten etap zamyka implementację callbacku dla ograniczonego przypadku Oersteda,
+ale nie zamyka celu produkcyjnego STT/SOT/SHE/Oersted. Następne bramy muszą
+objąć zależność prądu od magnetyzacji, torque callback, envelope/external-lead,
+GPU, `p`/energię/airbox i ilościową walidację FEM↔FDM oraz względem solverów
+zewnętrznych.

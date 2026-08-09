@@ -21,7 +21,7 @@ mod provenance;
 mod publication;
 mod stage_cache;
 
-use descriptor::preflight_transport_plans;
+pub(crate) use descriptor::preflight_transport_plans;
 use publication::transport_field_snapshots;
 use stage_cache::{
     validate_plan as validate_stage_cache_plan, SteadySourceStageCoordinator,

@@ -17,9 +17,18 @@ use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use crate::surface_selectors::resolve_fem_surface_selector;
 use crate::PlanError;
 
-const FEM_STEADY_SOURCE_CACHE_POLICY: &str = "steady_source_invariant.v1";
+const FEM_STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
 
+#[cfg(test)]
 fn resolve_fem_stage_coupling(
+    reciprocal: bool,
+    oersted_source_bound: bool,
+    conservative_current_view: Option<&fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
+) -> &'static str {
+    resolve_fem_stage_coupling_for_stage(reciprocal, oersted_source_bound, conservative_current_view)
+}
+
+fn resolve_fem_stage_coupling_for_stage(
     reciprocal: bool,
     oersted_source_bound: bool,
     conservative_current_view: Option<&fullmag_ir::ResolvedFemConservativeCurrentViewIR>,
@@ -31,7 +40,7 @@ fn resolve_fem_stage_coupling(
         )
     });
     if !reciprocal && oersted_source_bound && closed_geometry {
-        FEM_STEADY_SOURCE_CACHE_POLICY
+        FEM_STAGE_OERSTED_CALLBACK_POLICY
     } else {
         "none"
     }
@@ -517,10 +526,15 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             ));
         }
         if problem.spin_torque_modules.iter().any(|torque| {
-            matches!(torque,
-            SpinTorqueModuleIR::DriftDiffusionSpinTorque { solve_id, .. } if solve_id == &module.id)
+            matches!(
+                torque,
+                SpinTorqueModuleIR::DriftDiffusionSpinTorque { solve_id, .. }
+                    if solve_id == &module.id
+            )
         }) {
-            errors.push(format!("{prefix} stage coupling into LLG is not yet implemented and fails before provenance"));
+            errors.push(format!(
+                "{prefix} transport torque stage coupling into native LLG is not implemented; the FEM lane cannot publish torque_stt as an RHS without a torque callback"
+            ));
         }
         let source = problem
             .current_modules
@@ -951,11 +965,17 @@ fn materialize_fem_descriptor(
                 if source == &module.current_source_id
         )
     });
-    let stage_coupling = resolve_fem_stage_coupling(
+    let stage_coupling = resolve_fem_stage_coupling_for_stage(
         reciprocal,
         oersted_source_bound,
         conservative_current_view.as_ref(),
     );
+    if torque_target.is_some() && stage_coupling != FEM_STAGE_OERSTED_CALLBACK_POLICY {
+        return Err(vec![format!(
+            "FEM spin transport '{}' stage coupling requires one-way closed_geometry Oersted with a validated RT0 view",
+            module.id
+        )]);
+    }
     const MU0_H_PER_M: f64 = 1.256_637_061_435_917_3e-6;
     Ok(ResolvedFemSpinTransportIR {
         descriptor_schema: if reciprocal {
@@ -3613,11 +3633,11 @@ mod tests {
     }
 
     #[test]
-    fn closed_one_way_oersted_view_resolves_to_invariant_source_cache() {
+    fn closed_one_way_oersted_view_resolves_to_native_stage_callback() {
         let (mesh, view) = valid_rt0_view_for_planner();
         assert_eq!(
             resolve_fem_stage_coupling(false, true, Some(&view)),
-            FEM_STEADY_SOURCE_CACHE_POLICY
+            FEM_STAGE_OERSTED_CALLBACK_POLICY
         );
         assert_eq!(resolve_fem_stage_coupling(false, false, Some(&view)), "none");
         assert_eq!(resolve_fem_stage_coupling(true, true, Some(&view)), "none");
@@ -3639,6 +3659,15 @@ mod tests {
         assert_eq!(
             resolve_fem_stage_coupling(false, true, Some(&external_lead)),
             "none"
+        );
+    }
+
+    #[test]
+    fn closed_one_way_oersted_stage_field_resolves_native_callback_policy() {
+        let (_mesh, view) = valid_rt0_view_for_planner();
+        assert_eq!(
+            resolve_fem_stage_coupling_for_stage(false, true, Some(&view)),
+            FEM_STAGE_OERSTED_CALLBACK_POLICY
         );
     }
 

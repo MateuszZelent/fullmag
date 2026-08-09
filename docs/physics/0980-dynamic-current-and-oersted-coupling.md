@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-08
+- Last updated: 2026-08-09
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula version: `current_transport.fullmag.v1`
@@ -17,6 +17,7 @@
   `oersted_direct_biot_savart.v1`,
   `oersted_analytic_return_additive.v1`,
   `oersted_fem_vector_potential.v1`
+- Stage-provider policy: `fem_stage_oersted_callback.v1`
 
 Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
 formula/operator/realization identifiers. Section 8.1 of the runtime contract
@@ -234,23 +235,30 @@ at the accepted state; published `J_charge`, `H_oe`, and work/energy correspond
 to the RHS state they describe.
 
 The current FEM invariant-source gate is deliberately weaker than this full
-stage contract. It allows repeated RHS reads only for one exact immutable view
-identity and rejects a changed key; it does not provide the transport solve,
-RT0 certificate, device callback, or magnetization-dependent planner binding
-required for production. Those remain qualification gates.
+stage contract. It remains a compatibility policy for manually constructed
+descriptor fixtures. For a public one-way `closed_geometry` plan with a
+validated RT0 view, the planner now resolves
+`fem_stage_oersted_callback.v1`; the native CPU runner installs a provider that
+solves RT0/OE-F1 or RT0/OE-F2 for each callback stage and records the accepted
+stage observation. The one-way charge model is still independent of
+`m_stage`, so this is not reciprocal M2 and does not publish `torque_stt` into
+the LLG RHS. Envelope re-evaluation, external leads, device-resident execution
+and production qualification remain separate gates.
 
-The native CPU path now exposes an append-only stage-provider hook outside the
+The native CPU path exposes an append-only stage-provider hook outside the
 legacy plan ABI. Its evaluator receives the exact `m_stage`, `t_stage`, and a
 deterministic `stage_identity`, and must return a complete nodal `H_oe [A/m]`
-buffer plus a source-state revision. Optional `begin_attempt`,
-`commit_attempt`, and `rollback_attempt` hooks surround the adaptive RK
-attempt; a rejected attempt therefore cannot leave a solved-current cache
-published. The hook is exercised for every CPU tableau stage and accepted
-endpoint refresh, with FSAL reusing only the already accepted endpoint field.
-The GPU path rejects the hook until a device-resident implementation is
-qualified. This closes the native transaction/cadence mechanism, but it is not
-itself a transport solve, RT0 certificate, public `J_c(m_stage)` planner
-binding, or production capability promotion.
+buffer plus a source-state revision. The public planner binds this hook only
+for one-way closed-geometry plans carrying the immutable RT0 descriptor; the
+Rust provider reuses the resolved request shape, updates the stage identity,
+and calls the same RT0/OE-F1 or RT0/OE-F2 adapter used by the steady path.
+Optional `begin_attempt`, `commit_attempt`, and `rollback_attempt` hooks
+surround the adaptive RK attempt; a rejected attempt therefore cannot leave a
+stage observation accepted. The GPU path rejects the hook until a
+device-resident implementation is qualified. This closes the native
+transaction/cadence mechanism and its public CPU binding, but it is not a
+reciprocal `J_c(m_stage)` solve, does not feed `torque_stt` into LLG, and does
+not promote a production capability.
 
 (symbols-and-si-units)=
 ### 2.7 Symbols and SI units
@@ -1139,14 +1147,16 @@ lane/device/precision, cache identity, solver availability, and strict
 residency. Requested and resolved selections remain visible. Validation is
 scoped to named workload, geometry/BC, lane, precision, and frequency envelope.
 Native CPU contracts for OE-T0 and OE-F1 now exist, and the canonical planner
-accepts the explicit closed-geometry descriptor. For that descriptor it resolves
-`stage_coupling=steady_source_invariant.v1`; the runner validates and publishes
-the exact cache identity. The append-only native ABI now also exposes OE-F2 on
-that same immutable view, but method selection and normal-runtime publication
-remain deferred. This is a static-source reuse guard, not a promotion of the
-ordinary cylinder/nodal-midpoint path or a stage-coupled run: external-lead
-materialization, magnetization-dependent LLG coupling, normal-runtime OE-F2,
-GPU and production convergence gates remain open.
+accepts the explicit closed-geometry descriptor. For a one-way Oersted-bound
+descriptor it resolves `stage_coupling=fem_stage_oersted_callback.v1`; the
+runner validates the immutable view and installs the native CPU provider. Each
+RK callback evaluates the selected OE-F1 or OE-F2 realization on that view and
+publishes a bounded stage observation. The older
+`steady_source_invariant.v1` policy remains only for compatibility fixtures and
+is not the public stage-coupling resolution. The callback still carries a
+one-way charge solve: it is not reciprocal M2, does not publish `torque_stt`
+into LLG, and does not re-evaluate an authored transient envelope. External
+leads, device-resident execution and production convergence remain open.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1174,8 +1184,11 @@ Oersted subsystems under `backends/fem`.
 
 The transport provenance additionally records the invariant-source cache policy,
 key digest, last hit/miss observation and bounded hit/miss/invalidation counts.
-These counters describe an exact immutable view and must not be interpreted as
-proof of a per-RHS magnetization-dependent solve.
+A stage-bound run adds the separate
+`transport/fem_stage_oersted_callback.v1.json` artifact with callback counts,
+accepted/last stage observation, source-view identity digest and field digest.
+These records describe the exact immutable view and native transaction; they
+must not be interpreted as proof of reciprocal M2 or a `torque_stt` RHS.
 
 Until the public runner consumes the immutable RT0/H(div) view, its bounded
 steady FEM reference path is intentionally versioned separately as
@@ -1205,6 +1218,9 @@ native FEM CPU lane.  The planner records the binding in
 `ResolvedFemSpinTransportIR.oersted_source_bound`; a reciprocal FEM M2 request
 with the same Oersted source is rejected because the existing one-shot FEM
 transport solve is not stage-consistent with `J_c(m_stage)`.
+When a complete `closed_geometry` RT0 descriptor is present, the newer public
+stage-provider path in §4.6.3 supersedes this midpoint injection; this section
+describes the descriptor-free legacy/reference lane only.
 
 The runtime ordering is explicit:
 
@@ -1240,28 +1256,24 @@ managed FEM execution is still required before any qualification promotion.
 #### 4.5.1. Invariant-source stage cache (implemented bounded gate)
 
 For a one-way steady Ohmic plan with an explicit `closed_geometry` RT0 view, the
-planner resolves `stage_coupling=steady_source_invariant.v1`. The runner builds
-`SteadySourceCacheKey` from the source, conductivity, mesh, topology, geometry,
-envelope, closure, evaluation-time, multiplier and declared stage identities,
-and publishes its SHA-256 digest with the transport artifact. The first
-successful RT0/OE-F1 solve is a cache miss; subsequent reads are accepted only
-when both the key and `view_identity_digest` match exactly. A changed identity
-returns a fail-closed error until a fresh transport solve is completed. The
-artifact declares the policy that rejected candidates do not publish and that
-a final refresh is required after a key change. `SteadySourceStageCoordinator`
-now checkpoints the cache at attempt start, rejects an unresolved identity
-change, restores the accepted cache on rollback, and requires an explicit
-publish before accepting a new candidate. This coordinator is a runner
-contract; the native RK callback still has to invoke these transitions.
+public planner now resolves `stage_coupling=fem_stage_oersted_callback.v1` and
+the native CPU provider invokes the transport/Oersted adapter at each RK stage.
+`SteadySourceCacheKey` and `SteadySourceStageCoordinator` remain compatibility
+contracts for manually constructed invariant-source descriptors. They build the
+same exact identity from source, conductivity, mesh, topology, geometry,
+envelope, closure, evaluation-time, multiplier and declared stage identities;
+the callback provider additionally records every accepted observation. A
+changed identity is never silently reused. The old cache gate still protects
+legacy static-source fixtures, while the public callback path owns native
+begin/commit/rollback transitions.
 
-This gate protects the static one-way source already injected before native LLG;
-it is not a callback that solves transport for each magnetization stage. The
-managed gate runs both the exact-key cache test and the coordinator test
-covering a changed stage, rejected-attempt rollback, retry/FSAL-style reuse and
-final refresh. It does not yet prove native RK4/RK23/RK45 callback wiring,
-external-lead closure, reciprocal M2, normal-runtime OE-F2, or GPU execution.
-The capability therefore remains `development_executable`/`semantic_only` as
-documented in the matrix.
+This compatibility gate protects the static one-way source used by legacy
+fixtures. The managed gate runs both the exact-key cache test and the
+coordinator test covering a changed stage, rejected-attempt rollback,
+retry/FSAL-style reuse and final refresh. The native callback contract and the
+public planner binding are now separately qualified; they still do not prove
+external-lead closure, reciprocal M2, transient envelope re-evaluation,
+device-resident execution, or production capability.
 
 ### 4.6. Public ABI boundary and implemented append-only RT0/OE-F1 extension (audyt 2026-08-08)
 
@@ -1284,10 +1296,10 @@ aktywna wyłącznie wtedy, gdy resolved plan dostarczy kompletny descriptor
 `conservative_current_view`; brak tego descriptoru zachowuje jawny
 `solved_current_h1_nodal_midpoint_reference`. Sama obecność nowego symbolu nie
 promuje jeszcze ogólnej capability FEM dynamic-Oersted. Planner akceptuje
-wyłącznie jawnie dostarczony `closed_geometry` i dla niego deklaruje tylko
-`steady_source_invariant.v1`; nie generuje automatycznie
-magnetization-dependent stage snapshotu. Pełne etapowe sprzężenie z LLG oraz
-OE-F2 pozostają otwarte.
+wyłącznie jawnie dostarczony `closed_geometry` i dla one-way Oersted wiąże go z
+`fem_stage_oersted_callback.v1`; callback nie tworzy jednak reciprocal
+magnetization-dependent transportu ani torque RHS. Pełne M2, envelope stage,
+external-lead i GPU pozostają otwarte.
 Managed testy operatorów i nowy natywny kontrakt
 RT0→OE-F1 są dowodem wykonania kontrolowanej ścieżki CPU/double, nie dowodem
 kwalifikacji produkcyjnego łańcucha.
@@ -1367,9 +1379,10 @@ automatycznie stage snapshotu ani `external_lead`, a OE-F2, etapowe sprzężenie
 niezależnych badań `h`/airbox ani lane GPU.
 
 Append-only native CPU hook `fullmag_fem_backend_set_stage_oersted_callback_v1`
-jest już właścicielem samego mechanizmu stage cadence/FSAL/rollback, ale nie
-jest jeszcze wywoływany przez publiczny planner jako rozwiązanie transportu
-`J_c(m_stage)`; ten binding i certyfikowana provenance pozostają osobną bramą.
+jest właścicielem mechanizmu stage cadence/FSAL/rollback. Publiczny planner
+wywołuje go dla one-way `closed_geometry` z RT0 i zapisuje osobny artefakt
+telemetrii callbacku. Ten binding rozwiązuje tylko pole Oersteda; nie jest
+jeszcze sprzężeniem reciprocal `J_c(m_stage)` ani callbackiem torque.
 
 ### 4.6.2. OE-F2 w normalnym runtime FEM CPU/double (zaimplementowana ścieżka ograniczona, 2026-08-08)
 
@@ -1419,8 +1432,10 @@ utworzeniem natywnego backendu LLG. Artefakt transportu oznacza realizację
 `fem_vector_potential_hcurl_h1`, źródło
 `fem_conservative_current_rt0_vector_potential.v1` i zachowuje digest pola
 oraz widoku. Ścieżka dotyczy obecnie wyłącznie jednokierunkowego,
-`closed_geometry`, steady-source-invariant FEM CPU/double; nie jest callbackiem
-`J_c(m_stage)` dla RK/FSAL i nie zapewnia jeszcze GPU/device-resident,
+`closed_geometry`, FEM CPU/double. W publicznym runtime jest wywoływana przez
+callback `fem_stage_oersted_callback.v1` dla RK/FSAL/rollback, ale charge solve
+pozostaje one-way i nie jest to reciprocal `J_c(m_stage)` ani torque callback.
+Nie zapewnia jeszcze GPU/device-resident,
 `external_lead`, airbox-sequence, porównania FEM↔FDM ani kwalifikacji
 produkcyjnej.
 
@@ -1435,8 +1450,47 @@ FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-native-contract        
 Dokładny test append-only layoutu FFI również przechodzi po zbudowaniu
 `fullmag_fem` w obrazie managed. Dowody te potwierdzają kontrakt natywny,
 wybór metody, walidację i integrację kodową z planem LLG; brak jeszcze
-niezależnego, pełnego fixture'u managed, który wykonałby tę ścieżkę z kompletnym
-publicznym `closed_geometry` end-to-end i zamknąłby bramę produkcyjną.
+brak niezależnego fixture'u managed, który wykonałby tę ścieżkę z
+kompletnym publicznym `closed_geometry` end-to-end i zamknąłby bramę
+produkcyjną.
+
+### 4.6.3. Publiczne podłączenie callbacku stage (CPU/double, bounded)
+
+Planner ustawia `fem_stage_oersted_callback.v1` tylko wtedy, gdy jedyny
+transport FEM jest one-way, źródło Oersteda jest nazwane, a descriptor
+`ConservativeCurrentView` ma zamkniętą geometrię RT0. `StageOerstedProvider`
+tworzy ten sam request transportu, aktualizuje `evaluation_time_s` i
+`stage_identity`, a następnie wywołuje `solve_native_fem_steady_transport_rt0`
+na immutable view. `FemVectorPotential` wybiera OE-F2 z projekcją H1/P1; inne
+jawne realizacje wybierają OE-F1 direct-tetra. Wynik jest sprawdzany pod kątem
+długości, skończoności i digestu source-view przed przekazaniem nodalnego
+`H_oe` do natywnego LLG.
+
+`NativeFemBackend` instaluje callback przed `begin_stage`, a `Drop` usuwa go
+przed zwolnieniem providera. Hooki `begin_attempt`, `commit_attempt` i
+`rollback_attempt` są mapowane jeden-do-jednego na transakcję RK; telemetryczny
+artefakt `transport/fem_stage_oersted_callback.v1.json` przechowuje liczniki,
+ostatnią zaakceptowaną obserwację, `source_view_identity_digest` i hash pola.
+Przy żądaniu GPU, reciprocal M2, `external_lead` albo transportowego
+`torque_stt` planner/runtime kończy się fail-closed. Callback zwraca wyłącznie
+`H_oe`; `torque_stt` pozostaje opublikowanym wynikiem transportu i nie jest
+jeszcze składnikiem RHS LLG. Brak tu również ponownej ewaluacji autorskiego
+czasowego envelope'u prądu; ten parametr wymaga osobnej, jawnej reprezentacji
+źródła stage.
+
+Świeże dowody zarządzane:
+
+```text
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-time-domain-cpu-only-contract       # exit 0
+FULLMAG_RUNTIME_PRUNE=0 just verify-fem-steady-transport-native-contract   # exit 0
+```
+
+Pierwsza recepta buduje obraz `fem-cpu` od zera i uruchamia kontrakty
+Oersteda/RK/rollback. Druga buduje CUDA/MFEM oraz sprawdza ABI, planner,
+runner, API, provenance, `cargo check --features fem-gpu` i wspólny limit
+FEM↔FDM. To jest dowód implementacji i kompilacji zarządzanego runtime'u;
+nie jest jeszcze ilościową kwalifikacją pełnego M2, GPU ani produkcyjnego
+dynamicznego STT/SOT/SHE.
 
 (validation)=
 ## 5. Validation strategy
@@ -1497,7 +1551,8 @@ at least nominal minus `0.25` in the asymptotic range.
 - [x] Reference-only 3-D FEM/FDM midpoint common-limit operator contract (same uniform cube and far target; production FDM convolution and solved-current coupling remain open)
 - [x] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate (bounded CPU/double solver and nodal LLG bridge; GPU, p/airbox and production gates remain open)
 - [x] Invariant-source cache gate for one-way closed_geometry (exact-key RHS reuse and changed-identity rejection)
-- [ ] Magnetization-dependent stage coupling, FSAL, rollback, final refresh
+- [x] Native CPU stage-provider cadence, FSAL, rollback, and accepted observation
+- [ ] Magnetization-dependent/reciprocal `J_c(m_stage)`, envelope re-evaluation, and torque RHS
 - [ ] Correct external/nonvariational energy semantics
 - [ ] Quantities, provenance, typed API, and UI inspectors
 - [ ] Cross-backend convergence and managed/browser proof
@@ -1531,6 +1586,8 @@ evidence that the approximation is accurate.
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_v1` | public v1 ABI boundary |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_v1` | append-only RT0/OE-F1 ABI |
 | `native/include/fullmag_fem.h` | `fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1` | append-only RT0/OE-F2 ABI |
+| `native/include/fullmag_fem.h` | `fullmag_fem_backend_set_stage_oersted_callback_v1` | append-only CPU stage callback ABI |
+| `backends/fem/cpu/mfem/interactions/oersted.cpp` | `materialize_oersted_stage_field` | native stage callback evaluation and transaction ownership |
 | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and OE-F1/OE-F2 adapters |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
 | `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
@@ -1540,6 +1597,8 @@ evidence that the approximation is accurate.
 | `backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp` | `project_compatible_h_to_nodes` | bounded RT0-compatible H to H1/P1 nodal projection and residual |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
+| `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `from_plan` | public CPU stage binding to the RT0/OE-F1/OE-F2 adapter, exact stage identity and fail-closed transaction callbacks |
+| `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | append-only callback provenance artifact with accepted/last stage observation and field digest |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |
 | `backends/fem/tests/steady_transport_abi_contract.cpp` | `main` | RT0 boundary regression |
 | `backends/fem/tests/steady_transport_contract.cpp` | `main` | managed transport contract |

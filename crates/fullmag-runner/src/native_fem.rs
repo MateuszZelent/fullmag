@@ -17,6 +17,8 @@ mod plan;
 mod runtime_info;
 #[cfg(feature = "fem-gpu")]
 mod steady_transport;
+#[cfg(feature = "fem-gpu")]
+mod stage_oersted;
 #[cfg(all(test, feature = "fem-gpu"))]
 pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
@@ -68,6 +70,10 @@ pub(crate) use steady_transport::{
     NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
     NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
     NativeFemSteadyTransportRt0Result,
+};
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_oersted::{
+    plan_requests_stage_oersted_callback, StageOerstedProvider,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -702,6 +708,7 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
 #[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
+    stage_oersted_provider: Option<Box<StageOerstedProvider>>,
     magnetic_node_mask: Arc<[bool]>,
     saturation_magnetisation_by_node: Arc<[f64]>,
     dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
@@ -1824,6 +1831,27 @@ fn configure_managed_openmpi_environment() {
 
 #[cfg(feature = "fem-gpu")]
 impl NativeFemBackend {
+    pub(crate) fn install_stage_oersted_provider(
+        &mut self,
+        mut provider: Box<StageOerstedProvider>,
+    ) -> Result<(), RunError> {
+        let callback = provider.callback();
+        let status = unsafe {
+            ffi::fullmag_fem_backend_set_stage_oersted_callback_v1(self.handle, &callback)
+        };
+        if status != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("installing native FEM stage Oersted callback failed"));
+        }
+        self.stage_oersted_provider = Some(provider);
+        Ok(())
+    }
+
+    pub(crate) fn stage_oersted_telemetry(&self) -> Option<serde_json::Value> {
+        self.stage_oersted_provider
+            .as_ref()
+            .map(|provider| provider.telemetry())
+    }
+
     pub(crate) fn begin_stage(&mut self, stage_start_time_s: f64) -> Result<(), RunError> {
         if !stage_start_time_s.is_finite() || stage_start_time_s < 0.0 {
             return Err(RunError {
@@ -2575,6 +2603,7 @@ impl NativeFemBackend {
 
         let backend = Self {
             handle,
+            stage_oersted_provider: None,
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()])
                 .into(),
@@ -4784,6 +4813,14 @@ fn relaxation_driver_subphase_wall_time_ns(stats: &ffi::fullmag_fem_step_stats) 
 impl Drop for NativeFemBackend {
     fn drop(&mut self) {
         if !self.handle.is_null() {
+            if self.stage_oersted_provider.is_some() {
+                unsafe {
+                    let _ = ffi::fullmag_fem_backend_set_stage_oersted_callback_v1(
+                        self.handle,
+                        std::ptr::null(),
+                    );
+                }
+            }
             unsafe { ffi::fullmag_fem_backend_destroy(self.handle) };
             self.handle = std::ptr::null_mut();
         }

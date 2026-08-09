@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available, while an append-only closure-aware RT0/OE-F1/OE-F2 CPU/double path now selects OE-F2 in the planner, projects compatible H to nodal LLG values, and injects it before native LLG when a public closed_geometry descriptor is supplied. This is not magnetization-dependent RK coupling; external-lead closure, full stage coupling, GPU and production qualification remain open."
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available, while a closure-aware RT0/OE-F1/OE-F2 CPU/double path now selects the fem_stage_oersted_callback.v1 policy for a public closed_geometry descriptor, evaluates the field through the native RK stage provider, publishes callback provenance and injects nodal H before native LLG. This is not reciprocal magnetization-dependent transport or torque RHS; external-lead closure, envelope re-evaluation, GPU and production qualification remain open."
     },
     {
       "solver": "FEM",
@@ -60,7 +60,7 @@
       "id": "fem-transport-descriptor",
       "path": "crates/fullmag-plan/src/spin_transport.rs",
       "symbol": "resolve_m1_fem_spin_transport",
-      "responsibility": "Publish the resolved FEM transport descriptor and resolve steady_source_invariant.v1 only for one-way closed_geometry Oersted; fail closed for reciprocal or unsupported stage coupling."
+      "responsibility": "Publish the resolved FEM transport descriptor and resolve fem_stage_oersted_callback.v1 for one-way closed_geometry Oersted with a validated RT0 view; fail closed for reciprocal, torque-RHS or unsupported stage coupling."
     },
     {
       "id": "fem-oef2-planner-selection",
@@ -123,6 +123,18 @@
       "responsibility": "Evaluate the stage provider, validate finite nodal H_oe, retain source revision and stage identity, and own attempt transaction hooks."
     },
     {
+      "id": "fem-stage-oersted-callback-runner",
+      "path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "symbol": "from_plan",
+      "responsibility": "Bind the public one-way closed-geometry RT0 descriptor to the native CPU callback, evaluate OE-F1/OE-F2 at exact RK stage time/identity, and fail closed for missing view or invalid fields."
+    },
+    {
+      "id": "fem-stage-oersted-callback-provenance",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Persist callback counters, accepted/last stage observation, source-view digest and field digest as an auxiliary transport artifact."
+    },
+    {
       "id": "fem-rt0-oersted-native-adapter",
       "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
       "symbol": "solve_rt0",
@@ -138,13 +150,13 @@
       "id": "fem-steady-source-cache",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs",
       "symbol": "reuse",
-      "responsibility": "Require an exact immutable source/view identity for the bounded one-way closed-geometry cache and fail closed when a fresh transport solve is required."
+      "responsibility": "Require an exact immutable source/view identity for the compatibility invariant-source cache; the public stage callback uses the same identity contract without treating it as reciprocal M2."
     },
     {
       "id": "fem-steady-source-stage-coordinator",
       "path": "crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs",
       "symbol": "begin_attempt",
-      "responsibility": "Checkpoint accepted source state around an RK attempt, require explicit solve publication, restore the cache after rejection and prevent unresolved stage-identity changes from reaching Oersted."
+      "responsibility": "Checkpoint accepted source state around an RK attempt for legacy invariant-source fixtures; public callback transactions are owned by StageOerstedProvider and the native Oersted interaction."
     },
     {
       "id": "fem-rt0-oersted-contract",

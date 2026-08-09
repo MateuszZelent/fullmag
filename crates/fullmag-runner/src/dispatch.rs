@@ -38,6 +38,7 @@ use crate::native_fem;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{
     NativeFemBackend, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    StageOerstedProvider,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
@@ -2168,6 +2169,10 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     #[cfg(feature = "fem-gpu")]
     let transport_artifact_writer = artifact_writer.clone();
     #[cfg(feature = "fem-gpu")]
+    let stage_oersted_callback_requested = crate::native_fem::plan_requests_stage_oersted_callback(
+        &normalized_plan,
+    );
+    #[cfg(feature = "fem-gpu")]
     let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
         None
     } else {
@@ -2183,27 +2188,43 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         .as_ref()
         .and_then(|bundle| bundle.oersted_field_xyz.as_ref())
     {
-        if normalized_plan.has_oersted_cylinder {
-            return Err(RunError {
-                message: "FEM solved-current Oersted cannot be combined with an analytical cylinder in the bounded runtime".into(),
-            });
-        }
-        if let Some(existing) = normalized_plan.oersted_field_xyz.as_mut() {
-            if existing.len() != field.len() {
+        if stage_oersted_callback_requested {
+            if normalized_plan.has_oersted_cylinder
+                || normalized_plan
+                    .oersted_field_xyz
+                    .as_ref()
+                    .is_some_and(|existing| !existing.is_empty())
+            {
                 return Err(RunError {
-                    message: "FEM solved-current Oersted field length conflicts with the planned field".into(),
+                    message: "FEM stage-coupled solved-current Oersted cannot be combined with a static or analytical Oersted field".into(),
                 });
             }
-            for (planned, solved) in existing.iter_mut().zip(field) {
-                *planned += *solved;
-            }
+            // The transport bundle remains an artifact/provenance source. The
+            // native backend receives the stage-dependent field through the
+            // callback installed immediately after backend creation.
         } else {
-            normalized_plan.oersted_field_xyz = Some(field.clone());
-        }
-        if normalized_plan.oersted_realization.is_none() {
-            return Err(RunError {
-                message: "FEM solved-current transport returned a field without a resolved Oersted realization".into(),
-            });
+            if normalized_plan.has_oersted_cylinder {
+                return Err(RunError {
+                    message: "FEM solved-current Oersted cannot be combined with an analytical cylinder in the bounded runtime".into(),
+                });
+            }
+            if let Some(existing) = normalized_plan.oersted_field_xyz.as_mut() {
+                if existing.len() != field.len() {
+                    return Err(RunError {
+                        message: "FEM solved-current Oersted field length conflicts with the planned field".into(),
+                    });
+                }
+                for (planned, solved) in existing.iter_mut().zip(field) {
+                    *planned += *solved;
+                }
+            } else {
+                normalized_plan.oersted_field_xyz = Some(field.clone());
+            }
+            if normalized_plan.oersted_realization.is_none() {
+                return Err(RunError {
+                    message: "FEM solved-current transport returned a field without a resolved Oersted realization".into(),
+                });
+            }
         }
     }
     #[cfg(not(feature = "fem-gpu"))]
@@ -5612,6 +5633,14 @@ fn execute_native_fem(
 
     let mut backend =
         NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
+    if let Some(provider) = StageOerstedProvider::from_plan(plan)? {
+        if engine != FemEngine::CpuNative {
+            return Err(RunError {
+                message: "native FEM stage Oersted callback is qualified only on the CPU lane; refusing GPU fallback".into(),
+            });
+        }
+        backend.install_stage_oersted_provider(Box::new(provider))?;
+    }
     backend.begin_stage(plan.time_stage.start_time_s)?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
