@@ -47,6 +47,8 @@ Celowo pominięte, niestage’owane hunki C1/niezależne to przede wszystkim: `F
 
 ## Poprawka review
 
+Fix checkpoint: `b5be917de` (`fix(eigen): fail closed bias-field sweep planning`).
+
 - Domyślny `DEFAULT_RUN_STAGE_DRAFT` ma komplet wartości `biasFieldSamplesApm`, `biasFieldEquilibriumPolicy` i `biasFieldContinuationSeed`, więc wszystkie merge paths `StudyStageDraft` zachowują poprawny typ.
 - Planner i walidacja IR fail-closed wymagają dla skanu: demagu, `periodic_airbox_k0`, exact Gamma, `ignore` damping, double precision, strict execution i PBC `[periodic, periodic, open]`; fully-periodic 3D dostaje osobny stabilny token, każdy z plannerskich tokenów kończy się `fallback=none`.
 - Każdy `FemEigenBiasFieldSamplePlanIR` dostaje własne, sklonowane `FemEigenExecutionResolutionIR`, przez co CPU/GPU requested/resolved provenance jest związane z próbą, a nie tylko planem nadrzędnym.
