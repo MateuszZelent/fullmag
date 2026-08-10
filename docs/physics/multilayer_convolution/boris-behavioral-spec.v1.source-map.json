@@ -1,0 +1,255 @@
+{
+  "document": {
+    "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "clean-room behavioral traceability only",
+      "qualification": "not-qualified",
+      "evidence": "anchor and source-map validation; no numerical oracle"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "CUDA behavioral traceability only",
+      "qualification": "not-qualified",
+      "evidence": "anchor and source-map validation; no device parity"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The note records the FDM convolution behavior, not a FEM operator."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The note records the FDM convolution behavior, not a FEM operator."
+    }
+  ],
+  "equations": [
+    {
+      "id": "boris-ordered-field",
+      "symbols": ["H_d", "N_ds", "M_s", "L"],
+      "sources": ["boris_update", "boris_multiply"],
+      "publication_anchor": "ordered source-to-destination field contract"
+    },
+    {
+      "id": "boris-fft-decomposition",
+      "symbols": ["Mhat_s", "Nhat_ds", "Hhat_d", "L"],
+      "sources": ["boris_update", "boris_multiply_3d"],
+      "publication_anchor": "forward, ordered pair, and inverse transform decomposition"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "H_d",
+      "latex": "\\mathbf H_d",
+      "meaning": "pole demagnetyzujące w siatce celu $d$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "N_ds",
+      "latex": "\\mathsf N_{d\\leftarrow s}",
+      "meaning": "tensor demagnetyzujący pary źródło--cel",
+      "si_unit": "1"
+    },
+    {
+      "id": "M_s",
+      "latex": "\\mathbf M_s",
+      "meaning": "magnetyzacja źródła $s$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "L",
+      "latex": "L",
+      "meaning": "liczba uczestniczących warstw/siatek",
+      "si_unit": "1"
+    },
+    {
+      "id": "Mhat_s",
+      "latex": "\\widehat{\\mathbf M}_s",
+      "meaning": "widmo magnetyzacji źródła",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Nhat_ds",
+      "latex": "\\widehat{\\mathsf N}_{d\\leftarrow s}",
+      "meaning": "widmowy tensor pary",
+      "si_unit": "1"
+    },
+    {
+      "id": "Hhat_d",
+      "latex": "\\widehat{\\mathbf H}_d",
+      "meaning": "widmowe pole celu",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "boris_rect_collection",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-rect-collection",
+      "responsibility": "per-layer rectangles and scratch alignment",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_common_n",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-common-n",
+      "responsibility": "common counts and forced two-dimensional Z count",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_force_mode",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-header-force-mode",
+      "responsibility": "force mode vocabulary",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_set_common",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-set-n-common",
+      "responsibility": "explicit common counts",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_conv_rect",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-convolution-rect",
+      "responsibility": "adjusted convolution rectangle",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_init",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-mconv-init",
+      "responsibility": "multilayer scratch initialization",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_update",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-mconv-update",
+      "responsibility": "forward, pair, and inverse update stages",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_2d",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-2d-mode",
+      "responsibility": "two-dimensional mode policy",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_toggle",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-multilayer-toggle",
+      "responsibility": "multilayer versus supermesh choice",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_catalog",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-catalog",
+      "responsibility": "self, shifted, and full-complex kernel families",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_reuse",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-reuse",
+      "responsibility": "complete kernel identity for reuse",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_storage",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-storage",
+      "responsibility": "kernel representation metadata",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_multiply",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-multiply",
+      "responsibility": "ordered two-dimensional pair multiplication",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_multiply_3d",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-multiply-3d",
+      "responsibility": "ordered three-dimensional pair multiplication",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_irregular",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-irregular-thickness",
+      "responsibility": "unequal source and destination thickness",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_transfer",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-weighted-transfer",
+      "responsibility": "weighted mesh transfer",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_cuda_update",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-cuda-update",
+      "responsibility": "CUDA multilayer update stages",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "boris_cuda_init",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-cuda-init",
+      "responsibility": "CUDA multilayer scratch initialization",
+      "evidence_status": "planned_contract"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FDMDemag.strategy",
+        "type": "Literal[str]",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "`auto`, `single_grid`, `multilayer_convolution`",
+        "meaning": "żądana realizacja demag",
+        "backend_support": "FDM CPU/GPU; lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.strategy"
+      },
+      {
+        "python": "FDMDemag.mode",
+        "type": "Literal[str]",
+        "default": "three_d",
+        "si_unit": "$1$",
+        "validation": "`two_d_stack` lub `three_d`",
+        "meaning": "model wymiaru native warstw",
+        "backend_support": "FDM CPU/GPU; z ograniczeniami",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.mode"
+      },
+      {
+        "python": "FDMDemag.common_cells_xy",
+        "type": "tuple[int,int] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "dodatnie $N_x,N_y$; tylko `two_d_stack`",
+        "meaning": "hint liczby komórek scratch XY",
+        "backend_support": "FDM; nie jest meshem fizycznym",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells_xy"
+      }
+    ]
+  }
+}
