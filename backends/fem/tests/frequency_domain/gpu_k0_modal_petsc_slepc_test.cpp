@@ -195,8 +195,15 @@ int main()
     check(gpu.augmented_dof_count == problem.q_dof_count + problem.phi_dof_count,
           "GPU result must publish the native augmented DOF count");
     check(gpu.full_residual_certified, "GPU solve must certify the full descriptor residual");
-    check(gpu.setup_h2d_transfer_count > 0,
-          "GPU solve must report measured setup host-to-device block transfers");
+    // The persistent Schur context uploads A_qq, A_qphi, A_phiq, A_phiphi,
+    // and the full-residual B_qq block once. The real-split mass is
+    // materialized for this solve, so all six setup block transfers are
+    // accounted for in the public telemetry.
+    check(gpu.setup_h2d_transfer_count == 6,
+          "GPU solve must count B_qq and the split mass setup transfers");
+    check(
+        std::strstr(gpu.diagnostics_json, "\"setup_h2d_transfer_count\":6") != nullptr,
+        "GPU diagnostics must publish the B_qq setup transfer");
     check(gpu.final_d2h_transfer_count >= 4,
           "GPU solve must report the four final mode-vector device-to-host transfers");
     check(gpu.hot_loop_allocations == 0,

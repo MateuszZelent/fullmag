@@ -324,6 +324,7 @@ bool create_hypre_shift_preconditioner_cuda(
 
 struct GpuSchurContext {
     Mat a_qq = nullptr;
+    Mat b_qq = nullptr;
     Mat a_qphi = nullptr;
     Mat a_phiq = nullptr;
     Mat poisson = nullptr;
@@ -516,6 +517,7 @@ void destroy_schur_context(GpuSchurContext *context) noexcept
     if (context->poisson) MatDestroy(&context->poisson);
     if (context->a_phiq) MatDestroy(&context->a_phiq);
     if (context->a_qphi) MatDestroy(&context->a_qphi);
+    if (context->b_qq) MatDestroy(&context->b_qq);
     if (context->a_qq) MatDestroy(&context->a_qq);
 }
 
@@ -546,6 +548,10 @@ bool configure_schur_context(
     if (!create_cuda_csr_matrix(
             problem.A_qq,
             &context->a_qq,
+            &context->setup_h2d_transfer_count) ||
+        !create_cuda_csr_matrix(
+            problem.B_qq,
+            &context->b_qq,
             &context->setup_h2d_transfer_count) ||
         !create_cuda_csr_matrix(
             problem.A_qphi,
@@ -2081,7 +2087,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         operator_apply_before = schur->operator_apply_count;
         poisson_solve_before = schur->poisson_solve_count;
         poisson_iteration_before = schur->poisson_iteration_count;
-        // A reused context has already uploaded its four immutable operator CSR
+        // A reused context has already uploaded its five immutable operator CSR
         // blocks.  The split mass is materialized for each solve because its
         // scaling belongs to the current spectral normalization; that upload
         // is counted at the successful assembly boundary below.
