@@ -50,6 +50,7 @@ struct Sample {
     Shape shape{};
     uint64_t cells = 0, active_cells = 0, materials = 0, inactive_cells = 0;
     uint64_t finite_g_interfaces = 0, cold_iterations = 0, warm_iterations = 0;
+    bool empty_interior_aggregate = false;
     uint64_t hierarchy_builds = 0, hierarchy_hits = 0, amg_applies = 0;
     uint64_t fine_unknowns = 0, coarse_unknowns = 0, host_fallbacks = 0;
     uint32_t hierarchy_levels = 0;
@@ -57,6 +58,8 @@ struct Sample {
     double algebraic_residual = 0.0, physical_residual = 0.0;
     double component_balance = 0.0, electrode_balance = 0.0;
     double readback_boundary_balance = 0.0, max_abs_v = 0.0, max_abs_j = 0.0;
+    uint64_t required_peak_bytes = 0, cuda_free_bytes = 0, cuda_total_bytes = 0;
+    uint64_t safety_reserve_bytes = 0, resolved_usable_bytes = 0;
     std::array<uint8_t, 32> hierarchy_digest{}, snapshot_digest{}, build_digest{};
 };
 
@@ -222,6 +225,106 @@ void readback(fullmag_fdm_gpu_transport_context_handle_v1 context,
             "scalability artifact readback failed");
 }
 
+void verify_rap_oracle(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, const Shape &shape,
+    const std::vector<fullmag_fdm_gpu_transport_spin_cell_v1> &cells,
+    const std::array<fullmag_fdm_gpu_transport_spin_material_v1, 2> &materials,
+    uint64_t material_count,
+    const std::vector<fullmag_fdm_gpu_transport_spin_interface_v1> &interfaces,
+    const std::vector<fullmag_fdm_gpu_transport_charge_face_v1> &faces,
+    uint64_t coarse_count) {
+    const uint64_t cnx = (shape.nx + 1) / 2, cny = (shape.ny + 1) / 2;
+    const uint64_t cnz = (shape.nz + 1) / 2;
+    const uint64_t x_edges = (cnx - 1) * cny * cnz;
+    const uint64_t y_edges = cnx * (cny - 1) * cnz;
+    const uint64_t edge_count = x_edges + y_edges + cnx * cny * (cnz - 1);
+    std::vector<uint64_t> aggregate(cells.size());
+    std::vector<double> device_diag(coarse_count), device_edges(edge_count);
+    require(fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
+                context, aggregate.data(), aggregate.size(), device_diag.data(),
+                device_diag.size(), device_edges.data(), device_edges.size()) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "hierarchy readback failed");
+    std::vector<double> dense(coarse_count * coarse_count, 0.0);
+    auto sigma = [&](uint64_t i) {
+        for (uint64_t m = 0; m < material_count; ++m)
+            if (materials[m].material_index == cells[i].material_index)
+                return materials[m].conductivity;
+        throw std::runtime_error("material missing in RAP oracle");
+    };
+    auto add_edge = [&](uint64_t a, uint64_t b, double g) {
+        const uint64_t ca = aggregate[a], cb = aggregate[b];
+        dense[ca * coarse_count + ca] += g;
+        dense[cb * coarse_count + cb] += g;
+        dense[ca * coarse_count + cb] -= g;
+        dense[cb * coarse_count + ca] -= g;
+    };
+    for (uint64_t z = 0; z < shape.nz; ++z)
+        for (uint64_t y = 0; y < shape.ny; ++y)
+            for (uint64_t x = 0; x < shape.nx; ++x) {
+                const uint64_t a = index(shape, x, y, z);
+                require(aggregate[a] == x / 2 + cnx * (y / 2 + cny * (z / 2)),
+                        "geometric aggregate map mismatch");
+                if (!cells[a].active) continue;
+                const std::array<uint64_t, 3> step{{1, shape.nx, shape.nx * shape.ny}};
+                const std::array<bool, 3> has{{x + 1 < shape.nx, y + 1 < shape.ny,
+                                               z + 1 < shape.nz}};
+                for (uint32_t axis = 0; axis < 3; ++axis) if (has[axis]) {
+                    const uint64_t b = a + step[axis];
+                    if (!cells[b].active) continue;
+                    double resistance = kH / (2.0 * sigma(a)) + kH / (2.0 * sigma(b));
+                    for (const auto &interface : interfaces)
+                        if (interface.axis == axis && interface.negative_cell == a &&
+                            interface.positive_cell == b)
+                            resistance += 1.0 / (interface.G_up + interface.G_down);
+                    add_edge(a, b, kH * kH / resistance);
+                }
+            }
+    for (const auto &face : faces)
+        if (face.kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE &&
+            cells[face.adjacent_cell].active)
+            dense[aggregate[face.adjacent_cell] * coarse_count +
+                  aggregate[face.adjacent_cell]] +=
+                2.0 * sigma(face.adjacent_cell) * face.area / kH;
+    auto close = [](double a, double b) {
+        return std::abs(a - b) <= 2.0e-12 * std::max({1.0, std::abs(a), std::abs(b)});
+    };
+    for (uint64_t i = 0; i < coarse_count; ++i)
+        require(close(device_diag[i], dense[i * coarse_count + i]),
+                "P^T A P coarse diagonal mismatch");
+    std::vector<double> action_dense(coarse_count, 0.0), action_structured(coarse_count, 0.0);
+    std::vector<double> x(coarse_count);
+    for (uint64_t i = 0; i < coarse_count; ++i) x[i] = 0.25 + static_cast<double>(i % 17) / 19.0;
+    for (uint64_t i = 0; i < coarse_count; ++i) {
+        for (uint64_t j = 0; j < coarse_count; ++j)
+            action_dense[i] += dense[i * coarse_count + j] * x[j];
+        action_structured[i] = device_diag[i] * x[i];
+    }
+    uint64_t edge = 0;
+    auto check_edge = [&](uint64_t a, uint64_t b) {
+        const double expected = -dense[a * coarse_count + b];
+        require(close(device_edges[edge], expected), "P^T A P structured edge mismatch");
+        action_structured[a] -= device_edges[edge] * x[b];
+        action_structured[b] -= device_edges[edge] * x[a];
+        ++edge;
+    };
+    for (uint64_t z = 0; z < cnz; ++z) for (uint64_t y = 0; y < cny; ++y)
+        for (uint64_t x0 = 0; x0 + 1 < cnx; ++x0) {
+            const uint64_t a = x0 + cnx * (y + cny * z); check_edge(a, a + 1);
+        }
+    for (uint64_t z = 0; z < cnz; ++z) for (uint64_t y = 0; y + 1 < cny; ++y)
+        for (uint64_t x0 = 0; x0 < cnx; ++x0) {
+            const uint64_t a = x0 + cnx * (y + cny * z); check_edge(a, a + cnx);
+        }
+    for (uint64_t z = 0; z + 1 < cnz; ++z) for (uint64_t y = 0; y < cny; ++y)
+        for (uint64_t x0 = 0; x0 < cnx; ++x0) {
+            const uint64_t a = x0 + cnx * (y + cny * z); check_edge(a, a + cnx * cny);
+        }
+    for (uint64_t i = 0; i < coarse_count; ++i)
+        require(close(action_dense[i], action_structured[i]),
+                "independent coarse action oracle mismatch");
+}
+
 Sample run_sample(const std::string &series, Shape shape, int device,
                   const std::array<uint8_t, 16> &expected_uuid) {
     Sample sample{};
@@ -259,6 +362,16 @@ Sample run_sample(const std::string &series, Shape shape, int device,
             for (uint64_t x = shape.nx / 2; x < shape.nx; ++x)
                 cells[index(shape, x, y, z)].material_index = 2;
     } else if (series == "I") {
+        // Explicit legal empty geometric aggregate. This interior 2x2x2 block
+        // maps to one coarse cell while all authored external endpoints stay
+        // active, exposing the pre-guard V-cycle 0/0 path.
+        for (uint64_t z = 2; z < 4; ++z)
+            for (uint64_t y = 2; y < 4; ++y)
+                for (uint64_t x = 2; x < 4; ++x) {
+                    auto &cell = cells[index(shape, x, y, z)];
+                    cell.active = cell.conductor = 0;
+                }
+        sample.empty_interior_aggregate = true;
         for (uint64_t z = 1; z + 1 < shape.nz; z += 2)
             for (uint64_t y = 1; y + 1 < shape.ny; y += 3) {
                     auto &cell = cells[index(shape, shape.nx / 2, y, z)];
@@ -269,6 +382,8 @@ Sample run_sample(const std::string &series, Shape shape, int device,
         sample.active_cells += cell.active != 0;
         sample.inactive_cells += cell.active == 0;
     }
+    require(series != "I" || sample.inactive_cells >= 8,
+            "I series must contain an empty interior 2x2x2 aggregate");
 
     std::array<fullmag_fdm_gpu_transport_spin_material_v1, 2> materials{};
     sample.materials = series == "M" ? 2 : 1;
@@ -358,6 +473,15 @@ Sample run_sample(const std::string &series, Shape shape, int device,
                 "scalability charge solve failed");
     };
     fullmag_fdm_gpu_charge_solve_result_v1 cold{}, warm{};
+    size_t free_bytes = 0, total_bytes = 0;
+    require(cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess,
+            "CUDA memory identity query failed");
+    sample.cuda_free_bytes = free_bytes;
+    sample.cuda_total_bytes = total_bytes;
+    sample.safety_reserve_bytes = std::max<uint64_t>(UINT64_C(256) << 20,
+                                                     sample.cuda_total_bytes / 20);
+    sample.resolved_usable_bytes = sample.cuda_free_bytes > sample.safety_reserve_bytes
+        ? sample.cuda_free_bytes - sample.safety_reserve_bytes : 0;
     auto begin = std::chrono::steady_clock::now(); solve_once(1, &cold);
     sample.cold_seconds = elapsed(begin);
     sample.cold_iterations = cold.iterations;
@@ -410,6 +534,7 @@ Sample run_sample(const std::string &series, Shape shape, int device,
     begin = std::chrono::steady_clock::now(); solve_once(2, &warm);
     sample.warm_seconds = elapsed(begin);
     sample.warm_iterations = warm.iterations;
+    sample.required_peak_bytes = std::max(cold.peak_bytes, warm.peak_bytes);
 
     require(fullmag_fdm_gpu_transport_test_charge_audit_v1(
                 created.context_handle, &sample.hierarchy_builds, &sample.hierarchy_hits,
@@ -425,6 +550,9 @@ Sample run_sample(const std::string &series, Shape shape, int device,
                 std::any_of(sample.hierarchy_digest.begin(), sample.hierarchy_digest.end(),
                             [](uint8_t byte) { return byte != 0; }),
             "exact hierarchy build/hit/warm counters failed");
+    verify_rap_oracle(created.context_handle, shape, cells, materials,
+                      sample.materials, interfaces, faces,
+                      sample.coarse_unknowns);
     require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle) ==
@@ -503,6 +631,14 @@ int main() try {
             << "], \"cells\": " << s.cells << ", \"active_cells\": " << s.active_cells
             << ", \"inactive_cells\": " << s.inactive_cells << ", \"material_count\": " << s.materials
             << ", \"finite_g_interface_count\": " << s.finite_g_interfaces
+            << ", \"empty_interior_aggregate\": "
+            << (s.empty_interior_aggregate ? "true" : "false")
+            << ", \"memory_policy\": \"fixed_qualification\""
+            << ", \"required_peak_bytes\": " << s.required_peak_bytes
+            << ", \"cuda_free_bytes_before_solve\": " << s.cuda_free_bytes
+            << ", \"cuda_total_bytes\": " << s.cuda_total_bytes
+            << ", \"safety_reserve_bytes\": " << s.safety_reserve_bytes
+            << ", \"resolved_usable_bytes\": " << s.resolved_usable_bytes
             << ", \"upload_seconds\": " << s.upload_seconds
             << ", \"cold_solve_seconds\": " << s.cold_seconds
             << ", \"warm_solve_seconds\": " << s.warm_seconds

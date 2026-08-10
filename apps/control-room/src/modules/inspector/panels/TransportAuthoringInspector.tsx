@@ -18,17 +18,20 @@ import {
 } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { Switch } from "@/shared/ui/Switch";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import {
   buildCurrentTransport,
   buildSpinTransport,
+  currentTransportClosurePatch,
   currentTransportDraft,
   currentTransportModelPatch,
   currentTransportSupportsPrescribedDensity,
@@ -41,6 +44,7 @@ import {
   transportSelectionKey,
   type CurrentTransportDraft,
   type SpinTransportDraft,
+  type StructuredCurrentSourceCutDraft,
   type TransportAuthoringInitialScope,
 } from "./TransportAuthoringInspectorModel";
 
@@ -72,11 +76,16 @@ export function TransportAuthoringInspector({
   initialScope,
   resourceId,
   resourceIndex,
+  structuredCurrentFocus,
 }: {
   family: Family;
   initialScope?: TransportAuthoringInitialScope | null;
   resourceId?: string | null;
   resourceIndex?: number | null;
+  structuredCurrentFocus?: {
+    closureId: string;
+    sourceCutId?: string;
+  } | null;
 }) {
   const { api, resources } = useKernel();
   const current = useCurrentTransportsResource({ enabled: family === "current_transport" });
@@ -293,7 +302,7 @@ export function TransportAuthoringInspector({
             <FormField label="Opaque payload" type="textarea" rows={20} readOnly value={readonlyTransportPayload(selected)} />
           </>
         ) : family === "current_transport" ? (
-          <CurrentFields draft={draft as CurrentTransportDraft} identityReadOnly={Boolean(selected)} patch={patch} />
+          <CurrentFields draft={draft as CurrentTransportDraft} focus={structuredCurrentFocus} identityReadOnly={Boolean(selected)} patch={patch} />
         ) : (
           <SpinFields draft={draft as SpinTransportDraft} identityReadOnly={Boolean(selected)} patch={patch} />
         )}
@@ -406,13 +415,70 @@ export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProp
   );
 }
 
-function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTransportDraft; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {
+export function StructuredCurrentClosureInspectorPanel({ selection }: InspectorPanelProps) {
+  const ref = selection.ref?.type === "structured-current-closure"
+    ? selection.ref
+    : null;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "current_transport",
+        scope: { kind: "global", stableRef: "global:physics" },
+        source: {
+          id: ref?.structuredCurrentClosureId ?? "unknown-closure",
+          kind: "structured_current_closure",
+          status: "configured",
+        },
+        status: "configured",
+        statusReason: "Authoring capability remains semantic_only until the resolved runtime lane is qualified.",
+      })}
+      primary={ref ? <TransportAuthoringInspector
+        family="current_transport"
+        resourceId={ref.currentTransportId}
+        structuredCurrentFocus={{ closureId: ref.structuredCurrentClosureId }}
+      /> : null}
+    />
+  );
+}
+
+export function StructuredCurrentSourceCutInspectorPanel({ selection }: InspectorPanelProps) {
+  const ref = selection.ref?.type === "structured-current-source-cut"
+    ? selection.ref
+    : null;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "current_transport",
+        scope: { kind: "global", stableRef: "global:physics" },
+        source: {
+          id: ref?.structuredCurrentSourceCutId ?? "unknown-source-cut",
+          kind: "structured_current_source_cut",
+          status: "configured",
+        },
+        status: "configured",
+        statusReason: "Authoring capability remains semantic_only until the resolved runtime lane is qualified.",
+      })}
+      primary={ref ? <TransportAuthoringInspector
+        family="current_transport"
+        resourceId={ref.currentTransportId}
+        structuredCurrentFocus={{
+          closureId: ref.structuredCurrentClosureId,
+          sourceCutId: ref.structuredCurrentSourceCutId,
+        }}
+      /> : null}
+    />
+  );
+}
+
+function CurrentFields({ draft, focus, identityReadOnly, patch }: { draft: CurrentTransportDraft; focus?: { closureId: string; sourceCutId?: string } | null; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {
   const field = (key: keyof CurrentTransportDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
+  const hasStructuredClosure = draft.structuredCurrentClosure !== null;
   return <>
     <FormField label="Name" readOnly={identityReadOnly} value={draft.name} onChange={field("name")} />
-    <FormField label="Model" type="select" value={draft.model} onChange={(event) => patch(currentTransportModelPatch(draft, event.target.value as CurrentTransportDraft["model"]))}><option value="prescribed_density" disabled={!currentTransportSupportsPrescribedDensity(draft)}>Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
-    <FormField label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
-    <FormField label="Conservative RT0 current view (JSON; closed_geometry)" rows={12} type="textarea" value={draft.conservativeCurrentView} onChange={field("conservativeCurrentView")} />
+    <FormField disabled={hasStructuredClosure} label="Model" type="select" value={draft.model} onChange={(event) => patch(currentTransportModelPatch(draft, event.target.value as CurrentTransportDraft["model"]))}><option value="prescribed_density" disabled={!currentTransportSupportsPrescribedDensity(draft)}>Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
+    <FormField disabled={hasStructuredClosure} label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
+    <StructuredCurrentClosureFields draft={draft} focus={focus} patch={patch} />
+    {!hasStructuredClosure ? <FormField label="Conservative RT0 current view (JSON; closed_geometry)" rows={12} type="textarea" value={draft.conservativeCurrentView} onChange={field("conservativeCurrentView")} /> : null}
     {draft.model === "prescribed_density" ? <FormField label="Current density vector" unit="A/m²" type="textarea" value={draft.currentDensity} onChange={field("currentDensity")} /> : <>
       <FormField label="Domain region refs" type="textarea" rows={5} value={draft.domain} onChange={field("domain")} />
       <FormField label="Material assignments (sigma_Spm; M2: sigma_parallel_Spm, sigma_perpendicular_Spm, sigma_AHE_Spm)" type="textarea" rows={9} value={draft.materials} onChange={field("materials")} />
@@ -424,6 +490,101 @@ function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTrans
     <FormField label="Legacy solve region" value={draft.solveRegion} onChange={field("solveRegion")} />
     <FormField label="Legacy conductivity" unit="S/m" value={draft.conductivity} onChange={field("conductivity")} />
   </>;
+}
+
+function StructuredCurrentClosureFields({
+  draft,
+  focus,
+  patch,
+}: {
+  draft: CurrentTransportDraft;
+  focus?: { closureId: string; sourceCutId?: string } | null;
+  patch: (value: Partial<Draft>) => void;
+}) {
+  const closure = draft.structuredCurrentClosure;
+  const updateClosure = (value: NonNullable<CurrentTransportDraft["structuredCurrentClosure"]>) => {
+    patch({ structuredCurrentClosure: value });
+  };
+  const updateSourceCut = (
+    index: number,
+    value: Partial<StructuredCurrentSourceCutDraft>,
+  ) => {
+    if (!closure) return;
+    updateClosure({
+      ...closure,
+      sourceCuts: closure.sourceCuts.map((cut, cutIndex) => cutIndex === index
+        ? { ...cut, ...value }
+        : cut),
+    });
+  };
+  const appendSourceCut = () => {
+    if (!closure) return;
+    const ordinal = closure.sourceCuts.length + 1;
+    const scope = closure.sourceCuts[0];
+    updateClosure({
+      ...closure,
+      sourceCuts: [...closure.sourceCuts, {
+        axis: "x",
+        circuitId: `circuit-${ordinal}`,
+        driveId: `drive-${ordinal}`,
+        normal: "positive_axis",
+        objectId: scope?.objectId ?? "",
+        offsetM: "0",
+        potentialJumpV: "0.1",
+        regionId: scope?.regionId ?? "",
+        sourceCutId: `source-cut-${ordinal}`,
+      }],
+    });
+  };
+  return <div className="fm-structured-current-closure">
+    <InspectorPropertyRow label="Closed-geometry current closure">
+      <Switch
+        aria-label="Closed-geometry current closure"
+        checked={closure !== null}
+        onCheckedChange={(checked) => patch(currentTransportClosurePatch(draft, checked))}
+      />
+    </InspectorPropertyRow>
+    {closure ? <>
+      <FormField
+        label="Closure id"
+        value={closure.closureId}
+        onChange={(event) => updateClosure({ ...closure, closureId: event.target.value })}
+      />
+      <div className="fm-structured-current-closure__cuts">
+        {closure.sourceCuts.map((cut, index) => <section
+          className="fm-structured-current-closure__cut"
+          data-focused={focus?.closureId === closure.closureId && focus.sourceCutId === cut.sourceCutId || undefined}
+          key={`${cut.sourceCutId}:${index}`}
+        >
+          <div className="fm-structured-current-closure__cut-header">
+            <span>Source cut {index + 1}</span>
+            <Button
+              aria-label={`Remove source cut ${index + 1}`}
+              disabled={closure.sourceCuts.length === 1}
+              size="sm"
+              type="button"
+              variant="danger"
+              onClick={() => updateClosure({
+                ...closure,
+                sourceCuts: closure.sourceCuts.filter((_, cutIndex) => cutIndex !== index),
+              })}
+            >Remove</Button>
+          </div>
+          <FormField label={`Source cut ${index + 1} id`} value={cut.sourceCutId} onChange={(event) => updateSourceCut(index, { sourceCutId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} circuit id`} value={cut.circuitId} onChange={(event) => updateSourceCut(index, { circuitId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} object id`} value={cut.objectId} onChange={(event) => updateSourceCut(index, { objectId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} region id`} value={cut.regionId} onChange={(event) => updateSourceCut(index, { regionId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} plane axis`} type="select" value={cut.axis} onChange={(event) => updateSourceCut(index, { axis: event.target.value as StructuredCurrentSourceCutDraft["axis"] })}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></FormField>
+          <FormField label={`Source cut ${index + 1} plane offset`} unit="m" value={cut.offsetM} onChange={(event) => updateSourceCut(index, { offsetM: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} plane normal`} type="select" value={cut.normal} onChange={(event) => updateSourceCut(index, { normal: event.target.value as StructuredCurrentSourceCutDraft["normal"] })}><option value="positive_axis">Positive axis</option><option value="negative_axis">Negative axis</option></FormField>
+          <FormField label={`Source cut ${index + 1} drive id`} value={cut.driveId} onChange={(event) => updateSourceCut(index, { driveId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} potential jump`} unit="V" value={cut.potentialJumpV} onChange={(event) => updateSourceCut(index, { potentialJumpV: event.target.value })} />
+        </section>)}
+      </div>
+      <Button size="sm" type="button" onClick={appendSourceCut}>Add source cut</Button>
+      <div className="fm-help-text">Closed FDM geometry only. External leads, PBC, certified imports, GPU, M2, and M3 remain outside this contract.</div>
+    </> : null}
+  </div>;
 }
 
 function SpinFields({ draft, identityReadOnly, patch }: { draft: SpinTransportDraft; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {

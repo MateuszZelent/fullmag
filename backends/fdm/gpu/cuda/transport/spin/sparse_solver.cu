@@ -1277,6 +1277,49 @@ ByteLedger ledger_for(const Operator &input, const HierarchyCache &hierarchy,
     return ledger;
 }
 
+uint32_t allocate_workspace(const Operator &input,
+                            const HierarchyCache &hierarchy,
+                            Workspace *workspace) {
+    const uint64_t unknowns = 3 * cells_of(input.grid);
+    if (workspace->vector_unknowns == unknowns && workspace->basis != nullptr)
+        return ok;
+    release(workspace);
+    uint64_t workspace_bytes = 0;
+    workspace->vector_unknowns = unknowns;
+    uint64_t coarse_cells_sum = 0;
+    for (uint32_t level = 1; level < hierarchy.level_count; ++level)
+        coarse_cells_sum += hierarchy.levels[level].cells;
+    workspace->coarse_vector_values = 15 * coarse_cells_sum;
+    int device = 0;
+    cudaDeviceProp properties{};
+    if (cudaGetDevice(&device) != cudaSuccess ||
+        cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
+        release(workspace);
+        return cuda_failure;
+    }
+    workspace->reduction_blocks = std::min<uint64_t>(
+        uint64_t(properties.multiProcessorCount) * 2, 1024);
+    if (!allocate_values(&workspace->basis, uint64_t(kRestart + 1) * unknowns,
+                         &workspace_bytes) ||
+        !allocate_values(&workspace->vector_a, unknowns, &workspace_bytes) ||
+        !allocate_values(&workspace->vector_b, unknowns, &workspace_bytes) ||
+        !allocate_values(&workspace->vector_c, unknowns, &workspace_bytes) ||
+        !allocate_values(&workspace->coarse_vectors,
+                         workspace->coarse_vector_values, &workspace_bytes) ||
+        !allocate_values(&workspace->reduction_partials,
+                         workspace->reduction_blocks, &workspace_bytes) ||
+        !allocate_values(&workspace->small, kSmallValues, &workspace_bytes) ||
+        !allocate_values(&workspace->device_status,
+                         (kDeviceStatusBytes + sizeof(uint32_t) - 1) /
+                             sizeof(uint32_t),
+                         &workspace_bytes)) {
+        release(workspace);
+        return out_of_memory;
+    }
+    workspace->owned_bytes = workspace_bytes;
+    return ok;
+}
+
 } // namespace
 
 void release(Workspace *workspace) noexcept {
@@ -1307,8 +1350,10 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
     const uint64_t unknowns = 3 * cells;
     if (hierarchy->valid && hierarchy->operator_revision == input.operator_revision &&
         same_digest(hierarchy->operator_digest, input.operator_digest) &&
-        same_grid(hierarchy->fine_grid, input.grid) &&
-        workspace->vector_unknowns == unknowns) {
+        same_grid(hierarchy->fine_grid, input.grid)) {
+        const uint32_t workspace_status =
+            allocate_workspace(input, *hierarchy, workspace);
+        if (workspace_status != ok) return workspace_status;
         ++hierarchy->cache_hits;
         metrics->fine_unknowns = unknowns;
         metrics->coarse_unknowns =
@@ -1316,7 +1361,8 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
         metrics->level_count = hierarchy->level_count;
         metrics->bytes = ledger_for(input, *hierarchy, *workspace);
         metrics->peak_device_bytes = metrics->bytes.total_high_water;
-        return metrics->peak_device_bytes <= kDeviceBudgetBytes ? ok : resource_limit;
+        return metrics->peak_device_bytes <= input.resolved_device_budget_bytes
+            ? ok : resource_limit;
     }
     release(workspace);
     release(hierarchy);
@@ -1446,44 +1492,14 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
     }
     (void)cudaFree(device_strength);
 
-    uint64_t workspace_bytes = 0;
-    workspace->vector_unknowns = unknowns;
-    uint64_t coarse_cells_sum = 0;
-    for (uint32_t level = 1; level < hierarchy->level_count; ++level)
-        coarse_cells_sum += hierarchy->levels[level].cells;
-    workspace->coarse_vector_values = 15 * coarse_cells_sum;
-    int device = 0;
-    cudaDeviceProp properties{};
-    if (cudaGetDevice(&device) != cudaSuccess ||
-        cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
+    const uint32_t workspace_status =
+        allocate_workspace(input, *hierarchy, workspace);
+    if (workspace_status != ok) {
         (void)cudaEventDestroy(begin);
         (void)cudaEventDestroy(end);
         release(hierarchy);
-        return cuda_failure;
+        return workspace_status;
     }
-    workspace->reduction_blocks = std::min<uint64_t>(
-        uint64_t(properties.multiProcessorCount) * 2, 1024);
-    if (!allocate_values(&workspace->basis, uint64_t(kRestart + 1) * unknowns,
-                         &workspace_bytes) ||
-        !allocate_values(&workspace->vector_a, unknowns, &workspace_bytes) ||
-        !allocate_values(&workspace->vector_b, unknowns, &workspace_bytes) ||
-        !allocate_values(&workspace->vector_c, unknowns, &workspace_bytes) ||
-        !allocate_values(&workspace->coarse_vectors,
-                         workspace->coarse_vector_values, &workspace_bytes) ||
-        !allocate_values(&workspace->reduction_partials,
-                         workspace->reduction_blocks, &workspace_bytes) ||
-        !allocate_values(&workspace->small, kSmallValues, &workspace_bytes) ||
-        !allocate_values(&workspace->device_status,
-                         (kDeviceStatusBytes + sizeof(uint32_t) - 1) /
-                             sizeof(uint32_t),
-                         &workspace_bytes)) {
-        (void)cudaEventDestroy(begin);
-        (void)cudaEventDestroy(end);
-        release(workspace);
-        release(hierarchy);
-        return out_of_memory;
-    }
-    workspace->owned_bytes = workspace_bytes;
     hierarchy->operator_revision = input.operator_revision;
     std::memcpy(hierarchy->operator_digest, input.operator_digest, 32);
     hierarchy->fine_grid = input.grid;
@@ -1508,7 +1524,7 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
     metrics->setup_milliseconds = milliseconds;
     metrics->bytes = ledger_for(input, *hierarchy, *workspace);
     metrics->peak_device_bytes = metrics->bytes.total_high_water;
-    if (metrics->peak_device_bytes > kDeviceBudgetBytes) {
+    if (metrics->peak_device_bytes > input.resolved_device_budget_bytes) {
         release(workspace);
         release(hierarchy);
         return resource_limit;
@@ -1530,7 +1546,8 @@ uint32_t solve(const Operator &input, cudaStream_t stream,
         return invalid_argument;
     metrics->bytes = ledger_for(input, hierarchy, workspace);
     metrics->peak_device_bytes = metrics->bytes.total_high_water;
-    if (metrics->peak_device_bytes > kDeviceBudgetBytes) return resource_limit;
+    if (metrics->peak_device_bytes > input.resolved_device_budget_bytes)
+        return resource_limit;
 
     int device = 0;
     cudaDeviceProp properties{};

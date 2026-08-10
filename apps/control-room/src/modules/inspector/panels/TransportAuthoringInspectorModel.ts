@@ -2,6 +2,7 @@ import type {
   KnownSceneCurrentTransport,
   KnownSceneSpinTransport,
   SceneCurrentTransport,
+  SceneStructuredCutPlane,
   SceneSpinTransport,
 } from "@/kernel/api/apiTypes";
 import {
@@ -10,6 +11,23 @@ import {
 } from "@/shared/domain/physics/transportRecognition";
 
 const ELEMENTARY_CHARGE_C = 1.602176634e-19;
+
+export interface StructuredCurrentSourceCutDraft {
+  axis: SceneStructuredCutPlane["axis"];
+  circuitId: string;
+  driveId: string;
+  normal: SceneStructuredCutPlane["normal"];
+  objectId: string;
+  offsetM: string;
+  potentialJumpV: string;
+  regionId: string;
+  sourceCutId: string;
+}
+
+export interface StructuredCurrentClosureDraft {
+  closureId: string;
+  sourceCuts: StructuredCurrentSourceCutDraft[];
+}
 
 export interface CurrentTransportDraft {
   boundaries: string;
@@ -29,6 +47,7 @@ export interface CurrentTransportDraft {
   solverOperatorVersion: string;
   solverPhysicalResidualVersion: string;
   solverRelativeTolerance: string;
+  structuredCurrentClosure: StructuredCurrentClosureDraft | null;
   timeEnvelope: string;
 }
 
@@ -83,6 +102,7 @@ export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
       "solverMaxIterations",
       "solverOperatorVersion",
       "solverPhysicalResidualVersion",
+      "structuredCurrentClosure",
     ],
     opaque: ["domain", "materials", "boundaries"],
   },
@@ -196,6 +216,22 @@ export function currentTransportDraft(
     solverOperatorVersion: value?.solver?.operator_version ?? "fv_charge_harmonic_v1",
     solverPhysicalResidualVersion: value?.solver?.physical_residual_version ?? "charge_balance_integrated_l2.v1",
     solverRelativeTolerance: value?.solver?.linear.relative_tolerance.toString() ?? "1e-10",
+    structuredCurrentClosure: value?.structured_current_closure
+      ? {
+          closureId: value.structured_current_closure.closure_id,
+          sourceCuts: value.structured_current_closure.source_cuts.map((cut) => ({
+            axis: cut.plane.axis,
+            circuitId: cut.circuit_id,
+            driveId: cut.drive.drive_id,
+            normal: cut.plane.normal,
+            objectId: cut.region.object_id,
+            offsetM: cut.plane.offset_m.toString(),
+            potentialJumpV: cut.drive.potential_jump_V.toString(),
+            regionId: cut.region.region_id ?? "",
+            sourceCutId: cut.source_cut_id,
+          })),
+        }
+      : null,
     timeEnvelope: pretty(value?.time_envelope ?? {}),
   };
 }
@@ -235,6 +271,66 @@ export function currentTransportModelPatch(
     conductivity: "",
     model,
     solveRegion: domain[0]?.object_id ?? "",
+  };
+}
+
+function defaultStructuredCurrentSourceCut(
+  draft: CurrentTransportDraft,
+): StructuredCurrentSourceCutDraft {
+  let objectId = "";
+  let regionId = "";
+  try {
+    const domain = JSON.parse(draft.domain) as Array<{ object_id?: unknown; region_id?: unknown }>;
+    const first = Array.isArray(domain) ? domain[0] : undefined;
+    objectId = typeof first?.object_id === "string" ? first.object_id : "";
+    regionId = typeof first?.region_id === "string" ? first.region_id : "";
+  } catch {
+    // The existing domain validation reports malformed JSON when the draft is saved.
+  }
+  return {
+    axis: "x",
+    circuitId: "circuit-1",
+    driveId: "drive-1",
+    normal: "positive_axis",
+    objectId,
+    offsetM: "0",
+    potentialJumpV: "0.1",
+    regionId,
+    sourceCutId: "source-cut-1",
+  };
+}
+
+export function currentTransportClosurePatch(
+  draft: CurrentTransportDraft,
+  enabled: boolean,
+): Pick<
+  CurrentTransportDraft,
+  | "conservativeCurrentView"
+  | "coupling"
+  | "model"
+  | "solverOperatorVersion"
+  | "structuredCurrentClosure"
+> {
+  if (!enabled) {
+    return {
+      conservativeCurrentView: draft.conservativeCurrentView,
+      coupling: draft.coupling,
+      model: draft.model,
+      solverOperatorVersion: draft.solverOperatorVersion === "fv_charge_harmonic_source_cut_v1"
+        ? "fv_charge_harmonic_v1"
+        : draft.solverOperatorVersion,
+      structuredCurrentClosure: null,
+    };
+  }
+  return {
+    conservativeCurrentView: "{}",
+    coupling: "one_way",
+    model: "ohmic_poisson",
+    solverOperatorVersion: "fv_charge_harmonic_source_cut_v1",
+    structuredCurrentClosure: draft.structuredCurrentClosure ?? {
+      closureId: "closed-geometry-1",
+      sourceCuts: [defaultStructuredCurrentSourceCut(draft)],
+    },
   };
 }
 
@@ -299,6 +395,18 @@ function optionalJsonObject(value: string, label: string): Record<string, unknow
   return parsed as Record<string, unknown>;
 }
 
+function requiredIdentifier(value: string, label: string): string {
+  const identifier = value.trim();
+  if (!identifier) throw new Error(`${label} is required.`);
+  return identifier;
+}
+
+function assertUniqueIdentifiers(values: string[], label: string): void {
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${label} must be unique.`);
+  }
+}
+
 export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurrentTransport {
   if (!draft.name.trim()) throw new Error("Name is required.");
   const model = draft.coupling === "bidirectional"
@@ -358,6 +466,62 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
     operator_version: draft.solverOperatorVersion.trim(),
     physical_residual_version: draft.solverPhysicalResidualVersion.trim(),
   };
+  if (draft.structuredCurrentClosure) {
+    if (model !== "ohmic_poisson" || draft.coupling !== "one_way") {
+      throw new Error("Structured current closure requires the one-way Ohmic Poisson model.");
+    }
+    if (resource.conservative_current_view !== undefined) {
+      throw new Error("Structured current closure cannot be combined with a conservative RT0 current view.");
+    }
+    if (resource.solver.operator_version !== "fv_charge_harmonic_source_cut_v1") {
+      throw new Error("Structured current closure requires solver operator fv_charge_harmonic_source_cut_v1.");
+    }
+    if (draft.structuredCurrentClosure.sourceCuts.length === 0) {
+      throw new Error("Structured current closure requires at least one source cut.");
+    }
+    const sourceCuts = draft.structuredCurrentClosure.sourceCuts.map((cut, index) => {
+      const prefix = `Source cut ${index + 1}`;
+      const potentialJumpV = finite(cut.potentialJumpV, `${prefix} potential jump`);
+      if (potentialJumpV === 0) {
+        throw new Error(`${prefix} potential jump must be finite and non-zero.`);
+      }
+      const objectId = requiredIdentifier(cut.objectId, `${prefix} region object id`);
+      const regionId = cut.regionId.trim();
+      return {
+        circuit_id: requiredIdentifier(cut.circuitId, `${prefix} circuit id`),
+        drive: {
+          drive_id: requiredIdentifier(cut.driveId, `${prefix} drive id`),
+          kind: "impressed_potential_jump" as const,
+          potential_jump_V: potentialJumpV,
+          schema_version: "impressed_potential_jump.v1",
+        },
+        plane: {
+          axis: cut.axis,
+          normal: cut.normal,
+          offset_m: finite(cut.offsetM, `${prefix} plane offset`),
+        },
+        region: {
+          object_id: objectId,
+          ...(regionId ? { region_id: regionId } : {}),
+        },
+        source_cut_id: requiredIdentifier(cut.sourceCutId, `${prefix} source cut id`),
+      };
+    });
+    assertUniqueIdentifiers(sourceCuts.map((cut) => cut.source_cut_id), "Source cut ids");
+    assertUniqueIdentifiers(sourceCuts.map((cut) => cut.circuit_id), "Circuit ids");
+    assertUniqueIdentifiers(sourceCuts.map((cut) => cut.drive.drive_id), "Drive ids");
+    resource.structured_current_closure = {
+      closure_id: requiredIdentifier(
+        draft.structuredCurrentClosure.closureId,
+        "Structured current closure id",
+      ),
+      kind: "closed_geometry",
+      schema_version: "structured_current_closure.v1",
+      source_cuts: sourceCuts,
+    };
+  } else if (resource.solver.operator_version === "fv_charge_harmonic_source_cut_v1") {
+    throw new Error("Solver operator fv_charge_harmonic_source_cut_v1 requires a structured current closure.");
+  }
   if (draft.conductivity.trim()) resource.conductivity_s_per_m = finite(draft.conductivity, "Conductivity");
   if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
   const conservativeCurrentView = optionalJsonObject(
@@ -365,6 +529,9 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
     "Conservative current view",
   );
   if (conservativeCurrentView) resource.conservative_current_view = conservativeCurrentView;
+  if (resource.structured_current_closure && conservativeCurrentView) {
+    throw new Error("Structured current closure cannot be combined with a conservative RT0 current view.");
+  }
   return resource;
 }
 

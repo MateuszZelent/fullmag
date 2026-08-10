@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCurrentTransport,
   buildSpinTransport,
+  currentTransportClosurePatch,
   currentTransportDraft,
   currentTransportModelPatch,
   currentTransportSupportsPrescribedDensity,
@@ -156,6 +157,103 @@ describe("transport authoring drafts", () => {
       },
     };
     expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
+  });
+
+  it("round-trips a typed closed-geometry structured-current closure", () => {
+    const resource = {
+      boundaries: [],
+      coupling: "one_way" as const,
+      domain: [{ object_id: "ring", region_id: "conductor" }],
+      gauge: "zero_mean" as const,
+      kind: "current_transport" as const,
+      materials: [{
+        material: { sigma_Spm: 5.8e7 },
+        region: { object_id: "ring", region_id: "conductor" },
+      }],
+      model: "ohmic_poisson" as const,
+      name: "closed-loop",
+      solver: {
+        engine: "cg",
+        linear: {
+          absolute_tolerance: 1e-14,
+          max_iterations: 1000,
+          relative_tolerance: 1e-10,
+        },
+        operator_version: "fv_charge_harmonic_source_cut_v1",
+        physical_residual_version: "charge_balance_integrated_l2.v1",
+      },
+      structured_current_closure: {
+        closure_id: "ring-closure",
+        kind: "closed_geometry" as const,
+        schema_version: "structured_current_closure.v1",
+        source_cuts: [{
+          circuit_id: "ring-circuit",
+          drive: {
+            drive_id: "ring-drive",
+            kind: "impressed_potential_jump" as const,
+            potential_jump_V: 0.125,
+            schema_version: "impressed_potential_jump.v1",
+          },
+          plane: {
+            axis: "y" as const,
+            normal: "positive_axis" as const,
+            offset_m: 2e-9,
+          },
+          region: { object_id: "ring", region_id: "source-arm" },
+          source_cut_id: "ring-cut",
+        }],
+      },
+    };
+
+    expect(isKnownCurrentTransport(resource)).toBe(true);
+    const draft = currentTransportDraft(resource);
+    expect(draft.structuredCurrentClosure).toEqual({
+      closureId: "ring-closure",
+      sourceCuts: [{
+        axis: "y",
+        circuitId: "ring-circuit",
+        driveId: "ring-drive",
+        normal: "positive_axis",
+        objectId: "ring",
+        offsetM: "2e-9",
+        potentialJumpV: "0.125",
+        regionId: "source-arm",
+        sourceCutId: "ring-cut",
+      }],
+    });
+    expect(buildCurrentTransport(draft)).toEqual(resource);
+  });
+
+  it("selects and clears the source-cut solver contract with the closure toggle", () => {
+    const draft = currentTransportDraft(null, { objectId: "ring", regionId: "source-arm" });
+
+    Object.assign(draft, currentTransportClosurePatch(draft, true));
+    expect(draft).toMatchObject({
+      conservativeCurrentView: "{}",
+      coupling: "one_way",
+      model: "ohmic_poisson",
+      solverOperatorVersion: "fv_charge_harmonic_source_cut_v1",
+      structuredCurrentClosure: {
+        sourceCuts: [{ objectId: "ring", regionId: "source-arm" }],
+      },
+    });
+
+    Object.assign(draft, currentTransportClosurePatch(draft, false));
+    expect(draft.structuredCurrentClosure).toBeNull();
+    expect(draft.solverOperatorVersion).toBe("fv_charge_harmonic_v1");
+  });
+
+  it("rejects invalid or ambiguous structured-current source cuts before save", () => {
+    const draft = currentTransportDraft(null, { objectId: "ring", regionId: "source-arm" });
+    Object.assign(draft, currentTransportClosurePatch(draft, true));
+    const sourceCut = draft.structuredCurrentClosure!.sourceCuts[0];
+
+    sourceCut.potentialJumpV = "0";
+    expect(() => buildCurrentTransport(draft)).toThrow(/potential jump.*non-zero/i);
+
+    sourceCut.potentialJumpV = "0.1";
+    draft.structuredCurrentClosure!.sourceCuts.push({ ...sourceCut });
+    expect(() => buildCurrentTransport(draft)).toThrow(/source cut id.*unique/i);
   });
 
   it("prefills a new object-scoped prescribed-current draft without losing the Poisson domain", () => {

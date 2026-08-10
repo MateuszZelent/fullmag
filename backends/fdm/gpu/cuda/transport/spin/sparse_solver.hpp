@@ -8,8 +8,6 @@ namespace fullmag::fdm::gpu::transport::spin::sparse {
 
 inline constexpr uint32_t kRestart = 50;
 inline constexpr uint32_t kMaximumLevels = 20;
-inline constexpr uint64_t kDeviceBudgetBytes = UINT64_C(2147483648);
-
 enum class ConvergenceReason : uint32_t {
     unset = 0,
     converged = 1,
@@ -55,6 +53,7 @@ struct Operator {
     // the frozen whole-context high-water gate, even though sparse does not own
     // or release them.
     uint64_t resident_external_bytes = 0;
+    uint64_t resolved_device_budget_bytes = 0;
 };
 
 struct Level {

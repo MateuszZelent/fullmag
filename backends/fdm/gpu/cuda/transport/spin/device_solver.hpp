@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fullmag/fdm/transport/gpu_abi_v1.h"
+#include "memory_policy.hpp"
 #include "sparse_solver.hpp"
 
 #include <cuda_runtime_api.h>
@@ -97,6 +98,12 @@ struct SolveInput {
     SparseState *sparse_state = nullptr;
     uint64_t operator_revision = 0;
     uint64_t resident_external_bytes = 0;
+    uint64_t tracked_resident_bytes = 0;
+    uint64_t old_accepted_bytes = 0;
+    uint64_t total_device_bytes = 0;
+    uint64_t free_device_bytes = 0;
+    uint64_t static_baseline_bytes = 0;
+    uint32_t test_failure_boundary = 0;
     const uint64_t *interface_negative_cells_host = nullptr;
     const uint64_t *interface_positive_cells_host = nullptr;
 };
@@ -121,6 +128,7 @@ struct SolveOutput {
     uint8_t deterministic_compute_digest[32]{};
     uint64_t hierarchy_build_count = 0;
     uint64_t cache_hit_count = 0;
+    memory::Plan memory_plan{};
 };
 
 void release(Buffers &buffers) noexcept;

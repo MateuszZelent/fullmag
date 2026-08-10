@@ -2208,6 +2208,8 @@ fn validate_scene_charge_contract(
     let expected_engine = if reciprocal { "block_gmres" } else { "cg" };
     let expected_operator = if reciprocal {
         "fdm_coupled_charge_spin_fv_block_gmres.v1"
+    } else if transport.structured_current_closure.is_some() {
+        "fv_charge_harmonic_source_cut_v1"
     } else {
         "fv_charge_harmonic_v1"
     };
@@ -4051,7 +4053,7 @@ mod tests {
                 "engine": "cg",
                 "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
                 "physical_residual_version": "charge_balance_integrated_l2.v1",
-                "operator_version": "fv_charge_harmonic_v1"
+                "operator_version": "fv_charge_harmonic_source_cut_v1"
             },
             "structured_current_closure": descriptor
         }]))

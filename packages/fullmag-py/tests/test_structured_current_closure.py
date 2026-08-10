@@ -187,7 +187,9 @@ class StructuredCurrentClosureTests(unittest.TestCase):
                 )
             ],
             gauge=fm.ChargePotentialGauge("zero_mean"),
-            solver=fm.ChargeSolverPolicy(),
+            solver=fm.ChargeSolverPolicy(
+                operator_version="fv_charge_harmonic_source_cut_v1"
+            ),
             structured_current_closure=_closed_geometry(),
         )
         payload = transport.to_ir()

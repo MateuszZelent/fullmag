@@ -100,6 +100,8 @@ type ExplorerNodeKind =
   | "physics.couplings"
   | "physics.coupling"
   | "physics.module"
+  | "physics.structured-current-closure"
+  | "physics.structured-current-source-cut"
   | "physics.scope.global"
   | "physics.scope.cross-object"
   | "physics.scope.unresolved"
@@ -324,6 +326,7 @@ export interface ExplorerNode {
   objectId?: string;
   observableId?: string;
   couplingId?: string;
+  currentTransportId?: string;
   physicsModuleId?: string;
   physicsModuleKind?: string;
   physicsModuleFamily?: string;
@@ -351,6 +354,8 @@ export interface ExplorerNode {
   stageId?: string;
   stageIndex?: number;
   status?: ExplorerNodeStatus;
+  structuredCurrentClosureId?: string;
+  structuredCurrentSourceCutId?: string;
 }
 
 export interface ModelTreeObjectSnapshot {

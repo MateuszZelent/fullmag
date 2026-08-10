@@ -95,6 +95,7 @@ struct Slot {
     std::vector<double> charge_values;
     std::vector<std::string> charge_source_ids;
     std::vector<uint64_t> interface_source_ids, interface_topology_ids;
+    std::vector<uint64_t> interface_authored_to_canonical;
     std::vector<uint32_t> interface_axes;
     std::vector<uint64_t> interface_face_linear, interface_negative_cells,
         interface_positive_cells, interface_from_cells, interface_to_cells;
@@ -146,6 +147,7 @@ struct Slot {
     double spin_interface_balance = 0.0;
     double spin_torque_balance = 0.0;
     std::array<uint8_t, 32> spin_deterministic_compute_digest{};
+    fullmag::fdm::gpu::transport::spin::memory::Plan spin_memory_plan{};
     bool test_force_import_digest_mismatch = false;
     uint32_t test_failure_boundary = 0;
 };
@@ -306,7 +308,9 @@ void release_spin_sparse_state(SpinSparseState &state) {
 
 uint32_t accepted_charge_content_digest(
     Slot &parent, const ChargeBuffers &buffers, uint64_t accepted_sequence,
-    const std::array<uint8_t, 16> &lineage, std::array<uint8_t, 32> *digest,
+    const std::array<uint8_t, 16> &lineage, uint64_t iterations,
+    double component_balance, double physical_residual,
+    std::array<uint8_t, 32> *digest,
     CudaFailurePolicy *failure_policy = nullptr, uint32_t copy_boundary = 0,
     uint32_t sync_boundary = 0) {
     fullmag::fdm::gpu::transport::charge::ContentDigestIdentity identity{};
@@ -323,9 +327,9 @@ uint32_t accepted_charge_content_digest(
     identity.descriptor_revision = parent.descriptor_revision;
     identity.source_revision = parent.source_revision;
     identity.accepted_sequence = accepted_sequence;
-    identity.iterations = parent.iterations;
-    identity.component_balance = parent.component_balance;
-    identity.physical_residual = parent.physical_residual;
+    identity.iterations = iterations;
+    identity.component_balance = component_balance;
+    identity.physical_residual = physical_residual;
     return fullmag::fdm::gpu::transport::charge::content_digest_device(
         buffers, parent.static_payload_device[3],
         parent.static_views_host[3].element_count,
@@ -352,7 +356,7 @@ void initialize_spin_checkpoint_data(
     const Slot &parent, const Slot &snapshot,
     fullmag::fdm::gpu::transport::spin::SpinCheckpointData *data) {
     const SpinBuffers &buffers = snapshot.spin_accepted;
-    data->source_revision = snapshot.source_revision;
+    data->source_revision = parent.source_revision;
     data->operator_revision = parent.spin_operator_revision;
     data->preconditioner_revision = parent.spin_preconditioner_revision;
     data->convergence_reason = snapshot.spin_convergence_reason;
@@ -750,6 +754,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_context_create_v1(
         slot.charge_areas.clear();
         slot.charge_values.clear();
         slot.charge_source_ids.clear();
+        slot.interface_authored_to_canonical.clear();
         slot.static_views_device = nullptr;
         slot.grid.fill(0);
         slot.cell_size.fill(0.0);
@@ -788,6 +793,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_context_create_v1(
         slot.spin_interface_balance = 0.0;
         slot.spin_torque_balance = 0.0;
         slot.spin_deterministic_compute_digest.fill(0);
+        slot.spin_memory_plan = {};
         slot.test_force_import_digest_mismatch = false;
         slot.test_failure_boundary = 0;
         result->context_handle = {kCookie, i, slot.generation, kContextTag};
@@ -856,6 +862,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_context_destroy_v1(
         payload = nullptr;
     }
     slot.stream = nullptr;
+    slot.spin_memory_plan = {};
     slot.active = false;
     slot.tombstone = true;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
@@ -926,9 +933,14 @@ uint32_t static_descriptor_upload_impl(
     }
     if ((descriptor->required_features & ~slot.requested_features) != 0)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED_REQUIRED_FEATURE;
+    const bool charge_enabled =
+        (descriptor->required_features &
+         FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE) != 0;
     const bool same_identity =
         slot.descriptor_revision == descriptor->descriptor_revision &&
         slot.source_revision == descriptor->source_revision &&
+        ((slot.enabled_features & FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE) != 0) ==
+            charge_enabled &&
         std::memcmp(slot.descriptor_digest.data(), descriptor->descriptor_digest,
                     slot.descriptor_digest.size()) == 0;
     if (slot.static_uploaded) {
@@ -939,30 +951,17 @@ uint32_t static_descriptor_upload_impl(
         descriptor->masks_view_ptr, descriptor->materials_view_ptr,
         descriptor->interfaces_view_ptr, descriptor->charge_faces_view_ptr,
         descriptor->spin_faces_view_ptr, descriptor->formula_ids_view_ptr};
-    const bool charge_enabled =
-        (descriptor->required_features &
-         FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE) != 0;
     if (!charge_enabled) {
         // The feature graph owns interpretation of charge-specific fields.  A
         // descriptor without M1 charge may carry opaque/sentinel values in
         // those append-only ABI fields; they must never be dereferenced.
-        if (cudaSetDevice(slot.device) != cudaSuccess)
-            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-        void *device_descriptor = nullptr;
-        if (cudaMalloc(&device_descriptor, sizeof(*descriptor)) != cudaSuccess)
-            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
-        if (cudaMemcpyAsync(device_descriptor, descriptor, sizeof(*descriptor),
-                            cudaMemcpyHostToDevice, slot.stream) != cudaSuccess ||
-            cudaStreamSynchronize(slot.stream) != cudaSuccess) {
-            (void)cudaFree(device_descriptor);
-            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-        }
         slot.descriptor_revision = descriptor->descriptor_revision;
         slot.source_revision = descriptor->source_revision;
         std::memcpy(slot.descriptor_digest.data(), descriptor->descriptor_digest,
                     slot.descriptor_digest.size());
-        slot.enabled_features = slot.requested_features;
-        slot.static_descriptor_device = device_descriptor;
+        slot.enabled_features = slot.requested_features &
+            ~FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE;
+        slot.static_descriptor_device = nullptr;
         slot.grid = {descriptor->grid[0], descriptor->grid[1], descriptor->grid[2]};
         slot.cell_size = {descriptor->cell_size[0], descriptor->cell_size[1],
                           descriptor->cell_size[2]};
@@ -1235,7 +1234,9 @@ uint32_t static_descriptor_upload_impl(
     });
     std::vector<uint8_t> canonical_interface_payload(
         static_cast<size_t>(views[2].byte_length));
+    std::vector<uint64_t> interface_authored_to_canonical(interface_order.size());
     for (size_t canonical = 0; canonical < interface_order.size(); ++canonical) {
+        interface_authored_to_canonical[interface_order[canonical]] = canonical;
         const auto *record = reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
             interface_bytes + interface_order[canonical] * views[2].byte_stride);
         std::memcpy(canonical_interface_payload.data() + canonical * views[2].byte_stride,
@@ -1704,6 +1705,7 @@ uint32_t static_descriptor_upload_impl(
     slot.charge_values = std::move(charge_values);
     slot.charge_source_ids = std::move(charge_source_ids);
     slot.interface_source_ids = std::move(interface_source_ids);
+    slot.interface_authored_to_canonical = std::move(interface_authored_to_canonical);
     slot.interface_topology_ids = std::move(interface_topology_ids);
     slot.interface_axes = std::move(interface_axes);
     slot.interface_face_linear = std::move(interface_face_linear);
@@ -1908,19 +1910,11 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
     for (size_t byte = 0; byte < candidate_lineage.size(); ++byte)
         candidate_lineage[byte] = static_cast<uint8_t>(
             slot.descriptor_digest[byte] ^ ((candidate_sequence + byte) & 0xff));
-    const uint64_t saved_iterations = slot.iterations;
-    const double saved_component_balance = slot.component_balance;
-    const double saved_physical_residual = slot.physical_residual;
-    slot.iterations = device_output.iterations;
-    slot.component_balance = device_output.component_balance;
-    slot.physical_residual = device_output.physical_residual;
     std::array<uint8_t, 32> candidate_digest{};
     status = accepted_charge_content_digest(
         slot, device_output.buffers, candidate_sequence, candidate_lineage,
-        &candidate_digest, &failure_policy, 15, 16);
-    slot.iterations = saved_iterations;
-    slot.component_balance = saved_component_balance;
-    slot.physical_residual = saved_physical_residual;
+        device_output.iterations, device_output.component_balance,
+        device_output.physical_residual, &candidate_digest, &failure_policy, 15, 16);
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         if (failure_policy.failed_boundary != 0) {
             slot.test_failure_boundary = 0;
@@ -2169,6 +2163,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     input.accepted_interface_charge_current_density =
         snapshot.accepted.interface_charge_current_density;
     input.accepted_interface_count = snapshot.accepted.interface_count;
+    std::memcpy(input.accepted_snapshot_digest,
+                snapshot.candidate_digest.data(), 32);
     input.m_stage = reinterpret_cast<const double *>(static_cast<uintptr_t>(m_view->address));
     input.torque_destination = reinterpret_cast<double *>(
         static_cast<uintptr_t>(torque_view->address));
@@ -2179,17 +2175,34 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     input.max_iterations = request->max_iterations;
     input.sparse_state = &parent.spin_sparse_state;
     input.operator_revision = request->operator_revision;
+    input.test_failure_boundary = parent.test_failure_boundary;
+    parent.test_failure_boundary = 0;
     input.interface_negative_cells_host = parent.interface_negative_cells.data();
     input.interface_positive_cells_host = parent.interface_positive_cells.data();
-    uint64_t resident_bytes = 6 * sizeof(fullmag_fdm_gpu_transport_buffer_view_v1);
+    uint64_t resident_bytes = sizeof(fullmag_fdm_gpu_transport_static_descriptor_v1) +
+        6 * sizeof(fullmag_fdm_gpu_transport_buffer_view_v1);
     for (uint64_t bytes : parent.static_payload_bytes) resident_bytes += bytes;
-    resident_bytes += (snapshot.accepted.cells + snapshot.accepted.jx_count +
+    resident_bytes += snapshot.accepted.cells * sizeof(uint8_t);
+    resident_bytes += (2 * snapshot.accepted.cells + snapshot.accepted.jx_count +
                        snapshot.accepted.jy_count + snapshot.accepted.jz_count +
                        4 * snapshot.accepted.interface_count) * sizeof(double);
     resident_bytes += 2 * vector_values * sizeof(double);
+    resident_bytes += snapshot.spin_accepted.owned_bytes;
     input.resident_external_bytes = resident_bytes;
+    input.old_accepted_bytes = snapshot.spin_accepted.owned_bytes;
+    input.tracked_resident_bytes =
+        resident_bytes - snapshot.spin_accepted.owned_bytes;
+    size_t free_device_bytes = 0;
+    size_t total_device_bytes = 0;
+    if (cudaMemGetInfo(&free_device_bytes, &total_device_bytes) != cudaSuccess ||
+        free_device_bytes > total_device_bytes)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    input.free_device_bytes = free_device_bytes;
+    input.total_device_bytes = total_device_bytes;
+    input.static_baseline_bytes = total_device_bytes - free_device_bytes;
     fullmag::fdm::gpu::transport::spin::SolveOutput output{};
     status = fullmag::fdm::gpu::transport::spin::solve_device(input, &output);
+    parent.spin_memory_plan = output.memory_plan;
     result->iterations = output.iterations;
     result->reason = output.reason;
     result->algebraic_residual = output.algebraic_residual;
@@ -2444,10 +2457,14 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_readback_artifact_v1(
             snapshot.accepted.interface_charge_current_density}};
         copied=true;
         for(size_t lane=0;lane<sources.size()&&copied;++lane) {
-            copied=count==0||cudaMemcpyAsync(interface_trace_values[lane].data(),
-                sources[lane]+start,count*sizeof(double),cudaMemcpyDeviceToHost,
-                parent.stream)==cudaSuccess;
-            if(copied&&count!=0){++transfer_segments;transferred_bytes+=count*sizeof(double);}
+            for(uint64_t output=0;output<count&&copied;++output) {
+                const uint64_t authored=start+output;
+                const uint64_t canonical=parent.interface_authored_to_canonical[authored];
+                copied=cudaMemcpyAsync(interface_trace_values[lane].data()+output,
+                    sources[lane]+canonical,sizeof(double),cudaMemcpyDeviceToHost,
+                    parent.stream)==cudaSuccess;
+                if(copied){++transfer_segments;transferred_bytes+=sizeof(double);}
+            }
         }
         remaining=0;
     } else if (observation_stream) {
@@ -2527,7 +2544,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_readback_artifact_v1(
         auto *records=reinterpret_cast<fullmag_fdm_gpu_transport_charge_interface_trace_v1 *>(
             static_cast<uintptr_t>(destination->address));
         for(uint64_t output=0;output<request->range_count;++output) {
-            const uint64_t index=request->range_begin+output;
+            const uint64_t authored=request->range_begin+output;
+            const uint64_t index=parent.interface_authored_to_canonical[authored];
             auto &record=records[output]; std::memset(&record,0,sizeof(record));
             record.abi_version=FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
             record.struct_version=1;record.struct_size=sizeof(record);
@@ -2713,7 +2731,8 @@ uint32_t checkpoint_export_impl(
     std::array<uint8_t, 32> verified_digest{};
     status = accepted_charge_content_digest(
         parent, snapshot.accepted, snapshot.accepted_sequence,
-        snapshot.snapshot_lineage, &verified_digest, &failure_policy, 30, 31);
+        snapshot.snapshot_lineage, snapshot.iterations, snapshot.component_balance,
+        snapshot.physical_residual, &verified_digest, &failure_policy, 30, 31);
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         if (failure_policy.failed_boundary != 0) {
             parent.test_failure_boundary = 0;
@@ -2903,8 +2922,7 @@ uint32_t checkpoint_export_impl(
         ? fullmag::fdm::gpu::transport::spin::build_checkpoint(
               data, spin_data, &payload)
         : fullmag::fdm::gpu::transport::charge::build_checkpoint(&data, &payload);
-    if (!built ||
-        payload.size() != request->exact_capacity)
+    if (!built || payload.size() != request->exact_capacity)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
     std::memcpy(reinterpret_cast<void *>(static_cast<uintptr_t>(destination->address)),
                 payload.data(), payload.size());
@@ -3233,18 +3251,10 @@ uint32_t checkpoint_import_impl(
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     std::array<uint8_t, 32> restored_digest{};
-    const uint64_t saved_iterations = parent.iterations;
-    const double saved_component_balance = parent.component_balance;
-    const double saved_physical_residual = parent.physical_residual;
-    parent.iterations = data.iterations;
-    parent.component_balance = data.component_balance;
-    parent.physical_residual = data.physical_residual;
     status = accepted_charge_content_digest(
-        parent, restored, data.accepted_sequence, data.lineage, &restored_digest,
+        parent, restored, data.accepted_sequence, data.lineage, data.iterations,
+        data.component_balance, data.physical_residual, &restored_digest,
         &failure_policy, 43, 44);
-    parent.iterations = saved_iterations;
-    parent.component_balance = saved_component_balance;
-    parent.physical_residual = saved_physical_residual;
     if (parent.test_force_import_digest_mismatch &&
         status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK)
         restored_digest[0] ^= UINT8_C(1);
@@ -3429,7 +3439,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
         (boundary >= 10 && boundary <= 16) ||
         (boundary >= 20 && boundary <= 21) ||
         (boundary >= 30 && boundary <= 33) ||
-        (boundary >= 40 && boundary <= 44);
+        (boundary >= 40 && boundary <= 44) || boundary == 60;
     if (!legal) return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
     std::lock_guard<std::mutex> lock(registry_mutex);
     if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
@@ -3608,18 +3618,27 @@ fullmag_fdm_gpu_transport_test_accept_zero_charge_snapshot_v1(
             release_charge_buffers(accepted);
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
         }
+        constexpr uint64_t accepted_sequence = 1;
+        std::array<uint8_t, 16> lineage{};
+        lineage[0] = 1;
+        std::array<uint8_t, 32> content_digest{};
+        const uint32_t digest_status = accepted_charge_content_digest(
+            parent, accepted, accepted_sequence, lineage, 0, 0.0, 0.0,
+            &content_digest);
+        if (digest_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
+            release_charge_buffers(accepted);
+            return digest_status;
+        }
         ++snapshot.generation;
         snapshot.active = true;
         snapshot.tombstone = false;
         snapshot.type_tag = kSnapshotTag;
         snapshot.parent_slot = context.slot;
         snapshot.parent_generation = context.generation;
-        snapshot.accepted_sequence = 1;
+        snapshot.accepted_sequence = accepted_sequence;
         snapshot.accepted = accepted;
-        snapshot.candidate_digest.fill(0);
-        snapshot.candidate_digest[0] = 1;
-        snapshot.snapshot_lineage.fill(0);
-        snapshot.snapshot_lineage[0] = 1;
+        snapshot.candidate_digest = content_digest;
+        snapshot.snapshot_lineage = lineage;
         ++parent.live_snapshots;
         *snapshot_info = {};
         snapshot_info->abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
@@ -3686,6 +3705,42 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_audit_v1(
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    uint64_t *aggregate, uint64_t aggregate_count,
+    double *coarse_diagonal, uint64_t coarse_count,
+    double *structured_edge_weight, uint64_t edge_count) {
+    if (aggregate == nullptr || coarse_diagonal == nullptr ||
+        structured_edge_weight == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active ||
+        !slot.hierarchy_cache.valid || aggregate_count != slot.hierarchy_cache.cells ||
+        coarse_count != slot.hierarchy_cache.coarse_cells)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const uint64_t coarse_nx = (slot.grid[0] + 1) / 2;
+    const uint64_t coarse_ny = (slot.grid[1] + 1) / 2;
+    const uint64_t coarse_nz = (slot.grid[2] + 1) / 2;
+    const uint64_t expected_edges =
+        (coarse_nx > 1 ? (coarse_nx - 1) * coarse_ny * coarse_nz : 0) +
+        (coarse_ny > 1 ? coarse_nx * (coarse_ny - 1) * coarse_nz : 0) +
+        (coarse_nz > 1 ? coarse_nx * coarse_ny * (coarse_nz - 1) : 0);
+    if (edge_count != expected_edges || cudaSetDevice(slot.device) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    if (cudaMemcpy(aggregate, slot.hierarchy_cache.aggregate,
+                   aggregate_count * sizeof(uint64_t), cudaMemcpyDeviceToHost) != cudaSuccess ||
+        cudaMemcpy(coarse_diagonal, slot.hierarchy_cache.coarse_diag,
+                   coarse_count * sizeof(double), cudaMemcpyDeviceToHost) != cudaSuccess ||
+        cudaMemcpy(structured_edge_weight, slot.hierarchy_cache.coarse_edge_weight,
+                   edge_count * sizeof(double), cudaMemcpyDeviceToHost) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_audit_v1(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
     uint64_t *hierarchy_build_count, uint64_t *hierarchy_cache_hit_count,
@@ -3716,6 +3771,22 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_audit_v1(
     std::memcpy(hierarchy_digest, slot.spin_hierarchy_digest.data(), 32);
     *accepted_commit_count = slot.spin_accepted_commit_count;
     *failed_rollback_count = slot.spin_failed_rollback_count;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_memory_plan_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    fullmag::fdm::gpu::transport::spin::memory::Plan *plan) {
+    if (plan == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    *plan = slot.spin_memory_plan;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 

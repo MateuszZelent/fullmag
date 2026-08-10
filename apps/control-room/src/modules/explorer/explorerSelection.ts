@@ -492,6 +492,36 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   if (
+    node.kind === "physics.structured-current-closure" &&
+    node.currentTransportId &&
+    node.structuredCurrentClosureId
+  ) {
+    return {
+      currentTransportId: node.currentTransportId,
+      kind: "physics.structured-current-closure",
+      nodeId: node.id,
+      structuredCurrentClosureId: node.structuredCurrentClosureId,
+      type: "structured-current-closure",
+    };
+  }
+
+  if (
+    node.kind === "physics.structured-current-source-cut" &&
+    node.currentTransportId &&
+    node.structuredCurrentClosureId &&
+    node.structuredCurrentSourceCutId
+  ) {
+    return {
+      currentTransportId: node.currentTransportId,
+      kind: "physics.structured-current-source-cut",
+      nodeId: node.id,
+      structuredCurrentClosureId: node.structuredCurrentClosureId,
+      structuredCurrentSourceCutId: node.structuredCurrentSourceCutId,
+      type: "structured-current-source-cut",
+    };
+  }
+
+  if (
     node.kind === "physics.module" &&
     node.physicsModuleId &&
     node.physicsModuleKind &&

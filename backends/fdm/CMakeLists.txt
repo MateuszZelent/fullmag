@@ -14,6 +14,7 @@ set(FDM_SOURCES
     gpu/cuda/transport/checkpoint_abi_v1.cpp
     gpu/cuda/transport/charge/checkpoint_codec.cpp
     gpu/cuda/transport/spin/checkpoint_codec.cpp
+    gpu/cuda/transport/spin/memory_policy.cpp
 )
 
 if(FULLMAG_ENABLE_CUDA)
@@ -69,6 +70,8 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/device_solver.c
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/device_solver.hpp" FDM_GPU_SPIN_SOLVER_HEADER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/sparse_solver.cu" FDM_GPU_SPIN_SPARSE_SOLVER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/sparse_solver.hpp" FDM_GPU_SPIN_SPARSE_SOLVER_HEADER_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/memory_policy.cpp" FDM_GPU_SPIN_MEMORY_POLICY_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/memory_policy.hpp" FDM_GPU_SPIN_MEMORY_POLICY_HEADER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/checkpoint_codec.cpp" FDM_GPU_CHARGE_CHECKPOINT_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/checkpoint_codec.hpp" FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/spin/checkpoint_codec.cpp" FDM_GPU_SPIN_CHECKPOINT_SHA256)
@@ -81,7 +84,7 @@ set(FDM_GPU_BUILD_FLAGS_IDENTITY
 )
 string(REPLACE ";" "," FDM_GPU_BUILD_FLAGS_IDENTITY "${FDM_GPU_BUILD_FLAGS_IDENTITY}")
 string(SHA256 FDM_GPU_TRANSPORT_BUILD_DIGEST
-    "${FDM_GPU_CONTEXT_SHA256};${FDM_GPU_CHARGE_SOLVER_SHA256};${FDM_GPU_CHARGE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SOLVER_SHA256};${FDM_GPU_SPIN_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_HEADER_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256};${FDM_GPU_SPIN_CHECKPOINT_SHA256};${FDM_GPU_SPIN_CHECKPOINT_HEADER_SHA256};${FDM_GPU_LAYOUT_SHA256};${FDM_GPU_CHECKPOINT_SHA256};${FDM_GPU_HEADER_SHA256};${FDM_GPU_BUILD_FLAGS_IDENTITY}"
+    "${FDM_GPU_CONTEXT_SHA256};${FDM_GPU_CHARGE_SOLVER_SHA256};${FDM_GPU_CHARGE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SOLVER_SHA256};${FDM_GPU_SPIN_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_SHA256};${FDM_GPU_SPIN_SPARSE_SOLVER_HEADER_SHA256};${FDM_GPU_SPIN_MEMORY_POLICY_SHA256};${FDM_GPU_SPIN_MEMORY_POLICY_HEADER_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256};${FDM_GPU_SPIN_CHECKPOINT_SHA256};${FDM_GPU_SPIN_CHECKPOINT_HEADER_SHA256};${FDM_GPU_LAYOUT_SHA256};${FDM_GPU_CHECKPOINT_SHA256};${FDM_GPU_HEADER_SHA256};${FDM_GPU_BUILD_FLAGS_IDENTITY}"
 )
 target_compile_definitions(fullmag_fdm PRIVATE
     FULLMAG_FDM_GPU_TRANSPORT_BUILD_DIGEST_HEX="${FDM_GPU_TRANSPORT_BUILD_DIGEST}"
@@ -181,6 +184,21 @@ set_target_properties(fullmag_fdm PROPERTIES
 
 # ── Tests ──
 enable_testing()
+
+add_executable(fdm_gpu_m1_spin_memory_policy_contract
+    tests/gpu_m1_spin_memory_policy_contract.cpp
+    gpu/cuda/transport/spin/memory_policy.cpp
+)
+target_include_directories(fdm_gpu_m1_spin_memory_policy_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_gpu_m1_spin_memory_policy_contract PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+add_test(NAME fdm_gpu_m1_spin_memory_policy_contract
+         COMMAND fdm_gpu_m1_spin_memory_policy_contract)
 
 add_executable(source_layout_contract tests/source_layout_contract.cpp)
 add_test(NAME fdm_source_layout_contract COMMAND source_layout_contract)

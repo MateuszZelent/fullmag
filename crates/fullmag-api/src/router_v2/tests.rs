@@ -33089,6 +33089,83 @@ async fn current_transport_api_preserves_complete_ohmic_charge_contract() {
 }
 
 #[tokio::test]
+async fn current_transport_api_preserves_typed_closed_geometry_source_cuts() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+    let resource = serde_json::json!({
+        "kind": "current_transport",
+        "name": "closed-loop",
+        "model": "ohmic_poisson",
+        "coupling": "one_way",
+        "domain": [{"object_id": "body"}],
+        "materials": [{
+            "region": {"object_id": "body"},
+            "material": {"sigma_Spm": 5.0e6}
+        }],
+        "boundaries": [{
+            "kind": "insulating",
+            "id": "closed-boundary",
+            "surfaces": [{"object_id": "body", "surface_id": "outer", "orientation": [1.0, 0.0, 0.0]}]
+        }],
+        "gauge": "zero_mean",
+        "solver": {
+            "engine": "cg",
+            "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+            "physical_residual_version": "charge_balance_integrated_l2.v1",
+            "operator_version": "fv_charge_harmonic_source_cut_v1"
+        },
+        "structured_current_closure": {
+            "schema_version": "structured_current_closure.v1",
+            "closure_id": "ring-closure",
+            "kind": "closed_geometry",
+            "source_cuts": [{
+                "source_cut_id": "ring-cut",
+                "circuit_id": "ring-circuit",
+                "region": {"object_id": "body"},
+                "plane": {"axis": "y", "offset_m": 2.0e-9, "normal": "positive_axis"},
+                "drive": {
+                    "kind": "impressed_potential_jump",
+                    "schema_version": "impressed_potential_jump.v1",
+                    "drive_id": "ring-drive",
+                    "potential_jump_V": 0.125
+                }
+            }]
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/current-transports")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": sample_scene_document().revision,
+                        "resource": resource
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let committed = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{committed}");
+    assert_eq!(committed["resource"], resource);
+    assert_eq!(
+        committed["committed_scene"]["current_transports"][0]
+            ["structured_current_closure"],
+        resource["structured_current_closure"]
+    );
+}
+
+#[tokio::test]
 async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

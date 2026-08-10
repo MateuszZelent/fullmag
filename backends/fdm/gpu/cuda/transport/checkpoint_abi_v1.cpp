@@ -1,12 +1,15 @@
 #include "fullmag/fdm/transport/gpu_abi_v1.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <numeric>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -475,6 +478,8 @@ uint32_t checkpoint_validate_impl(
             std::vector<double> interface_from_trace,interface_to_trace,
                 interface_delta_trace,interface_current_density;
             std::vector<std::array<uint64_t,2>> interface_identities;
+            std::vector<uint32_t> interface_axes;
+            std::vector<uint64_t> interface_faces;
             interface_from_trace.reserve(interface_count); interface_to_trace.reserve(interface_count);
             interface_delta_trace.reserve(interface_count); interface_current_density.reserve(interface_count);
             uint64_t identity_offset=0;
@@ -553,6 +558,8 @@ uint32_t checkpoint_validate_impl(
                    !std::isfinite(jf)||jn!=jf)
                     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
                 interface_identities.push_back({source_id,topology_id});
+                interface_axes.push_back(static_cast<uint32_t>(axis));
+                interface_faces.push_back(face);
                 const bool from_is_negative=from_cell==negative_cell;
                 const double from_trace=from_is_negative?vn:vf;
                 const double to_trace=from_is_negative?vf:vn;
@@ -566,10 +573,27 @@ uint32_t checkpoint_validate_impl(
             }
             if(identity_offset!=subrecords[8].bytes[0])
                 return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
-            segment(15,interface_from_trace.data(),interface_count*sizeof(double));
-            segment(16,interface_to_trace.data(),interface_count*sizeof(double));
-            segment(17,interface_delta_trace.data(),interface_count*sizeof(double));
-            segment(18,interface_current_density.data(),interface_count*sizeof(double));
+            std::vector<size_t> interface_order(interface_count);
+            std::iota(interface_order.begin(),interface_order.end(),0);
+            std::sort(interface_order.begin(),interface_order.end(),[&](size_t a,size_t b){
+                return std::tie(interface_axes[a],interface_faces[a],interface_identities[a][0],
+                                interface_identities[a][1]) <
+                       std::tie(interface_axes[b],interface_faces[b],interface_identities[b][0],
+                                interface_identities[b][1]);
+            });
+            const auto canonical_trace=[&](const std::vector<double>& values){
+                std::vector<double> ordered; ordered.reserve(interface_count);
+                for(size_t index:interface_order) ordered.push_back(values[index]);
+                return ordered;
+            };
+            const auto canonical_from=canonical_trace(interface_from_trace);
+            const auto canonical_to=canonical_trace(interface_to_trace);
+            const auto canonical_delta=canonical_trace(interface_delta_trace);
+            const auto canonical_current=canonical_trace(interface_current_density);
+            segment(15,canonical_from.data(),interface_count*sizeof(double));
+            segment(16,canonical_to.data(),interface_count*sizeof(double));
+            segment(17,canonical_delta.data(),interface_count*sizeof(double));
+            segment(18,canonical_current.data(),interface_count*sizeof(double));
             if(content_derived_domain)
                 expected_snapshot=sha256(canonical.data(),canonical.size());
         }

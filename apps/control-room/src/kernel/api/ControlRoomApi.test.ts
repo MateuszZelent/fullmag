@@ -13,6 +13,7 @@ import {
 import type {
   AuthoringTransactionRequest,
   BinaryResourceResult,
+  CurrentTransportMutationRequest,
   FdmSingleGridFieldVectorQuery,
   FdmScopedFieldVectorQuery,
   FieldVectorResponseMetadata,
@@ -5120,6 +5121,65 @@ describe("ControlRoomApi", () => {
         url: "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
       },
     ]);
+  });
+
+  it("preserves the typed structured-current closure through the current-transport facade", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
+          url: String(url),
+        });
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
+    });
+    const request: CurrentTransportMutationRequest = {
+      base_revision: 7,
+      resource: {
+        boundaries: [],
+        coupling: "one_way",
+        domain: [{ object_id: "ring" }],
+        gauge: "zero_mean",
+        kind: "current_transport",
+        materials: [],
+        model: "ohmic_poisson",
+        name: "closed-loop",
+        solver: {
+          engine: "cg",
+          linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+          operator_version: "fv_charge_harmonic_source_cut_v1",
+          physical_residual_version: "charge_balance_integrated_l2.v1",
+        },
+        structured_current_closure: {
+          closure_id: "ring-closure",
+          kind: "closed_geometry",
+          schema_version: "structured_current_closure.v1",
+          source_cuts: [{
+            circuit_id: "ring-circuit",
+            drive: {
+              drive_id: "ring-drive",
+              kind: "impressed_potential_jump",
+              potential_jump_V: 0.125,
+              schema_version: "impressed_potential_jump.v1",
+            },
+            plane: { axis: "y", normal: "positive_axis", offset_m: 2e-9 },
+            region: { object_id: "ring", region_id: "source-arm" },
+            source_cut_id: "ring-cut",
+          }],
+        },
+      },
+    };
+
+    await api.model.replaceCurrentTransport("closed-loop", request);
+
+    expect(requests).toEqual([{
+      body: request,
+      method: "PATCH",
+      url: "http://127.0.0.1:8765/v2/sessions/current/model/current-transports/closed-loop",
+    }]);
   });
 
   it("routes spin-interface projection and clone-only transport validation through model resources", async () => {

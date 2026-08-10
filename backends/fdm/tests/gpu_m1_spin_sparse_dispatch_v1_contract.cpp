@@ -1,4 +1,5 @@
 #include "fullmag/fdm/transport/gpu_abi_v1.h"
+#include "../gpu/cuda/transport/spin/memory_policy.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -33,6 +34,13 @@ extern "C" uint32_t
 fullmag_fdm_gpu_transport_test_accept_zero_charge_snapshot_v1(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
     fullmag_fdm_gpu_charge_snapshot_info_v1 *snapshot_info);
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint32_t boundary);
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_memory_plan_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    fullmag::fdm::gpu::transport::spin::memory::Plan *plan);
 
 namespace {
 
@@ -260,7 +268,7 @@ int main() {
     create.deterministic = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;
     create.stream_policy =
         FULLMAG_FDM_GPU_TRANSPORT_STREAM_POLICY_CONTEXT_OWNED_SINGLE_STREAM;
-    create.allocator_limit = UINT64_C(2147483648);
+    create.allocator_limit = 0;
     create.workspace_limit = UINT64_C(2147483648);
     create.requested_device_features = kFeatures;
     fullmag_fdm_gpu_transport_context_create_result_v1 created{};
@@ -454,6 +462,16 @@ int main() {
     require(first_spin_seconds <= 30.0,
             "first public spin dispatch exceeded frozen 30 s limit");
     const SpinAudit after_first = query_spin_audit(created.context_handle);
+    fullmag::fdm::gpu::transport::spin::memory::Plan first_memory_plan{};
+    require(fullmag_fdm_gpu_transport_test_spin_memory_plan_v1(
+                created.context_handle, &first_memory_plan) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                first_memory_plan.preflight ==
+                    fullmag::fdm::gpu::transport::spin::memory::Preflight::ready &&
+                first_memory_plan.policy ==
+                    fullmag::fdm::gpu::transport::spin::memory::Policy::automatic &&
+                first_memory_plan.first_required_is_conservative_upper_bound,
+            "first solve did not publish automatic upper-bound memory provenance");
     require(after_first.builds == 1 && after_first.hits == 0 &&
                 after_first.host_fallbacks == 0 &&
                 after_first.fine_unknowns == kVectorValues &&
@@ -477,6 +495,14 @@ int main() {
     require(warm_spin_seconds <= 30.0,
             "warm public spin dispatch exceeded frozen 30 s limit");
     const SpinAudit after_identical = query_spin_audit(created.context_handle);
+    fullmag::fdm::gpu::transport::spin::memory::Plan warm_memory_plan{};
+    require(fullmag_fdm_gpu_transport_test_spin_memory_plan_v1(
+                created.context_handle, &warm_memory_plan) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_memory_plan.preflight ==
+                    fullmag::fdm::gpu::transport::spin::memory::Preflight::ready &&
+                !warm_memory_plan.first_required_is_conservative_upper_bound,
+            "warm solve did not publish memory provenance");
     require(after_identical.builds == 1 && after_identical.hits == 1 &&
                 after_identical.accepted_commits == 2 &&
                 after_identical.digest == after_first.digest,
@@ -534,6 +560,41 @@ int main() {
                 after_restore.failed_rollbacks == 1 &&
                 after_restore.host_fallbacks == 0,
             "post-rollback solve did not reuse the last valid sparse hierarchy");
+
+    require_cuda(cudaMemset(torque_device, 0xa5,
+                            magnetization.size() * sizeof(double)),
+                 "cudaMemset(torque sentinel)");
+    std::array<uint8_t, 128> torque_before_late_failure{};
+    std::array<uint8_t, 128> torque_after_late_failure{};
+    require_cuda(cudaMemcpy(torque_before_late_failure.data(), torque_device,
+                            torque_before_late_failure.size(),
+                            cudaMemcpyDeviceToHost),
+                 "cudaMemcpy(torque sentinel before late failure)");
+    const auto accepted_before_late_failure =
+        read_mu_prefix(created.context_handle, snapshot);
+    require(fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
+                created.context_handle, 60) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "failed to arm late torque publication boundary");
+    fullmag_fdm_gpu_steady_spin_solve_result_v1 late_failed{};
+    require(solve_spin(105, &late_failed) !=
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "late torque publication failure unexpectedly committed");
+    require_cuda(cudaMemcpy(torque_after_late_failure.data(), torque_device,
+                            torque_after_late_failure.size(),
+                            cudaMemcpyDeviceToHost),
+                 "cudaMemcpy(torque sentinel after late failure)");
+    const SpinAudit after_late_failure = query_spin_audit(created.context_handle);
+    require(torque_after_late_failure == torque_before_late_failure &&
+                read_mu_prefix(created.context_handle, snapshot) ==
+                    accepted_before_late_failure &&
+                after_late_failure.builds == after_restore.builds &&
+                after_late_failure.hits == after_restore.hits &&
+                after_late_failure.accepted_commits ==
+                    after_restore.accepted_commits &&
+                after_late_failure.failed_rollbacks == 2 &&
+                after_late_failure.digest == after_restore.digest,
+            "late failure mutated torque, accepted spin, or sparse cache");
 
     fullmag_fdm_gpu_transport_checkpoint_size_request_v1 size_request{};
     init_record(size_request, kCharge | kSpin | kCheckpoint);
@@ -646,7 +707,7 @@ int main() {
     spin_request.snapshot_handle = imported.snapshot_handle;
     spin_request.accepted_sequence = imported.accepted_sequence;
     fullmag_fdm_gpu_steady_spin_solve_result_v1 continued{};
-    require(solve_spin(105, &continued) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+    require(solve_spin(106, &continued) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 digest_equal(continued.deterministic_compute_digest,
                              restored.deterministic_compute_digest),
             "checkpoint continuation changed deterministic spin digest");
@@ -686,9 +747,23 @@ int main() {
                  << "  \"peak_bytes\": " << first.peak_bytes << ",\n"
                  << "  \"external_envelope_bytes\": "
                  << frozen_external_envelope << ",\n"
+                 << "  \"memory_policy\": \"auto\",\n"
+                 << "  \"device_total_bytes\": " << first_memory_plan.total_device_bytes << ",\n"
+                 << "  \"device_free_bytes\": " << first_memory_plan.free_device_bytes << ",\n"
+                 << "  \"static_baseline_bytes\": " << first_memory_plan.static_baseline_bytes << ",\n"
+                 << "  \"safety_reserve_bytes\": " << first_memory_plan.reserve_bytes << ",\n"
+                 << "  \"usable_bytes\": " << first_memory_plan.usable_bytes << ",\n"
+                 << "  \"first_required_bytes\": " << first_memory_plan.first_required_bytes << ",\n"
+                 << "  \"first_required_is_upper_bound\": true,\n"
+                 << "  \"preallocation_preflight_kind\": \"cold_upper_bound\",\n"
+                 << "  \"warm_required_bytes\": " << warm_memory_plan.warm_required_bytes << ",\n"
+                 << "  \"warm_required_is_exact\": true,\n"
+                 << "  \"warm_preflight_mode\": \"conservative_cold_upper_bound\",\n"
+                 << "  \"warm_exact_is_post_cache_audit\": true,\n"
+                 << "  \"resolved_context_limit_bytes\": " << first_memory_plan.effective_limit_bytes << ",\n"
                  << "  \"hierarchy_levels\": " << after_first.levels << ",\n"
                  << "  \"cache_hits_after_warm\": " << after_identical.hits << ",\n"
-                 << "  \"failed_rollbacks\": " << after_restore.failed_rollbacks << ",\n"
+                 << "  \"failed_rollbacks\": " << after_late_failure.failed_rollbacks << ",\n"
                  << "  \"passed\": true\n"
                  << "}\n";
         require(evidence.good(), "failed to write public spin evidence JSON");

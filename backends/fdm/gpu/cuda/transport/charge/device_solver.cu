@@ -31,6 +31,8 @@ struct DeviceSolveMetrics {
     uint64_t amg_apply_count;
     uint32_t reason;
     uint32_t hierarchy_levels;
+    uint32_t candidate_nonfinite;
+    uint32_t reserved0;
     double algebraic_residual;
     double physical_residual;
     double component_balance;
@@ -176,30 +178,13 @@ __global__ void content_digest_kernel(
     sha_segment(&sha,14,&buffers.interface_count,sizeof(buffers.interface_count));
     const double *trace_arrays[4]={buffers.interface_from_trace_v,buffers.interface_to_trace_v,
         buffers.interface_delta_trace_v,buffers.interface_charge_current_density};
+    (void)interfaces;
+    (void)interface_stride;
     for(uint32_t lane=0;lane<4;++lane){
         const uint32_t tag=15+lane;
         const uint64_t bytes=buffers.interface_count*sizeof(double);
         sha_update(&sha,&tag,sizeof(tag));sha_update(&sha,&bytes,sizeof(bytes));
-        for(uint64_t rank=0;rank<buffers.interface_count;++rank){
-            uint64_t selected=UINT64_MAX;
-            for(uint64_t candidate=0;candidate<buffers.interface_count;++candidate){
-                const auto *c=reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
-                    static_cast<const uint8_t *>(interfaces)+candidate*interface_stride);
-                uint64_t lower=0;
-                for(uint64_t other=0;other<buffers.interface_count;++other){
-                    const auto *o=reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
-                        static_cast<const uint8_t *>(interfaces)+other*interface_stride);
-                    const bool smaller=o->source_id<c->source_id ||
-                        (o->source_id==c->source_id && (o->topology_id<c->topology_id ||
-                        (o->topology_id==c->topology_id && (o->axis<c->axis ||
-                        (o->axis==c->axis && o->canonical_face_index<c->canonical_face_index)))));
-                    if(smaller)++lower;
-                }
-                if(lower==rank){selected=candidate;break;}
-            }
-            if(selected==UINT64_MAX)return;
-            sha_update(&sha,trace_arrays[lane]+selected,sizeof(double));
-        }
+        sha_update(&sha,trace_arrays[lane],bytes);
     }
     sha_finish(&sha,digest);
 }
@@ -392,7 +377,8 @@ __global__ void validate_static_payload_kernel(
                 : axis == 1
                     ? x_faces + side_offset * nx * nz + x + nx * z
                     : x_faces + y_faces + side_offset * nx * ny + x + nx * y;
-            bad = atomicCAS(seen_faces + boundary_ordinal, 0u, 1u) != 0u;
+            bad = boundary_ordinal >= face_count ||
+                  atomicCAS(seen_faces + boundary_ordinal, 0u, 1u) != 0u;
             if (bad) invalid_code = 5;
         }
         if (bad) atomicCAS(invalid, 0u, invalid_code);
@@ -447,14 +433,22 @@ __global__ void assemble_charge_fv_kernel(
                 2, x + nx * (y + ny * z), i - nx * ny, i, hz, az, sigma,
                 interface_payload, interface_count, interface_stride);
         double source = 0.0;
-        for (uint64_t f = 0; f < face_count; ++f) {
+        const uint64_t coordinates[3] = {x, y, z};
+        const uint64_t extents[3] = {nx, ny, nz};
+        for (uint32_t boundary_axis = 0; boundary_axis < 3; ++boundary_axis) {
+          for (int32_t boundary_side = -1; boundary_side <= 1; boundary_side += 2) {
+            if ((boundary_side < 0 && coordinates[boundary_axis] != 0) ||
+                (boundary_side > 0 && coordinates[boundary_axis] + 1 != extents[boundary_axis]))
+                continue;
+            const uint64_t f = boundary_ordinal(
+                boundary_axis, boundary_side, x, y, z, nx, ny, nz);
+            if (f >= face_count) continue;
             uint32_t kind = 0, axis = 0;
             int32_t side = 0;
             uint64_t adjacent = 0;
             double area = 0.0, value = 0.0;
             load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
                              &adjacent, &area, &value);
-            if (adjacent != i) continue;
             if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE) {
                 const double normal_h = axis == 0 ? hx : axis == 1 ? hy : hz;
                 const double conductance = 2.0 * sigma[i] * area / normal_h;
@@ -463,6 +457,7 @@ __global__ void assemble_charge_fv_kernel(
             } else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY) {
                 source -= value * area;
             }
+          }
         }
         diag[i] = diagonal;
         rhs[i] = source;
@@ -700,8 +695,10 @@ __device__ void device_galerkin_amg_vcycle(
             const double row_value = apply_coarse_row(
                 coarse, coarse_x, coarse_diag, coarse_edge_a, coarse_edge_b,
                 coarse_edge_weight, edge_count, coarse_nx, coarse_ny, coarse_nz);
-            coarse_tmp[coarse] = coarse_x[coarse] + omega *
-                (coarse_rhs[coarse] - row_value) / coarse_diag[coarse];
+            coarse_tmp[coarse] = coarse_diag[coarse] > 0.0 && isfinite(coarse_diag[coarse])
+                ? coarse_x[coarse] + omega *
+                    (coarse_rhs[coarse] - row_value) / coarse_diag[coarse]
+                : 0.0;
         }
         __syncthreads();
         for (uint64_t coarse = threadIdx.x; coarse < coarse_cells; coarse += blockDim.x)
@@ -830,6 +827,7 @@ __global__ void reconstruct_charge_flux_kernel(
     const uint64_t jx_count = (nx + 1) * ny * nz;
     const uint64_t jy_count = nx * (ny + 1) * nz;
     const uint64_t jz_count = nx * ny * (nz + 1);
+    (void)face_count;
     for (uint64_t face = blockIdx.x * blockDim.x + threadIdx.x; face < jx_count;
          face += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
         const uint64_t x = face % (nx + 1);
@@ -845,18 +843,18 @@ __global__ void reconstruct_charge_flux_kernel(
                     (potential[right] - potential[left]) / (hy * hz);
         } else {
             const uint64_t adjacent = cell_index(x == 0 ? 0 : nx - 1, y, z, nx, ny);
-            for (uint64_t f = 0; f < face_count; ++f) {
-                uint32_t kind = 0, axis = 0; int32_t side = 0; uint64_t cell = 0;
-                double area = 0.0, boundary = 0.0;
-                load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
-                                 &cell, &area, &boundary);
-                if (cell != adjacent || axis != 0 || side != (x == 0 ? -1 : 1)) continue;
-                if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE)
-                    value = x == 0 ? -sigma[adjacent] * (potential[adjacent] - boundary) / (0.5 * hx)
-                                   : -sigma[adjacent] * (boundary - potential[adjacent]) / (0.5 * hx);
-                else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY)
-                    value = side * boundary;
-            }
+            const int32_t side = x == 0 ? -1 : 1;
+            const uint64_t f = boundary_ordinal(0, side, x == 0 ? 0 : nx - 1,
+                                                y, z, nx, ny, nz);
+            uint32_t kind = 0, axis = 0; int32_t stored_side = 0; uint64_t cell = 0;
+            double area = 0.0, boundary = 0.0;
+            load_charge_face(face_payload, face_stride, f, &kind, &axis, &stored_side,
+                             &cell, &area, &boundary);
+            if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE)
+                value = x == 0 ? -sigma[adjacent] * (potential[adjacent] - boundary) / (0.5 * hx)
+                               : -sigma[adjacent] * (boundary - potential[adjacent]) / (0.5 * hx);
+            else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY)
+                value = side * boundary;
         }
         jx[face] = value;
     }
@@ -875,18 +873,18 @@ __global__ void reconstruct_charge_flux_kernel(
                     (potential[upper] - potential[lower]) / (hx * hz);
         } else {
             const uint64_t adjacent = cell_index(x, y == 0 ? 0 : ny - 1, z, nx, ny);
-            for (uint64_t f = 0; f < face_count; ++f) {
-                uint32_t kind = 0, axis = 0; int32_t side = 0; uint64_t cell = 0;
-                double area = 0.0, boundary = 0.0;
-                load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
-                                 &cell, &area, &boundary);
-                if (cell != adjacent || axis != 1 || side != (y == 0 ? -1 : 1)) continue;
-                if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE)
-                    value = y == 0 ? -sigma[adjacent] * (potential[adjacent] - boundary) / (0.5 * hy)
-                                   : -sigma[adjacent] * (boundary - potential[adjacent]) / (0.5 * hy);
-                else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY)
-                    value = side * boundary;
-            }
+            const int32_t side = y == 0 ? -1 : 1;
+            const uint64_t f = boundary_ordinal(1, side, x, y == 0 ? 0 : ny - 1,
+                                                z, nx, ny, nz);
+            uint32_t kind = 0, axis = 0; int32_t stored_side = 0; uint64_t cell = 0;
+            double area = 0.0, boundary = 0.0;
+            load_charge_face(face_payload, face_stride, f, &kind, &axis, &stored_side,
+                             &cell, &area, &boundary);
+            if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE)
+                value = y == 0 ? -sigma[adjacent] * (potential[adjacent] - boundary) / (0.5 * hy)
+                               : -sigma[adjacent] * (boundary - potential[adjacent]) / (0.5 * hy);
+            else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY)
+                value = side * boundary;
         }
         jy[face] = value;
     }
@@ -905,18 +903,18 @@ __global__ void reconstruct_charge_flux_kernel(
                     (potential[front] - potential[back]) / (hx * hy);
         } else {
             const uint64_t adjacent = cell_index(x, y, z == 0 ? 0 : nz - 1, nx, ny);
-            for (uint64_t f = 0; f < face_count; ++f) {
-                uint32_t kind = 0, axis = 0; int32_t side = 0; uint64_t cell = 0;
-                double area = 0.0, boundary = 0.0;
-                load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
-                                 &cell, &area, &boundary);
-                if (cell != adjacent || axis != 2 || side != (z == 0 ? -1 : 1)) continue;
-                if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE)
-                    value = z == 0 ? -sigma[adjacent] * (potential[adjacent] - boundary) / (0.5 * hz)
-                                   : -sigma[adjacent] * (boundary - potential[adjacent]) / (0.5 * hz);
-                else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY)
-                    value = side * boundary;
-            }
+            const int32_t side = z == 0 ? -1 : 1;
+            const uint64_t f = boundary_ordinal(2, side, x, y, z == 0 ? 0 : nz - 1,
+                                                nx, ny, nz);
+            uint32_t kind = 0, axis = 0; int32_t stored_side = 0; uint64_t cell = 0;
+            double area = 0.0, boundary = 0.0;
+            load_charge_face(face_payload, face_stride, f, &kind, &axis, &stored_side,
+                             &cell, &area, &boundary);
+            if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE)
+                value = z == 0 ? -sigma[adjacent] * (potential[adjacent] - boundary) / (0.5 * hz)
+                               : -sigma[adjacent] * (boundary - potential[adjacent]) / (0.5 * hz);
+            else if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY)
+                value = side * boundary;
         }
         jz[face] = value;
     }
@@ -952,6 +950,26 @@ __global__ void materialize_interface_traces_kernel(
         delta_trace[i] = vf - vt;
         oriented_current_density[i] = oriented_current;
     }
+}
+
+__global__ void validate_candidate_finite_kernel(
+    Buffers buffers, DeviceSolveMetrics *metrics) {
+    const double *arrays[7] = {
+        buffers.potential, buffers.jx, buffers.jy, buffers.jz,
+        buffers.interface_from_trace_v, buffers.interface_to_trace_v,
+        buffers.interface_delta_trace_v};
+    const uint64_t counts[7] = {
+        buffers.cells, buffers.jx_count, buffers.jy_count, buffers.jz_count,
+        buffers.interface_count, buffers.interface_count, buffers.interface_count};
+    for (uint32_t array = 0; array < 7; ++array)
+        for (uint64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < counts[array];
+             i += static_cast<uint64_t>(blockDim.x) * gridDim.x)
+            if (!isfinite(arrays[array][i])) atomicExch(&metrics->candidate_nonfinite, 1u);
+    for (uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+         i < buffers.interface_count;
+         i += static_cast<uint64_t>(blockDim.x) * gridDim.x)
+        if (!isfinite(buffers.interface_charge_current_density[i]))
+            atomicExch(&metrics->candidate_nonfinite, 1u);
 }
 
 __global__ void label_reference_components_kernel(
@@ -1304,6 +1322,20 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         (input.workspace_limit != 0 && workspace_bytes > input.workspace_limit) ||
         (input.allocator_limit != 0 && total_peak_bytes > input.allocator_limit))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    uint64_t required_new_bytes = candidate_bytes;
+    if (!checked_add(required_new_bytes, workspace_bytes, &required_new_bytes) ||
+        (!cache_hit && !checked_add(required_new_bytes, cache_bytes, &required_new_bytes)))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    size_t free_device_bytes = 0, total_device_bytes = 0;
+    if (cudaMemGetInfo(&free_device_bytes, &total_device_bytes) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    constexpr uint64_t minimum_safety_reserve = UINT64_C(256) * 1024 * 1024;
+    const uint64_t proportional_reserve = static_cast<uint64_t>(total_device_bytes) / 20;
+    const uint64_t safety_reserve = std::max(minimum_safety_reserve, proportional_reserve);
+    const uint64_t usable_device_bytes = static_cast<uint64_t>(free_device_bytes) > safety_reserve
+        ? static_cast<uint64_t>(free_device_bytes) - safety_reserve : 0;
+    if (required_new_bytes > usable_device_bytes)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     bool cache_allocated = true;
     if (!cache_hit) {
         cache.cells = cells;
@@ -1469,6 +1501,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             candidate.interface_delta_trace_v,
             candidate.interface_charge_current_density);
     }
+    validate_candidate_finite_kernel<<<face_blocks, threads, 0, input.stream>>>(
+        candidate, device_metrics);
     charge_balance_kernel<<<1, threads, 0, input.stream>>>(
         nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
         candidate.active, component_labels, candidate.jx, candidate.jy, candidate.jz,
@@ -1526,10 +1560,16 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_NONCONVERGED;
     }
-    if (metrics.physical_residual > 1.0e-10 || metrics.component_balance > 1.0e-10 ||
+    const bool finite_metrics = std::isfinite(metrics.algebraic_residual) &&
+        std::isfinite(metrics.physical_residual) && std::isfinite(metrics.component_balance) &&
+        std::isfinite(metrics.electrode_balance) && std::isfinite(metrics.debug_rho) &&
+        std::isfinite(metrics.debug_denominator);
+    if (metrics.candidate_nonfinite != 0 || !finite_metrics ||
+        metrics.physical_residual > 1.0e-10 || metrics.component_balance > 1.0e-10 ||
         metrics.electrode_balance > 1.0e-10) {
         std::fprintf(stderr,
-                     "charge balance failed: physical=%.17g component=%.17g electrode=%.17g iterations=%llu\n",
+                     "charge balance failed: candidate_nonfinite=%u physical=%.17g component=%.17g electrode=%.17g iterations=%llu\n",
+                     metrics.candidate_nonfinite,
                      metrics.physical_residual, metrics.component_balance,
                      metrics.electrode_balance,
                      static_cast<unsigned long long>(metrics.iterations));

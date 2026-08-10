@@ -118,6 +118,8 @@ import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPane
 import {
   CurrentTransportInspectorPanel,
   SpinTransportInspectorPanel,
+  StructuredCurrentClosureInspectorPanel,
+  StructuredCurrentSourceCutInspectorPanel,
 } from "./panels/TransportAuthoringInspector";
 import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./panels/SpinAuthoringInspector";
 import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
@@ -585,6 +587,18 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Current Transport",
     selectionKinds: ["physics.current-transport"],
     component: CurrentTransportInspectorPanel,
+  },
+  {
+    id: "physics-structured-current-closure",
+    title: "Structured Current Closure",
+    selectionKinds: ["physics.structured-current-closure"],
+    component: StructuredCurrentClosureInspectorPanel,
+  },
+  {
+    id: "physics-structured-current-source-cut",
+    title: "Structured Current Source Cut",
+    selectionKinds: ["physics.structured-current-source-cut"],
+    component: StructuredCurrentSourceCutInspectorPanel,
   },
   {
     id: "physics-spin-transport",

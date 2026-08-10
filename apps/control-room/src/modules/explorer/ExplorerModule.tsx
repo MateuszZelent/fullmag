@@ -50,6 +50,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
+import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
@@ -268,6 +269,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
   const physicsGraph = usePhysicsGraphResource({ enabled: modelTabActive });
+  const currentTransports = useCurrentTransportsResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
@@ -471,6 +473,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             },
             {
               activeAnalysisFieldOverlay,
+              currentTransports: currentTransports.data,
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
@@ -497,6 +500,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     filterText,
     selectedNodeId,
     crossSections,
+    currentTransports.data,
     manifest.data,
     manifest.status,
     meshSummary.data,

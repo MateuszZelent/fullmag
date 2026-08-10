@@ -8,6 +8,7 @@ import type {
   ModelTreeSnapshot,
 } from "../explorerTypes";
 import type {
+  CurrentTransportListResource,
   DomainMetaResource,
   FdmMultilayerLayoutResource,
 } from "@/kernel/api/apiTypes";
@@ -67,6 +68,7 @@ function formatSize(size: readonly [number, number, number] | null | undefined):
 
 type ModelTreeResources = ExplorerTreeResources & {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
+  currentTransports?: CurrentTransportListResource | null;
   planarMonitorDraft?: PlanarMonitorDraft | null;
   planarMonitors?: PlanarMonitorCollectionResource | null;
 };
@@ -217,7 +219,7 @@ function objectNodes(
             }),
           ]),
         },
-        ...physicsGraphObjectChildren(object, physicsGraph),
+        ...physicsGraphObjectChildren(object, physicsGraph, resources.currentTransports),
       ],
     };
   }
@@ -300,7 +302,7 @@ function objectNodes(
         ]),
       },
       ...objectExtensionNodes(parentId, object),
-      ...physicsGraphObjectChildren(object, physicsGraph),
+      ...physicsGraphObjectChildren(object, physicsGraph, resources.currentTransports),
     ],
   };
 }
@@ -308,11 +310,12 @@ function objectNodes(
 function physicsGraphObjectChildren(
   object: ModelTreeObjectSnapshot,
   physicsGraph: unknown | null | undefined,
+  currentTransports: CurrentTransportListResource | null | undefined,
 ): ExplorerNode[] {
   const node = buildPhysicsGraphObjectNode(physicsGraph, {
     id: object.id,
     label: object.label,
-  });
+  }, currentTransports);
   return node ? [node] : [];
 }
 
@@ -1656,6 +1659,7 @@ export function buildModelTree(
   const physicsGraphMode = physicsGraphStatus === "ready" && physicsGraphDataPresent;
   const physicsGraphNodes = physicsGraphMode
     ? buildPhysicsGraphTree({
+        currentTransports: resources.currentTransports,
         graph: snapshot?.physicsGraph,
         objects,
       })

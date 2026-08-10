@@ -382,6 +382,11 @@ uint32_t fullmag_fdm_gpu_transport_test_charge_audit_v1(
     uint64_t *coarse_unknown_count,
     uint32_t *hierarchy_levels,
     uint8_t hierarchy_digest[32]);
+uint32_t fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    uint64_t *aggregate, uint64_t aggregate_count,
+    double *coarse_diagonal, uint64_t coarse_count,
+    double *structured_edge_weight, uint64_t edge_count);
 #ifdef __cplusplus
 }
 #endif

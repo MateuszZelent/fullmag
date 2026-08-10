@@ -204,10 +204,10 @@ bool checkpoint_content_digest_v2(const CheckpointData &data, uint8_t digest[32]
     std::vector<size_t> order(interfaces);
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        return std::tie(data.interface_source_ids[a], data.interface_topology_ids[a],
-                        data.interface_axes[a], data.interface_face_linear[a]) <
-               std::tie(data.interface_source_ids[b], data.interface_topology_ids[b],
-                        data.interface_axes[b], data.interface_face_linear[b]);
+        return std::tie(data.interface_axes[a], data.interface_face_linear[a],
+                        data.interface_source_ids[a], data.interface_topology_ids[a]) <
+               std::tie(data.interface_axes[b], data.interface_face_linear[b],
+                        data.interface_source_ids[b], data.interface_topology_ids[b]);
     });
     const uint64_t interface_count = interfaces;
     segment(14, &interface_count, sizeof(interface_count));

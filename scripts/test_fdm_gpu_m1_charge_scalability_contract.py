@@ -42,11 +42,19 @@ class FdmGpuM1ChargeScalabilityContractTest(unittest.TestCase):
             '"finite_g_interface_count"',
             '"grid"',
             '"inactive_cells"',
+            '"empty_interior_aggregate"',
             '"series_id"',
             '"slopes"',
             '"hierarchy_cache_hit_count"',
+            '"memory_policy"',
+            '"required_peak_bytes"',
+            '"cuda_free_bytes_before_solve"',
+            '"safety_reserve_bytes"',
+            '"resolved_usable_bytes"',
         ):
             self.assertIn(token.replace('"', r'\"'), source)
+        self.assertIn("fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1", source)
+        self.assertIn("P^T A P", source)
 
     def test_just_recipe_publishes_durable_json_and_sha(self) -> None:
         source = JUSTFILE.read_text()
@@ -54,6 +62,12 @@ class FdmGpuM1ChargeScalabilityContractTest(unittest.TestCase):
         self.assertIn("durable_dir=/zfn2-reports/fdm-gpu-m1-charge", source)
         self.assertIn("sha256sum", source)
         self.assertIn('sha256sum "$durable" > "$durable.sha256"', source)
+
+    def test_boundary_mutation_has_managed_compute_sanitizer_canary(self) -> None:
+        source = JUSTFILE.read_text()
+        self.assertIn("verify-fdm-gpu-m1-charge-boundary-compute-sanitizer:", source)
+        self.assertIn("compute-sanitizer --tool memcheck --error-exitcode=99", source)
+        self.assertIn("fdm_gpu_m1_charge_boundary_mutation_v1_contract", source)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,9 @@
+import type {
+  CurrentTransportListResource,
+  KnownSceneCurrentTransport,
+} from "@/kernel/api/apiTypes";
+import { isKnownCurrentTransport } from "@/shared/domain/physics/transportRecognition";
+
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
 
 /**
@@ -11,6 +17,7 @@ export interface PhysicsGraphTreeObject {
 }
 
 export interface PhysicsGraphTreeInput {
+  currentTransports?: CurrentTransportListResource | null;
   graph?: unknown | null;
   objects?: readonly PhysicsGraphTreeObject[];
 }
@@ -73,6 +80,7 @@ const SCOPE_KIND_ALIASES: Record<string, ScopePlacement["kind"]> = {
 };
 
 export function buildPhysicsGraphTree({
+  currentTransports,
   graph: input,
   objects = [],
 }: PhysicsGraphTreeInput): ExplorerNode[] {
@@ -86,13 +94,19 @@ export function buildPhysicsGraphTree({
     left.id.localeCompare(right.id),
   );
   if (modules.length === 0) return [];
+  const currentTransportById = new Map<string, KnownSceneCurrentTransport>();
+  for (const transport of currentTransports?.items ?? []) {
+    if (isKnownCurrentTransport(transport)) {
+      currentTransportById.set(transport.name, transport);
+    }
+  }
 
   const grouped = new Map<
     string,
     { placement: ScopePlacement; modules: GroupedPhysicsModule[] }
   >();
-  for (const module of modules) {
-    const placement = placementFor(module);
+  for (const physicsModule of modules) {
+    const placement = placementFor(physicsModule);
     const resolvedPlacement = placement.kind === "object" &&
       objects.length > 0 &&
       !objects.some((object) => object.id === placement.objectId)
@@ -101,10 +115,10 @@ export function buildPhysicsGraphTree({
     const key = scopeKey(resolvedPlacement);
     const existing = grouped.get(key);
     if (existing) {
-      existing.modules.push({ module, placement: resolvedPlacement });
+      existing.modules.push({ module: physicsModule, placement: resolvedPlacement });
     } else {
       grouped.set(key, {
-        modules: [{ module, placement: resolvedPlacement }],
+        modules: [{ module: physicsModule, placement: resolvedPlacement }],
         placement: resolvedPlacement,
       });
     }
@@ -113,7 +127,7 @@ export function buildPhysicsGraphTree({
   return [...grouped.values()]
     .sort((left, right) => compareScope(left.placement, right.placement, objects))
     .map(({ placement, modules: scopedModules }) =>
-      buildScopeNode(placement, scopedModules, objects),
+      buildScopeNode(placement, scopedModules, objects, currentTransportById),
     );
 }
 
@@ -121,8 +135,9 @@ export function buildPhysicsGraphTree({
 export function buildPhysicsGraphObjectNode(
   graph: unknown | null | undefined,
   object: PhysicsGraphTreeObject,
+  currentTransports?: CurrentTransportListResource | null,
 ): ExplorerNode | null {
-  const node = buildPhysicsGraphTree({ graph, objects: [object] }).find(
+  const node = buildPhysicsGraphTree({ currentTransports, graph, objects: [object] }).find(
     (candidate) =>
       candidate.kind === "object.physics.scope" && candidate.objectId === object.id,
   );
@@ -327,6 +342,7 @@ function buildScopeNode(
   placement: ScopePlacement,
   modules: readonly GroupedPhysicsModule[],
   objects: readonly PhysicsGraphTreeObject[],
+  currentTransportById: ReadonlyMap<string, KnownSceneCurrentTransport>,
 ): ExplorerNode {
   const { id, kind, label, objectId, parentId } = scopeNodeIdentity(placement, objects);
   return {
@@ -342,7 +358,7 @@ function buildScopeNode(
     children: [...modules]
       .sort((left, right) => left.module.id.localeCompare(right.module.id))
       .map(({ module, placement: modulePlacement }) =>
-        buildModuleNode(module, modulePlacement, id),
+        buildModuleNode(module, modulePlacement, id, currentTransportById.get(module.id)),
       ),
   };
 }
@@ -395,10 +411,14 @@ function buildModuleNode(
   module: PhysicsGraphTreeModule,
   placement: ScopePlacement,
   parentId: string,
+  currentTransport?: KnownSceneCurrentTransport,
 ): ExplorerNode {
   const activation = module.activation ?? "unresolved";
+  const id = `${parentId}:module:${encodeURIComponent(module.id)}`;
+  const status = statusForActivation(activation, module.capability);
+  const closure = currentTransport?.structured_current_closure;
   return {
-    id: `${parentId}:module:${encodeURIComponent(module.id)}`,
+    id,
     kind: "physics.module",
     label: module.presentation?.label ?? module.label ?? module.name ?? `${labelForKind(module.kind)} · ${module.id}`,
     parentId,
@@ -417,9 +437,52 @@ function buildModuleNode(
     ...(placement.kind === "cross-object"
       ? { physicsScopeObjectIds: placement.objectIds }
       : {}),
-    status: statusForActivation(activation, module.capability),
+    status,
     resourceRef: `physics-graph:${module.id}`,
+    ...(closure ? {
+      children: [buildStructuredCurrentClosureNode(module.id, closure, id, status)],
+    } : {}),
   };
+}
+
+function buildStructuredCurrentClosureNode(
+  currentTransportId: string,
+  closure: NonNullable<KnownSceneCurrentTransport["structured_current_closure"]>,
+  parentId: string,
+  status: ExplorerNodeStatus,
+): ExplorerNode {
+  const id = `${parentId}:structured-current-closure:${encodeURIComponent(closure.closure_id)}`;
+  return {
+    badge: `closed geometry · ${closure.source_cuts.length} cut${closure.source_cuts.length === 1 ? "" : "s"}`,
+    children: closure.source_cuts.map((cut) => ({
+      badge: `${cut.plane.axis.toUpperCase()} · ${formatStructuredCutOffset(cut.plane.offset_m)} · ${cut.drive.potential_jump_V} V`,
+      currentTransportId,
+      icon: "activity",
+      id: `${id}:source-cut:${encodeURIComponent(cut.source_cut_id)}`,
+      kind: "physics.structured-current-source-cut",
+      label: cut.source_cut_id,
+      parentId: id,
+      status,
+      structuredCurrentClosureId: closure.closure_id,
+      structuredCurrentSourceCutId: cut.source_cut_id,
+    })),
+    currentTransportId,
+    icon: "activity",
+    id,
+    kind: "physics.structured-current-closure",
+    label: closure.closure_id,
+    parentId,
+    status,
+    structuredCurrentClosureId: closure.closure_id,
+  };
+}
+
+function formatStructuredCutOffset(value: number): string {
+  const absolute = Math.abs(value);
+  if (absolute >= 1e-3) return `${value / 1e-3} mm`;
+  if (absolute >= 1e-6) return `${value / 1e-6} µm`;
+  if (absolute >= 1e-9) return `${value / 1e-9} nm`;
+  return `${value} m`;
 }
 
 function statusForActivation(

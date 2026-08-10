@@ -719,8 +719,16 @@ capability ani kwalifikacją produkcyjną.
 Właściciel `backends/fdm/gpu/cuda/transport/charge/**` realizuje rzeczywisty
 FP64 charge solve na urządzeniu: konserwatywny operator FV z harmoniczną
 przewodnością ścian, device CG, fixed-tree redukcje oraz dwupoziomowy device AMG.
-Agregaty AMG powstają deterministycznie z grafu siły operatora, mają ograniczony
-rozmiar i jawny coarse operator $A_c=RAP$; nie jest to Jacobi nazwane AMG.
+Agregaty AMG są geometrycznymi blokami `2 x 2 x 2` kanonicznej ortogonalnej
+siatki FDM, z deterministycznym przypisaniem i jawnym coarse operatorem
+$A_c=P^TAP$. Ten wybór wykorzystuje regularną topologię tej realizacji,
+zapewnia co najwyżej osiem fine cells na agregat i stabilną tożsamość cache;
+nie jest adaptacyjnym strength-graph AMG. Puste agregaty wynikające z legalnej
+maski nieaktywnej mają zerową korektę coarse i nie wykonują dzielenia przez
+zero. Skuteczność tej dwupoziomowej preconditioner realization musi być
+kwalifikowana osobno dla skoków materiałowych, finite-$G$, nieparzystych
+wymiarów, masek nieaktywnych i rozłącznych komponentów; sama liczba coarse DOF
+nie dowodzi poprawności $P^TAP$ ani skalowalności solve.
 Typed cell/material/face/formula payloads są walidowane fail-closed przed
 publikacją. Voltage, exact-density i insulating external faces mają jeden
 globalnie zorientowany prąd ścianowy, a odrzucony descriptor lub solve nie
@@ -1008,6 +1016,32 @@ engine identity; it cannot claim the production AMG engine. Likewise, a local
 $3\times3$ reaction inverse may be a named prototype preconditioner but cannot
 silently replace the frozen component AMG/block-Jacobi policy.
 
+Production GPU memory resolution uses `memory_policy=auto`. After static state
+has been materialized on the selected CUDA context, the runtime reads
+`cudaMemGetInfo`, freezes a safety reserve, and computes `usable_bytes` from the
+actual free memory. Before any solve-owned allocation it must estimate and
+publish separate `first_required_bytes` and `warm_required_bytes`; the latter
+includes the immutable accepted state, the candidate state and every live
+hierarchy/workspace phase. For cold AMG construction, where device-side
+coarsening may reduce storage only after inspection of the operator,
+`first_required_bytes` is a conservative pre-allocation upper bound rather
+than a measured peak; provenance must identify estimate kind and the later
+measured high-water value separately. Warm-cache requirements are computed
+from the resolved resident hierarchy and must not be labelled as cold bounds.
+An insufficient budget fails closed before the
+first allocation and never enables CPU fallback. Because cache identity also
+depends on the assembled `m_stage` digest, a warm attempt uses the same cold
+upper bound for its pre-allocation gate; its exact retained-hierarchy
+requirement is published only as a post-cache-hit audit, never misreported as
+the earlier preflight. Provenance records the
+resolved policy, device total/free memory, static baseline, safety reserve,
+usable bytes, estimate kind, first/warm required bytes and measured high-water
+bytes. `memory_policy=fixed`
+is reserved for reproducible tests and qualification workloads. In particular,
+512 MiB is the frozen external envelope of `performance_v1`, and 2 GiB is its
+warm transactional high-water envelope; neither value is a global production
+cap.
+
 The first executable slice is intentionally bounded to one structured
 single-grid domain on one CUDA device, FP64-only, explicit static materials,
 axis-aligned external density/voltage/insulating charge faces, component
@@ -1098,7 +1132,7 @@ evidence.
 | `determinism_restart_v1` | `fdm_gpu_m1_determinism_restart_v1`: two uninterrupted repeats and one actual-runtime export/destroy/new-context/import continuation of a 4352-byte sequence-7 checkpoint; the separate frozen oracle A supplies codec mutations for truncation, corruption, unknown required ID, nonzero or surplus-zero padding, wrong ID-1 tuple, subrecord `record_bytes`, field type, extra inter-section block and missing required section | `oracle.checkpoint_bitwise_continuation_v1`: runtime payload B preserves exact device/build/static identity, lineage/sequence/content, and next field/balance/iteration/`deterministic_compute_digest`/`scientific_continuation_digest`; frozen payload A retains exact SHA-256 `ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5` solely as codec oracle and must reject across actual identity; `operation_audit_digest` independently proves export/import or failed-import events | scientific/compute digests exact; full telemetry stream is not compared; 100% semantic decoder/import mutation rejection and every actual transfer remains in the audit chain | non-skipped same-GPU UUID managed triplet with `fdm-gpu-m1-determinism-restart-v1.json`, audit records and complete runtime checkpoint payload |
 | `public_path_v1` | `fdm_gpu_m1_public_path_v1`: normalized ProblemIR for $8\times4\times2$, double/strict GPU, $\sigma=5\times10^6\,\mathrm{S/m}$, $\theta_{SH}=0.1$, x-min density $10^{11}\,\mathrm{A/m^2}$, x-max $V=0$, insulating spin BC and one torque target | `oracle.public_artifact_manifest_v1`: exact requested/resolved tuple plus required artifacts `V,J_c,mu_s,Q_ia,torque_stt`, charge/spin/interface balances, transfer audit and checkpoint identity with frozen SI units/components | normalized ProblemIR, requested/resolved identity and artifact key set 100% exact; numeric fields meet their gate tolerances | non-skipped managed ProblemIR-planner-runner-ABI-CUDA run with GPU UUID and `fdm-gpu-m1-public-path-v1.json` plus artifact manifest |
 | `convergence_v1` | `fdm_gpu_m1_convergence_v1`: uniform/layered charge and 1-D spin on 32/64/128 cells; transverse-only N/F interface with $y\in[0,1]\,\mathrm{m}$, unit depth, $m=(0,0,1)$, $G_\uparrow=G_\downarrow=G_i=0$, $G_r=2\,\mathrm{S/m^2}$, $\Delta\mu_s=(y^2,0,0)\,\mathrm{V}$, and mixing grids 2x16x1, 2x32x1, and 2x64x1 | `oracle.richardson_orders_v1`: analytic charge/spin solutions and mixing $q_{abs}=(2y^2,0,0)\,\mathrm{A/m^2}$ with exact integral $2/3\,\mathrm{A/m}$; composite midpoint error $e_n=1/(6n^2)\,\mathrm{A/m}$ | charge/spin order `>=1.8`, ratio `>=3.5`; mixing order `>=1.99`, successive ratio `[3.99,4.01]`, pointwise `rtol<=1e-13`; all balances `<=1e-10` | non-skipped managed mesh sweep with GPU UUID and `fdm-gpu-m1-convergence-v1.json` containing raw norms, exact errors, ratios and fitted orders |
-| `performance_v1` | `fdm_gpu_m1_performance_v1`: $1024\times128\times8=1,048,576$ cell racetrack, fixed solver tolerances, output/checkpoint disabled, one setup then five warm solves on one recorded GPU UUID/runtime/build | `oracle.absolute_fdm_gpu_m1_budget_v1`: no future or relative baseline; each run is checked directly against the frozen limits | `peak device bytes <=2147483648`; setup <=5 s; median total solve <=30 s; p95 total solve <=36 s; forbidden transfer bytes exact zero | five non-skipped managed runs with GPU UUID and `fdm-gpu-m1-performance-v1.json` containing raw setup/apply/solve/reduction times and memory high-water marks |
+| `performance_v1` | `fdm_gpu_m1_performance_v1`: $1024\times128\times8=1,048,576$ cell racetrack, fixed solver tolerances, output/checkpoint disabled, `memory_policy=fixed`, one first solve then five warm transactional solves on one recorded GPU UUID/runtime/build | `oracle.absolute_fdm_gpu_m1_budget_v1`: workload-specific fixed qualification envelope, not a global runtime cap | first-solve external envelope `<=536870912` bytes; warm transactional peak `<=2147483648` bytes; setup <=5 s; median total solve <=30 s; p95 total solve <=36 s; forbidden transfer bytes exact zero | five non-skipped managed runs with GPU UUID and `fdm-gpu-m1-performance-v1.json` containing raw setup/apply/solve/reduction times, first/warm required bytes, total/free/baseline/reserve/usable memory, resolved policy and high-water marks |
 
 These gates define qualification. The bounded charge rows named in the status
 section have actual-device contract evidence, while every other row remains a

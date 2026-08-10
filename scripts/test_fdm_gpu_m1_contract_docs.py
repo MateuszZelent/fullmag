@@ -899,7 +899,8 @@ def _assert_telemetry_and_fixture_closure(page: str, runtime: str) -> None:
         f"checkpoint D2H={len(restore_golden)} bytes",
         "mixing grids 2x16x1, 2x32x1, and 2x64x1",
         "e_n=1/(6n^2)",
-        "peak device bytes <=2147483648",
+        "workload-specific fixed qualification envelope, not a global runtime cap",
+        "warm transactional peak <=2147483648",
         "median total solve <=30 s",
         "p95 total solve <=36 s",
     )
