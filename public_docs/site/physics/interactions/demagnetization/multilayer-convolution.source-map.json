@@ -63,9 +63,9 @@
     },
     {
       "id": "cpu-runtime",
-      "path": "crates/fullmag-engine/src/multilayer.rs",
-      "symbol": "compute_demag_fields_checked",
-      "responsibility": "Execute checked push, FFT, pair accumulation, inverse FFT and pull for all CPU layers."
+      "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs",
+      "symbol": "execute_reference_fdm_multilayer",
+      "responsibility": "Execute the committed CPU multilayer reference runner; the checked runtime performs push, FFT, pair accumulation, inverse FFT and pull for all layers."
     },
     {
       "id": "cpu-observe",
@@ -124,14 +124,14 @@
     {
       "id": "ui-layers",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
-      "symbol": "adaptFdmMultilayerNativeLayerDomains",
-      "responsibility": "Create independent native-layer Explorer and viewport targets."
+      "symbol": "adaptFdmDomainMeta",
+      "responsibility": "Create the committed FDM grid render domain used as the base for independent native-layer Explorer and viewport targets."
     },
     {
       "id": "ui-airbox",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
-      "symbol": "adaptFdmMultilayerAirboxDomain",
-      "responsibility": "Create the target-only FDM multilayer Airbox domain."
+      "symbol": "adaptFdmDomainPresentation",
+      "responsibility": "Adapt the committed FDM presentation domain; the target-only multilayer Airbox carrier is an explicitly scoped extension of this contract."
     }
   ],
   "symbols": [

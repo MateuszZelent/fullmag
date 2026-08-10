@@ -528,7 +528,7 @@ niezerowego drawing buffer.
 | Python FDM wrapper | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Public authoring |
 | ProblemIR validation | `crates/fullmag-ir/src/mesh_hints.rs` | `FdmDemagHintsIR::validate` | FDM authored and resolved IR |
 | Planner | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | FDM planner |
-| CPU runtime | `crates/fullmag-engine/src/multilayer.rs` | `compute_demag_fields_checked` | FDM CPU FP64 |
+| CPU runtime | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `execute_reference_fdm_multilayer` | FDM CPU FP64 |
 | CPU observation and energy | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `observe_multilayer` | FDM CPU FP64 |
 | Push transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `push_m_with_boundary_policy` | FDM CPU transfer |
 | Pull transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `pull_h_with_boundary_policy` | FDM CPU transfer |
@@ -538,8 +538,8 @@ niezerowego drawing buffer.
 | CUDA v2 plan creation | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_v2` | FDM CUDA |
 | CUDA FFT workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_prepare_multilayer_fft_workspace_v2` | FDM CUDA |
 | UI round-trip model | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | `createStudyGlobalDraft` | Control Room authoring |
-| UI native-layer adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Explorer/viewport |
-| UI Airbox adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Explorer/viewport |
+| UI native-layer adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainMeta` | Explorer/viewport |
+| UI Airbox adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainPresentation` | Explorer/viewport |
 
 (multilayer-convolution-validation)=
 ## 10. Walidacja i rzeczywisty stan dowodów
@@ -618,7 +618,7 @@ Lepadatu i Newella oraz są mapowane do niezależnie utrzymywanego kodu Fullmag.
 | ProblemIR topology identity | `crates/fullmag-ir/src/mesh_hints.rs` | `fdm_multilayer_topology_tokens` | Wiąże resolved mode i geometrię warstw z certyfikatem topologii. | IR | `crates/fullmag-ir/src/mesh_hints.rs` tests | executable contract | Niedostępny przed committem |
 | ProblemIR validation | `crates/fullmag-ir/src/mesh_hints.rs` | `FdmDemagHintsIR::validate` | Odrzuca nielegalną authored konfigurację. | IR | `crates/fullmag-ir/src/mesh_hints.rs` tests | executable contract | Niedostępny przed committem |
 | Planner | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | Rozwiązuje tryb, warstwy, grid certificate i transfer. | Planner | `crates/fullmag-plan/src/tests.rs` multilayer tests | executable contract | Niedostępny przed committem |
-| CPU runtime | `crates/fullmag-engine/src/multilayer.rs` | `compute_demag_fields_checked` | Wykonuje FFT, pary i pull pola. | FDM CPU FP64 | engine multilayer tests i niezależne oracles | runtime-verified, zakresowy | Niedostępny przed committem |
+| CPU runtime | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `execute_reference_fdm_multilayer` | Uruchamia CPU reference; runtime wykonuje FFT, pary i pull pola. | FDM CPU FP64 | engine multilayer tests i niezależne oracles | runtime-verified, zakresowy | Niedostępny przed committem |
 | CPU observation and energy | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `observe_multilayer` | Publikuje pole, energię i provenance CPU. | FDM CPU FP64 | SP4-derived runtime artifacts | runtime-verified, zakresowy | Niedostępny przed committem |
 | Push transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `push_m_with_boundary_policy` | Przenosi magnetyzację na scratch grid. | FDM CPU transfer | transfer parity oracle | physically-validated, zakresowy | Niedostępny przed committem |
 | Pull transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `pull_h_with_boundary_policy` | Stosuje powrót pola do native grid. | FDM CPU transfer | adjointness oracle | physically-validated, zakresowy | Niedostępny przed committem |
@@ -628,5 +628,5 @@ Lepadatu i Newella oraz są mapowane do niezależnie utrzymywanego kodu Fullmag.
 | CUDA v2 plan creation | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_v2` | Waliduje, uploaduje i przygotowuje plan D-07. | FDM CUDA | managed ABI/contract tests | executable contract, no device parity | Niedostępny przed committem |
 | CUDA FFT workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_prepare_multilayer_fft_workspace_v2` | Przygotowuje batched workspace cuFFT. | FDM CUDA | managed contract tests | executable contract, no device parity | Niedostępny przed committem |
 | UI round-trip model | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | `createStudyGlobalDraft` | Czyta scene FDM do draftu Inspectora. | Control Room | `StudyGlobalAuthoringModel.test.ts` | contract-verified | Niedostępny przed committem |
-| UI native-layer adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Buduje osobne cele warstw. | Explorer/viewport | viewport adapter tests | contract-verified | Niedostępny przed committem |
-| UI Airbox adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Buduje target-only Airbox. | Explorer/viewport | viewport adapter tests | contract-verified, no fresh browser proof | Niedostępny przed committem |
+| UI native-layer adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainMeta` | Stanowi bazę dla osobnych celów warstw. | Explorer/viewport | viewport adapter tests | contract-verified | Niedostępny przed committem |
+| UI Airbox adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainPresentation` | Stanowi bazę dla target-only Airbox. | Explorer/viewport | viewport adapter tests | contract-verified, no fresh browser proof | Niedostępny przed committem |

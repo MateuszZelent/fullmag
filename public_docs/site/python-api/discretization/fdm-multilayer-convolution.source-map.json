@@ -62,51 +62,51 @@
     },
     {
       "id": "airbox",
-      "path": "crates/fullmag-runner/src/fdm/cpu/airbox_observation.rs",
-      "symbol": "materialize_airbox_observation",
-      "responsibility": "Materializes the optional CPU FP64 post-run target-only H_demag carrier."
+      "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs",
+      "symbol": "execute_reference_fdm_multilayer",
+      "responsibility": "Runs the committed CPU FP64 multilayer reference; the optional target-only H_demag Airbox carrier is an explicitly scoped post-run extension."
     },
     {
       "id": "ui-authoring",
       "path": "apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts",
-      "symbol": "fdmDraftToScene",
-      "responsibility": "Maps Control Room FDM authoring fields to the canonical scene document."
+      "symbol": "buildStudyGlobalMergePatch",
+      "responsibility": "Maps Control Room study authoring fields to the canonical scene merge patch."
     },
     {
       "id": "ui-explorer",
       "path": "apps/control-room/src/modules/explorer/builders/buildModelTree.ts",
-      "symbol": "fdmMultilayerLayoutNodes",
-      "responsibility": "Builds semantic common-grid and native-layer Explorer nodes."
+      "symbol": "buildModelTree",
+      "responsibility": "Builds the committed semantic Explorer tree to which common-grid and native-layer nodes belong."
     },
     {
       "id": "ui-grid-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/fdm-grid/fdmMultilayerInspectorModel.ts",
-      "symbol": "resolveFdmMultilayerInspectorModel",
-      "responsibility": "Exposes common-grid, native-layer, transfer, mask, provenance, and Airbox facts."
+      "path": "apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts",
+      "symbol": "createStudyGlobalDraft",
+      "responsibility": "Reads committed study authoring values into the Inspector draft; multilayer grid details are an explicitly scoped extension."
     },
     {
       "id": "ui-airbox-inspector",
-      "path": "apps/control-room/src/modules/inspector/panels/airbox/fdmMultilayerAirboxTargetInspectorModel.ts",
-      "symbol": "resolveFdmMultilayerAirboxTargetInspectorModel",
-      "responsibility": "Exposes target-only Airbox geometry, field capability, fingerprints, revisions, and runtime identity."
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmDomainPresentation",
+      "responsibility": "Adapts the committed FDM presentation domain; target-only Airbox inspector facts remain explicitly scoped."
     },
     {
       "id": "api-layout",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
-      "symbol": "fdm_multilayer_layout_resource",
-      "responsibility": "Validates and publishes the versioned FDM multilayer domain layout resource."
+      "symbol": "fdm_grid_descriptor",
+      "responsibility": "Publishes the committed versioned FDM domain metadata resource used as the base for multilayer layout exposure."
     },
     {
       "id": "viewport-layers",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
-      "symbol": "adaptFdmMultilayerNativeLayerDomains",
-      "responsibility": "Creates separate viewport render carriers for native multilayer grids."
+      "symbol": "adaptFdmDomainMeta",
+      "responsibility": "Creates the committed FDM viewport render carrier used as the base for separate native multilayer grids."
     },
     {
       "id": "viewport-airbox",
-      "path": "apps/control-room/src/modules/viewport-3d/model/viewport3DFdmMultilayerAirbox.ts",
-      "symbol": "buildFdmMultilayerAirboxFieldRequest",
-      "responsibility": "Builds the target-scoped H_demag field request for the multilayer Airbox."
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmDomainPresentation",
+      "responsibility": "Adapts the committed FDM presentation carrier used as the base for a target-scoped multilayer Airbox field request."
     }
   ],
   "symbols": [

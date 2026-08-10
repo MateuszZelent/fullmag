@@ -170,6 +170,50 @@ grid, padding, precision, mask, and energy reduction policy.
 | `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Strictly between $0$ and $1$ when supplied. | Lower bound for partial-cell volume fraction in stability logic. | Boundary-correction lanes. | `discretization.fdm.boundary_phi_floor` |
 | `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Greater than or equal to $0$ when supplied. | Lower bound for T1 boundary distance. | Boundary-correction lanes. | `discretization.fdm.boundary_delta_min` |
 
+### Minimalny skrypt stage-first
+
+Poniższy przykład uruchamia pojedynczy magnes na siatce FDM CPU FP64 i zapisuje pole
+`H_demag`. Dla kilku rozłącznych warstw użyj pełnego przykładu na stronie
+{doc}`multilayer-convolution` albo przewodnika {doc}`../../../python-api/discretization/fdm-multilayer-convolution`.
+
+```python
+# %% Imports and execution intent
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("fdm_convolution_python")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.interactive(False)
+
+# %% FDM grid and demagnetization policy
+study.fdm(
+    default_cell=(4.0 * nm, 4.0 * nm, 4.0 * nm),
+    demag=fm.FDMDemag(strategy="single_grid", mode="auto"),
+)
+
+# %% One magnetic body and physical terms
+study.universe(
+    mode="manual",
+    size=(32.0 * nm, 16.0 * nm, 8.0 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+magnet = study.geometry(fm.Box(size=(24.0 * nm, 12.0 * nm, 4.0 * nm)), name="magnet")
+magnet.Ms = 800.0e3
+magnet.Aex = 13.0e-12
+magnet.alpha = 0.02
+magnet.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange(enabled=True)
+study.demag(enabled=True)
+
+# %% Observable and fixed-step stage
+study.save("H_demag", every=1.0e-13)
+study.solver(integrator="rk4", fix_dt=1.0e-14, gamma=2.211e5)
+study.stages.add_run(until=1.0e-13, stage_id="fdm_demag_run")
+```
+
 (demag-fdm-problem-ir)=
 ## 6. ProblemIR and normalization
 
