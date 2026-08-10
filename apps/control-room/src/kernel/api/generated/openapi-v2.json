@@ -1,6 +1,215 @@
 {
   "components": {
     "schemas": {
+      "ActiveLaneCapabilityReasonCode": {
+        "description": "Stable machine-readable classification for an active-lane operation reason.\nHuman-readable `reason` text may evolve without changing UI behavior.",
+        "enum": [
+          "capability_supported",
+          "capability_semantic_only",
+          "capability_deferred",
+          "capability_unsupported",
+          "capability_stale"
+        ],
+        "type": "string"
+      },
+      "ActiveLaneCapabilitySnapshot": {
+        "properties": {
+          "authored": {
+            "$ref": "#/components/schemas/ActiveLaneIdentity"
+          },
+          "fallback": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActiveLaneFallback"
+              }
+            ]
+          },
+          "operations": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ActiveLaneOperationCapability"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "qualification": {
+            "$ref": "#/components/schemas/ActiveLaneQualification"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/ActiveLaneIdentity",
+            "description": "Effective execution request after launcher/environment overrides."
+          },
+          "resolved": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ActiveLaneIdentity"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilitySource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "authored",
+          "requested",
+          "source",
+          "qualification",
+          "operations"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneCapabilitySource": {
+        "properties": {
+          "authored_intent": {
+            "description": "Provenance of `authored`: canonical ProblemIR runtime selection.",
+            "type": "string"
+          },
+          "capability_profile_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_request": {
+            "description": "Provenance of `requested`: runtime resolution after launch overrides.",
+            "type": "string"
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`planner` when the snapshot is backed by resolved planner capabilities;\n`unavailable` when status must fail closed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "authored_intent",
+          "effective_request"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneCapabilityState": {
+        "enum": [
+          "supported",
+          "semantic_only",
+          "deferred",
+          "unsupported",
+          "stale"
+        ],
+        "type": "string"
+      },
+      "ActiveLaneFallback": {
+        "properties": {
+          "fallback_engine": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "occurred": {
+            "type": "boolean"
+          },
+          "original_engine": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurred",
+          "original_engine",
+          "fallback_engine",
+          "reason",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneIdentity": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "discretization": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "discretization",
+          "device",
+          "precision",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneOperationCapability": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilityReasonCode"
+          },
+          "requires": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilityState"
+          }
+        },
+        "required": [
+          "state",
+          "reason_code",
+          "reason",
+          "requires"
+        ],
+        "type": "object"
+      },
+      "ActiveLaneQualification": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "description": "Capability availability does not imply scientific qualification.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "type": "object"
+      },
       "AdaptiveSolverIntegratorRequest": {
         "enum": [
           "rk23",
@@ -1054,6 +1263,10 @@
       },
       "CapabilityMap": {
         "properties": {
+          "active_lane": {
+            "$ref": "#/components/schemas/ActiveLaneCapabilitySnapshot",
+            "description": "Planner-owned operation gating for the currently resolved execution lane."
+          },
           "algorithms_available": {
             "items": {
               "type": "string"
@@ -1112,7 +1325,8 @@
           "gpu_telemetry",
           "preview_2d",
           "preview_3d",
-          "algorithms_available"
+          "algorithms_available",
+          "active_lane"
         ],
         "type": "object"
       },
@@ -3389,6 +3603,413 @@
         ],
         "type": "object"
       },
+      "FdmCommonTransformLayoutResource": {
+        "properties": {
+          "cell_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "fft_shape": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "is_physical_mesh": {
+            "type": "boolean"
+          },
+          "origin": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "type": "string"
+          },
+          "shape": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "shape",
+          "cell_size",
+          "origin",
+          "fft_shape",
+          "is_physical_mesh",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "FdmLayerLayoutResource": {
+        "properties": {
+          "active_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_mask_present": {
+            "type": "boolean"
+          },
+          "convolution_cell_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "convolution_grid": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "inactive_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "magnet_name": {
+            "type": "string"
+          },
+          "mask_provenance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "native_cell_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "native_grid": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "native_grid_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "native_origin": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "transfer_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "layer_id",
+          "object_id",
+          "magnet_name",
+          "native_grid",
+          "native_cell_size",
+          "native_origin",
+          "convolution_grid",
+          "convolution_cell_size",
+          "transfer_kind",
+          "active_mask_present",
+          "active_cell_count",
+          "inactive_cell_count"
+        ],
+        "type": "object"
+      },
+      "FdmMagneticSupportSemanticRole": {
+        "enum": [
+          "magnetic-support"
+        ],
+        "type": "string"
+      },
+      "FdmMagneticSupportSummaryResource": {
+        "properties": {
+          "active_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_unassigned_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bounds_max_m": {
+            "description": "Cell-edge AABB of the exact active-cell mask in meters.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min_m": {
+            "description": "Cell-edge AABB of the exact active-cell mask in meters.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "grid_fingerprint": {
+            "description": "Grid identity used to compute this exact support summary.",
+            "type": "string"
+          },
+          "inactive_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "semantic_role": {
+            "$ref": "#/components/schemas/FdmMagneticSupportSemanticRole"
+          }
+        },
+        "required": [
+          "semantic_role",
+          "grid_fingerprint",
+          "bounds_min_m",
+          "bounds_max_m",
+          "active_cell_count",
+          "inactive_cell_count",
+          "active_unassigned_cell_count"
+        ],
+        "type": "object"
+      },
+      "FdmMultilayerAirboxResource": {
+        "properties": {
+          "carrier_available": {
+            "type": "boolean"
+          },
+          "carrier_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "carrier_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "cells": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "h_demag_available": {
+            "type": "boolean"
+          },
+          "h_eff_available": {
+            "type": "boolean"
+          },
+          "h_eff_unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_grid_fingerprints": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "source_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_runtime_identity": {},
+          "target_only": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "carrier_available",
+          "h_demag_available",
+          "h_eff_available"
+        ],
+        "type": "object"
+      },
+      "FdmMultilayerLayoutResource": {
+        "description": "Thin, revision-driven description of the native carriers used by an FDM\nmultilayer convolution.  The common transform layout is an FFT scratch\nlayout and must never be interpreted as a physical mesh.",
+        "properties": {
+          "airbox": {
+            "$ref": "#/components/schemas/FdmMultilayerAirboxResource"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "common_transform_layout": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FdmCommonTransformLayoutResource"
+              }
+            ]
+          },
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "execution_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/FdmLayerLayoutResource"
+            },
+            "type": "array"
+          },
+          "layout_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "layout_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requested_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "domain_generation_id",
+          "available",
+          "backend",
+          "layout_revision",
+          "observation_revision",
+          "execution_revision",
+          "layers",
+          "airbox"
+        ],
+        "type": "object"
+      },
       "FdmRegionLegendEntryResource": {
         "description": "Thin descriptor for realized FDM cell membership. The mask itself is kept\non the binary data plane under the companion FMRM resource.",
         "properties": {
@@ -3441,6 +4062,9 @@
             },
             "type": "array"
           },
+          "domain_generation_id": {
+            "type": "string"
+          },
           "encoding": {
             "type": "string"
           },
@@ -3449,6 +4073,17 @@
           },
           "grid_fingerprint": {
             "type": "string"
+          },
+          "magnetic_support": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FdmMagneticSupportSummaryResource",
+                "description": "Exact realized magnetic-support summary. Missing on legacy artifacts;\nconsumers must then keep outside-support presentation fail-closed."
+              }
+            ]
           },
           "mesh_revision": {
             "format": "int64",
@@ -3495,6 +4130,7 @@
           "region_membership_revision",
           "freshness",
           "binary_path",
+          "domain_generation_id",
           "grid_fingerprint",
           "origin_m",
           "counts",
@@ -5021,6 +5657,55 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "carrier_origin_x_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "carrier_phase_rad": {
+                "format": "double",
+                "type": "number"
+              },
+              "center_x_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "center_y_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "gaussian_plane_wave"
+                ],
+                "type": "string"
+              },
+              "sigma_x_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "sigma_y_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "wavelength_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center_x_m",
+              "center_y_m",
+              "carrier_origin_x_m",
+              "sigma_x_m",
+              "sigma_y_m",
+              "wavelength_m",
+              "carrier_phase_rad",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -5351,11 +6036,18 @@
             ]
           },
           "max_samples": {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFull-domain FDM responses always return the complete cell-centred field,\neven when this cap is provided, because FMVP v2 has no cell-index\nmapping for a downsampled payload. Scoped FDM responses use FMVP v3\nexplicit cell ordinals; multilayer layer/object scopes carry the native\ngrid certificate fingerprint and scope provenance in FMMI metadata.",
             "format": "int32",
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "owner_object_id": {
+            "description": "Optional canonical owner of a `region` scope.\n\nRequired when the current single-grid FDM membership has the same\n`region_id` under more than one magnetic object. It is ignored by\nglobally unique region IDs to preserve existing unqualified requests.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -5368,14 +6060,14 @@
             ]
           },
           "scope_id": {
-            "description": "Scope identifier for `object` and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
             "type": [
               "string",
               "null"
             ]
           },
           "scope_kind": {
-            "description": "Optional FEM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `part`, `airbox`, `selection`.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
+            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
             "type": [
               "string",
               "null"
@@ -9489,6 +10181,14 @@
               "null"
             ]
           },
+          "conservative_current_view": {
+            "additionalProperties": true,
+            "description": "Optional explicit accepted RT0/H(div) source descriptor.  It remains a\nJSON object at the scene boundary so every closure field survives UI\nround-trip; the planner performs mesh-exact typed validation.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "coupling": {
             "$ref": "#/components/schemas/SceneTransportCoupling"
           },
@@ -9546,6 +10246,16 @@
               },
               {
                 "$ref": "#/components/schemas/SceneChargeSolverPolicy"
+              }
+            ]
+          },
+          "time_envelope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneTimeEnvelope"
               }
             ]
           }
@@ -9776,6 +10486,9 @@
                 "format": "double",
                 "type": "number"
               },
+              "formula_version": {
+                "$ref": "#/components/schemas/ZhangLiFormulaVersion"
+              },
               "id": {
                 "type": "string"
               },
@@ -9784,6 +10497,39 @@
                   "zhang_li"
                 ],
                 "type": "string"
+              },
+              "lande_g": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "operator_version": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ZhangLiOperatorVersion"
+                  }
+                ]
+              },
+              "schema_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneRegionRef"
+                  }
+                ]
               }
             },
             "required": [
@@ -12787,9 +13533,9 @@
             "minimum": 0,
             "type": "integer"
           },
-          "unresolved_region_ids": {
+          "unresolved_regions": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/MeshUnresolvedRegionResource"
             },
             "type": "array"
           }
@@ -12851,6 +13597,10 @@
             },
             "type": "array"
           },
+          "owner_object_id": {
+            "description": "Canonical scene-object owner. Together with `region_id` this is the\nstable authored-region identity.",
+            "type": "string"
+          },
           "realization": {
             "type": "string"
           },
@@ -12892,6 +13642,7 @@
           "region_membership_revision",
           "freshness",
           "realization",
+          "owner_object_id",
           "region_id",
           "source",
           "mesh_part_ids",
@@ -13721,6 +14472,22 @@
         ],
         "type": "object"
       },
+      "MeshUnresolvedRegionResource": {
+        "properties": {
+          "owner_object_id": {
+            "description": "Canonical scene-object owner. Region ids are not globally unique.",
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_object_id",
+          "region_id"
+        ],
+        "type": "object"
+      },
       "MetricsSummary": {
         "properties": {
           "steps_per_second": {
@@ -14040,6 +14807,12 @@
       },
       "ObjectPatchRequest": {
         "properties": {
+          "absorbing_boundary": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "base_revision": {
             "format": "int64",
             "minimum": 0,
@@ -14250,6 +15023,281 @@
           "unavailable"
         ],
         "type": "string"
+      },
+      "PhysicsGraphActivationResource": {
+        "enum": [
+          "configured",
+          "active",
+          "inactive",
+          "blocked",
+          "unsupported",
+          "unresolved"
+        ],
+        "type": "string"
+      },
+      "PhysicsGraphEdgeResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "source_id",
+          "target_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphModuleResource": {
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
+          },
+          "applies_to": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphScopeResource"
+            },
+            "type": "array"
+          },
+          "authored_state": {
+            "type": "string"
+          },
+          "capability": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/PhysicsGraphPresentationResource"
+          },
+          "solve_domain": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionRef"
+            },
+            "type": "array"
+          },
+          "source_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "applies_to",
+          "solve_domain",
+          "depends_on",
+          "activation",
+          "authored_state",
+          "capability",
+          "source_path",
+          "presentation"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphPresentationResource": {
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "family",
+          "label"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphProvenanceResource": {
+        "properties": {
+          "normalizer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "normalizer"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphResource": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphEdgeResource"
+            },
+            "type": "array"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphModuleResource"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/PhysicsGraphProvenanceResource"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "schema_version",
+          "modules",
+          "edges",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphScopeResource": {
+        "description": "Stable scope reference used by the graph-driven model tree.\n\nThe graph endpoint intentionally exposes scope and dependency metadata,\nwhile constitutive family payloads remain on the family resources.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "interface"
+                ],
+                "type": "string"
+              },
+              "side_a": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "side_b": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              }
+            },
+            "required": [
+              "side_a",
+              "side_b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "cross_object"
+                ],
+                "type": "string"
+              },
+              "object_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "object_ids",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "source_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "source_path",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "PlanarEmptyPolicySchema": {
         "enum": [
@@ -18663,6 +19711,12 @@
       },
       "SceneObjectResource": {
         "properties": {
+          "absorbing_boundary": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "allocated_region_ids": {
             "items": {
               "type": "string"
@@ -23827,6 +24881,29 @@
                 "$ref": "#/components/schemas/RuntimeCommandIntent"
               },
               {
+                "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data.",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "fdm_grid_refresh"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
                 "properties": {
                   "profile": {
                     "$ref": "#/components/schemas/SolverProfileCommandConfig"
@@ -27349,6 +28426,21 @@
           }
         },
         "type": "object"
+      },
+      "ZhangLiFormulaVersion": {
+        "enum": [
+          "zhang_li.fullmag.v1",
+          "zhang_li.mumax3.v1",
+          "zhang_li.legacy_fullmag.v0"
+        ],
+        "type": "string"
+      },
+      "ZhangLiOperatorVersion": {
+        "enum": [
+          "zl_central_reference_v1",
+          "zl_mumax3_central_v1"
+        ],
+        "type": "string"
       }
     }
   },
@@ -28786,6 +29878,29 @@
         ]
       }
     },
+    "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FdmMultilayerLayoutResource"
+                }
+              }
+            },
+            "description": "FDM multilayer native and common transform layouts"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/domain/meta": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_meta",
@@ -28966,19 +30081,62 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary realized FDM cell membership (FMRM)"
+            "description": "Binary realized FDM cell membership (FMRM)",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "206": {
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial FMRM payload"
+            "description": "Partial FMRM payload",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
             "description": "FMRM payload not modified for the supplied ETag"
           },
           "404": {
             "description": "No realized FDM region membership artifact"
+          },
+          "409": {
+            "description": "Persisted membership does not belong to the current FDM domain"
           },
           "416": {
             "description": "Requested FMRM byte range is not satisfiable"
@@ -28998,6 +30156,15 @@
             "in": "path",
             "name": "region_id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical object owner used to disambiguate duplicate region IDs.",
+            "in": "query",
+            "name": "owner_object_id",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -29032,19 +30199,62 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Scoped binary realized FDM cell membership (FMRM)"
+            "description": "Scoped binary realized FDM cell membership (FMRM)",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "206": {
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial scoped FMRM payload"
+            "description": "Partial scoped FMRM payload",
+            "headers": {
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact FDM grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Current region-membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
             "description": "Scoped FMRM payload not modified for the supplied ETag"
           },
           "404": {
             "description": "No realized FDM membership or unknown region ID"
+          },
+          "409": {
+            "description": "Persisted membership does not belong to the current FDM domain"
           },
           "416": {
             "description": "Requested FMRM byte range is not satisfiable"
@@ -29074,6 +30284,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Persisted membership does not belong to the current FDM domain"
           }
         },
         "tags": [
@@ -29130,7 +30343,7 @@
             }
           },
           {
-            "description": "Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`).",
+            "description": "Optional FEM or FDM scope used for statistics.",
             "in": "query",
             "name": "scope_kind",
             "required": false,
@@ -29142,9 +30355,21 @@
             }
           },
           {
-            "description": "Scope identifier for `object` and `part` scopes.",
+            "description": "Scope identifier for `object`, `layer`, `region`, and `part` scopes.",
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional canonical owner of a `region` scope.",
+            "in": "query",
+            "name": "owner_object_id",
             "required": false,
             "schema": {
               "type": [
@@ -32189,7 +33414,7 @@
             }
           },
           {
-            "description": "Optional FEM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `part`, `airbox`, `selection`.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
+            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
             "in": "query",
             "name": "scope_kind",
             "required": false,
@@ -32201,9 +33426,21 @@
             }
           },
           {
-            "description": "Scope identifier for `object` and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional canonical owner of a `region` scope.\n\nRequired when the current single-grid FDM membership has the same\n`region_id` under more than one magnetic object. It is ignored by\nglobally unique region IDs to preserve existing unqualified requests.",
+            "in": "query",
+            "name": "owner_object_id",
             "required": false,
             "schema": {
               "type": [
@@ -32225,7 +33462,7 @@
             }
           },
           {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFull-domain FDM responses always return the complete cell-centred field,\neven when this cap is provided, because FMVP v2 has no cell-index\nmapping for a downsampled payload. Scoped FDM responses use FMVP v3\nexplicit cell ordinals; multilayer layer/object scopes carry the native\ngrid certificate fingerprint and scope provenance in FMMI metadata.",
             "in": "query",
             "name": "max_samples",
             "required": false,
@@ -32293,7 +33530,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.",
+            "description": "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads.",
             "headers": {
               "x-fullmag-component": {
                 "description": "Resolved component projection",
@@ -32475,6 +33712,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Canonical owner object ID. Required when multiple objects expose the\nsame authored region ID.",
+            "in": "query",
+            "name": "owner_object_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -32490,6 +33736,9 @@
           },
           "404": {
             "description": "No active mesh or membership for the region"
+          },
+          "409": {
+            "description": "Region ID is ambiguous without owner_object_id"
           }
         },
         "tags": [
@@ -36085,6 +37334,34 @@
             "description": ""
           }
         },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/physics-graph": {
+      "get": {
+        "description": "This endpoint is intentionally thin: mesh topology, field samples and the\nconstitutive family records stay on their dedicated resources.  The graph\nis normalized once by `fullmag-authoring` so the planner and Control Room\nconsume the same stable module identity, scope and dependency semantics.",
+        "operationId": "model_get_sessions_current_model_physics_graph",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicsGraphResource"
+                }
+              }
+            },
+            "description": "Normalized authored physics graph"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          },
+          "409": {
+            "description": "The authored scene cannot be normalized into a graph"
+          }
+        },
+        "summary": "Return the semantic physics-module graph for the current authoring scene.",
         "tags": [
           "model"
         ]

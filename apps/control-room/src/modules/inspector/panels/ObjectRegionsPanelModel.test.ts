@@ -229,6 +229,140 @@ describe("ObjectRegionsPanelModel", () => {
     });
   });
 
+  it("omits FEM mesh policy when an FDM region applies physical edits", () => {
+    const patch = buildObjectRegionPatch(
+      {
+        enabled: true,
+        frame: "object",
+        materialOverrides: [
+          {
+            conflictPolicy: "error",
+            parameter: "ms",
+            priority: 2,
+            unit: "A/m",
+            value: 800e3,
+          },
+        ],
+        meshPolicy: {
+          enabled: true,
+          maximumElementSize: 2e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: "fdm-region",
+        ownerBounds: null,
+        priority: 2,
+        realizationPolicy: "inherit",
+        shape: {
+          axis: [0, 0, 1],
+          center: [1e-9, 2e-9, 0],
+          height: 5e-9,
+          kind: "box",
+          radius: 20e-9,
+          size: [10e-9, 8e-9, 5e-9],
+        },
+      },
+      { meshPolicyLane: "fdm" },
+    );
+
+    expect(patch).not.toHaveProperty("mesh_policy");
+    expect(patch).toMatchObject({
+      material_overrides: [
+        {
+          parameter: "ms",
+          value: { kind: "constant", unit: "A/m", value: 800e3 },
+        },
+      ],
+      shape: {
+        center: [1e-9, 2e-9, 0],
+        kind: "box",
+        size: [10e-9, 8e-9, 5e-9],
+      },
+    });
+  });
+
+  it("clears stale FEM realization and mesh-size conflict fields from an FDM region patch", () => {
+    const patch = buildObjectRegionPatch(
+      {
+        enabled: true,
+        frame: "object",
+        materialOverrides: [
+          {
+            conflictPolicy: "min_mesh_size_wins" as never,
+            parameter: "ms",
+            priority: 2,
+            unit: "A/m",
+            value: 800e3,
+          },
+        ],
+        meshPolicy: {
+          enabled: true,
+          maximumElementSize: 2e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: "fdm-region",
+        ownerBounds: null,
+        priority: 2,
+        realizationPolicy: "project",
+        shape: {
+          axis: [0, 0, 1],
+          center: [0, 0, 0],
+          height: 5e-9,
+          kind: "box",
+          radius: 20e-9,
+          size: [10e-9, 8e-9, 5e-9],
+        },
+      },
+      { meshPolicyLane: "fdm" },
+    );
+
+    expect(patch.realization_policy).toBeNull();
+    expect(patch).not.toHaveProperty("mesh_policy");
+    expect(patch.material_overrides).toEqual([
+      {
+        parameter: "ms",
+        priority: 2,
+        value: { kind: "constant", unit: "A/m", value: 800e3 },
+      },
+    ]);
+  });
+
+  it("fails closed for an unresolved lane instead of serializing FEM region policy", () => {
+    const patch = buildObjectRegionPatch(
+      {
+        enabled: true,
+        frame: "object",
+        materialOverrides: [],
+        meshPolicy: {
+          enabled: true,
+          maximumElementSize: 2e-9,
+          minimumElementSize: 1e-9,
+          order: 1,
+          transitionDistance: 50e-9,
+        },
+        name: "unresolved-region",
+        ownerBounds: null,
+        priority: 0,
+        realizationPolicy: "conformal",
+        shape: {
+          axis: [0, 0, 1],
+          center: [0, 0, 0],
+          height: 5e-9,
+          kind: "box",
+          radius: 20e-9,
+          size: [10e-9, 8e-9, 5e-9],
+        },
+      },
+      { meshPolicyLane: "unknown" },
+    );
+
+    expect(patch.realization_policy).toBeNull();
+    expect(patch).not.toHaveProperty("mesh_policy");
+  });
+
   it("omits non-box shape parameters from the canonical Box patch", () => {
     const patch = buildObjectRegionPatch({
       enabled: true,
@@ -534,6 +668,65 @@ describe("ObjectRegionsPanelModel", () => {
         ],
       }),
     ).toContain("ms override priority must be an integer.");
+  });
+
+  it("does not block FDM physical edits on an irrelevant stale FEM policy", () => {
+    const validDraft = objectRegionDraftFromModel(
+      resolveObjectRegionPanelModel(
+        {
+          kind: "object.region",
+          label: "Core",
+          moduleSource: "explorer",
+          nodeId: "model:object:film:regions:reg-core",
+          objectId: "film",
+          ref: {
+            kind: "object.region",
+            nodeId: "model:object:film:regions:reg-core",
+            objectId: "film",
+            regionId: "reg-core",
+            type: "scene-object",
+            visualizationTargetId: "object:film",
+          },
+        },
+        { objects: [{ id: "film", name: "Film" }], revision: 1 },
+        {
+          geometry_realization_revision: 0,
+          regions: [
+            {
+              bounds_max: [1, 1, 1],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_ref: "mat-film",
+              mesh_part_ids: [],
+              name: "Core",
+              owner_object_id: "film",
+              region_id: "reg-core",
+              shape: { kind: "box", size: [10e-9, 10e-9, 2e-9] } as never,
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 1,
+        },
+      ),
+    );
+
+    expect(
+      validateObjectRegionDraft(
+        {
+          ...validDraft,
+          meshPolicy: {
+            ...validDraft.meshPolicy,
+            enabled: true,
+            maximumElementSize: 1e-9,
+            minimumElementSize: 2e-9,
+          },
+        },
+        { meshPolicyLane: "fdm" },
+      ),
+    ).toEqual([]);
   });
 
   it("prefers the selected authored region and counts parameter fields", () => {

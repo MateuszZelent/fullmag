@@ -83,6 +83,28 @@ describe("Inspector visual contract", () => {
     expect(fieldDrivePanel).not.toContain("Save drive");
   });
 
+  it("routes STT/SOT/SHE authoring drafts through the shared Inspector action bar", () => {
+    const authoringPanels = [
+      "TransportAuthoringInspector.tsx",
+      "SpinAuthoringInspector.tsx",
+      "SpinInterfaceInspector.tsx",
+    ].map((name) => readFileSync(join(inspectorRoot, "panels", name), "utf8"));
+    const interactionPanel = readFileSync(
+      join(inspectorRoot, "panels/PhysicsInteractionPanel.tsx"),
+      "utf8",
+    );
+    const overview = readFileSync(
+      join(inspectorRoot, "panels/PhysicsInspectorOverview.tsx"),
+      "utf8",
+    );
+
+    for (const source of authoringPanels) {
+      expect(source).toContain("useRegisterInspectorEditSession");
+    }
+    expect(interactionPanel).toContain("editSession={{");
+    expect(overview).toContain("PhysicsInspectorEditSessionBridge");
+  });
+
   it("routes Study drafts through the shared Inspector action bar", () => {
     const studyPanel = readFileSync(
       join(inspectorRoot, "panels/StudyInspectorPanel.tsx"),

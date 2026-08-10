@@ -13,6 +13,8 @@
 #include <sstream>
 #include <string>
 
+#include "../include/multilayer_batch_contract.hpp"
+
 namespace {
 
 void check(bool condition, const char *msg) {
@@ -203,14 +205,14 @@ void demag_launches_use_one_forward_and_inverse_batch() {
         "fp32 demag field launch must use one forward and one inverse batch");
 }
 
-void multilayer_demag_launches_use_one_forward_and_inverse_batch_per_kernel() {
+void multilayer_demag_launches_use_one_forward_and_inverse_batch_per_refresh() {
     const std::filesystem::path root = fdm_source_root();
     const std::string fp64 = function_body(
         read_text_file(root / "gpu" / "cuda" / "demag" / "multilayer_convolution.cu"),
-        "void launch_multilayer_demag_field_fp64(Context &ctx)");
+        "void launch_multilayer_demag_field_fp64_batched(Context &ctx)");
     const std::string fp32 = function_body(
         read_text_file(root / "gpu" / "cuda" / "demag" / "multilayer_convolution.cu"),
-        "void launch_multilayer_demag_field_fp32(Context &ctx)");
+        "void launch_multilayer_demag_field_fp32_batched(Context &ctx)");
 
     check(
         fp64.find("cufftExecZ2Z(") != std::string::npos,
@@ -218,14 +220,235 @@ void multilayer_demag_launches_use_one_forward_and_inverse_batch_per_kernel() {
     check(
         count_occurrences(fp64, "CUFFT_FORWARD") == 1 &&
             count_occurrences(fp64, "CUFFT_INVERSE") == 1,
-        "fp64 multilayer demag field launch must use one forward and one inverse batch per tensor kernel");
+        "fp64 multilayer demag field launch must use one forward and one inverse batch per refresh");
     check(
         fp32.find("cufftExecC2C(") != std::string::npos,
         "fp32 multilayer demag field launch must call cufftExecC2C");
     check(
         count_occurrences(fp32, "CUFFT_FORWARD") == 1 &&
             count_occurrences(fp32, "CUFFT_INVERSE") == 1,
-        "fp32 multilayer demag field launch must use one forward and one inverse batch per tensor kernel");
+        "fp32 multilayer demag field launch must use one forward and one inverse batch per refresh");
+    check(
+        fp64.find("for (const DeviceMultilayerTensorKernel &kernel") == std::string::npos &&
+            fp32.find("for (const DeviceMultilayerTensorKernel &kernel") == std::string::npos,
+        "batched multilayer path must not place FFT calls inside a pair-kernel loop");
+    check(
+        fp64.find("note_forward_fft") != std::string::npos &&
+            fp64.find("note_inverse_fft") != std::string::npos &&
+            fp64.find("note_pair_accumulation") != std::string::npos &&
+            fp32.find("note_forward_fft") != std::string::npos &&
+            fp32.find("note_inverse_fft") != std::string::npos &&
+            fp32.find("note_pair_accumulation") != std::string::npos,
+        "batched path must update the device-resident stage counter");
+}
+
+void multilayer_stage_counter_is_exact_without_a_gpu() {
+    for (const uint64_t layer_count : {1u, 2u, 3u, 4u, 8u}) {
+        const auto expected = fullmag::fdm::expected_multilayer_batch_counts(layer_count);
+        check(expected.forward_fft_count == layer_count,
+              "expected batched forward FFT count must equal L");
+        check(expected.inverse_fft_count == layer_count,
+              "expected batched inverse FFT count must equal L");
+        check(expected.pair_accumulation_count == layer_count * layer_count,
+              "expected batched pair accumulation count must equal L^2");
+        check(expected.h2d_count == 0 && expected.d2h_count == 0,
+              "warm device-resident refresh must not perform host transfers");
+
+        fullmag::fdm::MultilayerDemagStageCounters actual;
+        actual.begin_refresh(layer_count);
+        for (uint64_t i = 0; i < layer_count; ++i) {
+            actual.note_forward_fft();
+        }
+        for (uint64_t i = 0; i < layer_count * layer_count; ++i) {
+            actual.note_pair_accumulation();
+        }
+        for (uint64_t i = 0; i < layer_count; ++i) {
+            actual.note_inverse_fft();
+        }
+        check(actual.matches(expected),
+              "stage counter must accept exactly L forward, L inverse and L^2 pairs");
+
+        actual.refresh_count = 0;
+        check(!actual.matches(expected),
+              "stage counter must reject FFT/pair counts without one recorded refresh");
+    }
+}
+
+void d07_batched_refresh_has_l_fft_stages_l_squared_pairs_and_zeroed_destinations() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string source =
+        read_text_file(root / "gpu" / "cuda" / "demag" / "multilayer_convolution.cu");
+
+    const auto check_precision = [&](const std::string &launch_signature,
+                                     const std::string &fft_call,
+                                     const char *precision) {
+        const std::string launch = function_body(source, launch_signature);
+        const std::string source_loop = function_body(
+            launch, "for (uint32_t src_index = 0; src_index < layer_count; ++src_index)");
+        const std::string destination_loop = function_body(
+            launch, "for (uint32_t dst_index = 0; dst_index < layer_count; ++dst_index)");
+        const std::string pair_loop = function_body(
+            destination_loop, "for (uint32_t src_index = 0; src_index < layer_count; ++src_index)");
+
+        check(
+            count_occurrences(launch, fft_call) == 2,
+            "D-07 batched refresh must issue exactly one forward and one inverse cuFFT call site");
+        check(
+            count_occurrences(source_loop, "CUFFT_FORWARD") == 1 &&
+                source_loop.find("CUFFT_INVERSE") == std::string::npos &&
+                count_occurrences(source_loop, "note_forward_fft();") == 1 &&
+                count_occurrences(launch, "note_forward_fft();") == 1,
+            "D-07 source-layer loop must account for exactly one forward FFT per layer");
+        check(
+            count_occurrences(destination_loop, "CUFFT_INVERSE") == 1 &&
+                destination_loop.find("CUFFT_FORWARD") == std::string::npos &&
+                count_occurrences(destination_loop, "note_inverse_fft();") == 1 &&
+                count_occurrences(launch, "note_inverse_fft();") == 1,
+            "D-07 destination-layer loop must account for exactly one inverse FFT per layer");
+        check(
+            count_occurrences(pair_loop, "accumulate_demag_tensor_kernel_") == 1 &&
+                count_occurrences(pair_loop, "note_pair_accumulation();") == 1 &&
+                count_occurrences(destination_loop, "note_pair_accumulation();") == 1 &&
+                count_occurrences(launch, "note_pair_accumulation();") == 1 &&
+                pair_loop.find("CUFFT_FORWARD") == std::string::npos &&
+                pair_loop.find("CUFFT_INVERSE") == std::string::npos,
+            "D-07 pair loop must perform one accumulation and no FFT per ordered pair");
+
+        const std::size_t zero_x = destination_loop.find("cudaMemsetAsync(destination_x, 0, bytes, stream)");
+        const std::size_t zero_y = destination_loop.find("cudaMemsetAsync(destination_y, 0, bytes, stream)");
+        const std::size_t zero_z = destination_loop.find("cudaMemsetAsync(destination_z, 0, bytes, stream)");
+        const std::size_t first_pair = destination_loop.find(
+            "for (uint32_t src_index = 0; src_index < layer_count; ++src_index)");
+        check(
+            zero_x != std::string::npos && zero_y != std::string::npos &&
+                zero_z != std::string::npos && first_pair != std::string::npos &&
+                zero_x < first_pair && zero_y < first_pair && zero_z < first_pair,
+            "D-07 must zero every destination spectrum before its L pair accumulations");
+        check(
+            launch.find("cudaMemcpy") == std::string::npos &&
+                launch.find("_assisted") == std::string::npos,
+            "D-07 batched refresh must not transfer spectra or invoke the assisted path");
+        (void)precision;
+    };
+
+    check_precision(
+        "void launch_multilayer_demag_field_fp64_batched(Context &ctx)",
+        "cufftResult fft_err = cufftExecZ2Z(",
+        "fp64");
+    check_precision(
+        "void launch_multilayer_demag_field_fp32_batched(Context &ctx)",
+        "cufftResult fft_err = cufftExecC2C(",
+        "fp32");
+}
+
+void d07_batch_selection_requires_complete_catalog_and_fails_closed() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string source =
+        read_text_file(root / "gpu" / "cuda" / "demag" / "multilayer_convolution.cu");
+    const std::string classification = function_body(
+        source, "bool classify_multilayer_batch_plan(");
+    const std::string fp64_dispatch = function_body(
+        source, "void launch_multilayer_demag_field_fp64(Context &ctx)");
+    const std::string fp32_dispatch = function_body(
+        source, "void launch_multilayer_demag_field_fp32(Context &ctx)");
+
+    check(
+        classification.find("expected_kernel_count = layer_count * layer_count") !=
+                std::string::npos &&
+            classification.find("std::vector<uint8_t> seen(expected_kernel_count, 0)") !=
+                std::string::npos &&
+            classification.find("duplicate tensor pair") != std::string::npos &&
+            classification.find("incomplete tensor pair catalog") != std::string::npos &&
+            classification.find("use_batched = true") != std::string::npos,
+        "D-07 selection must require and catalog every ordered L^2 tensor pair");
+    check(
+        classification.find("D-07 device-resident spectra were not prepared before refresh") !=
+                std::string::npos &&
+            classification.find("unsupported multilayer transfer kind; refusing native refresh") !=
+                std::string::npos,
+        "D-07 selection must reject missing resident workspace and unknown transfers");
+    check(
+        fp64_dispatch.find("if (!classify_multilayer_batch_plan(") != std::string::npos &&
+            fp64_dispatch.find("if (use_batched)") != std::string::npos &&
+            fp64_dispatch.find("launch_multilayer_demag_field_fp64_batched(ctx)") !=
+                std::string::npos &&
+            fp32_dispatch.find("if (!classify_multilayer_batch_plan(") != std::string::npos &&
+            fp32_dispatch.find("if (use_batched)") != std::string::npos &&
+            fp32_dispatch.find("launch_multilayer_demag_field_fp32_batched(ctx)") !=
+                std::string::npos,
+        "D-07 dispatch must stop on classification failure instead of silently selecting another lane");
+
+    const std::string fp64_classification_failure = function_body(
+        fp64_dispatch, "if (!classify_multilayer_batch_plan(");
+    const std::string fp32_classification_failure = function_body(
+        fp32_dispatch, "if (!classify_multilayer_batch_plan(");
+    check(
+        count_occurrences(fp64_classification_failure, "return;") == 1 &&
+            fp64_classification_failure.find("_assisted") == std::string::npos &&
+            fp64_classification_failure.find("launch_multilayer_demag_field_fp64_batched") ==
+                std::string::npos &&
+            count_occurrences(fp32_classification_failure, "return;") == 1 &&
+            fp32_classification_failure.find("_assisted") == std::string::npos &&
+            fp32_classification_failure.find("launch_multilayer_demag_field_fp32_batched") ==
+                std::string::npos,
+        "D-07 classification failure must return directly before either CUDA lane");
+}
+
+void d07_runner_selection_and_fail_closed_matrix_is_covered() {
+    const std::filesystem::path repo_root = fdm_source_root().parent_path().parent_path();
+    const std::string cuda_runner = read_text_file(
+        repo_root / "crates" / "fullmag-runner" / "src" / "fdm" / "gpu" / "cuda" /
+            "multilayer.rs");
+    const std::string cpu_runner = read_text_file(
+        repo_root / "crates" / "fullmag-runner" / "src" / "fdm" / "cpu" /
+            "multilayer_reference.rs");
+    const std::string selection = read_text_file(
+        repo_root / "crates" / "fullmag-runner" / "src" / "solver_runtime" /
+            "selection.rs");
+
+    check(
+        cuda_runner.find("cuda_multilayer_two_d_mode_preserves_assisted_lane_without_d07") !=
+                std::string::npos &&
+            cuda_runner.find("cuda_multilayer_rejects_forged_fingerprint_before_allocation") !=
+                std::string::npos,
+        "runner must preserve two_d_stack as assisted without D-07 telemetry and fail closed on forged three_d fingerprints");
+    check(
+        cpu_runner.find("multilayer_runtime_rejects_push_pull_for_periodic_boundaries") !=
+                std::string::npos &&
+            cpu_runner.find("multilayer_runtime_rejects_unsupported_transfer_before_allocation") !=
+                std::string::npos,
+        "runner must test fail-closed PBC and unsupported-transfer gates");
+    check(
+        selection.find("script_forced_gpu_fails_closed_when_cuda_is_unavailable") !=
+                std::string::npos &&
+            selection.find("CUDA backend is not available") != std::string::npos,
+        "runner must test missing CUDA without silently falling back for forced GPU");
+}
+
+void multilayer_batch_storage_matches_cufft_component_stride() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string context_header =
+        read_text_file(root / "include" / "context.hpp");
+    const std::string context_source =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu");
+    const std::string multilayer_source =
+        read_text_file(root / "gpu" / "cuda" / "demag" /
+                       "multilayer_convolution.cu");
+
+    check(
+        context_header.find("multilayer_batch_layer_stride") != std::string::npos,
+        "D-07 workspace must record the [layer][component][cell] stride");
+    check(
+        context_source.find("component_bytes * index") != std::string::npos &&
+            context_source.find("ctx.multilayer_batch_layer_stride = layer_stride") !=
+                std::string::npos,
+        "D-07 workspace must allocate one contiguous three-component block per layer");
+    check(
+        multilayer_source.find("const uint64_t layer_stride") != std::string::npos &&
+            multilayer_source.find("const uint64_t component_stride") !=
+                std::string::npos &&
+            multilayer_source.find("* layer_stride") != std::string::npos,
+        "D-07 launch must distinguish layer stride from cuFFT component stride");
 }
 
 } // namespace
@@ -235,7 +458,12 @@ int main() {
     demag_fft_work_area_is_owned_by_context();
     demag_fft_runs_on_context_compute_stream();
     demag_launches_use_one_forward_and_inverse_batch();
-    multilayer_demag_launches_use_one_forward_and_inverse_batch_per_kernel();
+    multilayer_demag_launches_use_one_forward_and_inverse_batch_per_refresh();
+    multilayer_stage_counter_is_exact_without_a_gpu();
+    d07_batched_refresh_has_l_fft_stages_l_squared_pairs_and_zeroed_destinations();
+    d07_batch_selection_requires_complete_catalog_and_fails_closed();
+    d07_runner_selection_and_fail_closed_matrix_is_covered();
+    multilayer_batch_storage_matches_cufft_component_stride();
     std::printf("batched demag FFT contract: PASS\n");
     return 0;
 }

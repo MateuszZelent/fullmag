@@ -2,6 +2,7 @@ import {
   isVisualizationTopologyCurrent,
   isVisualizationTopologyRenderable,
   resolveTopologyConstrainedVisualizationSettings,
+  resolveSceneRevision,
   resolveVisualizationTopologyFreshness,
   type VisualizationTopologyFreshness,
 } from "@/kernel/visualization/visualizationDisplayResolution";
@@ -16,11 +17,12 @@ export function resolveViewport3DTopologyFreshness(
     topology?: unknown;
   } = {},
 ): Viewport3DTopologyFreshness {
-  if (hasLoadedFemDomainTopology(context.domainMeta, context.topology)) {
-    const resolved = resolveVisualizationTopologyFreshness(scene, manifest);
-    return resolved === "unknown" ? "current" : resolved;
+  if (
+    asRecord(context.domainMeta)?.discretization === "fem" &&
+    !asRecord(manifest)
+  ) {
+    return "unknown";
   }
-
   return resolveVisualizationTopologyFreshness(scene, manifest);
 }
 
@@ -54,7 +56,7 @@ export function resolveUnknownTopologyProvenanceRefreshKey(
   scene: unknown,
   manifest: unknown,
 ): string | null {
-  const sceneRevision = asFiniteNumber(asRecord(scene)?.revision);
+  const sceneRevision = resolveSceneRevision(scene);
   const manifestRecord = asRecord(manifest);
   const manifestRevision = asFiniteNumber(manifestRecord?.revision);
   const sourceSceneRevision = asFiniteNumber(
@@ -83,15 +85,4 @@ function asRecord(value: unknown): JsonRecord | null {
 
 function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function hasLoadedFemDomainTopology(domainMeta: unknown, topology: unknown): boolean {
-  const metaRecord = asRecord(domainMeta);
-  const topologyRecord = asRecord(topology);
-  const nodeCount = asFiniteNumber(topologyRecord?.nodeCount);
-  return (
-    metaRecord?.discretization === "fem" &&
-    nodeCount !== null &&
-    nodeCount > 0
-  );
 }

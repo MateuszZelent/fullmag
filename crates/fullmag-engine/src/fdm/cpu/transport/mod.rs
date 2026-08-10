@@ -7,8 +7,10 @@ mod spin_drift_diffusion;
 mod transient_spin;
 
 pub use charge::{
-    ChargeBalanceDiagnostics, ChargeBoundaryCondition, ChargeBoundaryConditions, ChargeSolution,
-    ChargeSolverConfig, OrientedFaceFluxes, PotentialGauge, StructuredChargeProblem,
+    ChargeBalanceDiagnostics, ChargeBoundaryCondition, ChargeBoundaryConditions,
+    ChargeInterfaceFluxObservation, ChargeSolution, ChargeSolverConfig,
+    OrientedChargeMixingInterface, OrientedFaceFluxes, PotentialGauge, StructuredChargeFace,
+    StructuredChargeProblem,
 };
 pub use coupled_charge_spin::{
     CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields, CoupledChargeSpinProblem,

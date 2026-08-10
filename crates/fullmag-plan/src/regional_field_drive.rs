@@ -243,6 +243,23 @@ fn spatial_point_value(
                 } => sinc_value(*axis, *period_m, *center_m, *width_m, window, point),
             })
         }
+        FieldSpatialProfileIR::GaussianPlaneWave {
+            center_x_m,
+            center_y_m,
+            carrier_origin_x_m,
+            sigma_x_m,
+            sigma_y_m,
+            wavelength_m,
+            carrier_phase_rad,
+        } => {
+            let dx = (point[0] - center_x_m) / sigma_x_m;
+            let dy = (point[1] - center_y_m) / sigma_y_m;
+            let envelope = (-0.5 * (dx * dx + dy * dy)).exp();
+            let carrier = 2.0 * std::f64::consts::PI * (point[0] - carrier_origin_x_m)
+                / wavelength_m
+                + carrier_phase_rad;
+            Ok(envelope * carrier.cos())
+        }
     }
 }
 
@@ -293,7 +310,9 @@ fn adaptive_cell_average(
         0.34785484513745385,
     ];
     match profile {
-        FieldSpatialProfileIR::Sinc { .. } if depth == 0 => {
+        FieldSpatialProfileIR::Sinc { .. } | FieldSpatialProfileIR::GaussianPlaneWave { .. }
+            if depth == 0 =>
+        {
             return tensor_average(profile, center, half, geometry, P4, W4);
         }
         FieldSpatialProfileIR::GeometryMask {
@@ -406,6 +425,42 @@ mod tests {
         };
         let average = spatial_cell_average(&profile, [0.0; 3], [1.0, 0.1, 0.1], &[]).unwrap();
         assert!(average < 1.0 && average > 0.5, "average={average}");
+    }
+
+    #[test]
+    fn gaussian_plane_wave_profile_uses_independent_carrier_origin() {
+        let profile = FieldSpatialProfileIR::GaussianPlaneWave {
+            center_x_m: -1.0e-6,
+            center_y_m: 0.0,
+            carrier_origin_x_m: 0.0,
+            sigma_x_m: 196.0e-9,
+            sigma_y_m: 186.8507960633642e-9,
+            wavelength_m: 196.0e-9,
+            carrier_phase_rad: 0.0,
+        };
+
+        let at_carrier_origin = spatial_point_value(&profile, [0.0, 0.0, 0.0], &[]).unwrap();
+        let at_quarter_wave = spatial_point_value(&profile, [49.0e-9, 0.0, 0.0], &[]).unwrap();
+        let expected_envelope: f64 = (-0.5_f64 * (1.0e-6_f64 / 196.0e-9_f64).powi(2)).exp();
+
+        assert!((at_carrier_origin - expected_envelope).abs() < 1.0e-14);
+        assert!(at_quarter_wave.abs() < 1.0e-14, "value={at_quarter_wave}");
+    }
+
+    #[test]
+    fn gaussian_plane_wave_profile_is_cell_averaged() {
+        let profile = FieldSpatialProfileIR::GaussianPlaneWave {
+            center_x_m: 0.0,
+            center_y_m: 0.0,
+            carrier_origin_x_m: 0.0,
+            sigma_x_m: 1.0,
+            sigma_y_m: 1.0,
+            wavelength_m: 4.0,
+            carrier_phase_rad: 0.0,
+        };
+
+        let average = spatial_cell_average(&profile, [0.0; 3], [0.25, 0.1, 0.1], &[]).unwrap();
+        assert!(average < 1.0 && average > 0.9, "average={average}");
     }
 
     #[test]

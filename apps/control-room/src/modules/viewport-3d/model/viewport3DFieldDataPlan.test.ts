@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -212,6 +213,42 @@ describe("viewport3DFieldDataPlan", () => {
         scope_kind: "object",
       },
     });
+  });
+
+  it("keeps FDM vector-only requests complete so cell mapping remains addressable", () => {
+    const fdmSettings: VisualizationTargetSettings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "H_eff",
+      shaderVisible: false,
+      vectorBudget: 128,
+      vectorsVisible: true,
+      visible: true,
+    };
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 128,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(plan.demands).toContainEqual(
+      expect.objectContaining({
+        completeness: "complete",
+        maxSamples: null,
+        passId: "fdm-domain:vector-glyph",
+        targetId: "fdm-domain",
+      }),
+    );
+    const [request] = Array.from(plan.requests.values());
+    expect(request).toMatchObject({
+        query: {
+          component: "full",
+          scope_kind: "full",
+        },
+      });
+    expect(request?.query).not.toHaveProperty("max_samples");
   });
 
   it("keeps orientation surfaces on complete full-vector data", () => {
@@ -608,6 +645,83 @@ describe("viewport3DFieldDataPlan", () => {
       quantityId: "H_eff",
     });
 
+    const fdmTargetQuantity = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings: {
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        surfaceColorSource: "component_y",
+        vectorsVisible: false,
+        visible: true,
+      },
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "m",
+      }),
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(fdmTargetQuantity.demands).toEqual([
+      expect.objectContaining({
+        passId: "fdm-domain:surface",
+        passKind: "surface",
+        quantityId: "H_eff",
+        scopeId: null,
+        scopeKind: "full",
+        targetId: "fdm-domain",
+      }),
+    ]);
+    expect([...fdmTargetQuantity.requests.values()][0]).toMatchObject({
+      query: {
+        component: "y",
+        scope_kind: "full",
+      },
+      quantityId: "H_eff",
+    });
+
+    const fdmAirboxTargetQuantity = resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_demag",
+        shaderVisible: false,
+        vectorBudget: 64,
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: null,
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "m",
+      }),
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(fdmAirboxTargetQuantity.demands).toEqual([
+      expect.objectContaining({
+        completeness: "sampled-ok",
+        component: "full",
+        passId: "fdm-universe-outside-support:vector-glyph",
+        passKind: "vector-glyph",
+        quantityId: "H_demag",
+        scopeId: null,
+        scopeKind: "airbox",
+        targetId: "fdm-universe-outside-support",
+      }),
+    ]);
+    expect([...fdmAirboxTargetQuantity.requests.values()][0]).toMatchObject({
+      query: {
+        component: "full",
+        max_samples: 64,
+        scope_kind: "airbox",
+      },
+      quantityId: "H_demag",
+    });
+
     const airbox = resolveViewport3DAirboxFieldVectorDemandPlan({
       airboxParts: [{ id: "airbox-a", label: "Airbox A" }],
       quantityId: "H_demag",
@@ -644,6 +758,24 @@ describe("viewport3DFieldDataPlan", () => {
       scope_kind: "airbox",
     });
 
+    const staleShaderAirbox = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "airbox-stale-shader", label: "Airbox" }],
+      quantityId: "H_demag",
+      shaderVisible: true,
+      surfaceColorSource: "magnitude",
+      vectorBudget: 16,
+      vectorsVisible: true,
+    });
+    expect(staleShaderAirbox.demands).toEqual([
+      expect.objectContaining({
+        completeness: "sampled-ok",
+        passKind: "vector-glyph",
+      }),
+    ]);
+    expect(staleShaderAirbox.demands).not.toEqual([
+      expect.objectContaining({ passKind: "surface" }),
+    ]);
+
     const emptyAirbox = resolveViewport3DAirboxFieldVectorDemandPlan({
       airboxParts: [{ id: "airbox-empty", label: "Empty Airbox" }],
       quantityId: "H_demag",
@@ -652,5 +784,57 @@ describe("viewport3DFieldDataPlan", () => {
     });
     expect(emptyAirbox.demands).toEqual([]);
     expect(emptyAirbox.requests.size).toBe(0);
+  });
+
+  it("does not request an unavailable FDM airbox quantity", () => {
+    const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "part:airbox" }],
+      fieldQuery: { component: "full", scope_kind: "full" },
+      quantityId: "H_demag",
+      vectorBudget: 1200,
+      vectorsVisible: true,
+      availableQuantityIds: new Set(["m"]),
+    });
+
+    expect(plan.demands).toEqual([]);
+    expect(plan.requests).toEqual(new Map());
+  });
+
+  it("does not request unavailable quantities for FDM target views", () => {
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["m"]),
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_demag",
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: {
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        visible: true,
+      },
+      fdmTargetSettings: [
+        {
+          label: "FDM target",
+          settings: {
+            ...DEFAULT_OBJECT_VISUALIZATION,
+            activeQuantityId: "H_eff",
+            shaderVisible: true,
+            visible: true,
+          },
+          targetId: "fdm-target",
+        },
+      ],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 1200,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(plan.demands).toEqual([]);
+    expect(plan.requests).toEqual(new Map());
   });
 });

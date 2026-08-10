@@ -48,6 +48,7 @@ describe("viewport 3D memory stress", () => {
 
       unsubscribe();
       expect(store.stats()).toEqual({
+        activePauseCount: 0,
         entryCount: 0,
         inflightCount: 0,
         listenerCount: 0,

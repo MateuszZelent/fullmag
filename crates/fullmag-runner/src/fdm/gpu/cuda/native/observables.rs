@@ -39,6 +39,14 @@ impl NativeFdmBackend {
             max_torque_Apm: 0.0,
             suggested_next_dt: 0.0,
             wall_time_ns: 0,
+            hot_loop_d2h_bytes: 0,
+            hot_loop_host_sync_count: 0,
+            hot_loop_control_scalar_d2h_bytes: 0,
+            hot_loop_control_scalar_host_sync_count: 0,
+            multilayer_refresh_count: 0,
+            multilayer_forward_fft_count: 0,
+            multilayer_inverse_fft_count: 0,
+            multilayer_pair_accumulation_count: 0,
         };
 
         let rc =

@@ -1,7 +1,9 @@
 "use client";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { JsonResourceSection } from "./MeshResourceView";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { InspectorGroup } from "../primitives/InspectorGroup";
+import { JsonResourceSection, MeshResourceFields } from "./MeshResourceView";
 import { MeshBuildHistorySection } from "./mesh-details/MeshBuildHistorySection";
 import { MeshBuildPipelineSection } from "./mesh-details/MeshBuildPipelineSection";
 import {
@@ -22,7 +24,49 @@ import {
 import { MeshEditorCapabilitiesSection } from "./mesh-details/MeshEditorCapabilitiesSection";
 import { MeshViewportDeliverySection } from "./mesh-details/MeshViewportDeliverySection";
 import { MixedTopologyProvenanceSection } from "./mesh-details/MixedTopologyProvenanceSection";
-import { useMeshDetailsModel } from "./mesh-details/useMeshDetailsModel";
+import { FdmGridInspectorPanel } from "./fdm-grid/FdmGridInspectorPanel";
+import {
+  type MeshDetailsLane,
+  useMeshDetailsModel,
+} from "./mesh-details/useMeshDetailsModel";
+
+function MeshLaneStatusSection({ lane }: { lane: MeshDetailsLane }) {
+  const isFdm = lane === "fdm";
+  const unavailableValue = isFdm
+    ? "not applicable"
+    : "withheld until lane resolution";
+  return (
+    <InspectorGroup
+      badge={isFdm ? "not applicable" : "unresolved"}
+      title={isFdm ? "Structured FDM Mesh" : "Mesh lane unresolved"}
+    >
+      <FeedbackBanner
+        kind="warning"
+        message={
+          isFdm
+            ? "FDM uses structured-grid semantics. FEM shared-domain, quality, size-field, universe, and build controls are not applicable."
+            : "The session discretization lane is unresolved; FEM mesh resources and controls are withheld until it is explicit."
+        }
+      />
+      <MeshResourceFields
+        fields={[
+          {
+            label: "Discretization",
+            value: isFdm ? "FDM" : "unknown",
+          },
+          {
+            label: "Grid semantics",
+            value: isFdm ? "structured grid" : unavailableValue,
+          },
+          { label: "FEM shared-domain mesh", value: unavailableValue },
+          { label: "FEM mesh quality", value: unavailableValue },
+          { label: "FEM size fields", value: unavailableValue },
+          { label: "FEM universe mesh", value: unavailableValue },
+        ]}
+      />
+    </InspectorGroup>
+  );
+}
 
 function meshDetailsInspectorSections(selectionKind: string | null): string[] {
   switch (selectionKind) {
@@ -112,6 +156,23 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
 
 export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const model = useMeshDetailsModel(selection);
+  if (model.lane === "fdm") {
+    // The global Mesh node is shared by both lanes.  FDM contributes the
+    // structured-grid/membership summary through its lane adapter instead of
+    // rendering an unrelated FEM build/quality panel.
+    return <FdmGridInspectorPanel selection={selection} />;
+  }
+  if (model.lane !== "fem") {
+    return (
+      <div
+        key={selection.kind ?? "default"}
+        className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
+        data-mesh-lane={model.lane}
+      >
+        <MeshLaneStatusSection lane={model.lane} />
+      </div>
+    );
+  }
   const sections = meshDetailsInspectorSections(selection.kind);
   const showSection = (section: string) => sections.includes(section);
 

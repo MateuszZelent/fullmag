@@ -14,7 +14,10 @@ import {
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
+  targetForFdmNativeLayer,
+  targetForFdmUniverseOutsideSupport,
   targetForMeshPart,
+  type FdmSelectionGrid,
 } from "./viewport3DTargets";
 
 function fieldVectorResourceRef(
@@ -28,9 +31,25 @@ function fieldVectorResourceRef(
 describe("viewport3DTargets", () => {
   it("maps the FDM structured domain to a stable object visualization target", () => {
     expect(targetForFdmDomain("current")).toEqual({
-      id: "object:current",
-      kind: "object",
+      id: "fdm-domain",
+      kind: "fdm-domain",
       label: "current",
+    });
+  });
+
+  it("keeps each FDM native layer on an encoded client-local target", () => {
+    expect(targetForFdmNativeLayer("layer:bottom", "Bottom layer")).toEqual({
+      id: "fdm-native-layer:layer%3Abottom",
+      kind: "fdm-native-layer",
+      label: "Bottom layer",
+    });
+  });
+
+  it("keeps the outside-support overlay as a distinct structured-domain target", () => {
+    expect(targetForFdmUniverseOutsideSupport()).toEqual({
+      id: "fdm-universe-outside-support",
+      kind: "fdm-domain",
+      label: "Airbox",
     });
   });
 
@@ -424,5 +443,251 @@ describe("viewport3DTargets", () => {
       radius: 0.3,
       size: [0.6, 0.6, 0.6],
     });
+  });
+
+  it("fits an FDM grid node to structured-grid bounds without using FEM topology", () => {
+    const selection: Selection = {
+      kind: "mesh.grid.mask",
+      label: "Cell Mask",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:mask",
+      objectId: null,
+      ref: {
+        kind: "mesh.grid.mask",
+        nodeId: "model:mesh:mask",
+        scope: "mask",
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-domain",
+      },
+    };
+
+    const bounds = resolveViewport3DSelectionBounds(
+      selection,
+      {
+        airboxParts: [],
+        magneticParts: [],
+        magneticSurfacePartsByPartId: new Map(),
+        objectPartIds: new Map(),
+        partsById: new Map(),
+      },
+      {
+        center: [100, 100, 100],
+        radius: 100,
+        size: [200, 200, 200],
+      },
+      {
+        bounds: {
+          center: [1, 2, 3],
+          radius: Math.sqrt(29) / 2,
+          size: [2, 3, 4],
+        },
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid",
+        origin: [0, 0.5, 1],
+        shape: [2, 3, 4],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 24,
+        gridFingerprint: "grid-current",
+      },
+    );
+
+    expect(bounds).toEqual({
+      center: [1, 2, 3],
+      radius: Math.sqrt(29) / 2,
+      size: [2, 3, 4],
+    });
+  });
+
+  it("focuses the distinct FDM universe and magnetic-support scopes to their own bounds", () => {
+    const grid: FdmSelectionGrid = {
+      bounds: { center: [0, 0, 0], radius: 2, size: [4, 4, 4] },
+      displayCellBudget: 8,
+      displayCellCount: 8,
+      gridFingerprint: "grid-current",
+      kind: "fdm-grid",
+      origin: [-2, -2, -2],
+      shape: [2, 2, 2],
+      spacing: [2, 2, 2],
+      stride: 1,
+      totalCells: 8,
+    };
+    const overlay = {
+      activeCellCount: null,
+      kind: "fdm-universe-outside-magnetic-support" as const,
+      legend: { magneticSupport: "support", outsideSupport: "outside" },
+      magneticSupportBounds: {
+        center: [0, 0, 0] as [number, number, number],
+        radius: 1,
+        size: [2, 2, 2] as [number, number, number],
+      },
+      target: {
+        id: "fdm-universe-outside-support" as const,
+        kind: "fdm-domain" as const,
+        label: "Airbox" as const,
+      },
+      inactiveCellCount: null,
+      universeBounds: grid.bounds!,
+    };
+    const domain = {
+      airboxParts: [],
+      magneticParts: [],
+      magneticSurfacePartsByPartId: new Map(),
+      objectPartIds: new Map(),
+      partsById: new Map(),
+    };
+    const selection = (scope: "magnetic-support" | "universe-outside-support"): Selection => ({
+      kind: scope === "magnetic-support"
+        ? "mesh.grid.magnetic-support"
+        : "mesh.grid.universe-outside-support",
+      label: scope,
+      moduleSource: "explorer",
+      nodeId: scope === "magnetic-support"
+        ? "model:mesh:magnetic-support"
+        : "model:universe:grid:outside-support",
+      objectId: null,
+      ref: {
+        kind: scope === "magnetic-support"
+          ? "mesh.grid.magnetic-support"
+          : "mesh.grid.universe-outside-support",
+        nodeId: scope === "magnetic-support"
+          ? "model:mesh:magnetic-support"
+          : "model:universe:grid:outside-support",
+        scope,
+        type: "fdm-domain",
+        visualizationTargetId: scope === "universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : "fdm-domain",
+      },
+    });
+
+    expect(resolveViewport3DSelectionBounds(
+      selection("universe-outside-support"), domain, null, grid, overlay,
+    )).toEqual(overlay.universeBounds);
+    expect(resolveViewport3DSelectionBounds(
+      selection("magnetic-support"), domain, null, grid, overlay,
+    )).toEqual(overlay.magneticSupportBounds);
+  });
+
+  it("resolves an FDM cell to exact cell bounds only for the current grid fingerprint", () => {
+    const selection: Selection = {
+      kind: "fdm.cell",
+      label: "Cell 4",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        cellOrdinal: "4",
+        gridFingerprint: "grid-current",
+        ijk: [1, 1, 0],
+        kind: "fdm.cell",
+        maskState: "region",
+        membershipRevision: "11:12",
+        nodeId: "model:mesh:grid",
+        numericRegionId: 7,
+        regionId: "region:core",
+        type: "fdm-cell",
+        visualizationTargetId: "fdm-domain",
+      },
+    };
+    const grid: FdmSelectionGrid = {
+      bounds: {
+        center: [1.5, 1.5, 1.5],
+        radius: Math.sqrt(27) / 2,
+        size: [3, 3, 3],
+      },
+      displayCellBudget: 27,
+      displayCellCount: 27,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [3, 3, 3] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 1,
+      totalCells: 27,
+      gridFingerprint: "grid-current",
+    };
+
+    expect(
+      resolveViewport3DSelectionBounds(
+        selection,
+        {
+          airboxParts: [],
+          magneticParts: [],
+          magneticSurfacePartsByPartId: new Map(),
+          objectPartIds: new Map(),
+          partsById: new Map(),
+        },
+        {
+          center: [100, 100, 100],
+          radius: 100,
+          size: [200, 200, 200],
+        },
+        grid,
+      ),
+    ).toEqual({
+      center: [1.5, 1.5, 0.5],
+      radius: Math.sqrt(3) / 2,
+      size: [1, 1, 1],
+    });
+
+    expect(
+      resolveViewport3DSelectionBounds(
+        selection,
+        {
+          airboxParts: [],
+          magneticParts: [],
+          magneticSurfacePartsByPartId: new Map(),
+          objectPartIds: new Map(),
+          partsById: new Map(),
+        },
+        {
+          center: [100, 100, 100],
+          radius: 100,
+          size: [200, 200, 200],
+        },
+        { ...grid, gridFingerprint: "grid-stale" },
+      ),
+    ).toBeNull();
+  });
+
+  it("fails closed for an FDM cell when the structured grid is unavailable", () => {
+    const selection: Selection = {
+      kind: "fdm.cell",
+      label: "Cell 7",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        cellOrdinal: "7",
+        gridFingerprint: "grid-current",
+        ijk: [1, 1, 0],
+        kind: "fdm.cell",
+        maskState: "region",
+        membershipRevision: "11:12",
+        nodeId: "model:mesh:grid",
+        numericRegionId: 7,
+        regionId: "region:core",
+        type: "fdm-cell",
+        visualizationTargetId: "fdm-domain",
+      },
+    };
+    expect(
+      resolveViewport3DSelectionBounds(
+        selection,
+        {
+          airboxParts: [],
+          magneticParts: [],
+          magneticSurfacePartsByPartId: new Map(),
+          objectPartIds: new Map(),
+          partsById: new Map(),
+        },
+        {
+          center: [100, 100, 100],
+          radius: 100,
+          size: [200, 200, 200],
+        },
+      ),
+    ).toBeNull();
   });
 });

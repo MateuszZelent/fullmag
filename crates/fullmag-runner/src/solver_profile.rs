@@ -612,24 +612,24 @@ impl SolverProfileStepSample {
             poisson_iterations: stats.poisson_iterations,
             poisson_final_residual: stats.poisson_final_residual,
             demag_solver_setup_reused: stats.demag_solver_setup_reused,
-            rk_transaction_capture_host_wall_time_ns:
-                stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns:
-                stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns:
-                stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns:
-                stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns:
-                stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns:
-                stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver: stats.demag_solver.clone(),
@@ -746,9 +746,15 @@ fn timing_semantics() -> Vec<SolverProfileTimingSemantic> {
         ("native_solver_wall_time_ns", "inclusive"),
         ("demag_solver_apply_wall_time_ns", "inclusive"),
         ("rk_transaction_capture_host_wall_time_ns", "exclusive"),
-        ("rk_transaction_capture_device_elapsed_time_ns", "device_elapsed"),
+        (
+            "rk_transaction_capture_device_elapsed_time_ns",
+            "device_elapsed",
+        ),
         ("rk_transaction_restore_host_wall_time_ns", "exclusive"),
-        ("rk_transaction_restore_device_elapsed_time_ns", "device_elapsed"),
+        (
+            "rk_transaction_restore_device_elapsed_time_ns",
+            "device_elapsed",
+        ),
         ("demag_hypre_wait_in_enqueue_wall_time_ns", "enqueue_only"),
         ("demag_hypre_host_api_wall_time_ns", "inclusive"),
         ("demag_hypre_device_elapsed_time_ns", "device_elapsed"),
@@ -1437,9 +1443,7 @@ impl SolverProfileState {
     /// so matching `span_last_step` is intentional.  A trace is never
     /// attached to a finalization-only sample (`span_step_count == 0`).
     pub fn attach_trace(&mut self, step: u64, trace: SolverTrace) -> bool {
-        if !self.config.enabled
-            || trace.trace_id.accepted_step != step
-            || trace.validate().is_err()
+        if !self.config.enabled || trace.trace_id.accepted_step != step || trace.validate().is_err()
         {
             return false;
         }
@@ -1459,11 +1463,7 @@ impl SolverProfileState {
     /// Add one server-clock segment to an already attached sampled trace.
     /// Duplicate segments and invalid clock-domain mappings are rejected by
     /// the trace model and leave the sample unchanged.
-    pub fn attach_trace_segment(
-        &mut self,
-        step: u64,
-        segment: SolverTraceSegment,
-    ) -> bool {
+    pub fn attach_trace_segment(&mut self, step: u64, segment: SolverTraceSegment) -> bool {
         let Some(sample) = self
             .samples
             .iter_mut()
@@ -1570,8 +1570,8 @@ mod tests {
         native_solver_wall_time_ns, phase_time, SolverProfileConfig, SolverProfileState,
         SolverProfileStepSample, SolverProfileThreading,
     };
-    use crate::types::StepStats;
     use crate::solver_trace::{SolverTrace, SolverTraceId};
+    use crate::types::StepStats;
 
     fn enabled_profile(sample_every: u64) -> SolverProfileState {
         SolverProfileState::new(SolverProfileConfig {
@@ -1727,7 +1727,9 @@ mod tests {
         let trace = SolverTrace::server_only(SolverTraceId::new("run-1", 2, 7, 1).unwrap());
         assert!(profile.attach_trace(7, trace.clone()));
 
-        let sample = profile.latest_step_sample(7).expect("sample remains available");
+        let sample = profile
+            .latest_step_sample(7)
+            .expect("sample remains available");
         assert_eq!(sample.trace, Some(trace));
     }
 
@@ -1826,22 +1828,18 @@ mod tests {
         assert_eq!(native_solver_wall_time_ns(&stats), 12_000_000);
         let sample = SolverProfileStepSample::from_step_stats(&stats);
         assert_eq!(sample.native_solver_wall_time_ns, 12_000_000);
-        assert!(sample
-            .timing_semantics
-            .iter()
-            .any(|entry| entry.id == "demag_hypre_host_api_wall_time_ns"
-                && matches!(
-                    entry.kind,
-                    super::SolverProfileTimingSemanticKind::Inclusive
-                )));
-        assert!(sample
-            .timing_semantics
-            .iter()
-            .any(|entry| entry.id == "demag_hypre_device_elapsed_time_ns"
-                && matches!(
-                    entry.kind,
-                    super::SolverProfileTimingSemanticKind::DeviceElapsed
-                )));
+        assert!(sample.timing_semantics.iter().any(|entry| entry.id
+            == "demag_hypre_host_api_wall_time_ns"
+            && matches!(
+                entry.kind,
+                super::SolverProfileTimingSemanticKind::Inclusive
+            )));
+        assert!(sample.timing_semantics.iter().any(|entry| entry.id
+            == "demag_hypre_device_elapsed_time_ns"
+            && matches!(
+                entry.kind,
+                super::SolverProfileTimingSemanticKind::DeviceElapsed
+            )));
     }
 
     #[test]

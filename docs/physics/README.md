@@ -38,6 +38,8 @@ Recommended filenames:
 - `0200-llg-exchange-reference-engine.md`
 - `0300-gpu-fdm-precision-and-calibration.md`
 - `0400-demagnetization.md`
+- `0421-fdm-multilayer-convolution-demag.md` — kanoniczny kontrakt FDM dla wielowarstwowej konwolucji demagnetyzacyjnej; statusy kwalifikacji są w `multilayer_convolution/qualification-matrix.md`.
+  Powiązane dowody: `0421-fdm-multilayer-convolution-demag.source-map.json`, źródłowy PDF w `multilayer_convolution/1_5116754 -- 4fb8226c2651eae7580a917b21d4fb18 -- Anna’s Archive.pdf` oraz jedyny manifest snapshotu BORIS `multilayer_convolution/boris-reference-manifest.v1.json`.
 - `fem_exchange.md`
 - `llg_conventions.md`
 - `fem_zeeman.md`

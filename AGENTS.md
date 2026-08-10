@@ -236,6 +236,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Ordinary `fullmag x.py` launches without `--output-dir` must replace only the auto-derived sibling `x.zarr` bundle and write final and per-stage scientific artifacts there; never auto-delete an explicit output path or hide the only result under `.fullmag` session history.
 - Never delete a worktree `target/` directory while a Docker Compose container bind-mounts that worktree, even when `/workspace/target` is overmounted by a named volume; stop the container and verify its mounts first.
 - For SP4 mixed-prism qualification, preserve the stricter relaxation threshold `tolT=1e-6 T` (`tolA=0.7957747154594767 A/m`); do not restore the legacy `7.957747 A/m` threshold during tolerance-unit migrations.
+- FEM scenario scripts that mirror a standard-problem study must use a flat module-level `study` configuration; only small dedicated geometry helpers may be defined when they improve readability.
+- Always write reports, plans, audits, implementation documents, and artifact summaries in Polish. Code comments, commit messages, and variable names remain in English.
 
 ---
 

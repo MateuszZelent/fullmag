@@ -121,10 +121,25 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
+    // The executable planner currently allows one direct spin-torque module
+    // at a time, so the shared node-mask device slot carries either the
+    // Slonczewski target or the prescribed-SOT target.
+    const auto &direct_torque_target_mask = !ctx.sot.active_node_mask.empty()
+        ? ctx.sot.active_node_mask
+        : ctx.stt.active_node_mask;
     if (!gpu_state_upload_stt_target_mask(
             ctx.gpu_state.device,
-            ctx.stt.active_node_mask.empty() ? nullptr : ctx.stt.active_node_mask.data(),
-            static_cast<uint64_t>(ctx.stt.active_node_mask.size()),
+            direct_torque_target_mask.empty() ? nullptr : direct_torque_target_mask.data(),
+            static_cast<uint64_t>(direct_torque_target_mask.size()),
+            ctx.transfer_audit.audit,
+            error)) {
+        return gpu_bootstrap_failed(ctx, error);
+    }
+    if (!gpu_state_upload_stt_element_mask(
+            ctx.gpu_state.device,
+            ctx.stt.active_element_mask.empty() ? nullptr : ctx.stt.active_element_mask.data(),
+            static_cast<uint64_t>(ctx.stt.active_element_mask.size()),
+            static_cast<uint64_t>(ctx.mesh.n_elements),
             ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx, error);

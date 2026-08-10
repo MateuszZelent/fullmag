@@ -3,7 +3,7 @@ import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { MeshEditorCapabilityModel } from "@/shared/domain/mesh/meshEditorCapabilityModel";
 
 const LABELS = {
-  fdm: "FDM grid",
+  fdm: "FDM structured mesh",
   fem: "FEM mesh",
   cpu: "CPU",
   gpu: "CUDA GPU",

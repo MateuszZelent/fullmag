@@ -462,14 +462,11 @@ pub fn table_column_value(stats: &StepStats, column: &str) -> Result<f64, String
 fn table_column_value_for_meta(stats: &StepStats, column: &TableColumnMeta) -> Result<f64, String> {
     if let (Some(object_id), Some(component)) = (&column.object_id, &column.component) {
         let key = format!("m{component}");
-        let values = stats
-            .per_object_scalars
-            .get(object_id)
-            .or_else(|| {
-                (stats.per_object_scalars.len() == 1)
-                    .then(|| stats.per_object_scalars.get("free"))
-                    .flatten()
-            });
+        let values = stats.per_object_scalars.get(object_id).or_else(|| {
+            (stats.per_object_scalars.len() == 1)
+                .then(|| stats.per_object_scalars.get("free"))
+                .flatten()
+        });
         return values
             .and_then(|values| values.get(&key))
             .copied()

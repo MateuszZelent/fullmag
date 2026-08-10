@@ -13,11 +13,14 @@ fn main() {
     println!("cargo:rerun-if-changed=../../backends/fdm/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../backends/fdm/api");
     println!("cargo:rerun-if-changed=../../backends/fdm/core");
+    println!("cargo:rerun-if-changed=../../backends/fdm/cpu");
     println!("cargo:rerun-if-changed=../../backends/fdm/gpu/cuda");
     println!("cargo:rerun-if-changed=../../backends/fdm/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FDM_LIB_DIR");
 
-    if std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_none() {
+    let build_native_cuda = std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_some();
+    let build_native_cpu = std::env::var_os("CARGO_FEATURE_BUILD_NATIVE_CPU").is_some();
+    if !build_native_cuda && !build_native_cpu {
         return;
     }
 
@@ -31,15 +34,17 @@ fn main() {
     let cmake = std::env::var("FULLMAG_CMAKE").unwrap_or_else(|_| "cmake".to_string());
     let mut configure = std::process::Command::new(&cmake);
     let mut enable_cuda = false;
-    if let Ok(cudacxx) = std::env::var("CUDACXX") {
-        if !cudacxx.trim().is_empty() {
-            configure.env("CUDACXX", &cudacxx);
+    if build_native_cuda {
+        if let Ok(cudacxx) = std::env::var("CUDACXX") {
+            if !cudacxx.trim().is_empty() {
+                configure.env("CUDACXX", &cudacxx);
+                enable_cuda = true;
+            }
+        } else if std::path::Path::new("/usr/local/cuda/bin/nvcc").exists() {
+            configure.env("CUDACXX", "/usr/local/cuda/bin/nvcc");
+            configure.env("CUDAToolkit_ROOT", "/usr/local/cuda");
             enable_cuda = true;
         }
-    } else if std::path::Path::new("/usr/local/cuda/bin/nvcc").exists() {
-        configure.env("CUDACXX", "/usr/local/cuda/bin/nvcc");
-        configure.env("CUDAToolkit_ROOT", "/usr/local/cuda");
-        enable_cuda = true;
     }
 
     let configure_status = configure

@@ -54,6 +54,7 @@ describe("semantic render target to Explorer contract", () => {
         })),
       );
     const tree = buildModelTree({
+      domainDiscretization: "fem",
       mesh: { partCount: parts.length, visualizationPartFallbacks: fallbackParts },
       objects: [{ id: "__air__", label: "Synthetic air" }],
     });
@@ -95,6 +96,7 @@ describe("semantic render target to Explorer contract", () => {
         })),
       );
     const tree = buildModelTree({
+      domainDiscretization: "fem",
       mesh: { partCount: parts.length, visualizationPartFallbacks: fallbackParts },
       objects: [
         { id: "film", label: "Film" },

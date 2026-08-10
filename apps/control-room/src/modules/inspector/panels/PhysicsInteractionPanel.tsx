@@ -10,8 +10,24 @@ import {
   useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
-import type { InteractionFieldSpec } from "@/shared/domain/physics/interactions";
+import {
+  resolveActiveLaneOperation,
+  useActiveLaneCapabilities,
+  type ActiveLaneCapabilitySnapshot,
+} from "@/kernel/resources/useActiveLaneCapabilities";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
+import {
+  interactionAvailabilityForDiscretization,
+  interactionSpecsForDiscretization,
+  normalizeInteractionDiscretization,
+  validateInteractionDraftForDiscretization,
+  type InteractionDiscretization,
+  type InteractionFieldSpec,
+  type InteractionSpec,
+} from "@/shared/domain/physics/interactions";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -28,21 +44,25 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import {
   buildInteractionApplyPatch,
   defaultObjectInteractionResource,
   draftFromInteractionResource,
   draftFromStudyScene,
   draftKeyForInteraction,
-  interactionSelectOptions,
   isDeferredInteraction,
   isWritableObjectInteraction,
   isWritableStudyInteraction,
   type PhysicsInteractionDraft,
   type PhysicsInteractionId,
 } from "./PhysicsInteractionPanelModel";
-import { SpinAuthoringInspector } from "./SpinAuthoringInspector";
-import { TransportAuthoringInspector } from "./TransportAuthoringInspector";
+import {
+  OerstedFieldInspectorPanel,
+  SpinTorqueInspectorPanel,
+} from "./SpinAuthoringInspector";
+import { CurrentTransportInspectorPanel } from "./TransportAuthoringInspector";
 
 interface DraftState {
   draft: PhysicsInteractionDraft;
@@ -99,13 +119,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-type PhysicsInteractionSpec = ReturnType<typeof interactionSelectOptions>[number];
+type PhysicsInteractionSpec = InteractionSpec;
 
 export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
   const selectedRegionId =
     selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
   const { api, resources } = useKernel();
+  const sessionDiscretization = useSessionStatusSelector(
+    (status) => status.data?.domain.discretization ?? null,
+  );
+  const activeLane = useActiveLaneCapabilities();
+  const interactionDiscretization = normalizeInteractionDiscretization(
+    sessionDiscretization,
+  );
+  const interactionOptions = interactionSpecsForDiscretization(
+    interactionDiscretization,
+  );
   const selectedInteractionId =
     interactionIdFromSelection(selection.nodeId) ?? "exchange";
   const [state, dispatch] = useReducer(physicsInteractionPanelReducer, {
@@ -122,17 +152,37 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       ? state.interactionSelection.interactionId
       : selectedInteractionId;
 
-  const spec = interactionSelectOptions().find((entry) => entry.id === interactionId);
-  const objectInteractionKind = isWritableObjectInteraction(interactionId)
+  const spec = interactionOptions.find((entry) => entry.id === interactionId);
+  const interactionAvailability = interactionAvailabilityForDiscretization(
+    interactionId,
+    interactionDiscretization,
+  );
+  const activeLaneOperation = resolveActiveLaneOperation(
+    activeLane,
+    `interaction.${interactionId}`,
+  );
+  const objectInteractionKind =
+    interactionAvailability.status === "supported" &&
+    isWritableObjectInteraction(interactionId)
     ? interactionId
     : "exchange";
   const objectInteraction = useObjectInteractionResource(
     objectId,
     objectInteractionKind,
-    { enabled: Boolean(objectId && isWritableObjectInteraction(interactionId)) },
+    {
+      enabled: Boolean(
+        objectId &&
+          interactionAvailability.status === "supported" &&
+          activeLaneOperation.enabled &&
+          isWritableObjectInteraction(interactionId),
+      ),
+    },
   );
   const scene = useSceneResource({
-    enabled: isWritableStudyInteraction(interactionId),
+    enabled:
+      interactionAvailability.status === "supported" &&
+      activeLaneOperation.enabled &&
+      isWritableStudyInteraction(interactionId),
   });
   const resource =
     objectInteraction.data ??
@@ -170,6 +220,9 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     }
     return nextDraft;
   }, [
+    // The draft intentionally derives from the current lane selection and
+    // resource snapshot; preserve this explicit memoization boundary.
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
     interactionId,
     resource,
     scene.data,
@@ -183,8 +236,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     key: draftKey,
   });
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const laneIssue = validateInteractionDraftForDiscretization(
+    draft,
+    interactionDiscretization,
+  );
   const canApply =
     Boolean(spec) &&
+    activeLaneOperation.enabled &&
+    !laneIssue &&
     !isDeferredInteraction(interactionId) &&
     (isWritableStudyInteraction(interactionId) ||
       (Boolean(objectId) && isWritableObjectInteraction(interactionId)));
@@ -208,13 +267,31 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     });
   }
 
-  async function applyInteraction(): Promise<void> {
+  async function applyInteraction(): Promise<boolean> {
+    if (!activeLaneOperation.enabled) {
+      dispatch({
+        type: "setFeedback",
+        feedback: { kind: "error", message: activeLaneOperation.reason },
+      });
+      return false;
+    }
+    const currentLaneIssue = validateInteractionDraftForDiscretization(
+      draft,
+      interactionDiscretization,
+    );
+    if (currentLaneIssue) {
+      dispatch({
+        type: "setFeedback",
+        feedback: { kind: "error", message: currentLaneIssue.error },
+      });
+      return false;
+    }
     if (isWritableObjectInteraction(interactionId) && !objectId) {
       dispatch({
         type: "setFeedback",
         feedback: { kind: "error", message: "No selected scene object." },
       });
-      return;
+      return false;
     }
 
     const result = buildInteractionApplyPatch(draft);
@@ -223,7 +300,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         type: "setFeedback",
         feedback: { kind: "error", message: result.error },
       });
-      return;
+      return false;
     }
 
     dispatch({ type: "setPending", pending: true });
@@ -257,30 +334,113 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         message: `${spec?.label ?? interactionId} updated.`,
         },
       });
+      return true;
     } catch (error) {
       dispatch({
         type: "setFeedback",
         feedback: { kind: "error", message: errorMessage(error) },
       });
+      return false;
     } finally {
       dispatch({ type: "setPending", pending: false });
     }
   }
 
-  if (interactionId === "current_transport") {
-    return <TransportAuthoringInspector family="current_transport" />;
-  }
-  if (
-    interactionId === "spin_torque" ||
-    interactionId === "oersted_field"
-  ) {
-    return <SpinAuthoringInspector key={interactionId} family={interactionId} />;
+  if (interactionDiscretization === "unknown") {
+    return (
+      <PhysicsInteractionLaneStatus
+        discretization={interactionDiscretization}
+        issue={laneIssue?.error ?? interactionAvailability.reason}
+      />
+    );
   }
 
+  if (
+    !activeLaneOperation.enabled &&
+    (interactionId === "current_transport" ||
+      interactionId === "spin_torque" ||
+      interactionId === "oersted_field")
+  ) {
+    return (
+      <PhysicsInteractionLaneStatus
+        capabilityState={activeLaneOperation.state}
+        discretization={interactionDiscretization}
+        issue={activeLaneOperation.reason}
+      />
+    );
+  }
+
+  if (interactionId === "current_transport") {
+    return <CurrentTransportInspectorPanel selection={selection} />;
+  }
+  if (interactionId === "spin_torque") {
+    return <SpinTorqueInspectorPanel selection={selection} />;
+  }
+  if (interactionId === "oersted_field") {
+    return <OerstedFieldInspectorPanel selection={selection} />;
+  }
+
+  const physicsStatus = !activeLaneOperation.enabled
+    ? interactionAvailability.status === "unsupported" ? "unsupported" as const : "blocked" as const
+    : draft.enabled ? "active" as const : "inactive" as const;
+  const draftDirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const editSessionValid = Boolean(
+    spec &&
+      activeLaneOperation.enabled &&
+      !laneIssue &&
+      !isDeferredInteraction(interactionId) &&
+      (isWritableStudyInteraction(interactionId) ||
+        (Boolean(objectId) && isWritableObjectInteraction(interactionId))),
+  );
+  const editSessionLockReason = !activeLaneOperation.enabled
+    ? activeLaneOperation.reason
+    : laneIssue?.error;
+  const resetInteractionDraft = () => {
+    setDraftState({ draft: baseDraft, key: draftKey });
+    dispatch({ type: "setFeedback", feedback: null });
+  };
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+    <PhysicsInspectorOverview
+      editSession={{
+        apply: applyInteraction,
+        applying: state.pending,
+        dirty: draftDirty,
+        lockReason: editSessionLockReason,
+        mode: "staged",
+        reset: resetInteractionDraft,
+        valid: editSessionValid,
+      }}
+      model={buildPhysicsInspectorOverviewModel({
+        dependency: {
+          requiredSourceIds: [],
+          reason: laneIssue?.error ?? activeLaneOperation.reason,
+          status: physicsStatus,
+        },
+        execution: { requestedLane: interactionDiscretization },
+        family: interactionId,
+        scope: {
+          kind: selectedRegionId ? "region" : objectId ? "object" : "global",
+          objectId,
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId
+            ? `region:${objectId ?? "unresolved"}:${selectedRegionId}`
+            : objectId
+              ? `object:${objectId}`
+              : "global:physics",
+        },
+        source: {
+          id: interactionId,
+          kind: interactionId,
+          status: physicsStatus,
+        },
+        status: physicsStatus,
+        statusReason: laneIssue?.error ?? activeLaneOperation.reason,
+      })}
+      primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <PhysicsInteractionSelectionSection
         interactionId={interactionId}
+        activeLane={activeLane}
+        options={interactionOptions}
         draft={draft}
         objectId={objectId}
         sceneData={scene.data}
@@ -306,6 +466,20 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           })
         }
       />
+      {laneIssue ? (
+        <FeedbackBanner kind="error" message={laneIssue.error} />
+      ) : null}
+      {!activeLaneOperation.enabled ? (
+        <FeedbackBanner
+          kind={
+            activeLaneOperation.state === "semantic_only" ||
+            activeLaneOperation.state === "deferred"
+              ? "warning"
+              : "error"
+          }
+          message={activeLaneOperation.reason}
+        />
+      ) : null}
       {spec ? <PhysicsInteractionContractSection spec={spec} /> : null}
       {isWritableObjectInteraction(interactionId) ? (
         <PhysicsInteractionBackendSection
@@ -316,12 +490,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         />
       ) : null}
       <PhysicsInteractionStateSection
+        disabled={!activeLaneOperation.enabled}
         draft={draft}
         interactionId={interactionId}
         onPatch={updateDraft}
       />
       <PhysicsInteractionParametersSection
         draft={draft}
+        disabled={!activeLaneOperation.enabled}
         interactionId={interactionId}
         spec={spec}
         onValueChange={updateValue}
@@ -343,13 +519,44 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           onOpenChange={(open) => dispatch({ type: "setHelpOpen", open })}
         />
       ) : null}
+    </div>}
+    />
+  );
+}
+
+function PhysicsInteractionLaneStatus({
+  capabilityState,
+  discretization,
+  issue,
+}: {
+  capabilityState?: string;
+  discretization: InteractionDiscretization;
+  issue: string | undefined;
+}) {
+  return (
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorGroup title="Physics interaction lane" defaultOpen>
+        <FieldRow
+          label="Discretization"
+          value={discretization === "unknown" ? "unresolved" : discretization.toUpperCase()}
+        />
+        {capabilityState ? (
+          <FieldRow label="Capability" value={capabilityState} />
+        ) : null}
+        <FeedbackBanner
+          kind="error"
+          message={issue ?? "Resolve the FDM/FEM lane before editing interactions."}
+        />
+      </InspectorGroup>
     </div>
   );
 }
 
 function PhysicsInteractionSelectionSection({
+  activeLane,
   draft,
   interactionId,
+  options,
   objectId,
   onHelpOpen,
   onInteractionChange,
@@ -357,8 +564,10 @@ function PhysicsInteractionSelectionSection({
   sceneData,
   selectedRegionId,
 }: {
+  activeLane: ActiveLaneCapabilitySnapshot | null;
   draft: PhysicsInteractionDraft;
   interactionId: PhysicsInteractionId;
+  options: readonly PhysicsInteractionSpec[];
   objectId: string | null | undefined;
   onHelpOpen: () => void;
   onInteractionChange: (interactionId: PhysicsInteractionId) => void;
@@ -366,7 +575,6 @@ function PhysicsInteractionSelectionSection({
   sceneData: Parameters<typeof draftFromStudyScene>[1];
   selectedRegionId: string | null;
 }) {
-  const options = interactionSelectOptions();
   return (
     <InspectorGroup
       title="Physics Interaction"
@@ -381,6 +589,7 @@ function PhysicsInteractionSelectionSection({
         {options.map((option) => (
           <PhysicsInteractionChecklistRow
             key={option.id}
+            activeLane={activeLane}
             draft={draft}
             interactionId={interactionId}
             objectId={objectId}
@@ -421,6 +630,7 @@ function PhysicsInteractionSelectionSection({
 }
 
 function PhysicsInteractionChecklistRow({
+  activeLane,
   draft,
   interactionId,
   objectId,
@@ -428,6 +638,7 @@ function PhysicsInteractionChecklistRow({
   option,
   sceneData,
 }: {
+  activeLane: ActiveLaneCapabilitySnapshot | null;
   draft: PhysicsInteractionDraft;
   interactionId: PhysicsInteractionId;
   objectId: string | null | undefined;
@@ -444,6 +655,10 @@ function PhysicsInteractionChecklistRow({
     { enabled: Boolean(objectId && isWritableObjectInteraction(option.id)) },
   );
   const selected = option.id === interactionId;
+  const operation = resolveActiveLaneOperation(
+    activeLane,
+    `interaction.${option.id}`,
+  );
   const objectActive = Boolean(
     objectInteraction.data?.present && objectInteraction.data?.enabled,
   );
@@ -453,10 +668,13 @@ function PhysicsInteractionChecklistRow({
   const checked = selected
     ? draft.present && draft.enabled
     : objectActive || Boolean(studyDraft?.present && studyDraft.enabled);
-  const disabled = isDeferredInteraction(option.id);
+  const disabled = isDeferredInteraction(option.id) || !operation.enabled;
 
   return (
-    <label className="fm-inspector-checkbox-row">
+    <label
+      className="fm-inspector-checkbox-row"
+      title={operation.enabled ? undefined : operation.reason}
+    >
       <input
         className="fm-inspector-checkbox"
         checked={checked}
@@ -466,7 +684,7 @@ function PhysicsInteractionChecklistRow({
       />
       <span>{option.label}</span>
       <span className="fm-inspector-checkbox-row__meta">
-        {statusLabel(option.availability)}
+        {operation.enabled ? statusLabel(option.availability) : operation.state}
       </span>
     </label>
   );
@@ -515,10 +733,12 @@ function PhysicsInteractionBackendSection({
 }
 
 function PhysicsInteractionStateSection({
+  disabled,
   draft,
   interactionId,
   onPatch,
 }: {
+  disabled: boolean;
   draft: PhysicsInteractionDraft;
   interactionId: PhysicsInteractionId;
   onPatch: (patch: Partial<PhysicsInteractionDraft>) => void;
@@ -528,14 +748,16 @@ function PhysicsInteractionStateSection({
       <FormField
         label="Present"
         type="checkbox"
-        disabled={interactionId === "exchange" || interactionId === "demag"}
+        disabled={
+          disabled || interactionId === "exchange" || interactionId === "demag"
+        }
         checked={draft.present}
         onChange={(event) => onPatch({ present: event.target.checked })}
       />
       <FormField
         label="Enabled"
         type="checkbox"
-        disabled={!draft.present}
+        disabled={disabled || !draft.present}
         checked={draft.enabled}
         onChange={(event) => onPatch({ enabled: event.target.checked })}
       />
@@ -545,11 +767,13 @@ function PhysicsInteractionStateSection({
 
 function PhysicsInteractionParametersSection({
   draft,
+  disabled,
   interactionId,
   onValueChange,
   spec,
 }: {
   draft: PhysicsInteractionDraft;
+  disabled: boolean;
   interactionId: PhysicsInteractionId;
   onValueChange: (fieldId: string, value: string | string[]) => void;
   spec: PhysicsInteractionSpec | undefined;
@@ -560,7 +784,7 @@ function PhysicsInteractionParametersSection({
         spec.fields.map((field) => (
           <InteractionField
             key={field.id}
-            disabled={isDeferredInteraction(interactionId)}
+            disabled={disabled || isDeferredInteraction(interactionId)}
             field={field}
             value={draft.values[field.id]}
             onChange={(value) => onValueChange(field.id, value)}

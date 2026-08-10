@@ -265,6 +265,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
+            artifacts.observe_physics_execution();
             self.total_steps += 1;
             if let Some(next) = report.suggested_next_dt {
                 dt = next;

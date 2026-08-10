@@ -294,6 +294,75 @@ describe("viewport3DColorbarPlan", () => {
     });
   });
 
+  it("resolves an FDM vector-only colorbar range from the vector scalar buffer", () => {
+    const target = {
+      ...objectPlan("fdm", {
+        shaderVisible: false,
+        surfaceColorSource: "orientation",
+        vectorColorMode: "magnitude",
+        vectorsVisible: true,
+      }),
+      targetKind: "fdm-domain" as const,
+    };
+    const [plan] = planViewport3DColorbars({ targets: [target] });
+    const vectorColors = {
+      colors: new Float32Array(12),
+      colorMode: "magnitude",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 3, min: 0 },
+    };
+
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fdmVectorColors: vectorColors,
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map(),
+      },
+      plans: plan ? [plan] : [],
+    });
+
+    expect(rangeStates.get(plan!.groupKey)).toEqual({
+      range: { max: 3, min: 0 },
+      state: "current",
+    });
+  });
+
+  it("resolves independent FDM target ranges from target color buffers", () => {
+    const plans = planViewport3DColorbars({
+      targets: [objectPlan("object:left"), objectPlan("region:right:core")],
+    });
+    const targetBuffer = (min: number, max: number) => ({
+      colors: new Float32Array(12),
+      colorMode: "x",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max, min },
+    });
+
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fdmTargetColorBuffers: new Map([
+        ["object:left", targetBuffer(-1, 0)],
+        ["region:right:core", targetBuffer(2, 3)],
+      ]),
+      plans,
+    });
+
+    const leftPlan = plans.find((plan) => plan.targetIds.includes("object:left"));
+    const rightPlan = plans.find((plan) =>
+      plan.targetIds.includes("region:right:core"),
+    );
+    expect(rangeStates.get(leftPlan!.groupKey)).toEqual({
+      range: { max: 0, min: -1 },
+      state: "current",
+    });
+    expect(rangeStates.get(rightPlan!.groupKey)).toEqual({
+      range: { max: 3, min: 2 },
+      state: "current",
+    });
+  });
+
   it("splits plans when targets use different palettes or modes", () => {
     const plans = planViewport3DColorbars({
       targets: [

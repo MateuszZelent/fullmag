@@ -22,7 +22,9 @@ use crate::mesh::{
     study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
-use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
+use crate::spin_torque::{
+    resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
+};
 use crate::util::{
     mesh_workflow_metadata, problem_domain_frame, runtime_requests_cuda,
     shared_domain_mesh_requested, MU0,
@@ -2292,6 +2294,7 @@ pub(crate) fn plan_fem(
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fem)?;
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fem, &current_transports)?;
+    let sot = resolve_sot_fields(problem, &current_transports, true)?;
 
     let base_material =
         selected_material.expect("validation should have caught missing FEM material");
@@ -2677,7 +2680,7 @@ pub(crate) fn plan_fem(
         }
         None => (None, None),
     };
-    let spin_torque_contract = spin_torque
+    let stt_contract = spin_torque
         .slonczewski_formula_version
         .as_ref()
         .or(spin_torque.zhang_li_formula_version.as_ref())
@@ -2690,11 +2693,52 @@ pub(crate) fn plan_fem(
             lande_g: spin_torque.zhang_li_lande_g,
             active_node_mask: stt_active_node_mask,
             active_element_mask: stt_active_element_mask,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
+    let sot_active_node_mask = sot
+        .target
+        .as_ref()
+        .map(|target| {
+            materialize_fem_spin_torque_target_masks(
+                target,
+                mesh.nodes.len(),
+                mesh.cell_count(),
+                &object_segments,
+                &resolved_mesh_parts,
+            )
+            .map(|(nodes, _elements)| nodes)
+        })
+        .transpose()?;
+    let spin_torque_contract = stt_contract.or_else(|| {
+        sot.formula_version
+            .map(|formula_version| fullmag_ir::FemSpinTorquePlanIR {
+                formula_version: formula_version.to_string(),
+                operator_version: None,
+                realization_version: None,
+                target: sot.target.clone(),
+                stack_normal: None,
+                lande_g: None,
+                active_node_mask: sot_active_node_mask.clone(),
+                active_element_mask: None,
+                sot_current_density: sot.current_density,
+                sot_xi_dl: sot.xi_dl,
+                sot_xi_fl: sot.xi_fl,
+                sot_sigma: sot.sigma,
+                sot_thickness: sot.thickness,
+                sot_envelope: sot.envelope.clone(),
+                sot_drive: sot.drive.clone(),
+            })
+    });
 
     if !problem.spin_transport_modules.is_empty() && ms_element_field.is_some() {
         return Err(PlanError {
-            reasons: vec!["FEM M1 steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the v1 native descriptor".to_string()],
+            reasons: vec!["bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string()],
         });
     }
     let spin_transport_plans = crate::spin_transport::resolve_m1_fem_spin_transport(
@@ -2846,6 +2890,15 @@ pub(crate) fn plan_fem(
                     fem_plan.oersted_realization =
                         Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
                 }
+                ResolvedOerstedTerm::SolvedCurrent { .. } => {
+                    // The steady transport runtime solves charge first and
+                    // derives the nodal Oersted field from the bounded
+                    // H(curl) x H1 vector-potential realization before
+                    // constructing the LLG backend.  Do not synthesize a
+                    // prescribed field in the planner.
+                    fem_plan.oersted_realization =
+                        Some(fullmag_ir::OerstedRealization::FemVectorPotential);
+                }
             }
             break;
         }
@@ -2972,6 +3025,7 @@ pub(crate) fn plan_fem(
                 }
             }),
             fem_eigen_execution_resolution: None,
+            physics_graph: None,
         },
     })
 }
@@ -3899,6 +3953,7 @@ pub(crate) fn plan_fem_eigen(
             notes: provenance_notes,
             integrator_resolution: None,
             fem_eigen_execution_resolution: execution_resolution,
+            physics_graph: None,
         },
     })
 }
@@ -4130,6 +4185,7 @@ pub(crate) fn plan_fem_frequency_response(
             notes: provenance_notes,
             integrator_resolution: None,
             fem_eigen_execution_resolution: None,
+            physics_graph: None,
         },
     })
 }

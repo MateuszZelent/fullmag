@@ -10,10 +10,15 @@ set(FDM_PUBLIC_HEADERS
 set(FDM_SOURCES
     api/c_api.cpp
     api/error.cpp
+    gpu/cuda/transport/layout_abi_v1.cpp
+    gpu/cuda/transport/checkpoint_abi_v1.cpp
+    gpu/cuda/transport/charge/checkpoint_codec.cpp
 )
 
 if(FULLMAG_ENABLE_CUDA)
     list(APPEND FDM_SOURCES
+        gpu/cuda/transport/context.cu
+        gpu/cuda/transport/charge/device_solver.cu
         gpu/cuda/runtime/context.cu
         gpu/cuda/runtime/telemetry.cu
         gpu/cuda/runtime/device_info.cpp
@@ -46,14 +51,94 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/demag/newell_gpu_fp64.cu
         gpu/cuda/demag/newell_gpu_fp32.cu
     )
+else()
+    list(APPEND FDM_SOURCES
+        gpu/cpu_only/transport_abi_v1_stubs.cpp
+    )
 endif()
 
 add_library(fullmag_fdm SHARED ${FDM_SOURCES})
 
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/context.cu" FDM_GPU_CONTEXT_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/device_solver.cu" FDM_GPU_CHARGE_SOLVER_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/device_solver.hpp" FDM_GPU_CHARGE_SOLVER_HEADER_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/checkpoint_codec.cpp" FDM_GPU_CHARGE_CHECKPOINT_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/checkpoint_codec.hpp" FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/layout_abi_v1.cpp" FDM_GPU_LAYOUT_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/checkpoint_abi_v1.cpp" FDM_GPU_CHECKPOINT_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/fullmag/fdm/transport/gpu_abi_v1.h" FDM_GPU_HEADER_SHA256)
+set(FDM_GPU_BUILD_FLAGS_IDENTITY
+    "cxx=${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION};cuda=${CMAKE_CUDA_COMPILER_ID}-${CMAKE_CUDA_COMPILER_VERSION};cxx_flags=${CMAKE_CXX_FLAGS};cuda_flags=${CMAKE_CUDA_FLAGS};arch=${CMAKE_CUDA_ARCHITECTURES}"
+)
+string(REPLACE ";" "," FDM_GPU_BUILD_FLAGS_IDENTITY "${FDM_GPU_BUILD_FLAGS_IDENTITY}")
+string(SHA256 FDM_GPU_TRANSPORT_BUILD_DIGEST
+    "${FDM_GPU_CONTEXT_SHA256};${FDM_GPU_CHARGE_SOLVER_SHA256};${FDM_GPU_CHARGE_SOLVER_HEADER_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_SHA256};${FDM_GPU_CHARGE_CHECKPOINT_HEADER_SHA256};${FDM_GPU_LAYOUT_SHA256};${FDM_GPU_CHECKPOINT_SHA256};${FDM_GPU_HEADER_SHA256};${FDM_GPU_BUILD_FLAGS_IDENTITY}"
+)
+target_compile_definitions(fullmag_fdm PRIVATE
+    FULLMAG_FDM_GPU_TRANSPORT_BUILD_DIGEST_HEX="${FDM_GPU_TRANSPORT_BUILD_DIGEST}"
+)
+
+add_library(fullmag_fdm_cpu_transport_abi OBJECT
+    api/cpu_transport_v1.cpp
+)
+set_target_properties(fullmag_fdm_cpu_transport_abi PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(fullmag_fdm_cpu_transport_abi PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fullmag_fdm_cpu_transport_abi PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+target_sources(fullmag_fdm PRIVATE
+    $<TARGET_OBJECTS:fullmag_fdm_cpu_transport_abi>
+)
+
+add_library(fullmag_fdm_cpu_transport STATIC
+    cpu/transport/charge_transport_v1.cpp
+    cpu/transport/spin_transport_gmres_v1.cpp
+    cpu/transport/spin_transport_validation_v1.cpp
+    cpu/transport/spin_transport_v1.cpp
+)
+set_target_properties(fullmag_fdm_cpu_transport PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(fullmag_fdm_cpu_transport
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fullmag_fdm_cpu_transport PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(fullmag_fdm_cpu_oersted STATIC
+    cpu/interactions/oersted/digest_v1.cpp
+    cpu/interactions/oersted/cell_integrated_kernel_v1.cpp
+    cpu/interactions/oersted/fft_plan_v1.cpp
+    cpu/interactions/oersted/differential_diagnostics_v1.cpp
+    cpu/interactions/oersted/fft_open_v1.cpp
+)
+set_target_properties(fullmag_fdm_cpu_oersted PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_include_directories(fullmag_fdm_cpu_oersted
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpu/interactions/oersted
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fullmag_fdm_cpu_oersted PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+
 target_include_directories(fullmag_fdm
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
-    PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
@@ -73,6 +158,8 @@ else()
     target_compile_definitions(fullmag_fdm PRIVATE FULLMAG_HAS_CUDA=0)
 endif()
 
+target_link_libraries(fullmag_fdm PRIVATE fullmag_fdm_cpu_transport)
+
 set_target_properties(fullmag_fdm PROPERTIES
     VERSION 0.1.0
     SOVERSION 0
@@ -86,6 +173,10 @@ add_executable(source_layout_contract tests/source_layout_contract.cpp)
 add_test(NAME fdm_source_layout_contract COMMAND source_layout_contract)
 
 add_executable(multilayer_abi_v2_contract tests/multilayer_abi_v2_contract.cpp)
+target_include_directories(multilayer_abi_v2_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fdm_multilayer_abi_v2_contract COMMAND multilayer_abi_v2_contract)
 
 add_executable(region_owned_abi_contract tests/region_owned_abi_contract.cpp)
@@ -134,6 +225,290 @@ add_test(NAME fdm_llg_time_policy_contract COMMAND fdm_llg_time_policy_contract)
 add_executable(prescribed_sot_contract tests/prescribed_sot_contract.cpp)
 target_include_directories(prescribed_sot_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fdm_prescribed_sot_contract COMMAND prescribed_sot_contract)
+
+add_executable(fdm_cpu_charge_transport_contract tests/cpu_charge_transport_contract.cpp)
+target_include_directories(fdm_cpu_charge_transport_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(fdm_cpu_charge_transport_contract PRIVATE fullmag_fdm_cpu_transport)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_cpu_charge_transport_contract PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME fdm_cpu_charge_transport_contract COMMAND fdm_cpu_charge_transport_contract)
+add_test(NAME fdm_cpu_charge_parity_rejects_nonfinite
+         COMMAND fdm_cpu_charge_transport_contract --compare-rust
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/charge_parity_v1.txt
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/charge_parity_nan_output_v1.txt)
+set_tests_properties(fdm_cpu_charge_parity_rejects_nonfinite PROPERTIES WILL_FAIL TRUE)
+add_test(NAME fdm_cpu_charge_parity_rejects_small_current_mismatch
+         COMMAND fdm_cpu_charge_transport_contract --reject-small-current-mismatch)
+set_tests_properties(fdm_cpu_charge_parity_rejects_small_current_mismatch PROPERTIES WILL_FAIL TRUE)
+
+add_executable(fdm_cpu_spin_transport_contract tests/cpu_spin_transport_contract.cpp)
+target_include_directories(fdm_cpu_spin_transport_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpu/transport
+)
+target_link_libraries(fdm_cpu_spin_transport_contract PRIVATE fullmag_fdm_cpu_transport)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_cpu_spin_transport_contract PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME fdm_cpu_spin_transport_contract COMMAND fdm_cpu_spin_transport_contract)
+
+add_executable(fdm_cpu_spin_transport_parity tests/cpu_spin_transport_parity.cpp)
+target_include_directories(fdm_cpu_spin_transport_parity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(fdm_cpu_spin_transport_parity PRIVATE fullmag_fdm_cpu_transport)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_cpu_spin_transport_parity PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_executable(fdm_cpu_transport_abi_v1_contract tests/cpu_transport_abi_v1_contract.cpp)
+target_include_directories(fdm_cpu_transport_abi_v1_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(fdm_cpu_transport_abi_v1_contract PRIVATE fullmag_fdm)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_cpu_transport_abi_v1_contract PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+add_test(NAME fdm_cpu_transport_abi_v1_contract COMMAND fdm_cpu_transport_abi_v1_contract)
+
+if(FULLMAG_ENABLE_CUDA)
+    add_executable(fdm_gpu_transport_layout_abi_v1_contract
+        tests/gpu_transport_layout_abi_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_transport_layout_abi_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_transport_layout_abi_v1_contract PRIVATE fullmag_fdm CUDA::cudart)
+    target_compile_definitions(fdm_gpu_transport_layout_abi_v1_contract PRIVATE
+        FULLMAG_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/.."
+        FULLMAG_FDM_GPU_TRANSPORT_COMPILER_FLAGS="${FDM_GPU_BUILD_FLAGS_IDENTITY}"
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_transport_layout_abi_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_transport_layout_abi_v1_contract
+             COMMAND fdm_gpu_transport_layout_abi_v1_contract)
+
+    add_executable(fdm_gpu_transport_registry_fail_closed_v1_contract
+        tests/gpu_transport_registry_fail_closed_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_transport_registry_fail_closed_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_transport_registry_fail_closed_v1_contract PRIVATE fullmag_fdm)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_transport_registry_fail_closed_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_transport_registry_fail_closed_v1_contract
+             COMMAND fdm_gpu_transport_registry_fail_closed_v1_contract)
+
+    add_executable(fdm_gpu_transport_checkpoint_semantic_v1_contract
+        tests/checkpoint_abi_v1_semantic_contract.cpp
+    )
+    target_include_directories(fdm_gpu_transport_checkpoint_semantic_v1_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_definitions(fdm_gpu_transport_checkpoint_semantic_v1_contract PRIVATE
+        FULLMAG_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/.."
+    )
+    target_link_libraries(fdm_gpu_transport_checkpoint_semantic_v1_contract PRIVATE
+        fullmag_fdm crypto
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_transport_checkpoint_semantic_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_transport_checkpoint_semantic_v1_contract
+             COMMAND fdm_gpu_transport_checkpoint_semantic_v1_contract)
+
+    add_executable(fdm_gpu_m1_charge_uniform_v1_contract
+        tests/gpu_m1_charge_uniform_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_charge_uniform_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_charge_uniform_v1_contract PRIVATE
+        fullmag_fdm CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_charge_uniform_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_charge_uniform_v1_contract
+             COMMAND fdm_gpu_m1_charge_uniform_v1_contract)
+    set_tests_properties(fdm_gpu_m1_charge_uniform_v1_contract PROPERTIES
+        ENVIRONMENT "FULLMAG_FDM_GPU_M1_CHARGE_EVIDENCE_PATH=${CMAKE_CURRENT_BINARY_DIR}/fdm-gpu-m1-charge-uniform-ctest-v1.json"
+    )
+
+    add_executable(fdm_gpu_m1_charge_layered_v1_contract
+        tests/gpu_m1_charge_layered_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_charge_layered_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_charge_layered_v1_contract PRIVATE
+        fullmag_fdm fullmag_fdm_cpu_transport CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_charge_layered_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_charge_layered_v1_contract
+             COMMAND fdm_gpu_m1_charge_layered_v1_contract)
+    set_tests_properties(fdm_gpu_m1_charge_layered_v1_contract PROPERTIES
+        ENVIRONMENT "FULLMAG_FDM_GPU_M1_CHARGE_LAYERED_EVIDENCE_PATH=${CMAKE_CURRENT_BINARY_DIR}/fdm-gpu-m1-charge-layered-ctest-v1.json"
+    )
+
+    add_executable(fdm_gpu_m1_charge_snapshot_v1_contract
+        tests/gpu_m1_charge_snapshot_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_charge_snapshot_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport
+    )
+    target_link_libraries(fdm_gpu_m1_charge_snapshot_v1_contract PRIVATE
+        fullmag_fdm CUDA::cudart crypto
+    )
+    target_compile_definitions(fdm_gpu_m1_charge_snapshot_v1_contract PRIVATE
+        FULLMAG_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/.."
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_charge_snapshot_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_charge_snapshot_v1_contract
+             COMMAND fdm_gpu_m1_charge_snapshot_v1_contract)
+    set_tests_properties(fdm_gpu_m1_charge_snapshot_v1_contract PROPERTIES
+        ENVIRONMENT "FULLMAG_FDM_GPU_M1_CHARGE_SNAPSHOT_EVIDENCE_PATH=${CMAKE_CURRENT_BINARY_DIR}/fdm-gpu-m1-charge-snapshot-ctest-v1.json"
+    )
+
+    add_executable(fdm_gpu_m1_charge_boundary_mutation_v1_contract
+        tests/gpu_m1_charge_boundary_mutation_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_charge_boundary_mutation_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_charge_boundary_mutation_v1_contract PRIVATE
+        fullmag_fdm fullmag_fdm_cpu_transport CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_charge_boundary_mutation_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_charge_boundary_mutation_v1_contract
+             COMMAND fdm_gpu_m1_charge_boundary_mutation_v1_contract)
+    set_tests_properties(fdm_gpu_m1_charge_boundary_mutation_v1_contract PROPERTIES
+        ENVIRONMENT "FULLMAG_FDM_GPU_M1_CHARGE_MUTATION_EVIDENCE_PATH=${CMAKE_CURRENT_BINARY_DIR}/fdm-gpu-m1-charge-mutation-ctest-v1.json"
+    )
+
+    add_executable(fdm_gpu_m1_charge_transfer_audit_v1_contract
+        tests/gpu_m1_charge_transfer_audit_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_charge_transfer_audit_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_charge_transfer_audit_v1_contract PRIVATE
+        fullmag_fdm CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_charge_transfer_audit_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_charge_transfer_audit_v1_contract
+             COMMAND fdm_gpu_m1_charge_transfer_audit_v1_contract)
+
+    add_executable(fdm_gpu_m1_spin_red_v1_contract
+        tests/gpu_m1_spin_red_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_spin_red_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_spin_red_v1_contract PRIVATE
+        fullmag_fdm CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_spin_red_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_spin_red_v1_contract
+             COMMAND fdm_gpu_m1_spin_red_v1_contract)
+endif()
+
+if(NOT FULLMAG_ENABLE_CUDA)
+    add_executable(fdm_gpu_transport_cpu_only_symbol_graph
+        tests/gpu_transport_cpu_only_symbol_graph.cpp
+    )
+    target_include_directories(fdm_gpu_transport_cpu_only_symbol_graph PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_transport_cpu_only_symbol_graph PRIVATE fullmag_fdm)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_transport_cpu_only_symbol_graph PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_transport_cpu_only_symbol_graph
+             COMMAND ${CMAKE_COMMAND} -E env
+                     LD_LIBRARY_PATH=$<TARGET_FILE_DIR:fullmag_fdm>
+                     $<TARGET_FILE:fdm_gpu_transport_cpu_only_symbol_graph>)
+endif()
+
+add_executable(fdm_gpu_transport_layout_abi_v1_c11_contract
+    tests/gpu_transport_layout_abi_v1_c11_contract.c
+)
+target_include_directories(fdm_gpu_transport_layout_abi_v1_c11_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+set_target_properties(fdm_gpu_transport_layout_abi_v1_c11_contract PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_gpu_transport_layout_abi_v1_c11_contract PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+add_test(NAME fdm_gpu_transport_layout_abi_v1_c11_contract
+         COMMAND fdm_gpu_transport_layout_abi_v1_c11_contract)
+
+add_executable(fdm_cpu_oersted_fft_open_contract
+    tests/cpu_oersted_fft_open_contract.cpp
+    tests/oersted_direct_oracle_v1.cpp
+)
+target_include_directories(fdm_cpu_oersted_fft_open_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(fdm_cpu_oersted_fft_open_contract PRIVATE
+    fullmag_fdm_cpu_oersted
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(fdm_cpu_oersted_fft_open_contract PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+add_test(NAME fdm_cpu_oersted_fft_open_contract COMMAND fdm_cpu_oersted_fft_open_contract)
 
 if(FULLMAG_ENABLE_CUDA)
     add_executable(smoke_context tests/smoke_context.cpp)

@@ -108,6 +108,7 @@ export interface RegionMeshOverlayOwnerPart {
   node_indices?: readonly number[] | null;
   node_start?: number | null;
   object_id?: string | null;
+  region_id?: string | null;
   surface_faces?: readonly (readonly number[])[] | null;
 }
 

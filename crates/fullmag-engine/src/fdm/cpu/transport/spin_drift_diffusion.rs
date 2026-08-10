@@ -1,4 +1,7 @@
-use super::{ChargeBoundaryCondition, StructuredChargeProblem};
+use super::{
+    ChargeBoundaryCondition, ChargeInterfaceFluxObservation, ChargeSolution, OrientedFaceFluxes,
+    StructuredChargeProblem,
+};
 use crate::fdm::shared::types::{EngineError, GridShape, Result};
 use std::collections::VecDeque;
 
@@ -257,6 +260,8 @@ pub struct SpinDriftDiffusionProblem {
     torque_targets: Option<SpinTorqueTargets>,
     region_ids: Vec<u32>,
     interfaces: Vec<OrientedSpinInterface>,
+    accepted_charge_interfaces: Vec<ChargeInterfaceFluxObservation>,
+    accepted_charge_face_fluxes: Option<OrientedFaceFluxes>,
     internal_contacts: Vec<InternalSpinContact>,
 }
 
@@ -387,6 +392,8 @@ impl SpinDriftDiffusionProblem {
             torque_targets: None,
             region_ids: vec![0; count],
             interfaces: Vec::new(),
+            accepted_charge_interfaces: Vec::new(),
+            accepted_charge_face_fluxes: None,
             internal_contacts: Vec::new(),
         })
     }
@@ -476,6 +483,75 @@ impl SpinDriftDiffusionProblem {
         Ok(self)
     }
 
+    pub fn with_accepted_charge_interfaces(
+        mut self,
+        observations: Vec<ChargeInterfaceFluxObservation>,
+    ) -> Result<Self> {
+        let mixing_interfaces: Vec<_> = self
+            .interfaces
+            .iter()
+            .filter(|interface| matches!(interface.law, SpinInterfaceLaw::MixingConductance { .. }))
+            .collect();
+        if observations.len() != mixing_interfaces.len() {
+            return Err(EngineError::new(
+                "accepted charge interface observations must match every spin mixing face",
+            ));
+        }
+        for observation in &observations {
+            if [
+                observation.from_potential_trace_v,
+                observation.to_potential_trace_v,
+                observation.delta_potential_trace_v,
+                observation.from_to_current_density_a_per_m2,
+                observation.global_face_current_density_a_per_m2,
+            ]
+            .iter()
+            .any(|value| !value.is_finite())
+            {
+                return Err(EngineError::new(
+                    "accepted charge interface observations must be finite",
+                ));
+            }
+            let matches_spin = mixing_interfaces.iter().any(|interface| {
+                let SpinInterfaceLaw::MixingConductance {
+                    g_up_s_per_m2,
+                    g_down_s_per_m2,
+                    ..
+                } = interface.law
+                else {
+                    return false;
+                };
+                interface.face.axis == observation.face.axis
+                    && interface.face.negative_cell == observation.face.negative_cell
+                    && interface.face.positive_cell == observation.face.positive_cell
+                    && interface.from_cell == observation.from_cell
+                    && interface.to_cell == observation.to_cell
+                    && g_up_s_per_m2 == observation.g_up_s_per_m2
+                    && g_down_s_per_m2 == observation.g_down_s_per_m2
+            });
+            if !matches_spin {
+                return Err(EngineError::new(
+                    "accepted charge interface observation does not match a spin mixing law",
+                ));
+            }
+        }
+        self.accepted_charge_interfaces = observations;
+        Ok(self)
+    }
+
+    pub fn with_accepted_charge_solution(mut self, solution: &ChargeSolution) -> Result<Self> {
+        if solution.potential_volts != self.charge_potential_volts {
+            return Err(EngineError::new(
+                "accepted charge solution potential must match the spin input exactly",
+            ));
+        }
+        self.charge
+            .conservative_divergence(&solution.current_density)?;
+        self = self.with_accepted_charge_interfaces(solution.interface_fluxes.clone())?;
+        self.accepted_charge_face_fluxes = Some(solution.current_density.clone());
+        Ok(self)
+    }
+
     pub fn with_internal_contacts(mut self, contacts: Vec<InternalSpinContact>) -> Result<Self> {
         for (index, contact) in contacts.iter().enumerate() {
             self.validate_structured_face(contact.face)?;
@@ -526,7 +602,13 @@ impl SpinDriftDiffusionProblem {
     pub fn face_fluxes(&self, spin_potential_volts: &[Vector3]) -> Result<OrientedSpinFaceFluxes> {
         self.validate_spin_values(spin_potential_volts)?;
         let GridShape { nx, ny, nz } = self.charge.grid;
-        let charge_fluxes = self.charge.face_fluxes(&self.charge_potential_volts)?;
+        let computed_charge_fluxes;
+        let charge_fluxes = if let Some(fluxes) = &self.accepted_charge_face_fluxes {
+            fluxes
+        } else {
+            computed_charge_fluxes = self.charge.face_fluxes(&self.charge_potential_volts)?;
+            &computed_charge_fluxes
+        };
         let electric_field = self.cell_electric_field();
         let mut fluxes = OrientedSpinFaceFluxes {
             x: vec![[0.0; 3]; (nx + 1) * ny * nz],
@@ -1190,7 +1272,7 @@ impl SpinDriftDiffusionProblem {
                     };
                     return Ok((negative_flux, Some(observation)));
                 }
-                if self.region_ids[left] != self.region_ids[right] {
+                let transparent_interface = if self.region_ids[left] != self.region_ids[right] {
                     let interface = self
                         .interfaces
                         .iter()
@@ -1207,7 +1289,10 @@ impl SpinDriftDiffusionProblem {
                             Some(observation),
                         ));
                     }
-                }
+                    Some(interface)
+                } else {
+                    None
+                };
                 let half_distance = 0.5 * self.axis_spacing(axis);
                 let diffusion_left = 0.5 * self.materials.spin_conductivity_s_per_m[left];
                 let diffusion_right = 0.5 * self.materials.spin_conductivity_s_per_m[right];
@@ -1263,7 +1348,30 @@ impl SpinDriftDiffusionProblem {
                         - (spin_potential[right][component] - spin_potential[left][component])
                             / (resistance_left + resistance_right);
                 }
-                Ok((flux, None))
+                let observation = transparent_interface.map(|interface| {
+                    let from_is_negative = interface.from_cell == face.negative_cell;
+                    SpinInterfaceFluxObservation {
+                        face,
+                        incoming_longitudinal_a_per_m2: [0.0; 3],
+                        backflow_longitudinal_a_per_m2: [0.0; 3],
+                        absorbed_transverse_a_per_m2: [0.0; 3],
+                        spin_memory_loss_a_per_m2: [0.0; 3],
+                        sml_reservoir: None,
+                        from_side_outgoing_a_per_m2: if from_is_negative {
+                            flux
+                        } else {
+                            scale(flux, -1.0)
+                        },
+                        to_side_transmitted_a_per_m2: if from_is_negative {
+                            flux
+                        } else {
+                            scale(flux, -1.0)
+                        },
+                        negative_cell_flux_positive_axis_a_per_m2: flux,
+                        positive_cell_flux_positive_axis_a_per_m2: flux,
+                    }
+                });
+                Ok((flux, observation))
             }
             (None, Some(cell)) => Ok((
                 self.boundary_face_flux(
@@ -1395,8 +1503,21 @@ impl SpinDriftDiffusionProblem {
                 "mixing flux requested for a transparent interface",
             ));
         };
-        let delta_v = self.charge_potential_volts[interface.from_cell]
-            - self.charge_potential_volts[interface.to_cell];
+        let delta_v = self
+            .accepted_charge_interfaces
+            .iter()
+            .find(|observation| {
+                observation.face.axis == interface.face.axis
+                    && observation.face.negative_cell == interface.face.negative_cell
+                    && observation.face.positive_cell == interface.face.positive_cell
+                    && observation.from_cell == interface.from_cell
+                    && observation.to_cell == interface.to_cell
+            })
+            .map(|observation| observation.delta_potential_trace_v)
+            .unwrap_or_else(|| {
+                self.charge_potential_volts[interface.from_cell]
+                    - self.charge_potential_volts[interface.to_cell]
+            });
         let delta_mu = add(
             spin_potential[interface.from_cell],
             scale(spin_potential[interface.to_cell], -1.0),
@@ -1562,6 +1683,28 @@ impl SpinDriftDiffusionProblem {
     fn cell_electric_field(&self) -> Vec<Vector3> {
         let grid = self.charge.grid;
         let mut field = vec![[0.0; 3]; grid.cell_count()];
+        if let Some(fluxes) = &self.accepted_charge_face_fluxes {
+            for z in 0..grid.nz {
+                for y in 0..grid.ny {
+                    for x in 0..grid.nx {
+                        let cell = grid.index(x, y, z);
+                        if !self.active_cells[cell] {
+                            continue;
+                        }
+                        let x0 = x + (grid.nx + 1) * (y + grid.ny * z);
+                        let y0 = x + grid.nx * (y + (grid.ny + 1) * z);
+                        let z0 = x + grid.nx * (y + grid.ny * z);
+                        let inverse_sigma = 1.0 / self.charge.conductivity_s_per_m[cell];
+                        field[cell] = [
+                            0.5 * (fluxes.x[x0] + fluxes.x[x0 + 1]) * inverse_sigma,
+                            0.5 * (fluxes.y[y0] + fluxes.y[y0 + grid.nx]) * inverse_sigma,
+                            0.5 * (fluxes.z[z0] + fluxes.z[z0 + grid.nx * grid.ny]) * inverse_sigma,
+                        ];
+                    }
+                }
+            }
+            return field;
+        }
         for z in 0..grid.nz {
             for y in 0..grid.ny {
                 for x in 0..grid.nx {

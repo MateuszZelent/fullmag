@@ -315,6 +315,7 @@ pub(crate) fn execute_direct_minimizer(
         );
         scalar_metrics.insert("accepted_steps".to_string(), state.accepted_steps as f64);
 
+        artifacts.observe_energy_evaluation();
         artifacts.record_scalar(&accepted_stats)?;
         steps.push(accepted_stats.clone());
         latest_stats = Some(accepted_stats.clone());

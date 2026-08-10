@@ -33,6 +33,24 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("sessionStatus.data");
   });
 
+  it("uses the structured-grid resource path for explicit FDM visualization targets", () => {
+    expect(panelSource).toContain("useDomainMetaResource");
+    expect(panelSource).toContain("useFdmRegionMembershipResource");
+    expect(panelSource).toContain(
+      "const fdmTarget = fdmResourcesEnabled && target !== null",
+    );
+    expect(panelSource).toContain("femResourcesEnabled &&");
+    expect(panelSource).toContain(
+      "useVisualizationStateResource({\n    enabled: femResourcesEnabled",
+    );
+    expect(panelSource).toContain(
+      "resolveObjectVisualizationTargetForLane({",
+    );
+    expect(panelSource).toContain("fdmGridCellCount");
+    expect(panelSource).toContain('value="Structured grid cells"');
+    expect(panelSource).not.toContain('"No airbox mesh part is present in the shared-domain manifest."');
+  });
+
   it("selects only visualization overrides relevant to the inspected target", () => {
     expect(panelSource).toContain("useObjectVisualizationController");
     expect(panelSource).toContain("useObjectVisualizationSelector");
@@ -75,6 +93,25 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
 
+  it("gates FDM quantity changes on the realized field catalog", () => {
+    expect(panelSource).toContain("fdmTarget ||");
+    expect(panelSource).toContain("fieldCatalogLoading");
+    expect(panelSource).toContain(
+      "disabled={pending || !settings.visible || fieldCatalogLoading}",
+    );
+    expect(panelSource).toContain(
+      "visualizationQuantityItems(\n        settings.activeQuantityId,\n        targetKind,\n        fieldCatalog,",
+    );
+  });
+
+  it("uses the FDM domain scope and catalog gate for inspector field metadata", () => {
+    expect(panelSource).toContain("fieldMetaTarget");
+    expect(panelSource).toContain("fieldMetaTarget={fieldMetaTarget}");
+    expect(panelSource).toContain("fieldCatalogQuantityAvailable");
+    expect(panelSource).toContain("fieldMetaQuantityAvailable");
+    expect(panelSource).toContain("fieldCatalogLoading");
+  });
+
   it("keeps target controls from patching the active analysis overlay", () => {
     expect(panelSource).not.toContain("settingsWithAnalysisField");
     expect(panelSource).not.toContain("analysisFieldOverlay.update");
@@ -96,7 +133,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   });
 
   it("uses target capabilities and one geometry extent control", () => {
-    expect(panelSource).toContain("visualizationTargetCapabilities(targetKind)");
+    expect(panelSource).toContain("visualizationTargetCapabilities(target)");
     expect(panelSource).toContain("targetKind={target.kind}");
     expect(panelSource.match(/<VisualizationGeometryScopeSection/g)).toHaveLength(1);
     expect(panelSource).not.toContain('label="Arrow extent"');

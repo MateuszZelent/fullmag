@@ -7,11 +7,14 @@
  */
 
 #include <cstdio>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+
+#include "fullmag_fdm.h"
 
 namespace {
 
@@ -64,15 +67,18 @@ std::string slice_between(
 
 std::filesystem::path native_root() {
     const std::filesystem::path this_file(__FILE__);
-    if (this_file.is_absolute()) {
-        return this_file.parent_path().parent_path().parent_path().parent_path();
-    }
-    return std::filesystem::current_path() /
-        this_file.parent_path().parent_path().parent_path().parent_path();
+    const std::filesystem::path source_file = this_file.is_absolute()
+        ? this_file
+        : std::filesystem::current_path() / this_file;
+    return source_file.parent_path().parent_path().parent_path().parent_path();
 }
 
 std::filesystem::path repo_root() {
-    return native_root().parent_path();
+    return native_root();
+}
+
+std::filesystem::path native_include_root() {
+    return repo_root() / "native";
 }
 
 std::filesystem::path runner_native_fdm_source() {
@@ -86,7 +92,7 @@ std::filesystem::path runner_multilayer_cuda_source() {
 }
 
 void c_header_exposes_multilayer_plan_shape() {
-    const std::string header = read_text_file(native_root() / "include" / "fullmag_fdm.h");
+    const std::string header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
 
     check(
         header.find("typedef enum {\n    FULLMAG_FDM_PLAN_UNIFORM_GRID = 0") !=
@@ -385,8 +391,12 @@ void native_multilayer_demag_transforms_all_vector_components() {
             context_source.find("CUFFT_C2C,\n            3,") != std::string::npos,
         "cached multilayer cuFFT workspaces must plan x/y/z as one batch");
     check(
-        count_occurrences(multilayer_source, "CUFFT_FORWARD") == 2 &&
-            count_occurrences(multilayer_source, "CUFFT_INVERSE") == 2 &&
+        count_occurrences(multilayer_source, "CUFFT_FORWARD") == 4 &&
+            count_occurrences(multilayer_source, "CUFFT_INVERSE") == 4 &&
+            multilayer_source.find("launch_multilayer_demag_field_fp64_batched") !=
+                std::string::npos &&
+            multilayer_source.find("launch_multilayer_demag_field_fp32_batched") !=
+                std::string::npos &&
             multilayer_source.find("cufftExecZ2Z(multilayer batch forward)") !=
                 std::string::npos &&
             multilayer_source.find("cufftExecZ2Z(multilayer batch inverse)") !=
@@ -395,7 +405,7 @@ void native_multilayer_demag_transforms_all_vector_components() {
                 std::string::npos &&
             multilayer_source.find("cufftExecC2C(multilayer batch inverse)") !=
                 std::string::npos,
-        "multilayer demag must transform x/y/z through one batched forward and inverse cuFFT per precision");
+        "multilayer demag must retain assisted transforms and expose one D-07 batched forward/inverse lane per precision");
 }
 
 void native_multilayer_identity_transfer_accepts_padded_fft_grid() {
@@ -645,7 +655,7 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
 
 void native_multilayer_v2_rhs_includes_uniform_external_field() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
@@ -708,7 +718,7 @@ void native_multilayer_v2_rhs_includes_uniform_external_field() {
 
 void native_multilayer_v2_rhs_includes_uniaxial_anisotropy() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
@@ -798,7 +808,7 @@ void native_multilayer_v2_rhs_includes_uniaxial_anisotropy() {
 
 void native_multilayer_v2_rhs_includes_cubic_anisotropy() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
@@ -904,7 +914,7 @@ void native_multilayer_v2_rhs_includes_cubic_anisotropy() {
 
 void native_multilayer_v2_rhs_includes_dmi() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
@@ -993,7 +1003,7 @@ void native_multilayer_v2_rhs_includes_dmi() {
 
 void native_sources_expose_multilayer_layer_field_copy() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
@@ -1126,7 +1136,7 @@ void native_sources_expose_multilayer_layer_field_copy() {
 
 void native_sources_expose_multilayer_layer_magnetization_upload() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
@@ -1183,7 +1193,7 @@ void native_sources_expose_multilayer_layer_magnetization_upload() {
 
 void native_sources_expose_explicit_multilayer_demag_refresh() {
     const std::filesystem::path root = native_root();
-    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
     const std::string c_api =
@@ -1212,6 +1222,78 @@ void native_sources_expose_explicit_multilayer_demag_refresh() {
             rust_runner.find("fullmag_fdm_backend_step(self.handle, 0.0") ==
                 std::string::npos,
         "Rust native runner wrapper must refresh multilayer demag through the explicit ABI, not step(0)");
+}
+
+void multilayer_stage_telemetry_is_append_only_and_crosses_ffi_provenance() {
+    const std::filesystem::path root = native_root();
+    const std::string c_header = read_text_file(native_include_root() / "include" / "fullmag_fdm.h");
+    const std::string context_header =
+        read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
+    const std::string c_api =
+        read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
+    const std::string rust =
+        read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
+    const std::string rust_runner = read_text_file(runner_native_fdm_source());
+    const std::string runner_types = read_text_file(
+        repo_root() / "crates" / "fullmag-runner" / "src" / "types.rs");
+    const std::string multilayer_runner = read_text_file(runner_multilayer_cuda_source());
+
+    const std::string c_stats = slice_between(
+        c_header,
+        "typedef struct {\n    uint64_t step;",
+        "} fullmag_fdm_step_stats;",
+        "fullmag_fdm_step_stats");
+    const std::size_t previous_tail =
+        c_stats.find("uint64_t hot_loop_control_scalar_host_sync_count;");
+    const std::size_t refresh = c_stats.find("uint64_t multilayer_refresh_count;");
+    const std::size_t forward = c_stats.find("uint64_t multilayer_forward_fft_count;");
+    const std::size_t inverse = c_stats.find("uint64_t multilayer_inverse_fft_count;");
+    const std::size_t pairs =
+        c_stats.find("uint64_t multilayer_pair_accumulation_count;");
+    check(
+        previous_tail != std::string::npos && refresh > previous_tail && forward > refresh &&
+            inverse > forward && pairs > inverse,
+        "D-07 counters must be appended after the previous fullmag_fdm_step_stats tail in stable order");
+    check(
+        offsetof(fullmag_fdm_step_stats, multilayer_refresh_count) ==
+                offsetof(fullmag_fdm_step_stats, hot_loop_control_scalar_host_sync_count) +
+                    sizeof(uint64_t) &&
+            offsetof(fullmag_fdm_step_stats, multilayer_forward_fft_count) ==
+                offsetof(fullmag_fdm_step_stats, multilayer_refresh_count) + sizeof(uint64_t) &&
+            offsetof(fullmag_fdm_step_stats, multilayer_inverse_fft_count) ==
+                offsetof(fullmag_fdm_step_stats, multilayer_forward_fft_count) + sizeof(uint64_t) &&
+            offsetof(fullmag_fdm_step_stats, multilayer_pair_accumulation_count) ==
+                offsetof(fullmag_fdm_step_stats, multilayer_inverse_fft_count) + sizeof(uint64_t),
+        "compiled C ABI layout must append D-07 counters contiguously after the previous tail");
+
+    check(
+        rust.find("pub multilayer_refresh_count: u64") != std::string::npos &&
+            rust.find("pub multilayer_forward_fft_count: u64") != std::string::npos &&
+            rust.find("pub multilayer_inverse_fft_count: u64") != std::string::npos &&
+            rust.find("pub multilayer_pair_accumulation_count: u64") != std::string::npos,
+        "Rust FFI must mirror every append-only D-07 step counter");
+    check(
+        context_header.find("fullmag_fdm_publish_multilayer_demag_stage_counters") !=
+                std::string::npos &&
+            c_api.find("fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats)") !=
+                std::string::npos,
+        "C ABI step/snapshot paths must publish Context D-07 counters into step stats");
+    check(
+        rust_runner.find("snapshot_multilayer_demag_stage_telemetry") != std::string::npos,
+        "Rust native wrapper must expose a typed D-07 telemetry snapshot");
+    check(
+        runner_types.find("pub struct FdmMultilayerStageTelemetry") != std::string::npos &&
+            runner_types.find("pub fdm_multilayer_stage_telemetry: Option<FdmMultilayerStageTelemetry>") !=
+                std::string::npos,
+        "ExecutionProvenance must carry backward-compatible optional D-07 stage telemetry");
+    check(
+        rust_runner.find("cuda_native_multilayer_demag_v2") != std::string::npos &&
+            rust_runner.find("snapshot_multilayer_demag_stage_telemetry") !=
+                std::string::npos &&
+            multilayer_runner.find("latest_stage_telemetry") != std::string::npos &&
+            multilayer_runner.find("fdm_multilayer_stage_telemetry: stage_telemetry") !=
+                std::string::npos,
+        "native v2 demag runner must publish unambiguous D-07 execution provenance");
 }
 
 void rust_runner_builds_multilayer_v2_plan_descriptor() {
@@ -1248,6 +1330,7 @@ int main() {
     native_sources_expose_multilayer_layer_field_copy();
     native_sources_expose_multilayer_layer_magnetization_upload();
     native_sources_expose_explicit_multilayer_demag_refresh();
+    multilayer_stage_telemetry_is_append_only_and_crosses_ffi_provenance();
     rust_runner_builds_multilayer_v2_plan_descriptor();
     std::printf("multilayer ABI v2 contract: PASS\n");
     return 0;

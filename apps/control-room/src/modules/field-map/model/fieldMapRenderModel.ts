@@ -44,3 +44,29 @@ export function surfaceProjectionStatus(meta: {
     ? "ambiguous"
     : "resolved";
 }
+
+export interface FieldMapAuxiliaryLayerState {
+  errorMessage?: string | null;
+  hasData: boolean;
+  label: string;
+  requested: boolean;
+  status: "error" | "idle" | "loading" | "ready" | "stale";
+}
+
+export function resolveFieldMapAuxiliaryDiagnostics(
+  layers: readonly FieldMapAuxiliaryLayerState[],
+): string[] {
+  return layers.flatMap(({ errorMessage, hasData, label, requested, status }) => {
+    if (!requested) return [];
+    if (status === "error") {
+      return [`${label}: degraded — ${errorMessage ?? "resource unavailable"}.`];
+    }
+    if (status === "stale") {
+      return [`${label}: stale — the last revision is not current.`];
+    }
+    if (status === "ready" && !hasData) {
+      return [`${label}: not materialized for this scope.`];
+    }
+    return [];
+  });
+}

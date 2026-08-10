@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildViewport3DCameraRegistryPatch,
   buildViewport3DColorbarTargetPlans,
   formatHysteresisReplayGlyphVector,
   formatHysteresisReplayLabel,
@@ -23,7 +24,12 @@ import {
 } from "./Viewport3DModule";
 import { planViewport3DColorbars } from "./model/viewport3DColorbarPlan";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
+import {
+  targetForFdmDomain,
+  targetForFdmUniverseOutsideSupport,
+} from "./model/viewport3DTargets";
 
 function scalarColorBuffer(
   mode: string,
@@ -277,7 +283,60 @@ describe("createViewport3DPointerHoldLifecycle", () => {
   });
 });
 
+describe("viewport camera registry handoff", () => {
+  it("keeps orbit commits in the dirty camera registry", () => {
+    expect(
+      buildViewport3DCameraRegistryPatch({
+        position: [3, 2, 1],
+        target: [0.5, 0.25, 0],
+        up: [0, 0, 1],
+        orthographicScale: 2.5,
+        projection: "orthographic",
+      }),
+    ).toEqual({
+      orthographic_scale: 2.5,
+      position: [3, 2, 1],
+      projection: "orthographic",
+      target: [0.5, 0.25, 0],
+      up: [0, 0, 1],
+    });
+  });
+});
+
 describe("resolveViewport3DColorbarLegend", () => {
+  it("keeps nested Airbox HUD legend text to one bounded line", () => {
+    const source = readFileSync(
+      "src/design/styles/viewport-3d.css",
+      "utf8",
+    );
+
+    expect(source).toContain(".fm-viewport-3d__hud > fieldset");
+    expect(source).toContain("--fm-viewport-3d-orientation-reserve");
+    expect(source).toContain("max-inline-size: 100%");
+    expect(source).toContain(".fm-viewport-3d__airbox-legend");
+    expect(source).toContain("flex: 1 1 0");
+    expect(source).toContain("white-space: nowrap");
+  });
+
+  it("hides only the Airbox target when its HUD toggle is disabled", () => {
+    const controller = new ObjectVisualizationController();
+    const magneticDomain = targetForFdmDomain("FDM domain");
+
+    expect(magneticDomain).not.toBeNull();
+    controller.patchTarget(magneticDomain!, {
+      visible: true,
+      wireframeVisible: true,
+    });
+    const magneticSettingsBefore = controller.getSettings(magneticDomain!);
+
+    controller.patchTarget(targetForFdmUniverseOutsideSupport(), {
+      visible: false,
+    });
+
+    expect(controller.getSettings(targetForFdmUniverseOutsideSupport()).visible).toBe(false);
+    expect(controller.getSettings(magneticDomain!)).toEqual(magneticSettingsBefore);
+  });
+
   it("renders the viewport legend as an Inspector-style scientific range card", () => {
     const source = readFileSync(
       "src/modules/viewport-3d/Viewport3DModule.tsx",
@@ -831,6 +890,37 @@ describe("resolveViewport3DColorbarLegend", () => {
     ).toBe(retainedPlan);
   });
 
+  it("clears retained FDM colorbar ranges when field identity is incompatible", () => {
+    const retainedPlan = planViewport3DColorbars({
+      rangeStatesByGroupKey: new Map(),
+      targets: buildViewport3DColorbarTargetPlans({
+        fdmSettings: visualizationSettings({ viewportColorbarVisible: true }),
+        parts: [],
+      }),
+    });
+
+    expect(
+      resolveViewport3DColorbarPlansForRender({
+        fieldIdentityCompatible: false,
+        planned: [],
+        renderSurfaceAvailable: true,
+        retained: retainedPlan,
+        targetPlanAvailable: true,
+        viewportColorbarRequested: true,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveRetainedViewport3DColorbarPlansForStore({
+        fieldIdentityCompatible: false,
+        planned: [],
+        renderSurfaceAvailable: true,
+        retained: retainedPlan,
+        targetPlanAvailable: true,
+        viewportColorbarRequested: true,
+      }),
+    ).toEqual([]);
+  });
+
   it("does not carry retained per-part colorbars into FDM colorbar mode", () => {
     const previous = [
       {
@@ -1029,6 +1119,48 @@ describe("resolveViewport3DColorbarLegend", () => {
         targetIds: ["airbox"],
       },
     ]);
+  });
+
+  it("keeps FDM target-view colorbars on the full-domain field scope", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const targetViewsStart = source.indexOf(
+      "...sceneProps.fdmTargetViews.map((view) => ({",
+    );
+    const targetViewsEnd = source.indexOf(
+      "      })),\n    ],",
+      targetViewsStart,
+    );
+    const targetViewsSource = source.slice(targetViewsStart, targetViewsEnd);
+
+    expect(targetViewsSource).toContain("objectScopeId: null");
+    expect(targetViewsSource).toContain('targetKind: "fdm-domain"');
+  });
+
+  it("does not plan a colorbar for a quantity missing from the FDM catalog", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      availableQuantityIds: new Set(["m"]),
+      fdmSettings: visualizationSettings({
+        activeQuantityId: "H_demag",
+        viewportColorbarVisible: true,
+      }),
+      parts: [
+        {
+          id: "airbox",
+          label: "Airbox",
+          role: "airbox",
+          settings: visualizationSettings({
+            activeQuantityId: "H_demag",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "airbox",
+        },
+      ],
+    });
+
+    expect(targets).toEqual([]);
   });
 
   it("does not plan a second viewport colorbar for air-interface parts", () => {
@@ -1519,7 +1651,7 @@ describe("notifyMeshTopologyRendered", () => {
 });
 
 describe("Viewport3DModule scene wiring", () => {
-  it("keeps ordinary camera gestures local while explicit camera patches persist", () => {
+  it("keeps ordinary camera gestures local while committing the latest pose to the registry", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
@@ -1540,7 +1672,9 @@ describe("Viewport3DModule scene wiring", () => {
     );
     expect(patchCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).toContain("viewport3dStore.setCamera(nextCamera);");
-    expect(saveCameraStateSource).not.toContain("kernel.cameraRegistry.patchCamera");
+    expect(saveCameraStateSource).toContain(
+      "kernel.cameraRegistry.patchCamera(buildViewport3DCameraRegistryPatch(camera));",
+    );
     expect(saveCameraStateSource).toContain("orthographicScale");
     expect(saveCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).not.toContain("queuePatch({ camera: nextCamera })");
@@ -1756,6 +1890,37 @@ describe("Viewport3DModule scene wiring", () => {
     );
     expect(styles).toMatch(
       /\.fm-viewport-3d__region-modes\s*\{[\s\S]*?pointer-events:\s*auto;/,
+    );
+  });
+
+  it("exposes the FDM universe overlay as a distinct optional target with its own legend", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain('aria-label="Airbox overlay"');
+    expect(source).toMatch(/\n\s+Airbox\n/);
+    expect(source).toContain("fdmUniverseOutsideSupportSettings?.visible");
+    expect(source).toContain(
+      "patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET",
+    );
+    expect(source).not.toContain("patchTarget(AIRBOX_VISUALIZATION_TARGET");
+    expect(source).toContain("legend.magneticSupport");
+    expect(source).toContain("legend.outsideSupport");
+    expect(source).toContain('className="fm-viewport-3d__airbox-legend"');
+    expect(source).toContain("viewportSelectionForFdmUniverseOutsideSupport");
+    expect(source).toContain(
+      "onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}",
+    );
+    expect(source).not.toContain("FDM Airbox mesh");
+
+    const styles = readFileSync(
+      new URL("../../design/styles/viewport-3d.css", import.meta.url),
+      "utf8",
+    );
+    expect(styles).toMatch(
+      /\.fm-viewport-3d__airbox-legend\s*\{[\s\S]*?text-overflow:\s*ellipsis;/,
     );
   });
 });

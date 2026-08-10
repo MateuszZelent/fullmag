@@ -90,10 +90,40 @@ page.on("response", (response) => {
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
-  await canvas.waitFor({ state: "visible", timeout: 15_000 });
+  try {
+    await canvas.waitFor({ state: "visible", timeout: 15_000 });
+  } catch (error) {
+    const { hudText, summary } = await readViewportHudDebug(page);
+    const bodyText = (await page.locator("body").innerText()).slice(0, 2_000);
+    throw new Error(
+      `Viewport 3D canvas did not become visible. hud=${hudText}; summary=${summary}; errors=${errors.join(" | ") || "none"}; body=${bodyText}; cause=${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   await waitForCanvasClipBox(page);
+  assertViewportWebGLState(await readViewportWebGLState(page), "main FDM fixture");
   if (useMainPageFdmFixture) {
     await verifyRegionOverlayModeControl(page);
+    const uncoloredSample = await sampleCanvasComposite(page);
+    await configureFdmFixtureFieldPresentation(page, false);
+    await verifyFdmFixtureFieldPresentation(page, missingSessionFixtureRequests);
+    const shadedSample = await sampleCanvasComposite(page);
+    const shaderDelta = canvasCompositeDifference(uncoloredSample, shadedSample);
+    if (!shaderDelta.changed) {
+      throw new Error("FDM magnitude shader did not change any sampled viewport pixels.");
+    }
+    await configureFdmFixtureFieldPresentation(page, true);
+    const vectorSample = await waitForCanvasCompositeChange(
+      page,
+      shadedSample,
+      "FDM vector glyph render",
+      "FDM vector glyph layer did not change any sampled viewport pixels",
+    );
+    const vectorDelta = canvasCompositeDifference(shadedSample, vectorSample);
+    console.log(
+      `Viewport 3D FDM shader/vector effects passed (shader=${shaderDelta.changedPixels}/${shaderDelta.sampledPixels}, vectors=${vectorDelta.changedPixels}/${vectorDelta.sampledPixels}).`,
+    );
   }
 
   const detectedScene = await detectScene(page);
@@ -157,9 +187,10 @@ try {
 }
 
 async function verifyFdmFixtureScene(browser) {
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { height: 900, width: 1440 },
   });
+  const page = await context.newPage();
   const errors = [];
   const fixtureRequests = [];
 
@@ -180,13 +211,16 @@ async function verifyFdmFixtureScene(browser) {
     const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
     await canvas.waitFor({ state: "visible", timeout: 15_000 });
     await waitForCanvasClipBox(page);
+    assertViewportWebGLState(
+      await readViewportWebGLState(page),
+      "isolated FDM fixture",
+    );
+    await configureFdmFixtureFieldPresentation(page);
     try {
       await page.waitForFunction(
         () => {
-          const summary = document
-            .querySelector(".fm-viewport-3d__hud span:nth-child(3)")
-            ?.textContent?.trim();
-          return /^\d+\/\d+$/.test(summary ?? "");
+          const hud = document.querySelector(".fm-viewport-3d__hud")?.textContent ?? "";
+          return /(?:\b192\/192\b|cells\s+192\b)/.test(hud) && /ready/.test(hud);
         },
         null,
         { timeout: 10_000 },
@@ -206,6 +240,7 @@ async function verifyFdmFixtureScene(browser) {
     if (detectedScene !== "fdm") {
       throw new Error(`FDM fixture rendered '${detectedScene}' instead of 'fdm'.`);
     }
+    await verifyFdmFixtureFieldPresentation(page, fixtureRequests);
 
     const captures = [];
     for (const profile of requiredProfiles) {
@@ -231,8 +266,167 @@ async function verifyFdmFixtureScene(browser) {
       sampledPixels: delta.sampledPixels,
     };
   } finally {
-    await page.close();
+    await context.close();
   }
+}
+
+async function configureFdmFixtureFieldPresentation(page, vectorsVisible = true) {
+  await page.waitForFunction(
+    () =>
+      typeof window.__FULLMAG_CONTROL_ROOM_AUDIT__?.patchFdmVisualization ===
+      "function",
+    null,
+    { timeout: 10_000 },
+  );
+  await page.evaluate((showVectors) => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__.patchFdmVisualization({
+      activeQuantityId: "m",
+      shaderVisible: true,
+      shaderColorMode: "magnitude",
+      surfaceColorSource: "magnitude",
+      vectorBudget: 192,
+      vectorColorMode: "orientation",
+      vectorsVisible: showVectors,
+      viewportColorbarVisible: true,
+    });
+  }, vectorsVisible);
+}
+
+async function verifyFdmFixtureFieldPresentation(page, fixtureRequests) {
+  await page
+    .locator(".fm-viewport-3d__colorbar-range-label")
+    .filter({ hasText: /\S/ })
+    .first()
+    .waitFor({ state: "visible", timeout: 10_000 });
+  const fieldVectorPath = "/v2/sessions/current/data/fields/m/samples/vector";
+  await waitForFixtureRequest(
+    page,
+    fixtureRequests,
+    `GET ${fieldVectorPath}`,
+  );
+  await page.waitForFunction(
+    () => {
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      const keys = Object.keys(audit?.readViewportAuditRuntime?.().listenerCounts ?? {});
+      const key = keys.find((candidate) =>
+        candidate.startsWith(
+          "/v2/sessions/current/data/fields/m/samples/vector?",
+        ),
+      );
+      if (!key) return false;
+      const data = audit?.readViewportAuditResource?.(key)?.data;
+      const payload = data?.data?.values ? data.data : data;
+      return Boolean(payload?.values && payload.values.length > 0);
+    },
+    null,
+    { timeout: 10_000 },
+  );
+  const decoded = await page.evaluate(() => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    const keys = Object.keys(audit?.readViewportAuditRuntime?.().listenerCounts ?? {});
+    const key = keys.find((candidate) =>
+      candidate.startsWith(
+        "/v2/sessions/current/data/fields/m/samples/vector?",
+      ),
+    );
+    const resource = key ? audit?.readViewportAuditResource?.(key) : null;
+    const data = resource?.data;
+    const payload = data?.data?.values ? data.data : data;
+    if (!payload) return null;
+    let minMagnitude = Number.POSITIVE_INFINITY;
+    let maxMagnitude = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < payload.values.length; index += 3) {
+      const magnitude = Math.hypot(
+        payload.values[index],
+        payload.values[index + 1],
+        payload.values[index + 2],
+      );
+      minMagnitude = Math.min(minMagnitude, magnitude);
+      maxMagnitude = Math.max(maxMagnitude, magnitude);
+    }
+    return {
+      domainGenerationId:
+        payload.domainGenerationId ?? data?.responseMetadata?.domainGenerationId,
+      formatVersion: payload.formatVersion,
+      grid: payload.grid,
+      indexing: payload.indexing,
+      maxMagnitude,
+      minMagnitude,
+      nComp: payload.nComp,
+      pointCount: payload.pointCount,
+      quantityId: payload.quantityId,
+      valueCount: payload.valueCount,
+    };
+  });
+  if (
+    !decoded ||
+    decoded.formatVersion !== 2 ||
+    decoded.nComp !== 3 ||
+    decoded.pointCount !== 192 ||
+    decoded.valueCount !== 576 ||
+    decoded.quantityId !== "m" ||
+    decoded.indexing !== "legacy_count_only" ||
+    decoded.domainGenerationId !== "1" ||
+    decoded.grid.join("x") !== "12x8x2" ||
+    !(decoded.maxMagnitude > decoded.minMagnitude)
+  ) {
+    throw new Error(`Unexpected decoded FDM vector payload: ${JSON.stringify(decoded)}.`);
+  }
+  console.log(
+    `Viewport 3D FDM field presentation passed (colorbar=visible, vectorRequest=GET ${fieldVectorPath}, payload=FMVPv${decoded.formatVersion} ${decoded.grid.join("x")}x${decoded.nComp}, magnitude=${decoded.minMagnitude.toFixed(6)}..${decoded.maxMagnitude.toFixed(6)}).`,
+  );
+}
+
+async function waitForFixtureRequest(page, fixtureRequests, expected) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() <= deadline) {
+    if (fixtureRequests.includes(expected)) return;
+    await page.waitForTimeout(50);
+  }
+  const diagnostic = await page.evaluate(() => ({
+    fdmSettings:
+      window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readFdmVisualizationSettings?.() ??
+      null,
+    hud: document.querySelector(".fm-viewport-3d__hud")?.textContent ?? null,
+    runtime: window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readViewportAuditRuntime?.() ??
+      null,
+    fieldUpdateHoldActive:
+      window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readViewport3DFieldUpdateHoldActive?.() ??
+      null,
+    fieldResource:
+      window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readViewportAuditResource?.(
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+      ) ?? null,
+    activeViewportModule:
+      window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readActiveViewportModule?.() ?? null,
+  }));
+  throw new Error(
+    `FDM fixture did not request ${expected.slice(4)}. Diagnostic=${JSON.stringify(diagnostic)}. Observed: ${[
+      ...new Set(fixtureRequests),
+    ].join(", ") || "none"}.`,
+  );
+}
+
+async function readViewportWebGLState(page) {
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    if (!(node instanceof HTMLCanvasElement)) {
+      return { contextLost: true, height: 0, width: 0 };
+    }
+    const context = node.getContext("webgl2") ?? node.getContext("webgl");
+    return {
+      contextLost: context?.isContextLost() ?? true,
+      height: context?.drawingBufferHeight ?? 0,
+      width: context?.drawingBufferWidth ?? 0,
+    };
+  }, VIEWPORT_3D_CANVAS_SELECTOR);
+}
+
+function assertViewportWebGLState(webgl, label) {
+  if (!webgl.contextLost && webgl.width > 0 && webgl.height > 0) return;
+  throw new Error(
+    `${label} WebGL is unavailable: lost=${webgl.contextLost} drawingBuffer=${webgl.width}x${webgl.height}.`,
+  );
 }
 
 async function verifyTopBottomProjectionFixture(browser) {
@@ -293,9 +487,10 @@ async function verifyTopBottomProjectionFixture(browser) {
 }
 
 async function verifyProjectionSwitchKeepsTopologyStable(browser) {
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { height: 900, width: 1440 },
   });
+  const page = await context.newPage();
   const errors = [];
   const fixtureRequests = [];
   const fixtureState = { projectionMode: "raw_nodal", revision: 1 };
@@ -337,22 +532,29 @@ async function verifyProjectionSwitchKeepsTopologyStable(browser) {
     await selectProjectionFixtureVisualizationNode(page);
     const projectionSelect = page
       .locator(".fm-inspector-panel")
-      .getByLabel("Projection");
-    await projectionSelect.waitFor({ state: "visible", timeout: 15_000 });
+      .locator('select[aria-label="Projection"]');
+    await projectionSelect.waitFor({ state: "attached", timeout: 15_000 });
+    await waitForProjectionFixtureRender(page, fixtureRequests, "raw_nodal");
 
     const topologyRequestsBeforeSwitch =
       countFixtureRequests(fixtureRequests, "GET", "/v2/sessions/current/data/domain/topology");
     const baseline = await sampleCanvasComposite(page);
-    await projectionSelect.selectOption("surface_faces");
+    await projectionSelect.selectOption("surface_faces", { force: true });
     await waitForProjectionFixtureMode(page, "surface_faces");
+    await waitForProjectionFixtureRender(page, fixtureRequests, "surface_faces");
     await waitForCanvasCompositeChange(
       page,
       baseline,
       "surface projection switch renders surface_faces",
       "Viewport canvas did not visually change after switching to surface_faces",
     );
-    await projectionSelect.selectOption("thickness_average_z");
+    await projectionSelect.selectOption("thickness_average_z", { force: true });
     await waitForProjectionFixtureMode(page, "thickness_average_z");
+    await waitForProjectionFixtureRender(
+      page,
+      fixtureRequests,
+      "thickness_average_z",
+    );
     const topologyRequestsAfterSwitch =
       countFixtureRequests(fixtureRequests, "GET", "/v2/sessions/current/data/domain/topology") -
       topologyRequestsBeforeSwitch;
@@ -377,7 +579,7 @@ async function verifyProjectionSwitchKeepsTopologyStable(browser) {
       }`,
     );
   } finally {
-    await page.close();
+    await context.close();
   }
 }
 
@@ -406,9 +608,10 @@ async function selectProjectionFixtureVisualizationNode(page) {
 }
 
 async function captureTopBottomProjectionFixtureMode(browser, projectionMode) {
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { height: 900, width: 1440 },
   });
+  const page = await context.newPage();
   const errors = [];
   const fixtureRequests = [];
 
@@ -446,7 +649,7 @@ async function captureTopBottomProjectionFixtureMode(browser, projectionMode) {
       null,
       { timeout: 10_000 },
     );
-    await page.waitForTimeout(400);
+    await waitForProjectionFixtureRender(page, fixtureRequests, projectionMode);
     const sample = await sampleCanvasComposite(page);
     if (!sample.nonBlank) {
       throw new Error(
@@ -469,8 +672,38 @@ async function captureTopBottomProjectionFixtureMode(browser, projectionMode) {
       }`,
     );
   } finally {
-    await page.close();
+    await context.close();
   }
+}
+
+async function waitForProjectionFixtureRender(page, fixtureRequests, projectionMode) {
+  await waitForFixtureRequest(
+    page,
+    fixtureRequests,
+    "GET /v2/sessions/current/data/fields/m/samples/vector",
+  );
+  await page.waitForFunction(
+    (mode) => {
+      const hud = document.querySelector(".fm-viewport-3d__hud")?.textContent ?? "";
+      const targetReady =
+        hud.includes("target-passes:") &&
+        hud.includes("work=field-color:") &&
+        hud.includes(":ready:");
+      return (
+        targetReady &&
+        !hud.includes("projection-fallback") &&
+        (mode === "raw_nodal" || hud.includes(`projection mode=${mode}`))
+      );
+    },
+    projectionMode,
+    { timeout: 10_000 },
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
 }
 
 async function waitForProjectionFixtureMode(page, projectionMode) {
@@ -560,11 +793,13 @@ async function installTopBottomProjectionFixtureApi(
       return;
     }
     if (path === "/v2/sessions/current/data/domain/topology") {
-      await fulfillBinary(route, makeTopBottomProjectionTopologyBuffer());
+      await fulfillRangeBinary(route, makeTopBottomProjectionTopologyBuffer());
       return;
     }
     if (path === "/v2/sessions/current/data/fields/m/samples/vector") {
-      await fulfillBinary(route, makeTopBottomProjectionFieldVectorBuffer());
+      await fulfillBinary(route, makeTopBottomProjectionFieldVectorBuffer(), 200, {
+        "x-fullmag-domain-generation-id": "1",
+      });
       return;
     }
     if (path === "/v2/sessions/current/model/scene") {
@@ -616,12 +851,26 @@ async function installFdmFixtureApi(page, fixtureRequests) {
       await fulfillJson(route, fdmDomainMetaFixture());
       return;
     }
+    if (path === "/v2/sessions/current/data/fdm-region-memberships") {
+      await fulfillJson(route, fdmRegionMembershipFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fdm-region-membership") {
+      await fulfillBinary(route, makeFdmRegionMembershipBuffer());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fdm-region-membership/fixture-region-owner%3Acore") {
+      await fulfillBinary(route, makeFdmRegionMembershipBuffer());
+      return;
+    }
     if (path === "/v2/sessions/current/data/domain/topology") {
       await fulfillEmpty(route, 204);
       return;
     }
     if (path === "/v2/sessions/current/data/fields/m/samples/vector") {
-      await fulfillBinary(route, makeFdmFieldVectorBuffer());
+      await fulfillBinary(route, makeFdmFieldVectorBuffer(), 200, {
+        "x-fullmag-domain-generation-id": "1",
+      });
       return;
     }
     if (path === "/v2/sessions/current/model/scene") {
@@ -678,6 +927,7 @@ function fdmSceneWithRegionFixture() {
 async function verifyRegionOverlayModeControl(page) {
   const control = page.getByRole("group", { name: "Region overlays" });
   await control.waitFor({ state: "visible", timeout: 15_000 });
+  const visibility = control.getByRole("button", { exact: true, name: "Regions" });
   const authored = control.getByRole("button", { exact: true, name: "Authored" });
   const realized = control.getByRole("button", { exact: true, name: "Realized" });
   const auto = control.getByRole("button", { exact: true, name: "Auto" });
@@ -685,9 +935,26 @@ async function verifyRegionOverlayModeControl(page) {
   if ((await auto.getAttribute("aria-pressed")) !== "true") {
     throw new Error("Region overlay mode must default to Auto.");
   }
+  if ((await visibility.getAttribute("aria-pressed")) !== "false") {
+    throw new Error("Region overlays must default to hidden.");
+  }
+  if (!(await authored.isDisabled())) {
+    throw new Error(
+      "Authored region overlay mode must remain disabled while region overlays are hidden.",
+    );
+  }
   if (!(await realized.isDisabled())) {
     throw new Error(
       "Realized region overlay mode must be disabled without mesh-backed regions.",
+    );
+  }
+  await visibility.click();
+  if ((await visibility.getAttribute("aria-pressed")) !== "true") {
+    throw new Error("Region overlays did not become visible.");
+  }
+  if (await authored.isDisabled()) {
+    throw new Error(
+      "Authored region overlay mode remained disabled after enabling region overlays.",
     );
   }
   await authored.click();
@@ -696,7 +963,7 @@ async function verifyRegionOverlayModeControl(page) {
   }
   await verifyFdmFixtureRegionOverlaySelection(page);
   console.log(
-    "Viewport 3D region overlay mode control passed (default=auto, authored selectable, realized unavailable without mesh).",
+    "Viewport 3D region overlay mode control passed (default=hidden/auto, authored selectable after enabling regions, realized unavailable without mesh).",
   );
 }
 
@@ -885,7 +1152,13 @@ async function waitForCanvasCompositeChange(
   const suffix = lastDelta
     ? `${lastDelta.changedPixels}/${lastDelta.sampledPixels} sampled pixels changed; threshold=${lastDelta.minimumChangedPixels}`
     : "no canvas sample was collected";
-  throw new Error(`${label} timed out. ${failureMessage}: ${suffix}.`);
+  const diagnostic = await page.evaluate(() => ({
+    fdmVectorSegmentCount:
+      document.querySelector(".fm-viewport-3d")?.getAttribute("data-fdm-vector-segment-count") ?? null,
+    hud: document.querySelector(".fm-viewport-3d__hud")?.textContent ?? "",
+    settings: window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readFdmVisualizationSettings?.() ?? null,
+  }));
+  throw new Error(`${label} timed out. ${failureMessage}: ${suffix}. diagnostic=${JSON.stringify(diagnostic)}`);
 }
 
 async function clickFreshAction(page, selector, label) {
@@ -922,13 +1195,18 @@ async function primitiveObjectCount(page) {
 }
 
 async function detectScene(page) {
-  const summary = await page.evaluate(() => {
+  const { summary, hudText } = await page.evaluate(() => {
     const spans = Array.from(
       document.querySelectorAll(".fm-viewport-3d__hud span"),
     );
-    return spans[2]?.textContent ?? null;
+    return {
+      hudText: document.querySelector(".fm-viewport-3d__hud")?.textContent ?? "",
+      summary: spans[2]?.textContent ?? null,
+    };
   });
-  if (/^\d+\/\d+$/.test(summary ?? "")) return "fdm";
+  if (/^\d+\/\d+$/.test(summary ?? "") || /cells\s+\d+.*stride/.test(hudText)) {
+    return "fdm";
+  }
   if (/^\d+\+\d+$/.test(summary ?? "")) return "fem";
   return "unknown";
 }
@@ -1084,14 +1362,39 @@ async function fulfillJson(route, body, status = 200) {
   });
 }
 
-async function fulfillBinary(route, arrayBuffer, status = 200) {
+async function fulfillBinary(route, arrayBuffer, status = 200, extraHeaders = {}) {
   await route.fulfill({
     body: Buffer.from(arrayBuffer),
     headers: fixtureHeaders({
       "content-type": "application/octet-stream",
       etag: '"fdm-fixture"',
+      ...extraHeaders,
     }),
     status,
+  });
+}
+
+async function fulfillRangeBinary(route, arrayBuffer) {
+  const bytes = Buffer.from(arrayBuffer);
+  const range = route.request().headers()["range"];
+  const match = /^bytes=(\d+)-(\d+)$/.exec(range ?? "");
+  if (!match) {
+    await fulfillBinary(route, arrayBuffer, 200, {
+      "accept-ranges": "bytes",
+    });
+    return;
+  }
+  const start = Number(match[1]);
+  const end = Math.min(Number(match[2]), bytes.length - 1);
+  await route.fulfill({
+    body: bytes.subarray(start, end + 1),
+    headers: fixtureHeaders({
+      "accept-ranges": "bytes",
+      "content-range": `bytes ${start}-${end}/${bytes.length}`,
+      "content-type": "application/octet-stream",
+      etag: '"projection-topology-fixture"',
+    }),
+    status: 206,
   });
 }
 
@@ -1108,7 +1411,8 @@ function fixtureHeaders(extra = {}) {
     "access-control-allow-headers": "*",
     "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "access-control-allow-origin": "*",
-    "access-control-expose-headers": "x-api-contract-version,etag,x-request-id",
+    "access-control-expose-headers":
+      "x-api-contract-version,etag,x-request-id,x-fullmag-domain-generation-id,content-range,accept-ranges",
     "x-api-contract-version": "1.0.0",
     ...extra,
   };
@@ -1210,6 +1514,40 @@ function fdmDomainMetaFixture() {
       spacing: [1e-7, 1e-7, 1e-7],
     },
     units: { length: "m" },
+  };
+}
+
+function fdmRegionMembershipFixture() {
+  return {
+    binary_path: "data/fdm-region-membership.v2.bin",
+    cell_count: 192,
+    cell_m: [1e-7, 1e-7, 1e-7],
+    counts: [12, 8, 2],
+    encoding: "FMRM:u32_le",
+    freshness: "current",
+    grid_fingerprint: "0".repeat(64),
+    magnetic_support: {
+      active_cell_count: 96,
+      active_unassigned_cell_count: 0,
+      bounds_max_m: [4e-7, 3e-7, 1e-7],
+      bounds_min_m: [-4e-7, -3e-7, -1e-7],
+      grid_fingerprint: "0".repeat(64),
+      inactive_cell_count: 96,
+      semantic_role: "magnetic-support",
+    },
+    mesh_revision: 1,
+    object_ids: [FDM_FIXTURE_REGION_OBJECT_ID],
+    origin_m: [-6e-7, -4e-7, -1e-7],
+    region_legend: [
+      {
+        numeric_id: 1,
+        object_id: FDM_FIXTURE_REGION_OBJECT_ID,
+        priority: 0,
+        region_id: FDM_FIXTURE_REGION_ID,
+      },
+    ],
+    region_membership_revision: 1,
+    schema_version: "fdm_region_membership.v2",
   };
 }
 
@@ -1710,14 +2048,14 @@ function makeTopBottomProjectionFieldVectorBuffer() {
   new TextEncoder().encodeInto("m", new Uint8Array(buffer, 28, 16));
 
   new Float64Array(buffer, 48).set([
-    0, 0, 1,
-    0, 0, 1,
-    0, 0, 1,
-    0, 0, 1,
-    0, 0, -1,
-    0, 0, -1,
-    0, 0, -1,
-    0, 0, -1,
+    1, 0, 1,
+    0, 1, 1,
+    -1, 0, 1,
+    0, -1, 1,
+    1, 0, 0.25,
+    0, 1, 0.25,
+    -1, 0, 0.25,
+    0, -1, 0.25,
   ]);
   return buffer;
 }
@@ -1749,13 +2087,36 @@ function makeFdmFieldVectorBuffer() {
         const centeredY = (y - (grid[1] - 1) / 2) / ((grid[1] - 1) / 2);
         const twist = z === 0 ? -0.35 : 0.35;
         const length = Math.hypot(centeredX, centeredY, twist) || 1;
-        values[offset++] = -centeredY / length;
-        values[offset++] = centeredX / length;
-        values[offset++] = twist / length;
+        const magnitude = 0.55 + 0.45 * (x / (grid[0] - 1));
+        values[offset++] = (-centeredY / length) * magnitude;
+        values[offset++] = (centeredX / length) * magnitude;
+        values[offset++] = (twist / length) * magnitude;
       }
     }
   }
 
+  return buffer;
+}
+
+function makeFdmRegionMembershipBuffer() {
+  const cellCount = 192;
+  const buffer = new ArrayBuffer(64 + cellCount * Uint32Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMRM"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 2);
+  view.setUint32(8, 12, true);
+  view.setUint32(12, 8, true);
+  view.setUint32(16, 2, true);
+  view.setUint32(20, cellCount, true);
+  view.setUint32(24, 1, true);
+
+  const regionIds = new Uint32Array(buffer, 64, cellCount);
+  for (let index = 0; index < cellCount; index += 1) {
+    regionIds[index] = index % 2 === 0 ? 1 : 0xffff_ffff;
+  }
   return buffer;
 }
 

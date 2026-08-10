@@ -38,6 +38,7 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_META_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
@@ -120,6 +121,7 @@ import {
   MODEL_OBJECT_REGIONS_REORDER_PATH,
   MODEL_OBJECT_REGIONS_PATH,
   MODEL_OBJECTS_PATH,
+  MODEL_PHYSICS_GRAPH_PATH,
   MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
   MODEL_PLANAR_MONITOR_PATH,
   MODEL_PLANAR_MONITORS_PATH,
@@ -205,6 +207,7 @@ import type {
   CrossSectionQualityQuery,
   CurrentRunResource,
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
   EngineLogResource,
   FieldCatalogResource,
   FieldVectorIdentityIssue,
@@ -217,6 +220,7 @@ import type {
   FieldStateImportResponse,
   FieldStateInspectRequest,
   FieldStateInspectResponse,
+  FdmScopedFieldVectorQuery,
   FieldVectorQuery,
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
@@ -288,6 +292,7 @@ import type {
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
   FdmRegionMembershipResource,
+  PendingJsonResourceResult,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
@@ -345,6 +350,7 @@ import type {
   OerstedFieldMutationRequest,
   OerstedFieldCommitResource,
   SpinAuthoringDeleteRequest,
+  PhysicsGraphResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
   ScriptSourceResponse,
@@ -977,6 +983,11 @@ export class ControlRoomApi {
     domain: {
       meta: (options?: RequestOptions) =>
         this.requestJson<DomainMetaResource>(DATA_DOMAIN_META_PATH, options),
+      fdmMultilayerLayout: (options?: RequestOptions) =>
+        this.requestJson<FdmMultilayerLayoutResource>(
+          DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+          options,
+        ),
       topology: (options?: BinaryRequestOptions) =>
         this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options),
       topologyBytes: (options?: BinaryRequestOptions) =>
@@ -1022,6 +1033,11 @@ export class ControlRoomApi {
           options,
         ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
       },
+      fdmVector: (
+        quantityId: string,
+        query: FdmScopedFieldVectorQuery,
+        options?: BinaryRequestOptions,
+      ) => this.data.fields.vector(quantityId, query, options),
       planar: {
         meta: (
           quantityId: string,
@@ -1113,11 +1129,18 @@ export class ControlRoomApi {
           ),
       },
     },
-    meshRegionMembership: (regionId: string, options?: RequestOptions) =>
+    meshRegionMembership: (
+      ownerObjectId: string,
+      regionId: string,
+      options?: RequestOptions,
+    ) =>
       this.requestJson<MeshRegionMembershipResource>(
         DATA_MESH_REGION_MEMBERSHIP_PATH,
         options,
-        { path: { region_id: regionId } },
+        {
+          path: { region_id: regionId },
+          query: { owner_object_id: ownerObjectId },
+        },
       ),
     meshRegionMemberships: (options?: RequestOptions) =>
       this.requestJson<MeshRegionMembershipListResource>(
@@ -1125,13 +1148,14 @@ export class ControlRoomApi {
         options,
       ),
     fdmRegionMemberships: (options?: RequestOptions) =>
-      this.requestOptionalJson<FdmRegionMembershipResource>(
+      this.requestPendingJson<FdmRegionMembershipResource>(
         DATA_FDM_REGION_MEMBERSHIPS_PATH,
         options,
       ),
     fdmRegionMembershipBytes: (options?: BinaryRequestOptions) =>
       this.requestBinaryBytes(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH, options),
     fdmRegionMembershipRegionBytes: (
+      ownerObjectId: string | null,
       regionId: string,
       options?: BinaryRequestOptions,
     ) =>
@@ -1139,6 +1163,7 @@ export class ControlRoomApi {
         DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
         options,
         { region_id: regionId },
+        ownerObjectId ? { owner_object_id: ownerObjectId } : undefined,
       ),
     scalars: {
       window: (
@@ -1924,6 +1949,8 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    physicsGraph: (options?: RequestOptions) =>
+      this.requestJson<PhysicsGraphResource>(MODEL_PHYSICS_GRAPH_PATH, options),
     authoringScript: (options?: RequestOptions) =>
       this.requestJson<ScriptSourceResponse>(MODEL_SCRIPT_PATH, options),
     syncAuthoringScript: (
@@ -2187,7 +2214,7 @@ export class ControlRoomApi {
     fetchImpl,
     maxGetRetries = 2,
     retryDelayMs = 100,
-    requestIdFactory = () => crypto.randomUUID(),
+    requestIdFactory = createRequestId,
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
     this.binaryDecodeScheduler = binaryDecodeScheduler;
@@ -2235,6 +2262,24 @@ export class ControlRoomApi {
     }
 
     return readOpenApiResult<T>(result);
+  }
+
+  private async requestPendingJson<T>(
+    path: OpenApiV2Path,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<PendingJsonResourceResult<T>> {
+    const result = await this.transport.GET(path as never, {
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+
+    if (result.response?.status === 204) {
+      return { data: null, status: "pending" };
+    }
+
+    return { data: readOpenApiResult<T>(result), status: "ready" };
   }
 
   private async requestFieldMeta(
@@ -3148,6 +3193,35 @@ function resolveDefaultFetch(): FetchLike {
   return globalThis.fetch.bind(globalThis);
 }
 
+function createRequestId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (typeof cryptoApi?.getRandomValues === "function") {
+    try {
+      cryptoApi.getRandomValues(bytes);
+    } catch {
+      fillRequestIdBytesWithMathRandom(bytes);
+    }
+  } else {
+    fillRequestIdBytesWithMathRandom(bytes);
+  }
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function fillRequestIdBytesWithMathRandom(bytes: Uint8Array): void {
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Math.floor(Math.random() * 256);
+  }
+}
+
 async function normalizeFetchInput(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -3250,6 +3324,7 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
 function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
   return {
     component: query.component ?? undefined,
+    owner_object_id: query.owner_object_id ?? undefined,
     scope_id: normalizeFieldMetaScopeId(
       query.scope_kind,
       query.scope_id,

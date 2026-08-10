@@ -7,9 +7,11 @@ export type DecodedFieldVectorIndexing =
 export type DecodedFieldVectorScopeKind =
   | "airbox"
   | "full"
+  | "layer"
   | "magnetic_only"
   | "object"
   | "part"
+  | "region"
   | "selection";
 
 export interface DecodedFieldVector {

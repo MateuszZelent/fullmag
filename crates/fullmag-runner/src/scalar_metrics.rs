@@ -81,7 +81,8 @@ pub(crate) fn apply_average_m_to_step_stats_with_active_mask(
     magnetization: &[[f64; 3]],
     active_mask: Option<&[bool]>,
 ) {
-    let [mx, my, mz] = average_magnetization_components_with_active_mask(magnetization, active_mask);
+    let [mx, my, mz] =
+        average_magnetization_components_with_active_mask(magnetization, active_mask);
     stats.mx = mx;
     stats.my = my;
     stats.mz = mz;

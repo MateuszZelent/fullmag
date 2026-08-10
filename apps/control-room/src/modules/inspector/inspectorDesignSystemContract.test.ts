@@ -34,13 +34,21 @@ describe("Inspector design-system reference contract", () => {
     expect(segmented).not.toContain("border-r");
   });
 
+  it("stacks the Inspector action bar into two columns in narrow containers", () => {
+    const inspector = read("src/design/styles/inspector.css");
+
+    expect(inspector).toContain("@container (max-width: 390px)");
+    expect(inspector).toMatch(
+      /@container \(max-width: 390px\)[\s\S]*?\.fm-inspector__action-bar\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+    );
+  });
+
   it("keeps the reference overview free of nested card sections", () => {
     const overview = read(
       "src/modules/inspector/panels/ObjectVisualizationOverview.tsx",
     );
 
-    expect(overview).toContain("InspectorGroup");
-    expect(overview).toContain("InspectorMetricStrip");
+    expect(overview).toContain("InspectorOverviewFrame");
     expect(overview).not.toContain("InspectorSection");
     expect(overview).not.toMatch(/<(?:img|canvas)\b/i);
   });
@@ -50,6 +58,20 @@ describe("Inspector design-system reference contract", () => {
 
     expect(css).not.toMatch(
       /\.fm-(?:inspector-section|inspector-input|inspector-select|tabs-trigger|button)\b/,
+    );
+  });
+
+  it("owns narrow metric-strip breakpoints in the shared overview frame", () => {
+    const shared = read("src/design/styles/inspector-visualization.css");
+    const physics = read("src/design/styles/inspector-physics.css");
+
+    expect(shared).toContain("@container (max-width: 420px)");
+    expect(shared).toContain(
+      '.fm-inspector-overview-frame .fm-inspector-metric-strip[data-count="4"]',
+    );
+    expect(shared).toContain("@container (max-width: 260px)");
+    expect(physics).not.toContain(
+      '.fm-physics-inspector-overview .fm-inspector-metric-strip[data-count="4"]',
     );
   });
 

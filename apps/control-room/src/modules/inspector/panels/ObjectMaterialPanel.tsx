@@ -26,6 +26,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
+import { ObjectAbsorbingBoundaryPanel } from "./ObjectAbsorbingBoundaryPanel";
 import {
   initialInspectorDraftState,
   resolveInspectorDraftState,
@@ -338,11 +339,11 @@ type ObjectMaterialPanelState = ReturnType<typeof useObjectMaterialPanelState>;
 function materialInspectorSections(selectionKind: string | null): string[] {
   switch (selectionKind) {
     case "object.material":
-      return ["parameters", "material-parameters", "actions"];
+      return ["parameters", "material-parameters", "absorbing-boundary", "actions"];
     case "object.magnetic-parameters":
-      return ["parameters", "assignment", "uniaxial-anisotropy", "actions"];
+      return ["parameters", "assignment", "uniaxial-anisotropy", "absorbing-boundary", "actions"];
     default:
-      return ["parameters", "assignment", "uniaxial-anisotropy", "material-parameters", "actions"];
+      return ["parameters", "assignment", "uniaxial-anisotropy", "material-parameters", "absorbing-boundary", "actions"];
   }
 }
 
@@ -546,6 +547,13 @@ function ObjectMaterialPanelView({
                 onChange={(event) => updateDraft({ dbulk: event.target.value })}
               />
             </InspectorGroup>
+          ) : null}
+
+          {showSection("absorbing-boundary") && object.mode === "committed" ? (
+            <ObjectAbsorbingBoundaryPanel
+              objectId={object.objectId}
+              baseRevision={object.baseRevision}
+            />
           ) : null}
 
           {showSection("uniaxial-anisotropy") ? (

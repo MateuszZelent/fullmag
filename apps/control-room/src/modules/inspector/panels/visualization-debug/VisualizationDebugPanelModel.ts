@@ -37,6 +37,17 @@ export type VisualizationDebugPanelState =
   | "target-not-rendered"
   | "ready";
 
+export type VisualizationDebugLane = "fdm" | "fem" | "unresolved";
+
+export function resolveVisualizationDebugLane(
+  discretization: string | null | undefined,
+): VisualizationDebugLane {
+  const normalized = discretization?.trim().toLowerCase();
+  if (normalized === "fdm") return "fdm";
+  if (normalized === "fem") return "fem";
+  return "unresolved";
+}
+
 export type VisualizationDebugSelectionKind =
   | "airbox.visualization.debug"
   | "object.visualization.debug"

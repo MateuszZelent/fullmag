@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "tetra_geometry_oracle.hpp"
@@ -129,6 +130,46 @@ void canonical_slonczewski_gpu_descriptor_contract_is_source_visible() {
     check(
         runtime.find("gpu_state_upload_stt_target_mask") != std::string::npos,
         "FEM GPU bootstrap must upload the STT target mask through the state module");
+}
+
+void canonical_zhang_li_gpu_descriptor_matches_cpu_contract() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string kernels = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "stt" / "stt_kernels.cu");
+    const std::string header = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "stt" / "stt_kernels.hpp");
+    const std::string torque = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_zhang_li_torque.cu");
+    const std::string mesh_regions = read_text_file(
+        root / "gpu" / "cuda" / "mesh" / "mesh_regions_state.hpp");
+    const std::string runtime = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
+    const std::string state_header = read_text_file(
+        root / "gpu" / "cuda" / "state" / "gpu_state.hpp");
+
+    check(
+        header.find("active_element_mask") != std::string::npos &&
+            header.find("formula_version") != std::string::npos &&
+            header.find("lande_g") != std::string::npos,
+        "FEM GPU Zhang-Li descriptor must carry target-element mask, formula version, and Landé factor");
+    check(
+        kernels.find("FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1") != std::string::npos &&
+            kernels.find("kExactElectronCharge") != std::string::npos &&
+            kernels.find("active_element_mask") != std::string::npos &&
+            kernels.find("canonical_v1") != std::string::npos,
+        "FEM GPU Zhang-Li kernel must implement the canonical exact-constant branch and target-element mask");
+    check(
+        torque.find("ctx.stt.formula_version") != std::string::npos &&
+            torque.find("ctx.stt.lande_g") != std::string::npos &&
+            torque.find("active_element_mask") != std::string::npos,
+        "FEM GPU RK Zhang-Li wrapper must forward the canonical descriptor and target-element mask");
+    check(
+        mesh_regions.find("stt_active_element_mask") != std::string::npos,
+        "FEM GPU mesh-region state must own the optional Zhang-Li target-element mask");
+    check(
+        runtime.find("gpu_state_upload_stt_element_mask") != std::string::npos &&
+            state_header.find("gpu_state_upload_stt_element_mask") != std::string::npos,
+        "FEM GPU bootstrap must upload the Zhang-Li target-element mask through the state module");
 }
 
 void zhang_li_cip_is_owned_by_zhang_li_module() {
@@ -401,6 +442,214 @@ void check_near(double actual, double expected, double tol, const char *msg) {
             actual);
         std::exit(1);
     }
+}
+
+void prescribed_sot_module_owns_local_physics() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "sot.hpp");
+    const std::string source = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "sot.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+
+    check(
+        header.find("struct SotRuntimeState") != std::string::npos,
+        "FEM SOT module must own prescribed-SOT runtime state");
+    check(
+        source.find("FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1") != std::string::npos &&
+            source.find("kExactElectronCharge") != std::string::npos &&
+            source.find("damping_like") != std::string::npos &&
+            source.find("field_like") != std::string::npos,
+        "FEM SOT source must own the canonical SI/Gilbert algebra");
+    check(
+        context_header.find("SotRuntimeState sot") != std::string::npos,
+        "Context must store SOT state through the SOT owner");
+}
+
+fullmag::fem::Context make_sot_context() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.sot.enabled = true;
+    ctx.sot.formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    ctx.sot.current_density_am2 = 1.0e11;
+    ctx.sot.xi_dl = 0.12;
+    ctx.sot.xi_fl = -0.02;
+    ctx.sot.thickness = 1.5e-9;
+    ctx.sot.envelope_value = 0.25;
+    ctx.sot.sigma = {0.0, 1.0, 0.0};
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.material.damping = 0.1;
+    ctx.material_fields.material.gyromagnetic_ratio = kGammaMu0Test;
+    return ctx;
+}
+
+void prescribed_sot_rhs_matches_si_oracle_and_current_reversal() {
+    auto ctx = make_sot_context();
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    std::vector<double> rhs(3u, 0.0);
+    double max_rhs = 0.0;
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs, 0.0, 0.0);
+
+    const double gamma_e = kGammaMu0Test / kMu0Test;
+    const double omega_base = gamma_e * kHbarTest * ctx.sot.current_density_am2 *
+        ctx.sot.envelope_value /
+        (2.0 * kExactElectronChargeTest *
+         ctx.material_fields.material.saturation_magnetisation * ctx.sot.thickness);
+    const double omega_dl = omega_base * ctx.sot.xi_dl;
+    const double omega_fl = omega_base * ctx.sot.xi_fl;
+    const double inv_gilbert = 1.0 / (1.0 + ctx.material_fields.material.damping *
+                                      ctx.material_fields.material.damping);
+    const double damping_like = (omega_dl - ctx.material_fields.material.damping * omega_fl) * inv_gilbert;
+    const double field_like = (omega_fl + ctx.material_fields.material.damping * omega_dl) * inv_gilbert;
+    check_near(rhs[0], 0.0, 1e-30, "SOT macrospin rhs x");
+    check_near(rhs[1], damping_like, std::abs(damping_like) * 1e-12, "SOT damping-like basis");
+    check_near(rhs[2], field_like, std::abs(field_like) * 1e-12, "SOT field-like basis");
+
+    ctx.sot.current_density_am2 = -ctx.sot.current_density_am2;
+    std::vector<double> reversed(3u, 0.0);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, reversed, max_rhs, 0.0, 0.0);
+    check_near(reversed[1], -rhs[1], std::abs(rhs[1]) * 1e-12, "SOT signed current reversal y");
+    check_near(reversed[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "SOT signed current reversal z");
+}
+
+void prescribed_sot_rhs_respects_magnetic_and_target_masks() {
+    auto ctx = make_sot_context();
+    ctx.sot.active_node_mask = {0u};
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    std::vector<double> rhs(3u, 0.0);
+    double max_rhs = 0.0;
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs, 0.0, 0.0);
+    check_near(rhs[0], 0.0, 0.0, "SOT target mask x");
+    check_near(rhs[1], 0.0, 0.0, "SOT target mask y");
+    check_near(rhs[2], 0.0, 0.0, "SOT target mask z");
+
+    ctx.sot.active_node_mask.clear();
+    ctx.mesh.magnetic_node_mask = {0u};
+    rhs.assign(3u, 0.0);
+    fullmag::fem::add_sot_rhs_aos(ctx, m, rhs, max_rhs, 0.0, 0.0);
+    check_near(rhs[0], 0.0, 0.0, "SOT magnetic mask x");
+    check_near(rhs[1], 0.0, 0.0, "SOT magnetic mask y");
+    check_near(rhs[2], 0.0, 0.0, "SOT magnetic mask z");
+}
+
+void prescribed_sot_plan_import_validates_append_only_descriptor() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    fullmag_fem_plan_desc plan{};
+    plan.has_prescribed_sot = 1;
+    plan.sot_formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    plan.sot_current_density_am2 = 1.0e11;
+    plan.sot_xi_dl = 0.1;
+    plan.sot_xi_fl = 0.0;
+    plan.sot_thickness = 1.0e-9;
+    plan.sot_sigma[1] = 1.0;
+    const uint8_t mask[2] = {1u, 0u};
+    plan.sot_active_node_mask = mask;
+    plan.sot_active_node_mask_len = 2;
+    plan.sot_envelope_value = 1.0;
+    std::string error;
+    check(
+        fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "canonical FEM SOT descriptor must import");
+    check(ctx.sot.enabled && ctx.sot.active_node_mask.size() == 2u,
+          "FEM SOT import must retain enablement and node mask");
+
+    plan.sot_active_node_mask_len = 1;
+    check(
+        !fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "FEM SOT descriptor with a short node mask must fail closed");
+    check(error.find("sot_active_node_mask") != std::string::npos,
+          "FEM SOT short-mask error must identify the field");
+}
+
+void prescribed_sot_envelope_is_evaluated_at_rk_stage_time() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    fullmag_fem_plan_desc plan{};
+    plan.has_prescribed_sot = 1;
+    plan.sot_formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+    plan.sot_current_density_am2 = 1.0e11;
+    plan.sot_xi_dl = 0.1;
+    plan.sot_thickness = 1.0e-9;
+    plan.sot_sigma[1] = 1.0;
+    plan.sot_envelope.abi_version = FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION;
+    plan.sot_envelope.struct_size = sizeof(fullmag_fem_sot_envelope_desc);
+    plan.sot_envelope.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+    plan.sot_envelope.time_origin = FULLMAG_FEM_TIME_STAGE_LOCAL;
+    plan.sot_envelope.amplitude = 2.0;
+    plan.sot_envelope.frequency_hz = 1.0;
+    plan.sot_envelope.offset = 0.5;
+    std::string error;
+    check(
+        fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "stage-time SOT envelope descriptor must import");
+    check_near(
+        fullmag::fem::evaluate_sot_envelope(ctx.sot, 0.25, 0.0),
+        2.5,
+        1e-14,
+        "stage-time sinusoidal SOT envelope");
+    check_near(
+        fullmag::fem::evaluate_sot_envelope(ctx.sot, 0.35, 0.10),
+        2.5,
+        1e-14,
+        "stage-local sinusoidal SOT envelope");
+
+    const fullmag_fem_time_point points[2] = {{0.0, 0.0}, {1.0, 2.0}};
+    plan.sot_envelope.kind = FULLMAG_FEM_TIME_PIECEWISE_LINEAR;
+    plan.sot_envelope.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    plan.sot_envelope.points = points;
+    plan.sot_envelope.point_count = 2;
+    check(
+        fullmag::fem::initialize_sot_plan_fields(ctx, plan, error),
+        "piecewise-linear SOT envelope descriptor must import");
+    check_near(
+        fullmag::fem::evaluate_sot_envelope(ctx.sot, 0.25, 0.0),
+        0.5,
+        1e-14,
+        "piecewise-linear SOT envelope");
+}
+
+void prescribed_sot_event_alignment_handles_pulse_pwl_and_stage_local_time() {
+    fullmag::fem::SotRuntimeState sot;
+    sot.envelope_kind = FULLMAG_FEM_TIME_PULSE;
+    sot.envelope_time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+    sot.envelope_t_on_s = 1.0e-13;
+    sot.envelope_t_off_s = 2.0e-13;
+    double event_time_s = 0.0;
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 0.0, 2.5e-13, 0.0, event_time_s),
+        "pulse must expose the first future event");
+    check_near(event_time_s, 1.0e-13, 1.0e-25, "pulse on event");
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 0.0, 2.5e-13, 1.0e12, event_time_s),
+        "absolute pulse timing must ignore the unused stage origin");
+    check_near(event_time_s, 1.0e-13, 1.0e-25, "absolute pulse event with unused stage origin");
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 1.0e-13, 2.5e-13, 0.0, event_time_s),
+        "pulse must expose the off event after the on knot");
+    check_near(event_time_s, 2.0e-13, 1.0e-25, "pulse off event");
+    check(
+        !fullmag::fem::next_sot_envelope_event_time(
+            sot, 2.0e-13, 2.5e-13, 0.0, event_time_s),
+        "pulse must not repeat an event at the accepted boundary");
+
+    sot.envelope_kind = FULLMAG_FEM_TIME_PIECEWISE_LINEAR;
+    sot.envelope_time_origin = FULLMAG_FEM_TIME_STAGE_LOCAL;
+    sot.envelope_point_times_s = {1.0e-13, 3.0e-13, 5.0e-13};
+    sot.envelope_point_values = {0.0, 1.0, 0.0};
+    check(
+        fullmag::fem::next_sot_envelope_event_time(
+            sot, 1.0e-12, 3.0e-13, 1.0e-12, event_time_s),
+        "stage-local PWL must expose a future knot in absolute time");
+    check_near(event_time_s, 1.1e-12, 1.0e-24, "stage-local PWL event");
+    check(
+        !fullmag::fem::next_sot_envelope_event_time(
+            sot, 1.0e-12, 5.0e-14, 1.0e-12, event_time_s),
+        "PWL event outside the requested interval must not clip the step");
 }
 
 fullmag::fem::Context make_slonczewski_context() {
@@ -951,9 +1200,9 @@ void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualificat
     const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_device_resident(zhang_li, reason);
     check(!zhang_li_plan.enabled, "canonical Zhang-Li GPU plan must be disabled");
     check(
-        reason.find("canonical Zhang-Li") != std::string::npos &&
-            reason.find("not qualified") != std::string::npos,
-        "canonical Zhang-Li GPU fail-closed reason must precede device prerequisites");
+        reason.find("FemGpuState") != std::string::npos &&
+            reason.find("device-resident") != std::string::npos,
+        "canonical Zhang-Li GPU plan must reach device prerequisites after formula qualification");
 }
 
 } // namespace
@@ -961,6 +1210,7 @@ void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualificat
 int main() {
     slonczewski_cpp_is_owned_by_slonczewski_module();
     canonical_slonczewski_gpu_descriptor_contract_is_source_visible();
+    canonical_zhang_li_gpu_descriptor_matches_cpu_contract();
     zhang_li_cip_is_owned_by_zhang_li_module();
     stt_plan_fields_are_owned_by_stt_module();
     stt_aggregate_header_documents_submodule_boundaries();
@@ -984,5 +1234,11 @@ int main() {
     canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_data();
     canonical_stt_plan_import_rejects_read_only_slonczewski_v1();
     canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualification();
+    prescribed_sot_module_owns_local_physics();
+    prescribed_sot_rhs_matches_si_oracle_and_current_reversal();
+    prescribed_sot_rhs_respects_magnetic_and_target_masks();
+    prescribed_sot_plan_import_validates_append_only_descriptor();
+    prescribed_sot_envelope_is_evaluated_at_rk_stage_time();
+    prescribed_sot_event_alignment_handles_pulse_pwl_and_stage_local_time();
     return 0;
 }

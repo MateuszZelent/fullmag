@@ -25,6 +25,7 @@ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfile
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import type { ModuleProps } from "@/kernel/types";
 import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResourceView";
+import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
@@ -65,7 +66,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
 
   useEffect(() => {
-    return kernel.bus.on("footer:tab-requested", ({ tab }) => {
+    return kernel.bus.subscribe("footer:tab-requested", ({ tab }) => {
       kernel.layout.setBottomPanelTab(tab);
     });
   }, [kernel.bus, kernel.layout]);
@@ -186,7 +187,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
 
   function handleCopyLog() {
     const text = filteredEntries.map(serializeTransportEntry).join("\n\n");
-    navigator.clipboard.writeText(text).then(() => {
+    copyTextToClipboard(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(console.error);

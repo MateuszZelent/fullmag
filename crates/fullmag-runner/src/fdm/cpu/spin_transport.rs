@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 
+use crate::time_envelope::evaluate_time_envelope;
 use fullmag_engine::fdm::cpu::transport::{
     biot_savart_midpoint_field, ChargeBoundaryCondition, ChargeBoundaryConditions, ChargeSolution,
     ChargeSolverConfig, CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields,
     CoupledChargeSpinProblem, CoupledChargeSpinSolverConfig, CoupledChargeSpinWarmStart,
-    CoupledTransportOuterErrorBudget, OrientedSpinInterface, PotentialGauge,
+    CoupledTransportOuterErrorBudget, OrientedChargeMixingInterface, OrientedFaceFluxes,
+    OrientedSpinFaceFluxes, OrientedSpinInterface, PotentialGauge, ReactionChannels,
     ReciprocalConstitutiveMaterial, SpinBoundaryCondition, SpinBoundaryConditions,
     SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw, SpinMaterialFields,
     SpinMemoryLossReservoirLaw, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
-    StructuredChargeProblem,
-    StructuredSpinFace, TransientErrorControllerState, TransientSpinIntegrator,
-    TransientSpinMaterial, TransientSpinSolverConfig, TransientSpinState,
+    StructuredChargeFace, StructuredChargeProblem, StructuredSpinFace,
+    TransientErrorControllerState, TransientSpinIntegrator, TransientSpinMaterial,
+    TransientSpinSolverConfig, TransientSpinState,
 };
 use fullmag_engine::fdm::TransportStageErrorBudget;
 use fullmag_engine::{CellSize, CoupledImexArk2Stage, GridShape};
@@ -71,25 +73,96 @@ pub(crate) struct FdmSpinMemoryLossReservoirSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinInterfaceFluxSnapshot {
     pub source_id: String,
+    pub stable_interface_id: u64,
+    pub axis: u8,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+    pub from_cell: u64,
+    pub to_cell: u64,
+    pub current_density_unit: String,
+    pub orientation: String,
     pub incoming_longitudinal_apm2: [f64; 3],
     pub backflow_longitudinal_apm2: [f64; 3],
     pub absorbed_transverse_apm2: [f64; 3],
     pub spin_memory_loss_apm2: [f64; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sml_reservoir: Option<FdmSpinMemoryLossReservoirSnapshot>,
+    pub negative_cell_flux_positive_axis_apm2: [f64; 3],
+    pub positive_cell_flux_positive_axis_apm2: [f64; 3],
     pub from_side_outgoing_apm2: [f64; 3],
     pub to_side_transmitted_apm2: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmChargeFaceCurrentSnapshot {
+    pub unit: String,
+    pub orientation: String,
+    pub x_apm2: Vec<f64>,
+    pub y_apm2: Vec<f64>,
+    pub z_apm2: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmSpinFaceCurrentSnapshot {
+    pub unit: String,
+    pub component_order: String,
+    pub orientation: String,
+    pub x_apm2: Vec<[f64; 3]>,
+    pub y_apm2: Vec<[f64; 3]>,
+    pub z_apm2: Vec<[f64; 3]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmChargeInterfaceSnapshot {
+    pub source_id: String,
+    pub stable_interface_id: u64,
+    pub axis: u8,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+    pub from_cell: u64,
+    pub to_cell: u64,
+    pub potential_unit: String,
+    pub current_density_unit: String,
+    pub orientation: String,
+    pub g_up_spm2: f64,
+    pub g_down_spm2: f64,
+    pub from_potential_trace_v: f64,
+    pub to_potential_trace_v: f64,
+    pub delta_potential_trace_v: f64,
+    pub from_to_current_density_apm2: f64,
+    pub global_face_current_density_apm2: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmSpinReactionChannelsSnapshot {
+    pub unit: String,
+    pub component_order: String,
+    pub spin_flip_apm3: Vec<[f64; 3]>,
+    pub exchange_apm3: Vec<[f64; 3]>,
+    pub dephasing_apm3: Vec<[f64; 3]>,
+    pub total_apm3: Vec<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub module_id: String,
     pub current_source_id: String,
+    pub runtime_owner: String,
+    pub transport_realization: String,
+    pub fallback_used: bool,
     pub potential_volts: Vec<f64>,
     pub current_density_apm2: Vec<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_face_current: Option<FdmChargeFaceCurrentSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub charge_interface_observations: Vec<FdmChargeInterfaceSnapshot>,
     pub spin_potential_volts: Vec<[f64; 3]>,
     /// Row-major `Q_ia`, flow axis first and spin axis second.
     pub spin_current_tensor_apm2: Vec<[f64; 9]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spin_face_current: Option<FdmSpinFaceCurrentSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spin_reaction_channels: Option<FdmSpinReactionChannelsSnapshot>,
     pub interface_fluxes: Vec<FdmSpinInterfaceFluxSnapshot>,
     pub transport_torque_per_s: Vec<[f64; 3]>,
     pub oersted_field_apm: Option<Vec<[f64; 3]>>,
@@ -98,6 +171,7 @@ pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub charge_operator_version: String,
     pub spin_operator_version: String,
     pub torque_formula_version: Option<String>,
+    pub evaluated_envelope_multiplier: f64,
     pub state_revision: u64,
     pub operator_revision: u64,
 }
@@ -133,6 +207,139 @@ pub(crate) struct FdmSpinTransportWorkflow {
     telemetry_cursor: u64,
     #[cfg(test)]
     coupled_failure_injection: Option<CoupledFailureInjection>,
+}
+
+pub(crate) fn fdm_transport_execution_provenance(
+    plan: &FdmPlanIR,
+) -> Vec<crate::types::TransportExecutionProvenance> {
+    plan.spin_transport_plans
+        .iter()
+        .filter_map(|resolved| {
+            let descriptor = resolved.fdm_cpu_double.as_ref()?;
+            let native =
+                descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+            let transparent = descriptor.interfaces.iter().any(|interface| {
+                matches!(
+                    interface.law,
+                    fullmag_ir::ResolvedSpinInterfaceLawIR::Transparent
+                )
+            });
+            let mixing = descriptor.interfaces.iter().any(|interface| {
+                matches!(
+                    interface.law,
+                    fullmag_ir::ResolvedSpinInterfaceLawIR::MixingConductance { .. }
+                )
+            });
+            Some(crate::types::TransportExecutionProvenance {
+                module_id: resolved.module_id.clone(),
+                current_source_id: resolved.current_source_id.clone(),
+                requested_discretization: format!(
+                    "{:?}",
+                    resolved.requested_execution.discretization
+                )
+                .to_ascii_lowercase(),
+                requested_device: format!("{:?}", resolved.requested_execution.device)
+                    .to_ascii_lowercase(),
+                requested_precision: format!("{:?}", resolved.requested_execution.precision)
+                    .to_ascii_lowercase(),
+                requested_execution_mode: format!(
+                    "{:?}",
+                    resolved.requested_execution.execution_mode
+                )
+                .to_ascii_lowercase(),
+                resolved_discretization: "fdm".into(),
+                resolved_device: "cpu".into(),
+                resolved_precision: "double".into(),
+                resolved_execution_mode: "strict".into(),
+                runtime_family: if native {
+                    "fullmag_fdm_cpu_native_transport".into()
+                } else {
+                    "fullmag_fdm_cpu_rust_transport".into()
+                },
+                runtime_id: if native {
+                    "fdm_cpu_native_transport_m1_v1".into()
+                } else {
+                    "fdm_cpu_rust_transport_reference_v1".into()
+                },
+                engine_id: if native {
+                    "native_m1_v1".into()
+                } else {
+                    "rust_reference_v1".into()
+                },
+                charge_solver_engine: descriptor.charge_solver.engine.clone(),
+                spin_solver_engine: descriptor.spin_solver.engine.clone(),
+                constitutive_version: resolved.constitutive_version.clone(),
+                operator_version: resolved.operator_version.clone(),
+                physical_residual_version: resolved.physical_residual_version.clone(),
+                charge_operator_version: Some(descriptor.charge_solver.operator_version.clone()),
+                spin_operator_version: Some(descriptor.spin_solver.operator_version.clone()),
+                interface_formula_versions: descriptor
+                    .interfaces
+                    .iter()
+                    .map(|interface| match &interface.law {
+                        fullmag_ir::ResolvedSpinInterfaceLawIR::Transparent => None,
+                        fullmag_ir::ResolvedSpinInterfaceLawIR::MixingConductance {
+                            formula_version,
+                            ..
+                        } => Some(formula_version.clone()),
+                    })
+                    .collect(),
+                torque_formula_version: descriptor.torque_formula_version.clone(),
+                interface_realization: match (transparent, mixing) {
+                    (false, false) => "none".into(),
+                    (true, false) => "transparent".into(),
+                    (false, true) => "magnetoelectronic.fullmag.v2".into(),
+                    (true, true) => "transparent+magnetoelectronic.fullmag.v2".into(),
+                },
+                stage_coupling: "one_way_stage_refresh".into(),
+                capability_status: if native {
+                    "semantic_only".into()
+                } else {
+                    "reference_executable".into()
+                },
+                implementation_state: "executable".into(),
+                validation_state: if native {
+                    "unvalidated".into()
+                } else {
+                    "algebra_validated".into()
+                },
+                validation_scope: if native {
+                    "opt_in_fdm_cpu_double_native_m1_v1_contract_only".into()
+                } else {
+                    "fdm_cpu_double_reference_transport".into()
+                },
+                inserted_default_boundaries: resolved.inserted_default_boundaries.clone(),
+                charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
+                    regions: Vec::new(),
+                    element_mask: descriptor.charge_active_cells.clone(),
+                },
+                spin_domain: fullmag_ir::ResolvedFemTransportDomainIR {
+                    regions: Vec::new(),
+                    element_mask: descriptor.spin_active_cells.clone(),
+                },
+                charge_insulating_boundaries: Vec::new(),
+                spin_insulating_boundaries: Vec::new(),
+                interfaces: Vec::new(),
+                torque_target: None,
+                fdm_interfaces: descriptor.interfaces.clone(),
+                fdm_torque_target_cells: descriptor.torque_target_cells.clone(),
+                fallback: None,
+                degradation: None,
+                oersted_source_kind: None,
+                oersted_source_current_sha256: None,
+                oersted_mesh_source_sha256: None,
+                oersted_field_sha256: None,
+                conservative_current_view_identity_digest: None,
+                conservative_current_balance_certificate_digest: None,
+                stage_cache_policy: None,
+                stage_cache_key_digest: None,
+                stage_cache_last_observation: None,
+                stage_cache_hit_count: None,
+                stage_cache_miss_count: None,
+                stage_cache_invalidation_count: None,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -447,8 +654,7 @@ fn validate_complete_coupled_checkpoint(
     for module in &checkpoint.accepted.modules {
         add_vector_field(&mut combined_torque, &module.transport_torque_per_s);
         if let Some(field) = &module.oersted_field_apm {
-            let aggregate =
-                combined_oersted.get_or_insert_with(|| vec![[0.0; 3]; vector_count]);
+            let aggregate = combined_oersted.get_or_insert_with(|| vec![[0.0; 3]; vector_count]);
             add_vector_field(aggregate, field);
         }
     }
@@ -538,6 +744,22 @@ impl FdmSpinTransportWorkflow {
             {
                 return Err(run_error(format!(
                     "spin transport '{}' resolved to an unsupported lane; runtime fallback is forbidden",
+                    resolved.module_id
+                )));
+            }
+            if resolved.fdm_cpu_double.as_ref().is_some_and(|descriptor| {
+                descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1
+            }) && (resolved.requested_execution.discretization != fullmag_ir::BackendTarget::Fdm
+                || resolved.requested_execution.device != fullmag_ir::ExecutionDevice::Cpu
+                || resolved.requested_execution.precision != fullmag_ir::ExecutionPrecision::Double
+                || resolved.requested_execution.execution_mode != fullmag_ir::ExecutionMode::Strict
+                || resolved.fdm_cpu_double.as_ref().is_none_or(|descriptor| {
+                    descriptor.enclosing_execution_mode != fullmag_ir::ExecutionMode::Strict
+                })
+                || resolved.resolved_coupling != fullmag_ir::TransportCouplingIR::OneWay)
+            {
+                return Err(run_error(format!(
+                    "spin transport '{}' native_m1_v1 plan is not explicit FDM/CPU/double/strict one-way under enclosing strict mode; fallback is forbidden",
                     resolved.module_id
                 )));
             }
@@ -751,6 +973,7 @@ impl FdmSpinTransportWorkflow {
                     resolved,
                     descriptor,
                     magnetization,
+                    stage_time_s,
                 )?
             } else {
                 let descriptor = resolved
@@ -775,6 +998,7 @@ impl FdmSpinTransportWorkflow {
                     resolved,
                     descriptor,
                     magnetization,
+                    stage_time_s,
                     accepted,
                     stage_error_budget,
                     previous_module,
@@ -1173,7 +1397,8 @@ impl FdmSpinTransportWorkflow {
                                 .chain(left.reservoir_to_lattice_apm2)
                                 .chain(std::iter::once(left.surface_power_w_per_m2))
                                 .collect(),
-                            right.reservoir_potential_v
+                            right
+                                .reservoir_potential_v
                                 .into_iter()
                                 .chain(right.normal_to_reservoir_apm2)
                                 .chain(right.ferromagnet_to_reservoir_apm2)
@@ -1361,6 +1586,13 @@ fn validate_transient_descriptor(
         )));
     }
     validate_descriptor(&descriptor.steady_operator, count, module_id)?;
+    if descriptor.steady_operator.realization
+        == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1
+    {
+        return Err(run_error(format!(
+            "spin transport '{module_id}' native_m1_v1 does not execute transient M3 and cannot fall back"
+        )));
+    }
     if descriptor.spin_capacitance_as_per_v_m3.len() != count
         || descriptor.capacitance_formula_versions.len() != count
     {
@@ -1417,6 +1649,56 @@ fn validate_descriptor(
             "spin transport '{module_id}' descriptor must resolve all six charge and spin boundary faces"
         )));
     }
+    if descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1 {
+        if descriptor.spin_solver.engine != "native_m1_v1"
+            || descriptor.charge_solver.engine != "cg"
+            || descriptor.enclosing_execution_mode != fullmag_ir::ExecutionMode::Strict
+        {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' native realization requires explicit native_m1_v1/cg engines and enclosing strict mode"
+            )));
+        }
+        if descriptor.spin_boundaries.iter().any(|boundary| {
+            matches!(
+                boundary.condition,
+                ResolvedSpinBoundaryConditionIR::SpecifiedOutwardFlux { .. }
+                    | ResolvedSpinBoundaryConditionIR::PeriodicSpin
+            )
+        }) {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' native_m1_v1 rejects specified spin flux and periodic boundaries"
+            )));
+        }
+        if descriptor.interfaces.iter().any(|interface| {
+            matches!(
+                &interface.law,
+                ResolvedSpinInterfaceLawIR::MixingConductance {
+                    g_sml_spm2,
+                    spin_memory_loss,
+                    ..
+                } if *g_sml_spm2 != 0.0 || spin_memory_loss.is_some()
+            )
+        }) {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' native_m1_v1 rejects SML"
+            )));
+        }
+        let density_boundary_count = descriptor
+            .charge_boundaries
+            .iter()
+            .filter(|boundary| {
+                matches!(
+                    boundary.condition,
+                    ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity { .. }
+                )
+            })
+            .count();
+        if density_boundary_count > 0 && descriptor.specified_current_faces.is_empty() {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' native_m1_v1 density BC has no planner-resolved external faces"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1464,12 +1746,15 @@ fn solve_coupled_module(
     resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
     descriptor: &ResolvedFdmCoupledSpinTransportIR,
     magnetization: &[[f64; 3]],
+    stage_time_s: f64,
     accepted: Option<&FdmSpinTransportModuleSnapshot>,
     stage_error_budget: Option<TransportStageErrorBudget>,
     previous_stage: Option<&FdmSpinTransportModuleSnapshot>,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
     let state_revision = state_revision(magnetization);
     let operator_revision = descriptor_revision(descriptor)?;
+    let evaluated_envelope_multiplier =
+        source_envelope_multiplier(descriptor.time_envelope.as_ref(), stage_time_s)?;
     let materials = CoupledChargeSpinMaterialFields {
         reciprocal: descriptor
             .reciprocal_materials
@@ -1501,7 +1786,10 @@ fn solve_coupled_module(
         materials,
         Some(descriptor.active_cells.clone()),
         CoupledChargeSpinBoundaryConditions {
-            charge: charge_boundary_conditions(&descriptor.charge_boundaries)?,
+            charge: charge_boundary_conditions(
+                &descriptor.charge_boundaries,
+                evaluated_envelope_multiplier,
+            )?,
             spin: spin_boundary_conditions(&descriptor.spin_boundaries)?,
         },
     )
@@ -1581,7 +1869,8 @@ fn solve_coupled_module(
         .interface_observations
         .iter()
         .map(|observation| interface_snapshot(observation, &descriptor.interfaces))
-        .collect();
+        .collect::<Result<Vec<_>, RunError>>()?;
+    let spin_reaction_channels = reaction_channels_snapshot(&solution.reaction_channels);
     let oersted_field_apm = descriptor
         .oersted_source_bound
         .then(|| {
@@ -1597,10 +1886,17 @@ fn solve_coupled_module(
     Ok(FdmSpinTransportModuleSnapshot {
         module_id: resolved.module_id.clone(),
         current_source_id: resolved.current_source_id.clone(),
+        runtime_owner: "fdm_cpu_rust_coupled_transport_reference_v1".into(),
+        transport_realization: "rust_reference_v1".into(),
+        fallback_used: false,
         potential_volts: solution.potential_volts,
         current_density_apm2: solution.cell_charge_current_density_a_per_m2,
+        charge_face_current: None,
+        charge_interface_observations: Vec::new(),
         spin_potential_volts: solution.spin_potential_volts,
         spin_current_tensor_apm2: tensors,
+        spin_face_current: None,
+        spin_reaction_channels: Some(spin_reaction_channels),
         interface_fluxes,
         transport_torque_per_s: solution.transport_gilbert_torque_per_s,
         oersted_field_apm,
@@ -1635,6 +1931,7 @@ fn solve_coupled_module(
         charge_operator_version: descriptor.operator_version.clone(),
         spin_operator_version: descriptor.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
+        evaluated_envelope_multiplier,
         state_revision,
         operator_revision,
     })
@@ -1662,25 +1959,23 @@ fn materialize_interfaces(
                     g_sml_spm2,
                     spin_memory_loss,
                     ..
-                } => {
-                    SpinInterfaceLaw::MixingConductance {
-                        g_up_s_per_m2: *g_up_spm2,
-                        g_down_s_per_m2: *g_down_spm2,
-                        g_r_s_per_m2: *g_r_spm2,
-                        g_i_s_per_m2: *g_i_spm2,
-                        g_sml_s_per_m2: *g_sml_spm2,
-                        sml_reservoir: spin_memory_loss.as_ref().map(|reservoir| {
-                            SpinMemoryLossReservoirLaw {
-                                g_n_s_per_m2: reservoir.g_n_spm2,
-                                g_f_s_per_m2: reservoir.g_f_spm2,
-                                g_lattice_s_per_m2: reservoir.g_lattice_spm2,
-                            }
-                        }),
-                        magnetization: *magnetization.get(to_cell).ok_or_else(|| {
-                            run_error("coupled interface target cell is outside the FDM grid")
-                        })?,
-                    }
-                }
+                } => SpinInterfaceLaw::MixingConductance {
+                    g_up_s_per_m2: *g_up_spm2,
+                    g_down_s_per_m2: *g_down_spm2,
+                    g_r_s_per_m2: *g_r_spm2,
+                    g_i_s_per_m2: *g_i_spm2,
+                    g_sml_s_per_m2: *g_sml_spm2,
+                    sml_reservoir: spin_memory_loss.as_ref().map(|reservoir| {
+                        SpinMemoryLossReservoirLaw {
+                            g_n_s_per_m2: reservoir.g_n_spm2,
+                            g_f_s_per_m2: reservoir.g_f_spm2,
+                            g_lattice_s_per_m2: reservoir.g_lattice_spm2,
+                        }
+                    }),
+                    magnetization: *magnetization.get(to_cell).ok_or_else(|| {
+                        run_error("coupled interface target cell is outside the FDM grid")
+                    })?,
+                },
             };
             Ok(OrientedSpinInterface {
                 face: StructuredSpinFace {
@@ -1696,21 +1991,64 @@ fn materialize_interfaces(
         .collect()
 }
 
+fn unique_interface_for_face<'a>(
+    axis: usize,
+    negative_cell: usize,
+    positive_cell: usize,
+    interfaces: &'a [fullmag_ir::ResolvedSpinInterfaceFaceIR],
+) -> Result<&'a fullmag_ir::ResolvedSpinInterfaceFaceIR, RunError> {
+    if axis > 2 {
+        return Err(run_error("interface observation axis is outside x/y/z"));
+    }
+    let mut matches = interfaces.iter().filter(|interface| {
+        interface.face.axis as usize == axis
+            && interface.face.negative_cell as usize == negative_cell
+            && interface.face.positive_cell as usize == positive_cell
+            && ((interface.from_cell as usize == negative_cell
+                && interface.to_cell as usize == positive_cell)
+                || (interface.from_cell as usize == positive_cell
+                    && interface.to_cell as usize == negative_cell))
+    });
+    let matched = matches
+        .next()
+        .ok_or_else(|| run_error("interface observation has no authored topology match"))?;
+    if matches.next().is_some() {
+        return Err(run_error(
+            "interface observation has duplicate authored topology matches",
+        ));
+    }
+    Ok(matched)
+}
+
 fn interface_snapshot(
     observation: &fullmag_engine::fdm::cpu::transport::SpinInterfaceFluxObservation,
     interfaces: &[fullmag_ir::ResolvedSpinInterfaceFaceIR],
-) -> FdmSpinInterfaceFluxSnapshot {
-    let source_id = interfaces
-        .iter()
-        .find(|interface| {
-            interface.face.axis as usize == observation.face.axis
-                && interface.face.negative_cell as usize == observation.face.negative_cell
-                && interface.face.positive_cell as usize == observation.face.positive_cell
-        })
-        .map(|interface| interface.source_id.clone())
-        .unwrap_or_else(|| "unresolved-interface".to_string());
-    FdmSpinInterfaceFluxSnapshot {
-        source_id,
+) -> Result<FdmSpinInterfaceFluxSnapshot, RunError> {
+    let interface = unique_interface_for_face(
+        observation.face.axis,
+        observation.face.negative_cell,
+        observation.face.positive_cell,
+        interfaces,
+    )?;
+    let axis = u8::try_from(observation.face.axis)
+        .map_err(|_| run_error("interface observation axis exceeds u8"))?;
+    Ok(FdmSpinInterfaceFluxSnapshot {
+        stable_interface_id: stable_transport_interface_id(
+            &interface.source_id,
+            axis,
+            interface.face.negative_cell,
+            interface.face.positive_cell,
+            interface.from_cell,
+            interface.to_cell,
+        ),
+        source_id: interface.source_id.clone(),
+        axis,
+        negative_cell: observation.face.negative_cell as u64,
+        positive_cell: observation.face.positive_cell as u64,
+        from_cell: interface.from_cell,
+        to_cell: interface.to_cell,
+        current_density_unit: "A/m^2".into(),
+        orientation: "positive_coordinate_axis".into(),
         incoming_longitudinal_apm2: observation.incoming_longitudinal_a_per_m2,
         backflow_longitudinal_apm2: observation.backflow_longitudinal_a_per_m2,
         absorbed_transverse_apm2: observation.absorbed_transverse_a_per_m2,
@@ -1724,9 +2062,110 @@ fn interface_snapshot(
                 surface_power_w_per_m2: reservoir.surface_power_w_per_m2,
             }
         }),
+        negative_cell_flux_positive_axis_apm2: observation
+            .negative_cell_flux_positive_axis_a_per_m2,
+        positive_cell_flux_positive_axis_apm2: observation
+            .positive_cell_flux_positive_axis_a_per_m2,
         from_side_outgoing_apm2: observation.from_side_outgoing_a_per_m2,
         to_side_transmitted_apm2: observation.to_side_transmitted_a_per_m2,
+    })
+}
+
+fn charge_face_snapshot(face_current: &OrientedFaceFluxes) -> FdmChargeFaceCurrentSnapshot {
+    FdmChargeFaceCurrentSnapshot {
+        unit: "A/m^2".into(),
+        orientation: "positive_coordinate_axis".into(),
+        x_apm2: face_current.x.clone(),
+        y_apm2: face_current.y.clone(),
+        z_apm2: face_current.z.clone(),
     }
+}
+
+fn spin_face_snapshot(face_current: &OrientedSpinFaceFluxes) -> FdmSpinFaceCurrentSnapshot {
+    FdmSpinFaceCurrentSnapshot {
+        unit: "A/m^2".into(),
+        component_order: "spin_xyz".into(),
+        orientation: "positive_coordinate_axis".into(),
+        x_apm2: face_current.x.clone(),
+        y_apm2: face_current.y.clone(),
+        z_apm2: face_current.z.clone(),
+    }
+}
+
+fn reaction_channels_snapshot(channels: &ReactionChannels) -> FdmSpinReactionChannelsSnapshot {
+    let total_apm3 = channels
+        .spin_flip
+        .iter()
+        .zip(&channels.exchange)
+        .zip(&channels.dephasing)
+        .map(|((spin_flip, exchange), dephasing)| {
+            [
+                spin_flip[0] + exchange[0] + dephasing[0],
+                spin_flip[1] + exchange[1] + dephasing[1],
+                spin_flip[2] + exchange[2] + dephasing[2],
+            ]
+        })
+        .collect();
+    FdmSpinReactionChannelsSnapshot {
+        unit: "A/m^3".into(),
+        component_order: "spin_xyz".into(),
+        spin_flip_apm3: channels.spin_flip.clone(),
+        exchange_apm3: channels.exchange.clone(),
+        dephasing_apm3: channels.dephasing.clone(),
+        total_apm3,
+    }
+}
+
+fn charge_interface_snapshots(
+    observations: &[fullmag_engine::fdm::cpu::transport::ChargeInterfaceFluxObservation],
+    interfaces: &[fullmag_ir::ResolvedSpinInterfaceFaceIR],
+) -> Result<Vec<FdmChargeInterfaceSnapshot>, RunError> {
+    observations
+        .iter()
+        .map(|observation| {
+            let interface = unique_interface_for_face(
+                observation.face.axis,
+                observation.face.negative_cell,
+                observation.face.positive_cell,
+                interfaces,
+            )?;
+            if interface.from_cell as usize != observation.from_cell
+                || interface.to_cell as usize != observation.to_cell
+            {
+                return Err(run_error(
+                    "charge interface observation orientation does not match authored topology",
+                ));
+            }
+            let axis = u8::try_from(observation.face.axis)
+                .map_err(|_| run_error("charge interface observation axis exceeds u8"))?;
+            Ok(FdmChargeInterfaceSnapshot {
+                stable_interface_id: stable_transport_interface_id(
+                    &interface.source_id,
+                    axis,
+                    interface.face.negative_cell,
+                    interface.face.positive_cell,
+                    interface.from_cell,
+                    interface.to_cell,
+                ),
+                source_id: interface.source_id.clone(),
+                axis,
+                negative_cell: observation.face.negative_cell as u64,
+                positive_cell: observation.face.positive_cell as u64,
+                from_cell: observation.from_cell as u64,
+                to_cell: observation.to_cell as u64,
+                potential_unit: "V".into(),
+                current_density_unit: "A/m^2".into(),
+                orientation: "from_cell_to_to_cell_and_positive_coordinate_axis".into(),
+                g_up_spm2: observation.g_up_s_per_m2,
+                g_down_spm2: observation.g_down_s_per_m2,
+                from_potential_trace_v: observation.from_potential_trace_v,
+                to_potential_trace_v: observation.to_potential_trace_v,
+                delta_potential_trace_v: observation.delta_potential_trace_v,
+                from_to_current_density_apm2: observation.from_to_current_density_a_per_m2,
+                global_face_current_density_apm2: observation.global_face_current_density_a_per_m2,
+            })
+        })
+        .collect()
 }
 
 fn descriptor_revision(descriptor: &ResolvedFdmCoupledSpinTransportIR) -> Result<u64, RunError> {
@@ -1762,14 +2201,18 @@ fn checkpoint_identity(plan: &FdmPlanIR) -> Result<FdmCoupledCheckpointIdentity,
                 "gauge": descriptor.steady_operator.charge_gauge,
                 "solver": descriptor.steady_operator.charge_solver,
             }),
-            serde_json::to_value(descriptor)
-                .map_err(|error| run_error(format!("cannot fingerprint transient descriptor: {error}")))?,
-            serde_json::to_value(&descriptor.steady_operator)
-                .map_err(|error| run_error(format!("cannot fingerprint transport material: {error}")))?,
-            serde_json::to_value(&descriptor.spin_capacitance_as_per_v_m3)
-                .map_err(|error| run_error(format!("cannot fingerprint spin capacitance: {error}")))?,
-            serde_json::to_value(&descriptor.capacitance_formula_versions)
-                .map_err(|error| run_error(format!("cannot fingerprint capacitance formula: {error}")))?,
+            serde_json::to_value(descriptor).map_err(|error| {
+                run_error(format!("cannot fingerprint transient descriptor: {error}"))
+            })?,
+            serde_json::to_value(&descriptor.steady_operator).map_err(|error| {
+                run_error(format!("cannot fingerprint transport material: {error}"))
+            })?,
+            serde_json::to_value(&descriptor.spin_capacitance_as_per_v_m3).map_err(|error| {
+                run_error(format!("cannot fingerprint spin capacitance: {error}"))
+            })?,
+            serde_json::to_value(&descriptor.capacitance_formula_versions).map_err(|error| {
+                run_error(format!("cannot fingerprint capacitance formula: {error}"))
+            })?,
             serde_json::json!({
                 "bound": descriptor.steady_operator.oersted_source_bound,
                 "charge_active": descriptor.steady_operator.charge_active_cells,
@@ -1788,10 +2231,12 @@ fn checkpoint_identity(plan: &FdmPlanIR) -> Result<FdmCoupledCheckpointIdentity,
                 "boundaries": descriptor.charge_boundaries,
                 "solver": descriptor.linear_solver,
             }),
-            serde_json::to_value(descriptor)
-                .map_err(|error| run_error(format!("cannot fingerprint reciprocal descriptor: {error}")))?,
-            serde_json::to_value(&descriptor.reciprocal_materials)
-                .map_err(|error| run_error(format!("cannot fingerprint reciprocal material: {error}")))?,
+            serde_json::to_value(descriptor).map_err(|error| {
+                run_error(format!("cannot fingerprint reciprocal descriptor: {error}"))
+            })?,
+            serde_json::to_value(&descriptor.reciprocal_materials).map_err(|error| {
+                run_error(format!("cannot fingerprint reciprocal material: {error}"))
+            })?,
             serde_json::Value::Null,
             serde_json::Value::Null,
             serde_json::json!({
@@ -1955,15 +2400,66 @@ fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
     })
 }
 
+pub(super) fn stable_transport_interface_id(
+    source_id: &str,
+    axis: u8,
+    negative_cell: u64,
+    positive_cell: u64,
+    from_cell: u64,
+    to_cell: u64,
+) -> u64 {
+    fnv1a(
+        source_id
+            .as_bytes()
+            .iter()
+            .copied()
+            .chain([0xff, axis])
+            .chain(negative_cell.to_le_bytes())
+            .chain(positive_cell.to_le_bytes())
+            .chain(from_cell.to_le_bytes())
+            .chain(to_cell.to_le_bytes()),
+    )
+    .max(1)
+}
+
 fn solve_module(
     grid: GridShape,
     cell_size: CellSize,
     resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
     descriptor: &ResolvedFdmSpinTransportIR,
     magnetization: &[[f64; 3]],
+    stage_time_s: f64,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
-    let (charge_solution, current_density_apm2, spin_problem) =
-        materialize_one_way_problem(grid, cell_size, descriptor, magnetization)?;
+    let evaluated_envelope_multiplier =
+        source_envelope_multiplier(descriptor.time_envelope.as_ref(), stage_time_s)?;
+    if descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1 {
+        #[cfg(feature = "fdm-native-cpu")]
+        {
+            return super::native_transport::solve_native_m1_snapshot(
+                grid,
+                cell_size,
+                resolved,
+                descriptor,
+                magnetization,
+                evaluated_envelope_multiplier,
+                state_revision(magnetization),
+            );
+        }
+        #[cfg(not(feature = "fdm-native-cpu"))]
+        {
+            return Err(run_error(format!(
+                "spin transport '{}' resolved native_m1_v1, but this runner lacks fdm-native-cpu; fallback is forbidden",
+                resolved.module_id
+            )));
+        }
+    }
+    let (charge_solution, current_density_apm2, spin_problem) = materialize_one_way_problem(
+        grid,
+        cell_size,
+        descriptor,
+        magnetization,
+        evaluated_envelope_multiplier,
+    )?;
     solve_one_way_snapshot(
         grid,
         cell_size,
@@ -1972,6 +2468,7 @@ fn solve_module(
         charge_solution,
         current_density_apm2,
         spin_problem,
+        evaluated_envelope_multiplier,
         state_revision(magnetization),
     )
 }
@@ -1996,8 +2493,15 @@ fn solve_transient_module(
     failure_injection: Option<CoupledFailureInjection>,
 ) -> Result<(FdmSpinTransportModuleSnapshot, TransientStageCandidate), RunError> {
     let steady = &descriptor.steady_operator;
-    let (charge_solution, current_density_apm2, spin_problem) =
-        materialize_one_way_problem(grid, cell_size, steady, magnetization)?;
+    let evaluated_envelope_multiplier =
+        source_envelope_multiplier(steady.time_envelope.as_ref(), stage_time_s)?;
+    let (charge_solution, current_density_apm2, spin_problem) = materialize_one_way_problem(
+        grid,
+        cell_size,
+        steady,
+        magnetization,
+        evaluated_envelope_multiplier,
+    )?;
     if failure_injection == Some(CoupledFailureInjection::ChargeSolve)
         && stage == CoupledImexArk2Stage::ImplicitStageOne
     {
@@ -2007,8 +2511,8 @@ fn solve_transient_module(
         &spin_problem,
         TransientSpinMaterial {
             spin_capacitance_as_per_v_m3: descriptor.spin_capacitance_as_per_v_m3.clone(),
-            capacitance_formula_version:
-                fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA.to_string(),
+            capacitance_formula_version: fullmag_ir::DOS_ISOTROPIC_NONMAGNETIC_CAPACITANCE_FORMULA
+                .to_string(),
         },
         TransientSpinSolverConfig {
             relative_tolerance: steady.spin_solver.linear.relative_tolerance,
@@ -2062,6 +2566,15 @@ fn solve_transient_module(
     let observation = spin_problem
         .observe_transient_state(&candidate.spin_potential_v)
         .map_err(engine_error("transient accepted-state observation"))?;
+    let charge_face_current = charge_face_snapshot(&charge_solution.current_density);
+    let charge_interface_observations =
+        charge_interface_snapshots(&charge_solution.interface_fluxes, &steady.interfaces)?;
+    let spin_face_current = spin_face_snapshot(&observation.spin_current_density);
+    let spin_reaction_channels = reaction_channels_snapshot(
+        &spin_problem
+            .reaction_channels(&candidate.spin_potential_v)
+            .map_err(engine_error("transient reaction channels"))?,
+    );
     if failure_injection == Some(CoupledFailureInjection::FinalObservation)
         && stage == CoupledImexArk2Stage::AcceptedObservation
     {
@@ -2089,7 +2602,7 @@ fn solve_transient_module(
         .interface_observations
         .iter()
         .map(|observation| interface_snapshot(observation, &steady.interfaces))
-        .collect();
+        .collect::<Result<Vec<_>, RunError>>()?;
     let oersted_field_apm = steady
         .oersted_source_bound
         .then(|| {
@@ -2131,10 +2644,17 @@ fn solve_transient_module(
     let snapshot = FdmSpinTransportModuleSnapshot {
         module_id: resolved.module_id.clone(),
         current_source_id: resolved.current_source_id.clone(),
+        runtime_owner: "fdm_cpu_rust_transient_transport_reference_v1".into(),
+        transport_realization: "rust_reference_v1".into(),
+        fallback_used: false,
         potential_volts: charge_solution.potential_volts,
         current_density_apm2,
+        charge_face_current: Some(charge_face_current),
+        charge_interface_observations,
         spin_potential_volts: candidate.spin_potential_v.clone(),
         spin_current_tensor_apm2: tensors,
+        spin_face_current: Some(spin_face_current),
+        spin_reaction_channels: Some(spin_reaction_channels),
         interface_fluxes,
         transport_torque_per_s: observation.transport_gilbert_torque_per_s,
         oersted_field_apm,
@@ -2165,6 +2685,7 @@ fn solve_transient_module(
         charge_operator_version: steady.charge_solver.operator_version.clone(),
         spin_operator_version: steady.spin_solver.operator_version.clone(),
         torque_formula_version: steady.torque_formula_version.clone(),
+        evaluated_envelope_multiplier,
         state_revision: candidate.state_revision,
         operator_revision: 0,
     };
@@ -2182,9 +2703,11 @@ fn materialize_one_way_problem(
     cell_size: CellSize,
     descriptor: &ResolvedFdmSpinTransportIR,
     magnetization: &[[f64; 3]],
+    envelope_multiplier: f64,
 ) -> Result<(ChargeSolution, Vec<[f64; 3]>, SpinDriftDiffusionProblem), RunError> {
-    let charge_boundary = charge_boundary_conditions(&descriptor.charge_boundaries)?;
-    let charge_problem = StructuredChargeProblem::new(
+    let charge_boundary =
+        charge_boundary_conditions(&descriptor.charge_boundaries, envelope_multiplier)?;
+    let mut charge_problem = StructuredChargeProblem::new(
         grid,
         cell_size,
         descriptor.charge_conductivity_spm.clone(),
@@ -2192,6 +2715,33 @@ fn materialize_one_way_problem(
         charge_boundary,
     )
     .map_err(engine_error("charge problem materialization"))?;
+    let charge_interfaces = descriptor
+        .interfaces
+        .iter()
+        .filter_map(|interface| match interface.law {
+            ResolvedSpinInterfaceLawIR::Transparent => None,
+            ResolvedSpinInterfaceLawIR::MixingConductance {
+                g_up_spm2,
+                g_down_spm2,
+                ..
+            } => Some(OrientedChargeMixingInterface {
+                face: StructuredChargeFace {
+                    axis: interface.face.axis as usize,
+                    negative_cell: interface.face.negative_cell as usize,
+                    positive_cell: interface.face.positive_cell as usize,
+                },
+                from_cell: interface.from_cell as usize,
+                to_cell: interface.to_cell as usize,
+                g_up_s_per_m2: g_up_spm2,
+                g_down_s_per_m2: g_down_spm2,
+            }),
+        })
+        .collect::<Vec<_>>();
+    if !charge_interfaces.is_empty() {
+        charge_problem = charge_problem
+            .with_interfaces(charge_interfaces)
+            .map_err(engine_error("charge mixing interfaces"))?;
+    }
     let charge_solution = charge_problem
         .solve(ChargeSolverConfig {
             relative_tolerance: descriptor.charge_solver.linear.relative_tolerance,
@@ -2268,22 +2818,20 @@ fn materialize_one_way_problem(
                         g_sml_spm2,
                         spin_memory_loss,
                         ..
-                    } => {
-                        SpinInterfaceLaw::MixingConductance {
-                            g_up_s_per_m2: *g_up_spm2,
-                            g_down_s_per_m2: *g_down_spm2,
-                            g_r_s_per_m2: *g_r_spm2,
-                            g_i_s_per_m2: *g_i_spm2,
-                            g_sml_s_per_m2: *g_sml_spm2,
-                            sml_reservoir: spin_memory_loss.as_ref().map(|reservoir| {
-                                SpinMemoryLossReservoirLaw {
-                                    g_n_s_per_m2: reservoir.g_n_spm2,
-                                    g_f_s_per_m2: reservoir.g_f_spm2,
-                                    g_lattice_s_per_m2: reservoir.g_lattice_spm2,
-                                }
-                            }),
-                            magnetization: magnetization[interface.to_cell as usize],
-                        }
+                    } => SpinInterfaceLaw::MixingConductance {
+                        g_up_s_per_m2: *g_up_spm2,
+                        g_down_s_per_m2: *g_down_spm2,
+                        g_r_s_per_m2: *g_r_spm2,
+                        g_i_s_per_m2: *g_i_spm2,
+                        g_sml_s_per_m2: *g_sml_spm2,
+                        sml_reservoir: spin_memory_loss.as_ref().map(|reservoir| {
+                            SpinMemoryLossReservoirLaw {
+                                g_n_s_per_m2: reservoir.g_n_spm2,
+                                g_f_s_per_m2: reservoir.g_f_spm2,
+                                g_lattice_s_per_m2: reservoir.g_lattice_spm2,
+                            }
+                        }),
+                        magnetization: magnetization[interface.to_cell as usize],
                     },
                 };
                 Ok(OrientedSpinInterface {
@@ -2298,6 +2846,9 @@ fn materialize_one_way_problem(
             .with_interfaces(descriptor.region_ids.clone(), interfaces)
             .map_err(engine_error("spin interfaces"))?;
     }
+    spin_problem = spin_problem
+        .with_accepted_charge_solution(&charge_solution)
+        .map_err(engine_error("accepted charge interface snapshot"))?;
     if !matches!(descriptor.spin_solver.engine.as_str(), "auto" | "gmres") {
         return Err(run_error(format!(
             "unsupported spin solver engine '{}' reached runtime",
@@ -2305,6 +2856,17 @@ fn materialize_one_way_problem(
         )));
     }
     Ok((charge_solution, current_density_apm2, spin_problem))
+}
+
+fn source_envelope_multiplier(
+    envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
+    stage_time_s: f64,
+) -> Result<f64, RunError> {
+    envelope
+        .map(|envelope| evaluate_time_envelope(envelope, stage_time_s))
+        .transpose()
+        .map_err(run_error)
+        .map(|value| value.unwrap_or(1.0))
 }
 
 fn solve_one_way_snapshot(
@@ -2315,6 +2877,7 @@ fn solve_one_way_snapshot(
     charge_solution: ChargeSolution,
     current_density_apm2: Vec<[f64; 3]>,
     spin_problem: SpinDriftDiffusionProblem,
+    evaluated_envelope_multiplier: f64,
     state_revision_value: u64,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
     let spin_solution = spin_problem
@@ -2347,37 +2910,13 @@ fn solve_one_way_snapshot(
         .spin_current_density
         .interface_observations
         .iter()
-        .map(|observation| {
-            let source_id = descriptor
-                .interfaces
-                .iter()
-                .find(|interface| {
-                    interface.face.axis as usize == observation.face.axis
-                        && interface.face.negative_cell as usize == observation.face.negative_cell
-                        && interface.face.positive_cell as usize == observation.face.positive_cell
-                })
-                .map(|interface| interface.source_id.clone())
-                .unwrap_or_else(|| "unresolved-interface".to_string());
-            FdmSpinInterfaceFluxSnapshot {
-                source_id,
-                incoming_longitudinal_apm2: observation.incoming_longitudinal_a_per_m2,
-                backflow_longitudinal_apm2: observation.backflow_longitudinal_a_per_m2,
-                absorbed_transverse_apm2: observation.absorbed_transverse_a_per_m2,
-                spin_memory_loss_apm2: observation.spin_memory_loss_a_per_m2,
-                sml_reservoir: observation.sml_reservoir.map(|reservoir| {
-                    FdmSpinMemoryLossReservoirSnapshot {
-                        reservoir_potential_v: reservoir.reservoir_potential_v,
-                        normal_to_reservoir_apm2: reservoir.normal_to_reservoir_a_per_m2,
-                        ferromagnet_to_reservoir_apm2: reservoir.ferromagnet_to_reservoir_a_per_m2,
-                        reservoir_to_lattice_apm2: reservoir.reservoir_to_lattice_a_per_m2,
-                        surface_power_w_per_m2: reservoir.surface_power_w_per_m2,
-                    }
-                }),
-                from_side_outgoing_apm2: observation.from_side_outgoing_a_per_m2,
-                to_side_transmitted_apm2: observation.to_side_transmitted_a_per_m2,
-            }
-        })
-        .collect();
+        .map(|observation| interface_snapshot(observation, &descriptor.interfaces))
+        .collect::<Result<Vec<_>, RunError>>()?;
+    let charge_face_current = charge_face_snapshot(&charge_solution.current_density);
+    let charge_interface_observations =
+        charge_interface_snapshots(&charge_solution.interface_fluxes, &descriptor.interfaces)?;
+    let spin_face_current = spin_face_snapshot(&spin_solution.spin_current_density);
+    let spin_reaction_channels = reaction_channels_snapshot(&spin_solution.reaction_channels);
     let oersted_field_apm = descriptor
         .oersted_source_bound
         .then(|| {
@@ -2393,10 +2932,17 @@ fn solve_one_way_snapshot(
     Ok(FdmSpinTransportModuleSnapshot {
         module_id: resolved.module_id.clone(),
         current_source_id: resolved.current_source_id.clone(),
+        runtime_owner: "fdm_cpu_rust_transport_reference_v1".into(),
+        transport_realization: "rust_reference_v1".into(),
+        fallback_used: false,
         potential_volts: charge_solution.potential_volts,
         current_density_apm2,
+        charge_face_current: Some(charge_face_current),
+        charge_interface_observations,
         spin_potential_volts: spin_solution.spin_potential_volts,
         spin_current_tensor_apm2: tensors,
+        spin_face_current: Some(spin_face_current),
+        spin_reaction_channels: Some(spin_reaction_channels),
         interface_fluxes,
         transport_torque_per_s: spin_solution.transport_gilbert_torque_per_s,
         oersted_field_apm,
@@ -2427,6 +2973,7 @@ fn solve_one_way_snapshot(
         charge_operator_version: descriptor.charge_solver.operator_version.clone(),
         spin_operator_version: descriptor.spin_solver.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
+        evaluated_envelope_multiplier,
         state_revision: state_revision_value,
         operator_revision: 0,
     })
@@ -2434,16 +2981,36 @@ fn solve_one_way_snapshot(
 
 fn charge_boundary_conditions(
     boundaries: &[fullmag_ir::ResolvedChargeBoundaryFaceIR],
+    source_multiplier: f64,
 ) -> Result<ChargeBoundaryConditions, RunError> {
+    if !source_multiplier.is_finite() {
+        return Err(run_error(
+            "FDM current-source time envelope evaluated to a non-finite multiplier",
+        ));
+    }
     let mut result = ChargeBoundaryConditions::default();
     for boundary in boundaries {
         let condition = match boundary.condition {
             ResolvedChargeBoundaryConditionIR::Voltage { potential_v } => {
-                ChargeBoundaryCondition::Voltage(potential_v)
+                let value = potential_v * source_multiplier;
+                if !value.is_finite() {
+                    return Err(run_error(
+                        "FDM current-source time envelope produced a non-finite voltage drive",
+                    ));
+                }
+                ChargeBoundaryCondition::Voltage(value)
             }
             ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
                 current_density_apm2,
-            } => ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(current_density_apm2),
+            } => {
+                let value = current_density_apm2 * source_multiplier;
+                if !value.is_finite() {
+                    return Err(run_error(
+                        "FDM current-source time envelope produced a non-finite current drive",
+                    ));
+                }
+                ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(value)
+            }
             ResolvedChargeBoundaryConditionIR::Insulating => ChargeBoundaryCondition::Insulating,
         };
         set_charge_face(&mut result, boundary.face, condition);
@@ -2545,6 +3112,9 @@ mod tests {
         let cells = 4;
         let descriptor = ResolvedFdmSpinTransportIR {
             descriptor_schema: "fullmag.fdm.spin_transport_descriptor.v1".into(),
+            realization: fullmag_ir::FdmCpuTransportRealizationIR::RustReferenceV1,
+            enclosing_execution_mode: ExecutionMode::Strict,
+            time_envelope: None,
             charge_active_cells: vec![true; cells],
             charge_conductivity_spm: vec![2.0; cells],
             charge_boundaries: vec![
@@ -2573,6 +3143,7 @@ mod tests {
                     ResolvedChargeBoundaryConditionIR::Insulating,
                 ),
             ],
+            specified_current_faces: Vec::new(),
             charge_gauge: ChargePotentialGaugeIR::DirichletReference,
             charge_solver: ChargeSolverPolicyIR {
                 engine: "cg".into(),
@@ -2698,6 +3269,7 @@ mod tests {
         ];
         resolved.fdm_cpu_double_reciprocal = Some(ResolvedFdmCoupledSpinTransportIR {
             descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            time_envelope: None,
             active_cells: one_way.charge_active_cells,
             reciprocal_materials: (0..count)
                 .map(|_| ResolvedReciprocalMaterialIR {
@@ -2749,7 +3321,10 @@ mod tests {
             descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
             steady_operator,
             spin_capacitance_as_per_v_m3: vec![2.0; count],
-            capacitance_formula_versions: vec!["dos_isotropic_nonmagnetic.fullmag.v1".into(); count],
+            capacitance_formula_versions: vec![
+                "dos_isotropic_nonmagnetic.fullmag.v1".into();
+                count
+            ],
             transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
             integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
             integrator_version: "coupled_imex_ark2.v1".into(),
@@ -3095,15 +3670,7 @@ mod tests {
             )
             .unwrap();
 
-        for label in [
-            "V",
-            "J",
-            "mu",
-            "Q",
-            "torque",
-            "H",
-            "previous spin history",
-        ] {
+        for label in ["V", "J", "mu", "Q", "torque", "H", "previous spin history"] {
             let mut raw = serde_json::to_value(&checkpoint).unwrap();
             if label == "H" {
                 raw["accepted"]["modules"][0]["oersted_field_apm"] = serde_json::json!([]);
@@ -3112,11 +3679,11 @@ mod tests {
                     "V" => (&mut raw["accepted"]["modules"][0], "potential_volts"),
                     "J" => (&mut raw["accepted"]["modules"][0], "current_density_apm2"),
                     "mu" => (&mut raw["accepted"]["modules"][0], "spin_potential_volts"),
-                    "Q" => (&mut raw["accepted"]["modules"][0], "spin_current_tensor_apm2"),
-                    "torque" => (
+                    "Q" => (
                         &mut raw["accepted"]["modules"][0],
-                        "transport_torque_per_s",
+                        "spin_current_tensor_apm2",
                     ),
+                    "torque" => (&mut raw["accepted"]["modules"][0], "transport_torque_per_s"),
                     "previous spin history" => (
                         &mut raw["transient_states"]["spin"],
                         "previous_spin_potential_v",
@@ -3138,15 +3705,50 @@ mod tests {
 
         type Mutation = Box<dyn Fn(&mut FdmCoupledCheckpoint)>;
         let mutations: Vec<(&str, Mutation)> = vec![
-            ("V shape", Box::new(|value| value.accepted.modules[0].potential_volts.clear())),
-            ("J finite", Box::new(|value| value.accepted.modules[0].current_density_apm2[0][0] = f64::NAN)),
-            ("mu shape", Box::new(|value| value.accepted.modules[0].spin_potential_volts.clear())),
-            ("Q finite", Box::new(|value| value.accepted.modules[0].spin_current_tensor_apm2[0][0] = f64::INFINITY)),
-            ("torque shape", Box::new(|value| value.accepted.modules[0].transport_torque_per_s.clear())),
-            ("H shape", Box::new(|value| value.accepted.modules[0].oersted_field_apm = Some(Vec::new()))),
-            ("previous spin history", Box::new(|value| value.transient_states.get_mut("spin").unwrap().previous_spin_potential_v = None)),
-            ("module keys", Box::new(|value| value.accepted.modules[0].module_id = "other".into())),
-            ("module revision", Box::new(|value| value.accepted.modules[0].state_revision += 1)),
+            (
+                "V shape",
+                Box::new(|value| value.accepted.modules[0].potential_volts.clear()),
+            ),
+            (
+                "J finite",
+                Box::new(|value| value.accepted.modules[0].current_density_apm2[0][0] = f64::NAN),
+            ),
+            (
+                "mu shape",
+                Box::new(|value| value.accepted.modules[0].spin_potential_volts.clear()),
+            ),
+            (
+                "Q finite",
+                Box::new(|value| {
+                    value.accepted.modules[0].spin_current_tensor_apm2[0][0] = f64::INFINITY
+                }),
+            ),
+            (
+                "torque shape",
+                Box::new(|value| value.accepted.modules[0].transport_torque_per_s.clear()),
+            ),
+            (
+                "H shape",
+                Box::new(|value| value.accepted.modules[0].oersted_field_apm = Some(Vec::new())),
+            ),
+            (
+                "previous spin history",
+                Box::new(|value| {
+                    value
+                        .transient_states
+                        .get_mut("spin")
+                        .unwrap()
+                        .previous_spin_potential_v = None
+                }),
+            ),
+            (
+                "module keys",
+                Box::new(|value| value.accepted.modules[0].module_id = "other".into()),
+            ),
+            (
+                "module revision",
+                Box::new(|value| value.accepted.modules[0].state_revision += 1),
+            ),
             (
                 "accepted revision",
                 Box::new(|value| value.accepted.revision += 1),
@@ -3169,9 +3771,7 @@ mod tests {
             ),
             (
                 "accepted spin state",
-                Box::new(|value| {
-                    value.accepted.modules[0].spin_potential_volts[0][0] += 1.0
-                }),
+                Box::new(|value| value.accepted.modules[0].spin_potential_volts[0][0] += 1.0),
             ),
             (
                 "operator revision",
@@ -3179,9 +3779,7 @@ mod tests {
             ),
             (
                 "combined torque",
-                Box::new(|value| {
-                    value.accepted.combined_transport_torque_per_s[0][0] += 1.0
-                }),
+                Box::new(|value| value.accepted.combined_transport_torque_per_s[0][0] += 1.0),
             ),
             (
                 "combined Oersted presence",
@@ -3196,9 +3794,18 @@ mod tests {
                     value.accepted.modules[0].torque_formula_version = Some("   ".into())
                 }),
             ),
-            ("telemetry finite", Box::new(|value| value.accepted.modules[0].telemetry.charge_residual_l2 = f64::NAN)),
-            ("telemetry cursor", Box::new(|value| value.telemetry_cursor = 0)),
-            ("thermal counter", Box::new(|value| value.thermal_counter += 1)),
+            (
+                "telemetry finite",
+                Box::new(|value| value.accepted.modules[0].telemetry.charge_residual_l2 = f64::NAN),
+            ),
+            (
+                "telemetry cursor",
+                Box::new(|value| value.telemetry_cursor = 0),
+            ),
+            (
+                "thermal counter",
+                Box::new(|value| value.thermal_counter += 1),
+            ),
         ];
         for (label, mutate) in mutations {
             let pristine = workflow.clone();
@@ -3398,6 +4005,999 @@ mod tests {
         assert_eq!(workflow.accepted().unwrap().revision, 1);
     }
 
+    #[test]
+    fn interface_artifact_identity_is_per_face_and_mapping_is_fail_closed() {
+        let interface =
+            |source_id: &str, negative_cell: u64, positive_cell: u64| ResolvedSpinInterfaceFaceIR {
+                source_id: source_id.into(),
+                face: StructuredInternalFaceIR {
+                    axis: 0,
+                    negative_cell,
+                    positive_cell,
+                },
+                from_cell: negative_cell,
+                to_cell: positive_cell,
+                law: ResolvedSpinInterfaceLawIR::Transparent,
+            };
+        let first = interface("shared-source", 0, 1);
+        let second = interface("shared-source", 2, 3);
+        let first_id = stable_transport_interface_id("shared-source", 0, 0, 1, 0, 1);
+        let second_id = stable_transport_interface_id("shared-source", 0, 2, 3, 2, 3);
+        assert_ne!(
+            first_id, second_id,
+            "one source may author many distinct faces"
+        );
+
+        let observation =
+            |axis: usize| fullmag_engine::fdm::cpu::transport::SpinInterfaceFluxObservation {
+                face: fullmag_engine::fdm::cpu::transport::StructuredSpinFace {
+                    axis,
+                    negative_cell: 0,
+                    positive_cell: 1,
+                },
+                incoming_longitudinal_a_per_m2: [0.0; 3],
+                backflow_longitudinal_a_per_m2: [0.0; 3],
+                absorbed_transverse_a_per_m2: [0.0; 3],
+                spin_memory_loss_a_per_m2: [0.0; 3],
+                sml_reservoir: None,
+                from_side_outgoing_a_per_m2: [0.0; 3],
+                to_side_transmitted_a_per_m2: [0.0; 3],
+                negative_cell_flux_positive_axis_a_per_m2: [0.0; 3],
+                positive_cell_flux_positive_axis_a_per_m2: [0.0; 3],
+            };
+        let mapped = interface_snapshot(&observation(0), &[first.clone(), second])
+            .expect("unique full topology must map");
+        assert_eq!(mapped.source_id, "shared-source");
+        assert_eq!(mapped.stable_interface_id, first_id);
+        assert!(
+            interface_snapshot(&observation(0), &[]).is_err(),
+            "missing match"
+        );
+        assert!(
+            interface_snapshot(&observation(0), &[first.clone(), first]).is_err(),
+            "duplicate topology match"
+        );
+        assert!(
+            interface_snapshot(&observation(3), &[]).is_err(),
+            "invalid axis must fail before any fabricated mapping"
+        );
+    }
+
+    #[cfg(feature = "fdm-native-cpu")]
+    #[test]
+    fn explicit_native_m1_v1_crosses_rust_abi_and_publishes_native_provenance() {
+        let mut plan = plan();
+        let descriptor = plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor");
+        descriptor.realization = fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+        descriptor.spin_solver.engine = "native_m1_v1".into();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("native workflow construction")
+            .expect("native spin workflow");
+        let evaluation = workflow
+            .evaluate_stage(&plan.initial_magnetization, 0.0)
+            .expect("native charge and spin ABI solve");
+        let module = &evaluation.modules[0];
+        assert_eq!(module.runtime_owner, "fdm_cpu_native_transport_m1_v1");
+        assert_eq!(module.transport_realization, "native_m1_v1");
+        assert!(!module.fallback_used);
+        assert!(module.charge_face_current.is_some());
+        assert!(module.spin_face_current.is_some());
+        assert!(module.spin_reaction_channels.is_some());
+        assert!(module.operator_revision > 0);
+        assert_eq!(
+            module.potential_volts.len(),
+            plan.initial_magnetization.len()
+        );
+        assert_eq!(
+            module.spin_current_tensor_apm2.len(),
+            plan.initial_magnetization.len()
+        );
+
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.integrator = Some(IntegratorChoice::Heun);
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.material = FdmMaterialIR {
+            name: "Py".into(),
+            saturation_magnetisation: 8.0e5,
+            exchange_stiffness: 13.0e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+        let executed =
+            super::super::reference::execute_reference_fdm(&plan, 1.0e-15, &[], None, None)
+                .expect("public FDM runner with native transport");
+        assert_eq!(executed.result.status, crate::types::RunStatus::Completed);
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .expect("accepted native transport artifact");
+        let document: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("native transport artifact JSON");
+        let artifact_module = &document["evaluation"]["modules"][0];
+        assert_eq!(
+            artifact_module["runtime_owner"],
+            "fdm_cpu_native_transport_m1_v1"
+        );
+        assert_eq!(artifact_module["transport_realization"], "native_m1_v1");
+        assert_eq!(artifact_module["fallback_used"], false);
+        assert!(artifact_module["charge_face_current"].is_object());
+        assert!(artifact_module["spin_face_current"].is_object());
+        assert!(artifact_module["spin_reaction_channels"].is_object());
+    }
+
+    #[cfg(feature = "fdm-native-cpu")]
+    #[test]
+    fn native_m1_v1_interface_oracle_matches_rust_owner_for_all_mixing_orientations() {
+        fn mixing(
+            source_id: &str,
+            negative_cell: u64,
+            positive_cell: u64,
+            reversed: bool,
+            g_up_spm2: f64,
+            g_down_spm2: f64,
+        ) -> ResolvedSpinInterfaceFaceIR {
+            let (from_cell, to_cell) = if reversed {
+                (positive_cell, negative_cell)
+            } else {
+                (negative_cell, positive_cell)
+            };
+            ResolvedSpinInterfaceFaceIR {
+                source_id: source_id.into(),
+                face: StructuredInternalFaceIR {
+                    axis: 0,
+                    negative_cell,
+                    positive_cell,
+                },
+                from_cell,
+                to_cell,
+                law: ResolvedSpinInterfaceLawIR::MixingConductance {
+                    g_up_spm2,
+                    g_down_spm2,
+                    g_r_spm2: 4.0,
+                    g_i_spm2: -1.5,
+                    g_sml_spm2: 0.0,
+                    spin_memory_loss: None,
+                    formula_version: "magnetoelectronic.fullmag.v2".into(),
+                },
+            }
+        }
+        fn solve(mut plan: FdmPlanIR, native: bool) -> FdmSpinTransportModuleSnapshot {
+            let descriptor = plan.spin_transport_plans[0]
+                .fdm_cpu_double
+                .as_mut()
+                .expect("one-way descriptor");
+            descriptor.realization = if native {
+                FdmCpuTransportRealizationIR::NativeM1V1
+            } else {
+                FdmCpuTransportRealizationIR::RustReferenceV1
+            };
+            descriptor.spin_solver.engine = if native { "native_m1_v1" } else { "gmres" }.into();
+            FdmSpinTransportWorkflow::from_plan(&plan)
+                .expect("oracle workflow")
+                .expect("transport workflow")
+                .evaluate_stage(&plan.initial_magnetization, 0.0)
+                .expect("oracle solve")
+                .modules
+                .remove(0)
+        }
+        fn close(label: &str, left: f64, right: f64, absolute: f64, relative: f64) {
+            let scale = left.abs().max(right.abs());
+            assert!(
+                (left - right).abs() <= absolute + relative * scale,
+                "{label} owner/native mismatch: {left} != {right}"
+            );
+        }
+        fn compare(
+            reference: &FdmSpinTransportModuleSnapshot,
+            native: &FdmSpinTransportModuleSnapshot,
+            expected_charge_interface_count: usize,
+            expected_interface_count: usize,
+        ) {
+            const POTENTIAL_ABS_V: f64 = 1.0e-13;
+            const SPIN_POTENTIAL_ABS_V: f64 = 1.0e-12;
+            const CURRENT_ABS_APM2: f64 = 1.0e-6;
+            const REACTION_ABS_APM3: f64 = 1.0e-3;
+            const TORQUE_ABS_PER_S: f64 = 1.0e-18;
+            const POWER_ABS_W_PER_M2: f64 = 1.0e-12;
+            const RELATIVE_TOLERANCE: f64 = 2.0e-9;
+            assert_eq!(
+                reference.potential_volts.len(),
+                native.potential_volts.len()
+            );
+            for (left, right) in reference
+                .potential_volts
+                .iter()
+                .zip(&native.potential_volts)
+            {
+                close(
+                    "potential V",
+                    *left,
+                    *right,
+                    POTENTIAL_ABS_V,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            assert_eq!(
+                reference.current_density_apm2.len(),
+                native.current_density_apm2.len()
+            );
+            for (left, right) in reference
+                .current_density_apm2
+                .iter()
+                .flatten()
+                .zip(native.current_density_apm2.iter().flatten())
+            {
+                close(
+                    "cell Jc A/m^2",
+                    *left,
+                    *right,
+                    CURRENT_ABS_APM2,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            let reference_charge = reference
+                .charge_face_current
+                .as_ref()
+                .expect("reference Jc faces");
+            let native_charge = native
+                .charge_face_current
+                .as_ref()
+                .expect("native Jc faces");
+            assert_eq!(reference_charge.unit, native_charge.unit);
+            assert_eq!(reference_charge.orientation, native_charge.orientation);
+            assert_eq!(reference_charge.x_apm2.len(), native_charge.x_apm2.len());
+            assert_eq!(reference_charge.y_apm2.len(), native_charge.y_apm2.len());
+            assert_eq!(reference_charge.z_apm2.len(), native_charge.z_apm2.len());
+            for (left, right) in reference_charge
+                .x_apm2
+                .iter()
+                .chain(&reference_charge.y_apm2)
+                .chain(&reference_charge.z_apm2)
+                .zip(
+                    native_charge
+                        .x_apm2
+                        .iter()
+                        .chain(&native_charge.y_apm2)
+                        .chain(&native_charge.z_apm2),
+                )
+            {
+                close(
+                    "face Jc A/m^2",
+                    *left,
+                    *right,
+                    CURRENT_ABS_APM2,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            assert_eq!(
+                reference.charge_interface_observations.len(),
+                expected_charge_interface_count
+            );
+            assert_eq!(
+                native.charge_interface_observations.len(),
+                expected_charge_interface_count
+            );
+            for left in &reference.charge_interface_observations {
+                let matches = native
+                    .charge_interface_observations
+                    .iter()
+                    .filter(|right| right.stable_interface_id == left.stable_interface_id)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "charge observation identity must match once"
+                );
+                let right = matches[0];
+                assert_eq!(left.source_id, right.source_id);
+                assert_eq!(left.stable_interface_id, right.stable_interface_id);
+                assert_eq!(left.axis, right.axis);
+                assert_eq!(left.negative_cell, right.negative_cell);
+                assert_eq!(left.positive_cell, right.positive_cell);
+                assert_eq!(left.from_cell, right.from_cell);
+                assert_eq!(left.to_cell, right.to_cell);
+                assert_eq!(left.potential_unit, right.potential_unit);
+                assert_eq!(left.current_density_unit, right.current_density_unit);
+                assert_eq!(left.orientation, right.orientation);
+                assert_eq!(left.g_up_spm2, right.g_up_spm2);
+                assert_eq!(left.g_down_spm2, right.g_down_spm2);
+                close(
+                    "charge trace V",
+                    left.from_potential_trace_v,
+                    right.from_potential_trace_v,
+                    POTENTIAL_ABS_V,
+                    RELATIVE_TOLERANCE,
+                );
+                close(
+                    "charge trace V",
+                    left.to_potential_trace_v,
+                    right.to_potential_trace_v,
+                    POTENTIAL_ABS_V,
+                    RELATIVE_TOLERANCE,
+                );
+                close(
+                    "charge delta V",
+                    left.delta_potential_trace_v,
+                    right.delta_potential_trace_v,
+                    POTENTIAL_ABS_V,
+                    RELATIVE_TOLERANCE,
+                );
+                close(
+                    "interface Jc A/m^2",
+                    left.from_to_current_density_apm2,
+                    right.from_to_current_density_apm2,
+                    CURRENT_ABS_APM2,
+                    RELATIVE_TOLERANCE,
+                );
+                close(
+                    "interface Jc A/m^2",
+                    left.global_face_current_density_apm2,
+                    right.global_face_current_density_apm2,
+                    CURRENT_ABS_APM2,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            assert_eq!(
+                reference.spin_potential_volts.len(),
+                native.spin_potential_volts.len()
+            );
+            assert_eq!(
+                reference.spin_current_tensor_apm2.len(),
+                native.spin_current_tensor_apm2.len()
+            );
+            assert_eq!(
+                reference.transport_torque_per_s.len(),
+                native.transport_torque_per_s.len()
+            );
+            for (left, right) in reference
+                .spin_potential_volts
+                .iter()
+                .flatten()
+                .zip(native.spin_potential_volts.iter().flatten())
+            {
+                close(
+                    "spin potential V",
+                    *left,
+                    *right,
+                    SPIN_POTENTIAL_ABS_V,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            for (left, right) in reference
+                .spin_current_tensor_apm2
+                .iter()
+                .flatten()
+                .zip(native.spin_current_tensor_apm2.iter().flatten())
+            {
+                close(
+                    "cell Q A/m^2",
+                    *left,
+                    *right,
+                    CURRENT_ABS_APM2,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            for (left, right) in reference
+                .transport_torque_per_s
+                .iter()
+                .flatten()
+                .zip(native.transport_torque_per_s.iter().flatten())
+            {
+                close(
+                    "transport torque 1/s",
+                    *left,
+                    *right,
+                    TORQUE_ABS_PER_S,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            let reference_faces = reference
+                .spin_face_current
+                .as_ref()
+                .expect("reference Q faces");
+            let native_faces = native.spin_face_current.as_ref().expect("native Q faces");
+            assert_eq!(reference_faces.unit, native_faces.unit);
+            assert_eq!(
+                reference_faces.component_order,
+                native_faces.component_order
+            );
+            assert_eq!(reference_faces.orientation, native_faces.orientation);
+            assert_eq!(reference_faces.x_apm2.len(), native_faces.x_apm2.len());
+            assert_eq!(reference_faces.y_apm2.len(), native_faces.y_apm2.len());
+            assert_eq!(reference_faces.z_apm2.len(), native_faces.z_apm2.len());
+            for (left, right) in reference_faces
+                .x_apm2
+                .iter()
+                .chain(&reference_faces.y_apm2)
+                .chain(&reference_faces.z_apm2)
+                .flatten()
+                .zip(
+                    native_faces
+                        .x_apm2
+                        .iter()
+                        .chain(&native_faces.y_apm2)
+                        .chain(&native_faces.z_apm2)
+                        .flatten(),
+                )
+            {
+                close(
+                    "face Q A/m^2",
+                    *left,
+                    *right,
+                    CURRENT_ABS_APM2,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            let reference_reactions = reference
+                .spin_reaction_channels
+                .as_ref()
+                .expect("reference reaction channels");
+            let native_reactions = native
+                .spin_reaction_channels
+                .as_ref()
+                .expect("native reaction channels");
+            assert_eq!(reference_reactions.unit, native_reactions.unit);
+            assert_eq!(
+                reference_reactions.component_order,
+                native_reactions.component_order
+            );
+            assert_eq!(
+                reference_reactions.spin_flip_apm3.len(),
+                native_reactions.spin_flip_apm3.len()
+            );
+            assert_eq!(
+                reference_reactions.exchange_apm3.len(),
+                native_reactions.exchange_apm3.len()
+            );
+            assert_eq!(
+                reference_reactions.dephasing_apm3.len(),
+                native_reactions.dephasing_apm3.len()
+            );
+            assert_eq!(
+                reference_reactions.total_apm3.len(),
+                native_reactions.total_apm3.len()
+            );
+            for (left, right) in reference_reactions
+                .spin_flip_apm3
+                .iter()
+                .flatten()
+                .chain(reference_reactions.exchange_apm3.iter().flatten())
+                .chain(reference_reactions.dephasing_apm3.iter().flatten())
+                .chain(reference_reactions.total_apm3.iter().flatten())
+                .zip(
+                    native_reactions
+                        .spin_flip_apm3
+                        .iter()
+                        .flatten()
+                        .chain(native_reactions.exchange_apm3.iter().flatten())
+                        .chain(native_reactions.dephasing_apm3.iter().flatten())
+                        .chain(native_reactions.total_apm3.iter().flatten()),
+                )
+            {
+                close(
+                    "reaction A/m^3",
+                    *left,
+                    *right,
+                    REACTION_ABS_APM3,
+                    RELATIVE_TOLERANCE,
+                );
+            }
+            let reference_torque = reference
+                .transport_torque_per_s
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            let native_torque = native
+                .transport_torque_per_s
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(reference_torque.len(), native_torque.len());
+            let reference_torque_max = reference_torque
+                .iter()
+                .map(|value| value.abs())
+                .fold(0.0_f64, f64::max);
+            let native_torque_max = native_torque
+                .iter()
+                .map(|value| value.abs())
+                .fold(0.0_f64, f64::max);
+            assert!(
+                reference_torque_max > 1_000.0 * TORQUE_ABS_PER_S,
+                "torque oracle magnitude {reference_torque_max} 1/s must significantly exceed absolute tolerance {TORQUE_ABS_PER_S} 1/s"
+            );
+            assert!(
+                native_torque_max > 1_000.0 * TORQUE_ABS_PER_S,
+                "native torque magnitude {native_torque_max} 1/s must significantly exceed absolute tolerance {TORQUE_ABS_PER_S} 1/s"
+            );
+            let sign_correlation = reference_torque
+                .iter()
+                .zip(&native_torque)
+                .map(|(left, right)| left * right)
+                .sum::<f64>();
+            assert!(
+                sign_correlation > 0.0,
+                "native torque must preserve oracle sign"
+            );
+            assert_eq!(reference.interface_fluxes.len(), expected_interface_count);
+            assert_eq!(native.interface_fluxes.len(), expected_interface_count);
+            assert_eq!(
+                reference.interface_fluxes.len(),
+                native.interface_fluxes.len()
+            );
+            for left in &reference.interface_fluxes {
+                let matches = native
+                    .interface_fluxes
+                    .iter()
+                    .filter(|right| right.stable_interface_id == left.stable_interface_id)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "spin observation identity must match once"
+                );
+                let right = matches[0];
+                assert_eq!(left.source_id, right.source_id);
+                assert_eq!(left.stable_interface_id, right.stable_interface_id);
+                assert_eq!(left.axis, right.axis);
+                assert_eq!(left.negative_cell, right.negative_cell);
+                assert_eq!(left.positive_cell, right.positive_cell);
+                assert_eq!(left.from_cell, right.from_cell);
+                assert_eq!(left.to_cell, right.to_cell);
+                assert_eq!(left.current_density_unit, right.current_density_unit);
+                assert_eq!(left.orientation, right.orientation);
+                if left.source_id == "transparent" {
+                    assert_eq!(left.incoming_longitudinal_apm2, [0.0; 3]);
+                    assert_eq!(left.backflow_longitudinal_apm2, [0.0; 3]);
+                    assert_eq!(left.absorbed_transverse_apm2, [0.0; 3]);
+                    assert_eq!(left.spin_memory_loss_apm2, [0.0; 3]);
+                    assert_eq!(left.sml_reservoir, None);
+                    let transmitted_max = left
+                        .from_side_outgoing_apm2
+                        .into_iter()
+                        .chain(left.to_side_transmitted_apm2)
+                        .chain(left.negative_cell_flux_positive_axis_apm2)
+                        .chain(left.positive_cell_flux_positive_axis_apm2)
+                        .map(f64::abs)
+                        .fold(0.0_f64, f64::max);
+                    assert!(
+                        transmitted_max > 1_000.0 * CURRENT_ABS_APM2,
+                        "transparent record must carry non-vacuous Q; max={transmitted_max} A/m^2"
+                    );
+                }
+                for (left, right) in left
+                    .incoming_longitudinal_apm2
+                    .into_iter()
+                    .chain(left.backflow_longitudinal_apm2)
+                    .chain(left.absorbed_transverse_apm2)
+                    .chain(left.spin_memory_loss_apm2)
+                    .chain(left.negative_cell_flux_positive_axis_apm2)
+                    .chain(left.positive_cell_flux_positive_axis_apm2)
+                    .chain(left.from_side_outgoing_apm2)
+                    .chain(left.to_side_transmitted_apm2)
+                    .zip(
+                        right
+                            .incoming_longitudinal_apm2
+                            .into_iter()
+                            .chain(right.backflow_longitudinal_apm2)
+                            .chain(right.absorbed_transverse_apm2)
+                            .chain(right.spin_memory_loss_apm2)
+                            .chain(right.negative_cell_flux_positive_axis_apm2)
+                            .chain(right.positive_cell_flux_positive_axis_apm2)
+                            .chain(right.from_side_outgoing_apm2)
+                            .chain(right.to_side_transmitted_apm2),
+                    )
+                {
+                    close(
+                        "interface Q A/m^2",
+                        left,
+                        right,
+                        CURRENT_ABS_APM2,
+                        RELATIVE_TOLERANCE,
+                    );
+                }
+                match (&left.sml_reservoir, &right.sml_reservoir) {
+                    (None, None) => {}
+                    (Some(left), Some(right)) => {
+                        for (left, right) in left
+                            .reservoir_potential_v
+                            .into_iter()
+                            .zip(right.reservoir_potential_v)
+                        {
+                            close(
+                                "SML reservoir potential V",
+                                left,
+                                right,
+                                SPIN_POTENTIAL_ABS_V,
+                                RELATIVE_TOLERANCE,
+                            );
+                        }
+                        for (left, right) in left
+                            .normal_to_reservoir_apm2
+                            .into_iter()
+                            .chain(left.ferromagnet_to_reservoir_apm2)
+                            .chain(left.reservoir_to_lattice_apm2)
+                            .zip(
+                                right
+                                    .normal_to_reservoir_apm2
+                                    .into_iter()
+                                    .chain(right.ferromagnet_to_reservoir_apm2)
+                                    .chain(right.reservoir_to_lattice_apm2),
+                            )
+                        {
+                            close(
+                                "SML reservoir current A/m^2",
+                                left,
+                                right,
+                                CURRENT_ABS_APM2,
+                                RELATIVE_TOLERANCE,
+                            );
+                        }
+                        close(
+                            "SML reservoir surface power W/m^2",
+                            left.surface_power_w_per_m2,
+                            right.surface_power_w_per_m2,
+                            POWER_ABS_W_PER_M2,
+                            RELATIVE_TOLERANCE,
+                        );
+                    }
+                    _ => panic!("SML reservoir option mismatch"),
+                }
+            }
+        }
+
+        let cases = [
+            vec![ResolvedSpinInterfaceFaceIR {
+                source_id: "transparent".into(),
+                face: StructuredInternalFaceIR {
+                    axis: 0,
+                    negative_cell: 1,
+                    positive_cell: 2,
+                },
+                from_cell: 1,
+                to_cell: 2,
+                law: ResolvedSpinInterfaceLawIR::Transparent,
+            }],
+            vec![mixing("full", 1, 2, false, 7.0, 3.0)],
+            vec![mixing("transverse-only", 1, 2, false, 0.0, 0.0)],
+            vec![mixing("reversed", 1, 2, true, 7.0, 3.0)],
+            vec![
+                mixing("multiple", 2, 3, true, 5.0, 2.0),
+                mixing("multiple", 0, 1, false, 7.0, 3.0),
+            ],
+        ];
+        for interfaces in cases {
+            let mut fixture = plan();
+            let descriptor = fixture.spin_transport_plans[0]
+                .fdm_cpu_double
+                .as_mut()
+                .expect("one-way descriptor");
+            let multiple = interfaces.len() > 1;
+            descriptor.interfaces = interfaces;
+            descriptor.region_ids = if multiple {
+                vec![0, 1, 1, 2]
+            } else {
+                vec![0, 0, 1, 1]
+            };
+            descriptor.polarization_p = vec![0.2; 4];
+            descriptor.theta_sh = vec![0.1; 4];
+            descriptor.reactions = vec![
+                ResolvedSpinReactionLengthsIR {
+                    spin_flip_m: Some(2.0),
+                    exchange_m: Some(3.0),
+                    dephasing_m: Some(4.0),
+                };
+                4
+            ];
+            descriptor.torque_target_cells = vec![true; 4];
+            descriptor.spin_boundaries[0].condition =
+                ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
+                    value_v: [1.0, 2.0, 3.0],
+                };
+            let expected_charge_interface_count = descriptor
+                .interfaces
+                .iter()
+                .filter(|interface| {
+                    matches!(
+                        interface.law,
+                        ResolvedSpinInterfaceLawIR::MixingConductance { .. }
+                    )
+                })
+                .count();
+            let expected_interface_count = descriptor.interfaces.len();
+            let reference = solve(fixture.clone(), false);
+            let native = solve(fixture, true);
+            compare(
+                &reference,
+                &native,
+                expected_charge_interface_count,
+                expected_interface_count,
+            );
+            assert!(reference
+                .interface_fluxes
+                .iter()
+                .all(|observation| observation.sml_reservoir.is_none()));
+            assert!(native
+                .interface_fluxes
+                .iter()
+                .all(|observation| observation.sml_reservoir.is_none()));
+            type SnapshotMutation = fn(&mut FdmSpinTransportModuleSnapshot);
+            let omitted_snapshot_metadata_mutations: [(&str, SnapshotMutation); 7] = [
+                ("charge face unit", |snapshot| {
+                    snapshot
+                        .charge_face_current
+                        .as_mut()
+                        .expect("charge face snapshot")
+                        .unit = "bad".into();
+                }),
+                ("charge face orientation", |snapshot| {
+                    snapshot
+                        .charge_face_current
+                        .as_mut()
+                        .expect("charge face snapshot")
+                        .orientation = "bad".into();
+                }),
+                ("spin face unit", |snapshot| {
+                    snapshot
+                        .spin_face_current
+                        .as_mut()
+                        .expect("spin face snapshot")
+                        .unit = "bad".into();
+                }),
+                ("spin face component order", |snapshot| {
+                    snapshot
+                        .spin_face_current
+                        .as_mut()
+                        .expect("spin face snapshot")
+                        .component_order = "bad".into();
+                }),
+                ("spin face orientation", |snapshot| {
+                    snapshot
+                        .spin_face_current
+                        .as_mut()
+                        .expect("spin face snapshot")
+                        .orientation = "bad".into();
+                }),
+                ("spin reaction unit", |snapshot| {
+                    snapshot
+                        .spin_reaction_channels
+                        .as_mut()
+                        .expect("spin reaction snapshot")
+                        .unit = "bad".into();
+                }),
+                ("spin reaction component order", |snapshot| {
+                    snapshot
+                        .spin_reaction_channels
+                        .as_mut()
+                        .expect("spin reaction snapshot")
+                        .component_order = "bad".into();
+                }),
+            ];
+            for (field, mutate) in omitted_snapshot_metadata_mutations {
+                let mut mutated = native.clone();
+                mutate(&mut mutated);
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        compare(
+                            &reference,
+                            &mutated,
+                            expected_charge_interface_count,
+                            expected_interface_count,
+                        )
+                    }))
+                    .is_err(),
+                    "full snapshot comparator must reject mutated {field}"
+                );
+            }
+            let omitted_spin_field_mutations: [(&str, SnapshotMutation); 4] = [
+                ("spin current unit", |snapshot| {
+                    snapshot.interface_fluxes[0].current_density_unit = "bad".into();
+                }),
+                ("spin orientation", |snapshot| {
+                    snapshot.interface_fluxes[0].orientation = "bad".into();
+                }),
+                ("spin memory loss channel", |snapshot| {
+                    snapshot.interface_fluxes[0].spin_memory_loss_apm2[0] += 1.0;
+                }),
+                ("unexpected spin memory loss reservoir", |snapshot| {
+                    snapshot.interface_fluxes[0].sml_reservoir =
+                        Some(FdmSpinMemoryLossReservoirSnapshot {
+                            reservoir_potential_v: [1.0; 3],
+                            normal_to_reservoir_apm2: [2.0; 3],
+                            ferromagnet_to_reservoir_apm2: [3.0; 3],
+                            reservoir_to_lattice_apm2: [4.0; 3],
+                            surface_power_w_per_m2: 5.0,
+                        });
+                }),
+            ];
+            for (field, mutate) in omitted_spin_field_mutations {
+                let mut mutated = native.clone();
+                mutate(&mut mutated);
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        compare(
+                            &reference,
+                            &mutated,
+                            expected_charge_interface_count,
+                            expected_interface_count,
+                        )
+                    }))
+                    .is_err(),
+                    "full interface comparator must reject mutated {field}"
+                );
+            }
+            if expected_charge_interface_count > 0 {
+                let omitted_charge_field_mutations: [(&str, SnapshotMutation); 3] = [
+                    ("charge potential unit", |snapshot| {
+                        snapshot.charge_interface_observations[0].potential_unit = "bad".into();
+                    }),
+                    ("charge current unit", |snapshot| {
+                        snapshot.charge_interface_observations[0].current_density_unit =
+                            "bad".into();
+                    }),
+                    ("charge orientation", |snapshot| {
+                        snapshot.charge_interface_observations[0].orientation = "bad".into();
+                    }),
+                ];
+                for (field, mutate) in omitted_charge_field_mutations {
+                    let mut mutated = native.clone();
+                    mutate(&mut mutated);
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            compare(
+                                &reference,
+                                &mutated,
+                                expected_charge_interface_count,
+                                expected_interface_count,
+                            )
+                        }))
+                        .is_err(),
+                        "full interface comparator must reject mutated {field}"
+                    );
+                }
+            }
+            if native
+                .charge_interface_observations
+                .iter()
+                .any(|observation| observation.g_up_spm2 == 0.0 && observation.g_down_spm2 == 0.0)
+            {
+                assert!(native
+                    .charge_interface_observations
+                    .iter()
+                    .all(|observation| observation.from_to_current_density_apm2 == 0.0));
+            }
+        }
+    }
+
+    #[test]
+    fn native_m1_v1_runtime_preflight_rejects_extended_or_missing_enclosing_mode() {
+        let mut extended = plan();
+        let descriptor = extended.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor");
+        descriptor.realization = fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+        descriptor.spin_solver.engine = "native_m1_v1".into();
+        descriptor.enclosing_execution_mode = ExecutionMode::Extended;
+        let error = FdmSpinTransportWorkflow::from_plan(&extended)
+            .expect_err("global extended plus module strict must fail runtime preflight");
+        assert!(error.message.contains("enclosing strict mode"));
+
+        let mut missing = plan();
+        let descriptor = missing.spin_transport_plans[0]
+            .fdm_cpu_double
+            .take()
+            .expect("one-way descriptor");
+        let mut encoded = serde_json::to_value(descriptor).expect("serialize descriptor");
+        encoded
+            .as_object_mut()
+            .expect("descriptor JSON object")
+            .remove("enclosing_execution_mode");
+        let mut decoded: ResolvedFdmSpinTransportIR =
+            serde_json::from_value(encoded).expect("legacy descriptor must deserialize safely");
+        assert_eq!(decoded.enclosing_execution_mode, ExecutionMode::Extended);
+        decoded.realization = fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+        decoded.spin_solver.engine = "native_m1_v1".into();
+        missing.spin_transport_plans[0].fdm_cpu_double = Some(decoded);
+        let error = FdmSpinTransportWorkflow::from_plan(&missing)
+            .expect_err("missing enclosing mode must default fail-closed");
+        assert!(error.message.contains("enclosing strict mode"));
+    }
+
+    #[cfg(not(feature = "fdm-native-cpu"))]
+    #[test]
+    fn native_m1_v1_plan_never_falls_back_when_runner_feature_is_absent() {
+        let mut plan = plan();
+        let descriptor = plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor");
+        descriptor.realization = fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+        descriptor.spin_solver.engine = "native_m1_v1".into();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("plan validation must not select another realization")
+            .expect("spin workflow");
+        let error = workflow
+            .evaluate_stage(&plan.initial_magnetization, 0.0)
+            .expect_err("missing native feature must fail without fallback");
+        assert!(error.message.contains("fallback is forbidden"));
+    }
+
+    #[test]
+    fn one_way_current_envelope_is_re_evaluated_at_each_fdm_stage() {
+        let mut plan = plan();
+        plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor")
+            .time_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 2.0 });
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("workflow construction")
+            .expect("spin workflow");
+        let evaluation = workflow
+            .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
+            .expect("stage solve");
+        let module = &evaluation.modules[0];
+        assert_eq!(module.evaluated_envelope_multiplier, 2.0);
+        for current in &module.current_density_apm2 {
+            assert!((current[0] + 1.0).abs() < 1.0e-10);
+        }
+        for (cell, potential) in module.potential_volts.iter().enumerate() {
+            assert!((*potential - 2.0 * (cell as f64 + 0.5) / 4.0).abs() < 1.0e-10);
+        }
+    }
+
+    #[test]
+    fn reciprocal_m2_current_envelope_is_re_evaluated_at_each_fdm_stage() {
+        let plan = reciprocal_plan();
+        let mut scaled_plan = plan.clone();
+        scaled_plan.spin_transport_plans[0]
+            .fdm_cpu_double_reciprocal
+            .as_mut()
+            .expect("reciprocal descriptor")
+            .time_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 2.0 });
+
+        let mut baseline = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("baseline workflow construction")
+            .expect("baseline spin workflow");
+        let baseline_evaluation = baseline
+            .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
+            .expect("baseline reciprocal stage solve");
+        let mut scaled = FdmSpinTransportWorkflow::from_plan(&scaled_plan)
+            .expect("scaled workflow construction")
+            .expect("scaled spin workflow");
+        let scaled_evaluation = scaled
+            .evaluate_stage(&scaled_plan.initial_magnetization, 2.5e-12)
+            .expect("scaled reciprocal stage solve");
+
+        let baseline_module = &baseline_evaluation.modules[0];
+        let scaled_module = &scaled_evaluation.modules[0];
+        assert_eq!(scaled_module.evaluated_envelope_multiplier, 2.0);
+        for (scaled, baseline) in scaled_module
+            .potential_volts
+            .iter()
+            .zip(&baseline_module.potential_volts)
+        {
+            assert!((scaled - 2.0 * baseline).abs() < 1.0e-9);
+        }
+        for (scaled, baseline) in scaled_module
+            .current_density_apm2
+            .iter()
+            .zip(&baseline_module.current_density_apm2)
+        {
+            for component in 0..3 {
+                assert!((scaled[component] - 2.0 * baseline[component]).abs() < 1.0e-9);
+            }
+        }
+    }
+
     fn analytical_direct_she_evaluation(nz: usize) -> (FdmPlanIR, FdmSpinTransportEvaluation) {
         let nx = 3usize;
         let thickness_m: f64 = 4.0;
@@ -3566,8 +5166,7 @@ mod tests {
         }
 
         assert!(
-            relative_errors[1] < relative_errors[0]
-                && relative_errors[2] < relative_errors[1],
+            relative_errors[1] < relative_errors[0] && relative_errors[2] < relative_errors[1],
             "direct-SHE profile error must decrease with z refinement: {relative_errors:?}"
         );
         assert!(
@@ -3773,7 +5372,10 @@ mod tests {
             descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
             steady_operator,
             spin_capacitance_as_per_v_m3: vec![2.0; count],
-            capacitance_formula_versions: vec!["dos_isotropic_nonmagnetic.fullmag.v1".into(); count],
+            capacitance_formula_versions: vec![
+                "dos_isotropic_nonmagnetic.fullmag.v1".into();
+                count
+            ],
             transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
             integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
             integrator_version: "coupled_imex_ark2.v1".into(),
@@ -3865,7 +5467,10 @@ mod tests {
             descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
             steady_operator,
             spin_capacitance_as_per_v_m3: vec![2.0; count],
-            capacitance_formula_versions: vec!["dos_isotropic_nonmagnetic.fullmag.v1".into(); count],
+            capacitance_formula_versions: vec![
+                "dos_isotropic_nonmagnetic.fullmag.v1".into();
+                count
+            ],
             transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
             integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
             integrator_version: "coupled_imex_ark2.v1".into(),
@@ -4025,7 +5630,9 @@ mod tests {
                 formula_version: "magnetoelectronic.fullmag.v2".into(),
             },
         }];
-        resolved.capabilities.push("transport.spin.memory_loss".into());
+        resolved
+            .capabilities
+            .push("transport.spin.memory_loss".into());
         plan.fixed_timestep = Some(1e-15);
         plan.integrator = Some(IntegratorChoice::Heun);
         plan.gyromagnetic_ratio = 2.211e5;
@@ -4039,14 +5646,9 @@ mod tests {
         plan.enable_exchange = false;
         plan.enable_demag = false;
 
-        let executed = super::super::reference::execute_reference_fdm(
-            &plan,
-            1e-15,
-            &[],
-            None,
-            None,
-        )
-        .expect("SML reservoir reference run");
+        let executed =
+            super::super::reference::execute_reference_fdm(&plan, 1e-15, &[], None, None)
+                .expect("SML reservoir reference run");
         let artifact = executed
             .auxiliary_artifacts
             .iter()
@@ -4054,8 +5656,8 @@ mod tests {
             .expect("accepted reciprocal transport artifact");
         let document: serde_json::Value =
             serde_json::from_slice(&artifact.bytes).expect("transport artifact JSON");
-        let reservoir = &document["evaluation"]["modules"][0]["interface_fluxes"][0]
-            ["sml_reservoir"];
+        let reservoir =
+            &document["evaluation"]["modules"][0]["interface_fluxes"][0]["sml_reservoir"];
         assert!(reservoir.is_object(), "{document}");
         assert!(reservoir["surface_power_w_per_m2"].as_f64().unwrap() >= 0.0);
         assert_eq!(

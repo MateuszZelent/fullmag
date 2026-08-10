@@ -8,6 +8,7 @@ import type {
   SolverStatusResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 
 import {
   buildFooterTelemetryModel,
@@ -19,6 +20,7 @@ import {
 const status: LiveStatusResource = {
   api_contract_version: "1.0.0",
   capabilities: {
+    active_lane: activeLaneCapabilityFixture(),
     algorithms_available: [],
     binary_fields: true,
     cell_fields: true,

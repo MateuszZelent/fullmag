@@ -21,6 +21,7 @@ import {
   inspectViewport3DFieldVectorCacheEntryDiagnostics,
   invalidateViewport3DFieldMetaResources,
   loadCachedBinaryResource,
+  resolveCachedFieldVectorEnvelope,
   resolveViewport3DAirboxFieldVectorQuery,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DAirboxFieldVectorResourceRequests,
@@ -36,7 +37,84 @@ const viewport3dResourcesSourceUrl = new URL(
   import.meta.url,
 );
 
+function fieldResponseMetadata(
+  overrides: Partial<FieldVectorResponseMetadata> = {},
+): FieldVectorResponseMetadata {
+  return {
+    component: "full",
+    domainGenerationId: "generation-1",
+    encoding: "FMVP;version=2",
+    fieldIndexing: null,
+    fieldRevision: "1",
+    identityIssues: [],
+    meshTopologyHash: null,
+    nComp: 3,
+    nodeIndexCount: null,
+    pointCount: 1,
+    quantityId: "m",
+    scopeId: null,
+    scopeKind: null,
+    snapshotId: null,
+    valueCount: 3,
+    ...overrides,
+  };
+}
+
 describe("viewport3dResources", () => {
+  it("binds field data and response metadata from the same cache entry", () => {
+    const cache = new ResourceCache<
+      DecodedFieldVector,
+      FieldVectorResponseMetadata
+    >({ maxBytes: 128 });
+    const field = {
+      dtype: "float64",
+      grid: [1, 1, 1],
+      nComp: 3,
+      pointCount: 1,
+      quantityId: "m",
+      valueCount: 3,
+      values: new Float64Array(3),
+    } as DecodedFieldVector;
+    const metadata = fieldResponseMetadata();
+    cache.set("field:m", {
+      byteLength: 24,
+      data: field,
+      etag: '"field-1"',
+      metadata,
+    });
+
+    expect(resolveCachedFieldVectorEnvelope(cache, "field:m", field)).toEqual({
+      data: field,
+      etag: '"field-1"',
+      responseMetadata: metadata,
+      resourceKey: "field:m",
+    });
+  });
+
+  it("fails closed when revalidation replaces the cache entry before the resource commits", () => {
+    const cache = new ResourceCache<
+      DecodedFieldVector,
+      FieldVectorResponseMetadata
+    >({ maxBytes: 128 });
+    const oldField = { values: new Float64Array([1]) } as DecodedFieldVector;
+    const newField = { values: new Float64Array([2]) } as DecodedFieldVector;
+    cache.set("field:m", {
+      byteLength: 8,
+      data: newField,
+      etag: '"field-2"',
+      metadata: fieldResponseMetadata({
+        domainGenerationId: "generation-2",
+      }),
+    });
+
+    expect(
+      resolveCachedFieldVectorEnvelope(cache, "field:m", oldField),
+    ).toBeNull();
+    expect(
+      resolveCachedFieldVectorEnvelope(cache, "field:H_eff", newField),
+    ).toBeNull();
+  });
+
   it("exposes bounded aggregate and exact-entry field cache diagnostics without decoded data", () => {
     const resourceKey = resolveViewport3DFieldVectorResourceKey("missing", {
       component: "full",
@@ -897,23 +975,6 @@ describe("viewport3dResources", () => {
         preferCached: true,
       }),
     ).resolves.toBe("cached-field");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("skips binary requests while a caller-level request pause is active", async () => {
-    const cache = new ResourceCache<string>({ maxBytes: 32 });
-    const request = vi.fn(async () => ({
-      byteLength: 5,
-      data: "fresh",
-      etag: '"field-2"',
-      status: "ready" as const,
-    }));
-
-    await expect(
-      loadCachedBinaryResource(cache, "field:m", request, {
-        pauseRequest: () => true,
-      }),
-    ).resolves.toBeNull();
     expect(request).not.toHaveBeenCalled();
   });
 

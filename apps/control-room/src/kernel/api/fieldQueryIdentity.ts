@@ -10,6 +10,7 @@ export interface CanonicalFieldVectorQuery {
   readonly componentExplicit: boolean;
   readonly geometryScope?: string;
   readonly maxSamples?: number;
+  readonly ownerObjectId?: string;
   readonly phaseRad?: number;
   readonly quantityId: string;
   readonly scopeId?: string;
@@ -24,6 +25,7 @@ const FIELD_VECTOR_QUERY_ORDER = [
   "component",
   "geometry_scope",
   "max_samples",
+  "owner_object_id",
   "phase_rad",
   "scope_id",
   "scope_kind",
@@ -87,6 +89,7 @@ export function canonicalFieldVectorQuery(
     componentExplicit: component !== undefined,
     geometryScope: nonEmptyString(query.geometry_scope),
     maxSamples: finiteNumber(query.max_samples),
+    ownerObjectId: nonEmptyString(query.owner_object_id),
     phaseRad: finiteNumber(query.phase_rad),
     quantityId: resolveCanonicalQuantityId(quantityId),
     scopeId: canonicalScopeId(scopeKind, nonEmptyString(query.scope_id)),
@@ -105,6 +108,7 @@ export function canonicalFieldVectorQueryParams(
     component: query.componentExplicit ? query.component : undefined,
     geometry_scope: query.geometryScope,
     max_samples: query.maxSamples === undefined ? undefined : String(query.maxSamples),
+    owner_object_id: query.ownerObjectId,
     phase_rad: query.phaseRad === undefined ? undefined : String(query.phaseRad),
     scope_id: query.scopeId,
     scope_kind: query.scopeKindExplicit ? query.scopeKind : undefined,
@@ -122,6 +126,7 @@ export function canonicalFieldVectorQueriesEqual(
     left.component === right.component &&
     left.geometryScope === right.geometryScope &&
     left.maxSamples === right.maxSamples &&
+    left.ownerObjectId === right.ownerObjectId &&
     left.phaseRad === right.phaseRad &&
     left.quantityId === right.quantityId &&
     left.scopeId === right.scopeId &&
@@ -191,6 +196,7 @@ export function parseCanonicalFieldVectorResourceKey(
     geometry_scope: url.searchParams.get("geometry_scope") ?? undefined,
     max_samples:
       maxSamples === null || maxSamples.length === 0 ? undefined : Number(maxSamples),
+    owner_object_id: url.searchParams.get("owner_object_id") ?? undefined,
     phase_rad:
       phaseRad === null || phaseRad.length === 0 ? undefined : Number(phaseRad),
     scope_id: url.searchParams.get("scope_id") ?? undefined,

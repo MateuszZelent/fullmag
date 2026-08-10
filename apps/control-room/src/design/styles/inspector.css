@@ -828,6 +828,7 @@
   }
 
   .fm-inspector__action-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--fm-space-1);
     padding-inline: var(--fm-space-2);
   }

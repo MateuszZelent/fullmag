@@ -94,6 +94,27 @@ describe("viewport3dPrimitiveModel", () => {
     );
   });
 
+  it("builds primitive-only entries when the API uses scene_revision", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 2, 3] },
+            },
+            id: "box",
+          },
+        ],
+        scene_revision: 9,
+      },
+      null,
+    );
+
+    expect(model.sceneRevision).toBe(9);
+    expect(model.objects[0]?.sceneRevision).toBe(9);
+  });
+
   it("changes primitive frame keys when primitive geometry changes", () => {
     const first = buildViewport3DPrimitiveRenderModel(
       {

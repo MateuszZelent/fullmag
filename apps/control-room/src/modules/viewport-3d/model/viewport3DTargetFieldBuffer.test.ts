@@ -74,6 +74,44 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(false);
   });
 
+  it.each(["region", "layer"] as const)(
+    "preserves the %s scope kind from a scoped FDM FMVP v3 payload",
+    (scopeKind) => {
+      const scopeId = scopeKind === "region" ? "region:body:shared" : "layer-a";
+      const buffer = buildViewport3DTargetFieldBuffer({
+        domain: {
+          discretization: "fdm",
+          domainGenerationId: "fdm-1",
+          meshTopologyHash: "a".repeat(64),
+          meshTopologyRevision: null,
+          pointCount: 4,
+        },
+        fieldVector: vectorFixture({
+          domainGenerationId: "fdm-1",
+          formatVersion: 3,
+          indexing: "explicit_node_indices",
+          meshTopologyHash: "a".repeat(64),
+          meshTopologyRevision: "1",
+          nodeIndices: Uint32Array.from([0, 1]),
+          pointCount: 2,
+          scopeId,
+          scopeKind,
+        }),
+        query: {
+          component: "full",
+          owner_object_id: scopeKind === "region" ? "body" : undefined,
+          scope_id: scopeKind === "region" ? "shared" : scopeId,
+          scope_kind: scopeKind,
+        },
+        targetIds: [scopeId],
+      });
+
+      expect(buffer.scopeKind).toBe(scopeKind);
+      expect(buffer.scopeId).toBe(scopeId);
+      expect(buffer.domainCompatibility.status).toBe("compatible");
+    },
+  );
+
   it("classifies unsampled full vectors as complete full-vector buffers", () => {
     const fieldVector = vectorFixture();
     const buffer = buildViewport3DTargetFieldBuffer({

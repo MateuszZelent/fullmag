@@ -14,10 +14,13 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 
 interface InterfaceDraft {
   absorption: string;
@@ -153,8 +156,10 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const { api, resources } = useKernel();
   const projected = useSpinInterfacesResource();
   const transports = useSpinTransportsResource();
-  const ref = selection.ref?.type === "spin-interface" && selection.ref.spinInterfaceIndex !== undefined
-    ? selection.ref
+  const interfaceRef = selection.ref?.type === "spin-interface" ? selection.ref : null;
+  const ref = interfaceRef &&
+    (interfaceRef.spinInterfaceIndex !== undefined || Boolean(interfaceRef.spinInterfaceId))
+    ? interfaceRef
     : null;
   const [localOwnerId, setLocalOwnerId] = useState("");
   const [localInterfaceId, setLocalInterfaceId] = useState("");
@@ -162,8 +167,21 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const selected = useMemo(() => {
     const items = projected.data?.items ?? [];
     if (ref?.spinInterfaceIndex !== undefined) return items[ref.spinInterfaceIndex] ?? null;
+    if (ref?.spinInterfaceId) {
+      return items.find((item) =>
+        item.interface_id === ref.spinInterfaceId &&
+        (!ref.spinInterfaceOwnerId || item.owner_spin_transport_id === ref.spinInterfaceOwnerId)
+      ) ?? null;
+    }
     return items.find((item) => item.owner_spin_transport_id === ownerId && item.interface_id === localInterfaceId) ?? null;
-  }, [localInterfaceId, ownerId, projected.data?.items, ref?.spinInterfaceIndex]);
+  }, [
+    localInterfaceId,
+    ownerId,
+    projected.data?.items,
+    ref?.spinInterfaceId,
+    ref?.spinInterfaceIndex,
+    ref?.spinInterfaceOwnerId,
+  ]);
   const baseDraft = interfaceDraft(selected?.interface);
   const draftKey = `${ownerId}:${selected?.interface_id ?? "new"}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState({ key: draftKey, value: baseDraft });
@@ -175,6 +193,24 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const validation = validationState.key === validationKey ? validationState.response : null;
   const readOnly = selected ? !selected.known : false;
   const capability = useSessionStatusSelector((status) => status.data?.capabilities.transport_authoring?.m1_one_way_steady ?? null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const valid = Boolean(
+    !readOnly &&
+      ownerId &&
+      transports.status === "ready" &&
+      capability?.authoring_allowed &&
+      validation?.semantic.valid === true &&
+      validation?.execution.authoring_allowed === true,
+  );
+  const lockReason = readOnly
+    ? "Unknown interface payloads are read-only."
+    : !ownerId
+      ? "Select the owning spin transport before applying."
+      : transports.status !== "ready"
+        ? "Spin transport resources are not ready."
+        : !capability?.authoring_allowed
+          ? capability?.reason ?? "Authoring capability is unavailable."
+          : undefined;
 
   const validationRequest = (): TransportValidationRequest => {
     if (!ownerId || transports.data?.scene_revision === undefined) throw new Error("Select the owning spin transport.");
@@ -213,7 +249,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     if (!response.semantic.valid || !response.execution.authoring_allowed) throw new Error(response.semantic.issues[0]?.message ?? response.execution.reason ?? "Owner update is not authoring-ready.");
   }
 
-  async function run(action: "save" | "delete") {
+  async function run(action: "save" | "delete"): Promise<boolean> {
     setPending(true);
     setFeedback(null);
     try {
@@ -232,19 +268,57 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
         SPIN_INTERFACES_RESOURCE_KEY,
       ]);
       setFeedback({ kind: "success", message: action === "delete" ? "Interface deleted through its owning spin transport." : "Interface committed through its owning spin transport." });
-    } catch (error) { setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) }); }
+      return true;
+    } catch (error) { setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) }); return false; }
     finally { setPending(false); }
   }
 
+  function resetDraft(): void {
+    setDraftState({ key: draftKey, value: baseDraft });
+    setFeedback(null);
+  }
+
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    valid,
+    lockReason,
+    () => run("save"),
+    resetDraft,
+  );
+
   const patch = (value: Partial<InterfaceDraft>) => setDraftState({ key: draftKey, value: { ...draft, ...value } });
-  return <div className="fm-inspector-panel"><InspectorGroup title="Spin interface">
+  const selectedRecord = record(selected?.interface);
+  const selectedSideA = region(selectedRecord?.side_a);
+  const selectedSideB = region(selectedRecord?.side_b);
+  const overviewModel = buildPhysicsInspectorOverviewModel({
+    family: "spin_interface",
+    scope: {
+      kind: selectedSideA.object && selectedSideB.object
+        ? "cross_object"
+        : "interface",
+      sideA: selectedSideA.object,
+      sideB: selectedSideB.object,
+      stableRef: selected?.interface_id
+        ? `interface:${selected.interface_id}`
+        : "interface:new",
+    },
+    source: {
+      id: selected?.interface_id ?? "new",
+      kind: "spin_interface",
+      status: readOnly ? "unsupported" : "active",
+    },
+    status: readOnly ? "unsupported" : "active",
+  });
+  return <PhysicsInspectorOverview model={overviewModel} primary={<div className="fm-inspector-panel"><InspectorGroup title="Spin interface">
     {!ref ? <><FormField label="Owning spin transport" type="select" value={ownerId} onChange={(event) => { setLocalOwnerId(event.target.value); setLocalInterfaceId(""); }}><option value="">Select owner</option>{(transports.data?.items ?? []).map((item, index) => { const id = record(item)?.id; return typeof id === "string" ? <option key={`${id}:${index}`} value={id}>{id}</option> : null; })}</FormField><FormField label="Interface" type="select" value={localInterfaceId} onChange={(event) => setLocalInterfaceId(event.target.value)}><option value="">New interface</option>{(projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId).map((item, index) => <option key={`${item.interface_id}:${index}`} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField></> : null}
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields draft={draft} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Owner: {ownerId || "not selected"}</div><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
     {!readOnly ? <Button disabled={pending || !ownerId || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
     {selected && !readOnly ? <Button variant="danger" disabled={pending || !capability?.authoring_allowed || validation?.execution.authoring_allowed !== true} onClick={() => void run("delete")}>Delete</Button> : null}
-  </InspectorGroup></div>;
+  </InspectorGroup></div>} />;
 }
 
 function InterfaceFields({ draft, patch }: { draft: InterfaceDraft; patch: (value: Partial<InterfaceDraft>) => void }) {

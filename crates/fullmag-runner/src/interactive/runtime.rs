@@ -245,8 +245,9 @@ impl InteractiveRuntime {
             return Ok(result);
         }
 
-        let mut artifact_pipeline = ArtifactPipeline::start_for_problem(
+        let mut artifact_pipeline = ArtifactPipeline::start_for_problem_and_plan(
             problem,
+            plan,
             output_dir.to_path_buf(),
             artifacts::build_field_context(problem, plan),
             crate::artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -265,7 +266,7 @@ impl InteractiveRuntime {
         );
         let pipeline_summary = artifact_pipeline.finish();
 
-        let executed = match executed_result {
+        let mut executed = match executed_result {
             Ok(executed) => executed,
             Err(error) => {
                 if let Err(writer_error) = pipeline_summary {
@@ -280,6 +281,7 @@ impl InteractiveRuntime {
             }
         };
         let pipeline_summary = pipeline_summary?;
+        crate::physics_graph_execution::attach_executed_module_ids(problem, &mut executed)?;
 
         if let Err(error) = artifacts::write_artifacts(
             output_dir,

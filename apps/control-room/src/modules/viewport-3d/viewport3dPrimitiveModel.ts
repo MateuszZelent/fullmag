@@ -6,6 +6,7 @@ import {
   isVisualizationAirboxIdentity,
   type Selection,
 } from "@/kernel/selection/selectionTypes";
+import { resolveSceneRevision } from "@/kernel/visualization/visualizationDisplayResolution";
 
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
@@ -457,7 +458,7 @@ export function buildViewport3DPrimitiveRenderModel(
   manifest: MeshSharedDomainManifestResource | null | undefined,
 ): Viewport3DPrimitiveRenderModel {
   const sceneRecord = asRecord(scene);
-  const sceneRevision = asNumber(sceneRecord?.revision);
+  const sceneRevision = resolveSceneRevision(sceneRecord);
   if (!sceneRecord || sceneRevision === null || !Array.isArray(sceneRecord.objects)) {
     return { objects: [], sceneRevision };
   }

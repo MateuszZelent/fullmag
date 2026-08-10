@@ -309,6 +309,35 @@ fn validate_field_spatial_profile(
                 );
             }
         }
+        FieldSpatialProfileIR::GaussianPlaneWave {
+            center_x_m,
+            center_y_m,
+            carrier_origin_x_m,
+            sigma_x_m,
+            sigma_y_m,
+            wavelength_m,
+            carrier_phase_rad,
+        } => {
+            for (name, value) in [
+                ("center_x_m", *center_x_m),
+                ("center_y_m", *center_y_m),
+                ("carrier_origin_x_m", *carrier_origin_x_m),
+                ("carrier_phase_rad", *carrier_phase_rad),
+            ] {
+                if !value.is_finite() {
+                    errors.push(format!("{label} {name} must be finite"));
+                }
+            }
+            for (name, value) in [
+                ("sigma_x_m", *sigma_x_m),
+                ("sigma_y_m", *sigma_y_m),
+                ("wavelength_m", *wavelength_m),
+            ] {
+                if !value.is_finite() || value <= 0.0 {
+                    errors.push(format!("{label} {name} must be finite and > 0"));
+                }
+            }
+        }
     }
 }
 
@@ -715,6 +744,7 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
     for (index, term) in problem.energy_terms.iter().enumerate() {
         match term {
             EnergyTermIR::OerstedCylinder {
+                id,
                 current,
                 radius,
                 center,
@@ -722,6 +752,11 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
                 ..
             } => {
                 oersted_term_count += 1;
+                if id.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_cylinder id must not be empty when present"
+                    ));
+                }
                 if !current.is_finite() {
                     errors.push(format!(
                         "energy_terms[{index}] oersted_cylinder current must be finite"
@@ -750,8 +785,13 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
                     }
                 }
             }
-            EnergyTermIR::OerstedField { source, .. } => {
+            EnergyTermIR::OerstedField { id, source, .. } => {
                 oersted_term_count += 1;
+                if id.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_field id must not be empty when present"
+                    ));
+                }
                 if source.trim().is_empty() {
                     errors.push(format!(
                         "energy_terms[{index}] oersted_field source must not be empty"
@@ -951,9 +991,18 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                 current_density,
                 solve_region,
                 conductivity_s_per_m,
+                time_envelope,
                 definition,
                 ..
             } => {
+                if let Some(envelope) = time_envelope {
+                    validate_time_envelope(
+                        format!("current_modules[{index}] current_transport time_envelope")
+                            .as_str(),
+                        envelope,
+                        errors,
+                    );
+                }
                 if let Some(region) = solve_region {
                     if region.trim().is_empty() {
                         errors.push(format!(
@@ -1143,8 +1192,19 @@ fn validate_charge_transport_definition(
     }
     let solver = &definition.solver;
     let supported_solver = if reciprocal {
+        let supported_operator = match requested_backend {
+            crate::BackendTarget::Fem => {
+                solver.operator_version == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+            }
+            crate::BackendTarget::Auto => matches!(
+                solver.operator_version.as_str(),
+                "fdm_coupled_charge_spin_fv_block_gmres.v1"
+                    | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+            ),
+            _ => solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1",
+        };
         solver.engine == "block_gmres"
-            && solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            && supported_operator
             && solver.physical_residual_version == "transport_balance_integrated_l2.v1"
     } else {
         let supported_operator = match requested_backend {
@@ -2068,17 +2128,32 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             }
         }
         let supported_operator = if reciprocal {
-            module.solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            match module.requested_execution.discretization {
+                crate::BackendTarget::Fem => {
+                    module.solver.operator_version
+                        == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                }
+                crate::BackendTarget::Auto => matches!(
+                    module.solver.operator_version.as_str(),
+                    "fdm_coupled_charge_spin_fv_block_gmres.v1"
+                        | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                ),
+                _ => module.solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1",
+            }
         } else {
             match module.requested_execution.discretization {
                 crate::BackendTarget::Fdm => module.solver.operator_version == "fv_spin_upwind_v1",
                 crate::BackendTarget::Fem => {
                     module.solver.operator_version
                         == "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                        || module.solver.operator_version
+                            == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
                 }
                 crate::BackendTarget::Auto => matches!(
                     module.solver.operator_version.as_str(),
-                    "fv_spin_upwind_v1" | "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                    "fv_spin_upwind_v1"
+                        | "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                        | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
                 ),
                 crate::BackendTarget::Hybrid => false,
             }
@@ -2091,7 +2166,14 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             ));
         }
         if reciprocal {
+            let bounded_fem_m2 = module.solver.operator_version
+                == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                && matches!(
+                    module.requested_execution.discretization,
+                    crate::BackendTarget::Fem | crate::BackendTarget::Auto
+                );
             match &module.solver.reciprocal_nonlinear {
+                None if bounded_fem_m2 => {}
                 Some(policy)
                     if policy.gmres_restart > 0
                         && policy.max_picard_iterations > 0

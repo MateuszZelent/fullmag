@@ -16,6 +16,21 @@ describe("RegionMeshOverlayLayer", () => {
     expect(source).not.toContain("buildRegionMeshOverlayModels(");
   });
 
+  it("keeps realized region overlay identities owner-qualified", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("key={regionMeshOverlayIdentity(model)}");
+    expect(source).not.toContain("key={model.regionId}");
+    expect(source).toContain(
+      "region-mesh-overlay:${encodeURIComponent(model.objectId)}:${encodeURIComponent(model.regionId)}",
+    );
+    expect(source).toContain("objectId: model.objectId");
+    expect(source).toContain('`object=${encodeURIComponent(objectId)}`');
+  });
+
   it("renders realized region diagnostics as feature-edge outlines only", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./RegionMeshOverlayLayer.tsx", import.meta.url)),

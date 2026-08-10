@@ -1,6 +1,5 @@
 import type {
   CouplingListResource,
-  CurrentTransportListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
   MeshSharedDomainManifestResource,
@@ -8,21 +7,18 @@ import type {
   RegionListResource,
   SceneResource,
   StageExecutionResource,
-  SpinTransportListResource,
-  SpinInterfaceListResource,
-  SpinTorqueListResource,
-  OerstedFieldListResource,
+  DomainMetaResource,
+  FdmMultilayerLayoutResource,
 } from "@/kernel/api/apiTypes";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
-  isKnownCurrentTransport,
-  isKnownSpinTransport,
-  transportIdentity,
-} from "@/shared/domain/physics/transportRecognition";
-import { isUnsupportedSpinAuthoringResource } from "@/shared/domain/physics/spinAuthoringRecognition";
+  canonicalVisualizationSceneObjectId,
+  isVisualizationAirboxIdentity,
+} from "@/kernel/selection/selectionTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
+import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
 import type {
   ExplorerNodeStatus,
@@ -53,17 +49,20 @@ type SceneMaterialParameterAssignment = NonNullable<
   SceneObjectResource["material_parameter_fields"]
 >[number];
 
-interface ModelTreeResourceInputs {
+export interface ModelTreeResourceInputs {
+  domainMeta?: DomainMetaResource | null;
+  fdmMultilayerLayout?: FdmMultilayerLayoutResource | null;
+  fdmMultilayerLayoutStatus?: ResourceStatus;
+  domainDiscretization?: "fdm" | "fem" | null;
+  domainPresentationStatus?: "idle" | "loading" | "ready" | "stale" | "error";
+  domainPresentation?: DomainPresentation | null;
   couplings?: CouplingListResource | null;
-  currentTransports?: CurrentTransportListResource | null;
   meshManifest?: MeshSharedDomainManifestResource | null;
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
   regionMemberships?: readonly MeshRegionMembershipResource[] | null;
-  spinTransports?: SpinTransportListResource | null;
-  spinInterfaces?: SpinInterfaceListResource | null;
-  spinTorques?: SpinTorqueListResource | null;
-  oerstedFields?: OerstedFieldListResource | null;
+  physicsGraph?: unknown | null;
+  physicsGraphStatus?: ResourceStatus;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -91,6 +90,18 @@ export function modelTreeSnapshotFromScene(
     resources.regionMemberships,
   );
   return {
+    domainMeta: resources.domainMeta ?? null,
+    domainPresentationStatus: resources.domainPresentationStatus ?? "idle",
+    domainDiscretization: resources.domainDiscretization ?? (resources.domainMeta?.discretization?.toLowerCase() === "fdm"
+      ? "fdm"
+      : resources.domainMeta?.discretization?.toLowerCase() === "fem"
+        ? "fem"
+        : null),
+    domainPresentation: resources.domainPresentation ?? null,
+    fdmMultilayerLayout: resources.fdmMultilayerLayout ?? null,
+    ...(resources.fdmMultilayerLayoutStatus !== undefined
+      ? { fdmMultilayerLayoutStatus: resources.fdmMultilayerLayoutStatus }
+      : {}),
     couplings: couplingSnapshots(resources.couplings, scene),
     fieldDrives: fieldDriveSnapshots(scene?.field_drives),
     materials,
@@ -103,6 +114,7 @@ export function modelTreeSnapshotFromScene(
             magnetizationById,
             authoredRegionsByObject,
             materialFieldsByObject,
+            resources.domainPresentation,
             resources.meshManifest,
           );
           if (snapshot) {
@@ -112,45 +124,12 @@ export function modelTreeSnapshotFromScene(
         }, [])
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
-    currentTransports: (resources.currentTransports?.items ?? []).map((item, index) => {
-      const id = transportIdentity("current_transport", item);
-      return {
-        id,
-        index,
-        label: id ?? `Unknown current transport ${index + 1}`,
-        model: "model" in item && typeof item.model === "string" ? item.model : null,
-        supported: isKnownCurrentTransport(item),
-      };
-    }),
-    spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => {
-      const id = transportIdentity("spin_transport", item);
-      return {
-      currentSourceId: "current_source_id" in item && typeof item.current_source_id === "string" ? item.current_source_id : null,
-      id,
-      index,
-      label: id ?? `Unknown spin transport ${index + 1}`,
-      mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
-      supported: isKnownSpinTransport(item),
-      };
-    }),
-    spinInterfaces: (resources.spinInterfaces?.items ?? []).map((item, index) => ({
-      id: item.interface_id ?? null,
-      index,
-      known: item.known,
-      ownerId: item.owner_spin_transport_id,
-    })),
-    spinTorques: (resources.spinTorques?.items ?? []).map((item, index) => ({
-      id: "id" in item && typeof item.id === "string" && item.id.trim() ? item.id : null,
-      index,
-      kind: "kind" in item && typeof item.kind === "string" ? item.kind : null,
-      supported: !isUnsupportedSpinAuthoringResource("spin_torque", item),
-    })),
-    oerstedFields: (resources.oerstedFields?.items ?? []).map((item, index) => ({
-      id: "id" in item && typeof item.id === "string" && item.id.trim() ? item.id : null,
-      index,
-      kind: "kind" in item && typeof item.kind === "string" ? item.kind : null,
-      supported: !isUnsupportedSpinAuthoringResource("oersted_field", item),
-    })),
+    ...(resources.physicsGraph !== undefined
+      ? { physicsGraph: resources.physicsGraph }
+      : {}),
+    ...(resources.physicsGraphStatus !== undefined
+      ? { physicsGraphStatus: resources.physicsGraphStatus }
+      : {}),
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
@@ -402,6 +381,7 @@ function sceneObjectSnapshot(
   magnetizationById: ReadonlyMap<string, SceneMagnetizationAssetSnapshot>,
   authoredRegionsByObject: ReadonlyMap<string, ModelTreeObjectRegionSnapshot[]>,
   materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
+  domainPresentation: DomainPresentation | null | undefined,
   meshManifest: MeshSharedDomainManifestResource | null | undefined,
 ): ModelTreeObjectSnapshot | null {
   if (!value || typeof value !== "object") return null;
@@ -433,7 +413,12 @@ function sceneObjectSnapshot(
     material: materialRef,
     materialLabel: material?.label ?? materialRef,
     materialPropertyKeys: material?.propertyKeys,
-    meshStatus: meshStatusFromTags(object.tags, id, meshManifest),
+    meshStatus: meshStatusFromTags(
+      object.tags,
+      id,
+      meshManifest,
+      domainPresentation,
+    ),
     objectRole: sceneObjectRole(object),
     physicsInteractions: sceneObjectPhysicsInteractions(
       object.physics_stack,
@@ -472,9 +457,7 @@ function authoredRegionsByOwner(
   memberships: readonly MeshRegionMembershipResource[] | null | undefined,
 ): Map<string, ModelTreeObjectRegionSnapshot[]> {
   const byObject = new Map<string, ModelTreeObjectRegionSnapshot[]>();
-  const membershipByRegionId = new Map(
-    (memberships ?? []).map((membership) => [membership.region_id, membership]),
-  );
+  const resolveMembership = buildOwnerQualifiedMembershipResolver(memberships);
   if (resource?.regions?.length) {
     for (const region of resource.regions) {
       if (region.source !== "authored_object_region") continue;
@@ -497,7 +480,7 @@ function authoredRegionsByOwner(
           meshLifecycleStatus: resolveRegionMeshLifecycle({
             build: null,
             draftDirty: false,
-            membership: membershipByRegionId.get(region.region_id),
+            membership: resolveMembership(owner, region.region_id),
             policyEnabled: Boolean(region.mesh_policy),
             supported: true,
           }).status,
@@ -533,7 +516,7 @@ function authoredRegionsByOwner(
         meshLifecycleStatus: resolveRegionMeshLifecycle({
           build: null,
           draftDirty: false,
-          membership: membershipByRegionId.get(id),
+          membership: resolveMembership(objectId, id),
           policyEnabled: Boolean(region?.mesh_policy),
           supported: true,
         }).status,
@@ -547,6 +530,25 @@ function authoredRegionsByOwner(
     }
   }
   return sortRegionMap(byObject);
+}
+
+function buildOwnerQualifiedMembershipResolver(
+  memberships: readonly MeshRegionMembershipResource[] | null | undefined,
+): (ownerId: string, regionId: string) => MeshRegionMembershipResource | undefined {
+  const candidatesByIdentity = new Map<string, MeshRegionMembershipResource[]>();
+  for (const membership of memberships ?? []) {
+    const ownerId = stringValue(membership.owner_object_id);
+    if (!ownerId) continue;
+    const identity = `${ownerId}\u0000${membership.region_id}`;
+    const candidates = candidatesByIdentity.get(identity) ?? [];
+    candidates.push(membership);
+    candidatesByIdentity.set(identity, candidates);
+  }
+
+  return (ownerId, regionId) => {
+    const candidates = candidatesByIdentity.get(`${ownerId}\u0000${regionId}`) ?? [];
+    return candidates.length === 1 ? candidates[0] : undefined;
+  };
 }
 
 function pushRegionSnapshot(
@@ -951,6 +953,7 @@ function meshStatusFromTags(
   value: unknown,
   objectId: string,
   meshManifest: MeshSharedDomainManifestResource | null | undefined,
+  domainPresentation: DomainPresentation | null | undefined,
 ): ExplorerNodeStatus {
   const tags: string[] = [];
   if (Array.isArray(value)) {
@@ -965,6 +968,9 @@ function meshStatusFromTags(
   if (tags.includes("mesh:validation-blocked")) return "validation-blocked";
   if (tags.includes("mesh:dirty")) return "mesh-stale";
   if (tags.includes("mesh:ready")) return "mesh-ready";
+  if (fdmMembershipOwnsObject(domainPresentation, objectId)) {
+    return "mesh-ready";
+  }
   const objectAliases = new Set(
     manifestCarrierOwnershipAliases({ object_id: objectId }),
   );
@@ -981,6 +987,36 @@ function meshStatusFromTags(
     }
   }
   return "primitive-only";
+}
+
+function fdmMembershipOwnsObject(
+  presentation: DomainPresentation | null | undefined,
+  objectId: string,
+): boolean {
+  if (
+    presentation?.discretization !== "fdm" ||
+    presentation.resourceStatus !== "realized"
+  ) {
+    return false;
+  }
+  const membership = presentation.fdmGrid.membership;
+  if (
+    !membership ||
+    typeof membership.freshness !== "string" ||
+    membership.freshness.trim().toLowerCase() !== "current" ||
+    !Array.isArray(membership.region_legend)
+  ) {
+    return false;
+  }
+  const canonicalObjectId = canonicalVisualizationSceneObjectId(objectId);
+  const owners = [
+    ...(membership?.object_ids ?? []),
+    ...membership.region_legend.map((entry) => entry.object_id),
+  ];
+  return owners.some((owner) =>
+    canonicalVisualizationSceneObjectId(owner.replace(/^object:/, "")) ===
+      canonicalObjectId,
+  );
 }
 
 function interactionLabel(kind: string): string {

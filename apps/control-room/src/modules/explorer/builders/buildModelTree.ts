@@ -7,6 +7,12 @@ import type {
   ModelTreeCouplingSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
+import type {
+  DomainMetaResource,
+  FdmMultilayerLayoutResource,
+} from "@/kernel/api/apiTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
 import {
@@ -18,11 +24,18 @@ import {
   type ExplorerTreeResources,
 } from "./frequencyDomainExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
+import {
+  buildPhysicsGraphObjectNode,
+  buildPhysicsGraphTree,
+} from "./physicsGraphTree";
 
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { PlanarMonitorCollectionResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  canonicalVisualizationSceneObjectId,
+  isVisualizationAirboxIdentity,
+} from "@/kernel/selection/selectionTypes";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   buildEigenSpectrumChartModel,
@@ -34,6 +47,11 @@ import {
   resolveMeshBuildFreshness,
   type MeshFreshnessState,
 } from "@/shared/domain/mesh/meshBuildFreshness";
+import {
+  isFdmDomain,
+  isFemDomain,
+} from "@/shared/domain/mesh/domainPresentation";
+import { resolveFdmMultilayerAirboxTarget } from "@/shared/domain/mesh/fdmMultilayerAirboxTarget";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -107,6 +125,7 @@ export function buildPlanarMonitorNodes(
     kind: "model.planar.monitors",
     label: "Planar Monitors",
     parentId: "model:definitions",
+    selectable: false,
     status: "ready",
   };
 }
@@ -134,6 +153,7 @@ interface ModeVisualizationFieldNode {
 function objectNodes(
   object: ModelTreeObjectSnapshot,
   resources: ModelTreeResources = {},
+  physicsGraph?: unknown | null,
 ): ExplorerNode {
   const objectId = object.id;
   const parentId = `model:object:${objectId}`;
@@ -197,6 +217,7 @@ function objectNodes(
             }),
           ]),
         },
+        ...physicsGraphObjectChildren(object, physicsGraph),
       ],
     };
   }
@@ -279,8 +300,20 @@ function objectNodes(
         ]),
       },
       ...objectExtensionNodes(parentId, object),
+      ...physicsGraphObjectChildren(object, physicsGraph),
     ],
   };
+}
+
+function physicsGraphObjectChildren(
+  object: ModelTreeObjectSnapshot,
+  physicsGraph: unknown | null | undefined,
+): ExplorerNode[] {
+  const node = buildPhysicsGraphObjectNode(physicsGraph, {
+    id: object.id,
+    label: object.label,
+  });
+  return node ? [node] : [];
 }
 
 function compactExplorerNodes(
@@ -944,7 +977,7 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
       {
         id: "model:mesh:shared-domain",
         kind: "mesh.shared-domain",
-        label: "Shared-Domain Solver Mesh",
+        label: "Domain Mesh",
         parentId: "model:mesh",
         badge: meshFreshnessBadge(freshness),
         icon: "mesh",
@@ -1019,6 +1052,508 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   };
 }
 
+function fdmMeshPolicyNodes(
+  presentation: FdmDomainPresentation | null,
+  domainMeta: DomainMetaResource | null | undefined,
+  presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",
+  multilayerLayout: FdmMultilayerLayoutResource | null | undefined = null,
+  multilayerLayoutStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"] = "idle",
+): ExplorerNode {
+  const fallbackShape = (domainMeta?.grid?.shape ?? [0, 0, 0]) as [number, number, number];
+  const fallbackOrigin = (domainMeta?.grid?.origin ?? [0, 0, 0]) as [number, number, number];
+  const fallbackSpacing = (domainMeta?.grid?.spacing ?? [0, 0, 0]) as [number, number, number];
+  const grid = presentation?.fdmGrid ?? {
+    descriptor: domainMeta?.grid ?? { origin: fallbackOrigin, shape: fallbackShape, spacing: fallbackSpacing },
+    gridFingerprint: null,
+    membership: null,
+    membershipStatus:
+      presentationStatus === "error" ? "error" : presentationStatus === "loading" ? "loading" : presentationStatus === "stale" ? "stale" : "missing",
+    origin: fallbackOrigin,
+    shape: fallbackShape,
+    spacing: fallbackSpacing,
+    totalCells: fallbackShape.reduce((product, value) => product * value, 1),
+  };
+  const membership = grid.membership;
+  const resolvedStatus = presentation?.resourceStatus ?? grid.membershipStatus;
+  const status: ExplorerNodeStatus =
+    !presentation && presentationStatus === "error"
+      ? "degraded"
+      : resolvedStatus === "realized"
+      ? "mesh-ready"
+      : resolvedStatus === "error"
+        ? "mesh-failed"
+        : resolvedStatus === "loading"
+          ? "mesh-building"
+          : resolvedStatus === "stale" || resolvedStatus === "incompatible"
+            ? "mesh-stale"
+            : resolvedStatus === "authoring-grid" || resolvedStatus === "missing"
+              ? "mesh-stale"
+            : presentationStatus === "error"
+              ? "degraded"
+              : presentationStatus === "loading"
+                ? "mesh-building"
+                : "ready";
+  const cellCount = grid.totalCells;
+  const domainMeshId = "model:mesh:shared-domain";
+  const regionsMeshId = "model:mesh:regions";
+  const regionLegend = membership?.region_legend ?? [];
+  const regionOwnersById = new Map<string, Set<string>>();
+  for (const entry of regionLegend) {
+    const owners = regionOwnersById.get(entry.region_id) ?? new Set<string>();
+    owners.add(canonicalVisualizationSceneObjectId(entry.object_id));
+    regionOwnersById.set(entry.region_id, owners);
+  }
+  const regionNodes = regionLegend.map((entry) => {
+    const objectId = canonicalVisualizationSceneObjectId(entry.object_id);
+    const owners = regionOwnersById.get(entry.region_id);
+    return {
+      // Preserve the legacy region-only id while the region is unambiguous.
+      // Once multiple ferromagnetic owners publish the same region id, include
+      // the owner so Explorer keys and selection identities cannot collide.
+      id:
+        owners?.size === 1
+          ? `model:mesh:region:${encodeURIComponent(entry.region_id)}`
+          : `model:mesh:region:${encodeURIComponent(objectId)}:${encodeURIComponent(entry.region_id)}`,
+      kind: "mesh.grid.region" as const,
+      label: entry.region_id,
+      parentId: regionsMeshId,
+      objectId,
+      regionId: entry.region_id,
+      badge: `${entry.numeric_id}`,
+      icon: "layers" as const,
+      status: "ready" as const,
+    };
+  });
+  const structuredGridDetails: ExplorerNode[] = [
+    {
+      id: "model:mesh:grid",
+      kind: "mesh.grid.descriptor",
+      label: "Structured Grid",
+      parentId: domainMeshId,
+      badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
+      icon: "mesh",
+      status,
+    },
+    {
+      id: "model:mesh:magnetic-support",
+      kind: "mesh.grid.magnetic-support",
+      label: "Magnetic Support",
+      parentId: domainMeshId,
+      badge: `${grid.shape.join(" × ")} cells`,
+      icon: "layers",
+      status,
+    },
+    {
+      id: "model:mesh:active-unassigned",
+      kind: "mesh.grid.active-unassigned",
+      label: "Active / Unassigned Cells",
+      parentId: domainMeshId,
+      badge: "FDM membership",
+      icon: "layers",
+      status: membership ? "ready" : "stale",
+    },
+    {
+      id: "model:mesh:mask",
+      kind: "mesh.grid.mask",
+      label: "Cell Mask",
+      parentId: domainMeshId,
+      badge: membership ? membership.encoding : "pending",
+      icon: "shield",
+      status,
+    },
+    {
+      id: "model:mesh:provenance",
+      kind: "mesh.grid.provenance",
+      label: "Grid Provenance",
+      parentId: domainMeshId,
+      badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "pending",
+      icon: "activity",
+      status: "ready",
+    },
+  ];
+  const multilayerDetails = fdmMultilayerLayoutNodes(
+    domainMeshId,
+    multilayerLayout,
+    multilayerLayoutStatus,
+  );
+  return {
+    id: "model:mesh",
+    // Mesh is the shared product-level summary for both FEM and FDM.  The
+    // structured representation is a detail of its domain-mesh child, not a
+    // second product-level "FDM Grid" node.
+    kind: "mesh.root",
+    label: "Mesh",
+    parentId: "model:session",
+    badge: `FDM · ${grid.shape.join(" × ")} / ${cellCount} cells`,
+    icon: "mesh",
+    status,
+    contextCommands: ["workspace.focus-selection"],
+    children: [
+      {
+        id: domainMeshId,
+        kind: "mesh.shared-domain",
+        label: "Domain Mesh",
+        parentId: "model:mesh",
+        badge: `structured grid · ${grid.shape.join(" × ")} / ${cellCount} cells`,
+        icon: "mesh",
+        status,
+        children: [...structuredGridDetails, ...multilayerDetails],
+      },
+      {
+        id: "model:mesh:builds",
+        kind: "mesh.builds",
+        label: "Build Pipeline",
+        parentId: "model:mesh",
+        badge: grid.gridFingerprint ?? presentation?.generationId ?? domainMeta?.generation_id ?? "execution artifact",
+        icon: "activity",
+        selectable: false,
+        status,
+      },
+      {
+        id: "model:mesh:quality",
+        kind: "mesh.quality",
+        label: "Quality Gates",
+        parentId: "model:mesh",
+        badge: "structured-grid checks",
+        icon: "gauge",
+        selectable: false,
+        status: "ready",
+      },
+      {
+        id: "model:mesh:size-fields",
+        kind: "mesh.size-fields",
+        label: "Realized Size Fields",
+        parentId: "model:mesh",
+        badge: "uniform spacing",
+        icon: "settings",
+        selectable: false,
+        status: "ready",
+      },
+      {
+        id: regionsMeshId,
+        kind: "mesh.regions",
+        label: "Regions And Mesh Parts",
+        parentId: "model:mesh",
+        badge: `${regionNodes.length} regions / structured cells`,
+        icon: "layers",
+        selectable: false,
+        status: regionNodes.length > 0 ? "ready" : "stale",
+        children: regionNodes,
+      },
+    ],
+  };
+}
+
+function fdmMultilayerLayoutNodes(
+  parentId: string,
+  layout: FdmMultilayerLayoutResource | null | undefined,
+  resourceStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"],
+): ExplorerNode[] {
+  if (!layout?.available) return [];
+  const tuple3 = (values: readonly number[]): [number, number, number] => [
+    values[0] ?? 0,
+    values[1] ?? 0,
+    values[2] ?? 0,
+  ];
+  const status: ExplorerNodeStatus =
+    resourceStatus === "error"
+      ? "degraded"
+      : resourceStatus === "loading" || resourceStatus === "stale"
+        ? "mesh-building"
+        : "ready";
+  const common = layout.common_transform_layout;
+  const commonNode: ExplorerNode = {
+    id: `${parentId}:common-convolution-grid`,
+    kind: "mesh.grid.common",
+    label: "Common Convolution Grid",
+    parentId,
+    badge: common ? `${common.shape.join(" × ")} · diagnostic` : "not published",
+    icon: "mesh",
+    status: common ? status : "degraded",
+    selectable: true,
+    visualizationTargetId: "fdm-domain",
+    nativeGrid: common ? tuple3(common.shape) : undefined,
+    nativeCellSize: common ? tuple3(common.cell_size) : undefined,
+    nativeOrigin: common ? tuple3(common.origin) : undefined,
+  };
+  const layerNodes: ExplorerNode[] = layout.layers.map((layer): ExplorerNode => {
+    const layerParentId = `${parentId}:native-layers:${encodeURIComponent(layer.layer_id)}`;
+    return {
+      id: layerParentId,
+      kind: "mesh.grid.layer" as const,
+      label: layer.magnet_name,
+      parentId: `${parentId}:native-layers`,
+      layerId: layer.layer_id,
+      objectId: layer.object_id,
+      badge: `${layer.native_grid.join(" × ")} · ${layer.transfer_kind}`,
+      icon: "layers" as const,
+      status,
+      visualizationTargetId: "fdm-domain",
+      nativeGrid: tuple3(layer.native_grid),
+      nativeCellSize: tuple3(layer.native_cell_size),
+      nativeOrigin: tuple3(layer.native_origin),
+      gridFingerprint: layer.native_grid_fingerprint,
+      transferKind: layer.transfer_kind,
+      activeMaskPresent: layer.active_mask_present,
+      activeCellCount: layer.active_cell_count,
+      inactiveCellCount: layer.inactive_cell_count,
+      children: [
+        {
+          id: `${layerParentId}:native-grid`,
+          kind: "mesh.grid.layer.native-grid" as const,
+          label: "Native Grid",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: `${layer.native_grid.join(" × ")} · ${layer.native_grid_fingerprint ?? "no fingerprint"}`,
+          icon: "mesh" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          nativeGrid: tuple3(layer.native_grid),
+          nativeCellSize: tuple3(layer.native_cell_size),
+          nativeOrigin: tuple3(layer.native_origin),
+          gridFingerprint: layer.native_grid_fingerprint,
+        },
+        {
+          id: `${layerParentId}:active-mask`,
+          kind: "mesh.grid.layer.mask" as const,
+          label: "Active Mask",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: layer.active_mask_present ? `${layer.active_cell_count} active` : "dense / implicit",
+          icon: "shield" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          activeMaskPresent: layer.active_mask_present,
+          activeCellCount: layer.active_cell_count,
+          inactiveCellCount: layer.inactive_cell_count,
+        },
+        {
+          id: `${layerParentId}:transfer`,
+          kind: "mesh.grid.layer.transfer" as const,
+          label: "Transfer",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: layer.transfer_kind,
+          icon: "activity" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          transferKind: layer.transfer_kind,
+        },
+        {
+          id: `${layerParentId}:provenance`,
+          kind: "mesh.grid.layer.provenance" as const,
+          label: "Provenance",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: layout.layout_fingerprint ?? "unfingerprinted",
+          icon: "activity" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          gridFingerprint: layer.native_grid_fingerprint,
+        },
+      ],
+    };
+  });
+  return [
+    commonNode,
+    {
+      id: `${parentId}:native-layers`,
+      kind: "mesh.grid.layers",
+      label: "Native Layers",
+      parentId,
+      badge: `${layout.layers.length}`,
+      icon: "layers",
+      status,
+      selectable: false,
+      children: layerNodes,
+    },
+  ];
+}
+
+/**
+ * FDM exposes the same product-level Airbox entry as FEM when the declared
+ * universe contains cells outside the realized magnetic support.  The mesh
+ * child remains a structured-grid selection; the shared child labels are
+ * retained for navigation, while the FDM lane renders them as read-only
+ * execution facts instead of FEM element-size/topology controls.
+ */
+function fdmAirboxNode(
+  presentation: FdmDomainPresentation,
+  presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",
+  multilayerLayout: FdmMultilayerLayoutResource | null | undefined = null,
+  multilayerLayoutStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"] = "idle",
+): ExplorerNode | null {
+  if (!presentation.universeOutsideMagneticSupport) return null;
+  const grid = presentation.fdmGrid;
+  const meshStatus: ExplorerNodeStatus =
+    presentation.resourceStatus === "error"
+      ? "mesh-failed"
+      : presentation.resourceStatus === "loading"
+        ? "mesh-building"
+      : presentation.resourceStatus === "stale" || presentation.resourceStatus === "incompatible"
+          ? "mesh-stale"
+        : presentation.resourceStatus === "authoring-grid" || presentation.resourceStatus === "missing"
+          ? "mesh-stale"
+          : presentationStatus === "error"
+            ? "degraded"
+            : "mesh-ready";
+  const cellCount = grid.totalCells;
+  const multilayerTarget = resolveFdmMultilayerAirboxTarget(multilayerLayout);
+  const multilayerTargetStatus: ExplorerNodeStatus =
+    multilayerLayoutStatus === "loading" || multilayerLayoutStatus === "stale"
+      ? "stale"
+      : multilayerLayoutStatus === "error"
+        ? "degraded"
+        : "ready";
+  return {
+    id: "model:airbox",
+    kind: "airbox.root",
+    label: "Airbox",
+    parentId: "model:universe",
+    badge: "FDM universe",
+    icon: "shield",
+    status: meshStatus,
+    visualizationTargetId: "fdm-universe-outside-support",
+    contextCommands: ["workspace.focus-selection"],
+    children: [
+      {
+        id: "model:airbox:mesh",
+        kind: "airbox.mesh",
+        label: "Mesh",
+        parentId: "model:airbox",
+        badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
+        icon: "mesh",
+        status: meshStatus,
+        visualizationTargetId: "fdm-universe-outside-support",
+        contextCommands: ["workspace.focus-selection"],
+        children: [
+          {
+            id: "model:airbox:mesh:parameters",
+            kind: "airbox.mesh.parameters",
+            label: "Parameters",
+            parentId: "model:airbox:mesh",
+            badge: "read-only",
+            icon: "settings",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:quality-gates",
+            kind: "airbox.mesh.quality-gates",
+            label: "Quality Gates",
+            parentId: "model:airbox:mesh",
+            badge: "read-only",
+            icon: "gauge",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:statistics",
+            kind: "airbox.mesh.statistics",
+            label: "Statistics",
+            parentId: "model:airbox:mesh",
+            badge: "structured grid",
+            icon: "activity",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:topology",
+            kind: "airbox.mesh.topology",
+            label: "Topology",
+            parentId: "model:airbox:mesh",
+            badge: "not applicable",
+            icon: "mesh",
+            status: "unsupported",
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+          {
+            id: "model:airbox:mesh:build",
+            kind: "airbox.mesh.build",
+            label: "Build & Provenance",
+            parentId: "model:airbox:mesh",
+            badge: "execution artifact",
+            icon: "activity",
+            status: meshStatus,
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+        ],
+      },
+      {
+        id: "model:airbox:visualization",
+        // Keep the product kind aligned with FEM.  The target marker routes
+        // this FDM selection to the structured-grid outside-support adapter.
+        kind: "airbox.visualization",
+        label: "Visualization",
+        parentId: "model:airbox",
+        badge: "display",
+        icon: "sparkles",
+        status: "ready",
+        visualizationTargetId: "fdm-universe-outside-support",
+        contextCommands: ["workspace.focus-selection"],
+        children: [
+          {
+            ...visualizationDebugNode({
+              kind: "airbox.visualization.debug",
+              parentId: "model:airbox:visualization",
+            }),
+            visualizationTargetId: "fdm-universe-outside-support",
+          },
+        ],
+      },
+      ...(multilayerTarget ? [{
+        id: "model:airbox:multilayer-target",
+        kind: "airbox.multilayer.target" as const,
+        label: "Multilayer H_demag target",
+        parentId: "model:airbox",
+        badge: `${multilayerTarget.cells.join(" × ")} · H_demag`,
+        icon: "activity" as const,
+        status: multilayerTargetStatus,
+        visualizationTargetId: "airbox",
+        nativeGrid: multilayerTarget.cells,
+        nativeCellSize: multilayerTarget.cellSize,
+        nativeOrigin: multilayerTarget.origin,
+        gridFingerprint: multilayerTarget.carrierFingerprint,
+        contextCommands: ["workspace.focus-selection"],
+      }] : []),
+    ],
+  };
+}
+
+type ExplorerDomainLane = "fdm" | "fem" | "unresolved";
+
+function resolveExplorerDomainLane(
+  snapshot: ModelTreeSnapshot | null,
+): ExplorerDomainLane {
+  if (isFdmDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fdm") {
+    return "fdm";
+  }
+  if (isFemDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fem") {
+    return "fem";
+  }
+  return "unresolved";
+}
+
+function unresolvedMeshPolicyNodes(
+  presentationStatus: ModelTreeSnapshot["domainPresentationStatus"],
+): ExplorerNode {
+  const loading = presentationStatus === "loading";
+  return {
+    id: "model:mesh",
+    kind: "mesh.root",
+    label: "Mesh",
+    parentId: "model:session",
+    badge: loading ? "lane loading" : "lane unresolved",
+    icon: "mesh",
+    status: loading ? "queued" : "unavailable",
+    children: [],
+  };
+}
+
 function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): ExplorerNode | null {
   if (couplings.length === 0) return null;
   return {
@@ -1048,111 +1583,6 @@ function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): Explore
   };
 }
 
-function spinTransportNodes(transports: NonNullable<ModelTreeSnapshot["spinTransports"]>): ExplorerNode {
-  return {
-    id: "model:physics:spin-transports",
-    kind: "physics.spin-transports",
-    label: "Spin Transport",
-    parentId: "model:session",
-    badge: `${transports.length}`,
-    icon: "activity",
-    status: "ready",
-    children: transports.map((transport) => ({
-      id: transport.id === null
-        ? `model:physics:spin-transports:position:${transport.index}`
-        : `model:physics:spin-transports:id:${encodeURIComponent(transport.id)}`,
-      kind: "physics.spin-transport" as const,
-      label: transport.label,
-      parentId: "model:physics:spin-transports",
-      badge: transport.supported ? `${transport.mode ?? "typed"} · ${transport.currentSourceId ?? "no source"}` : "read-only",
-      icon: "activity" as const,
-      ...(transport.id === null
-        ? { spinTransportIndex: transport.index }
-        : { spinTransportId: transport.id }),
-      status: transport.supported ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
-function currentTransportNodes(transports: NonNullable<ModelTreeSnapshot["currentTransports"]>): ExplorerNode {
-  return {
-    id: "model:physics:current-transports",
-    kind: "physics.current-transports",
-    label: "Current Transport",
-    parentId: "model:session",
-    badge: `${transports.length}`,
-    icon: "activity",
-    status: "ready",
-    children: transports.map((transport) => ({
-      id: transport.id === null
-        ? `model:physics:current-transports:position:${transport.index}`
-        : `model:physics:current-transports:id:${encodeURIComponent(transport.id)}`,
-      kind: "physics.current-transport" as const,
-      label: transport.label,
-      parentId: "model:physics:current-transports",
-      badge: transport.supported ? transport.model ?? "typed" : "read-only",
-      icon: "activity" as const,
-      ...(transport.id === null
-        ? { currentTransportIndex: transport.index }
-        : { currentTransportId: transport.id }),
-      status: transport.supported ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
-function spinInterfaceNodes(interfaces: NonNullable<ModelTreeSnapshot["spinInterfaces"]>): ExplorerNode {
-  return {
-    id: "model:physics:spin-interfaces",
-    kind: "physics.spin-interfaces",
-    label: "Spin Interfaces",
-    parentId: "model:session",
-    badge: `${interfaces.length}`,
-    icon: "activity",
-    status: "ready",
-    children: interfaces.map((item) => ({
-      id: `model:physics:spin-interfaces:${encodeURIComponent(item.ownerId)}:position:${item.index}`,
-      kind: "physics.spin-interface" as const,
-      label: item.id ?? `Unknown interface ${item.index + 1}`,
-      parentId: "model:physics:spin-interfaces",
-      badge: `${item.ownerId} · ${item.known ? "typed" : "read-only"}`,
-      icon: "activity" as const,
-      spinInterfaceId: item.id ?? undefined,
-      spinInterfaceIndex: item.index,
-      spinInterfaceOwnerId: item.ownerId,
-      status: item.known ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
-function authoredSourceNodes(
-  family: "spin-torques" | "oersted-fields",
-  items: NonNullable<ModelTreeSnapshot["spinTorques"]>,
-): ExplorerNode {
-  const torque = family === "spin-torques";
-  const root = `model:physics:${family}`;
-  return {
-    id: root,
-    kind: torque ? "physics.spin-torques" : "physics.oersted-fields",
-    label: torque ? "Spin Torques" : "Oersted Fields",
-    parentId: "model:session",
-    badge: `${items.length}`,
-    icon: "activity",
-    status: "ready",
-    children: items.map((item) => ({
-      id: `${root}:position:${item.index}`,
-      kind: torque ? "physics.spin-torque" as const : "physics.oersted-field" as const,
-      label: item.id ?? `Unknown ${torque ? "spin torque" : "Oersted field"} ${item.index + 1}`,
-      parentId: root,
-      badge: item.supported ? item.kind ?? "typed" : "read-only",
-      icon: "activity" as const,
-      ...(torque
-        ? { spinTorqueId: item.id ?? undefined, spinTorqueIndex: item.index }
-        : { oerstedFieldId: item.id ?? undefined, oerstedFieldIndex: item.index }),
-      status: item.supported ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
 function couplingStatus(coupling: ModelTreeCouplingSnapshot): ExplorerNodeStatus {
   if (!coupling.enabled) return "degraded";
   if (coupling.realizationStatus?.includes("requires")) return "unsupported";
@@ -1178,9 +1608,18 @@ export function buildModelTree(
     label: "Universe",
     size: [2e-6, 1e-6, 5e-8] as const,
   };
+  const legacyAirboxObjectPresent = (snapshot?.objects ?? []).some(
+    (object) => isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
+  );
   const objects = (snapshot?.objects ?? []).filter(
     (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
   );
+  const domainLane = resolveExplorerDomainLane(snapshot);
+  const fdmDomain = domainLane === "fdm";
+  const femDomain = domainLane === "fem";
+  const fdmPresentation = isFdmDomain(snapshot?.domainPresentation)
+    ? snapshot.domainPresentation
+    : null;
   const boundaryFacesStatus: ExplorerNodeStatus =
     (snapshot?.mesh?.outerBoundaryPartCount ?? 0) > 0
       ? meshFreshnessStatus(
@@ -1188,6 +1627,42 @@ export function buildModelTree(
           meshRootStatus(snapshot?.mesh),
         )
       : "unavailable";
+  const femAirboxApplicable = Boolean(
+    snapshot?.airbox?.authoredPolicy ||
+      snapshot?.airbox?.realizedCarrier ||
+      snapshot?.airbox?.resolvedTarget ||
+      legacyAirboxObjectPresent,
+  );
+  const femAirboxStatus: ExplorerNodeStatus = snapshot?.mesh?.lastError
+    ? "mesh-failed"
+    : meshPipelineStatusIsActive(snapshot?.mesh?.activeBuildStatus)
+      ? "mesh-building"
+      : snapshot?.airbox?.realizedCarrier
+        ? meshFreshnessStatus(
+            meshFreshnessState(snapshot?.mesh),
+            meshRootStatus(snapshot?.mesh),
+          )
+        : "mesh-stale";
+  const femAirboxBadge = snapshot?.airbox?.realizedCarrier
+    ? "realized"
+    : snapshot?.airbox?.authoredPolicy
+      ? "authored"
+      : snapshot?.airbox?.resolvedTarget
+        ? "resolved"
+        : "legacy carrier";
+  const physicsGraphDataPresent =
+    snapshot?.physicsGraph !== undefined && snapshot?.physicsGraph !== null;
+  const physicsGraphStatus = snapshot?.physicsGraphStatus;
+  const physicsGraphMode = physicsGraphStatus === "ready" && physicsGraphDataPresent;
+  const physicsGraphNodes = physicsGraphMode
+    ? buildPhysicsGraphTree({
+        graph: snapshot?.physicsGraph,
+        objects,
+      })
+    : [];
+  const sessionPhysicsGraphNodes = physicsGraphNodes.filter(
+    (node) => node.kind !== "object.physics.scope",
+  );
   const sessionChildren: ExplorerNode[] = [
     {
       badge: "authoring",
@@ -1202,6 +1677,7 @@ export function buildModelTree(
       kind: "definitions.root",
       label: "Definitions",
       parentId: "model:session",
+      selectable: false,
       status: "ready",
     },
     {
@@ -1211,16 +1687,28 @@ export function buildModelTree(
       parentId: "model:session",
       badge: formatSize(universe.size),
       icon: "shield",
+      selectable: false,
       status: "ready",
-      children: [
-        {
+      children: fdmDomain ? [
+        ...(fdmPresentation
+          ? [fdmAirboxNode(
+              fdmPresentation,
+              snapshot?.domainPresentationStatus,
+              snapshot?.fdmMultilayerLayout,
+              snapshot?.fdmMultilayerLayoutStatus,
+            )].filter(
+              (node): node is ExplorerNode => node !== null,
+            )
+          : []),
+      ] : femDomain ? [
+        ...(femAirboxApplicable ? [{
           id: "model:airbox",
           kind: "airbox.root",
           label: "Airbox",
           parentId: "model:universe",
-          badge: "domain",
+          badge: femAirboxBadge,
           icon: "shield",
-          status: "ready",
+          status: femAirboxStatus,
           children: [
             {
               id: "model:airbox:mesh",
@@ -1229,7 +1717,7 @@ export function buildModelTree(
               parentId: "model:airbox",
               badge: "mesh policy",
               icon: "mesh",
-              status: "ready",
+              status: femAirboxStatus,
               contextCommands: ["workspace.focus-selection"],
               children: [
                 {
@@ -1238,7 +1726,7 @@ export function buildModelTree(
                   label: "Parameters",
                   parentId: "model:airbox:mesh",
                   icon: "settings",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:quality-gates",
@@ -1246,7 +1734,7 @@ export function buildModelTree(
                   label: "Quality Gates",
                   parentId: "model:airbox:mesh",
                   icon: "gauge",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:statistics",
@@ -1254,7 +1742,7 @@ export function buildModelTree(
                   label: "Statistics",
                   parentId: "model:airbox:mesh",
                   icon: "activity",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:topology",
@@ -1262,7 +1750,7 @@ export function buildModelTree(
                   label: "Topology",
                   parentId: "model:airbox:mesh",
                   icon: "mesh",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
                 {
                   id: "model:airbox:mesh:build",
@@ -1270,7 +1758,7 @@ export function buildModelTree(
                   label: "Build & Provenance",
                   parentId: "model:airbox:mesh",
                   icon: "activity",
-                  status: "ready",
+                  status: femAirboxStatus,
                 },
               ],
             },
@@ -1281,7 +1769,7 @@ export function buildModelTree(
               parentId: "model:airbox",
               badge: "display",
               icon: "sparkles",
-              status: "ready",
+              status: femAirboxStatus,
               contextCommands: ["workspace.focus-selection"],
               children: [
                 visualizationDebugNode({
@@ -1291,7 +1779,7 @@ export function buildModelTree(
               ],
             },
           ],
-        },
+        } satisfies ExplorerNode] : []),
         {
           id: "model:boundary-faces",
           kind: "boundary-faces.root",
@@ -1306,7 +1794,7 @@ export function buildModelTree(
           icon: "mesh",
           status: boundaryFacesStatus,
         },
-      ],
+      ] : [],
     },
     {
       id: "model:objects",
@@ -1315,8 +1803,15 @@ export function buildModelTree(
       parentId: "model:session",
       badge: `${objects.length}`,
       icon: "layers",
+      selectable: false,
       status: "ready",
-      children: objects.map((object) => objectNodes(object, resources)),
+      children: objects.map((object) =>
+        objectNodes(
+          object,
+          resources,
+          physicsGraphMode ? snapshot?.physicsGraph : null,
+        ),
+      ),
     },
   ];
 
@@ -1331,14 +1826,24 @@ export function buildModelTree(
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
   }
-  sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
-  sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
-  sessionChildren.push(spinInterfaceNodes(snapshot?.spinInterfaces ?? []));
-  sessionChildren.push(authoredSourceNodes("spin-torques", snapshot?.spinTorques ?? []));
-  sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
+  if (physicsGraphMode) {
+    sessionChildren.push(...sessionPhysicsGraphNodes);
+  } else {
+    sessionChildren.push(physicsGraphUnavailableNode(physicsGraphStatus ?? "idle"));
+  }
 
   sessionChildren.push(
-    meshPolicyNodes(snapshot?.mesh ?? null),
+    domainLane === "fdm"
+      ? fdmMeshPolicyNodes(
+          fdmPresentation,
+          snapshot?.domainMeta,
+          snapshot?.domainPresentationStatus,
+          snapshot?.fdmMultilayerLayout,
+          snapshot?.fdmMultilayerLayoutStatus,
+        )
+      : domainLane === "fem"
+        ? meshPolicyNodes(snapshot?.mesh ?? null)
+        : unresolvedMeshPolicyNodes(snapshot?.domainPresentationStatus),
     buildStudyNodes(snapshot?.study ?? null),
   );
 
@@ -1350,11 +1855,32 @@ export function buildModelTree(
       parentId: null,
       badge: "ProblemIR",
       icon: "folder",
+      selectable: false,
       status: "ready",
       contextCommands: ["explorer.expand-all", "explorer.collapse-all"],
       children: sessionChildren,
     },
   ];
+}
+
+function physicsGraphUnavailableNode(status: ResourceStatus): ExplorerNode {
+  const presentation = {
+    idle: { label: "Physics graph unavailable", nodeStatus: "unavailable" as const },
+    loading: { label: "Loading physics graph", nodeStatus: "queued" as const },
+    stale: { label: "Physics graph stale", nodeStatus: "stale" as const },
+    ready: { label: "Physics graph unavailable", nodeStatus: "unavailable" as const },
+    error: { label: "Physics graph unavailable", nodeStatus: "failed" as const },
+  }[status];
+  return {
+    id: "model:physics:unresolved",
+    kind: "physics.scope.unresolved",
+    label: presentation.label,
+    parentId: "model:session",
+    badge: "graph resource",
+    icon: "activity",
+    selectable: false,
+    status: presentation.nodeStatus,
+  };
 }
 
 function branch(id: string, label: string, kind: ExplorerNode["kind"], status: ExplorerNodeStatus = "ready"): ExplorerNode {

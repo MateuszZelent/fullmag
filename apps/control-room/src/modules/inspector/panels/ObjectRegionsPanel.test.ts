@@ -227,9 +227,98 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(parent).toContain("useMeshRegionMembershipResource");
     expect(parent).toContain("useMeshBuildCurrent");
     expect(parent).toContain("resolveRegionMeshLifecycle");
+    expect(parent).toContain('const femMeshLane = meshLane === "fem";');
+    expect(parent).toContain("meshPolicyLane: meshLane");
     expect(panel).toContain("regionMeshLifecycle={regionMeshLifecycle}");
     expect(shared).toContain('label="Mesh realization"');
     expect(shared).toContain("Apply & Build Mesh");
     expect(shared).toContain('status === "unsupported"');
+  });
+
+  it("gates region mesh writes and FEM controls from an explicit FDM lane", () => {
+    const parent = readFileSync(
+      new URL("./ObjectRegionsPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const meshPanel = readFileSync(
+      new URL("./region/ObjectRegionMeshPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const shared = readFileSync(
+      new URL("./region/shared.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(parent).toContain("useSessionStatusSelector(");
+    expect(parent).toContain('const canWriteMeshRegion = canWriteRegion && femMeshLane;');
+    expect(parent).toContain('if (meshLane !== "fem")');
+    expect(parent).toContain('kernel.commands.execute("mesh.build-shared-domain"');
+    expect(meshPanel).toContain('if (meshLane === "fdm")');
+    expect(meshPanel).toContain('if (meshLane !== "fem")');
+    expect(meshPanel).not.toContain('title="FEM Mesh Controls"');
+    expect(meshPanel).toContain('InspectorGroup title="Region Mesh" badge={fdmModel.status}');
+    expect(meshPanel).toContain('label="Mesh policy" value="execution-plan owned (read-only)"');
+    expect(meshPanel).toContain('label="Mesh scope" value={`${model.objectId} / ${model.regionId}`}');
+    expect(meshPanel).toContain('label="Mesh realization" value="structured-grid cell membership"');
+    expect(shared).toContain("canWriteMeshRegion");
+    expect(shared).toContain("FDM structured-grid membership is read-only");
+    expect(shared).toContain('label="Mesh realization"');
+
+    for (const panelName of [
+      "ObjectRegionOverviewPanel.tsx",
+      "ObjectRegionGeometryPanel.tsx",
+      "ObjectRegionMagneticParametersPanel.tsx",
+      "ObjectRegionMeshPanel.tsx",
+    ]) {
+      const panel = readFileSync(
+        new URL(`./region/${panelName}`, import.meta.url),
+        "utf8",
+      );
+      expect(panel, panelName).toContain("canWriteMeshRegion");
+    }
+  });
+
+  it("keeps FDM region actions neutral and scopes FDM membership to the selected region", () => {
+    const parent = readFileSync(
+      new URL("./ObjectRegionsPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const shared = readFileSync(
+      new URL("./region/shared.tsx", import.meta.url),
+      "utf8",
+    );
+    const meshPanel = readFileSync(
+      new URL("./region/ObjectRegionMeshPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const overview = readFileSync(
+      new URL("./region/ObjectRegionOverviewPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(parent).toContain('meshLane === "fem"');
+    expect(parent).toContain("resolveRegionMeshLifecycle");
+    expect(shared).toContain('meshLane === "fdm"');
+    expect(shared).toContain("FDM structured-grid membership is read-only");
+    expect(shared).toContain("const femMeshLifecycle = meshLane === \"fem\"");
+    expect(meshPanel).toContain("useFdmRegionMembershipBinaryResource(");
+    expect(meshPanel).toContain("model.regionId");
+    expect(meshPanel).toContain("regionId: model.regionId");
+    expect(overview).toContain('meshLane === "fdm"');
+    expect(overview).toContain("Runtime-derived structured-grid membership");
+  });
+
+  it("does not fetch the FEM scene while routing explicit-FDM region visualization", () => {
+    const parent = readFileSync(
+      new URL("./ObjectRegionsPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(parent).toContain(
+      'const regionVisualizationSelection =\n    selection.kind === "object.region.visualization";',
+    );
+    expect(parent).toContain(
+      'useSceneResource({\n    enabled: !regionVisualizationSelection || meshLane === "fem",\n  })',
+    );
   });
 });

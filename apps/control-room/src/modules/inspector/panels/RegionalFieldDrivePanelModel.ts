@@ -8,7 +8,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 export interface RegionalFieldDrivePanelModel {
   drive: RegionalFieldDriveResource | null;
   driveId: string | null;
-  mode: "found" | "missing" | "unselected";
+  mode: "create" | "found" | "missing" | "unselected";
   sceneRevision: number | null;
 }
 
@@ -22,6 +22,20 @@ export interface RegionalFieldDriveSamplingContext {
   samplePeriodS: number | null;
   solverDtS: number | null;
   durationS: number | null;
+}
+
+interface RegionalFieldDriveMutationApi {
+  createFieldDrive(request: {
+    base_revision: number;
+    drive: RegionalFieldDriveResource;
+  }): Promise<{ scene_revision: number }>;
+  replaceFieldDrive(
+    driveId: string,
+    request: {
+      base_revision: number;
+      drive: RegionalFieldDriveResource;
+    },
+  ): Promise<{ scene_revision: number }>;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -119,6 +133,17 @@ export function resolveRegionalFieldDrivePanelModel(
   selection: Selection,
   resource: FieldDriveListResource | null,
 ): RegionalFieldDrivePanelModel {
+  const createRequested =
+    selection.ref?.type === "physics-field-drive" &&
+    selection.ref.draft === true;
+  if (createRequested) {
+    return {
+      drive: createRegionalFieldDriveDraft(resource?.drives ?? []),
+      driveId: null,
+      mode: "create",
+      sceneRevision: resource?.scene_revision ?? null,
+    };
+  }
   const driveId =
     selection.ref?.type === "physics-field-drive"
       ? selection.ref.fieldDriveId
@@ -133,4 +158,41 @@ export function resolveRegionalFieldDrivePanelModel(
     mode: drive ? "found" : "missing",
     sceneRevision: resource?.scene_revision ?? null,
   };
+}
+
+export function createRegionalFieldDriveDraft(
+  existing: readonly RegionalFieldDriveResource[],
+): RegionalFieldDriveResource {
+  const ids = new Set(existing.map((drive) => drive.id));
+  let id = "field-drive";
+  let suffix = 2;
+  while (ids.has(id)) {
+    id = `field-drive-${suffix}`;
+    suffix += 1;
+  }
+  return {
+    activation: { kind: "all_time_evolution" },
+    amplitude_B_T: 1e-3,
+    direction: [0, 1, 0],
+    enabled: true,
+    id,
+    kind: "regional",
+    name: "Global field drive",
+    spatial_profile: { kind: "uniform" },
+    target: { kind: "global" },
+    time_origin: "stage_local",
+    waveform: { kind: "constant" },
+  };
+}
+
+export function commitRegionalFieldDrive(
+  api: RegionalFieldDriveMutationApi,
+  mode: "create" | "found",
+  baseRevision: number,
+  drive: RegionalFieldDriveResource,
+): Promise<{ scene_revision: number }> {
+  const request = { base_revision: baseRevision, drive };
+  return mode === "create"
+    ? api.createFieldDrive(request)
+    : api.replaceFieldDrive(drive.id, request);
 }

@@ -81,6 +81,12 @@ describe("VisualizationDebugPanel mounted interaction", () => {
         </KernelContext.Provider>,
       );
     });
+    await act(async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await vi.runOnlyPendingTimersAsync();
+        await Promise.resolve();
+      }
+    });
     expect(kernel.visualizationDebug.getDemandSnapshot("object:magnet").expanded).toBe(true);
 
     const publisher = kernel.visualizationDebug.registerPublisher("viewport-primary");
@@ -95,9 +101,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
 
     expect(container.textContent).toContain("Evidence export");
     expect(container.textContent).toContain("Snapshot is stale");
-    expect(container.textContent).toContain(
-      "Health is unknown because evidence is incomplete.",
-    );
+    expect(container.textContent).toContain("Evidence is internally consistent.");
     expect(container.textContent).toContain("Requested componentfull");
     expect(container.textContent).toContain("Decoded component— (not encoded)");
 
@@ -314,7 +318,11 @@ function makeKernel(): KernelApi {
       },
       sessions: {
         current: {
-          status: () => new Promise(() => undefined),
+          status: async () => ({
+            capabilities: { explicit_topology: false },
+            domain: { discretization: "fem" },
+            resources: {},
+          }),
         },
       },
       visualization: {

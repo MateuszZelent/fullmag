@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   FieldCatalogResource,
@@ -8,6 +8,7 @@ import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
   DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
   resolveEffectiveVisualizationSettings,
@@ -42,6 +43,7 @@ import {
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  restoreVisualizationAppliedBaseline,
   resolveVisualizationVectorAccounting,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -60,12 +62,368 @@ import {
   VISUALIZATION_QUANTITY_ITEMS,
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
+  fieldCatalogQuantityAvailable,
   visualizationResetActionLabel,
+  fdmGridCellCount,
+  fdmVisualizationResourceNotice,
+  isFdmVisualizationTarget,
+  resolveObjectVisualizationLane,
+  resolveObjectVisualizationResourceGates,
+  resolveObjectVisualizationTargetForLane,
 } from "./ObjectVisualizationPanelModel";
+import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
+import { OBJECT_VISUALIZATION_TARGET_KINDS } from "./ObjectVisualizationHelpers";
 
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("keeps an FDM object visualization selection on the object target", () => {
+    const selection = {
+      kind: "object.visualization",
+      label: "Film visualization",
+      moduleSource: "inspector",
+      nodeId: "model:object:film:visualization",
+      objectId: "film",
+      ref: {
+        kind: "object.visualization",
+        nodeId: "model:object:film:visualization",
+        objectId: "film",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    expect(selectionTarget).toEqual({
+      id: "object:film",
+      kind: "object",
+      label: "Film visualization",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fdm",
+        selection,
+        selectionTarget,
+      }),
+    ).toEqual(selectionTarget);
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fem",
+        selection,
+        selectionTarget,
+      }),
+    ).toEqual(selectionTarget);
+  });
+
+  it("withholds visualization targets and FEM resources until the lane is explicit", () => {
+    const selection = {
+      kind: "object.visualization",
+      label: "Film visualization",
+      moduleSource: "inspector",
+      nodeId: "model:object:film:visualization",
+      objectId: "film",
+      ref: null,
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    expect(resolveObjectVisualizationLane(undefined)).toBe("unresolved");
+    const unresolvedTarget = resolveObjectVisualizationTargetForLane({
+      lane: "unresolved",
+      selection,
+      selectionTarget,
+    });
+    expect(unresolvedTarget).toBeNull();
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "unresolved",
+        target: unresolvedTarget,
+      }),
+    ).toEqual({ fdm: false, fem: false });
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "fdm",
+        target: { id: "fdm-domain", kind: "fdm-domain" },
+      }),
+    ).toEqual({ fdm: true, fem: false });
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "fdm",
+        target: { id: "object:film", kind: "object" },
+      }),
+    ).toEqual({ fdm: true, fem: false });
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "fdm",
+        target: { id: "region:film:core", kind: "region" },
+      }),
+    ).toEqual({ fdm: true, fem: false });
+    expect(
+      resolveObjectVisualizationResourceGates({
+        lane: "fem",
+        target: selectionTarget,
+      }),
+    ).toEqual({ fdm: false, fem: true });
+  });
+
+  it("routes FDM Airbox visualization to the structured-grid target", () => {
+    for (const kind of ["airbox.visualization"]) {
+      const selection = {
+        kind,
+        label: "FDM visualization",
+        moduleSource: "inspector",
+        nodeId: `model:${kind}`,
+        objectId: "film",
+        ref: null,
+      } as const;
+      const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+      expect(
+        resolveObjectVisualizationTargetForLane({
+          lane: "fdm",
+          selection,
+          selectionTarget,
+        }),
+      ).toMatchObject({ id: "fdm-domain", kind: "fdm-domain" });
+    }
+  });
+
+  it("keeps an FDM region visualization selection on its region target", () => {
+    const selection = {
+      kind: "object.region.visualization",
+      label: "Core visualization",
+      moduleSource: "inspector",
+      nodeId: "model:object:film:region:core:visualization",
+      objectId: "film",
+      ref: {
+        kind: "object.region.visualization",
+        nodeId: "model:object:film:region:core:visualization",
+        objectId: "film",
+        regionId: "core",
+        type: "scene-object",
+        visualizationTargetId: "region:film:core",
+      },
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    expect(selectionTarget).toMatchObject({
+      id: "region:film:core",
+      kind: "region",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fdm",
+        selection,
+        selectionTarget,
+      }),
+    ).toEqual(selectionTarget);
+  });
+
+  it("restores an FDM baseline locally without queueing FEM VisualizationState", () => {
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const visualization = {
+      clearTarget: vi.fn(),
+      patchTarget: vi.fn(),
+      patchViewportPreferences: vi.fn(),
+    };
+    const queuePatch = vi.fn();
+    const settings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      visible: true,
+      shaderVisible: true,
+    };
+
+    restoreVisualizationAppliedBaseline({
+      baseline: {
+        overrides: [],
+        targets: [
+          {
+            preferences: { primitiveVisible: true },
+            settings,
+            target,
+          },
+        ],
+      },
+      currentOverrides: [],
+      queuePatch,
+      visualization,
+    });
+
+    expect(queuePatch).not.toHaveBeenCalled();
+    expect(visualization.clearTarget).toHaveBeenCalledWith(target);
+    expect(visualization.patchTarget).toHaveBeenCalledWith(
+      target,
+      expect.objectContaining({ visible: true, shaderVisible: true }),
+    );
+    expect(visualization.patchViewportPreferences).toHaveBeenCalledWith(target, {
+      primitiveVisible: true,
+    });
+  });
+
+  it("restores an FDM region baseline locally", () => {
+    const target = { id: "region:film:core", kind: "region" as const };
+    const visualization = {
+      clearTarget: vi.fn(),
+      patchTarget: vi.fn(),
+      patchViewportPreferences: vi.fn(),
+    };
+    const queuePatch = vi.fn();
+
+    restoreVisualizationAppliedBaseline({
+      baseline: {
+        overrides: [],
+        targets: [{ preferences: null, settings: DEFAULT_OBJECT_VISUALIZATION, target }],
+      },
+      currentOverrides: [],
+      fdm: true,
+      queuePatch,
+      visualization,
+    });
+
+    expect(queuePatch).not.toHaveBeenCalled();
+    expect(visualization.patchTarget).toHaveBeenCalledWith(
+      target,
+      expect.objectContaining({ visible: true }),
+    );
+  });
+
+  it("keeps FEM baseline restoration on the backend queue path", () => {
+    const target = { id: "object:sample", kind: "object" as const };
+    const visualization = {
+      clearTarget: vi.fn(),
+      patchTarget: vi.fn(),
+      patchViewportPreferences: vi.fn(),
+    };
+    const queuePatch = vi.fn();
+
+    restoreVisualizationAppliedBaseline({
+      baseline: {
+        overrides: [{ scope: "object", scope_id: "sample", visible: true }],
+        targets: [
+          {
+            preferences: null,
+            settings: DEFAULT_OBJECT_VISUALIZATION,
+            target,
+          },
+        ],
+      },
+      currentOverrides: [],
+      queuePatch,
+      visualization,
+    });
+
+    expect(queuePatch).toHaveBeenCalledWith({
+      overrides: [{ scope: "object", scope_id: "sample", visible: true }],
+    });
+    expect(visualization.clearTarget).toHaveBeenCalledWith(target);
+    expect(visualization.patchTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps the FDM domain in the shared target registry without an API scope", () => {
+    expect(OBJECT_VISUALIZATION_TARGET_KINDS).toContain("fdm-domain");
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "fdm-domain",
+        kind: "fdm-domain",
+      }),
+    ).toEqual({ scope_id: null, scope_kind: null });
+  });
+
+  it("uses the structured-grid descriptor for FDM visualization capacity", () => {
+    const domain = {
+      domain_id: "domain-1",
+      generation_id: "generation-1",
+      discretization: "fdm",
+      bounds: { min: [0, 0, 0], max: [4, 3, 2] },
+      units: { length: "m" },
+      grid: {
+        shape: [4, 3, 2],
+        origin: [0, 0, 0],
+        spacing: [1, 1, 1],
+      },
+    } as never;
+
+    expect(isFdmVisualizationTarget({ id: "fdm-domain", kind: "fdm-domain" })).toBe(
+      true,
+    );
+    expect(fdmGridCellCount(domain)).toBe(24);
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        fdmCellCount: fdmGridCellCount(domain),
+        meshParts: null,
+        target: { id: "fdm-domain", kind: "fdm-domain" },
+      }),
+    ).toEqual({
+      availableNodeCount: 24,
+      exact: true,
+      max: 24,
+      min: 0,
+      step: 1,
+    });
+  });
+
+  it("reports FDM resource state without inventing FEM airbox errors", () => {
+    const notice = fdmVisualizationResourceNotice({
+      domain: {
+        domain_id: "domain-1",
+        generation_id: "generation-1",
+        discretization: "fdm",
+        bounds: { min: [0, 0, 0], max: [4, 3, 2] },
+        units: { length: "m" },
+        grid: {
+          shape: [4, 3, 2],
+          origin: [0, 0, 0],
+          spacing: [1, 1, 1],
+        },
+      } as never,
+      domainStatus: "ready",
+      membership: null,
+      membershipStatus: "ready",
+    });
+
+    expect(notice).toContain("cell membership/field overlays are not materialized");
+    expect(notice).not.toContain("airbox mesh part");
+    expect(notice).not.toContain("shared-domain manifest");
+  });
+
+  it("reports an unmaterialized FDM membership mask separately from its descriptor", () => {
+    const notice = fdmVisualizationResourceNotice({
+      domain: {
+        domain_id: "domain-1",
+        generation_id: "generation-1",
+        discretization: "fdm",
+        bounds: { min: [0, 0, 0], max: [4, 3, 2] },
+        units: { length: "m" },
+        grid: {
+          shape: [4, 3, 2],
+          origin: [0, 0, 0],
+          spacing: [1, 1, 1],
+        },
+      } as never,
+      domainStatus: "ready",
+      membership: {
+        binary_path: "fdm.bin",
+        cell_count: 24,
+        cell_m: [1, 1, 1],
+        counts: [4, 3, 2],
+        domain_generation_id: "generation-1",
+        encoding: "u32le",
+        freshness: "current",
+        grid_fingerprint: "grid-1",
+        mesh_revision: 1,
+        origin_m: [0, 0, 0],
+        region_legend: [],
+        region_membership_revision: 2,
+        schema_version: "fdm_region_membership.v1",
+      } as never,
+      membershipStatus: "ready",
+      membershipBinaryReason: "not-materialized",
+      membershipBinaryStatus: "pending",
+    });
+
+    expect(notice).toContain("membership mask is not materialized");
+    expect(notice).toContain("re-plan or run the study");
+  });
+
   it("reports decoded and adopted vector counts only for matching identities", () => {
     const snapshot = {
       capturedAtMs: 10,
@@ -393,6 +751,21 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual(["part-air"]);
   });
 
+  it("does not expose FEM mesh-part rows for the FDM domain target", () => {
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts: [
+          { id: "part-air", label: "Air", role: "air" },
+          { id: "part-object", label: "Object", object_id: "object-a", role: "object" },
+        ] as MeshPart[],
+        manifestRegions: [],
+        sceneObjectIds: new Set(["object-a"]),
+        target: { id: "fdm-domain", kind: "fdm-domain" },
+        visualizationState: null,
+      }),
+    ).toEqual([]);
+  });
+
   it("labels every multi-carrier region and airbox row with its selected target", () => {
     const regionRows = resolveSelectedTargetVectorMeshPartRows({
       meshParts: [
@@ -573,6 +946,7 @@ describe("ObjectVisualizationPanelModel", () => {
       "m",
       "H_eff",
       "H_demag",
+      "H_ext",
       "H_ex",
       "H_ani",
       "torque",
@@ -599,9 +973,46 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(airboxItems.map((item) => item.value)).toEqual([
       "H_eff",
       "H_demag",
+      "H_ext",
     ]);
   });
 
+  it("uses the same field-only quantity set for the dedicated FDM Airbox UI", () => {
+    expect(visualizationQuantityItems("H_demag", "airbox").map((item) => item.value)).toEqual([
+      "H_eff",
+      "H_demag",
+      "H_ext",
+    ]);
+  });
+
+  it("filters quantity options by the realized field catalog", () => {
+    const catalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        {
+          available: true,
+          quantity_id: "m",
+          label: "Magnetization",
+        },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+
+    expect(
+      visualizationQuantityItems("m", "object", catalog).map(
+        (item) => item.value,
+      ),
+    ).toEqual(["m"]);
+    expect(
+      visualizationQuantityItems("H_demag", "object", catalog),
+    ).toEqual([
+      { label: "Unavailable / H_demag", value: "H_demag" },
+      { label: "Magnetization", value: "m" },
+    ]);
+    expect(fieldCatalogQuantityAvailable(catalog, "m")).toBe(true);
+    expect(fieldCatalogQuantityAvailable(catalog, "H_demag")).toBe(false);
+    expect(fieldCatalogQuantityAvailable(null, "H_demag")).toBe(true);
+  });
 
   it("switches scalar material quantities to colormap surface coloring", () => {
     expect(
@@ -727,6 +1138,23 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({ scope_id: null, scope_kind: "airbox" });
     expect(
       fieldMetaScopeQueryForVisualizationTarget({
+        id: "fdm-domain",
+        kind: "fdm-domain",
+        label: "FDM domain",
+      }),
+    ).toEqual({ scope_id: null, scope_kind: null });
+    // The Explorer identity is stable (`layer_id`) and may differ from the
+    // runtime magnet name.  The API resolves this opaque layer scope against
+    // the native multilayer layout; the UI must not substitute the label.
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "fdm-native-layer:layer%3Abottom",
+        kind: "fdm-native-layer",
+        label: "bottom",
+      }),
+    ).toEqual({ scope_id: "layer:bottom", scope_kind: "layer" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
         id: "region-a",
         kind: "region",
         label: "Region A",
@@ -802,7 +1230,7 @@ describe("ObjectVisualizationPanelModel", () => {
         kind: "membership",
         objectId: "film",
         regionId: "film:shell",
-        syntheticPartId: "membership:film%3Ashell",
+        syntheticPartId: "membership:film:film%3Ashell",
       }),
     ).toContain("diagnostic");
     expect(
@@ -811,6 +1239,96 @@ describe("ObjectVisualizationPanelModel", () => {
         reason: "No mesh manifest regions are available.",
       }),
     ).toContain("Physical field coloring");
+  });
+
+  it("keeps the FDM Airbox marker on the structured-grid target while FEM stays canonical Airbox", () => {
+    const fdmSelection = {
+      kind: "mesh.grid.universe-outside-support",
+      label: "Airbox",
+      moduleSource: "inspector",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+      ref: {
+        kind: "mesh.grid.universe-outside-support",
+        nodeId: "model:airbox:visualization",
+        scope: "universe-outside-support",
+        type: "fdm-domain",
+        visualizationTargetId: "fdm-universe-outside-support",
+      },
+    } as const;
+    const fdmTarget = resolveVisualizationTargetFromSelection(fdmSelection);
+    expect(fdmTarget).toEqual({
+      id: "fdm-universe-outside-support",
+      kind: "fdm-domain",
+      label: "Airbox",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fdm",
+        selection: fdmSelection,
+        selectionTarget: fdmTarget,
+      }),
+    ).toEqual(fdmTarget);
+
+    const femSelection = {
+      kind: "airbox.visualization",
+      label: "Airbox",
+      moduleSource: "inspector",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+      ref: {
+        kind: "airbox.visualization",
+        nodeId: "model:airbox:visualization",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    } as const;
+    const femTarget = resolveVisualizationTargetFromSelection(femSelection);
+    expect(femTarget).toEqual({
+      id: "airbox",
+      kind: "airbox",
+      label: "Airbox",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fem",
+        selection: femSelection,
+        selectionTarget: femTarget,
+      }),
+    ).toEqual(femTarget);
+  });
+
+  it("keeps an FDM region selection on its owner-scoped visualization target", () => {
+    const selection = {
+      kind: "mesh.grid.region",
+      label: "Core",
+      moduleSource: "inspector",
+      nodeId: "model:mesh:region:core",
+      objectId: "film",
+      ref: {
+        kind: "mesh.grid.region",
+        nodeId: "model:mesh:region:core",
+        objectId: "film",
+        regionId: "core",
+        scope: "region",
+        type: "fdm-domain",
+        visualizationTargetId: "region:film:core",
+      },
+    } as const;
+    const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+
+    expect(selectionTarget).toEqual({
+      id: "region:film:core",
+      kind: "region",
+      label: "Core",
+    });
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        lane: "fdm",
+        selection,
+        selectionTarget,
+      }),
+    ).toEqual(selectionTarget);
   });
 
   it("labels region override state as inherited until a local override exists", () => {
@@ -1069,6 +1587,26 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toBe("stale");
   });
 
+  it("scopes panel freshness to the selected object", () => {
+    expect(
+      resolveObjectVisualizationPanelTopologyFreshness({
+        manifest: {
+          mesh_parts: [{ object_id: "film" }],
+          revision: 4,
+        },
+        scene: {
+          objects: [
+            { id: "film", visible: true },
+            { id: "antenna", visible: true },
+          ],
+          revision: 4,
+        },
+        targetKind: "object",
+        targetObjectId: "object:film",
+      }),
+    ).toBe("current");
+  });
+
   it("does not load the field catalog on object selection until surface coloring requests it", () => {
     expect(
       shouldLoadObjectVisualizationFieldCatalog({
@@ -1247,6 +1785,40 @@ describe("ObjectVisualizationPanelModel", () => {
         disabled: false,
         fields: [expect.objectContaining({ id: "activeQuantityId" })],
       });
+  });
+
+  it("exposes points, wireframe, quantity, and vector controls for the FDM Airbox target", () => {
+    const sections = buildVisualizationPanelSections({
+      effectiveSettings: resolveEffectiveVisualizationSettings(
+        DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+      ),
+      settings: DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+      target: {
+        id: "fdm-universe-outside-support",
+        kind: "fdm-domain",
+      },
+    });
+
+    expect(sections.map((section) => section.id)).toEqual([
+      "display-passes",
+      "quantity-source",
+      "points",
+      "wireframe",
+      "vectors",
+      "overrides",
+    ]);
+    expect(sections.map((section) => section.id)).not.toEqual(
+      expect.arrayContaining(["surface-coloring", "points", "geometry-scope"]),
+    );
+    expect(sections.find((section) => section.id === "vectors")?.fields).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "geometryScope" })]),
+    );
+    expect(sections.find((section) => section.id === "display-passes")?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "visible" }),
+        expect.objectContaining({ id: "boundsVisible" }),
+      ]),
+    );
   });
 
   it("marks pass-specific controls inactive while preserving configured values", () => {
@@ -1635,6 +2207,7 @@ describe("ObjectVisualizationPanelModel", () => {
         realization: "realized",
         region_membership_revision: 1,
         node_indices: [1, 2, 3, 4],
+        owner_object_id: "film",
         region_id: "film:shell",
         source: "test",
       },
@@ -1652,8 +2225,90 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({
       kind: "membership",
       objectId: "film",
-      syntheticPartId: "membership:film%3Ashell",
+      syntheticPartId: "membership:film:film%3Ashell",
       regionId: "film:shell",
+    });
+  });
+
+  it("qualifies fallback region memberships by their owning object", () => {
+    const memberships = [
+      {
+        boundary_face_indices: [],
+        element_indices: [21, 22],
+        mesh_id: "shared-domain",
+        mesh_part_ids: [],
+        mesh_revision: 1,
+        freshness: "current",
+        realization: "realized",
+        region_membership_revision: 1,
+        node_indices: [21, 22],
+        owner_object_id: "other-film",
+        region_id: "shared",
+        source: "test",
+      },
+      {
+        boundary_face_indices: [],
+        element_indices: [1, 2, 3],
+        mesh_id: "shared-domain",
+        mesh_part_ids: [],
+        mesh_revision: 1,
+        freshness: "current",
+        realization: "realized",
+        region_membership_revision: 2,
+        node_indices: [1, 2, 3, 4, 5],
+        owner_object_id: "film",
+        region_id: "shared",
+        source: "test",
+      },
+    ];
+    const target = {
+      id: "region:film:shared",
+      kind: "region" as const,
+    };
+
+    expect(
+      resolveRegionVisualizationCarrier({
+        manifestRegions: [],
+        memberships,
+        target,
+      }),
+    ).toEqual({
+      kind: "membership",
+      objectId: "film",
+      syntheticPartId: "membership:film:shared",
+      regionId: "shared",
+    });
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        manifestRegions: [],
+        memberships,
+        meshParts: [
+          meshPart({
+            id: "part:other",
+            label: "Other",
+            node_count: 1,
+            object_id: "other-film",
+            role: "object",
+          }),
+        ],
+        target,
+      }),
+    ).toMatchObject({
+      availableNodeCount: 5,
+      exact: true,
+      max: 5,
+    });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget(target, {
+        kind: "membership",
+        objectId: "film",
+        syntheticPartId: "membership:film:shared",
+        regionId: "shared",
+      }),
+    ).toEqual({
+      owner_object_id: "film",
+      scope_id: "shared",
+      scope_kind: "region",
     });
   });
 
@@ -1890,6 +2545,71 @@ describe("ObjectVisualizationPanelModel", () => {
       status: "confirmed",
       title: "Airbox visibility confirmed",
     });
+  });
+
+  it("does not treat stale airbox surface and points flags as drawable passes", () => {
+    const diagnostic = buildAirboxVisibilityDiagnostic({
+      displaySettings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        pointsVisible: true,
+        shaderVisible: true,
+        visible: true,
+      },
+      renderWarning: null,
+      settings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        pointsVisible: true,
+        shaderVisible: true,
+        visible: true,
+      },
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "no-drawable-pass",
+      title: "Airbox has no active pass",
+    });
+    expect(diagnostic.message).toContain("Wireframe, Frame, or Vectors");
+    expect(diagnostic.details.map((detail) => detail.label)).not.toEqual(
+      expect.arrayContaining(["Surface pass", "Points pass"]),
+    );
+  });
+
+  it("keeps airbox vector diagnostics sampled when a stale shader flag is present", () => {
+    const diagnostic = buildAirboxVectorDiagnostic({
+      airboxPartIds: ["part:__air__"],
+      displaySettings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+        vectorBudget: 300,
+        vectorsVisible: true,
+        visible: true,
+      },
+      fieldCatalog: null,
+      fieldCatalogStatus: "idle",
+      renderWarning: null,
+      settings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+        vectorBudget: 300,
+        vectorsVisible: true,
+        visible: true,
+      },
+      vectorDomain: "auto",
+    });
+
+    expect(diagnostic.details).toEqual(
+      expect.arrayContaining([
+        {
+          label: "Expected resource",
+          value:
+            `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&max_samples=300&scope_kind=airbox`,
+        },
+      ]),
+    );
   });
 
   it("confirms airbox H_eff vectors when gates and catalog are available", () => {

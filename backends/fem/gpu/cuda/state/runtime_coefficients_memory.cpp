@@ -67,6 +67,8 @@ void gpu_runtime_coefficients_free(
     gpu_device_free_u8(mesh_regions.magnetic_node_mask);
     gpu_device_free_u8(mesh_regions.stt_active_node_mask);
     mesh_regions.stt_active_node_count = 0;
+    gpu_device_free_u8(mesh_regions.stt_active_element_mask);
+    mesh_regions.stt_active_element_count = 0;
     gpu_device_free_u32(mesh_regions.periodic_reduced_node);
     gpu_device_free_u32(mesh_regions.periodic_representative_nodes);
 }

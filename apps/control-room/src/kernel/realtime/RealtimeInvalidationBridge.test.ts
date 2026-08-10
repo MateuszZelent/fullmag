@@ -16,9 +16,12 @@ import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyD
 import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_MESH_REGION_MEMBERSHIPS_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_TABLE_ROWS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
@@ -68,6 +71,8 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { resolveFdmRegionMembershipBinaryResourceKey } from "../resources/geometryLifecycleResources";
+import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
 import { RealtimeInvalidationBridge } from "./RealtimeInvalidationBridge";
 
@@ -318,6 +323,9 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(handled).toBe(true);
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(12);
+    expect(resources.getRevision(PHYSICS_GRAPH_RESOURCE_KEY)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
     expect(resources.getRevision(MODEL_REGIONS_PATH)).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
@@ -1314,6 +1322,10 @@ describe("RealtimeInvalidationBridge", () => {
     );
     const topologicalChargeKey =
       ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "box");
+    const scopedFdmMembershipKey =
+      resolveFdmRegionMembershipBinaryResourceKey("body:core");
+    const revisionScopedFdmMembershipKey =
+      resolveFdmRegionMembershipBinaryResourceKey("body:core", "membership-8");
 
     for (const resourceKey of [
       objectTopologyKey,
@@ -1321,6 +1333,11 @@ describe("RealtimeInvalidationBridge", () => {
       objectQualityKey,
       objectSizeFieldKey,
       topologicalChargeKey,
+      DATA_FDM_REGION_MEMBERSHIPS_PATH,
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+      scopedFdmMembershipKey,
+      revisionScopedFdmMembershipKey,
+      DATA_MESH_REGION_MEMBERSHIPS_PATH,
     ]) {
       resources.subscribe(resourceKey, () => {});
     }
@@ -1366,6 +1383,60 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(objectQualityKey)).toBe("mesh-build-9");
     expect(resources.getRevision(objectSizeFieldKey)).toBe("mesh-build-9");
     expect(resources.getRevision(topologicalChargeKey)).toBe("mesh-build-9");
+    expect(resources.getRevision(DATA_FDM_REGION_MEMBERSHIPS_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(scopedFdmMembershipKey)).toBe("mesh-build-9");
+    expect(resources.getRevision(revisionScopedFdmMembershipKey)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(DATA_MESH_REGION_MEMBERSHIPS_PATH)).toBeNull();
+  });
+
+  it("refreshes FDM membership binaries when the descriptor revision changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const scopedKey = resolveFdmRegionMembershipBinaryResourceKey("body:core");
+    const revisionScopedKey = resolveFdmRegionMembershipBinaryResourceKey(
+      "body:core",
+      "membership-32",
+    );
+
+    for (const resourceKey of [
+      DATA_FDM_REGION_MEMBERSHIPS_PATH,
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+      scopedKey,
+      revisionScopedKey,
+    ]) {
+      resources.subscribe(resourceKey, () => {});
+    }
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DATA_FDM_REGION_MEMBERSHIPS_PATH,
+            resource: "fdm-region-memberships",
+            revision: "membership-32",
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(DATA_FDM_REGION_MEMBERSHIPS_PATH)).toBe(
+      "membership-32",
+    );
+    expect(resources.getRevision(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH)).toBe(
+      "membership-32",
+    );
+    expect(resources.getRevision(scopedKey)).toBe("membership-32");
+    expect(resources.getRevision(revisionScopedKey)).toBe("membership-32");
   });
 
   it("ignores realtime lifecycle events without resource changes", () => {

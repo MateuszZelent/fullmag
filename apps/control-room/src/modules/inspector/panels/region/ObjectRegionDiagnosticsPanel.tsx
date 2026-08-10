@@ -7,35 +7,81 @@ import {
   ObjectRegionMetadataSection,
   type RegionSubPanelProps,
 } from "./shared";
+import { resolveRegionDiagnosticsForLane } from "./regionDiagnosticPresentation";
 
-export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
+export interface ObjectRegionDiagnosticsLaneView {
+  realizationPolicy: string;
+  realizationStatus: string;
+}
+
+export function resolveObjectRegionDiagnosticsLaneView(
+  model: Pick<RegionSubPanelProps["model"], "realizationPolicy" | "realizationStatus">,
+  meshLane: RegionSubPanelProps["meshLane"] = "unknown",
+): ObjectRegionDiagnosticsLaneView {
+  if (meshLane === "fdm") {
+    return {
+      realizationPolicy: "Runtime-derived structured-grid membership",
+      realizationStatus: "Runtime-derived structured-grid membership",
+    };
+  }
+  if (meshLane !== "fem") {
+    return {
+      realizationPolicy: "Withheld until the session discretization is explicit",
+      realizationStatus: "Withheld until the session discretization is explicit",
+    };
+  }
+  return {
+    realizationPolicy: model.realizationPolicy ?? "inherit",
+    realizationStatus: model.realizationStatus ?? "authored",
+  };
+}
+
+export function ObjectRegionDiagnosticsPanel({ model, meshLane = "unknown" }: RegionSubPanelProps) {
+  const laneView = resolveObjectRegionDiagnosticsLaneView(model, meshLane);
+  const diagnostics = resolveRegionDiagnosticsForLane(model.diagnostics, meshLane);
+  const withheldDiagnosticCount = model.diagnostics.length - diagnostics.length;
+  const warningCount = diagnostics.filter(
+    (diagnostic) => diagnostic.severity.toLowerCase() === "warning",
+  ).length;
+  const errorCount = diagnostics.filter(
+    (diagnostic) => diagnostic.severity.toLowerCase() === "error",
+  ).length;
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Diagnostics">
         <FieldRow label="Mode" value={model.mode} />
         <FieldRow label="Source" value={model.source} />
         <FieldRow
           label="Realization policy"
-          value={model.realizationPolicy ?? "inherit"}
+          value={laneView.realizationPolicy}
         />
-        <FieldRow
-          label="Realization status"
-          value={model.realizationStatus ?? "authored"}
-        />
+        <FieldRow label="Realization status" value={laneView.realizationStatus} />
         <FieldRow label="Scene revision" value={model.revision ?? "unknown"} />
-        <FieldRow label="Region diagnostics" value={String(model.diagnosticCount)} />
-        <FieldRow label="Warnings" value={String(model.warningCount)} />
-        <FieldRow label="Errors" value={String(model.errorCount)} />
-        
-        {model.diagnostics.length === 0 ? (
+        <FieldRow label="Region diagnostics" value={String(diagnostics.length)} />
+        <FieldRow label="Warnings" value={String(warningCount)} />
+        <FieldRow label="Errors" value={String(errorCount)} />
+        {withheldDiagnosticCount > 0 && meshLane === "fdm" ? (
+          <FieldRow
+            label="FEM capability diagnostics"
+            value="Not applicable for FDM structured-grid regions"
+          />
+        ) : null}
+        {withheldDiagnosticCount > 0 && meshLane === "unknown" ? (
+          <FieldRow
+            label="FEM capability diagnostics"
+            value="Withheld until the session discretization is explicit"
+          />
+        ) : null}
+
+        {diagnostics.length === 0 ? (
           <div className="fm-mt-3">
             <FieldRow label="Messages" value="none" />
           </div>
         ) : (
           <div className="fm-mt-4">
-            {model.diagnostics.map((diagnostic) => (
+            {diagnostics.map((diagnostic) => (
               <div
                 key={diagnostic.diagnosticId}
                 className="fm-region-diagnostic-item fm-section-separator fm-mb-3"

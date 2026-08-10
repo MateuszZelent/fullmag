@@ -4,7 +4,8 @@ Source contract: ``external_solvers/3/test/standardproblem5.mx3``.
 The geometry, material constants, vortex state, Zhang--Li parameters, and
 one-nanosecond observation horizon intentionally remain literal here so the
 lowered ProblemIR can be compared with the external script without hidden
-defaults.
+defaults. ``FULLMAG_SP5_RUN_UNTIL`` is an explicit diagnostic override for
+short stage-to-stage comparisons; the default remains one nanosecond.
 
 Run with the Rust-hosted CLI, for example::
 
@@ -28,7 +29,7 @@ ALPHA = 0.1
 CURRENT_DENSITY = (1e12, 0.0, 0.0)
 POLARIZATION = 1.0
 XI = 0.05
-RUN_UNTIL = 1e-9
+RUN_UNTIL = float(os.environ.get("FULLMAG_SP5_RUN_UNTIL", "1e-9"))
 EXECUTION_DEVICE = os.environ.get("FULLMAG_SP5_DEVICE", "cpu").strip().lower()
 FIXED_DT_ENV = os.environ.get("FULLMAG_SP5_FIXED_DT", "").strip()
 FIXED_DT = float(FIXED_DT_ENV) if FIXED_DT_ENV else None
@@ -37,6 +38,8 @@ RELAX_TOL_T = float(os.environ.get("FULLMAG_SP5_RELAX_TOL_T", "1e-6"))
 
 if FIXED_DT is not None and FIXED_DT <= 0.0:
     raise ValueError("FULLMAG_SP5_FIXED_DT must be positive")
+if RUN_UNTIL <= 0.0:
+    raise ValueError("FULLMAG_SP5_RUN_UNTIL must be positive")
 
 
 study = fm.study("mumax_standard_problem_5_fdm")

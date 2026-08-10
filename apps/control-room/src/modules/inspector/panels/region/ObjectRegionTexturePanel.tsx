@@ -49,6 +49,7 @@ import type { Selection, RegionVisualizationTargetId } from "@/kernel/selection/
 
 export function ObjectRegionTexturePanel({
   model: regionModel,
+  meshLane = "unknown",
 }: RegionSubPanelProps) {
   const kernel = useKernel();
   const { api, resources } = kernel;
@@ -234,7 +235,7 @@ export function ObjectRegionTexturePanel({
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={regionModel} />
+      <ObjectRegionMetadataSection model={regionModel} meshLane={meshLane} />
 
       <MagneticTextureAssignmentSection
         draft={draft}

@@ -43,10 +43,15 @@ import {
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type {
+  VisualizationTargetRef,
+  VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import type {
+  FdmNativeLayerRenderView,
+  FdmMultilayerAirboxRenderView,
   FdmGridRenderDomain,
   FemManifestRenderDomain,
   Viewport3DMeshPart,
@@ -79,6 +84,7 @@ import type {
   Viewport3DRotationMode,
   Viewport3DScaleUnitMode,
 } from "../viewport3dStore";
+import { DEFAULT_VIEWPORT_3D_CAMERA_STATE } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { DimensionFrameLayer } from "./DimensionFrameLayer";
@@ -95,6 +101,8 @@ import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
 import {
   AirboxLayer,
   DomainBoxLayer,
+  FdmMultilayerAirboxBoundsLayer,
+  FdmUniverseOutsideSupportLayer,
   SelectionHighlightLayer,
 } from "./BoundsLayers";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
@@ -137,9 +145,12 @@ import {
   type Viewport3DVisualProfileId,
 } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
-import { clampNumber } from "../viewport3dMath";
+import { clampNumber, sameTuple3 } from "../viewport3dMath";
 import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
+import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
+import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -156,13 +167,26 @@ interface Viewport3DSceneProps {
   planarMonitorFramePreview: PlanarMonitorFramePreview | null;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
+  fdmLaneActive: boolean;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
+  fdmAirboxInstanceModel: FdmCuboidInstanceModel | null | undefined;
+  fdmAirboxPassPlan: FdmAirboxPassPlan;
+  fdmAirboxFieldVector: DecodedFieldVector | null | undefined;
+  fdmAirboxVectorGlyphColors: ScalarColorBuffer | null;
+  fdmAirboxVectorSegments: Float32Array | null;
+  fdmMultilayerAirboxView: FdmMultilayerAirboxRenderView | null;
+  fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
+  fdmUniverseOutsideSupportSettings: VisualizationTargetSettings | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
+  availableQuantityIds?: ReadonlySet<string> | null;
+  fdmNativeLayerViews: readonly FdmNativeLayerRenderView[];
+  fdmTargetViews: readonly Viewport3DFdmTargetRenderView[];
   fdmSettings: VisualizationTargetSettings;
   fdmSurfaceColors: ScalarColorBuffer | null;
+  fdmVectorColors: ScalarColorBuffer | null;
+  fdmVectorGlyphColors: ScalarColorBuffer | null;
   fdmVectorSegments: Float32Array | null;
-  fieldVector: DecodedFieldVector | null | undefined;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
@@ -190,6 +214,9 @@ interface Viewport3DSceneProps {
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
+  onSelectFdmTarget: (target: VisualizationTargetRef) => void;
+  onSelectFdmUniverseOutsideSupport: () => void;
+  onSelectFdmCell?: (instanceId: number) => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
   orbitDebugCommitRevision: number;
@@ -216,7 +243,6 @@ interface Viewport3DSceneProps {
   visualizationRevision: number | null;
   hslReferenceVisible: boolean;
   inspectEnabled: boolean;
-  inspectQuantityId: string;
   onInspectClear?: () => void;
   onInspectSample?: (
     sample: Viewport3DInspectSample,
@@ -248,6 +274,38 @@ interface Viewport3DCameraClip {
 
 const FALLBACK_GRID_SIZE = 1e-6;
 const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
+
+/**
+ * Resolve the initial scene camera against the actual domain bounds.
+ *
+ * The persisted default camera is FEM-sized (micrometre scale). FDM domains
+ * are commonly nanometre-scale, so handing that default directly to the
+ * active Three camera leaves the structured grid effectively invisible. A
+ * real user camera remains authoritative; only the untouched application
+ * default is replaced by the bounds fit.
+ */
+export function resolveViewport3DEffectiveCameraState({
+  bounds,
+  cameraState,
+}: {
+  bounds: Viewport3DBounds | null;
+  cameraState: Viewport3DCameraState;
+}): Viewport3DCameraState {
+  if (
+    !bounds ||
+    !sameTuple3(cameraState.position, DEFAULT_VIEWPORT_3D_CAMERA_STATE.position) ||
+    !sameTuple3(cameraState.target, DEFAULT_VIEWPORT_3D_CAMERA_STATE.target)
+  ) {
+    return cameraState;
+  }
+
+  const fit = resolveViewport3DCameraFit(bounds);
+  return {
+    position: fit.position,
+    target: fit.target,
+    up: VIEWPORT_3D_WORLD_UP,
+  };
+}
 
 export function resolveViewport3DProjectionCameraClip(
   bounds: Viewport3DBounds | null,
@@ -515,12 +573,20 @@ export function resolveAuthoredRegionOverlayVisibility({
 }
 
 function resolveViewport3DModelLayerStageKey({
-  fdmInstanceModel,
+  fdmAirboxInstanceModel,
+  fdmMultilayerAirboxView,
+  fdmNativeLayerViews,
+  fdmTargetViews,
   primitiveModel,
   topologyModel,
 }: Pick<
   Viewport3DSceneProps,
-  "fdmInstanceModel" | "primitiveModel" | "topologyModel"
+  | "fdmAirboxInstanceModel"
+  | "fdmMultilayerAirboxView"
+  | "fdmNativeLayerViews"
+  | "fdmTargetViews"
+  | "primitiveModel"
+  | "topologyModel"
 >): string {
   return [
     topologyModel?.meshGenerationId ?? "no-mesh-generation",
@@ -530,7 +596,12 @@ function resolveViewport3DModelLayerStageKey({
     topologyModel?.airboxParts.length ?? 0,
     primitiveModel?.sceneRevision ?? "no-scene-revision",
     primitiveModel?.objects.length ?? 0,
-    fdmInstanceModel ? "fdm-ready" : "fdm-empty",
+    fdmAirboxInstanceModel ? "fdm-airbox-ready" : "fdm-airbox-empty",
+    fdmMultilayerAirboxView?.model
+      ? "fdm-multilayer-airbox-ready"
+      : "fdm-multilayer-airbox-empty",
+    fdmNativeLayerViews.length > 0 ? "fdm-native-ready" : "fdm-native-empty",
+    fdmTargetViews.length > 0 ? "fdm-ready" : "fdm-empty",
   ].join(":");
 }
 
@@ -659,9 +730,16 @@ function Viewport3DOverlayLayerStack({
   planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
+  fdmAirboxPassPlan,
+  fdmDomain,
+  fdmMultilayerAirboxView,
+  fdmUniverseOutsideSupport,
+  fdmUniverseOutsideSupportSettings,
   fdmSettings,
   materialProfile,
   onSelectDomain,
+  onSelectFdmTarget,
+  onSelectFdmUniverseOutsideSupport,
   scaleLabelsVisible,
   scaleUnitMode,
   selectionBounds,
@@ -680,8 +758,15 @@ function Viewport3DOverlayLayerStack({
   | "planarMonitorFramePreview"
   | "dimensionFrameDensity"
   | "dimensionFrameMode"
+  | "fdmAirboxPassPlan"
+  | "fdmDomain"
+  | "fdmMultilayerAirboxView"
+  | "fdmUniverseOutsideSupport"
+  | "fdmUniverseOutsideSupportSettings"
   | "fdmSettings"
   | "onSelectDomain"
+  | "onSelectFdmTarget"
+  | "onSelectFdmUniverseOutsideSupport"
   | "scaleLabelsVisible"
   | "scaleUnitMode"
   | "selectionBounds"
@@ -727,10 +812,36 @@ function Viewport3DOverlayLayerStack({
       {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
         <>
           <DomainBoxLayer
-            bounds={bounds}
+            bounds={
+              fdmUniverseOutsideSupport?.magneticSupportBounds ??
+              fdmDomain?.bounds ??
+              bounds
+            }
+            boundsOpacityPercent={fdmSettings.boundsOpacityPercent}
             boundsVisible={fdmSettings.boundsVisible}
             colors={colors}
             onSelectDomain={onSelectDomain}
+          />
+          <FdmUniverseOutsideSupportLayer
+            colors={colors}
+            model={
+              fdmAirboxPassPlan.needsExtentOverlay
+                ? fdmUniverseOutsideSupport
+                : null
+            }
+            onSelect={onSelectFdmUniverseOutsideSupport}
+            settings={fdmUniverseOutsideSupportSettings}
+            tracker={tracker}
+          />
+          <FdmMultilayerAirboxBoundsLayer
+            colors={colors}
+            onSelect={() => {
+              if (fdmMultilayerAirboxView) {
+                onSelectFdmTarget(fdmMultilayerAirboxView.target);
+              }
+            }}
+            tracker={tracker}
+            view={fdmMultilayerAirboxView}
           />
           <SelectionHighlightLayer
             bounds={selectionBounds}
@@ -773,19 +884,21 @@ function Viewport3DModelLayerStack({
   airboxSettings,
   bounds,
   colors,
-  fdmInstanceModel,
-  fdmSettings,
-  fdmSurfaceColors,
-  fdmVectorSegments,
+  fdmAirboxPassPlan,
+  fdmAirboxFieldVector,
+  fdmAirboxInstanceModel,
+  fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorSegments,
+  fdmMultilayerAirboxView,
+  fdmLaneActive,
+  fdmUniverseOutsideSupportSettings,
+  fdmNativeLayerViews,
+  fdmTargetViews,
   fieldModel,
-  fieldVector,
-  fallbackSettings,
-  femDomain,
   hysteresisReplayGlyphModel,
   getObjectSettings,
   getPartSettings,
   inspectEnabled,
-  inspectQuantityId,
   magnetizationTexturePreviews,
   materialProfile,
   meshQualityColors,
@@ -797,6 +910,9 @@ function Viewport3DModelLayerStack({
   onInspectClear,
   onInspectSample,
   onSelectDomain,
+  onSelectFdmTarget,
+  onSelectFdmUniverseOutsideSupport,
+  onSelectFdmCell,
   onSelectObject,
   onSelectPart,
   onSelectRegion,
@@ -819,14 +935,17 @@ function Viewport3DModelLayerStack({
   | "airboxSettings"
   | "bounds"
   | "colors"
-  | "fdmInstanceModel"
-  | "fdmSettings"
-  | "fdmSurfaceColors"
-  | "fdmVectorSegments"
+  | "fdmAirboxPassPlan"
+  | "fdmAirboxFieldVector"
+  | "fdmAirboxInstanceModel"
+  | "fdmAirboxVectorGlyphColors"
+  | "fdmAirboxVectorSegments"
+  | "fdmMultilayerAirboxView"
+  | "fdmLaneActive"
+  | "fdmUniverseOutsideSupportSettings"
+  | "fdmNativeLayerViews"
+  | "fdmTargetViews"
   | "fieldModel"
-  | "fieldVector"
-  | "fallbackSettings"
-  | "femDomain"
   | "getObjectSettings"
   | "getPartSettings"
   | "hysteresisReplayGlyphModel"
@@ -838,10 +957,12 @@ function Viewport3DModelLayerStack({
   | "periodicOverlayModel"
   | "meshSizeHighlightModel"
   | "inspectEnabled"
-  | "inspectQuantityId"
   | "onInspectClear"
   | "onInspectSample"
   | "onSelectDomain"
+  | "onSelectFdmTarget"
+  | "onSelectFdmUniverseOutsideSupport"
+  | "onSelectFdmCell"
   | "onSelectObject"
   | "onSelectPart"
   | "onSelectRegion"
@@ -864,11 +985,21 @@ function Viewport3DModelLayerStack({
   const modelLayerStageKey = useMemo(
     () =>
       resolveViewport3DModelLayerStageKey({
-        fdmInstanceModel,
+        fdmAirboxInstanceModel,
+        fdmMultilayerAirboxView,
+        fdmNativeLayerViews,
+        fdmTargetViews,
         primitiveModel,
         topologyModel,
       }),
-    [fdmInstanceModel, primitiveModel, topologyModel],
+    [
+      fdmAirboxInstanceModel,
+      fdmMultilayerAirboxView,
+      fdmNativeLayerViews,
+      fdmTargetViews,
+      primitiveModel,
+      topologyModel,
+    ],
   );
   const modelLayerStage = useViewport3DModelLayerStage({
     resetKey: modelLayerStageKey,
@@ -898,6 +1029,18 @@ function Viewport3DModelLayerStack({
     ? realizedRegionOverlayModels.status
     : "disabled";
 
+  const realizedFdmObjectIds = useMemo(
+    () =>
+      new Set(
+        fdmTargetViews.flatMap((view) =>
+          view.ownerTarget.kind === "object" && view.ownerTarget.id.startsWith("object:")
+            ? [view.ownerTarget.id.slice("object:".length)]
+            : [],
+        ),
+      ),
+    [fdmTargetViews],
+  );
+
   if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
 
   const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
@@ -908,9 +1051,41 @@ function Viewport3DModelLayerStack({
     stageVisible: stageVisibility.authoredRegionOverlays,
   });
   const stagedFieldModel = stageVisibility.fieldDrivenLayers ? fieldModel : null;
-  const stagedFieldVector = stageVisibility.fieldDrivenLayers ? fieldVector : null;
-  const stagedFdmSurfaceColors = stageVisibility.fieldDrivenLayers
-    ? fdmSurfaceColors
+  const stagedFdmTargetViews = stageVisibility.fieldDrivenLayers
+    ? fdmTargetViews
+    : fdmTargetViews.map((view) => ({
+        ...view,
+        fieldVector: null,
+        surfaceColors: null,
+        vectorColors: null,
+        vectorGlyphColors: null,
+        vectorSegments: null,
+      }));
+  const stagedFdmNativeLayerViews = stageVisibility.fieldDrivenLayers
+    ? fdmNativeLayerViews
+    : fdmNativeLayerViews.map((view) => ({
+        ...view,
+        fieldVector: null,
+        surfaceColors: null,
+        vectorGlyphColors: null,
+        vectorSegments: null,
+      }));
+  const stagedFdmMultilayerAirboxView =
+    stageVisibility.fieldDrivenLayers || !fdmMultilayerAirboxView
+      ? fdmMultilayerAirboxView
+      : {
+          ...fdmMultilayerAirboxView,
+          fieldVector: null,
+          surfaceColors: null,
+          vectorGlyphColors: null,
+          vectorSegments: null,
+        };
+  const fdmAirboxMeshSettings = fdmUniverseOutsideSupportSettings
+    ? {
+        ...fdmUniverseOutsideSupportSettings,
+        boundsVisible: false,
+        shaderVisible: false,
+      }
     : null;
   const stagedMeshQualityColors = stageVisibility.fieldDrivenLayers
     ? meshQualityColors
@@ -930,30 +1105,121 @@ function Viewport3DModelLayerStack({
       ) : null}
       {stageVisibility.baseGeometry &&
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
+        <>
+          {stagedFdmNativeLayerViews.map((view) => (
+            <FdmCuboidLayer
+              adoptionRegistry={adoptionRegistry}
+              carrierId={view.target.id}
+              colors={colors}
+              fieldVector={view.fieldVector}
+              instanceModel={view.model}
+              inspectEnabled={false}
+              inspectQuantityId={view.settings.activeQuantityId}
+              key={view.target.id}
+              materialProfile={materialProfile}
+              onSelectDomain={onSelectDomain}
+              onSelectTarget={() => onSelectFdmTarget(view.target)}
+              onSelectFdmCell={undefined}
+              onSelectRegion={undefined}
+              regionOverlays={[]}
+              selectedObjectId={selectedObjectId}
+              selectedRegionId={selectedRegionId}
+              settings={view.settings}
+              surfaceColors={view.surfaceColors}
+              tracker={tracker}
+              vectorColorMode={vectorColorMode}
+              vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
+              vectorSegments={view.vectorSegments}
+              vectorStyle={vectorStyle}
+            />
+          ))}
+          {stagedFdmMultilayerAirboxView ? (
+            <FdmCuboidLayer
+              adoptionRegistry={adoptionRegistry}
+              carrierId={stagedFdmMultilayerAirboxView.target.id}
+              colors={colors}
+              fieldVector={stagedFdmMultilayerAirboxView.fieldVector}
+              instanceModel={stagedFdmMultilayerAirboxView.model}
+              inspectEnabled={false}
+              inspectQuantityId={stagedFdmMultilayerAirboxView.settings.activeQuantityId}
+              key={stagedFdmMultilayerAirboxView.target.id}
+              materialProfile={materialProfile}
+              onSelectDomain={onSelectDomain}
+              onSelectTarget={() =>
+                onSelectFdmTarget(stagedFdmMultilayerAirboxView.target)
+              }
+              onSelectFdmCell={undefined}
+              onSelectRegion={undefined}
+              regionOverlays={[]}
+              selectedObjectId={selectedObjectId}
+              selectedRegionId={selectedRegionId}
+              settings={stagedFdmMultilayerAirboxView.settings}
+              surfaceColors={stagedFdmMultilayerAirboxView.surfaceColors}
+              tracker={tracker}
+              vectorColorMode={stagedFdmMultilayerAirboxView.settings.vectorColorMode}
+              vectorGlyphColors={
+                stagedFdmMultilayerAirboxView.vectorGlyphColors?.colors ?? null
+              }
+              vectorSegments={stagedFdmMultilayerAirboxView.vectorSegments}
+              vectorStyle={vectorStyle}
+            />
+          ) : null}
+          {stagedFdmTargetViews.map((view) => (
+            <FdmCuboidLayer
+              adoptionRegistry={adoptionRegistry}
+              carrierId={view.target.id}
+              colors={colors}
+              fieldVector={view.fieldVector}
+              geometryScopeInstanceOrdinals={view.surfaceInstanceOrdinals}
+              instanceModel={view.sourceModel}
+              instanceOrdinals={view.instanceOrdinals}
+              inspectEnabled={inspectEnabled}
+              inspectQuantityId={view.settings.activeQuantityId}
+              key={view.target.id}
+              materialProfile={materialProfile}
+              onInspectClear={onInspectClear}
+              onInspectSample={onInspectSample}
+              onSelectDomain={onSelectDomain}
+              onSelectTarget={() => onSelectFdmTarget(view.target)}
+              onSelectFdmCell={onSelectFdmCell}
+              onSelectRegion={onSelectRegion}
+              regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
+              selectedObjectId={selectedObjectId}
+              selectedRegionId={selectedRegionId}
+              settings={view.settings}
+              surfaceColors={view.surfaceColors}
+              tracker={tracker}
+              vectorColorMode={vectorColorMode}
+              vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
+              vectorSegments={view.vectorSegments}
+              vectorStyle={vectorStyle}
+            />
+          ))}
+        </>
+      ) : null}
+      {stageVisibility.baseGeometry &&
+      viewport3DFdmCuboidLayerEnabledFromBrowserConfig() &&
+      fdmAirboxPassPlan.needsInactiveCellGeometry && fdmAirboxMeshSettings ? (
         <FdmCuboidLayer
-          adoptionRegistry={adoptionRegistry}
           colors={colors}
-          fieldVector={stagedFieldVector}
-          instanceModel={fdmInstanceModel}
-          inspectEnabled={inspectEnabled}
-          inspectQuantityId={inspectQuantityId}
+          fieldVector={fdmAirboxFieldVector}
+          vectorGlyphColors={fdmAirboxVectorGlyphColors?.colors ?? null}
+          instanceModel={fdmAirboxInstanceModel}
+          inspectEnabled={false}
+          inspectQuantityId="m"
           materialProfile={materialProfile}
-          onInspectClear={onInspectClear}
-          onInspectSample={onInspectSample}
-          onSelectDomain={onSelectDomain}
-          onSelectRegion={onSelectRegion}
-          regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
-          selectedObjectId={selectedObjectId}
-          selectedRegionId={selectedRegionId}
-          settings={fdmSettings}
-          surfaceColors={stagedFdmSurfaceColors}
+          onSelectDomain={onSelectFdmUniverseOutsideSupport}
+          regionOverlays={[]}
+          settings={fdmAirboxMeshSettings}
+          surfaceColors={null}
           tracker={tracker}
-          vectorColorMode={vectorColorMode}
-          vectorSegments={fdmVectorSegments}
+          vectorColorMode={fdmAirboxMeshSettings.vectorColorMode}
+          vectorSegments={fdmAirboxVectorSegments}
           vectorStyle={vectorStyle}
         />
       ) : null}
-      {stageVisibility.baseGeometry &&
+      {!fdmLaneActive &&
+      stageVisibility.baseGeometry &&
       viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
         <AirboxLayer
           adoptionRegistry={adoptionRegistry}
@@ -977,23 +1243,22 @@ function Viewport3DModelLayerStack({
           materialProfile={materialProfile}
           onSelectObject={onSelectObject}
           primitiveModel={primitiveModel}
+          realizedObjectIds={realizedFdmObjectIds}
           tracker={tracker}
         />
       ) : null}
-      {stageVisibility.baseGeometry &&
+      {!fdmLaneActive &&
+      stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
         <TopologyMeshLayer
           adoptionRegistry={adoptionRegistry}
           colors={colors}
-          fallbackSettings={fallbackSettings}
-          femDomain={femDomain}
           fieldModel={stagedFieldModel}
           getPartSettings={getPartSettings}
           materialProfile={materialProfile}
           magnetizationTexturePreviews={magnetizationTexturePreviews}
           meshQualityColors={stagedMeshQualityColors}
           meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
-          onSelectDomain={onSelectDomain}
           onSelectPart={onSelectPart}
           tracker={tracker}
           topologyFreshness={topologyFreshness}
@@ -1099,6 +1364,7 @@ function RegionOverlayNativePickingLayer({
 }
 
 function Viewport3DInteractionAndHudStack({
+  bounds,
   cameraGestureRef,
   cameraOrthographicScale,
   cameraProjection,
@@ -1117,6 +1383,7 @@ function Viewport3DInteractionAndHudStack({
   viewCubeVisible,
 }: Pick<
   Viewport3DSceneProps,
+  | "bounds"
   | "cameraOrthographicScale"
   | "cameraProjection"
   | "cameraState"
@@ -1138,6 +1405,7 @@ function Viewport3DInteractionAndHudStack({
   return (
     <>
       <OrbitCameraControls
+        bounds={bounds}
         cameraGestureRef={cameraGestureRef}
         cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
@@ -1175,6 +1443,7 @@ export function Viewport3DScene({
   cameraProjection,
   cameraState,
   colors,
+  fdmAirboxFieldVector,
   clip,
   clipFrameRotationDegrees,
   clipIntersectionMarkers,
@@ -1183,16 +1452,21 @@ export function Viewport3DScene({
   planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
+  fdmLaneActive,
+  fdmAirboxInstanceModel,
+  fdmAirboxPassPlan,
   airboxSettings,
-  fdmInstanceModel,
+  fdmDomain,
+  fdmUniverseOutsideSupport,
+  fdmUniverseOutsideSupportSettings,
+  fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorSegments,
+  fdmMultilayerAirboxView,
+  fdmNativeLayerViews,
+  fdmTargetViews,
   fdmSettings,
-  fdmSurfaceColors,
-  fdmVectorSegments,
-  fieldVector,
-  femDomain,
   fieldModel,
   fitRevision,
-  fallbackSettings,
   getObjectSettings,
   getPartSettings,
   hysteresisReplayGlyphModel,
@@ -1210,6 +1484,9 @@ export function Viewport3DScene({
   onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
+  onSelectFdmTarget,
+  onSelectFdmUniverseOutsideSupport,
+  onSelectFdmCell,
   onSelectPart,
   onSelectRegion,
   orbitDebugAngles,
@@ -1235,7 +1512,6 @@ export function Viewport3DScene({
   visualizationRevision,
   hslReferenceVisible,
   inspectEnabled,
-  inspectQuantityId,
   onInspectClear,
   onInspectSample,
   scaleLabelsVisible,
@@ -1249,19 +1525,23 @@ export function Viewport3DScene({
   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
-  const cameraClip = useMemo(
-    () => resolveViewport3DProjectionCameraClip(bounds, cameraState),
+  const effectiveCameraState = useMemo(
+    () => resolveViewport3DEffectiveCameraState({ bounds, cameraState }),
     [bounds, cameraState],
+  );
+  const cameraClip = useMemo(
+    () => resolveViewport3DProjectionCameraClip(bounds, effectiveCameraState),
+    [bounds, effectiveCameraState],
   );
   const orthographicCameraFrame = useMemo(
     () =>
       resolveViewport3DOrthographicCameraFrame(
         bounds,
         viewportSize,
-        cameraState,
+        effectiveCameraState,
         cameraOrthographicScale,
       ),
-    [bounds, cameraOrthographicScale, cameraState, viewportSize],
+    [bounds, cameraOrthographicScale, effectiveCameraState, viewportSize],
   );
   const visualProfile = useMemo(
     () => getViewport3DVisualProfile(visualProfileId),
@@ -1273,17 +1553,51 @@ export function Viewport3DScene({
   );
 
   useLayoutEffect(() => {
+    if (cameraProjection === "orthographic") {
+      const activeCamera = orthographicCameraRef.current;
+      if (!activeCamera) return;
+      setThreeState({ camera: activeCamera });
+      applyViewport3DOrthographicCameraPose(
+        activeCamera,
+        effectiveCameraState,
+        cameraClip.near,
+        cameraClip.far,
+      );
+    } else {
+      const activeCamera = perspectiveCameraRef.current;
+      if (!activeCamera) return;
+      setThreeState({ camera: activeCamera });
+      applyViewport3DPerspectiveCameraPose(
+        activeCamera,
+        effectiveCameraState,
+        cameraClip.near,
+        cameraClip.far,
+        PERSPECTIVE_CAMERA_FOV_DEGREES,
+      );
+    }
+    return scheduleViewport3DProjectionRenderFrames({ invalidate, tracker });
+    // Camera pose is applied only on projection change or mount — not on every
+    // camera state update.  OrbitControls owns the live camera position during
+    // interaction; re-applying React state on every debounced update would
+    // overwrite the current OrbitControls position and cause visible "rewind".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraProjection, invalidate, setThreeState, tracker]);
+
+  // Bounds/resource changes still need to refresh clipping, but updating the
+  // clip planes must not re-apply the declarative pose while OrbitControls is
+  // moving the live camera.
+  useLayoutEffect(() => {
     const activeCamera =
       cameraProjection === "orthographic"
         ? orthographicCameraRef.current
         : perspectiveCameraRef.current;
     if (!activeCamera) return;
-
-    setThreeState({ camera: activeCamera });
+    activeCamera.near = cameraClip.near;
+    activeCamera.far = cameraClip.far;
     activeCamera.updateProjectionMatrix();
-    activeCamera.updateMatrixWorld(true);
-    return scheduleViewport3DProjectionRenderFrames({ invalidate, tracker });
-  }, [cameraProjection, invalidate, setThreeState, tracker]);
+    tracker.recordDirtyFrame("camera-clip");
+    invalidate();
+  }, [cameraClip, cameraProjection, invalidate, tracker]);
 
   // Demand rendering needs an explicit frame when async resources settle.
   useEffect(() => {
@@ -1315,7 +1629,7 @@ export function Viewport3DScene({
         bounds={bounds}
         cameraClip={cameraClip}
         cameraGestureRef={cameraGestureRef}
-        cameraState={cameraState}
+        cameraState={effectiveCameraState}
         fitRevision={fitRevision}
         onCameraChange={onCameraChange}
         orthographicCameraFrame={orthographicCameraFrame}
@@ -1327,7 +1641,7 @@ export function Viewport3DScene({
       <Viewport3DOverlayLayerStack
         bounds={bounds}
         cameraProjection={cameraProjection}
-        cameraState={cameraState}
+        cameraState={effectiveCameraState}
         clip={clip}
         clipFrameRotationDegrees={clipFrameRotationDegrees}
         clipIntersectionMarkers={clipIntersectionMarkers}
@@ -1337,9 +1651,16 @@ export function Viewport3DScene({
         planarMonitorFramePreview={planarMonitorFramePreview}
         dimensionFrameDensity={dimensionFrameDensity}
         dimensionFrameMode={dimensionFrameMode}
+        fdmAirboxPassPlan={fdmAirboxPassPlan}
+        fdmDomain={fdmDomain}
+        fdmMultilayerAirboxView={fdmMultilayerAirboxView}
+        fdmUniverseOutsideSupport={fdmUniverseOutsideSupport}
+        fdmUniverseOutsideSupportSettings={fdmUniverseOutsideSupportSettings}
         fdmSettings={fdmSettings}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
+        onSelectFdmTarget={onSelectFdmTarget}
+        onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
         scaleLabelsVisible={scaleLabelsVisible}
         scaleUnitMode={scaleUnitMode}
         selectionBounds={selectionBounds}
@@ -1350,16 +1671,18 @@ export function Viewport3DScene({
         airboxSettings={airboxSettings}
         bounds={bounds}
         colors={colors}
-        fdmInstanceModel={fdmInstanceModel}
-        fdmSettings={fdmSettings}
-        fdmSurfaceColors={fdmSurfaceColors}
-        fdmVectorSegments={fdmVectorSegments}
+        fdmLaneActive={fdmLaneActive}
+        fdmAirboxFieldVector={fdmAirboxFieldVector}
+        fdmAirboxInstanceModel={fdmAirboxInstanceModel}
+        fdmAirboxPassPlan={fdmAirboxPassPlan}
+        fdmAirboxVectorGlyphColors={fdmAirboxVectorGlyphColors}
+        fdmAirboxVectorSegments={fdmAirboxVectorSegments}
+        fdmMultilayerAirboxView={fdmMultilayerAirboxView}
+        fdmNativeLayerViews={fdmNativeLayerViews}
+        fdmTargetViews={fdmTargetViews}
+        fdmUniverseOutsideSupportSettings={fdmUniverseOutsideSupportSettings}
         fieldModel={fieldModel}
-        fieldVector={fieldVector}
         inspectEnabled={inspectEnabled}
-        inspectQuantityId={inspectQuantityId}
-        fallbackSettings={fallbackSettings}
-        femDomain={femDomain}
         getObjectSettings={getObjectSettings}
         getPartSettings={getPartSettings}
         hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
@@ -1374,6 +1697,9 @@ export function Viewport3DScene({
         onInspectClear={onInspectClear}
         onInspectSample={onInspectSample}
         onSelectDomain={onSelectDomain}
+        onSelectFdmTarget={onSelectFdmTarget}
+        onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
+        onSelectFdmCell={onSelectFdmCell}
         onSelectObject={onSelectObject}
         onSelectPart={onSelectPart}
         onSelectRegion={onSelectRegion}
@@ -1392,10 +1718,11 @@ export function Viewport3DScene({
         visualizationRevision={visualizationRevision}
       />
       <Viewport3DInteractionAndHudStack
+        bounds={bounds}
         cameraGestureRef={cameraGestureRef}
         cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
-        cameraState={cameraState}
+        cameraState={effectiveCameraState}
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}
         orbitDebugAngles={orbitDebugAngles}

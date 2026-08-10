@@ -37,12 +37,14 @@ No constructor parameters are owned by this conceptual page.
 ### Authoring-to-IR inspection
 
 ```python
-# %% Inspect the canonical IR produced by a loaded Problem
+# %% Inspect the canonical IR lowering of a study scenario
 import fullmag as fm
 
-loaded = fm.load_problem_from_script("examples/mumax_standard_problem_5_fdm.py")
-problem_ir = loaded.stages[0].problem.to_ir()
-assert problem_ir["magnets"]
+study = fm.study("ir_inspection_study", engine="fem", device="gpu", mode="strict")
+study.set_state(film=fm.Box(size=(100e-9, 50e-9, 10e-9)), material=fm.Ferromagnet.permalloy())
+stage = study.stages.add_relax(algorithm="llg_overdamped")
+ir_dict = stage.to_ir()
+assert ir_dict is not None
 ```
 
 

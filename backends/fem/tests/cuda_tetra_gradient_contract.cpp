@@ -15,6 +15,7 @@ namespace {
 
 constexpr double kBohrMagneton = 9.274009994e-24;
 constexpr double kElectronCharge = 1.60217662e-19;
+constexpr double kExactElectronCharge = 1.602176634e-19;
 
 void check(bool condition, const char *message)
 {
@@ -92,6 +93,8 @@ void cuda_zhang_li_skew_tetra_matches_independent_affine_oracle()
     double *d_nodes = copy_to_device(nodes_xyz);
     uint32_t *d_elements = copy_to_device(elements);
     uint8_t *d_magnetic_elements = copy_to_device(magnetic_elements);
+    const std::vector<uint8_t> active_elements = {1};
+    uint8_t *d_active_elements = copy_to_device(active_elements);
     uint8_t *d_magnetic_nodes = copy_to_device(magnetic_nodes);
     double *d_mx = copy_to_device(mx);
     double *d_my = copy_to_device(my);
@@ -107,9 +110,9 @@ void cuda_zhang_li_skew_tetra_matches_independent_affine_oracle()
     double *d_max_rhs = copy_to_device(std::vector<double>{0.});
 
     fullmag::fem::fullmag_cuda_add_zhang_li_stt_rhs(
-        d_nodes, d_elements, d_magnetic_elements, d_mx, d_my, d_mz, d_ms, nullptr,
+        d_nodes, d_elements, d_magnetic_elements, nullptr, d_mx, d_my, d_mz, d_ms, nullptr,
         d_magnetic_nodes, d_work_x, d_work_y, d_work_z, d_weight, d_rhs_x, d_rhs_y,
-        d_rhs_z, d_max_rhs, current_x, 0.0, 0.0, 1.0, 0.0, 0.0, 1, 4);
+        d_rhs_z, d_max_rhs, current_x, 0.0, 0.0, 1.0, 0.0, 2.0, 0u, 0.0, 1, 4);
     check_cuda(cudaGetLastError(), "CUDA Zhang-Li launch");
     check_cuda(cudaDeviceSynchronize(), "CUDA Zhang-Li synchronize");
 
@@ -128,14 +131,39 @@ void cuda_zhang_li_skew_tetra_matches_independent_affine_oracle()
     check_cuda(cudaMemset(d_rhs_y, 0, 4 * sizeof(double)), "clear reversed RHS y");
     check_cuda(cudaMemset(d_rhs_z, 0, 4 * sizeof(double)), "clear reversed RHS z");
     fullmag::fem::fullmag_cuda_add_zhang_li_stt_rhs(
-        d_nodes, d_elements, d_magnetic_elements, d_mx, d_my, d_mz, d_ms, nullptr,
+        d_nodes, d_elements, d_magnetic_elements, nullptr, d_mx, d_my, d_mz, d_ms, nullptr,
         d_magnetic_nodes, d_work_x, d_work_y, d_work_z, d_weight, d_rhs_x, d_rhs_y,
-        d_rhs_z, d_max_rhs, -current_x, 0.0, 0.0, 1.0, 0.0, 0.0, 1, 4);
+        d_rhs_z, d_max_rhs, -current_x, 0.0, 0.0, 1.0, 0.0, 2.0, 0u, 0.0, 1, 4);
     check_cuda(cudaGetLastError(), "CUDA reversed Zhang-Li launch");
     check_cuda(cudaDeviceSynchronize(), "CUDA reversed Zhang-Li synchronize");
     const auto reversed_z = copy_from_device(d_rhs_z, 4);
     for (double value : reversed_z) {
         check_near(value, -u_x, 1e-12 * std::max(std::abs(u_x), 1e-24), "CUDA current reversal velocity");
+    }
+
+    // The canonical FEM v1 branch uses exact e, explicit g=2, no beta
+    // denominator, and the signed Gilbert-source direction shared with CPU.
+    check_cuda(cudaMemset(d_rhs_x, 0, 4 * sizeof(double)), "clear canonical RHS x");
+    check_cuda(cudaMemset(d_rhs_y, 0, 4 * sizeof(double)), "clear canonical RHS y");
+    check_cuda(cudaMemset(d_rhs_z, 0, 4 * sizeof(double)), "clear canonical RHS z");
+    fullmag::fem::fullmag_cuda_add_zhang_li_stt_rhs(
+        d_nodes, d_elements, d_magnetic_elements, d_active_elements,
+        d_mx, d_my, d_mz, d_ms, nullptr, d_magnetic_nodes,
+        d_work_x, d_work_y, d_work_z, d_weight, d_rhs_x, d_rhs_y,
+        d_rhs_z, d_max_rhs, current_x, 0.0, 0.0, 1.0, 0.0, 2.0,
+        FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1, 0.0, 1, 4);
+    check_cuda(cudaGetLastError(), "CUDA canonical Zhang-Li launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA canonical Zhang-Li synchronize");
+    const auto canonical_x = copy_from_device(d_rhs_x, 4);
+    const auto canonical_z = copy_from_device(d_rhs_z, 4);
+    const double canonical_u_x =
+        kBohrMagneton * current_x / (kExactElectronCharge * ms[0]);
+    for (size_t node = 0; node < 4; ++node) {
+        const double scale = std::max(std::abs(canonical_u_x), 1e-24);
+        check_near(canonical_x[node], mz[node] * canonical_u_x, 1e-12 * scale,
+            "CUDA canonical Zhang-Li signed Gilbert RHS x");
+        check_near(canonical_z[node], -canonical_u_x, 1e-12 * scale,
+            "CUDA canonical Zhang-Li signed Gilbert RHS z");
     }
 
     // The ten-step comparison uses the production CPU operator and CUDA wrapper on
@@ -190,9 +218,9 @@ void cuda_zhang_li_skew_tetra_matches_independent_affine_oracle()
             check_cuda(cudaMemset(d_rhs_y, 0, 4 * sizeof(double)), "clear trajectory RHS y");
             check_cuda(cudaMemset(d_rhs_z, 0, 4 * sizeof(double)), "clear trajectory RHS z");
             fullmag::fem::fullmag_cuda_add_zhang_li_stt_rhs(
-                d_nodes, d_elements, d_magnetic_elements, d_mx, d_my, d_mz, d_ms, nullptr,
+                d_nodes, d_elements, d_magnetic_elements, nullptr, d_mx, d_my, d_mz, d_ms, nullptr,
                 d_magnetic_nodes, d_work_x, d_work_y, d_work_z, d_weight, d_rhs_x, d_rhs_y,
-                d_rhs_z, d_max_rhs, signed_current, 0.0, 0.0, 1.0, 0.0, 0.0, 1, 4);
+                d_rhs_z, d_max_rhs, signed_current, 0.0, 0.0, 1.0, 0.0, 2.0, 0u, 0.0, 1, 4);
             check_cuda(cudaGetLastError(), "CUDA trajectory Zhang-Li launch");
             check_cuda(cudaDeviceSynchronize(), "CUDA trajectory synchronize");
             const auto rx = copy_from_device(d_rhs_x, 4);
@@ -234,7 +262,7 @@ void cuda_zhang_li_skew_tetra_matches_independent_affine_oracle()
     check(cuda_reversed[2] < trajectory_initial[2], "reversed current reverses ten-step texture velocity");
     std::printf("STT trajectory dt-study: coarse-fine %.17g, CPU-GPU %.17g, bound %.17g\n", convergence_error, cpu_gpu_error, trajectory_bound);
 
-    for (void *pointer : {static_cast<void *>(d_nodes), static_cast<void *>(d_elements), static_cast<void *>(d_magnetic_elements), static_cast<void *>(d_magnetic_nodes), static_cast<void *>(d_mx), static_cast<void *>(d_my), static_cast<void *>(d_mz), static_cast<void *>(d_ms), static_cast<void *>(d_work_x), static_cast<void *>(d_work_y), static_cast<void *>(d_work_z), static_cast<void *>(d_weight), static_cast<void *>(d_rhs_x), static_cast<void *>(d_rhs_y), static_cast<void *>(d_rhs_z), static_cast<void *>(d_max_rhs)}) {
+    for (void *pointer : {static_cast<void *>(d_nodes), static_cast<void *>(d_elements), static_cast<void *>(d_magnetic_elements), static_cast<void *>(d_active_elements), static_cast<void *>(d_magnetic_nodes), static_cast<void *>(d_mx), static_cast<void *>(d_my), static_cast<void *>(d_mz), static_cast<void *>(d_ms), static_cast<void *>(d_work_x), static_cast<void *>(d_work_y), static_cast<void *>(d_work_z), static_cast<void *>(d_weight), static_cast<void *>(d_rhs_x), static_cast<void *>(d_rhs_y), static_cast<void *>(d_rhs_z), static_cast<void *>(d_max_rhs)}) {
         cudaFree(pointer);
     }
 }

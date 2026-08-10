@@ -1775,7 +1775,7 @@ pub fn slice_etag_token(
     quantity_id: &str,
     session_id: &str,
     field_revision: u64,
-    domain_generation_id: u64,
+    domain_generation_id: &str,
     q: &ResolvedSliceQuery,
 ) -> String {
     let comp_str = match &q.component {

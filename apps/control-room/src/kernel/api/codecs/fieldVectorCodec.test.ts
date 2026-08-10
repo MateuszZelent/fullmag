@@ -31,16 +31,18 @@ function makeFieldVectorBuffer({
 }
 
 function makeFieldVectorV3Buffer({
-  domainGenerationId = BigInt(42),
+  domainGenerationId = "generation-42",
   indexing = 0,
+  metadataVersion = 2,
   nodeIndices = [],
   quantityId = "m",
   scopeId = "",
   scopeKind = "full",
   values = [1, 0, -1],
 }: {
-  domainGenerationId?: bigint;
+  domainGenerationId?: string;
   indexing?: number;
+  metadataVersion?: number;
   nodeIndices?: number[];
   quantityId?: string;
   scopeId?: string;
@@ -50,8 +52,13 @@ function makeFieldVectorV3Buffer({
   const encoder = new TextEncoder();
   const scopeKindBytes = encoder.encode(scopeKind);
   const scopeIdBytes = encoder.encode(scopeId);
+  const generationIdBytes = encoder.encode(domainGenerationId);
   const rawMetadataLength =
-    68 + scopeKindBytes.length + scopeIdBytes.length + nodeIndices.length * 4;
+    68 +
+    scopeKindBytes.length +
+    scopeIdBytes.length +
+    generationIdBytes.length +
+    nodeIndices.length * 4;
   const metadataLength = Math.ceil(rawMetadataLength / 8) * 8;
   const buffer = new ArrayBuffer(
     48 + metadataLength + values.length * Float64Array.BYTES_PER_ELEMENT,
@@ -73,8 +80,8 @@ function makeFieldVectorV3Buffer({
   for (const [index, code] of [..."FMMI"].entries()) {
     view.setUint8(48 + index, code.charCodeAt(0));
   }
-  view.setUint16(52, 1, true);
-  view.setBigUint64(56, domainGenerationId, true);
+  view.setUint16(52, metadataVersion, true);
+  view.setUint16(56, generationIdBytes.length, true);
   view.setBigUint64(64, BigInt(7), true);
   new Uint8Array(buffer, 72, 32).fill(0xab);
   view.setUint32(104, indexing, true);
@@ -85,7 +92,11 @@ function makeFieldVectorV3Buffer({
   new Uint8Array(buffer, 116 + scopeKindBytes.length, scopeIdBytes.length).set(
     scopeIdBytes,
   );
-  let offset = 116 + scopeKindBytes.length + scopeIdBytes.length;
+  const generationIdStart = 116 + scopeKindBytes.length + scopeIdBytes.length;
+  new Uint8Array(buffer, generationIdStart, generationIdBytes.length).set(
+    generationIdBytes,
+  );
+  let offset = generationIdStart + generationIdBytes.length;
   for (const nodeIndex of nodeIndices) {
     view.setUint32(offset, nodeIndex, true);
     offset += 4;
@@ -110,7 +121,7 @@ describe("decodeFieldVector", () => {
     const decoded = decodeFieldVector(makeFieldVectorV3Buffer());
 
     expect(decoded.formatVersion).toBe(3);
-    expect(decoded.domainGenerationId).toBe("42");
+    expect(decoded.domainGenerationId).toBe("generation-42");
     expect(decoded.meshTopologyRevision).toBe("7");
     expect(decoded.meshTopologyHash).toBe("abababababababababababababababababababababababababababababababab");
     expect(decoded.scopeKind).toBe("full");
@@ -119,14 +130,60 @@ describe("decodeFieldVector", () => {
     expect(decoded.nodeIndices).toBeNull();
   });
 
-  it("preserves FMVP v3 u64 domain generation ids above Number.MAX_SAFE_INTEGER", () => {
+  it("preserves arbitrary UTF-8 FMVP v3 domain generation identities", () => {
     const decoded = decodeFieldVector(
       makeFieldVectorV3Buffer({
-        domainGenerationId: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(10),
+        domainGenerationId: "domain:warstwa-α/9007199254741001",
       }),
     );
 
-    expect(decoded.domainGenerationId).toBe("9007199254741001");
+    expect(decoded.domainGenerationId).toBe("domain:warstwa-α/9007199254741001");
+  });
+
+  it.each(["region", "layer"] as const)(
+    "decodes FDM %s scope metadata",
+    (scopeKind) => {
+      const decoded = decodeFieldVector(
+        makeFieldVectorV3Buffer({
+          indexing: 1,
+          nodeIndices: [4],
+          scopeId: `${scopeKind}:free`,
+          scopeKind,
+        }),
+      );
+
+      expect(decoded.scopeKind).toBe(scopeKind);
+      expect(decoded.scopeId).toBe(`${scopeKind}:free`);
+      expect(Array.from(decoded.nodeIndices ?? [])).toEqual([4]);
+    },
+  );
+
+  it("rejects obsolete metadata v1 instead of decoding generation bytes as u64", () => {
+    expect(() =>
+      decodeFieldVector(makeFieldVectorV3Buffer({ metadataVersion: 1 })),
+    ).toThrow(/Unsupported FMVP metadata version/);
+  });
+
+  it("rejects empty FMVP v3 generation identities", () => {
+    expect(() =>
+      decodeFieldVector(makeFieldVectorV3Buffer({ domainGenerationId: "" })),
+    ).toThrow(/domain generation/i);
+  });
+
+  it("rejects malformed metadata v2 generation lengths, reserved bytes, and padding", () => {
+    const oversizedGeneration = makeFieldVectorV3Buffer();
+    new DataView(oversizedGeneration).setUint16(56, 0xffff, true);
+    expect(() => decodeFieldVector(oversizedGeneration)).toThrow(/lengths exceed/);
+
+    const nonzeroReserved = makeFieldVectorV3Buffer();
+    new DataView(nonzeroReserved).setUint8(58, 1);
+    expect(() => decodeFieldVector(nonzeroReserved)).toThrow(/reserved bytes/);
+
+    const nonzeroPadding = makeFieldVectorV3Buffer();
+    const paddingView = new DataView(nonzeroPadding);
+    const metadataLength = paddingView.getUint32(8, true);
+    paddingView.setUint8(48 + metadataLength - 1, 1);
+    expect(() => decodeFieldVector(nonzeroPadding)).toThrow(/padding bytes/);
   });
 
   it("decodes scoped FMVP v3 node indices", () => {

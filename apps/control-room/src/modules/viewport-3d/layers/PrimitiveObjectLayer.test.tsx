@@ -11,6 +11,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   createPrimitiveObjectGeometry,
   releasePrimitiveObjectGeometry,
+  resolvePrimitiveObjectRenderSettings,
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
@@ -63,8 +64,13 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       source.indexOf("function PrimitiveObjectGizmo"),
     );
 
-    expect(primitiveSurfaceSource).toContain("settings.primitiveMonoColor");
+    expect(primitiveSurfaceSource).toContain("renderSettings.primitiveMonoColor");
+    expect(primitiveSurfaceSource).toContain(
+      'renderSettings.surfaceColorSource === "solid"',
+    );
     expect(primitiveSurfaceSource).toContain("renderPlan.primitive.opacity");
+    expect(primitiveSurfaceSource).toContain("renderPlan.points.visible");
+    expect(primitiveSurfaceSource).toContain("pointColorFromSettings");
     expect(primitiveSurfaceSource).not.toContain("fieldModel");
     expect(primitiveSurfaceSource).not.toContain("scalarColors");
     expect(primitiveSurfaceSource).not.toContain("magnetizationTexturePreview");
@@ -193,6 +199,18 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       .toBe(false);
   });
 
+  it("does not confuse ordinary wireframe with an unavailable manipulate mode", () => {
+    expect(
+      shouldRenderPrimitiveTransformGizmo({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        renderMode: "wireframe",
+        shaderVisible: true,
+        visible: true,
+        wireframeVisible: true,
+      }),
+    ).toBe(false);
+  });
+
   it("renders pre-mesh channels only before mesh-ready state", () => {
     expect(
       shouldRenderPrimitiveObject(
@@ -212,6 +230,16 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
       ),
     ).toBe(true);
+  });
+
+  it("does not render a primitive fallback when a realized FDM carrier owns the object", () => {
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "primitive-only" },
+        DEFAULT_OBJECT_VISUALIZATION,
+        true,
+      ),
+    ).toBe(false);
   });
 
   it("keeps pre-mesh wireframe and bounds independent from primitive fill", () => {
@@ -237,5 +265,44 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("uses a field-free primitive fill for a requested shaded pre-mesh pass", () => {
+    const settings = resolvePrimitiveObjectRenderSettings(
+      primitiveObject("box"),
+      { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: true },
+    );
+
+    expect(settings.primitiveVisible).toBe(true);
+    expect(settings.shaderVisible).toBe(true);
+  });
+
+  it("does not invent a primitive fill for wireframe-only or mesh-ready passes", () => {
+    expect(
+      resolvePrimitiveObjectRenderSettings(
+        primitiveObject("box"),
+        { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: false, wireframeVisible: true },
+      ).primitiveVisible,
+    ).toBe(false);
+    expect(
+      resolvePrimitiveObjectRenderSettings(
+        { ...primitiveObject("box"), meshState: "mesh-ready" },
+        { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: true },
+      ).primitiveVisible,
+    ).toBe(false);
+  });
+
+  it("renders a primitive-only points pass without a field payload", () => {
+    expect(
+      shouldRenderPrimitiveObject(
+        primitiveObject("box"),
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          pointsVisible: true,
+          shaderVisible: false,
+          wireframeVisible: false,
+        },
+      ),
+    ).toBe(true);
   });
 });

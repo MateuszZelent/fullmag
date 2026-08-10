@@ -3,9 +3,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildSharedDomainPolicyDiffRows,
   resolveCurrentMixedCertificateQualityPresentation,
+  resolveMeshDetailsLane,
+  shouldLoadMeshDetailsFemResources,
 } from "./useMeshDetailsModel";
 
 describe("useMeshDetailsModel helpers", () => {
+  it("only enables FEM mesh resources for an explicit FEM session lane", () => {
+    expect(resolveMeshDetailsLane("fem")).toBe("fem");
+    expect(resolveMeshDetailsLane("FEM")).toBe("fem");
+    expect(resolveMeshDetailsLane("fdm")).toBe("fdm");
+    expect(resolveMeshDetailsLane("auto")).toBe("unknown");
+    expect(resolveMeshDetailsLane(null)).toBe("unknown");
+
+    expect(shouldLoadMeshDetailsFemResources("fem", true)).toBe(true);
+    expect(shouldLoadMeshDetailsFemResources("fem", false)).toBe(false);
+    expect(shouldLoadMeshDetailsFemResources("fdm", true)).toBe(false);
+    expect(shouldLoadMeshDetailsFemResources("unknown", true)).toBe(false);
+  });
+
   it("builds current, draft, and realized shared-domain policy diff rows", () => {
     const rows = buildSharedDomainPolicyDiffRows({
       activeBuild: {

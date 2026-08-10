@@ -38,6 +38,7 @@ use crate::native_fem;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{
     NativeFemBackend, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    StageOerstedProvider,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
@@ -625,10 +626,17 @@ fn resolve_fem_engine_with_effective_request(
     policy: &str,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
     apply_runtime_gpu_index(problem, "fem");
-    let ir_policy = runtime_fem_policy(problem);
     let fe_order = runtime_fem_order(problem);
+    let (policy, env_override) = effective_fem_execution_policy(problem, policy);
+
+    let availability = native_fem::native_availability();
+    resolve_fem_engine_with_availability(problem, &policy, env_override, fe_order, &availability)
+}
+
+fn effective_fem_execution_policy(problem: &ProblemIR, requested_policy: &str) -> (String, bool) {
+    let ir_policy = runtime_fem_policy(problem);
     let strict_gpu = strict_fem_gpu_requested(problem);
-    let (policy, env_override) = match std::env::var("FULLMAG_FEM_EXECUTION") {
+    match std::env::var("FULLMAG_FEM_EXECUTION") {
         Ok(env_val) if strict_gpu && !fem_policy_requires_gpu(&env_val) => {
             runtime_warn_once(&format!(
                 "ignoring FULLMAG_FEM_EXECUTION={} because ProblemIR requests device=gpu in strict execution mode",
@@ -647,11 +655,13 @@ fn resolve_fem_engine_with_effective_request(
             (env_val, true)
         }
         Err(_) if all_in_gpu_fem_env_requested() => ("all_in_gpu".to_string(), true),
-        Err(_) => (ir_policy.to_string(), false),
-    };
-
-    let availability = native_fem::native_availability();
-    resolve_fem_engine_with_availability(problem, &policy, env_override, fe_order, &availability)
+        // `requested_policy` is already the canonical effective request. In
+        // the plan-aware path it includes a managed launcher override and,
+        // for a certified mixed-topology plan, the device bound to the plan.
+        // Falling back to the raw ProblemIR policy here silently discarded
+        // that request and could select the GPU lane for a CPU-bound stage.
+        Err(_) => (requested_policy.to_string(), false),
+    }
 }
 
 fn strict_fem_gpu_requested(problem: &ProblemIR) -> bool {
@@ -718,6 +728,10 @@ fn fem_gpu_rk_plan_ineligible_error(message: String) -> RunError {
     }
 }
 
+fn fem_plan_gpu_request_is_forced(requested_device: &str) -> bool {
+    matches!(requested_device, "gpu" | "all_in_gpu")
+}
+
 fn fem_gpu_min_nodes_threshold() -> Option<usize> {
     match std::env::var("FULLMAG_FEM_GPU_MIN_NODES") {
         Ok(raw) => match raw.trim().parse::<usize>() {
@@ -775,23 +789,25 @@ fn apply_fem_gpu_plan_constraints(
         }
     }
 
-    if let Some(message) = fem_gpu_rk_plan_ineligible_message(plan) {
-        if forced_gpu {
-            return Err(fem_gpu_rk_plan_ineligible_error(message));
+    if resolution.engine == FemEngine::NativeGpu {
+        if let Some(message) = fem_gpu_rk_plan_ineligible_message(plan) {
+            if forced_gpu {
+                return Err(fem_gpu_rk_plan_ineligible_error(message));
+            }
+            runtime_warn_once(&message);
+            resolution.engine = FemEngine::CpuNative;
+            resolution.fallback = Some(runtime_fallback(
+                fem_engine_id(FemEngine::NativeGpu),
+                fem_engine_id(FemEngine::CpuNative),
+                FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON,
+                message,
+            ));
+            return Ok(FemPlanEngineResolution {
+                engine: resolution.engine,
+                fallback: resolution.fallback,
+                fem_crossover_decision,
+            });
         }
-        runtime_warn_once(&message);
-        resolution.engine = FemEngine::CpuNative;
-        resolution.fallback = Some(runtime_fallback(
-            fem_engine_id(FemEngine::NativeGpu),
-            fem_engine_id(FemEngine::CpuNative),
-            FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON,
-            message,
-        ));
-        return Ok(FemPlanEngineResolution {
-            engine: resolution.engine,
-            fallback: resolution.fallback,
-            fem_crossover_decision,
-        });
     }
 
     if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
@@ -1388,7 +1404,7 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     apply_fem_gpu_plan_constraints(
         plan,
         resolve_fem_engine_with_effective_request(problem, &requested_device)?,
-        requested_device != "auto",
+        fem_plan_gpu_request_is_forced(&requested_device),
         fem_crossover_decision,
     )
 }
@@ -2113,6 +2129,7 @@ pub(crate) fn execute_fem_in_mode<'a>(
         outputs,
         live,
         artifact_writer,
+        None,
         execution_mode,
     )
 }
@@ -2134,6 +2151,7 @@ pub(crate) fn execute_fem_with_context<'a>(
         outputs,
         live,
         artifact_writer,
+        None,
         ExecutionMode::Strict,
     )
 }
@@ -2146,12 +2164,20 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    physics_execution_context: Option<
+        &crate::physics_graph_execution::PhysicsGraphExecutionContext,
+    >,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
-    let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    #[cfg(not(feature = "fem-gpu"))]
+    let _ = physics_execution_context;
+    let mut normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
     #[cfg(feature = "fem-gpu")]
     let transport_artifact_writer = artifact_writer.clone();
+    #[cfg(feature = "fem-gpu")]
+    let stage_oersted_callback_requested =
+        crate::native_fem::plan_requests_stage_oersted_callback(&normalized_plan);
     #[cfg(feature = "fem-gpu")]
     let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
         None
@@ -2163,6 +2189,50 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         }
         crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?
     };
+    #[cfg(feature = "fem-gpu")]
+    if let Some(field) = transport_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.oersted_field_xyz.as_ref())
+    {
+        if stage_oersted_callback_requested {
+            if normalized_plan.has_oersted_cylinder
+                || normalized_plan
+                    .oersted_field_xyz
+                    .as_ref()
+                    .is_some_and(|existing| !existing.is_empty())
+            {
+                return Err(RunError {
+                    message: "FEM stage-coupled solved-current Oersted cannot be combined with a static or analytical Oersted field".into(),
+                });
+            }
+            // The transport bundle remains an artifact/provenance source. The
+            // native backend receives the stage-dependent field through the
+            // callback installed immediately after backend creation.
+        } else {
+            if normalized_plan.has_oersted_cylinder {
+                return Err(RunError {
+                    message: "FEM solved-current Oersted cannot be combined with an analytical cylinder in the bounded runtime".into(),
+                });
+            }
+            if let Some(existing) = normalized_plan.oersted_field_xyz.as_mut() {
+                if existing.len() != field.len() {
+                    return Err(RunError {
+                        message: "FEM solved-current Oersted field length conflicts with the planned field".into(),
+                    });
+                }
+                for (planned, solved) in existing.iter_mut().zip(field) {
+                    *planned += *solved;
+                }
+            } else {
+                normalized_plan.oersted_field_xyz = Some(field.clone());
+            }
+            if normalized_plan.oersted_realization.is_none() {
+                return Err(RunError {
+                    message: "FEM solved-current transport returned a field without a resolved Oersted realization".into(),
+                });
+            }
+        }
+    }
     #[cfg(not(feature = "fem-gpu"))]
     if !normalized_plan.spin_transport_plans.is_empty() {
         return Err(RunError {
@@ -2266,6 +2336,9 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     let mut executed = executed;
     #[cfg(feature = "fem-gpu")]
     if let Some(mut bundle) = transport_bundle {
+        if let Some(context) = physics_execution_context {
+            context.observe_steady_transport(&mut executed.provenance);
+        }
         let mut next_revision = executed
             .field_snapshots
             .iter()
@@ -5525,6 +5598,15 @@ fn execute_cuda_fdm(
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
         timestep_policy,
+        executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
+            && (plan.zhang_li_formula_version.is_some()
+                || plan.slonczewski_formula_version.is_some()
+                || plan.sot_formula_version.is_some())
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -6174,6 +6256,9 @@ fn execute_native_fem(
     artifact_writer: Option<ArtifactPipelineSender>,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_transport_callback_requested =
+        crate::native_fem::plan_requests_stage_transport_callback(plan);
+    let coupled_stage_provider = crate::native_fem::StageM2CoupledProvider::from_plan(plan)?;
     let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -6200,6 +6285,31 @@ fn execute_native_fem(
 
     let mut backend =
         NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
+    if let Some(provider) =
+        StageOerstedProvider::from_plan_with_coupled(plan, coupled_stage_provider.clone())?
+    {
+        if engine != FemEngine::CpuNative {
+            return Err(RunError {
+                message: "native FEM stage Oersted callback is qualified only on the CPU lane; refusing GPU fallback".into(),
+            });
+        }
+        backend.install_stage_oersted_provider(Box::new(provider))?;
+    }
+    if let Some(provider) = crate::native_fem::StageTransportProvider::from_plan_with_coupled(
+        plan,
+        coupled_stage_provider,
+    )? {
+        if engine != FemEngine::CpuNative {
+            return Err(RunError {
+                message: "native FEM stage transport callback is qualified only on the CPU lane; refusing GPU fallback".into(),
+            });
+        }
+        backend.install_stage_transport_provider(Box::new(provider))?;
+    } else if stage_transport_callback_requested {
+        return Err(RunError {
+            message: "FEM stage transport callback was requested by the planner but no provider could be materialized".into(),
+        });
+    }
     backend.begin_stage(plan.time_stage.start_time_s)?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
@@ -6290,6 +6400,16 @@ fn execute_native_fem(
             None
         },
         timestep_policy,
+        executed_physics_kinds: if crate::fem::relax::algorithm::native_step_control(
+            plan.relaxation.as_ref(),
+        )
+        .is_none()
+            && plan.spin_torque_contract.is_some()
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
         dt_policy: None,
         mfem_device: plan.mfem_device_string.clone(),
         demag_refresh_interval_s: plan
@@ -7064,6 +7184,7 @@ mod tests {
             solve_region: None,
             conductivity_s_per_m: None,
             coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            time_envelope: None,
             definition: Some(descriptor.charge_definition.clone()),
         }];
         plan.spin_transport_plans = vec![resolved];
@@ -7277,6 +7398,13 @@ mod tests {
             lande_g: (formula_version == "zhang_li.fullmag.v1").then_some(2.0),
             active_node_mask: Some(vec![true; 4]),
             active_element_mask: Some(vec![true]),
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
         plan
     }
@@ -8541,6 +8669,31 @@ mod tests {
                 .engine,
             FemEngine::NativeGpu,
         );
+    }
+
+    #[test]
+    fn managed_cpu_request_is_not_replaced_by_script_auto_without_environment_override() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+
+        let requested = effective_fem_device_request(&problem);
+        let (policy, env_override) = effective_fem_execution_policy(&problem, &requested);
+
+        assert_eq!(requested, "cpu");
+        assert_eq!(policy, "cpu");
+        assert!(!env_override);
     }
 
     #[test]
@@ -11028,6 +11181,7 @@ mod tests {
                 solve_region: Some("free".to_string()),
                 conductivity_s_per_m: None,
                 coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
                 definition: None,
             });
 
@@ -11168,7 +11322,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_fem_canonical_zhang_li_falls_back_to_cpu_with_versioned_reason() {
+    fn auto_fem_canonical_zhang_li_remains_gpu_eligible() {
         let resolution = apply_fem_gpu_plan_constraints(
             &canonical_stt_fem_plan("zhang_li.fullmag.v1"),
             EngineResolution {
@@ -11178,13 +11332,35 @@ mod tests {
             false,
             None,
         )
-        .expect("auto FEM must resolve canonical Zhang-Li CPU-only STT to CPU");
+        .expect("auto FEM must keep canonical Zhang-Li on the native GPU lane");
+
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
+    }
+
+    #[test]
+    fn explicit_cpu_fem_plan_is_not_classified_as_forced_gpu() {
+        assert!(!fem_plan_gpu_request_is_forced("cpu"));
+        assert!(!fem_plan_gpu_request_is_forced("auto"));
+        assert!(fem_plan_gpu_request_is_forced("gpu"));
+        assert!(fem_plan_gpu_request_is_forced("all_in_gpu"));
+    }
+
+    #[test]
+    fn explicit_cpu_zhang_li_plan_reaches_cpu_preflight() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &canonical_stt_fem_plan("zhang_li.fullmag.v1"),
+            EngineResolution {
+                engine: FemEngine::CpuNative,
+                fallback: None,
+            },
+            fem_plan_gpu_request_is_forced("cpu"),
+            None,
+        )
+        .expect("CPU Zhang-Li plan must not enter the strict GPU preflight");
 
         assert_eq!(resolution.engine, FemEngine::CpuNative);
-        let fallback = resolution.fallback.expect("typed fallback provenance");
-        assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
-        assert!(fallback.message.contains("zhang_li.fullmag.v1"));
-        assert!(fallback.message.contains("canonical FEM STT"));
+        assert!(resolution.fallback.is_none());
     }
 
     #[test]
@@ -11239,8 +11415,8 @@ mod tests {
     }
 
     #[test]
-    fn strict_fem_canonical_zhang_li_gpu_fails_before_provenance() {
-        let err = apply_fem_gpu_plan_constraints(
+    fn strict_fem_canonical_zhang_li_reaches_native_runtime_validation() {
+        let resolution = apply_fem_gpu_plan_constraints(
             &canonical_stt_fem_plan("zhang_li.fullmag.v1"),
             EngineResolution {
                 engine: FemEngine::NativeGpu,
@@ -11249,11 +11425,10 @@ mod tests {
             true,
             None,
         )
-        .expect_err("strict canonical Zhang-Li GPU must fail during selection");
+        .expect("strict canonical Zhang-Li GPU should reach native runtime validation");
 
-        assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
-        assert!(err.message.contains("zhang_li.fullmag.v1"));
-        assert!(err.message.contains("canonical FEM STT"));
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
     }
 
     #[test]

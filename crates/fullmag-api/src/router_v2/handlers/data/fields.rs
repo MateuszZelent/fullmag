@@ -10,10 +10,12 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
+use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
     extract_fdm_field, extract_fem_field, fem_magnetic_node_indices,
-    field_values_match_current_domain, flatten_json_field_values, json_field_grid,
+    field_values_match_current_domain, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
     live_magnetization_available, strict_flat_json_field_values,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
@@ -48,8 +50,8 @@ use crate::quantity_data_plane::{
 };
 use crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_points_if_available;
 use crate::router_v2::handlers::sessions::status::{
-    domain_generation_id, field_catalog_revision as current_field_catalog_revision,
-    field_quantity_revision,
+    domain_generation_id, domain_generation_revision, fdm_grid_shape,
+    field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
 };
 use crate::schemas::fields::*;
 use crate::session::{
@@ -77,6 +79,12 @@ static HDR_FIELD_INDEXING: &str = "x-fullmag-field-indexing";
 static HDR_NODE_INDEX_COUNT: &str = "x-fullmag-node-index-count";
 const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
+const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.json";
+const FDM_MULTILAYER_AIRBOX_FIELD: &str = "fields/H_demag/airbox/H_demag.samples.v1.json";
+const FDM_MULTILAYER_AIRBOX_SCHEMA: &str = "fdm_multilayer_observation.v1";
+const FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
+const FDM_MULTILAYER_AIRBOX_H_EFF_REASON: &str =
+    "fdm_multilayer_airbox_h_eff_unavailable.v1";
 const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
     "V_electric",
     "J_charge",
@@ -84,6 +92,345 @@ const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
     "spin_current_tensor",
     "torque_stt",
 ];
+
+#[derive(Debug, Clone)]
+pub(crate) struct FdmMultilayerAirboxCarrier {
+    pub cells: [u32; 3],
+    pub origin_m: [f64; 3],
+    pub cell_size_m: [f64; 3],
+    pub carrier_fingerprint: String,
+    pub sample_count: usize,
+    pub values: Vec<f64>,
+    pub source_policy: String,
+    pub source_grid_fingerprints: Vec<String>,
+    pub source_runtime_identity: serde_json::Value,
+}
+
+fn is_fdm_multilayer_snapshot(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .and_then(|layout| layout.get("backend"))
+        .and_then(serde_json::Value::as_str)
+        == Some("fdm_multilayer")
+        || snapshot
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("execution_plan"))
+            .and_then(|plan| plan.get("backend_plan"))
+            .and_then(|plan| plan.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("fdm_multilayer")
+}
+
+fn raw_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+fn fdm_multilayer_airbox_carrier_fingerprint(
+    grid: &serde_json::Value,
+    source_grid_fingerprints: &serde_json::Value,
+    source_common_grid: &serde_json::Value,
+    source_runtime_identity: &serde_json::Value,
+    field_artifact_sha256: &str,
+) -> Result<String, String> {
+    // This seed deliberately mirrors the runner byte-for-byte.  It validates
+    // the target-only carrier without using the common transform layout as an
+    // observation grid.
+    let seed = serde_json::json!({
+        "schema_version": FDM_MULTILAYER_AIRBOX_SCHEMA,
+        "scope_kind": "airbox",
+        "quantity_id": "H_demag",
+        "source_policy": "target_only",
+        "grid": grid,
+        "source_grid_fingerprints": source_grid_fingerprints,
+        "source_common_grid": source_common_grid,
+        "source_runtime_identity": source_runtime_identity,
+        "field_artifact_sha256": field_artifact_sha256,
+    });
+    let bytes = serde_json::to_vec(&seed)
+        .map_err(|error| format!("Airbox carrier fingerprint serialization failed: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn validated_airbox_grid(
+    value: Option<&serde_json::Value>,
+    context: &str,
+) -> Result<([u32; 3], [f64; 3], [f64; 3]), String> {
+    let grid = value
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| format!("{context} grid is missing or malformed"))?;
+    let parse_u32 = |field: &str| -> Result<[u32; 3], String> {
+        let values = grid
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| values.len() == 3)
+            .ok_or_else(|| format!("{context} grid.{field} is missing or malformed"))?;
+        let parsed = values
+            .iter()
+            .map(|value| value.as_u64().and_then(|value| u32::try_from(value).ok()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("{context} grid.{field} must contain u32 values"))?;
+        let values = [parsed[0], parsed[1], parsed[2]];
+        if values.contains(&0) {
+            return Err(format!("{context} grid.{field} must be non-zero"));
+        }
+        Ok(values)
+    };
+    let parse_f64 = |field: &str, positive: bool| -> Result<[f64; 3], String> {
+        let values = grid
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| values.len() == 3)
+            .ok_or_else(|| format!("{context} grid.{field} is missing or malformed"))?;
+        let parsed = values
+            .iter()
+            .map(serde_json::Value::as_f64)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("{context} grid.{field} must contain finite numbers"))?;
+        let values = [parsed[0], parsed[1], parsed[2]];
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || (positive && *value <= 0.0))
+        {
+            return Err(format!("{context} grid.{field} contains invalid values"));
+        }
+        Ok(values)
+    };
+    Ok((
+        parse_u32("cells")?,
+        parse_f64("origin_m", false)?,
+        parse_f64("cell_size_m", true)?,
+    ))
+}
+
+fn read_required_string<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{context} {field} is missing or malformed"))
+}
+
+/// Reads the runner-origin Airbox carrier without ever projecting it onto the
+/// common FFT layout.  A malformed carrier is deliberately indistinguishable
+/// from an unavailable field to browser callers, but is retained here as a
+/// detailed reason for the layout resource and diagnostics.
+pub(crate) fn load_fdm_multilayer_airbox_carrier(
+    snapshot: &SessionStateResponse,
+) -> Result<Option<FdmMultilayerAirboxCarrier>, String> {
+    if !is_fdm_multilayer_snapshot(snapshot) {
+        return Ok(None);
+    }
+    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
+        return Ok(None);
+    };
+    let manifest_path = try_resolve_artifact_path(&artifact_dir, FDM_MULTILAYER_AIRBOX_MANIFEST)
+        .map_err(|error| format!("failed to resolve Airbox manifest: {error}"))?;
+    let Some(_) = manifest_path else {
+        return Ok(None);
+    };
+    let manifest = read_json_artifact_value(&artifact_dir, FDM_MULTILAYER_AIRBOX_MANIFEST)
+        .map_err(|error| format!("failed to read Airbox manifest: {error}"))?;
+    if read_required_string(&manifest, "schema_version", "Airbox manifest")?
+        != FDM_MULTILAYER_AIRBOX_SCHEMA
+        || read_required_string(&manifest, "scope_kind", "Airbox manifest")? != "airbox"
+        || read_required_string(&manifest, "quantity_id", "Airbox manifest")? != "H_demag"
+        || read_required_string(&manifest, "unit", "Airbox manifest")? != "A/m"
+        || read_required_string(&manifest, "source_policy", "Airbox manifest")? != "target_only"
+        || manifest.get("target_only").and_then(serde_json::Value::as_bool) != Some(true)
+        || manifest.get("published_quantities") != Some(&serde_json::json!(["H_demag"]))
+        || manifest
+            .get("unavailable_quantities")
+            .and_then(|value| value.get("H_eff"))
+            .and_then(serde_json::Value::as_str)
+            != Some(FDM_MULTILAYER_AIRBOX_H_EFF_REASON)
+    {
+        return Err("Airbox manifest identity, target-only, or H_eff contract is invalid".into());
+    }
+    let manifest_grid = manifest
+        .get("grid")
+        .ok_or_else(|| "Airbox manifest grid is missing".to_string())?;
+    let (cells, origin_m, cell_size_m) =
+        validated_airbox_grid(Some(manifest_grid), "Airbox manifest")?;
+    let carrier_fingerprint = read_required_string(&manifest, "carrier_fingerprint", "Airbox manifest")?;
+    if !raw_sha256_hex(carrier_fingerprint) {
+        return Err("Airbox manifest carrier_fingerprint must be canonical raw sha256 hex".into());
+    }
+    let source_grid_fingerprints_value = manifest
+        .get("source_grid_fingerprints")
+        .and_then(serde_json::Value::as_array)
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| "Airbox manifest source_grid_fingerprints is missing or empty".to_string())?;
+    let source_grid_fingerprints = source_grid_fingerprints_value
+        .iter()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "Airbox manifest source_grid_fingerprints is malformed".to_string())?;
+    if source_grid_fingerprints.iter().any(|value| !raw_sha256_hex(value)) {
+        return Err("Airbox manifest source_grid_fingerprints must use raw sha256 hex".into());
+    }
+    let source_common_grid = manifest
+        .get("source_common_grid")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "Airbox manifest source_common_grid is missing or malformed".to_string())?;
+    let _ = validated_airbox_grid(Some(source_common_grid), "Airbox source_common_grid")?;
+    let source_runtime_identity = manifest
+        .get("source_runtime_identity")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or_else(|| "Airbox manifest source_runtime_identity is missing or malformed".to_string())?;
+    for field in [
+        "execution_engine",
+        "precision",
+        "demag_operator_kind",
+        "fft_backend",
+        "problem_source_hash",
+        "run_status",
+    ] {
+        read_required_string(&source_runtime_identity, field, "Airbox source_runtime_identity")?;
+    }
+    if read_required_string(&manifest, "field_artifact", "Airbox manifest")?
+        != "H_demag.samples.v1.json"
+    {
+        return Err("Airbox manifest field_artifact is not the canonical H_demag carrier".into());
+    }
+    let expected_field_hash = read_required_string(&manifest, "field_artifact_sha256", "Airbox manifest")?;
+    if !raw_sha256_hex(expected_field_hash) {
+        return Err("Airbox manifest field_artifact_sha256 must be canonical raw sha256 hex".into());
+    }
+    let field_path = try_resolve_artifact_path(&artifact_dir, FDM_MULTILAYER_AIRBOX_FIELD)
+        .map_err(|error| format!("failed to resolve Airbox field artifact: {error}"))?
+        .ok_or_else(|| "Airbox field artifact is missing".to_string())?;
+    let field_bytes = std::fs::read(&field_path)
+        .map_err(|error| format!("failed to read Airbox field artifact: {error}"))?;
+    let actual_field_hash = format!("{:x}", Sha256::digest(&field_bytes));
+    if actual_field_hash != expected_field_hash {
+        return Err("Airbox field artifact sha256 does not match manifest".into());
+    }
+    let field_payload: serde_json::Value = serde_json::from_slice(&field_bytes)
+        .map_err(|error| format!("Airbox field artifact is malformed JSON: {error}"))?;
+    if read_required_string(&field_payload, "schema_version", "Airbox field artifact")?
+        != FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA
+        || read_required_string(&field_payload, "observable", "Airbox field artifact")? != "H_demag"
+        || read_required_string(&field_payload, "quantity_id", "Airbox field artifact")? != "H_demag"
+        || read_required_string(&field_payload, "scope_kind", "Airbox field artifact")? != "airbox"
+        || read_required_string(&field_payload, "unit", "Airbox field artifact")? != "A/m"
+    {
+        return Err("Airbox field artifact identity is invalid".into());
+    }
+    let field_grid = validated_airbox_grid(field_payload.get("grid"), "Airbox field artifact")?;
+    if field_grid != (cells, origin_m, cell_size_m) {
+        return Err("Airbox field artifact grid disagrees with manifest target grid".into());
+    }
+    let vectors = field_payload
+        .get("values")
+        .and_then(serde_json::Value::as_array)
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| "Airbox field artifact values are missing or empty".to_string())?;
+    let mut values = Vec::with_capacity(vectors.len() * 3);
+    for vector in vectors {
+        let vector = vector
+            .as_array()
+            .filter(|values| values.len() == 3)
+            .ok_or_else(|| "Airbox field artifact values must contain f64 triplets".to_string())?;
+        for value in vector {
+            let value = value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| "Airbox field artifact values contain non-finite data".to_string())?;
+            values.push(value);
+        }
+    }
+    let sample_count = manifest
+        .get("sample_count")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "Airbox manifest sample_count is missing or invalid".to_string())?;
+    let grid_count = cells
+        .iter()
+        .try_fold(1usize, |total, axis| total.checked_mul(*axis as usize))
+        .ok_or_else(|| "Airbox target grid cell count overflows usize".to_string())?;
+    if sample_count != vectors.len() || sample_count != grid_count || values.len() != sample_count * 3 {
+        return Err("Airbox sample_count, target grid, and vector value count disagree".into());
+    }
+    let expected_carrier_fingerprint = fdm_multilayer_airbox_carrier_fingerprint(
+        manifest_grid,
+        &serde_json::Value::Array(source_grid_fingerprints_value.clone()),
+        source_common_grid,
+        &source_runtime_identity,
+        expected_field_hash,
+    )?;
+    if carrier_fingerprint != expected_carrier_fingerprint {
+        return Err("Airbox manifest carrier_fingerprint does not match runner carrier seed".into());
+    }
+    Ok(Some(FdmMultilayerAirboxCarrier {
+        cells,
+        origin_m,
+        cell_size_m,
+        carrier_fingerprint: carrier_fingerprint.to_string(),
+        sample_count,
+        values,
+        source_policy: "target_only".to_string(),
+        source_grid_fingerprints: source_grid_fingerprints.into_iter().map(str::to_string).collect(),
+        source_runtime_identity,
+    }))
+}
+
+fn requested_fdm_multilayer_airbox_carrier(
+    snapshot: &SessionStateResponse,
+    query: &FieldVectorQuery,
+    quantity_id: &str,
+) -> Result<Option<FdmMultilayerAirboxCarrier>, ApiError> {
+    if query.scope_kind.as_deref().map(str::trim) != Some("airbox")
+        || !is_fdm_multilayer_snapshot(snapshot)
+    {
+        return Ok(None);
+    }
+    if query
+        .scope_id
+        .as_deref()
+        .is_some_and(|scope_id| !scope_id.is_empty() && scope_id != "airbox")
+    {
+        return Err(ApiError::not_found("multilayer FDM Airbox scope not found"));
+    }
+    let carrier = load_fdm_multilayer_airbox_carrier(snapshot)
+        .map_err(|reason| ApiError::not_found(format!("multilayer FDM Airbox carrier unavailable: {reason}")))?
+        .ok_or_else(|| ApiError::not_found("multilayer FDM Airbox carrier is unavailable"))?;
+    if quantity_id == "H_eff" {
+        return Err(ApiError::not_found(format!(
+            "multilayer FDM Airbox H_eff is unavailable: {FDM_MULTILAYER_AIRBOX_H_EFF_REASON}"
+        )));
+    }
+    if quantity_id != "H_demag" {
+        return Err(ApiError::not_found(format!(
+            "field '{quantity_id}' is not published on the multilayer FDM Airbox carrier"
+        )));
+    }
+    Ok(Some(carrier))
+}
+
+fn fdm_multilayer_airbox_scope(carrier: &FdmMultilayerAirboxCarrier) -> ResolvedFieldScope {
+    ResolvedFieldScope {
+        domain: ResolvedFieldScopeDomain::Air,
+        kind: "airbox".to_string(),
+        id: Some("airbox".to_string()),
+        node_indices: (0..carrier.sample_count).collect(),
+        value_indices: (0..carrier.sample_count).collect(),
+        grid: Some(carrier.cells),
+        carrier_hash: Some(format!("sha256:{}", carrier.carrier_fingerprint)),
+    }
+}
 
 fn canonical_transport_field_artifact(
     snapshot: &SessionStateResponse,
@@ -599,7 +946,7 @@ fn insert_field_headers(
     quantity_id: &str,
     component: &ComponentSelection,
     field_revision: u64,
-    domain_gen_id: u64,
+    domain_gen_id: &str,
     point_count: usize,
     value_count: usize,
 ) {
@@ -808,7 +1155,18 @@ fn preview_field_freshness(
 }
 
 fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) -> bool {
-    if snapshot.preview_cache.get(quantity_id).is_none() {
+    let Some(preview) = snapshot.preview_cache.get(quantity_id) else {
+        return false;
+    };
+    let n_comp = quantity_spec(quantity_id)
+        .map(|spec| spec.n_comp as usize)
+        .unwrap_or(3);
+    if !field_values_match_current_domain(
+        snapshot,
+        quantity_id,
+        n_comp,
+        &preview.vector_field_values,
+    ) {
         return false;
     }
     if snapshot.latest_fields.get(quantity_id).is_none() {
@@ -823,12 +1181,29 @@ fn resolved_current_field_grid(
     point_count: usize,
 ) -> [u32; 3] {
     match grid {
-        Some(grid) if snapshot.fem_mesh.is_some() && grid.contains(&0) => {
+        Some(grid)
+            if snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot) && grid.contains(&0) =>
+        {
             // Unstructured FEM geometry is carried by FMVP v3 topology metadata,
             // while its grid header is the canonical linear node-count carrier.
             [point_count as u32, 1, 1]
         }
         Some(grid) => grid,
+        None if is_fdm_snapshot(snapshot) => {
+            let domain_grid = fdm_grid_shape(
+                snapshot,
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.latest_step.grid),
+            );
+            let domain_count = domain_grid.into_iter().try_fold(1usize, |count, axis| {
+                usize::try_from(axis).ok()?.checked_mul(count)
+            });
+            (domain_count == Some(point_count))
+                .then_some(domain_grid)
+                .unwrap_or([point_count as u32, 1, 1])
+        }
         None => [point_count as u32, 1, 1],
     }
 }
@@ -1015,7 +1390,7 @@ pub async fn get_field_catalog(
                 .as_ref()
                 .map(|artifact| canonical_transport_field_artifact_revision(Some(artifact)))
                 .unwrap_or_else(|| field_quantity_revision(snapshot, qid)),
-            gen_id,
+            &gen_id,
             latest_json_field_freshness(snapshot, value, qid),
             true,
         );
@@ -1040,10 +1415,35 @@ pub async fn get_field_catalog(
                 .starts_with("fem_")
                 .then_some(field.spatial_kind.as_str()),
             field_quantity_revision(snapshot, qid),
-            gen_id,
+            &gen_id,
             preview_field_freshness(snapshot, field),
             true,
         );
+    }
+
+    // A multilayer Airbox is a separately materialized observation carrier.
+    // It is intentionally not tested against the current magnetic-domain
+    // cardinality and is advertised only after its manifest and payload agree.
+    if !quantities.iter().any(|q| q.quantity_id == "H_demag") {
+        if let Ok(Some(carrier)) = load_fdm_multilayer_airbox_carrier(snapshot) {
+            let revision = snapshot.field_samples_revision;
+            push_field_descriptor(
+                &mut quantities,
+                "H_demag",
+                quantity_unit("H_demag"),
+                Some("airbox_only"),
+                revision,
+                &gen_id,
+                completed_field_freshness(
+                    current_source_step(snapshot),
+                    current_source_step(snapshot),
+                    revision,
+                    0,
+                    0,
+                ),
+                carrier.sample_count > 0,
+            );
+        }
     }
 
     let mut catalog_revision = current_field_catalog_revision(snapshot);
@@ -1069,7 +1469,7 @@ pub async fn get_field_catalog(
             quantity_unit(quantity_id),
             None,
             revision,
-            gen_id,
+            &gen_id,
             completed_field_freshness(
                 current_source_step(snapshot),
                 current_source_step(snapshot),
@@ -1097,7 +1497,7 @@ pub async fn get_field_catalog(
             quantity_unit("m"),
             None,
             field_quantity_revision(snapshot, "m"),
-            gen_id,
+            &gen_id,
             completed_field_freshness(
                 current_source_step(snapshot),
                 current_source_step(snapshot),
@@ -1148,7 +1548,7 @@ pub async fn get_field_catalog(
                     .filter(|field| field.spatial_kind.starts_with("fem_"))
                     .map(|field| field.spatial_kind.as_str()),
                 field_quantity_revision(snapshot, &status.quantity),
-                gen_id,
+                &gen_id,
                 freshness,
                 false,
             );
@@ -1172,7 +1572,7 @@ pub async fn get_field_catalog(
             quantity_unit(selected_quantity.as_ref()),
             None,
             field_quantity_revision(snapshot, selected_quantity.as_ref()),
-            gen_id,
+            &gen_id,
             legacy_pending_field_freshness(snapshot),
             false,
         );
@@ -1235,6 +1635,18 @@ pub async fn get_field_meta(
         .map(|field| field.spatial_kind.clone())
         .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
     let component = parse_component(query.component.as_deref(), n_comp as usize)?;
+    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &FieldVectorQuery {
+        component: query.component.clone(),
+        scope_kind: query.scope_kind.clone(),
+        scope_id: query.scope_id.clone(),
+        owner_object_id: query.owner_object_id.clone(),
+        geometry_scope: None,
+        max_samples: None,
+        snapshot_id: query.snapshot_id.clone(),
+        stage_id: query.stage_id.clone(),
+        view: None,
+        phase_rad: None,
+    }, quantity_id)?;
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
@@ -1267,9 +1679,21 @@ pub async fn get_field_meta(
             ))
         })
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3], FieldFreshness)> = if let Some(snapshot_id) =
-        requested_snapshot_id
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3], FieldFreshness)> = if let Some(carrier) =
+        airbox_carrier.as_ref()
     {
+        Some((
+            carrier.values.clone(),
+            carrier.cells,
+            completed_field_freshness(
+                current_source_step(snapshot),
+                current_source_step(snapshot),
+                snapshot.field_samples_revision,
+                0,
+                0,
+            ),
+        ))
+    } else if let Some(snapshot_id) = requested_snapshot_id {
         if quantity_id != "m" {
             return Err(ApiError::bad_request(format!(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
@@ -1311,7 +1735,7 @@ pub async fn get_field_meta(
                 location,
                 unit,
                 field_revision: field_quantity_revision(snapshot, quantity_id),
-                domain_generation_id: gen_id,
+                domain_generation_id: gen_id.clone(),
                 stats: None,
                 source_step: freshness.source_step,
                 source_revision: freshness.source_revision,
@@ -1342,7 +1766,7 @@ pub async fn get_field_meta(
                 location,
                 unit,
                 field_revision: field_quantity_revision(snapshot, quantity_id),
-                domain_generation_id: gen_id,
+                domain_generation_id: gen_id.clone(),
                 stats: None,
                 source_step: freshness.source_step,
                 source_revision: freshness.source_revision,
@@ -1372,6 +1796,7 @@ pub async fn get_field_meta(
         component: query.component.clone(),
         scope_kind: query.scope_kind.clone(),
         scope_id: query.scope_id.clone(),
+        owner_object_id: query.owner_object_id.clone(),
         geometry_scope: None,
         max_samples: None,
         snapshot_id: query.snapshot_id.clone(),
@@ -1379,13 +1804,17 @@ pub async fn get_field_meta(
         view: None,
         phase_rad: None,
     };
-    let resolved_scope = resolve_field_scope(
-        &scope_query,
-        snapshot,
-        workspace_selection.as_ref(),
-        raw_point_count,
-        quantity_id,
-    )?;
+    let resolved_scope = if let Some(carrier) = airbox_carrier.as_ref() {
+        Some(fdm_multilayer_airbox_scope(carrier))
+    } else {
+        resolve_field_scope(
+            &scope_query,
+            snapshot,
+            workspace_selection.as_ref(),
+            raw_point_count,
+            quantity_id,
+        )?
+    };
     let raw_values = apply_field_scope(raw_values, grid, n_comp as usize, resolved_scope.as_ref());
 
     Ok(Json(FieldMeta {
@@ -1395,7 +1824,9 @@ pub async fn get_field_meta(
         components: n_comp,
         location,
         unit,
-        field_revision: if transport_artifact.is_some() {
+        field_revision: if airbox_carrier.is_some() {
+            snapshot.field_samples_revision
+        } else if transport_artifact.is_some() {
             transport_artifact_revision
         } else {
             field_quantity_revision(snapshot, quantity_id)
@@ -1416,10 +1847,12 @@ pub async fn get_field_meta(
 pub struct FieldMetaQuery {
     /// Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`).
     pub component: Option<String>,
-    /// Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`).
+    /// Optional FEM or FDM scope used for statistics.
     pub scope_kind: Option<String>,
-    /// Scope identifier for `object` and `part` scopes.
+    /// Scope identifier for `object`, `layer`, `region`, and `part` scopes.
     pub scope_id: Option<String>,
+    /// Optional canonical owner of a `region` scope.
+    pub owner_object_id: Option<String>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.
     pub snapshot_id: Option<String>,
@@ -1463,7 +1896,7 @@ fn push_field_descriptor(
     unit: &str,
     location: Option<&str>,
     field_revision: u64,
-    domain_generation_id: u64,
+    domain_generation_id: &str,
     freshness: FieldFreshness,
     available: bool,
 ) {
@@ -1483,7 +1916,7 @@ fn push_field_descriptor(
             .to_string(),
         unit: unit.to_string(),
         field_revision,
-        domain_generation_id,
+        domain_generation_id: domain_generation_id.to_string(),
         available,
         source_step: freshness.source_step,
         source_revision: freshness.source_revision,
@@ -1504,6 +1937,8 @@ struct ResolvedFieldScope {
     id: Option<String>,
     node_indices: Vec<usize>,
     value_indices: Vec<usize>,
+    grid: Option<[u32; 3]>,
+    carrier_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1565,6 +2000,18 @@ fn resolve_field_scope(
     if scope_kind == "full" {
         return Ok(None);
     }
+    if is_fdm_snapshot(snapshot) {
+        let scope =
+            resolve_fdm_field_scope(query, snapshot, raw_point_count, scope_kind, geometry_scope)?;
+        if quantity_spatial_domain(quantity_id) == "magnetic_only"
+            && scope.domain == ResolvedFieldScopeDomain::Air
+        {
+            return Err(ApiError::not_found(format!(
+                "field '{quantity_id}' is not available on airbox grid scope"
+            )));
+        }
+        return Ok(Some(scope));
+    }
     let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
         ApiError::bad_request(format!(
             "field scope '{scope_kind}' requires FEM mesh topology"
@@ -1604,6 +2051,8 @@ fn resolve_field_scope(
                     geometry_scope == "surface",
                 )?,
                 value_indices: Vec::new(),
+                grid: None,
+                carrier_hash: None,
             }
         }
         "selection" => {
@@ -1666,6 +2115,332 @@ fn resolve_field_scope(
     }))
 }
 
+fn resolve_fdm_field_scope(
+    query: &FieldVectorQuery,
+    snapshot: &SessionStateResponse,
+    raw_point_count: usize,
+    scope_kind: &str,
+    geometry_scope: &str,
+) -> Result<ResolvedFieldScope, ApiError> {
+    if let Some(scope) =
+        resolve_multilayer_native_layer_scope(query, snapshot, raw_point_count, scope_kind)?
+    {
+        return Ok(scope);
+    }
+    let membership = load_resolved_fdm_membership(snapshot)?;
+    if membership.cell_membership.len() != raw_point_count {
+        return Err(ApiError::conflict(
+            "FDM field length does not match current membership cell count",
+        ));
+    }
+    let scope_id = if scope_kind == "airbox" {
+        query.scope_id.as_deref().unwrap_or("airbox")
+    } else {
+        required_scope_id(query, scope_kind)?
+    };
+    let mut canonical_scope_id = scope_id.to_string();
+    let mut selected = match scope_kind {
+        "object" => {
+            if !membership
+                .object_ids
+                .iter()
+                .any(|id| object_ids_match(id, scope_id))
+            {
+                return Err(ApiError::not_found(format!(
+                    "FDM object membership not found: {scope_id}"
+                )));
+            }
+            let numeric_ids = membership
+                .region_legend
+                .iter()
+                .filter(|entry| object_ids_match(&entry.object_id, scope_id))
+                .map(|entry| entry.numeric_id)
+                .collect::<BTreeSet<_>>();
+            // When the region legend is empty (single-object, uniform grid)
+            // all active cells (numeric_id==0) belong to the only canonical
+            // object.  The raw object_ids may carry geometry aliases (e.g.
+            // "film_geom") alongside the magnet name, so we must compare
+            // canonical (suffix-stripped) unique count, not raw length.
+            let canonical_object_count = {
+                let mut seen = std::collections::HashSet::new();
+                for id in &membership.object_ids {
+                    let canonical = id
+                        .strip_suffix("_geom")
+                        .or_else(|| id.strip_suffix("_geometry"))
+                        .or_else(|| id.strip_suffix("-geometry"))
+                        .unwrap_or(id);
+                    seen.insert(canonical);
+                }
+                seen.len()
+            };
+            membership
+                .cell_membership
+                .iter()
+                .enumerate()
+                .filter_map(|(index, numeric_id)| {
+                    (numeric_ids.contains(numeric_id)
+                        || (*numeric_id == 0 && canonical_object_count == 1))
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>()
+        }
+        "region" => {
+            let requested_owner_object_id = query.owner_object_id.as_deref();
+            let mut entries = membership.region_legend.iter().filter(|entry| {
+                entry.region_id == scope_id
+                    && requested_owner_object_id
+                        .map(|owner| object_ids_match(&entry.object_id, owner))
+                        .unwrap_or(true)
+            });
+            let entry = entries.next().ok_or_else(|| {
+                if let Some(owner) = requested_owner_object_id {
+                    ApiError::not_found(format!(
+                        "FDM region membership not found: {owner}/{scope_id}"
+                    ))
+                } else {
+                    ApiError::not_found(format!("FDM region membership not found: {scope_id}"))
+                }
+            })?;
+            if entries.next().is_some() {
+                let identity = requested_owner_object_id
+                    .map(|owner| format!("{owner}/{scope_id}"))
+                    .unwrap_or_else(|| scope_id.to_string());
+                let hint = requested_owner_object_id
+                    .is_none()
+                    .then_some("; provide owner_object_id")
+                    .unwrap_or("");
+                return Err(ApiError::conflict(format!(
+                    "FDM region membership '{identity}' is ambiguous{hint}"
+                )));
+            }
+            canonical_scope_id = format!("region:{}:{}", entry.object_id, entry.region_id);
+            membership
+                .cell_membership
+                .iter()
+                .enumerate()
+                .filter_map(|(index, numeric_id)| {
+                    (*numeric_id == entry.numeric_id).then_some(index)
+                })
+                .collect::<Vec<_>>()
+        }
+        "airbox" => membership
+            .cell_membership
+            .iter()
+            .enumerate()
+            .filter_map(|(index, numeric_id)| (*numeric_id == u32::MAX).then_some(index))
+            .collect::<Vec<_>>(),
+        _ => {
+            return Err(ApiError::bad_request(format!(
+                "unsupported FDM field scope_kind '{scope_kind}'"
+            )))
+        }
+    };
+    if scope_kind == "airbox" && geometry_scope == "surface" {
+        selected.retain(|index| fdm_cell_is_domain_surface(*index, membership.counts));
+    }
+    if selected.is_empty() {
+        return Err(ApiError::not_found(format!(
+            "FDM field scope '{scope_kind}/{scope_id}' has no realized cells"
+        )));
+    }
+    Ok(ResolvedFieldScope {
+        domain: if scope_kind == "airbox" {
+            ResolvedFieldScopeDomain::Air
+        } else {
+            ResolvedFieldScopeDomain::Magnetic
+        },
+        kind: scope_kind.to_string(),
+        id: Some(canonical_scope_id),
+        node_indices: selected.clone(),
+        value_indices: selected,
+        grid: None,
+        carrier_hash: Some(format!("sha256:{}", membership.grid_fingerprint)),
+    })
+}
+
+fn resolve_multilayer_native_layer_scope(
+    query: &FieldVectorQuery,
+    snapshot: &SessionStateResponse,
+    raw_point_count: usize,
+    scope_kind: &str,
+) -> Result<Option<ResolvedFieldScope>, ApiError> {
+    let Some(layout) = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .filter(|layout| {
+            layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
+        })
+    else {
+        return Ok(None);
+    };
+    if scope_kind != "layer" && scope_kind != "object" {
+        if scope_kind == "region" {
+            return Err(ApiError::unprocessable(
+                "multilayer FDM region scope is unavailable: independent native grids have no single FMRM membership carrier; use layer or object scope",
+            ));
+        }
+        return Err(ApiError::bad_request(format!(
+            "multilayer FDM field scope_kind '{scope_kind}' is unsupported; use layer or object"
+        )));
+    }
+    let scope_id = required_scope_id(query, scope_kind)?;
+    let layers = layout
+        .get("layers")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| ApiError::conflict("multilayer FDM field layout has no native layers"))?;
+    let total_count = layers.iter().try_fold(0usize, |total, layer| {
+        let count = layer.get("value_count")?.as_u64()?;
+        total.checked_add(usize::try_from(count).ok()?)
+    });
+    if total_count != Some(raw_point_count) {
+        return Err(ApiError::conflict(
+            "multilayer FDM field length does not match native layer payload layout",
+        ));
+    }
+    // Explorer/viewport targets use the stable `layer_id` identity while the
+    // original runtime artifact historically exposed only `magnet_name`.
+    // Resolve both canonical identities here, without guessing or falling
+    // through to another layer when the layout is ambiguous.  Object scopes
+    // similarly accept the layout's `object_id` (with `magnet_name` retained
+    // as the backwards-compatible alias).
+    let matching_layers = layers
+        .iter()
+        .filter(|layer| {
+            let matches =
+                |key: &str| layer.get(key).and_then(serde_json::Value::as_str) == Some(scope_id);
+            match scope_kind {
+                "layer" => matches("layer_id") || matches("magnet_name"),
+                "object" => matches("object_id") || matches("magnet_name"),
+                _ => false,
+            }
+        })
+        .collect::<Vec<_>>();
+    let layer = match matching_layers.as_slice() {
+        [] => {
+            return Err(ApiError::not_found(format!(
+                "multilayer FDM {scope_kind} not found: {scope_id}"
+            )))
+        }
+        [layer] => *layer,
+        _ => {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM {scope_kind} is ambiguous: {scope_id}"
+            )))
+        }
+    };
+    let canonical_scope_id = match scope_kind {
+        "layer" => ["magnet_name", "layer_id", "object_id"],
+        "object" => ["object_id", "magnet_name", "layer_id"],
+        _ => unreachable!("scope_kind was validated above"),
+    }
+    .into_iter()
+    .find_map(|key| layer.get(key).and_then(serde_json::Value::as_str))
+    .ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM {scope_kind} has no canonical scope identity"
+        ))
+    })?;
+    let offset = layer
+        .get("value_offset")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| ApiError::conflict("multilayer FDM layer has no valid value_offset"))?;
+    let count = layer
+        .get("value_count")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| ApiError::conflict("multilayer FDM layer has no valid value_count"))?;
+    let grid = layer
+        .get("native_grid")
+        .and_then(serde_json::Value::as_array)
+        .filter(|values| values.len() == 3)
+        .and_then(|values| {
+            Some([
+                u32::try_from(values[0].as_u64()?).ok()?,
+                u32::try_from(values[1].as_u64()?).ok()?,
+                u32::try_from(values[2].as_u64()?).ok()?,
+            ])
+        })
+        .ok_or_else(|| ApiError::conflict("multilayer FDM layer has no valid native_grid"))?;
+    if grid
+        .into_iter()
+        .map(|value| value as usize)
+        .product::<usize>()
+        != count
+        || offset
+            .checked_add(count)
+            .is_none_or(|end| end > raw_point_count)
+    {
+        return Err(ApiError::conflict(
+            "multilayer FDM native layer grid disagrees with its payload range",
+        ));
+    }
+    let native_origin = serde_json::from_value::<[f64; 3]>(
+        layer
+            .get("native_origin")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer has no valid native_origin: {error}"
+        ))
+    })?;
+    let native_cell_size = serde_json::from_value::<[f64; 3]>(
+        layer
+            .get("native_cell_size")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer has no valid native_cell_size: {error}"
+        ))
+    })?;
+    let active_cells = layer
+        .get("active_cell_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(count as u64);
+    let native_grid_fingerprint = fullmag_ir::FdmGridCertificateIR::new(
+        native_origin,
+        grid,
+        native_cell_size,
+        active_cells,
+        1,
+    )
+    .map_err(|error| {
+        ApiError::conflict(format!(
+            "multilayer FDM native layer cannot establish a grid carrier: {error}"
+        ))
+    })?
+    .grid_fingerprint;
+    Ok(Some(ResolvedFieldScope {
+        domain: ResolvedFieldScopeDomain::Magnetic,
+        kind: scope_kind.to_string(),
+        id: Some(canonical_scope_id.to_string()),
+        node_indices: (0..count).collect(),
+        value_indices: (offset..offset + count).collect(),
+        grid: Some(grid),
+        carrier_hash: Some(format!("sha256:{native_grid_fingerprint}")),
+    }))
+}
+
+fn fdm_cell_is_domain_surface(index: usize, counts: [u32; 3]) -> bool {
+    let [nx, ny, nz] = counts.map(|count| count as usize);
+    if nx == 0 || ny == 0 || nz == 0 {
+        return false;
+    }
+    let plane_stride = nx.saturating_mul(ny);
+    if index >= plane_stride.saturating_mul(nz) {
+        return false;
+    }
+    let x = index % nx;
+    let y = (index / nx) % ny;
+    let z = index / plane_stride;
+    x == 0 || x + 1 == nx || y == 0 || y + 1 == ny || z == 0 || z + 1 == nz
+}
+
 fn required_scope_id<'a>(
     query: &'a FieldVectorQuery,
     scope_kind: &str,
@@ -1726,6 +2501,8 @@ fn resolve_object_scope(
             id: Some(object_id.to_string()),
             node_indices: node_indices_for_part(part),
             value_indices: Vec::new(),
+            grid: None,
+            carrier_hash: None,
         });
     }
 
@@ -1744,6 +2521,8 @@ fn resolve_object_scope(
         id: Some(object_id.to_string()),
         node_indices: node_indices_for_segment(mesh, segment),
         value_indices: Vec::new(),
+        grid: None,
+        carrier_hash: None,
     })
 }
 
@@ -1871,6 +2650,8 @@ fn resolve_part_scope(
         id: Some(part.id.clone()),
         node_indices: node_indices_for_part(part),
         value_indices: Vec::new(),
+        grid: None,
+        carrier_hash: None,
     })
 }
 
@@ -1949,7 +2730,8 @@ fn apply_field_scope(
 
 fn resolve_field_vector_sample_limit(
     query: &FieldVectorQuery,
-    _scope: Option<&ResolvedFieldScope>,
+    scope: Option<&ResolvedFieldScope>,
+    is_fdm: bool,
 ) -> Result<Option<usize>, ApiError> {
     let Some(max_samples) = query.max_samples else {
         return Ok(None);
@@ -1958,6 +2740,14 @@ fn resolve_field_vector_sample_limit(
         return Err(ApiError::bad_request(
             "max_samples must be greater than zero",
         ));
+    }
+    // Full-domain FDM remains on the legacy FMVP v2 contract and has no cell
+    // ordinal mapping. Single-grid scoped FDM carries explicit cell ordinals
+    // in FMVP v3, so it can safely honour max_samples. Multilayer native
+    // scopes remain unchanged until their separate sampling contract is
+    // qualified.
+    if is_fdm && (scope.is_none() || scope.is_some_and(|scope| scope.grid.is_some())) {
+        return Ok(None);
     }
     Ok(Some(max_samples as usize))
 }
@@ -2074,7 +2864,7 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream", headers(
+        (status = 200, description = "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream", headers(
             ("x-fullmag-field-revision" = String, description = "Field revision"),
             ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
             ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
@@ -2131,17 +2921,21 @@ pub async fn get_field_vector(
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
+    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &query, quantity_id)?;
 
     let session_id = snapshot.session.session_id.clone();
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
-    let field_revision = if transport_artifact.is_some() {
+    let field_revision = if airbox_carrier.is_some() {
+        snapshot.field_samples_revision
+    } else if transport_artifact.is_some() {
         transport_artifact_revision
     } else {
         field_quantity_revision(snapshot, quantity_id)
     };
     let gen_id = domain_generation_id(snapshot);
+    let gen_revision = domain_generation_revision(snapshot);
     let requested_snapshot_id = query
         .snapshot_id
         .as_deref()
@@ -2156,13 +2950,13 @@ pub async fn get_field_vector(
                 return None;
             }
             let element_count = values.len() / n_comp;
-            let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
+            let grid = resolved_current_field_grid(snapshot, json_field_grid(raw), element_count);
             Some((values, grid))
         })
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(snapshot_id) =
-        requested_snapshot_id
-    {
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(carrier) = airbox_carrier.as_ref() {
+        Some((carrier.values.clone(), carrier.cells))
+    } else if let Some(snapshot_id) = requested_snapshot_id {
         if quantity_id != "m" {
             return Err(ApiError::bad_request(format!(
                 "persisted hysteresis snapshot '{snapshot_id}' is only available for magnetization"
@@ -2180,7 +2974,8 @@ pub async fn get_field_vector(
                 .map(|(values, grid, _freshness)| (values, grid))
         })
     };
-    let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
+    let has_field_source = airbox_carrier.is_some()
+        || snapshot.latest_fields.get(quantity_id).is_some()
         || snapshot.preview_cache.get(quantity_id).is_some()
         || transport_artifact.is_some()
         || (quantity_id == "m"
@@ -2207,24 +3002,42 @@ pub async fn get_field_vector(
     } else {
         raw_values.len()
     };
-    let resolved_scope = resolve_field_scope(
+    let resolved_scope = if let Some(carrier) = airbox_carrier.as_ref() {
+        Some(fdm_multilayer_airbox_scope(carrier))
+    } else {
+        resolve_field_scope(
+            &query,
+            snapshot,
+            workspace_selection.as_ref(),
+            raw_point_count,
+            quantity_id,
+        )?
+    };
+    let sample_limit = resolve_field_vector_sample_limit(
         &query,
-        snapshot,
-        workspace_selection.as_ref(),
-        raw_point_count,
-        quantity_id,
+        resolved_scope.as_ref(),
+        is_fdm_snapshot(snapshot),
     )?;
-    let sample_limit = resolve_field_vector_sample_limit(&query, resolved_scope.as_ref())?;
     let resolved_scope = resolved_scope.map(|scope| sample_field_scope(scope, sample_limit));
-    let topology_hash = snapshot
-        .fem_mesh
-        .as_ref()
-        .map(fullmag_runner::fem_mesh_topology_fingerprint);
+    let topology_hash = if is_fdm_snapshot(snapshot) {
+        resolved_scope
+            .as_ref()
+            .and_then(|scope| scope.carrier_hash.clone())
+    } else {
+        snapshot
+            .fem_mesh
+            .as_ref()
+            .map(fullmag_runner::fem_mesh_topology_fingerprint)
+    };
     let topology_hash_bytes = topology_hash
         .as_deref()
         .map(mesh_topology_hash_bytes)
         .transpose()?;
-    let topology_revision = snapshot.mesh_revision;
+    let topology_revision = if is_fdm_snapshot(snapshot) {
+        gen_revision
+    } else {
+        snapshot.mesh_revision
+    };
     let scoped_node_indices = resolved_scope
         .as_ref()
         .map(|scope| scope.node_indices.clone());
@@ -2256,13 +3069,17 @@ pub async fn get_field_vector(
             quantity_id,
             session_id.as_str(),
             field_revision,
-            gen_id,
+            gen_revision,
             &component,
         )
     ));
     let scoped_grid = resolved_scope
         .as_ref()
-        .map(|scope| [scope.node_indices.len() as u32, 1, 1])
+        .map(|scope| {
+            scope
+                .grid
+                .unwrap_or([scope.node_indices.len() as u32, 1, 1])
+        })
         .unwrap_or(grid);
     let (raw_values, scoped_grid, sampled_node_indices) = if resolved_scope.is_some() {
         (
@@ -2326,7 +3143,7 @@ pub async fn get_field_vector(
         quantity_id,
         session_id.as_str(),
         field_revision,
-        gen_id,
+        gen_revision,
         &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}{topology_cache_token}"),
     );
     {
@@ -2344,7 +3161,7 @@ pub async fn get_field_vector(
                 quantity_id,
                 &component,
                 field_revision,
-                gen_id,
+                &gen_id,
                 point_count,
                 total_value_count,
             );
@@ -2382,7 +3199,7 @@ pub async fn get_field_vector(
     {
         let indexing = field_indexing.unwrap_or(FieldVectorIndexing::FullDomain);
         let metadata = FieldVectorBinaryMetadata {
-            domain_generation_id: gen_id,
+            domain_generation_id: &gen_id,
             mesh_topology_revision: topology_revision,
             mesh_topology_hash: topology_hash_bytes,
             scope_kind: scope_kind_for_metadata,
@@ -2420,7 +3237,7 @@ pub async fn get_field_vector(
         quantity_id,
         &component,
         field_revision,
-        gen_id,
+        &gen_id,
         point_count,
         value_count,
     );
@@ -2550,7 +3367,7 @@ fn analysis_frequency_response_vector_response(
         field_id,
         &component,
         revision,
-        domain_generation_id(snapshot),
+        &domain_generation_id(snapshot),
         point_count,
         projected.len(),
     );
@@ -2685,7 +3502,7 @@ fn serialize_analysis_field_vector_binary(
         FieldVectorIndexing::ExplicitNodeIndices
     };
     let metadata = FieldVectorBinaryMetadata {
-        domain_generation_id: domain_generation_id(snapshot),
+        domain_generation_id: &domain_generation_id(snapshot),
         mesh_topology_revision: snapshot.mesh_revision,
         mesh_topology_hash: topology_hash_bytes,
         scope_kind: if magnetic_node_indices.is_empty() {
@@ -3148,7 +3965,7 @@ fn analysis_eigen_mode_vector_response(
         field_id,
         &component,
         revision,
-        domain_generation_id(snapshot),
+        &domain_generation_id(snapshot),
         point_count,
         projected.len(),
     );
@@ -3359,7 +4176,7 @@ fn analysis_payload_revision(
     relative_path: &str,
     byte_len: usize,
 ) -> u64 {
-    let mut hash = domain_generation_id(snapshot) ^ (byte_len as u64);
+    let mut hash = domain_generation_revision(snapshot) ^ (byte_len as u64);
     for byte in relative_path.as_bytes() {
         hash = hash.wrapping_mul(1099511628211).wrapping_add(*byte as u64);
     }
@@ -3422,7 +4239,7 @@ fn is_fem_runtime(snapshot: &crate::types::SessionStateResponse) -> bool {
                 | RuntimeEngineId::FemFrequencyResponseDenseValidation
                 | RuntimeEngineId::FemFrequencyResponseProductionCpu
         )
-    ) || snapshot.fem_mesh.is_some()
+    ) || (snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot))
 }
 
 fn fem_topology_available(snapshot: &crate::types::SessionStateResponse) -> bool {
@@ -3445,7 +4262,7 @@ fn projection_etag_token(
     quantity_id: &str,
     session_id: &str,
     field_revision: u64,
-    domain_generation_id: u64,
+    domain_generation_id: &str,
     q: &crate::field_slice::ResolvedProjectionQuery,
     sampling_method: &str,
 ) -> String {
@@ -3626,7 +4443,7 @@ fn matrix_hash(raw: &str) -> String {
 
 fn spatial_index_key(
     quantity_id: &str,
-    domain_generation_id: u64,
+    domain_generation_id: &str,
     normal_axis: usize,
     field: &FemField,
 ) -> String {
@@ -3640,7 +4457,7 @@ fn spatial_index_key(
 async fn get_or_build_fem_spatial_index(
     state: &AppState,
     quantity_id: &str,
-    domain_generation_id: u64,
+    domain_generation_id: &str,
     plane: SlicePlane,
     field: &FemField,
 ) -> std::sync::Arc<FemNormalAxisIndex> {
@@ -3957,7 +4774,7 @@ fn matrix_etag_token(
     quantity_id: &str,
     session_id: &str,
     field_revision: u64,
-    domain_generation_id: u64,
+    domain_generation_id: &str,
     plane: SlicePlane,
     mode: &str,
     component: &str,
@@ -4030,7 +4847,7 @@ async fn build_slice_matrix(
 
     let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
         Some(
-            get_or_build_fem_spatial_index(state, quantity_id, gen_id, query.plane, fem_field)
+            get_or_build_fem_spatial_index(state, quantity_id, &gen_id, query.plane, fem_field)
                 .await,
         )
     } else {
@@ -4088,7 +4905,7 @@ async fn build_slice_matrix(
         quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         query.plane,
         mode,
         &component_label,
@@ -4187,7 +5004,7 @@ async fn build_projection_matrix(
         quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         query.plane,
         "projection",
         &component,
@@ -4251,7 +5068,7 @@ pub async fn get_field_projection_meta(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         &resolved,
         projection.sampling_method,
     );
@@ -4408,7 +5225,7 @@ pub async fn get_field_projection_scalar(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         resolved.plane.as_str(),
         resolved.x_size,
         resolved.y_size,
@@ -4424,7 +5241,7 @@ pub async fn get_field_projection_scalar(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         &resolved,
         sampling_method,
     );
@@ -4590,7 +5407,7 @@ pub async fn get_field_projection_empty_mask(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         resolved.plane.as_str(),
         resolved.x_size,
         resolved.y_size,
@@ -4606,7 +5423,7 @@ pub async fn get_field_projection_empty_mask(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         &resolved,
         sampling_method,
     );
@@ -4967,8 +5784,14 @@ pub async fn get_field_slice_meta(
     drop(guard);
     let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
         Some(
-            get_or_build_fem_spatial_index(&state, &quantity_id, gen_id, resolved.plane, fem_field)
-                .await,
+            get_or_build_fem_spatial_index(
+                &state,
+                &quantity_id,
+                &gen_id,
+                resolved.plane,
+                fem_field,
+            )
+            .await,
         )
     } else {
         None
@@ -4991,8 +5814,13 @@ pub async fn get_field_slice_meta(
         resolved.cut_norm,
     );
 
-    let scalar_etag_token =
-        slice_etag_token(&quantity_id, &session_id, field_revision, gen_id, &resolved);
+    let scalar_etag_token = slice_etag_token(
+        &quantity_id,
+        &session_id,
+        field_revision,
+        &gen_id,
+        &resolved,
+    );
     let scalar_etag = crate::router_v2::handlers::shared::stable_strong_etag(&scalar_etag_token);
 
     let meta_etag_token = format!("meta:{}", scalar_etag_token);
@@ -5007,7 +5835,7 @@ pub async fn get_field_slice_meta(
             &quantity_id,
             &session_id,
             field_revision,
-            gen_id,
+            &gen_id,
             &arrows_query,
         )
     );
@@ -5159,7 +5987,7 @@ pub async fn get_field_slice_scalar(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         resolved.plane.as_str(),
         &slice_cut_cache_key(&resolved),
         resolved.x_size,
@@ -5169,14 +5997,26 @@ pub async fn get_field_slice_scalar(
         resolved.arrow_every,
         resolved.max_arrows,
     );
-    let etag_token = slice_etag_token(&quantity_id, &session_id, field_revision, gen_id, &resolved);
+    let etag_token = slice_etag_token(
+        &quantity_id,
+        &session_id,
+        field_revision,
+        &gen_id,
+        &resolved,
+    );
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
 
     drop(guard);
     let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
         Some(
-            get_or_build_fem_spatial_index(&state, &quantity_id, gen_id, resolved.plane, fem_field)
-                .await,
+            get_or_build_fem_spatial_index(
+                &state,
+                &quantity_id,
+                &gen_id,
+                resolved.plane,
+                fem_field,
+            )
+            .await,
         )
     } else {
         None
@@ -5284,7 +6124,7 @@ pub async fn get_field_slice_arrows(
         &quantity_id,
         &session_id,
         field_revision,
-        gen_id,
+        &gen_id,
         resolved.plane.as_str(),
         &slice_cut_cache_key(&resolved),
         resolved.x_size,
@@ -5296,15 +6136,27 @@ pub async fn get_field_slice_arrows(
     );
     let etag_token = format!(
         "arrows:{}",
-        slice_etag_token(&quantity_id, &session_id, field_revision, gen_id, &resolved)
+        slice_etag_token(
+            &quantity_id,
+            &session_id,
+            field_revision,
+            &gen_id,
+            &resolved
+        )
     );
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
 
     drop(guard);
     let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
         Some(
-            get_or_build_fem_spatial_index(&state, &quantity_id, gen_id, resolved.plane, fem_field)
-                .await,
+            get_or_build_fem_spatial_index(
+                &state,
+                &quantity_id,
+                &gen_id,
+                resolved.plane,
+                fem_field,
+            )
+            .await,
         )
     } else {
         None
@@ -5372,14 +6224,70 @@ mod tests {
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         apply_field_scope, decode_complex_f64_pairs_little_endian, is_fem_runtime,
         parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
-        parse_component, project_values, resolve_field_scope,
+        parse_component, preview_cache_is_fresher, project_values, resolve_field_scope,
         serialize_analysis_field_vector_binary, FieldVectorQuery, ResolvedFieldScopeDomain,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
     use fullmag_runner::{
-        BackendCapabilities, FemMeshPartPayload, FemMeshPayload, RuntimeEngineId,
+        BackendCapabilities, FemMeshPartPayload, FemMeshPayload, LivePreviewField, RuntimeEngineId,
     };
+
+    #[test]
+    fn downscaled_preview_does_not_hide_full_latest_field() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(
+            serde_json::json!({ "session_id": "downscaled-preview-precedence" }),
+        )
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "source_step": 12,
+                "source_revision": 12,
+                "layout": {
+                    "grid_cells": [4, 1, 1],
+                    "original_grid_cells": [4, 1, 1]
+                },
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [3.0, 0.0, 0.0],
+                    [4.0, 0.0, 0.0]
+                ]
+            }
+        }))
+        .expect("full latest field should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 13,
+            source_step: 13,
+            source_revision: 13,
+            materialized_at_unix_ms: 1,
+            materialization_wall_time_ns: 0,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "full_domain".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [4, 1, 1],
+            vector_field_values: vec![1.0, 0.0, 0.0, 4.0, 0.0, 0.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: true,
+            auto_downscale_message: Some("preview only".to_string()),
+            active_mask: None,
+        });
+        if let Some(live_state) = snapshot.live_state.as_mut() {
+            live_state.latest_step.grid = [4, 1, 1];
+        }
+
+        assert!(!preview_cache_is_fresher(&snapshot, "H_demag"));
+    }
 
     #[test]
     fn parses_frequency_response_analysis_field_id() {
@@ -5510,6 +6418,7 @@ mod tests {
                 max_samples: None,
                 phase_rad: None,
                 scope_id: Some("airbox-b".to_string()),
+                owner_object_id: None,
                 scope_kind: Some("airbox".to_string()),
                 snapshot_id: None,
                 stage_id: None,
@@ -5526,6 +6435,39 @@ mod tests {
         assert_eq!(scope.domain, ResolvedFieldScopeDomain::Air);
         assert_eq!(scope.id.as_deref(), Some("airbox-b"));
         assert_eq!(scope.node_indices, vec![6, 7]);
+
+        let magnetic_scope = resolve_field_scope(
+            &FieldVectorQuery {
+                component: Some("full".to_string()),
+                geometry_scope: None,
+                max_samples: None,
+                phase_rad: None,
+                scope_id: Some("body".to_string()),
+                owner_object_id: None,
+                scope_kind: Some("part".to_string()),
+                snapshot_id: None,
+                stage_id: None,
+                view: None,
+            },
+            &snapshot,
+            None,
+            8,
+            "H_demag",
+        )
+        .expect("magnetic part scope should resolve")
+        .expect("magnetic part scope should be scoped");
+
+        assert_eq!(magnetic_scope.domain, ResolvedFieldScopeDomain::Magnetic);
+        assert_eq!(magnetic_scope.node_indices, vec![0, 1, 2, 3]);
+        assert!(
+            scope
+                .node_indices
+                .iter()
+                .all(|index| !magnetic_scope.node_indices.contains(index)),
+            "airbox and magnetic-part carrier masks must be disjoint"
+        );
+        assert_eq!(scope.value_indices, vec![6, 7]);
+        assert_eq!(magnetic_scope.value_indices, vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -5601,6 +6543,7 @@ mod tests {
                 max_samples: None,
                 phase_rad: None,
                 scope_id: Some("body-b".to_string()),
+                owner_object_id: None,
                 scope_kind: Some("part".to_string()),
                 snapshot_id: None,
                 stage_id: None,
@@ -5946,7 +6889,13 @@ mod tests {
                 .try_into()
                 .unwrap(),
         ) as usize;
-        let node_indices_start = metadata_start + 68 + scope_kind_len + scope_id_len;
+        let generation_id_len = u16::from_le_bytes(
+            binary[metadata_start + 8..metadata_start + 10]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let node_indices_start =
+            metadata_start + 68 + scope_kind_len + scope_id_len + generation_id_len;
         assert_eq!(
             u32::from_le_bytes(
                 binary[node_indices_start..node_indices_start + 4]

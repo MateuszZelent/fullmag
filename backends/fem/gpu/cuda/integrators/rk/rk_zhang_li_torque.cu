@@ -57,6 +57,13 @@ bool gpu_rk_add_zhang_li_torque(
         reason = "GPU RK Zhang-Li STT requires device-resident mesh geometry";
         return false;
     }
+    if (!ctx.stt.active_element_mask.empty() &&
+        (gpu.mesh_regions.stt_active_element_mask == nullptr ||
+            gpu.mesh_regions.stt_active_element_count !=
+                static_cast<uint64_t>(ctx.mesh.n_elements))) {
+        reason = "GPU RK Zhang-Li STT requires the canonical target-element mask on device";
+        return false;
+    }
     if (gpu.materials.ms == nullptr || gpu.materials.alpha == nullptr ||
         gpu.local_interactions.vector.x == nullptr ||
         gpu.local_interactions.vector.y == nullptr || gpu.local_interactions.vector.z == nullptr ||
@@ -68,6 +75,7 @@ bool gpu_rk_add_zhang_li_torque(
         gpu.mesh_geometry.nodes_xyz,
         gpu.mesh_geometry.elements,
         gpu.mesh_geometry.magnetic_element_mask,
+        gpu.mesh_regions.stt_active_element_mask,
         m.x,
         m.y,
         m.z,
@@ -87,6 +95,8 @@ bool gpu_rk_add_zhang_li_torque(
         ctx.stt.current_density_am2[2],
         ctx.stt.degree,
         ctx.stt.beta,
+        ctx.stt.lande_g,
+        ctx.stt.formula_version,
         ctx.material_fields.material.damping,
         static_cast<int>(ctx.mesh.n_elements),
         n,

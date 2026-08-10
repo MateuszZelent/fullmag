@@ -929,6 +929,9 @@ fn apply_step_stats_to_idle_live_state(
     state: &mut LocalLiveWorkspaceState,
     step_stats: &fullmag_runner::StepStats,
 ) {
+    if step_stats.step < state.live_state.latest_step.step {
+        return;
+    }
     state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
     state.live_state.latest_step.step = step_stats.step;
     state.live_state.latest_step.time = step_stats.time;
@@ -982,6 +985,7 @@ mod tests {
                 problem_name: "test".to_string(),
                 requested_backend: "fdm".to_string(),
                 explicit_selection: true,
+                authored_requested_device: "cpu".to_string(),
                 requested_device: "cpu".to_string(),
                 requested_precision: "double".to_string(),
                 requested_mode: "strict".to_string(),
@@ -1149,6 +1153,38 @@ mod tests {
         assert_eq!(
             state.latest_scalar_row.as_ref().map(|row| row.step),
             Some(7)
+        );
+    }
+
+    #[test]
+    fn idle_preview_step_zero_cannot_regress_terminal_step() {
+        let mut state = workspace_state_for_energy_refresh();
+        apply_step_stats_to_idle_live_state(
+            &mut state,
+            &StepStats {
+                step: 123,
+                time: 4.0e-9,
+                e_total: 9.0,
+                ..StepStats::default()
+            },
+        );
+
+        apply_step_stats_to_idle_live_state(
+            &mut state,
+            &StepStats {
+                step: 0,
+                time: 0.0,
+                e_total: 1.0,
+                ..StepStats::default()
+            },
+        );
+
+        assert_eq!(state.live_state.latest_step.step, 123);
+        assert_eq!(state.live_state.latest_step.time, 4.0e-9);
+        assert_eq!(state.live_state.latest_step.e_total, 9.0);
+        assert_eq!(
+            state.latest_scalar_row.as_ref().map(|row| row.step),
+            Some(123)
         );
     }
 

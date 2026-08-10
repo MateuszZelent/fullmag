@@ -21,7 +21,10 @@ export const BACKEND_INTERACTION_IDS = [
 export type PhysicsInteractionId = (typeof BACKEND_INTERACTION_IDS)[number];
 
 type InteractionAvailability = "object" | "study" | "deferred";
-type InteractionScope = "object_or_region" | "global" | "global_or_region";
+type InteractionScope =
+  | "object_or_region"
+  | "global"
+  | "global_or_object_or_region";
 type InteractionFieldKind = "number" | "select" | "text" | "vector3" | "vector6";
 
 interface InteractionFieldOption {
@@ -51,6 +54,19 @@ export interface InteractionSpec {
   writableReason?: string;
 }
 
+export type InteractionDiscretization = "fdm" | "fem" | "unknown";
+
+export type InteractionLaneStatus =
+  | "supported"
+  | "deferred"
+  | "unsupported"
+  | "unresolved";
+
+export interface InteractionLaneAvailability {
+  reason?: string;
+  status: InteractionLaneStatus;
+}
+
 export interface PhysicsInteractionDraft {
   enabled: boolean;
   id: PhysicsInteractionId;
@@ -75,6 +91,28 @@ const DEMAG_METHOD_OPTIONS: InteractionFieldOption[] = [
   { label: "FEM FMM", value: "fmm" },
   { label: "FDM multilayer convolution", value: "multilayer_convolution" },
 ];
+
+const FDM_DEMAG_METHOD_OPTIONS: InteractionFieldOption[] = [
+  { label: "Auto", value: "auto" },
+  { label: "FDM single-grid demag", value: "single_grid" },
+  { label: "FDM multilayer convolution", value: "multilayer_convolution" },
+];
+
+const FEM_DEMAG_METHOD_OPTIONS = DEMAG_METHOD_OPTIONS.filter(
+  (option) => option.value !== "multilayer_convolution",
+);
+
+const DEMAG_METHOD_VALUES_BY_LANE: Record<
+  Exclude<InteractionDiscretization, "unknown">,
+  readonly string[]
+> = {
+  fdm: FDM_DEMAG_METHOD_OPTIONS.map((option) => option.value),
+  fem: FEM_DEMAG_METHOD_OPTIONS.map((option) => option.value),
+};
+
+const FDM_UNSUPPORTED_INTERACTIONS = new Set<PhysicsInteractionId>([
+  "magnetoelastic",
+]);
 
 const INTERACTION_SPECS: readonly InteractionSpec[] = [
   {
@@ -182,7 +220,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     ],
     id: "current_transport",
     label: "Electric current",
-    scope: "global_or_region",
+    scope: "global_or_object_or_region",
     storage: "study",
   },
   {
@@ -455,8 +493,8 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
       },
     ],
     id: "oersted_field",
-    label: "Regional field source",
-    scope: "global_or_region",
+    label: "Oersted field",
+    scope: "global_or_object_or_region",
     storage: "study",
   },
   {
@@ -500,6 +538,112 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
 
 export function allInteractionSpecs(): readonly InteractionSpec[] {
   return INTERACTION_SPECS;
+}
+
+export function normalizeInteractionDiscretization(
+  value: unknown,
+): InteractionDiscretization {
+  if (typeof value !== "string") return "unknown";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "fdm") return "fdm";
+  if (normalized === "fem") return "fem";
+  return "unknown";
+}
+
+/**
+ * Return the interaction catalog for a resolved lane. An unresolved lane has
+ * no editable catalog: showing the FEM catalog while the runtime lane is
+ * unknown would make a later command mutate the wrong physical realization.
+ */
+export function interactionSpecsForDiscretization(
+  discretization: InteractionDiscretization,
+): readonly InteractionSpec[] {
+  if (discretization === "unknown") return [];
+  return INTERACTION_SPECS.filter(
+    (spec) =>
+      interactionAvailabilityForDiscretization(spec.id, discretization).status !==
+      "unsupported",
+  ).map((spec) => {
+    if (spec.id !== "demag") return spec;
+    return {
+      ...spec,
+      fields: spec.fields.map((field) =>
+        field.id === "method"
+          ? {
+              ...field,
+              options:
+                discretization === "fdm"
+                  ? FDM_DEMAG_METHOD_OPTIONS
+                  : FEM_DEMAG_METHOD_OPTIONS,
+            }
+          : field,
+      ),
+    };
+  });
+}
+
+export function interactionAvailabilityForDiscretization(
+  id: PhysicsInteractionId,
+  discretization: InteractionDiscretization,
+): InteractionLaneAvailability {
+  if (discretization === "unknown") {
+    return {
+      reason:
+        "Physics interaction lane is unresolved; resolve FDM or FEM before editing.",
+      status: "unresolved",
+    };
+  }
+  const spec = findInteractionSpec(id);
+  if (!spec) {
+    return {
+      reason: `Interaction '${id}' is not available for ${discretization.toUpperCase()}.`,
+      status: "unsupported",
+    };
+  }
+  if (discretization === "fdm" && FDM_UNSUPPORTED_INTERACTIONS.has(id)) {
+    return {
+      reason:
+        "Magnetoelastic coupling is not applicable to the executable FDM lane; use a qualified FEM lane.",
+      status: "unsupported",
+    };
+  }
+  if (spec.availability === "deferred") {
+    return {
+      reason: spec.writableReason ?? `${spec.label} authoring is deferred.`,
+      status: "deferred",
+    };
+  }
+  return { status: "supported" };
+}
+
+export function validateInteractionDraftForDiscretization(
+  draft: PhysicsInteractionDraft,
+  discretization: InteractionDiscretization,
+): { error: string } | null {
+  const availability = interactionAvailabilityForDiscretization(
+    draft.id,
+    discretization,
+  );
+  if (availability.status !== "supported") {
+    return { error: availability.reason ?? "Interaction is not available." };
+  }
+  if (draft.id !== "demag") return null;
+
+  const method = stringValue(draft.values.method, "auto");
+  const allowed =
+    discretization === "unknown"
+      ? []
+      : DEMAG_METHOD_VALUES_BY_LANE[discretization];
+  if (allowed.includes(method)) return null;
+  const laneLabel = discretization.toUpperCase();
+  const allowedLabel =
+    allowed.length > 1
+      ? `${allowed.slice(0, -1).join(", ")}, or ${allowed.at(-1)}`
+      : allowed[0] ?? "auto";
+  return {
+    error:
+      `Demagnetization method '${method}' is not applicable to ${laneLabel}; choose ${allowedLabel}.`,
+  };
 }
 
 export function findInteractionSpec(

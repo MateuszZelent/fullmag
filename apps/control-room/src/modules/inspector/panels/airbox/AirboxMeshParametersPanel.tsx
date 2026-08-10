@@ -32,6 +32,7 @@ import {
   draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
   type AirboxMeshPolicyDraft,
+  type AirboxMeshPolicyLane,
 } from "./airboxMeshPolicyDraft";
 import type { MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource } from "@/kernel/api/apiTypes";
 
@@ -40,12 +41,13 @@ type Feedback = { kind: "error" | "success"; message: string } | null;
 export async function submitAirboxPolicyDraft(
   draft: AirboxMeshPolicyDraft,
   replace: (request: MeshUniverseConfigReplaceRequest) => Promise<MeshUniverseConfigResource>,
+  options: { lane?: AirboxMeshPolicyLane } = {},
 ): Promise<
   | { error: string; kind: "error" }
   | { kind: "noop" }
   | { kind: "submitted"; resource: MeshUniverseConfigResource }
 > {
-  const result = buildAirboxMeshPolicyReplaceRequest(draft);
+  const result = buildAirboxMeshPolicyReplaceRequest(draft, options);
   if ("error" in result) return { error: result.error, kind: "error" };
   if (result.request === null) return { kind: "noop" } as const;
   return { kind: "submitted", resource: await replace(result.request) } as const;
@@ -93,11 +95,21 @@ const EFFECTIVE_FIELDS = [
   ["center", "Effective center"],
 ] as const;
 
+const FDM_EFFECTIVE_FIELDS = EFFECTIVE_FIELDS.filter(([key]) =>
+  ["mode", "padding", "size", "center"].includes(key),
+);
+
 const displayEffectiveValue = (value: unknown) =>
   Array.isArray(value) ? value.join(", ") : value == null ? "not published" : String(value);
 
-export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
+export type AirboxMeshParametersLane = "fem" | "fdm";
+
+export function AirboxMeshParametersPanel({
+  lane = "fem",
+  selection,
+}: InspectorPanelProps & { lane?: AirboxMeshParametersLane }) {
   void selection;
+  const isFdm = lane === "fdm";
   const kernel = useKernel();
   const { api, commands, resources } = kernel;
   const policy = useUniverseMeshPolicyResource();
@@ -152,6 +164,7 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
       const submission = await submitAirboxPolicyDraft(
         draft,
         (request) => api.meshing.replaceUniversePolicy(request),
+        { lane },
       );
       if (submission.kind === "error") {
         setFeedback({ kind: "error", message: submission.error });
@@ -168,7 +181,9 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
       if (!silent) {
         setFeedback({
           kind: "success",
-          message: "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt.",
+          message: isFdm
+            ? "Canonical Airbox policy saved for FDM. Re-run or re-plan the study to materialize the new structured grid."
+            : "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt.",
         });
       }
       return true;
@@ -205,31 +220,40 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Canonical Authored Parameters" badge="Python round-trip">
         <FieldRow label="Policy revision" value={String(resource.revision)} />
-        {NUMBER_FIELDS.map(({ key, label, unit }) => (
-          <FormField
-            key={key}
-            label={label}
-            type="number"
-            unit={unit}
-            value={draft[key]}
-            onChange={(event) => updateDraft({ [key]: event.target.value })}
+        {!isFdm ? (
+          <>
+            {NUMBER_FIELDS.map(({ key, label, unit }) => (
+              <FormField
+                key={key}
+                label={label}
+                type="number"
+                unit={unit}
+                value={draft[key]}
+                onChange={(event) => updateDraft({ [key]: event.target.value })}
+              />
+            ))}
+            <FormField
+              label="Element grading"
+              type="select"
+              value={draft.airboxGrading}
+              onChange={(event) =>
+                updateDraft({
+                  airboxGrading: event.target.value as AirboxMeshPolicyDraft["airboxGrading"],
+                  airboxGradingAuthored: true,
+                })
+              }
+            >
+              {AIRBOX_GRADING_MODES.map((mode) => (
+                <option key={mode} value={mode}>{mode}</option>
+              ))}
+            </FormField>
+          </>
+        ) : (
+          <FieldRow
+            label="FDM policy scope"
+            value="Structured-grid universe geometry"
           />
-        ))}
-        <FormField
-          label="Element grading"
-          type="select"
-          value={draft.airboxGrading}
-          onChange={(event) =>
-            updateDraft({
-              airboxGrading: event.target.value as AirboxMeshPolicyDraft["airboxGrading"],
-              airboxGradingAuthored: true,
-            })
-          }
-        >
-          {AIRBOX_GRADING_MODES.map((mode) => (
-            <option key={mode} value={mode}>{mode}</option>
-          ))}
-        </FormField>
+        )}
       </InspectorGroup>
       <InspectorGroup title="Canonical Airbox Geometry" badge="Python round-trip">
         <FormField
@@ -255,7 +279,7 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
       </InspectorGroup>
       <InspectorGroup title="Backend-effective Values" badge="read-only">
         <FieldRow label="Source" value="effective_config published by backend" />
-        {EFFECTIVE_FIELDS.map(([key, label]) => (
+        {(isFdm ? FDM_EFFECTIVE_FIELDS : EFFECTIVE_FIELDS).map(([key, label]) => (
           <FieldRow key={key} label={label} value={displayEffectiveValue(resource.effective_config?.[key])} />
         ))}
         <FieldRow
@@ -264,29 +288,43 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
         />
         <FieldRow label="Effective key count" value={String(Object.keys(resource.effective_config ?? {}).length)} />
       </InspectorGroup>
-      <InspectorGroup title="Advanced Authored Policy JSON" badge="Python round-trip" collapsible defaultOpen={false}>
-        <FormField
-          label="Advanced universe policy JSON"
-          rows={8}
-          type="textarea"
-          value={draft.configText}
-          onChange={(event) => updateDraft({ configText: event.target.value })}
-        />
-      </InspectorGroup>
+      {!isFdm ? (
+        <InspectorGroup title="Advanced Authored Policy JSON" badge="Python round-trip" collapsible defaultOpen={false}>
+          <FormField
+            label="Advanced universe policy JSON"
+            rows={8}
+            type="textarea"
+            value={draft.configText}
+            onChange={(event) => updateDraft({ configText: event.target.value })}
+          />
+        </InspectorGroup>
+      ) : null}
       <InspectorGroup title="Transactions">
+        {isFdm ? (
+          <FeedbackBanner
+            kind="warning"
+            message="FDM policy changes apply to the next run; re-run or re-plan the study after applying."
+          />
+        ) : null}
         {dirty ? (
           <FeedbackBanner
             kind="warning"
-            message="Unapplied changes. Apply Airbox Policy or Apply & Build before trusting the current Airbox mesh."
+            message={
+              isFdm
+                ? "Unapplied changes. Apply Airbox Policy, then re-run or re-plan the study."
+                : "Unapplied changes. Apply Airbox Policy or Apply & Build before trusting the current Airbox mesh."
+            }
           />
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button disabled={pending} size="sm" type="button" variant="primary" onClick={() => void applyPolicy()}>
             Apply Airbox Policy
           </Button>
-          <Button disabled={pending} size="sm" type="button" variant="secondary" onClick={() => void build()}>
-            {dirty ? "Apply & Build Shared-Domain Mesh" : "Build Shared-Domain Mesh"}
-          </Button>
+          {!isFdm ? (
+            <Button disabled={pending} size="sm" type="button" variant="secondary" onClick={() => void build()}>
+              {dirty ? "Apply & Build Shared-Domain Mesh" : "Build Shared-Domain Mesh"}
+            </Button>
+          ) : null}
           <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={revert}>
             Revert
           </Button>

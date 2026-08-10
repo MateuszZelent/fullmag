@@ -49,18 +49,16 @@ declare -A FAMILY_COUNTS=()
 mark_process_reference() {
   local raw_path="${1:-}"
   [ -n "${raw_path}" ] || return 0
-  # Process command lines contain arbitrary paths from unrelated mounts.  Do
-  # not call readlink -f on those paths: a stale sshfs/FUSE mount can block
-  # indefinitely and hold the managed-runtime export lock.  Only runtime
+  # Process command lines contain arbitrary paths from unrelated mounts. Do
+  # not canonicalize those paths: a stale sshfs/FUSE mount can block
+  # indefinitely and hold the managed-runtime export lock. Only runtime
   # paths can protect a managed variant, so reject everything else before
   # touching the filesystem.
   case "${raw_path}" in
     "${VARIANTS_ROOT}"/*|"${RUNTIME_PARENT}"/*) ;;
     *) return 0 ;;
   esac
-  local resolved_path
-  resolved_path="$(readlink -f -- "${raw_path}" 2>/dev/null || true)"
-  [ -n "${resolved_path}" ] || resolved_path="${raw_path}"
+  local resolved_path="${raw_path}"
   local relative variant_root
   case "${resolved_path}" in
     "${VARIANTS_ROOT}"/*)

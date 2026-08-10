@@ -10,13 +10,18 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
-use crate::router_v2::handlers::sessions::status::{domain_generation_id, fdm_grid_shape};
+use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
+use crate::router_v2::handlers::sessions::status::{
+    domain_generation_id, domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
+};
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
+use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -43,7 +48,7 @@ pub async fn get_domain_meta(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    let is_fem = snapshot.fem_mesh.is_some();
+    let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot);
     let latest = snapshot.live_state.as_ref().map(|l| &l.latest_step);
 
     let grid_shape = if is_fem {
@@ -131,12 +136,361 @@ pub async fn get_domain_meta(
             boundary_faces,
         },
         grid,
-        element_type: if is_fem {
-            Some("tetrahedron".into())
-        } else {
-            None
-        },
+        element_type: is_fem
+            .then(|| snapshot.fem_mesh.as_ref().and_then(fem_element_type))
+            .flatten(),
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+    responses(
+        (status = 200, description = "FDM multilayer native and common transform layouts", body = FdmMultilayerLayoutResource),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "data"
+)]
+pub async fn get_fdm_multilayer_layout(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<FdmMultilayerLayoutResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    Ok(Json(fdm_multilayer_layout_resource(snapshot)))
+}
+
+fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultilayerLayoutResource {
+    let generation = domain_generation_id(snapshot);
+    let revisions = (
+        domain_generation_revision(snapshot),
+        snapshot.field_samples_revision,
+        snapshot.stage_execution_revision,
+    );
+    let metadata = snapshot.metadata.as_ref();
+    let artifact = metadata
+        .and_then(|value| value.get("artifact_layout"))
+        .filter(|value| value.get("backend").and_then(Value::as_str) == Some("fdm_multilayer"));
+    let backend_plan = metadata
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("backend_plan"))
+        .filter(|value| value.get("layers").is_some() && value.get("common_cells").is_some());
+    let available = artifact.is_some() || backend_plan.is_some();
+    if !available {
+        return FdmMultilayerLayoutResource {
+            schema_version: "fdm-multilayer-layout.v1".into(),
+            domain_generation_id: generation,
+            available: false,
+            unavailable_reason: Some("not_fdm_multilayer".into()),
+            backend: "fdm".into(),
+            layout_revision: revisions.0,
+            observation_revision: revisions.1,
+            execution_revision: revisions.2,
+            layout_fingerprint: None,
+            strategy: None,
+            requested_mode: None,
+            resolved_mode: None,
+            common_transform_layout: None,
+            layers: Vec::new(),
+            airbox: unavailable_fdm_multilayer_airbox_resource("not_fdm_multilayer"),
+        };
+    }
+
+    let plan_summary = backend_plan.and_then(|value| value.get("planner_summary"));
+    let strategy = plan_summary
+        .and_then(|value| value.get("selected_strategy"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            plan_summary
+                .and_then(|value| value.get("requested_strategy"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
+    let requested_mode = plan_summary
+        .and_then(|value| value.get("requested_mode"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            backend_plan
+                .and_then(|value| value.get("mode"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
+    let resolved_mode = plan_summary
+        .and_then(|value| value.get("resolved_mode"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            backend_plan
+                .and_then(|value| value.get("mode"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
+
+    let certificate = backend_plan.and_then(|value| value.get("grid_certificate"));
+    let common_shape = backend_plan
+        .and_then(|value| value.get("common_cells"))
+        .or_else(|| artifact.and_then(|value| value.get("common_cells")))
+        .and_then(value_array3_u32)
+        .unwrap_or([0, 0, 0]);
+    let common_cell_size = certificate
+        .and_then(|value| value.get("cell_m"))
+        .and_then(value_array3_f64)
+        .or_else(|| {
+            artifact
+                .and_then(|value| value.get("layers"))
+                .and_then(Value::as_array)
+                .and_then(|layers| layers.first())
+                .and_then(|value| value.get("convolution_cell_size"))
+                .and_then(value_array3_f64)
+        })
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let common_origin = certificate
+        .and_then(|value| value.get("origin_m"))
+        .and_then(value_array3_f64)
+        .or_else(|| {
+            artifact
+                .and_then(|value| value.get("layers"))
+                .and_then(Value::as_array)
+                .and_then(|layers| layers.first())
+                .and_then(|value| value.get("convolution_origin"))
+                .and_then(value_array3_f64)
+        })
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let common_layout =
+        (common_shape.iter().all(|value| *value > 0)).then(|| FdmCommonTransformLayoutResource {
+            shape: common_shape,
+            cell_size: common_cell_size,
+            origin: common_origin,
+            fft_shape: common_shape.map(|value| value.saturating_mul(2)),
+            is_physical_mesh: false,
+            provenance: "planner.grid_certificate;fft-scratch-only".into(),
+        });
+
+    let plan_layers = backend_plan
+        .and_then(|value| value.get("layers"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let artifact_layers = artifact
+        .and_then(|value| value.get("layers"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let transfer_provenance = metadata
+        .and_then(|value| value.get("mesh"))
+        .and_then(|value| value.get("transfer_provenance"))
+        .and_then(Value::as_array);
+    let layer_count = plan_layers.len().max(artifact_layers.len());
+    let layers = (0..layer_count)
+        .filter_map(|index| {
+            let plan_layer = plan_layers.get(index);
+            let artifact_layer = artifact_layers.get(index);
+            let source = plan_layer.or(artifact_layer)?;
+            let magnet_name = value_string(source, "magnet_name")
+                .or_else(|| artifact_layer.and_then(|value| value_string(value, "magnet_name")))?;
+            let native_grid = plan_layer
+                .and_then(|value| value.get("native_grid"))
+                .or_else(|| artifact_layer.and_then(|value| value.get("native_grid")))
+                .and_then(value_array3_u32)?;
+            let native_cell_size = plan_layer
+                .and_then(|value| value.get("native_cell_size"))
+                .or_else(|| artifact_layer.and_then(|value| value.get("native_cell_size")))
+                .and_then(value_array3_f64)?;
+            let native_origin = plan_layer
+                .and_then(|value| value.get("native_origin"))
+                .or_else(|| artifact_layer.and_then(|value| value.get("native_origin")))
+                .and_then(value_array3_f64)?;
+            let convolution_grid = artifact_layer
+                .and_then(|value| value.get("convolution_grid"))
+                .or_else(|| plan_layer.and_then(|value| value.get("convolution_grid")))
+                .and_then(value_array3_u32)
+                .unwrap_or(common_shape);
+            let convolution_cell_size = artifact_layer
+                .and_then(|value| value.get("convolution_cell_size"))
+                .or_else(|| plan_layer.and_then(|value| value.get("convolution_cell_size")))
+                .and_then(value_array3_f64)
+                .unwrap_or(common_cell_size);
+            let layer_id = value_string(source, "layer_id")
+                .or_else(|| value_string(source, "object_id").map(|id| format!("layer:{id}")))
+                .unwrap_or_else(|| format!("layer:{index}:{magnet_name}"));
+            let object_id = value_string(source, "object_id")
+                .unwrap_or_else(|| format!("object:{magnet_name}"));
+            let active_mask = plan_layer
+                .and_then(|value| value.get("native_active_mask"))
+                .and_then(Value::as_array);
+            let total_cells = native_grid
+                .iter()
+                .map(|value| u64::from(*value))
+                .product::<u64>();
+            let active_cell_count = active_mask
+                .map(|mask| {
+                    mask.iter()
+                        .filter(|value| value.as_bool() == Some(true))
+                        .count() as u64
+                })
+                .or_else(|| {
+                    artifact_layer
+                        .and_then(|value| value.get("active_cell_count"))
+                        .and_then(Value::as_u64)
+                })
+                .unwrap_or(total_cells);
+            let source_grid_fingerprint = transfer_provenance
+                .and_then(|entries| {
+                    entries.iter().find(|entry| {
+                        value_string(entry, "magnet_name").as_deref() == Some(magnet_name.as_str())
+                    })
+                })
+                .and_then(|entry| value_string(entry, "source_grid_fingerprint"));
+            Some(FdmLayerLayoutResource {
+                layer_id,
+                object_id,
+                magnet_name,
+                native_grid,
+                native_cell_size,
+                native_origin,
+                native_grid_fingerprint: source_grid_fingerprint,
+                convolution_grid,
+                convolution_cell_size,
+                transfer_kind: value_string(source, "transfer_kind")
+                    .unwrap_or_else(|| "identity".into()),
+                active_mask_present: active_mask.is_some()
+                    || artifact_layer
+                        .and_then(|value| value.get("active_mask_present"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                active_cell_count,
+                inactive_cell_count: total_cells.saturating_sub(active_cell_count),
+                mask_provenance: active_mask
+                    .is_some()
+                    .then(|| "execution_plan.layers.native_active_mask".into()),
+            })
+        })
+        .collect();
+    let layout_fingerprint = artifact.or(backend_plan).and_then(|value| {
+        serde_json::to_vec(value).ok().map(|bytes| {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            format!("sha256:{:x}", hasher.finalize())
+        })
+    });
+
+    FdmMultilayerLayoutResource {
+        schema_version: "fdm-multilayer-layout.v1".into(),
+        domain_generation_id: generation,
+        available: true,
+        unavailable_reason: None,
+        backend: "fdm_multilayer".into(),
+        layout_revision: revisions.0,
+        observation_revision: revisions.1,
+        execution_revision: revisions.2,
+        layout_fingerprint,
+        strategy,
+        requested_mode,
+        resolved_mode,
+        common_transform_layout: common_layout,
+        layers,
+        airbox: fdm_multilayer_airbox_resource(snapshot, revisions.1),
+    }
+}
+
+fn unavailable_fdm_multilayer_airbox_resource(reason: &str) -> FdmMultilayerAirboxResource {
+    FdmMultilayerAirboxResource {
+        carrier_available: false,
+        h_demag_available: false,
+        h_eff_available: false,
+        unavailable_reason: Some(reason.to_string()),
+        h_eff_unavailable_reason: Some("fdm_multilayer_airbox_h_eff_unavailable.v1".into()),
+        cells: None,
+        origin_m: None,
+        cell_size_m: None,
+        carrier_fingerprint: None,
+        sample_count: None,
+        value_count: None,
+        carrier_revision: None,
+        source_policy: None,
+        target_only: None,
+        source_grid_fingerprints: None,
+        source_runtime_identity: None,
+    }
+}
+
+fn fdm_multilayer_airbox_resource(
+    snapshot: &SessionStateResponse,
+    observation_revision: u64,
+) -> FdmMultilayerAirboxResource {
+    match load_fdm_multilayer_airbox_carrier(snapshot) {
+        Ok(Some(carrier)) => fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision),
+        Ok(None) => unavailable_fdm_multilayer_airbox_resource("airbox_carrier_missing"),
+        Err(reason) => unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}")),
+    }
+}
+
+fn fdm_multilayer_airbox_resource_from_carrier(
+    carrier: FdmMultilayerAirboxCarrier,
+    observation_revision: u64,
+) -> FdmMultilayerAirboxResource {
+    FdmMultilayerAirboxResource {
+        carrier_available: true,
+        h_demag_available: true,
+        h_eff_available: false,
+        unavailable_reason: None,
+        h_eff_unavailable_reason: Some("fdm_multilayer_airbox_h_eff_unavailable.v1".into()),
+        cells: Some(carrier.cells),
+        origin_m: Some(carrier.origin_m),
+        cell_size_m: Some(carrier.cell_size_m),
+        carrier_fingerprint: Some(format!("sha256:{}", carrier.carrier_fingerprint)),
+        sample_count: Some(carrier.sample_count as u64),
+        value_count: Some(carrier.values.len() as u64),
+        carrier_revision: Some(observation_revision),
+        source_policy: Some(carrier.source_policy),
+        target_only: Some(true),
+        source_grid_fingerprints: Some(
+            carrier
+                .source_grid_fingerprints
+                .into_iter()
+                .map(|fingerprint| format!("sha256:{fingerprint}"))
+                .collect(),
+        ),
+        source_runtime_identity: Some(carrier.source_runtime_identity),
+    }
+}
+
+fn value_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn value_array3_u32(value: &Value) -> Option<[u32; 3]> {
+    let values = value.as_array()?;
+    Some([
+        u32::try_from(values.first()?.as_u64()?).ok()?,
+        u32::try_from(values.get(1)?.as_u64()?).ok()?,
+        u32::try_from(values.get(2)?.as_u64()?).ok()?,
+    ])
+}
+
+fn value_array3_f64(value: &Value) -> Option<[f64; 3]> {
+    let values = value.as_array()?;
+    Some([
+        values.first()?.as_f64()?,
+        values.get(1)?.as_f64()?,
+        values.get(2)?.as_f64()?,
+    ])
+}
+
+fn fem_element_type(mesh: &fullmag_runner::FemMeshPayload) -> Option<String> {
+    let first = *mesh.cells.types.first()?;
+    if mesh.cells.types.iter().any(|cell_type| *cell_type != first) {
+        return Some("mixed".to_string());
+    }
+    Some(
+        match first {
+            fullmag_ir::FemCellTypeIR::Tet4 => "tetrahedron",
+            fullmag_ir::FemCellTypeIR::Prism6 => "prism",
+            fullmag_ir::FemCellTypeIR::Pyramid5 => "pyramid",
+            fullmag_ir::FemCellTypeIR::Hex8 => "hexahedron",
+        }
+        .to_string(),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -146,55 +500,10 @@ struct FdmGridLayout {
 }
 
 fn fdm_grid_descriptor(snapshot: &SessionStateResponse) -> FdmGridLayout {
-    let layout = snapshot
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("artifact_layout"))
-        .filter(|layout| layout.get("backend").and_then(Value::as_str) == Some("fdm"));
-    let origin = layout
-        .and_then(|layout| {
-            layout
-                .get("origin_m")
-                .or_else(|| layout.get("origin"))
-                .or_else(|| layout.get("grid_origin"))
-                .or_else(|| layout.get("native_origin"))
-        })
-        .and_then(value_array3_f64_any_finite)
-        .unwrap_or([0.0, 0.0, 0.0]);
-    let spacing = layout
-        .and_then(|layout| layout.get("cell_size"))
-        .and_then(value_array3_f64_allow_planar)
-        .unwrap_or([1.0, 1.0, 1.0]);
+    let (origin, spacing) =
+        fdm_grid_geometry(snapshot).unwrap_or(([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]));
 
     FdmGridLayout { origin, spacing }
-}
-
-fn value_array3_f64_any_finite(value: &Value) -> Option<[f64; 3]> {
-    let array = value.as_array()?;
-    let values = [
-        array.first()?.as_f64()?,
-        array.get(1)?.as_f64()?,
-        array.get(2)?.as_f64()?,
-    ];
-    values
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some(values)
-}
-
-fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
-    let array = value.as_array()?;
-    let values = [
-        array.first()?.as_f64()?,
-        array.get(1)?.as_f64()?,
-        array.get(2)?.as_f64()?,
-    ];
-    let positive_axes = values.iter().filter(|value| **value > 0.0).count();
-    values
-        .iter()
-        .all(|value| value.is_finite() && *value >= 0.0)
-        .then_some(values)
-        .filter(|_| positive_axes >= 2)
 }
 
 #[utoipa::path(
@@ -224,6 +533,9 @@ pub async fn get_domain_topology(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
+    if is_fdm_snapshot(snapshot) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
@@ -270,6 +582,9 @@ pub async fn get_domain_slice_mesh_overlay(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
+    if is_fdm_snapshot(snapshot) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -346,7 +661,7 @@ pub async fn get_domain_slice_mesh_overlay(
         segment_count,
         point_count: 0,
         topology_revision: snapshot.mesh_revision,
-        domain_generation_id,
+        domain_generation_id: domain_generation_id.to_string(),
         etag: etag.clone(),
     };
 

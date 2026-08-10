@@ -217,10 +217,14 @@ export function planViewport3DColorbars({
 
 export function resolveViewport3DColorbarRangeStates({
   fdmSurfaceColors,
+  fdmTargetColorBuffers,
+  fdmVectorColors,
   fieldModel,
   plans,
 }: {
   fdmSurfaceColors?: ScalarColorBuffer | null;
+  fdmTargetColorBuffers?: ReadonlyMap<string, ScalarColorBuffer | null>;
+  fdmVectorColors?: ScalarColorBuffer | null;
   fieldModel?: Viewport3DColorbarRangeFieldModel | null;
   plans: readonly Viewport3DColorbarPlan[];
 }): ReadonlyMap<string, Viewport3DColorbarRangeState> {
@@ -229,15 +233,38 @@ export function resolveViewport3DColorbarRangeStates({
     Boolean(fieldModel?.targetPasses) &&
     (fieldModel?.targetPasses?.size ?? 0) > 0;
   for (const plan of plans) {
+    const fdmTargetColorBuffer = plan.targetIds
+      .map((targetId) => fdmTargetColorBuffers?.get(targetId) ?? null)
+      .find((buffer) =>
+        scalarColorBufferMatchesColorbarRequest({
+          buffer,
+          colorMode: plan.colorMode,
+          colorPalette: plan.palette,
+          quantityId: plan.quantityId,
+        }),
+      ) ?? null;
     const scopedScalarColors =
       plan.scopeId == null
         ? null
         : fieldModel?.scalarColorsByPartAndMode
             .get(plan.scopeId)
             ?.get(plan.colorMode) ?? null;
+    const fdmColorBuffer =
+      plan.scopeKind === "full"
+        ? [fdmSurfaceColors, fdmVectorColors].find((buffer) =>
+            scalarColorBufferMatchesColorbarRequest({
+              buffer,
+              colorMode: plan.colorMode,
+              colorPalette: plan.palette,
+              quantityId: plan.quantityId,
+            }),
+          ) ?? null
+        : null;
     const candidate =
-      plan.scopeKind === "full" && fdmSurfaceColors
-        ? fdmSurfaceColors
+      fdmTargetColorBuffer
+        ? fdmTargetColorBuffer
+        : fdmColorBuffer
+        ? fdmColorBuffer
         : plan.scopeKind === "full"
           ? resolveViewport3DTargetSurfaceLayerInput({
               fieldModel: fieldModel ?? null,

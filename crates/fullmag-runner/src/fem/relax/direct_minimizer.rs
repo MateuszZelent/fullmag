@@ -234,6 +234,7 @@ pub(crate) fn execute_direct_minimizer(
         terminal_stats = None;
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
+        artifacts.observe_energy_evaluation();
         let artifact_metrics = artifacts.record_scalar(&accepted_stats)?;
         apply_artifact_enqueue_metrics(&mut accepted_stats, artifact_metrics);
         for name in artifacts.due_accepted_step_fields(accepted_stats.step, false) {

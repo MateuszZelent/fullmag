@@ -25,9 +25,15 @@ import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { SelectionController } from "../selection/SelectionController";
 
-import { GEOMETRY_LIFECYCLE_COMMANDS } from "./geometryLifecycleCommandContributions";
+import {
+  FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
+  GEOMETRY_LIFECYCLE_COMMANDS,
+  UNKNOWN_MESH_COMMAND_LANE_REASON,
+  resolveMeshCommandLane,
+} from "./geometryLifecycleCommandContributions";
 
 function registryWithLifecycleCommands(): CommandRegistry {
   const registry = new CommandRegistry();
@@ -55,6 +61,14 @@ function selectBox(selection: SelectionController): void {
     },
     "test",
   );
+}
+
+function sessionStatus(discretization: string) {
+  return {
+    [SESSION_STATUS_RESOURCE_KEY]: {
+      domain: { discretization },
+    },
+  };
 }
 
 describe("geometry lifecycle command contributions", () => {
@@ -89,6 +103,7 @@ describe("geometry lifecycle command contributions", () => {
       registry.isEnabled("mesh.build-selected", {
         selection,
         source: "test",
+        resourceData: sessionStatus("fem"),
       }),
     ).toBe(true);
 
@@ -99,6 +114,7 @@ describe("geometry lifecycle command contributions", () => {
       bus,
       layout: layout as never,
       resources,
+      resourceData: sessionStatus("fem"),
       selection,
       source: "test",
     });
@@ -169,6 +185,7 @@ describe("geometry lifecycle command contributions", () => {
       bus,
       layout: layout as never,
       resources,
+      resourceData: sessionStatus("fem"),
       source: "test",
     });
 
@@ -216,6 +233,7 @@ describe("geometry lifecycle command contributions", () => {
       selection,
       source: "test" as const,
       resourceData: {
+        ...sessionStatus("fem"),
         [MESHING_CAPABILITIES_PATH]: {
           mesh_capabilities: {
             fem: {
@@ -234,22 +252,25 @@ describe("geometry lifecycle command contributions", () => {
     expect(registry.isEnabled("mesh.build-shared-domain", context)).toBe(false);
   });
 
-  it("does not block builds when a legacy mesh resource omits lane keys", () => {
+  it("requires an explicit FEM session lane when a legacy mesh resource omits lane keys", () => {
     const registry = registryWithLifecycleCommands();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     selectBox(selection);
 
-    expect(
-      registry.isEnabled("mesh.build-selected", {
-        selection,
-        source: "test",
-        resourceData: {
-          [MESHING_CAPABILITIES_PATH]: {
-            mesh_capabilities: { has_volume_mesh: true },
-          },
+    const context = {
+      selection,
+      source: "test" as const,
+      resourceData: {
+        [MESHING_CAPABILITIES_PATH]: {
+          mesh_capabilities: { has_volume_mesh: true },
         },
-      }),
-    ).toBe(true);
+      },
+    };
+
+    expect(registry.isEnabled("mesh.build-selected", context)).toBe(false);
+    expect(registry.get("mesh.build-selected")?.disabledReason?.(context)).toBe(
+      UNKNOWN_MESH_COMMAND_LANE_REASON,
+    );
   });
 
   it("focuses primitive display explicitly for the selected object", async () => {
@@ -331,6 +352,7 @@ describe("geometry lifecycle command contributions", () => {
           commands: { submit, detail },
         } as never,
         resources,
+        resourceData: sessionStatus("fem"),
         source: "test",
       },
       { elementIndex: 7, meshOptions },
@@ -355,6 +377,32 @@ describe("geometry lifecycle command contributions", () => {
     expect(
       resources.getRevision(MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH),
     ).toBe(3);
+  });
+
+  it("uses the FEM capability resource to gate quality refinement", () => {
+    const registry = registryWithLifecycleCommands();
+    const context: CommandContext = {
+      resourceData: {
+        ...sessionStatus("fem"),
+        [MESHING_CAPABILITIES_PATH]: {
+          mesh_capabilities: {
+            fem: {
+              status: "unsupported",
+              reason: "FEM quality refinement is unavailable for this session.",
+            },
+          },
+        },
+      },
+      source: "test",
+      input: { meshOptions: { compute_quality: true } },
+    };
+
+    expect(
+      registry.isEnabled("mesh.refine-worst-quality-element", context),
+    ).toBe(false);
+    expect(
+      registry.get("mesh.refine-worst-quality-element")?.disabledReason?.(context),
+    ).toBe("FEM quality refinement is unavailable for this session.");
   });
 
   it("disables primitive commands when geometry capabilities reject them", () => {
@@ -447,6 +495,7 @@ describe("geometry lifecycle command contributions", () => {
     selectBox(selection);
     const context: CommandContext = {
       resourceData: {
+        ...sessionStatus("fem"),
         [MODEL_GEOMETRY_VALIDATION_PATH]: {
           blockers: [
             {
@@ -473,6 +522,7 @@ describe("geometry lifecycle command contributions", () => {
     selectBox(selection);
     const context: CommandContext = {
       resourceData: {
+        ...sessionStatus("fem"),
         [MESHING_BUILDS_CURRENT_PATH]: {
           active_build: {
             mesh_target: { kind: "object_mesh", object_id: "box" },
@@ -725,5 +775,92 @@ describe("geometry lifecycle command contributions", () => {
       objectId: null,
       ref: null,
     });
+  });
+
+  it("fails closed for every FEM mesh command and navigation route without a lane", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    selectBox(selection);
+    const context = { selection, source: "test" as const };
+    const ids = [
+      "mesh.build-selected",
+      "mesh.build-shared-domain",
+      "mesh.refine-worst-quality-element",
+      "mesh.open-overview",
+      "mesh.open-shared-domain",
+      "mesh.open-builds",
+      "mesh.open-quality",
+      "mesh.open-size-fields",
+      "mesh.open-regions",
+      "mesh.open-object-report",
+    ];
+
+    for (const id of ids) {
+      expect(registry.isEnabled(id, context), id).toBe(false);
+      expect(registry.get(id)?.disabledReason?.(context), id).toBe(
+        UNKNOWN_MESH_COMMAND_LANE_REASON,
+      );
+    }
+
+    const submit = vi.fn();
+    const result = await registry.execute("mesh.build-shared-domain", {
+      ...context,
+      api: { commands: { submit } } as never,
+    });
+    expect(result).toEqual({
+      message: UNKNOWN_MESH_COMMAND_LANE_REASON,
+      status: "failed",
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for every FEM mesh command and navigation route in an FDM lane", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    selectBox(selection);
+    const context = {
+      resourceData: sessionStatus("fdm"),
+      selection,
+      source: "test" as const,
+    };
+    const ids = [
+      "mesh.build-selected",
+      "mesh.build-shared-domain",
+      "mesh.refine-worst-quality-element",
+      "mesh.open-overview",
+      "mesh.open-shared-domain",
+      "mesh.open-builds",
+      "mesh.open-quality",
+      "mesh.open-size-fields",
+      "mesh.open-regions",
+      "mesh.open-object-report",
+    ];
+
+    for (const id of ids) {
+      expect(registry.isEnabled(id, context), id).toBe(false);
+      expect(registry.get(id)?.disabledReason?.(context), id).toBe(
+        FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
+      );
+    }
+
+    const submit = vi.fn();
+    const result = await registry.execute("mesh.build-selected", {
+      ...context,
+      api: { commands: { submit } } as never,
+    });
+    expect(result).toEqual({
+      message: FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
+      status: "failed",
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("resolves only explicit FEM/FDM session lanes", () => {
+    expect(resolveMeshCommandLane("fem")).toBe("fem");
+    expect(resolveMeshCommandLane("FDM")).toBe("fdm");
+    expect(resolveMeshCommandLane("auto")).toBe("unknown");
+    expect(resolveMeshCommandLane(null)).toBe("unknown");
   });
 });

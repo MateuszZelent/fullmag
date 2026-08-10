@@ -12,10 +12,14 @@ import {
 import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
+  RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
+  RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
+  isVisualizationTargetKind,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
 import {
@@ -39,10 +43,12 @@ import type {
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizationCommandContributions";
@@ -105,6 +111,13 @@ function selectedMeshObject() {
       type: "scene-object" as const,
       visualizationTargetId: visualizationTargetIdForSceneObject("box"),
     },
+  };
+}
+
+function femRibbonSessionStatus() {
+  return {
+    domain: { discretization: "fem" as const },
+    resources: { field_revision: 1, fields_revision: 1 },
   };
 }
 
@@ -247,6 +260,11 @@ function clickableRibbonMenuCommandGaps(
 }
 
 describe("ribbon structure", () => {
+  it("accepts the FDM domain only as a viewport-local visualization target kind", () => {
+    expect(isVisualizationTargetKind("fdm-domain")).toBe(true);
+    expect(isVisualizationTargetKind("not-a-target")).toBe(false);
+  });
+
   it("routes selected mesh parts through the canonical visualization target resolver", () => {
     const target = resolveRibbonVisualizationTarget({
       sceneObjectIds: new Set(),
@@ -1435,9 +1453,37 @@ describe("ribbon structure", () => {
     expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
   });
 
+  it("accepts FDM Airbox vector edits in the local structured-grid controller", async () => {
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      overrides: [],
+      revision: 7,
+    });
+
+    const result = await context.commands.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context.commandContext as CommandContext,
+      visualizationTargetCommandInput(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+        vectorsVisible: true,
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(patches).toEqual([]);
+    expect(invalidations).toEqual([]);
+    expect(context.visualization.getSnapshot().overrides).toMatchObject({
+      [FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id]: {
+        vectorsVisible: true,
+      },
+    });
+  });
+
   it("routes physics interaction choices through the command registry", async () => {
     const content = buildRibbonTabContent("physics", {
       commands: createRibbonCommandRegistry(),
+      sessionStatus: {
+        domain: { discretization: "fem" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
       selection: {
         kind: "object.physics",
         label: "Free layer physics",
@@ -1476,6 +1522,23 @@ describe("ribbon structure", () => {
     const result = await registry.execute(
       RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
       {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.oersted_field": {
+                    state: "supported",
+                    reason: "Oersted authoring is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fem" },
+          },
+        },
         selection: {
           get: () => ({
             kind: "object.physics",
@@ -1496,18 +1559,230 @@ describe("ribbon structure", () => {
     expect(selections).toEqual([
       expect.objectContaining({
         kind: "object.physics",
-        label: "Regional field source",
+        label: "Oersted field",
         nodeId: "model:object:free-layer:physics:oersted_field",
         objectId: "free-layer",
       }),
     ]);
   });
 
+  it("requires an object or region before opening object-scoped spin torque", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.spin_torque": {
+                    state: "supported",
+                    reason: "Spin torque authoring is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fdm" },
+          },
+        },
+        selection: {
+          get: () => ({ objectId: null }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "spin_torque" },
+    );
+
+    expect(result).toEqual({
+      message: "Select an object or region before adding 'Spin torque'.",
+      status: "failed",
+    });
+    expect(selections).toEqual([]);
+  });
+
+  it("keeps global interactions global even when an object is selected", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.zeeman": {
+                    state: "supported",
+                    reason: "Zeeman authoring is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fem" },
+          },
+        },
+        selection: {
+          get: () => ({ objectId: "free-layer" }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "zeeman" },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([
+      expect.objectContaining({
+        kind: "object.physics",
+        nodeId: "model:physics:zeeman",
+        objectId: null,
+        ref: null,
+      }),
+    ]);
+  });
+
+  it("keeps deferred interactions visible but disabled with planner reason", () => {
+    const content = buildRibbonTabContent("physics", {
+      commands: createRibbonCommandRegistry(),
+      sessionStatus: {
+        capabilities: {
+          active_lane: {
+            ...activeLaneCapabilityFixture(),
+            operations: {
+              "interaction.exchange": {
+                state: "supported",
+                reason_code: "capability_supported",
+                reason: "Exchange is supported.",
+                requires: [],
+              },
+              "interaction.demag": {
+                state: "deferred",
+                reason_code: "capability_deferred",
+                reason: "Demag is deferred until the lane provides a realization.",
+                requires: ["interaction:demag"],
+              },
+            },
+          },
+        },
+        domain: { discretization: "fem" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+      selection: {
+        kind: "object.physics",
+        label: "Free layer physics",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:physics",
+        objectId: "free-layer",
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const nodes = content?.groups
+      .find((group) => group.id === "physics-core")
+      ?.actions.find((action) => action.id === "physics-interactions")?.menu;
+    const exchange = nodes?.find((node) => node.id === "physics-interactions:exchange");
+    const demag = nodes?.find((node) => node.id === "physics-interactions:demag");
+
+    expect(exchange).toMatchObject({ disabled: false });
+    expect(demag).toMatchObject({
+      disabled: true,
+      shortcut: "deferred",
+      tooltip: "Demag is deferred until the lane provides a realization.",
+    });
+  });
+
+  it("fails closed for unresolved physics lanes and hides FEM airbox controls from FDM", () => {
+    const baseContext = {
+      commands: createRibbonCommandRegistry(),
+      sessionStatus: null,
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: "test" as const,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    };
+    const unresolvedPhysics = buildRibbonTabContent("physics", baseContext);
+    const unresolvedMenu = unresolvedPhysics?.groups
+      .find((group) => group.id === "physics-core")
+      ?.actions.find((action) => action.id === "physics-interactions")?.menu;
+    expect(unresolvedMenu).toEqual([
+      expect.objectContaining({ type: "label" }),
+      expect.objectContaining({
+        type: "status",
+        value: expect.stringMatching(/unresolved/i),
+      }),
+    ]);
+
+    const fdmView = buildRibbonTabContent("view", {
+      ...baseContext,
+      sessionStatus: {
+        domain: { discretization: "fdm" },
+        resources: { field_revision: 0, fields_revision: 0 },
+      },
+    });
+    expect(
+      fdmView?.groups
+        .find((group) => group.id === "view-global-display")
+        ?.actions.some((action) => action.id === "view-airbox"),
+    ).toBe(false);
+  });
+
+  it("rejects every FEM airbox command in an explicit FDM lane", async () => {
+    const visualization = new ObjectVisualizationController();
+    const before = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
+    const patches: VisualizationStatePatch[] = [];
+    const commandContext = {
+      api: {
+        visualization: {
+          patch: async (patch: VisualizationStatePatch) => {
+            patches.push(patch);
+            return { revision: 2 } as VisualizationStateResource;
+          },
+        },
+      },
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          data: { domain: { discretization: "fdm" } },
+        },
+      },
+      selection: {
+        get: () => ({ objectId: null }),
+        set: vi.fn(),
+      },
+      source: "test" as const,
+      visualization,
+    } as unknown as CommandContext;
+    const registry = createRibbonCommandRegistry();
+
+    for (const [commandId, input] of [
+      [RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND, { visible: false }],
+      [RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND, undefined],
+      [RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND, undefined],
+    ] as const) {
+      const result = await registry.execute(commandId, commandContext, input);
+      expect(result).toMatchObject({ status: "failed" });
+      expect(result.message).toMatch(/FDM|not applicable|unresolved/i);
+    }
+
+    expect(patches).toEqual([]);
+    expect(visualization.getSettings(AIRBOX_VISUALIZATION_TARGET)).toEqual(before);
+  });
+
   it("keeps unsupported Physics shell workflows disabled", () => {
     const unsupportedIds = new Set([
       "physics-add-dmi",
       "physics-add-ku",
-      "physics-global",
       "manage-rf",
       "add-cpw",
     ]);
@@ -1522,6 +1797,219 @@ describe("ribbon structure", () => {
       }
     }
     expect(matchedIds).toEqual(unsupportedIds);
+  });
+
+  it("exposes only global interactions from the Global Physics action", () => {
+    const content = buildRibbonTabContent("physics", {
+      sessionStatus: {
+        capabilities: {
+          active_lane: activeLaneCapabilityFixture(),
+        },
+        domain: { discretization: "fem" },
+      },
+    } as never);
+    const core = content?.groups.find((group) => group.id === "physics-core");
+    const globalPhysics = core?.actions.find(
+      (action) => action.id === "physics-global",
+    );
+    const items = globalPhysics?.menu?.filter((node) => node.type === "item") ?? [];
+
+    expect(globalPhysics?.disabled).toBe(false);
+    expect(items.map((node) => node.id)).toEqual([
+      "physics-global:exchange",
+      "physics-global:demag",
+      "physics-global:zeeman",
+      "physics-global:add-field-drive",
+    ]);
+    expect(items.slice(0, 3).every(
+      (node) => node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+    )).toBe(true);
+    expect(items[3]).toMatchObject({
+      commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+      label: "Field Drive",
+    });
+    expect(items.some((node) => node.id.includes("current_transport"))).toBe(false);
+  });
+
+  it("opens a canonical global field-drive draft from the Ribbon", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+      {
+        selection: {
+          get: () => null,
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([{
+      kind: "physics.field-drive",
+      label: "New field drive",
+      nodeId: "model:physics:field-drive:draft",
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.field-drive",
+        nodeId: "model:physics:field-drive:draft",
+        type: "physics-field-drive",
+      },
+    }]);
+  });
+
+  it("keeps Oersted and spin torque in the single capability-gated Add Physics menu", () => {
+    const content = buildRibbonTabContent("physics", {
+      sessionStatus: {
+        capabilities: {
+          active_lane: {
+            ...activeLaneCapabilityFixture(),
+            operations: {
+              "interaction.oersted_field": {
+                state: "supported",
+                reason: "Oersted authoring is supported.",
+                requires: [],
+              },
+              "interaction.spin_torque": {
+                state: "unsupported",
+                reason: "Spin torque is unavailable on this lane.",
+                requires: [],
+              },
+            },
+          },
+        },
+        domain: { discretization: "fem" },
+      },
+    } as never);
+    const core = content?.groups.find((group) => group.id === "physics-core");
+    const addPhysics = core?.actions.find((action) => action.id === "physics-interactions");
+    const oersted = addPhysics?.menu?.find(
+      (node) => node.id === "physics-interactions:oersted_field",
+    );
+    const torque = addPhysics?.menu?.find(
+      (node) => node.id === "physics-interactions:spin_torque",
+    );
+
+    expect(oersted).toMatchObject({
+      disabled: false,
+      label: "Oersted field",
+      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      commandInput: { interactionId: "oersted_field" },
+    });
+    expect(torque).toMatchObject({
+      disabled: true,
+      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      commandInput: { interactionId: "spin_torque" },
+      tooltip: "Spin torque is unavailable on this lane.",
+    });
+    expect(content?.groups.some((group) => group.id === "physics-drive")).toBe(false);
+    expect(addPhysics?.label).toBe("Add Physics");
+  });
+
+  it.each(["fdm", "fem"] as const)(
+    "keeps typed spin transport and spin interface authoring in the %s Add Physics menu",
+    (discretization) => {
+      const content = buildRibbonTabContent("physics", {
+        sessionStatus: {
+          capabilities: {
+            active_lane: activeLaneCapabilityFixture(),
+          },
+          domain: { discretization },
+        },
+      } as never);
+      const core = content?.groups.find((group) => group.id === "physics-core");
+      const addPhysics = core?.actions.find(
+        (action) => action.id === "physics-interactions",
+      );
+
+      expect(addPhysics?.menu?.find(
+        (node) => node.id === "physics-resources:spin-transport",
+      )).toMatchObject({
+        commandId: "ribbon.physics.create-spin-transport",
+        disabled: false,
+        label: "Spin Transport / SHE",
+      });
+      expect(addPhysics?.menu?.find(
+        (node) => node.id === "physics-resources:spin-interface",
+      )).toMatchObject({
+        commandId: "ribbon.physics.create-spin-interface",
+        disabled: false,
+        label: "Spin Interface",
+      });
+    },
+  );
+
+  it("opens a spin-transport draft with the exact selected region scope", async () => {
+    const selections: unknown[] = [];
+    const currentSelection = {
+      kind: "object.region",
+      label: "free-layer",
+      moduleSource: "explorer",
+      nodeId: "model:object:pillar:region:free-layer",
+      objectId: "pillar",
+      ref: {
+        kind: "object.region",
+        nodeId: "model:object:pillar:region:free-layer",
+        objectId: "pillar",
+        regionId: "free-layer",
+        type: "scene-object",
+        visualizationTargetId: "region:pillar:free-layer",
+      },
+    };
+    const result = await createRibbonCommandRegistry().execute(
+      "ribbon.physics.create-spin-transport",
+      {
+        selection: {
+          get: () => currentSelection,
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([{
+      kind: "physics.spin-transport",
+      label: "New spin transport",
+      nodeId: "model:physics:spin-transport:draft",
+      objectId: "pillar",
+      ref: {
+        draft: true,
+        kind: "physics.spin-transport",
+        nodeId: "model:physics:spin-transport:draft",
+        regionId: "free-layer",
+        type: "spin-transport",
+      },
+    }]);
+  });
+
+  it("opens a spin-interface draft without inventing an owner", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      "ribbon.physics.create-spin-interface",
+      {
+        selection: {
+          get: () => null,
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([{
+      kind: "physics.spin-interface",
+      label: "New spin interface",
+      nodeId: "model:physics:spin-interface:draft",
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.spin-interface",
+        nodeId: "model:physics:spin-interface:draft",
+        type: "spin-interface",
+      },
+    }]);
   });
 
   it("wires Physics Microstrip to the geometry antenna command", () => {
@@ -1678,7 +2166,6 @@ describe("ribbon structure", () => {
     if (
       vectorThicknessNode?.type !== "slider" ||
       wireframeColorNode?.type !== "color" ||
-      pointColorNode?.type !== "color" ||
       visibleNode?.type !== "checkbox"
     ) {
       throw new Error("Expected selected airbox style controls");
@@ -1687,14 +2174,12 @@ describe("ribbon structure", () => {
     const commandContext = { ...context, selection };
     await runRibbonNode(vectorThicknessNode, 2.4, commandContext);
     await runRibbonNode(wireframeColorNode, "#ffffff", commandContext);
-    await runRibbonNode(pointColorNode, "#66eeff", commandContext);
     await runRibbonNode(visibleNode, false, commandContext);
 
-    expect(patches).toHaveLength(4);
+    expect(patches).toHaveLength(3);
     expect(patches).toMatchObject([
       { overrides: [{ style: { vector_thickness: 2.4 } }] },
       { overrides: [{ style: { wireframe_color: "#ffffff" } }] },
-      { overrides: [{ style: { point_color: "#66eeff" } }] },
       { layers: { airbox: { visible: false } } },
     ]);
     await vi.waitFor(() =>
@@ -1702,7 +2187,6 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
         [VISUALIZATION_STATE_PATH, 43],
-        [VISUALIZATION_STATE_PATH, 44],
       ]),
     );
   });
@@ -1923,8 +2407,6 @@ describe("ribbon structure", () => {
         layers: {
           airbox: {
             bounds: { opacity: 1, visible: false },
-            points: { opacity: 1, visible: false },
-            surface: { opacity: 0.28, visible: false },
             vectors: { density: 1200, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: false },
@@ -3196,8 +3678,9 @@ describe("ribbon structure", () => {
       label: "Camera parameters",
     });
     expect(topographyAction).toMatchObject({
-      disabled: false,
+      disabled: true,
       label: "Topography",
+      tooltip: "Voxel topography is unavailable for this session.",
     });
     expect(topographyEnabledNode).toMatchObject({
       commandId: "viewport-3d.fdm-topography-toggle",
@@ -3267,6 +3750,7 @@ describe("ribbon structure", () => {
         objectId: null,
         ref: null,
       },
+      sessionStatus: femRibbonSessionStatus(),
       visualization: new ObjectVisualizationController(),
       visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
     });
@@ -3295,6 +3779,7 @@ describe("ribbon structure", () => {
         objectId: null,
         ref: null,
       },
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });
@@ -3323,6 +3808,179 @@ describe("ribbon structure", () => {
     });
   });
 
+  it("fails closed to the Mesh overview for an explicit FDM session", () => {
+    const visualization = new ObjectVisualizationController();
+    const sessionStatus = {
+      domain: { discretization: "fdm" },
+      resources: { field_revision: 1, fields_revision: 1 },
+    } as const;
+    const context = {
+      commandContext: { source: "test" as const },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", context);
+    const geometryBuildAction = geometry?.groups
+      .find((group) => group.id === "builder-lifecycle")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+    expect(geometryBuildAction).toBeUndefined();
+
+    const mesh = buildRibbonTabContent("mesh", {
+      ...context,
+      meshBuildCurrent: {
+        active_build: { phase: "running" },
+        mesh_pipeline_status: "running",
+      } as never,
+      meshBuildLatest: {
+        last_success: { revision: 7 },
+      } as never,
+      meshSemantics: {
+        solver_mesh: { mesh_name: "fem-mesh" },
+        object_configs: [{ object_id: "obj-1" }],
+      } as never,
+      meshSummary: {
+        mesh_summary: { node_count: 9, element_count: 8 },
+      } as never,
+    });
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+    expect(mesh?.groups.find((group) => group.id === "build")).toBeUndefined();
+    expect(mesh?.groups.find((group) => group.id === "method")).toBeUndefined();
+    expect(mesh?.groups.find((group) => group.id === "size")).toBeUndefined();
+    const inspectorAction = mesh?.groups
+      .find((group) => group.id === "mesh-view")
+      ?.actions.find((action) => action.id === "mesh.open-overview");
+    expect(inspectorAction?.menu).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Open mesh overview" }),
+      ]),
+    );
+    expect(inspectorAction?.menu).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Shared-domain mesh" }),
+        expect.objectContaining({ label: "Quality gates" }),
+      ]),
+    );
+    const fdmCommandIds = mesh?.groups.flatMap((group) =>
+      group.actions.flatMap((action) => [
+        action.commandId,
+        ...(action.menu ?? []).flatMap((node) =>
+          node.type === "item" || node.type === "checkbox" || node.type === "radio-group"
+            ? [node.commandId]
+            : [],
+        ),
+      ]),
+    );
+    expect(fdmCommandIds).not.toContain("mesh.build-selected");
+    expect(fdmCommandIds).not.toContain("mesh.build-shared-domain");
+    expect(fdmCommandIds).not.toContain("mesh.open-builds");
+    expect(mesh).not.toEqual(
+      expect.objectContaining({
+        groups: expect.arrayContaining([
+          expect.objectContaining({
+            actions: expect.arrayContaining([
+              expect.objectContaining({ label: "Object policies" }),
+              expect.objectContaining({ label: "Solver mesh" }),
+            ]),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("does not flash FEM mesh actions while the session lane is unresolved", () => {
+    const visualization = new ObjectVisualizationController();
+    const context = {
+      commandContext: { source: "test" as const },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus: null,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", context);
+    expect(
+      geometry?.groups
+        .find((group) => group.id === "builder-lifecycle")
+        ?.actions.find((action) => action.id === "mesh.build-selected"),
+    ).toBeUndefined();
+    const mesh = buildRibbonTabContent("mesh", context);
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
+    expect(
+      mesh?.groups.flatMap((group) =>
+        group.actions.flatMap((action) =>
+          action.menu?.flatMap((node) =>
+            node.type === "item" ? [node.commandId] : [],
+          ) ?? [],
+        ),
+      ),
+    ).toEqual(["mesh.open-overview"]);
+  });
+
+  it("preserves FEM mesh ribbon copy for an explicit FEM session", () => {
+    const visualization = new ObjectVisualizationController();
+    const context = {
+      commandContext: { source: "test" as const },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus: {
+        domain: { discretization: "fem" },
+        resources: { field_revision: 1, fields_revision: 1 },
+      } as const,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    };
+
+    const geometry = buildRibbonTabContent("geometry", context);
+    const geometryBuildAction = geometry?.groups
+      .find((group) => group.id === "builder-lifecycle")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+    expect(geometryBuildAction?.label).toBe("Build Mesh");
+
+    const mesh = buildRibbonTabContent("mesh", context);
+    const buildGroup = mesh?.groups.find((group) => group.id === "build");
+    expect(
+      buildGroup?.actions.find(
+        (action) => action.id === "mesh.build-shared-domain",
+      ),
+    ).toMatchObject({ label: "Build All" });
+    const methodGroup = mesh?.groups.find((group) => group.id === "method");
+    expect(
+      methodGroup?.actions.find((action) => action.id === "mesh.open-quality"),
+    ).toBeDefined();
+    const inspectorAction = mesh?.groups
+      .find((group) => group.id === "mesh-view")
+      ?.actions.find((action) => action.id === "mesh.open-overview");
+    expect(inspectorAction?.menu).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Shared-domain mesh" }),
+        expect.objectContaining({ label: "Quality gates" }),
+      ]),
+    );
+  });
+
   it("shows the server capability reason on mesh build actions", () => {
     const commands = createControlRoomCommandRegistry();
     const visualization = new ObjectVisualizationController();
@@ -3347,6 +4005,7 @@ describe("ribbon structure", () => {
         objectId: null,
         ref: null,
       },
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });
@@ -3386,6 +4045,7 @@ describe("ribbon structure", () => {
       },
       resources: { invalidate: vi.fn() },
       selection: selectedMeshObject(),
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });
@@ -3425,6 +4085,7 @@ describe("ribbon structure", () => {
       },
       resources: { invalidate: vi.fn() },
       selection: selectedMeshObject(),
+      sessionStatus: femRibbonSessionStatus(),
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
     });

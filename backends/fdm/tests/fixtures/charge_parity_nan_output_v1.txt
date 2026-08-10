@@ -1,0 +1,2 @@
+fullmag.fdm.charge.rust_oracle_output.v1
+potential 8 nan 0 0 0 0 0 0 0

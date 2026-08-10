@@ -291,6 +291,7 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
   if (!isObject(value) || !hasOnlyKeys(value, [
     "boundaries",
     "conductivity_s_per_m",
+    "conservative_current_view",
     "coupling",
     "current_density",
     "domain",
@@ -309,6 +310,9 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
     && (value.conductivity_s_per_m === undefined
       || value.conductivity_s_per_m === null
       || isFiniteNumber(value.conductivity_s_per_m))
+    && (value.conservative_current_view === undefined
+      || value.conservative_current_view === null
+      || isObject(value.conservative_current_view))
     && (value.coupling === undefined || value.coupling === "one_way" || value.coupling === "bidirectional")
     && (value.current_density === undefined || value.current_density === null || isVec3(value.current_density))
     && (value.domain === undefined || isArrayOf(value.domain, isRegionRef))

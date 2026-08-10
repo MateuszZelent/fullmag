@@ -12,6 +12,16 @@ function controlRoomApiProxyTarget(): string {
 const staticExport = process.env.FULLMAG_CONTROL_ROOM_STATIC_EXPORT === "1";
 const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
 
+function isIsolatedSmokeDistDir(value: string | undefined): value is string {
+  return /^\.next-audit-target-smoke-[a-z0-9-]+$/.test(value ?? "");
+}
+
+const isolatedSmokeDistDir = isIsolatedSmokeDistDir(
+  process.env.FULLMAG_NEXT_DIST_DIR?.trim(),
+)
+  ? process.env.FULLMAG_NEXT_DIST_DIR.trim()
+  : null;
+
 function configuredPublicDevHost(): string | null {
   const raw = process.env.FULLMAG_WEB_PUBLIC_HOST?.trim();
   if (!raw) {
@@ -28,6 +38,7 @@ function configuredPublicDevHost(): string | null {
 const configuredPublicDevHostValue = configuredPublicDevHost();
 const allowedDevOrigins = [
   "fullmag.amucontainers.orion.zfns.eu.org",
+  "127.0.0.1",
   ...(configuredPublicDevHostValue &&
   !["localhost", "127.0.0.1", "::1"].includes(configuredPublicDevHostValue)
     ? [configuredPublicDevHostValue]
@@ -36,7 +47,7 @@ const allowedDevOrigins = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins,
-  distDir: auditBuild ? ".next-audit" : ".next",
+  distDir: isolatedSmokeDistDir ?? (auditBuild ? ".next-audit" : ".next"),
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
   ...(staticExport

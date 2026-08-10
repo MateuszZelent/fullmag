@@ -1,0 +1,211 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/fdm-multilayer-convolution.md",
+    "title": "FDM multilayer convolution — Python, ProblemIR, and UI"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "Public authoring, planner, CPU FP64 reference execution, and optional target-only Airbox materialization are source-backed; production qualification remains evidence-scoped."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Public authoring and CUDA runtime contracts exist, but production claims require fresh managed executed-device parity and residency telemetry."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM multilayer convolution is not a FEM scalar-potential or boundary-element realization."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM multilayer convolution is not an MFEM/hypre/libCEED demagnetization realization."
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-grid",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMGrid",
+      "responsibility": "Validates and lowers one named magnet's native Cartesian cell size."
+    },
+    {
+      "id": "python-demag",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMDemag",
+      "responsibility": "Owns requested strategy, mode, common-grid sizes, removed fallback behavior, and lowering."
+    },
+    {
+      "id": "python-fdm",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "Owns default and per-magnet grids plus boundary-correction policy."
+    },
+    {
+      "id": "python-global-demag",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "Defines the global physical demagnetization energy term separately from the FDM discretization policy."
+    },
+    {
+      "id": "python-study-fdm",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Attaches FDM discretization hints to a study."
+    },
+    {
+      "id": "python-study-demag",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Enables and configures the separate global Demag energy term."
+    },
+    {
+      "id": "generated-python",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "render_loaded_problem_as_script",
+      "responsibility": "Renders canonical study state as independent stage-first Python calls."
+    },
+    {
+      "id": "planner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "Validates geometry and capabilities and resolves the canonical multilayer execution plan."
+    },
+    {
+      "id": "topology",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "fdm_multilayer_topology_tokens",
+      "responsibility": "Builds topology-bound certificate tokens from mode, layer identity, masks, grids, origins, and transfers."
+    },
+    {
+      "id": "airbox",
+      "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs",
+      "symbol": "execute_reference_fdm_multilayer",
+      "responsibility": "Runs the committed CPU FP64 multilayer reference; the optional target-only H_demag Airbox carrier is an explicitly scoped post-run extension."
+    },
+    {
+      "id": "ui-authoring",
+      "path": "apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts",
+      "symbol": "buildStudyGlobalMergePatch",
+      "responsibility": "Maps Control Room study authoring fields to the canonical scene merge patch."
+    },
+    {
+      "id": "ui-explorer",
+      "path": "apps/control-room/src/modules/explorer/builders/buildModelTree.ts",
+      "symbol": "buildModelTree",
+      "responsibility": "Builds the committed semantic Explorer tree to which common-grid and native-layer nodes belong."
+    },
+    {
+      "id": "ui-grid-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts",
+      "symbol": "createStudyGlobalDraft",
+      "responsibility": "Reads committed study authoring values into the Inspector draft; multilayer grid details are an explicitly scoped extension."
+    },
+    {
+      "id": "ui-airbox-inspector",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmDomainPresentation",
+      "responsibility": "Adapts the committed FDM presentation domain; target-only Airbox inspector facts remain explicitly scoped."
+    },
+    {
+      "id": "api-layout",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_grid_descriptor",
+      "responsibility": "Publishes the committed versioned FDM domain metadata resource used as the base for multilayer layout exposure."
+    },
+    {
+      "id": "viewport-layers",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmDomainMeta",
+      "responsibility": "Creates the committed FDM viewport render carrier used as the base for separate native multilayer grids."
+    },
+    {
+      "id": "viewport-airbox",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmDomainPresentation",
+      "responsibility": "Adapts the committed FDM presentation carrier used as the base for a target-scoped multilayer Airbox field request."
+    },
+    {
+      "id": "api-layout-resource",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_multilayer_layout_resource",
+      "line_anchor": "L164-L305",
+      "responsibility": "Builds the resource-first multilayer layout, including explicit availability and computational common-transform metadata."
+    },
+    {
+      "id": "ui-native-layout",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmMultilayerNativeLayerDomains",
+      "line_anchor": "L176-L240",
+      "responsibility": "Adapts physical native-layer render carriers and excludes the common FFT scratch grid."
+    },
+    {
+      "id": "ui-airbox-layout",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmMultilayerAirboxDomain",
+      "line_anchor": "L242-L340",
+      "responsibility": "Adapts the target-only Airbox carrier and validates scoped field availability."
+    }
+  ],
+  "symbols": [
+    {"id": "ellm", "latex": "$\\ell,m$", "meaning": "destination and source layer indices", "si_unit": "$1$"},
+    {"id": "xli", "latex": "$\\mathbf{x}_{\\ell,\\mathbf{i}}$", "meaning": "center of native cell $\\mathbf{i}$ in layer $\\ell$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "i", "latex": "$\\mathbf{i}$", "meaning": "three-dimensional integer cell index", "si_unit": "$1$"},
+    {"id": "ol", "latex": "$\\mathbf{o}_{\\ell}$", "meaning": "world-space origin of the native grid for layer $\\ell$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "hl", "latex": "$\\mathbf{h}_{\\ell}$", "meaning": "authored native cell-edge lengths of layer $\\ell$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "one", "latex": "$\\mathbf{1}$", "meaning": "three-component vector of ones", "si_unit": "$1$"},
+    {"id": "hadamard", "latex": "$\\odot$", "meaning": "component-wise multiplication", "si_unit": "$1$"},
+    {"id": "C", "latex": "$\\mathbf{C}$", "meaning": "resolved common convolution-grid cell counts", "si_unit": "$1$"},
+    {"id": "Cxy", "latex": "$C_x,C_y$", "meaning": "resolved common in-plane cell counts", "si_unit": "$1$"},
+    {"id": "Nxy", "latex": "$N_x^{\\mathrm{common}},N_y^{\\mathrm{common}}$", "meaning": "authored `common_cells_xy` components", "si_unit": "$1$"},
+    {"id": "L", "latex": "$L$", "meaning": "number of magnetic layers", "si_unit": "$1$"},
+    {"id": "odz", "latex": "$o_{d,z},o_{s,z}$", "meaning": "destination and source native-grid origins along $z$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "hcz", "latex": "$h_{c,z}$", "meaning": "resolved convolution-cell thickness", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Q", "latex": "$Q$", "meaning": "picometre quantizer used in the reuse key", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "Kpair", "latex": "$K_{\\mathrm{pair}}$", "meaning": "number of ordered layer pairs", "si_unit": "$1$"},
+    {"id": "Kunique", "latex": "$K_{\\mathrm{unique}}$", "meaning": "number of distinct reuse keys, not merely distinct physical separations", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {
+      "id": "eq-python-fdm-multilayer-native-centers",
+      "symbols": ["xli", "i", "ol", "hl", "one", "hadamard"],
+      "sources": ["planner"]
+    },
+    {
+      "id": "eq-python-fdm-multilayer-common-2d",
+      "symbols": ["C", "Cxy", "Nxy"],
+      "sources": ["python-demag", "planner"]
+    },
+    {
+      "id": "eq-python-fdm-multilayer-pair-count",
+      "symbols": ["ellm", "L", "odz", "hcz", "Q", "Kpair", "Kunique"],
+      "sources": ["planner"]
+    }
+  ],
+  "public_api": {
+    "constructors": ["fullmag.FDMGrid", "fullmag.FDMDemag", "fullmag.FDM"],
+    "parameters": [
+      {"python": "FDMGrid.cell", "type": "Sequence[float] of length 3", "default": "required", "si_unit": "$\\mathrm{m}$ per component", "validation": "Exactly three finite, strictly positive components.", "meaning": "Native Cartesian cell size for one named magnet.", "backend_support": "FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane.", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell`"},
+      {"python": "FDMDemag.strategy", "type": "Literal[\"auto\", \"single_grid\", \"multilayer_convolution\"]", "default": "`\"auto\"`", "si_unit": "$1$", "validation": "Must be one of the three literal values.", "meaning": "Requested demagnetization topology; use `\"multilayer_convolution\"` to force this path.", "backend_support": "FDM CPU/GPU; multi-body `single_grid` is currently rejected by the planner.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"},
+      {"python": "FDMDemag.mode", "type": "Literal[\"auto\", \"two_d_stack\", \"three_d\"]", "default": "`\"auto\"`", "si_unit": "$1$", "validation": "Must be one of the three literal values.", "meaning": "Requested thin-film stack or full 3-D convolution mode.", "backend_support": "FDM CPU/GPU subject to geometry and native-Z constraints.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"},
+      {"python": "FDMDemag.common_cells", "type": "tuple[int, int, int] | None", "default": "`None`", "si_unit": "$1$", "validation": "Exactly three positive non-Boolean integers; mutually exclusive with `common_cells_xy`; invalid with `mode=\"two_d_stack\"`.", "meaning": "Explicit 3-D common convolution-grid cell counts.", "backend_support": "FDM CPU/GPU subject to planner memory and runtime capability.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells`"},
+      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int, int] | None", "default": "`None`", "si_unit": "$1$", "validation": "Exactly two positive non-Boolean integers; mutually exclusive with `common_cells`; valid only with `mode=\"auto\"` or `mode=\"two_d_stack\"`.", "meaning": "Explicit in-plane common-grid counts; planner resolves the Z count to one for a 2-D stack.", "backend_support": "FDM CPU/GPU two-dimensional stack path.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells_xy`"},
+      {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "`None`", "si_unit": "$1$", "validation": "Every non-`None` value raises `ValueError`.", "meaning": "Removed compatibility input; silent fallback is forbidden.", "backend_support": "Unsupported on every lane.", "problem_ir": "Not serialized"},
+      {"python": "FDMDemag.explain", "type": "bool", "default": "`True`", "si_unit": "$1$", "validation": "Boolean authoring value.", "meaning": "Requests a human-readable plan explanation; it is not physical intent.", "backend_support": "Python/UI authoring helper only.", "problem_ir": "Not serialized"},
+      {"python": "FDM.cell", "type": "Sequence[float] | None", "default": "`None`", "si_unit": "$\\mathrm{m}$ per component", "validation": "Legacy alias; cannot be supplied together with `default_cell`; when present, exactly three finite positive components.", "meaning": "Backward-compatible default Cartesian cell size.", "backend_support": "FDM CPU/GPU; prefer `default_cell`.", "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"},
+      {"python": "FDM.default_cell", "type": "Sequence[float] | None", "default": "`None`", "si_unit": "$\\mathrm{m}$ per component", "validation": "Exactly three finite positive components when supplied; either this or a non-empty `per_magnet` mapping is required.", "meaning": "Default grid for magnets without an explicit native-grid override and basis for an inferred common grid.", "backend_support": "FDM CPU/GPU.", "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"},
+      {"python": "FDM.per_magnet", "type": "dict[str, FDMGrid] | None", "default": "`None`", "si_unit": "$1$", "validation": "Keys are non-empty strings and values are `FDMGrid`; without `default_cell`, every authored magnet must have a matching key.", "meaning": "Native grid overrides keyed by canonical magnet name.", "backend_support": "FDM multilayer paths.", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"},
+      {"python": "FDM.demag", "type": "FDMDemag | None", "default": "`None`", "si_unit": "$1$", "validation": "Nested `FDMDemag` validation applies.", "meaning": "Attaches requested demagnetization topology and common-grid policy.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"},
+      {"python": "FDM.boundary_correction", "type": "Literal[\"none\", \"volume\", \"full\"] | None", "default": "`None`", "si_unit": "$1$", "validation": "When supplied, must be `\"none\"`, `\"volume\"`, or `\"full\"`.", "meaning": "Selects binary, T0 volume-fraction, or T1 full sub-cell boundary policy.", "backend_support": "Lane and precision dependent; this page does not qualify all combinations.", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"},
+      {"python": "FDM.boundary_phi_floor", "type": "float | None", "default": "`None`", "si_unit": "$1$", "validation": "Strictly $0<\\varphi_{\\mathrm{floor}}<1$ when supplied.", "meaning": "Lower volume-fraction bound used by boundary-correction stability logic.", "backend_support": "Boundary-correction lanes only.", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_phi_floor`"},
+      {"python": "FDM.boundary_delta_min", "type": "float | None", "default": "`None`", "si_unit": "$\\mathrm{m}$", "validation": "Values less than zero raise `ValueError`; the Python constructor currently performs no separate finiteness check.", "meaning": "Lower intersection-distance bound used by the T1 stencil.", "backend_support": "Boundary-correction lanes only.", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_delta_min`"}
+    ]
+  }
+}

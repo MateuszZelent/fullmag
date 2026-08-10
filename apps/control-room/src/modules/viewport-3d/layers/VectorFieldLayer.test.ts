@@ -18,6 +18,7 @@ import {
   ensureWhiteVertexColorAttribute,
   identifyVectorGlyphBuildResult,
   recordVectorFieldAdoption,
+  resolveVectorGlyphDepthPolicy,
   resolveVectorFieldAdoptionBuildKey,
   resolveVectorFieldLayerStyle,
   syncVectorGlyphMaterialStyle,
@@ -40,6 +41,25 @@ import {
 } from "./viewport3DLayerSettings";
 
 describe("VectorFieldLayer performance contracts", () => {
+  it("keeps FDM glyph overlays visible over opaque cell surfaces", () => {
+    expect(resolveVectorGlyphDepthPolicy()).toEqual({
+      depthTest: true,
+      depthWrite: true,
+    });
+    expect(resolveVectorGlyphDepthPolicy(true)).toEqual({
+      depthTest: false,
+      depthWrite: false,
+    });
+  });
+
+  it("creates a stable instanced color attribute for GPU uploads", () => {
+    expect(vectorFieldLayerSource).toContain("return useMemo(() => {");
+    expect(vectorFieldLayerSource).toContain("new InstancedBufferAttribute(");
+    expect(vectorFieldLayerSource).toContain(
+      "instanceColorAttr,\n    invalidate,",
+    );
+  });
+
   it("clears the exact vector receipt when no build remains or the layer unmounts", () => {
     expect(vectorFieldLayerSource).toContain("adoptionRegistry.clearAdoption(");
     expect(vectorFieldLayerSource).toContain("if (glyphBuild || !adoptionRegistry || !carrierId) return;");
@@ -357,7 +377,10 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(buildHookSource).toContain("groupKey:");
     expect(buildHookSource).toContain("latestWins: true");
     expect(buildHookSource).toContain("createVectorGlyphBuildStore");
-    expect(buildHookSource).toContain("snapshot.buildKey === buildKey");
+    expect(buildHookSource).toContain("const normalizedBuildKey = buildKey ?? null;");
+    expect(buildHookSource).toContain(
+      "snapshot.buildKey === normalizedBuildKey",
+    );
     expect(buildHookSource).toContain("useSyncExternalStore");
     expect(buildHookSource).toContain("AbortController");
     expect(buildHookSource).toContain("useVectorGlyphDerivedBufferCache");

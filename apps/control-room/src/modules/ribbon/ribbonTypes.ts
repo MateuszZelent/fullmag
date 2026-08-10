@@ -66,6 +66,7 @@ export type RibbonMenuNode =
       label: string;
       icon?: ReactNode;
       shortcut?: string;
+      tooltip?: string;
       disabled?: boolean;
       commandId?: string;
       commandInput?: unknown;

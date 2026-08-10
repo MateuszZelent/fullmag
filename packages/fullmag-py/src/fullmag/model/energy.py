@@ -327,6 +327,7 @@ class OerstedCylinder:
     center: tuple[float, float, float] = (0.0, 0.0, 0.0)
     axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
     time_dependence: TimeDependence | None = None
+    id: str = "oersted:cylinder"
 
     def __init__(
         self,
@@ -335,6 +336,7 @@ class OerstedCylinder:
         center: Sequence[float] = (0.0, 0.0, 0.0),
         axis: Sequence[float] = (0.0, 0.0, 1.0),
         time_dependence: TimeDependence | None = None,
+        id: str = "oersted:cylinder",
     ) -> None:
         require_positive(radius, "radius")
         object.__setattr__(self, "current", float(current))
@@ -342,10 +344,12 @@ class OerstedCylinder:
         object.__setattr__(self, "center", as_vector3(center, "center"))
         object.__setattr__(self, "axis", as_vector3(axis, "axis"))
         object.__setattr__(self, "time_dependence", time_dependence)
+        object.__setattr__(self, "id", require_non_empty(id, "id"))
 
     def to_ir(self) -> dict[str, object]:
         ir: dict[str, object] = {
             "kind": "oersted_cylinder",
+            "id": self.id,
             "current": self.current,
             "radius": self.radius,
             "center": list(self.center),
@@ -370,17 +374,21 @@ class OerstedField:
 
     source: str
     model: str = "from_current_solution"
+    id: str | None = None
 
     def __post_init__(self) -> None:
         if self.model not in OERSTED_FIELD_MODELS:
             raise ValueError(
                 f"OerstedField model must be one of {sorted(OERSTED_FIELD_MODELS)!r}, got {self.model!r}"
             )
-        object.__setattr__(self, "source", require_non_empty(self.source, "source"))
+        source = require_non_empty(self.source, "source")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "id", require_non_empty(self.id or f"oersted:{source}", "id"))
 
     def to_ir(self) -> dict[str, object]:
         return {
             "kind": "oersted_field",
+            "id": self.id,
             "model": self.model,
             "source": self.source,
         }

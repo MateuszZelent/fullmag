@@ -81,7 +81,10 @@ import {
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   type ApplyGlobalQuantityInput,
 } from "./ribbonCommands";
-import { ribbonTabNeedsRuntimeResources } from "./ribbonResourcePolicy";
+import {
+  ribbonTabNeedsRuntimeResources,
+  ribbonTabNeedsSessionStatusResources,
+} from "./ribbonResourcePolicy";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
 import { RIBBON_TABS } from "./ribbonTypes";
@@ -89,7 +92,7 @@ import { RIBBON_TABS } from "./ribbonTypes";
 type RibbonRuntimeStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
-    "binary_fields" | "explicit_topology"
+    "active_lane" | "binary_fields" | "explicit_topology"
   >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
@@ -113,6 +116,7 @@ function selectRibbonRuntimeStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
+      active_lane: status.data.capabilities.active_lane,
       binary_fields: status.data.capabilities.binary_fields,
       explicit_topology: status.data.capabilities.explicit_topology,
     },
@@ -145,6 +149,7 @@ function ribbonRuntimeStatusEquals(
   if (!previous || !next) return previous === next;
   return (
     previous.capabilities.binary_fields === next.capabilities.binary_fields &&
+    previous.capabilities.active_lane === next.capabilities.active_lane &&
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&
@@ -193,7 +198,10 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const geometryValidation = useGeometryValidationResource({
     enabled: needsGeometryResources || needsRuntimeResources,
   });
-  const needsSessionStatusResources = needsMeshResources || needsRuntimeResources;
+  const needsSessionStatusResources = ribbonTabNeedsSessionStatusResources(
+    activeTab,
+    needsMeshResources,
+  );
   const sessionStatusData = useSessionStatusSelector(
     selectRibbonRuntimeStatus,
     {
@@ -300,7 +308,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [SIMULATION_STAGES_EXECUTION_PATH]: needsRuntimeResources
             ? stageExecution.data
             : null,
-          [SESSION_STATUS_RESOURCE_KEY]: needsRuntimeResources
+          [SESSION_STATUS_RESOURCE_KEY]: needsSessionStatusResources
             ? sessionStatusData
             : null,
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
@@ -321,6 +329,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshCapabilities.data,
       meshManifest.data,
       meshSummary.data,
+      needsSessionStatusResources,
       sessionStatusData,
       solverStatus.data,
       stageExecution.data,

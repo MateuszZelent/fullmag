@@ -9,6 +9,13 @@ interface WorkerLike {
   terminate(): void;
 }
 
+/** Keep the occupancy mask available for hover/probe while a worker owns a copy. */
+export function clonePlanarMaskForWorker(
+  mask: Uint8Array | null | undefined,
+): Uint8Array | undefined {
+  return mask ? new Uint8Array(mask) : undefined;
+}
+
 export function createPlanarColorizer(
   worker: WorkerLike,
   onPixels: (pixels: Uint8ClampedArray) => void,
@@ -26,15 +33,16 @@ export function createPlanarColorizer(
       mask?: Uint8Array,
     ) {
       latestId = ++nextId;
+      const workerMask = clonePlanarMaskForWorker(mask);
       const request: PlanarColorizeRequest = {
         id: latestId,
         kind: "colorize",
-        mask,
+        mask: workerMask,
         range,
         values,
       };
       const transfers: Transferable[] = [values.buffer];
-      if (mask) transfers.push(mask.buffer);
+      if (workerMask) transfers.push(workerMask.buffer);
       worker.postMessage(request, transfers);
     },
     dispose() {

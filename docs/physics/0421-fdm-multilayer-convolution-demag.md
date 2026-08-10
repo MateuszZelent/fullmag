@@ -1,340 +1,480 @@
-# Boris Multi-Layered Convolution Demag (Supercell)
+# FDM: wielowarstwowa konwolucja demagnetyzacyjna
 
-> **Purpose**: Document Boris's multi-layered convolution approach for variable-resolution
-> demagnetization, as basis for future Fullmag implementation.
->
-> **References**:
-> - Boris source: `SDemag.h`, `SDemag_MConv.cpp`, `DemagKernelCollection.h`
-> - Lepadatu, *J. Appl. Phys.* **128** (2020) — convolution-based multi-scale approach
+> Status: kanoniczna specyfikacja fizyczno-numeryczna. CPU FP64 ma już aktywny
+> katalog kerneli i współdzielony workspace dla descriptorowego runtime, ale
+> żaden lane shifted, heterogeneous, transferowy ani GPU nie jest obecnie
+> production-qualified. Macierz poniżej rozdziela zgodność z BORIS od dowodu
+> wykonania i od kwalifikacji produkcyjnej.
 
-## 1. Problem Statement
+(problem-statement)=
+## Problem fizyczny
 
-Standard FFT-based demag requires a **single uniform grid** across the entire simulation volume.
-When a system contains multiple magnetic layers (e.g. SAF stack, spin-valve), each layer
-may need different spatial resolution. Boris solves this with two approaches:
+Dla $L$ rozłącznych ferromagnetycznych obiektów FDM para $(d,s)$ oznacza
+odpowiednio cel i źródło. Jedyną konwencją jest
+$\boldsymbol\delta_{d,s}=\mathbf o_d-\mathbf o_s$ oraz
+$\mathbf H_d=-\sum_s\mathsf N_{d\leftarrow s}\mathbf M_s$. Nie wolno uzależniać
+jej od kolejności warstw ani od znaku przesunięcia. Metoda używa osobnych
+native i scratch grids, zachowując fizykę magnetostatyczną. Kwalifikowany
+boundary mode to open; PBC jest fail-closed.
 
-| Approach | Description | Trade-off |
+(governing-equations)=
+## Równania rządzące
+
+Model ciągły jest wyłącznie definicją pola:
+$\mathbf H(\mathbf r)=-\int\mathcal N(\mathbf r-\mathbf r')\mathbf M(\mathbf r')\,\mathrm dV'$.
+Podstawowym kontraktem FDM jest dyskretna suma Eq. (3) publikacji, strona 2 PDF:
+
+```{math}
+:label: eq-lepadatu-3-discrete-fdm
+\mathbf H'_{k,l}=-\sum_{i=1}^{L}\sum_{\mathbf r_{i,j}\in V_i}
+\mathsf N(\mathbf r'_{k,l}-\mathbf r_{i,j},\mathbf h_k,\mathbf h_i)
+\mathbf M(\mathbf r_{i,j}),\qquad \mathbf r'_{k,l}\in V_k .
+```
+
+```{math}
+:label: eq-multilayer-demag-field
+\mathbf H_d(\mathbf r_d)=-\sum_{s=1}^{L}\int_{V_s}
+\mathcal N_{d\leftarrow s}(\mathbf r_d-\mathbf r_s)\mathbf M_s(\mathbf r_s)\,\mathrm dV_s .
+```
+
+```{math}
+:label: eq-multilayer-reciprocity
+V_d\,\mathsf N_{d\leftarrow s}(\mathbf r)
+=V_s\,\mathsf N_{s\leftarrow d}^{\mathsf T}(-\mathbf r).
+```
+
+```{math}
+:label: eq-multilayer-energy
+E_d=-\frac{\mu_0}{2}\sum_{c\in\mathcal A_d}V_c\,
+\mathbf M_{d,c}\mathbin\cdot\mathbf H_{d,c}.
+```
+
+```{math}
+:label: eq-multilayer-transfer-adjoint
+\langle P\mathbf M,\mathbf H_c\rangle_{V_c}
+=\langle\mathbf M,P^*\mathbf H_c\rangle_{V_n}.
+```
+
+Tensor ma sześć niezależnych składowych
+$N_{xx},N_{yy},N_{zz},N_{xy},N_{xz},N_{yz}$. Reciprocity jest zawsze
+volume-weighted; prosta równość tensorów jest legalna tylko przy równych
+objętościach komórek. Cross-energy raportuje wkłady zorientowane
+$d\leftarrow s$ oraz fizycznie symetryzowaną sumę, nie nieważony
+$\mathbf M\mathbin\cdot\mathbf H$.
+
+Równanie ciągłe powyżej wyjaśnia pole, lecz implementowany kontrakt FDM jest
+sumą po komórkach. Zgodnie z równaniem (3) Lepadatu (2019),
+$\mathbf H_{k,l}'=-\sum_{i=1}^{L}\sum_{\mathbf r_{i,j}\in V_i}
+\mathsf N(\mathbf r_{k,l}'-\mathbf r_{i,j},\mathbf h_k,\mathbf h_i)
+\mathbf M(\mathbf r_{i,j})$. Wymiar źródła i celu jest częścią kernela.
+Macierz $\mathsf N$ ma sześć składowych niezależnych:
+$\mathsf N=[N_{xx},N_{xy},N_{xz};N_{xy},N_{yy},N_{yz};N_{xz},N_{yz},N_{zz}]$.
+
+```{math}
+:label: eq-lepadatu-4-transfer
+\mathbf M(\mathbf r')=\sum_{i\in P}w_i\mathbf M(\mathbf r_i).
+```
+
+```{math}
+:label: eq-lepadatu-5-weights
+w_i=\frac{\widetilde d_i\delta_i}{\widetilde d_T},\quad
+\widetilde d_T=\sum_{i\in P}\widetilde d_i\delta_i,\quad
+\widetilde d_i=\frac{\lvert\mathbf h'+\mathbf h\rvert}{2}-\lvert\mathbf r'-\mathbf r_i\rvert .
+```
+
+Równania (4)--(5) publikacji są transferem weighted-average: dla punktu
+scratch $\mathbf r'$ i komórek wejściowych $c_i$,
+$\mathbf M(\mathbf r')=\sum_i w_i\mathbf M(\mathbf r_i)$,
+$w_i=\widetilde d_i\delta_i/\sum_j\widetilde d_j\delta_j$,
+$\widetilde d_i=\lvert(\mathbf h'+\mathbf h)/2\rvert-\lvert\mathbf r'-\mathbf r_i\rvert$,
+gdzie $\delta_i$ wybiera komórki zachodzące. To jest cytowany model
+transferu, nie dowód, że obecny Fullmag realizuje adjoint $P^*$; ten warunek
+jest kanoniczną, planowaną bramą orakla.
+
+Appendix A publikacji, strony 6--7 PDF, definiuje nieregularny Newell:
+
+```{math}
+:label: eq-lepadatu-a1
+N_{xx}(\mathbf s)=L[f;\mathbf h_s,\mathbf h_d](\mathbf s),\qquad
+N_{xy}(\mathbf s)=L[g;\mathbf h_s,\mathbf h_d](\mathbf s).
+```
+
+```{math}
+:label: eq-lepadatu-a2
+L[w;\mathbf h_s,\mathbf h_d](\mathbf s)=\frac{1}{\tau}
+\sum_{\epsilon_1,\epsilon_2=-1}^{1}(-1)^{|\epsilon_1|+|\epsilon_2|}
+\bigl[-w(x+\epsilon_1h_x,y+\epsilon_2h_y,z-h_{s,z})
+-w(x+\epsilon_1h_x,y+\epsilon_2h_y,z+h_{d,z})
++w(x+\epsilon_1h_x,y+\epsilon_2h_y,z)
++w(x+\epsilon_1h_x,y+\epsilon_2h_y,z-\Delta)\bigr].
+```
+
+```{math}
+:label: eq-lepadatu-a3
+R^2=x^2+y^2+z^2,\quad \tau=\pi h_xh_yh_{d,z},\quad\Delta=h_{s,z}-h_{d,z},
+\qquad f=\frac{(2x^2-y^2-z^2)R}{6}
++\frac{y(z^2-x^2)}{4}\ln\!\left(1+\frac{2y(y+R)}{x^2+z^2}\right)
++\frac{z(y^2-x^2)}{4}\ln\!\left(1+\frac{2z(z+R)}{x^2+y^2}\right)
+-xyz\arctan\!\frac{yz}{xR}.
+```
+
+```{math}
+:label: eq-lepadatu-a4
+g=-\frac{xyR}{3}-\frac{z^3}{6}\arctan\!\frac{xy}{zR}
+-\frac{zy^2}{2}\arctan\!\frac{xz}{yR}
+-\frac{zx^2}{2}\arctan\!\frac{yz}{xR}
++\frac{y(3z^2-y^2)}{12}\ln\!\left(1+\frac{2x(x+R)}{y^2+z^2}\right)
++\frac{x(3z^2-x^2)}{12}\ln\!\left(1+\frac{2y(y+R)}{x^2+z^2}\right)
++\frac{xyz}{2}\ln\!\left(1+\frac{2z(z+R)}{x^2+y^2}\right),
+\qquad\mathbf h_s=(h_x,h_y,h_{s,z}),\quad\mathbf h_d=(h_x,h_y,h_{d,z}).
+```
+
+To literalne formy Appendix A, strony 6--7 lokalnego PDF; permutacje osi
+dają pozostałe elementy tensora zgodnie z Newell et al. (1993).
+
+(symbols-and-si-units)=
+## Symbole i jednostki SI
+
+| Symbol | Znaczenie | Jednostka SI |
 |---|---|---|
-| **Supermesh** | Single uniform grid covering all meshes; M interpolated to/from it | Simple, but wastes resolution if layers differ in scale |
-| **Multi-layered convolution** | Each mesh keeps its own resolution; cross-layer interactions via shifted Newell kernels | More complex, far more efficient for multi-scale |
+| $\mathbf H$ | pole magnetostatyczne w modelu ciągłym | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_d$ | pole demagnetyzujące celu | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H'_{k,l}$ | dyskretne pole celu k,l | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{d,c}$ | pole demagnetyzujące aktywnej komórki celu c | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_c$ | pole na siatce konwolucyjnej | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf M_s$ | magnetyzacja źródła | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf M$ | magnetyzacja komórkowa | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf M_{d,c}$ | magnetyzacja aktywnej komórki celu c | $\mathrm{A\,m^{-1}}$ |
+| $\mathsf N_{d\leftarrow s}$ | dyskretny tensor demagnetyzujący | $1$ |
+| $\mathsf N$ | tensor demagnetyzujący pary komórek Eq. (3) | $1$ |
+| $\mathcal N$ | ciągłe jądro magnetostatyczne | $\mathrm{m^{-3}}$ |
+| $\mathcal N_{d\leftarrow s}$ | ciągłe jądro kierunkowane od źródła s do celu d | $\mathrm{m^{-3}}$ |
+| $\mathbf r_d$ | środek komórki celu | $\mathrm m$ |
+| $\mathbf r_s$ | środek komórki źródła | $\mathrm m$ |
+| $\mathbf r$ | wektor przesunięcia w reciprocity | $\mathrm m$ |
+| $\mathbf r'_{k,l}$ | pozycja komórki celu w Eq. (3) | $\mathrm m$ |
+| $\mathbf r_{i,j}$ | pozycja komórki źródła w Eq. (3) | $\mathrm m$ |
+| $V_i$ | objętość domeny źródłowej i | $\mathrm{m^3}$ |
+| $V_d$ | objętość komórki celu | $\mathrm{m^3}$ |
+| $V_s$ | objętość komórki źródła | $\mathrm{m^3}$ |
+| $V_c$ | objętość aktywnej komórki | $\mathrm{m^3}$ |
+| $V_n$ | objętość komórki siatki native | $\mathrm{m^3}$ |
+| $\mathrm dV'$ | element objętości źródła | $\mathrm{m^3}$ |
+| $\mathrm dV_s$ | element objętości źródła s | $\mathrm{m^3}$ |
+| $\mu_0$ | przenikalność magnetyczna próżni | $\mathrm{N\,A^{-2}}$ |
+| $E_d$ | energia demagnetyzacyjna celu | $\mathrm J$ |
+| $\mathbf h_k$ | rozmiar komórki celu Eq. (3) | $\mathrm m$ |
+| $\mathbf h_i$ | rozmiar komórki źródła Eq. (3) | $\mathrm m$ |
+| $\mathbf h_s$ | rozmiar komórki źródła Appendix A | $\mathrm m$ |
+| $\mathbf h_d$ | rozmiar komórki celu Appendix A | $\mathrm m$ |
+| $\mathbf h'$ | cell size transferu | $\mathrm m$ |
+| $\mathbf h$ | cell size wejściowej siatki transferu | $\mathrm m$ |
+| $h_x$ | rozmiar komórki w osi x Appendix A | $\mathrm m$ |
+| $h_y$ | rozmiar komórki w osi y Appendix A | $\mathrm m$ |
+| $h_{s,z}$ | grubość komórki źródła | $\mathrm m$ |
+| $h_{d,z}$ | grubość komórki celu | $\mathrm m$ |
+| $\mathbf r_i$ | środek komórki transferu | $\mathrm m$ |
+| $\mathbf r'$ | punkt transferu | $\mathrm m$ |
+| $P$ | transfer native do scratch | $1$ |
+| $P^*$ | adjoint transferu scratch do native | $1$ |
+| $\mathcal A_d$ | aktywne komórki celu | $1$ |
+| $w_i$ | waga transferu | $1$ |
+| $\delta_i$ | wskaźnik nakładania komórki | $1$ |
+| $\widetilde d_i$ | odległość ważona transferu | $\mathrm m$ |
+| $\widetilde d_T$ | suma odległości ważonych | $\mathrm m$ |
+| $L$ | operator ośmiu narożników Newella | $1$ |
+| $f$ | funkcja bazowa Newella diagonalna | $\mathrm{m^3}$ |
+| $g$ | funkcja bazowa Newella off-diagonal | $\mathrm{m^3}$ |
+| $\mathbf s=(x,y,z)$ | wektor argumentu Appendix A | $\mathrm m$ |
+| $x$ | współrzędna x Appendix A | $\mathrm m$ |
+| $y$ | współrzędna y Appendix A | $\mathrm m$ |
+| $z$ | współrzędna z Appendix A | $\mathrm m$ |
+| $R$ | $\sqrt{x^2+y^2+z^2}$ | $\mathrm m$ |
+| $\tau$ | normalizacja stencila | $\mathrm{m^3}$ |
+| $\Delta$ | różnica grubości źródła i celu | $\mathrm m$ |
+| $\epsilon_1,\epsilon_2$ | indeksy stencila | $1$ |
+| $\epsilon_1$ | indeks narożnika x/y | $1$ |
+| $\epsilon_2$ | indeks narożnika x/y | $1$ |
+| $N_{xx}$ | składowa diagonalna xx | $1$ |
+| $N_{xy}$ | składowa off-diagonal xy | $1$ |
+| $N_{dd}$ | składowa diagonalna celu w Table I | $1$ |
+| $N_{xz}$ | składowa off-diagonal xz w Table I | $1$ |
+| $N_{yz}$ | składowa off-diagonal yz w Table I | $1$ |
+| $w$ | funkcja bazowa Newella w Appendix A | $\mathrm{m^3}$ |
+| $k,l,i,j,V_i$ | indeksy komórek celu i źródła oraz domena źródłowa Eq. (3) | $1$ |
 
-## 2. Architecture
+(assumptions-and-validity)=
+## Założenia i granice ważności
 
-### 2.1 Module hierarchy
+Każda warstwa ma native_grid, scratch_grid, origin i $h_z$.
+common_transform_layout opisuje wyłącznie shape FFT, strides, padding i
+konwencję transformacji, nie fizyczny grid. Dla osi liniowej
+$n_{\mathrm{linear}}=n_{\mathrm{source}}+n_{\mathrm{destination}}-1$; fft_shape
+nie może być mniejszy. Descriptor zawiera source insertion offset, lag-zero,
+mapę lagów ujemnych, destination crop window, R2C na osi X o długości
+$N_x/2+1$, x-fastest indexing, normalizację inverse i zerowanie paddingu.
 
-```mermaid
-graph TD
-    SDemag["SDemag (super-mesh module)"]
-    SDemag -->|"creates one per mesh"| SD1["SDemag_Demag (layer 0)"]
-    SDemag -->|"creates one per mesh"| SD2["SDemag_Demag (layer 1)"]
-    SDemag -->|"creates one per mesh"| SD3["SDemag_Demag (layer N)"]
-    SD1 -->|"inherits"| DKC1["DemagKernelCollection"]
-    SD2 -->|"inherits"| DKC2["DemagKernelCollection"]
-    SD3 -->|"inherits"| DKC3["DemagKernelCollection"]
+two_d_stack ma jedną roboczą komórkę Z na warstwę. Tekstura
+$\mathbf M(z)$ wymaga jawnego transferu i testu 2D-vs-3D albo wyboru three_d.
+2D używa moment-zachowującej średniej przez grubość. Appendix-A dla nierównych
+grubości wymaga wspólnego $h_x,h_y$ pary; inne XY wymagają transferu do
+wspólnego scratch XY albo odrzucenia. Reuse $+\Delta z/-\Delta z$ jest legalny
+wyłącznie dla two_d_stack, czystego shift Z i zorientowanej pary o równych $h$.
+
+Tabela I Lepadatu rozróżnia 2D-self, 3D-self, 2D-zShift, 3D-zShift oraz
+2D/3D-full: self używa kerneli real i reduced storage; 2D-zShift ma
+diagonalne i $xy$ real oraz $xz,yz$ imaginary w reduced storage; 3D-zShift
+i full są complex, przy czym full wymaga full storage. Tabela I jest celem
+reprezentacji; obecny Fullmag nie ma jeszcze runtime evidence tej redukcji.
+Appendix A, równania (A1)--(A4), określa irregular Newell dla
+$\mathbf h_s=(h_x,h_y,h_{s,z})$ i $\mathbf h_d=(h_x,h_y,h_{d,z})$, a więc
+różnicy wyłącznie Z. Checked pair builder w
+`crates/fullmag-fdm-demag/src/shifted_kernel.rs::compute_shifted_kernel_pair`
+korzysta z tego kontraktu i ma niezależne porównanie GL8 oraz test odwrotnej
+transformaty FFT w
+`crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs`. To jest dowód
+matematyczny i wykonywalny, nie kwalifikacja produkcyjna: aktywny runner CPU
+używa tej ścieżki dla nierównych grubości 2D, natomiast pełny per-layer
+transfer/crop, CUDA i świeże artefakty runtime nadal pozostają bramami otwartymi.
+
+Dokładny layout FFT dla pary ma source insertion offset $a_s$, lag-zero
+$z_{d,s}$ i crop celu $C_d$. Współczynnik o lagu $q$ trafia do
+$K[(q+z_{d,s})\bmod F]$, magnetyzacja do $M[(i+a_s)\bmod F]$, a wynik celu
+czyta się z $H[C_d(l)]$. Forward nie normalizuje, inverse mnoży przez
+$1/\prod_\alpha F_\alpha$ dokładnie raz. To są wymagane formuły descriptoru;
+test ma pokryć wrap-around i niezerowy crop.
+
+(boris-gap-matrix)=
+## Macierz różnic względem BORIS
+
+Poniższa macierz rozdziela zgodność fizyczną od zgodności interfejsu. Źródła
+referencyjne BORIS są lokalne: `external_solvers/BORIS/Boris/SDemag.h`,
+`SDemag.cpp`, `SDemag_MConv.cpp`, `SDemag_Demag.cpp`,
+`BorisLib/VEC_MeshTransfer.h` oraz `Simulation.cpp` (komendy
+`multiconvolution`, `2dmulticonvolution`, `ncommon`). Brak odpowiednika w
+kolumnie Fullmag jest świadomą luką, a nie aliasem pod inną nazwą.
+
+| Kontrakt BORIS | Co robi BORIS | Stan Fullmag | Granica i wymagany dowód |
+|---|---|---|---|
+| `multiconvolution=true` | Osobne FFT spaces i `Rect_collection` dla każdego mesh/layer; transfer do wspólnego scratchu i z powrotem. | `strategy="multilayer_convolution"`; każdy layer zachowuje native/scratch descriptor, a CPU FP64 buduje `kernel_catalog` i `pair_bindings` oraz używa jednego workspace na refresh. | To jest implementacyjny odpowiednik katalogu BORIS w ograniczonej ścieżce CPU. Nadal trzeba wykazać pełny per-layer insertion/crop, transfer i energię dla wszystkich centrów/extents oraz osobną kwalifikację CUDA. |
+| `multiconvolution=false` | Jedna konwolucja na supermesh; komórka supermesh musi być pusta albo należeć w całości do jednego input mesh. | `strategy="single_grid"` dla wielu magnetów jest fail-closed, więc nie jest odpowiednikiem BORIS supermesh. | Brak implementacji/kwalifikacji supermesh; UI i docs nie mogą przedstawiać `single_grid` jako zamiennika. |
+| `2dmulticonvolution=0` | Tryb automatyczny: 3D jest dozwolone, jeśli geometria tego wymaga. | Najbliższe `mode="three_d"`/`auto`; translacyjny FFT wymaga wspólnego pitchu na osiach próbkowanych. | Potrzebny pełny 3D cross-layer oracle dla offsetu XYZ i raport runtime. |
+| `2dmulticonvolution=1` | Każdy mesh traktowany jako niezależny 2D mesh, nawet przy własnej dyskretyzacji Z. | `two_d_stack` jest legalny tylko wtedy, gdy każda warstwa ma dokładnie jedną natywną komórkę Z; dla tego podzbioru CPU ma descriptorowy katalog i workspace. | To nie jest pełne BORIS `=1`: BORIS redukuje dowolną dyskretyzację Z, a Fullmag wielokomórkowe Z odrzuca fail-closed. |
+| `2dmulticonvolution=2` | Każdy mesh jest dzielony na warstwy 2D w Z; każda warstwa uczestniczy w layered convolution. | Brak implementacji i pól Python/IR/UI. | To osobna luka funkcjonalna, nie alias `two_d_stack`; potrzebne zdefiniowanie layer decomposition, transferu i testu. |
+| `ncommonstatus=false` | BORIS automatycznie dobiera `n_common` z największych rozmiarów meshów (dla 2D `n_common.z=1`). | Brak flagi status; brak `common_cells*` uruchamia politykę planner-auto, opartą o union scratch i native Z. | Semantyka nie jest 1:1; provenance musi zapisywać auto-policy i resolved grid, a dokumentacja nie może nazywać jej odpowiednikiem BORIS largest-mesh default. |
+| `ncommon=(nx,ny,nz)` | Użytkownik wymusza wspólną liczbę komórek; `nz=1` jest częścią polityki BORIS 2D. | `common_cells=(nx,ny,nz)` lub `common_cells_xy=(nx,ny)`; `nz=1` nie redukuje legalnie warstwy z wieloma natywnymi komórkami Z. | Walidacja wspólnego scratchu, originu i granic insertion/crop; CUDA z transferem pozostaje fail-closed. |
+| Common-cell pitch | BORIS wyznacza `h_common = convolution_rect / n_common` i używa maksymalnej komórki do normalizacji wymiarów transferu. | Fullmag traktuje common-cell size, native-cell size i transform layout jako osobne pola descriptoru; transfer lub odrzucenie jest jawne, a różna geometria nie zmienia po cichu native grid. | Potrzebny osobny dowód pitch/volume oraz tolerancji transferu dla każdej klasy cell-size; samo równe `n_common` nie jest dowodem równych komórek. |
+| Różne XY extents/centers | `Rect_collection` rozszerza i wyrównuje prostokąty do maksymalnego wspólnego rozmiaru, próbując zachować wspólne rzuty XY. | Planner materializuje union XY i `push_pull`; runtime waliduje insertion offset, lag-zero i destination crop, a katalog wiąże kernel z dokładnym layoutem. | CPU ma kontrakt fail-closed i testy layoutu, ale pełne różne extents/centers oraz GPU wymagają świeżych artefaktów runtime. |
+| Różne grubości Z | W 2D wspólny XY cell size, ale dowolne `h_z`; kernel ma niezależne `h_src`, `h_dst`. | Checked `compute_shifted_kernel_pair` + Appendix-A Newell; aktywny CPU runner obsługuje nierówne `h_z` przy `two_d_stack`. | GL8, inverse-FFT i focused CPU test przechodzą; brak production-qualified runtime/CUDA. |
+| Transfer M/H | Weighted-average do scratchu i transfer wyniku z powrotem; `VEC_MeshTransfer` ma coverage/weighting. | `push_pull` i `VolumeWeightedTransfer` istnieją oraz mają testy momentu/adjointness, ale nie są dowodem pełnej integracji każdego runnera. | Należy raportować native→scratch→native, maski aktywne, objętości i błąd transferu osobno od kernela. |
+| Pełny offset XYZ | Pair kernels używają pozycji celu minus źródła; BORIS nie ogranicza się do samego `z_shift`. | Pair API przyjmuje pełny offset center-to-center; runner konwertuje lower-corner origin na środek komórki. | Dla różnych pitchów 3D translacyjny FFT jest odrzucany; direct tensor jest oracle. |
+| Kernel reuse i parzystość | BORIS ma katalog kernel modules, reuse identycznych par i kontrolowane symetrie ±Z. | CPU runtime ma `kernel_catalog` (jeden tensor na unikalny `KernelReuseKey`) oraz `pair_bindings`; klucz obejmuje tryb, zorientowany offset, oba rozmiary komórek, objętości, transform/padding/crop, reprezentację, precyzję, schemat i boundary. Telemetria raportuje hit/miss, liczbę par, FFT i pamięć cold/warm. | Implementacja katalogu i workspace jest domknięta dla CPU descriptor path, lecz nie kwalifikuje jeszcze wszystkich rodzin BORIS (reduced/full, X/Y/XYZ shift) ani CUDA. Każda zmiana fingerprintu musi unieważnić reuse. |
+| Storage/symmetry | BORIS rozróżnia real/reduced i full-complex; 2D zShift ma specyficzne składowe real/imag. | `TensorDemagKernel` przechowuje sześć pełnych składowych complex; reduced-storage fast path nie jest runtime-qualified. | Potrzebne testy redukcji, rekonstrukcji znaków i pamięci, osobno dla CPU/CUDA. |
+| CPU/GPU | BORIS ma FFTW CPU i CUDA realizację tej samej metody. | CPU FP64 jest referencją; CUDA ma ABI/guardy i authoring/IR, lecz brak świeżej managed parity. FP32 również nie jest qualified. | Nie deklarować wsparcia wykonawczego GPU bez artefaktu urządzenia, parity i telemetry FFT. |
+| PBC images | `demag_pbc_images` i `Set_PBC` stosują tę samą liczbę obrazów PBC do wszystkich meshów w supermesh i multilayer convolution. | Fullmag ma tylko boundary `open`; planner odrzuca PBC dla multilayer, a UI nie oferuje cichego fallbacku. | PBC jest pełną luką funkcjonalną: potrzebne są jawne pola Python/IR, kernel images, energia, provenance i osobna kwalifikacja CPU/CUDA. |
+| Puste komórki i energia | BORIS prowadzi `non_empty_cells` oraz `total_nonempty_volume`, a energię normalizuje względem niepustej objętości; obsługuje też maski i mesh exclusion. | Fullmag zachowuje active mask na native layer, liczy energię objętościowo i publikuje target-only Airbox `H_demag`; solver mask i wizualny full-domain field są rozdzielone. | Trzeba utrzymać osobny dowód maski, objętości i energii dla każdej klasy transferu; implementacja/source test nie zastępują świeżego artefaktu runtime. |
+| Antiferromagnetyczne i atomistyczne meshe | BORIS prowadzi `antiferromagnetic_meshes_present`, osobne moduły i wymuszony transfer dla atomistycznych meshów. | Fullmag publiczny multilayer contract obejmuje nazwane ferromagnetyczne obiekty FDM; nie ma semantyki AFM, atomistic mesh ani ich transferu do wspólnego scratchu. | To jawna luka zakresu produktu, nie dozwolony fallback. Wymagałaby osobnego modelu materiału, maski, transferu, energii i kwalifikacji. |
+| Re-konfiguracja i invalidation | BORIS `UpdateConfiguration_MConv_Demag` niszczy i tworzy moduły po zmianie meshów, `n_common`, trybu lub PBC. | Fullmag rozwiązuje nowy plan per topology fingerprint; CPU runtime przechowuje fingerprint invalidation dla katalogu/workspace i odrzuca niezgodną geometrię. | Brakuje jeszcze end-to-end dowodu dynamicznej zmiany konfiguracji w sesji i parity po replanie; nie wolno traktować samego fingerprintu jako takiego dowodu. |
+| Mesh/UI/obserwacja | BORIS operuje na input meshes i transferach; supermesh nie jest fizyczną warstwą. | Explorer/Inspector pokazuje native layers; `CommonTransformLayout` ma `physical_mesh=false`; Airbox `H_demag` jest target-only. | Scratch nie może być rysowany jako ferromagnetyczna geometria; potrzebna świeża macierz viewport/WebGL po integracji. |
+
+Wniosek: obecny Fullmag implementuje i testuje część matematyczną BORIS-style
+multilayer convolution, a CPU ma już aktywny per-layer katalog reuse i
+współdzielony workspace. Nie oferuje jednak pełnego zestawu BORIS: brakuje
+supermesh, pełnych semantyk `2dmulticonvolution=1/2`, PBC images, wszystkich
+reprezentacji reduced/full, dynamicznej re-konfiguracji z dowodem sesyjnym oraz
+kwalifikowanego CUDA. Te luki są wymaganiami implementacyjnymi, nie opcjonalnymi
+ulepszeniami.
+
+| Table I class | Warunek | $N_{dd}$: x/y/z | $N_{xy}$: x/y/z | $N_{xz}$: x/y/z | $N_{yz}$: x/y/z | DFT/storage |
+|---|---|---|---|---|---|---|
+| 2D-self | jeden cell Z | even/even/n.a. | odd/odd/n.a. | zero | zero | real/reduced |
+| 3D-self | $\mathbf h_i=\mathbf h_j$ | even/even/even | odd/odd/even | odd/even/odd | even/odd/odd | real/reduced |
+| 2D-zShift | $h_{x,y,i}=h_{x,y,j}$ | even/even/n.a. | odd/odd/n.a. | odd/even/n.a. | even/odd/n.a. | dd,xy real; xz,yz imaginary; reduced |
+| 3D-zShift | $\mathbf h_i=\mathbf h_j$ | even/even/even | odd/odd/even | odd/even/odd | even/odd/odd | complex/reduced |
+| 2D-full | $h_{x,y,i}=h_{x,y,j}$ | none/none/n.a. | none/none/n.a. | none/none/n.a. | none/none/n.a. | complex/full |
+| 3D-full | $\mathbf h_i=\mathbf h_j$ | none/none/none | none/none/none | none/none/none | none/none/none | complex/full |
+
+(python-api)=
+## Publiczny Python API
+
+| Parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR | Qualification |
+|---|---|---|---|---|---|---|---|
+| FDM.cell | Sequence[float] or None | None | $\mathrm m$ | exclusive with default_cell; three positive values when present | legacy/default native cell size | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.cell | implemented authoring |
+| FDM.default_cell | Sequence[float] or None | None | $\mathrm m$ | three positive values when present | default native cell size | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.default_cell | implemented authoring |
+| FDM.per_magnet | dict[str, FDMGrid] or None | None | $1$ | non-empty names and FDMGrid values | per-object native grid overrides | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.per_magnet | implemented authoring |
+| FDM.demag | FDMDemag or None | None | $1$ | FDMDemag instance | demagnetization policy wrapper | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.demag | implemented authoring |
+| FDMGrid.cell | Sequence[float] | required | $\mathrm m$ | three positive values | native cell size | FDM CPU/GPU | discretization.fdm.per_magnet.*.cell | implemented authoring |
+| FDMDemag.strategy | Literal[str] | auto | $1$ | auto, single_grid, multilayer_convolution | requested demag realization | FDM CPU/GPU | discretization.fdm.demag.strategy | implemented; multilayer runtime gated |
+| FDMDemag.mode | Literal[str] | auto | $1$ | auto, two_d_stack, three_d | requested multilayer mode | FDM CPU/GPU | discretization.fdm.demag.mode | implemented; runtime not qualified |
+| FDMDemag.common_cells | tuple[int, int, int] or None | None | $1$ | three positive ints | explicit 3D working cell count | FDM CPU/GPU | discretization.fdm.demag.common_cells | implemented; runtime not qualified |
+| FDMDemag.common_cells_xy | tuple[int, int] or None | None | $1$ | two positive ints | explicit 2D working XY count | FDM CPU/GPU | discretization.fdm.demag.common_cells_xy | implemented; runtime not qualified |
+| FDMDemag.explain | bool | True | $1$ | boolean | planner explanation request | FDM CPU/GPU authoring | discretization.fdm.demag.explain (authoring metadata; no lowered physics field) | implemented authoring |
+
+Parametry FDM.boundary_correction, FDM.boundary_phi_floor i
+FDM.boundary_delta_min są publicznie obniżane do FDM hints, lecz nie są
+semantyką multilayer-convolution tej noty: pozostają wykluczone z tego
+kontraktu, dopóki planner nie poda ich per-layer wpływu na transfer/kernel.
+Wykluczenie jest jawne; nie oznacza pominięcia wartości przez obecny wrapper.
+
+```python
+# %% Imports
+import fullmag as fm
+
+# %% Discretization intent
+grid = fm.FDMGrid(cell=(3.90625e-9, 3.90625e-9, 3.0e-9))
+demag = fm.FDMDemag(strategy="multilayer_convolution", mode="two_d_stack", common_cells_xy=(128, 32))
+
+# %% Lowering check
+assert grid.to_ir()["cell"][2] == 3.0e-9
+assert demag.to_ir()["strategy"] == "multilayer_convolution"
 ```
 
-- **`SDemag`**: Top-level module on the super-mesh. Owns the multi-convolution orchestration.
-- **`SDemag_Demag`**: Per-mesh module. Each owns a `transfer` VEC for interpolation and inherits
-  `DemagKernelCollection` for its kernel set.
-- **`DemagKernelCollection`**: Stores N kernels (one per layer in the system) for a single
-  destination layer. Each kernel handles the interaction from source layer → this layer.
+Obecna biblioteka nie udostępnia pełnej rejestracji tej interakcji przez
+publiczny stage builder. Dokumentacja nie udaje działającego stage workflow
+przed implementacją i runtime proof tej granicy.
 
-### 2.2 Key constraint: `n_common`
+(problem-ir)=
+## ProblemIR i normalizacja
 
-All layers must share the **same number of cells** `n_common = (Nx, Ny, Nz)`.
-The physical cellsize varies per layer (`h_convolution = Rect / n_common`).
+FDMGrid.to_ir obniża cell do listy SI. FDMDemag.to_ir obniża strategy, mode,
+common_cells i common_cells_xy do discretization.fdm.demag. Planner materializuje
+FdmMultilayerPlanIR, FdmLayerPlanIR i FdmMultilayerSummaryIR z requested oraz
+selected strategy, eligibility i oszacowaniem kerneli.
 
-- In **3D mode**: all layers have identical `n_common` in all dimensions
-- In **2D mode**: all layers share `(Nx, Ny)` but can differ in `Nz=1` (each layer treated as 2D)
+(round-trip-and-failure-semantics)=
+## Round-trip i semantyka błędów
 
-When a mesh's own discretization differs from `n_common`, a **transfer mesh** interpolates
-between the mesh's native M grid and the convolution grid.
+Requested intent jest intencją strategy, mode i common grid. Resolved execution
+jest decyzją planera, zapisaną osobno w planner_summary i provenance runtime.
+Validation errors odrzucają nielegalne counts, warstwy nakładające się,
+niezgodne $h_x,h_y$ bez możliwego transferu do wspólnego scratchu, PBC i brak
+transferu. Różne XY extents/centers są zachowywane jako native geometrie i
+materializowane przez union computational scratch oraz `push_pull`; nie są
+automatycznie odrzucane ani rysowane jako jeden fizyczny supermesh.
+Unsupported combinations nie mogą potajemnie spaść do single_grid ani innej
+precyzji.
 
-## 3. Kernel Types
+(discrete-realization)=
+## Realizacje backendowe
 
-Each `DemagKernelCollection` stores N `KerType` objects (one per source layer):
+| Solver | Device | Status | Stan dowodu |
+|---|---|---|---|
+| FDM | CPU | reference_executable | 2D exact Newell; świeże pełne oracles L=1/L=2 identity, osobny CPU `push_pull` equal + mały unequal transfer oraz target-only Airbox convergence; ogólny 3D/heterogeneous production path nadal gated |
+| FDM | GPU | implemented | CUDA istnieje; wymaga świeżej parity device |
+| FEM | CPU | not-applicable | nota opisuje FDM FFT/Newell, nie FEM magnetostatykę |
+| FEM | GPU | not-applicable | nota opisuje FDM FFT/Newell, nie FEM magnetostatykę |
 
-### 3.1 Self-kernel (source == destination)
+CPU FP64 jest referencyjnym lane’em wykonawczym, nie niezależnym oraklem
+matematyki kernela. W lane’ach 2D (`n_z=1`) produkcyjny `newell.rs` liczy
+całkę po objętości przez stabilną sumę 64 narożników dla każdego laga; dla
+ogólnego 3D odległe pary mogą nadal korzystać z jawnie ograniczonego
+point-dipole asymptotic branch. Niezależny verifier ma własny Newell/GL8 i
+kanonikalizuje znaki laga przez parzystość tensora, więc nie porównuje
+niestabilnych, osobno obliczonych ujemnych lagów. Pełne pokrycie pola i energii
+dla zweryfikowanych L=1/L=2 identity zostało wykonane; mały heterogeneous
+`push_pull` ma osobny pełny verifier. Każdy destination spectrum jest
+zerowany, sumuje źródła, potem inverse FFT i pull_h zwracają pole do native grid.
+Runtime utrzymuje katalog unikalnych tensorów oraz ordered pair bindings;
+workspace FFT, linie pomocnicze i bufory konwolucji są alokowane raz i używane
+ponownie między refreshami. Telemetria rozróżnia cold/warm bytes, hit/miss,
+liczbę FFT i par oraz fingerprint invalidation, ale `residency=host` nie jest
+dowodem CUDA device residency.
+push_m zachowuje moment objętościowy; pull_h musi realizować $P^*$. Jeżeli
+transfer nie spełni tej tożsamości, energia jest liczona na convolution grid
+albo lane pozostaje gated.
 
-Standard Newell tensor, same as single-mesh demag. Stored as **real** arrays with full
-octant symmetry exploitation:
-- `Kdiag_real`: (Nxx, Nyy, Nzz) — only first octant stored
-- `Kodiag_real` / `K2D_odiag`: off-diagonal with sign flips
+(implementation-mapping)=
+## Mapowanie implementacji
 
-### 3.2 Shifted kernel (source ≠ destination)
+compute_newell_kernels i compute_newell_kernels_shifted budują 2D exact corner
+tensor, a dla 3D jawnie ograniczony shifted tensor; accumulate_tensor_convolution
+wykonuje mnożenie spektralne; negate_field umieszcza konwencyjny znak pola.
+Transfery są push_m_with_boundary_policy oraz pull_h_with_boundary_policy, a
+plannerem jest plan_fdm_multilayer. `build_kernel_catalog` deduplikuje kernel
+per pełny `KernelReuseKey`, `pair_bindings` zachowują orientację d←s, a
+`compute_demag_fields_checked` uruchamia forward/pair/inverse z jednym
+współdzielonym workspace i guardami długości. Nie jest to dowód kompletności
+matematycznej: direct high-precision/cubature oracle ma należeć do osobnego
+testowego ownera, niezależnego od production buildera.
 
-When layers are at different z-positions, the Newell tensor is computed with a **z-shift**:
-$N_{ij}(\vec{r}) \to N_{ij}(\vec{r} + \Delta z \hat{z})$
+(validation)=
+## Plan walidacji
 
-Boris uses the shifted/irregular variants of `f`/`g` from `DemagTFunc_fg.cpp`:
-- `fill_f_vals_shifted` — precomputes f on grid with z-offset
-- `Ldia_shifted` / `Lodia_shifted` — 27-point stencil at shifted positions
+Małe asymetryczne przypadki porównują niezależną cubature lub high-precision
+fixtures dla sześciu składowych i znaków $\pm x,\pm y,\pm z$. Testy obejmują
+linear extent, crop, padding, source offset, weighted reciprocity, energy
+finite difference, transfer adjointness, stałe pola, moment i active mask.
 
-**Optimization**: if layers differ only in sign of z-shift, Boris reuses the kernel
-with `inverse_shifted = true` and adjusts sign during multiplication.
+sp4-derived-multilayer, a nie kanoniczny µMAG SP4, sprawdza L=1, bilayer,
+three-layer, równe/nierówne grubości oraz identity/push_pull. CPU target-only
+Airbox convergence ma osobny świeży dowód dla meshów `160×40×18` i
+`160×40×24` przy `115200/115200` wspólnych centrach; nie zastępuje to
+kwalifikacji device ani pełnej macierzy wizualnej. Paper-reproduction
+lane ma osobno odtworzyć geometrię publikacji: trilayer Ni80Fe20
+$640\times320\,\mathrm{nm^2}$, grubości $20/10/20\,\mathrm{nm}$ i szczeliny
+$1\,\mathrm{nm}$ przy polu $20\,\mathrm{kA\,m^{-1}}$ pod $5^\circ$, a następnie
+Co skyrmion disks o średnicy $512\,\mathrm{nm}$, grubości $1\,\mathrm{nm}$ i
+spacerze $3\,\mathrm{nm}$. To lane traceability, nie zastępstwo dla orakla
+ani kwalifikacji SP4. Airbox jest
+target-only observation carrier: pierwsza promocja publikuje H_demag; H_eff
+poza domeną magnetyczną ma versioned unavailable reason. CPU FP64, CUDA FP64 i
+CUDA FP32 wymagają osobnych artefaktów runtime, urządzenia i tolerancji.
 
-### 3.3 Irregular kernel (different source/destination cellsizes)
+(limitations)=
+## Ograniczenia
 
-When source and destination layers have **different cell thicknesses** (dz_src ≠ dz_dst),
-Boris uses "irregular" kernel functions:
-- `Ldia_shifted_irregular_xx_yy` / `Ldia_shifted_irregular_zz`
-- `Lodia_shifted_irregular_xy` / `Lodia_shifted_irregular_xz_yz`
+Niepromowane produkcyjnie: supermesh, PBC, pełne semantyki
+`2dmulticonvolution=1/2`, ogólny XY offset (authoring/planner mają ścieżkę
+union-scratch + `push_pull`, lecz brak pełnego dowodu transfer/insertion/crop),
+pełny 3D/heterogeneous production path, reduced/full storage classes,
+dynamiczna re-konfiguracja sesji, device-resident parity, CUDA/D-07 i FP32. CPU
+target-only Airbox convergence jest
+kwalifikowane wyłącznie w opisanym zakresie dwóch meshów. Test źródłowy, build albo
+screenshot nie są dowodem fizycznej ani produkcyjnej kwalifikacji.
 
-These use a 36-point stencil (instead of 27) with contributions from both the regular
-`f_vals` and a `f_vals_del` array computed at the delta cellsize.
+(scientific-bibliography)=
+## Bibliografia naukowa
 
-### 3.4 Storage formats
+1. S. Lepadatu, Efficient computation of demagnetizing fields for magnetic
+   multilayers using multilayered convolution, Journal of Applied Physics
+   **126**, 103903 (2019),
+   [doi:10.1063/1.5116754](https://doi.org/10.1063/1.5116754).
+2. A. J. Newell, W. Williams i D. J. Dunlop, A generalization of the
+   demagnetizing tensor for nonuniform magnetization, Journal of Geophysical
+   Research: Solid Earth **98**, 9551--9555 (1993),
+   [doi:10.1029/93JE01171](https://doi.org/10.1029/93JE01171).
+3. A. Aharoni, Demagnetizing factors for rectangular ferromagnetic prisms,
+   Journal of Applied Physics **83**, 3432 (1998),
+   [doi:10.1063/1.367113](https://doi.org/10.1063/1.367113).
 
-| Kernel type | Diagonal storage | Off-diagonal storage |
-|---|---|---|
-| Self (no shift) | Real VEC\<DBL3\> | Real VEC\<DBL3\> or scalar array |
-| z-shifted only | Real with symmetry trick | Imaginary in same real array |
-| x-shifted only | Complex VEC\<ReIm3\> | Complex VEC\<ReIm3\> |
-| General shift | Complex VEC\<ReIm3\> | Complex VEC\<ReIm3\> |
+Jedynym snapshotem BORIS użytym do traceability jest manifest
+multilayer_convolution/boris-reference-manifest.v1.json. Nie jest to źródło
+kwalifikacji, orakl numeryczny ani licencja na kopiowanie kodu.
 
-## 4. Runtime Algorithm
+(source-code-index)=
+## Indeks kodu źródłowego
 
-```
-┌────────────────────────────────────────────────────────┐
-│ For each timestep:                                      │
-│                                                        │
-│ 1. FORWARD FFT (per layer)                             │
-│    for layer in layers:                                │
-│        if transfer needed:                             │
-│            M.transfer_in(layer.transfer_mesh)          │
-│        ForwardFFT(layer.M or layer.transfer)           │
-│        → result stored in FFT_Spaces_Input[layer]      │
-│                                                        │
-│ 2. KERNEL MULTIPLICATION (per destination layer)       │
-│    for dst in layers (reverse order):                  │
-│        KernelMultiplication_MultipleInputs(all_FFTs)   │
-│        // For each source:                             │
-│        //   self: Nxx*Mx + Nxy*My + Nxz*Mz (real)     │
-│        //   shifted: complex tensor multiply           │
-│        //   → accumulate into dst's output buffer      │
-│                                                        │
-│ 3. INVERSE FFT (per layer)                             │
-│    for layer in layers:                                │
-│        InverseFFT → Hdemag                             │
-│        if transfer needed:                             │
-│            Hdemag.transfer_out() → layer.Heff          │
-│        else:                                           │
-│            add directly to layer.Heff                  │
-└────────────────────────────────────────────────────────┘
-```
+Kolumna `Immutable link` wskazuje źródłowy snapshot lub świadomie opisuje
+brak świeżego artefaktu runtime. Samo wskazanie symbolu nie podnosi statusu
+kwalifikacji.
 
-**Computational cost**: For L layers, each needs L kernel multiplications → O(L²) tensor
-multiplications per timestep. The FFTs are O(L × N log N).
-
-## 5. Boris `KernelMultiplication_MultipleInputs`
-
-The core routine for each destination layer iterates over all source layers:
-
-```cpp
-void KernelMultiplication_3D(vector<VEC<ReIm3>*>& Incol, VEC<ReIm3>& Out) {
-    for (int idx = 0; idx < kernels.size(); idx++) {
-        if (idx == self_contribution_index) {
-            KernelMultiplication_3D_Self(*Incol[idx], Out);  // real kernel, sets output
-        } else if (kernels[idx]->zshifted) {
-            if (inverse_shifted[idx])
-                KernelMultiplication_3D_inversezShifted(*Incol[idx], Out, ...);
-            else
-                KernelMultiplication_3D_zShifted(*Incol[idx], Out, ...);
-        } else {
-            KernelMultiplication_3D_Complex_Full(*Incol[idx], Out, ...);
-        }
-    }
-}
-```
-
-## 6. Kernel Reuse Optimization
-
-Boris avoids recomputing identical kernels across the collection:
-
-```cpp
-shared_ptr<KerType> KernelAlreadyComputed(DBL3 shift, DBL3 h_src, DBL3 h_dst);
-```
-
-If layer pair (A→B) has the same `|shift|`, `h_src`, `h_dst` as (C→D), they share
-the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused for
-`-Δz` with `inverse_shifted = true`.
-
-## 7. Implementation Plan for Fullmag
-
-### Phase 0: Native ABI boundary
-- [x] Expose `fullmag_fdm_plan_kind` with explicit `UNIFORM_GRID` and
-  `MULTILAYER_CONV` variants.
-- [x] Expose `fullmag_fdm_layer_desc_v2` with both native and convolution grids,
-  per-layer material, initial magnetization, active mask, and z-offset metadata.
-- [x] Expose `fullmag_fdm_tensor_kernel_desc_v2` and
-  `fullmag_fdm_multilayer_plan_desc_v2` so Rust can pass precomputed layer-pair
-  tensor spectra into the native backend without overloading the legacy
-  single-grid plan.
-- [x] Add the native v2 creation/validation entrypoint with explicit validation
-  errors and a staged execution scope for valid multilayer plans.
-- [x] Add the native v2 device upload/staging path for layers and tensor kernels.
-- [x] Add the first native CUDA demag owner for identity-grid `push_m`,
-  tensor multiplication, and `pull_h` boundaries in fp64/fp32.
-- [x] Transform all three vector components through forward and inverse cuFFT in
-  the native identity-grid multilayer demag operator before tensor multiply and
-  pull-back.
-- [x] Batch the three staged v2 multilayer demag component transforms through
-  the existing `cufftMakePlanMany(..., batch=3)` workspace, so each tensor
-  kernel uses one forward and one inverse cuFFT launch instead of separate
-  x/y/z launches.
-- [x] Validate native identity transfer against `native_grid == convolution_grid`
-  while allowing the tensor-kernel FFT grid to be padded.
-- [x] Prepare cached native cuFFT workspaces for staged v2 multilayer tensor
-  kernels, keyed by each tensor-kernel `fft_grid`.
-- [x] Wire staged v2 handles through `step()` for the first native timestep
-  slices: Heun, RK4, and fixed-step RK23 over staged multilayer layers in fp64/fp32 with optional
-  demag and layer-local exchange fields; local/exchange-only plans keep
-  `H_DEMAG = 0` instead of requiring demag kernels. Adaptive and multistep
-  integrators are still rejected explicitly.
-- [x] Allow the public multilayer FDM planner and CUDA-assisted multilayer
-  runner gate to carry fixed-step RK4 and RK23 into the staged native v2 path instead of
-  rejecting them at the older Heun-only public boundary. Adaptive and multistep
-  v2 integrators remain explicit non-goals for this slice.
-- [x] Split the public fixed-step integrator gate by execution target:
-  CPU-reference multilayer execution can carry Heun, RK4, RK23, RK45, and ABM3,
-  compatible `cuda_native_multilayer_single_grid` stacks can carry RK23, RK45,
-  and ABM3 through the existing native single-grid CUDA backend, while staged
-  native v2 multilayer execution carries fixed-step Heun, RK4, and RK23;
-  staged adaptive RK23/RK45 and multistep owners remain deferred.
-- [x] Add an explicit `fullmag_fdm_backend_refresh_multilayer_demag` ABI so the
-  CUDA-assisted identity-grid path refreshes staged v2 demag without using
-  `step(0)` as an operator call.
-- [x] Expose per-layer v2 `M`, `H_EX`, and `H_DEMAG` copy entrypoints so
-  refreshed native multilayer fields are observable outside private `Context`
-  state. `H_EX` copies refresh the staged layer-local exchange field on demand
-  before host transfer.
-- [x] Expose per-layer v2 `H_DMI` copy entrypoints for staged CUDA multilayer
-  handles. `Context` owns a layer-local `h_dmi` buffer and refreshes it on
-  demand with the same centered interfacial/bulk DMI stencil used by the
-  staged v2 explicit-RK RHS.
-- [x] Expose per-layer v2 `H_ANI` copy entrypoints for staged CUDA multilayer
-  handles. `Context` owns a layer-local `h_ani` buffer and
-  `gpu/cuda/interactions/multilayer_anisotropy.cu` refreshes it on demand with
-  the same uniaxial/cubic anisotropy field equations used by the staged v2
-  explicit-RK RHS.
-- [x] Expose per-layer v2 `H_EFF` copy entrypoints for staged CUDA multilayer
-  handles. `gpu/cuda/interactions/multilayer_effective_field.cu` assembles
-  `H_EX + H_DEMAG + H_DMI + H_ANI + H_EXT` on demand into the existing layer
-  `tmp` scratch buffer after refreshing staged `H_EX`, `H_DMI`, and `H_ANI`.
-  `H_DEMAG` remains the current staged demag buffer and is refreshed by the
-  explicit multilayer demag refresh/timestep boundary, so `H_EFF` is observable
-  without adding persistent per-layer field storage.
-- [x] Expose per-layer v2 magnetization upload and route identity-grid
-  CUDA-assisted multilayer demag through the staged native v2 handle, with
-  provenance distinguishing native cuFFT demag from the Rust fallback.
-- [x] Carry explicit `transfer_kind` through the native C ABI, Rust FFI, Rust
-  runner wrapper, and native `Context` staging so `identity` and `push_pull`
-  route through separate native transfer boundaries.
-- [x] Add native CUDA `push_pull` transfer kernels with the same V1 semantics as
-  `fullmag-fdm-demag`: volume-weighted native-to-convolution `push_m` and
-  trilinear convolution-to-native `pull_h` for fp64/fp32 staged v2 demag refresh.
-- [x] Precompute staged heterogeneous transfer maps in native `Context` upload:
-  sparse push offsets/indices/weights and padded-FFT pull indices/weights are
-  consumed by fp64/fp32 CUDA refresh kernels instead of rebuilding overlap maps
-  inside the timestep launch.
-- [x] Add a layer-local native CUDA exchange field owner for staged v2 layers:
-  uniform-A six-neighbor stencil on each layer native grid, open Neumann
-  boundary clamping, and active-mask clamping.
-- [x] Add native CUDA RK4 timestep ownership for staged v2 layers, using
-  per-layer `k1`/`k2`/`k3`/`k4` stage fields and the same optional demag plus
-  layer-local exchange RHS as the Heun slice.
-- [x] Add fixed-step native CUDA Bogacki-Shampine RK23 ownership for staged v2
-  layers, reusing the shared explicit-RK RHS and existing `k1`/`k2`/`k3`
-  buffers. `adaptive_timestep` remains rejected; each native step requires a
-  positive `dt_seconds`. Embedded-error reduction, FSAL and adaptive
-  accept/reject/retry remain deferred.
-- [x] Carry the requested uniform external field through
-  `fullmag_fdm_multilayer_plan_desc_v2`, Rust FFI, Rust runner wrapper, and
-  native `Context`, and include it in the staged v2 explicit-RK RHS alongside
-  optional demag and layer-local exchange.
-- [x] Carry per-layer uniform uniaxial anisotropy (`Ku1`, `Ku2`, axis) through
-  `fullmag_fdm_layer_desc_v2`, Rust FFI, Rust runner wrapper, and native staged
-  layer state. The staged v2 explicit-RK RHS uses the same FDM field convention as
-  the single-grid backend,
-  `H_ani = [2/(mu0 Ms)] [Ku1 (m.u) + 2 Ku2 (m.u)^3] u`, for fp64/fp32 layers.
-  Per-cell anisotropy fields remain outside this slice.
-- [x] Carry per-layer uniform cubic anisotropy (`Kc1`, `Kc2`, `Kc3`,
-  `axis1`, `axis2`) through `fullmag_fdm_layer_desc_v2`, Rust FFI, Rust runner
-  wrapper, and native staged layer state. The staged v2 explicit-RK RHS uses the
-  existing single-grid native FDM cubic field convention in the local cubic
-  basis where `axis3 = axis1 x axis2`; per-cell `kc*_field` inputs remain
-  outside this slice.
-- [x] Preserve layer-local anisotropy at the public multilayer observation
-  boundary: CPU reference observables expose `H_ani`/`E_ani`, CUDA-assisted
-  double/single field assembly carries the same derived `H_ani`, and native
-  stacked scalar/field reporting reuses layer-local contexts instead of losing
-  anisotropy fields at the combined-grid boundary. Staged v2 CUDA handles also
-  expose `H_ANI` through the per-layer copy ABI, backed by the layer-local
-  `h_ani` device buffer; staged `H_EFF` copy refreshes staged exchange,
-  anisotropy, and DMI before scratch-backed effective-field assembly.
-- [x] Carry global interfacial and bulk DMI constants through
-  `FdmMultilayerPlanIR`, `fullmag_fdm_multilayer_plan_desc_v2`, Rust FFI, Rust
-  runner wrapper, and native `Context`. The staged v2 explicit-RK RHS applies the
-  same centered finite-difference FDM DMI convention as the single-grid backend
-  on each layer native grid, with open/active-mask clamping. Per-layer DMI and
-  per-cell DMI fields remain outside this slice; global DMI exposes a separate
-  staged `H_DMI` layer copy endpoint.
-- [x] Keep CPU reference multilayer and CUDA-assisted/native-stacked
-  multilayer execution semantically aligned for global interfacial/bulk DMI:
-  per-layer contexts receive the global constants, CPU reference observables and
-  RHS include `H_DMI`/`E_DMI`, CUDA-assisted local effective fields include the
-  same local DMI term, and the native stacked single-grid plan preserves the DMI
-  constants instead of dropping them while composing the global `FdmPlanIR`.
-  Native stacked scalar/field reporting also reuses the layer-local contexts, so
-  public `H_dmi` snapshots and per-object `e_dmi` are not lost at the combined
-  grid observation boundary.
-- [x] Reject public multilayer FDM thermal noise, Oersted terms, and
-  spin-torque inputs explicitly until staged CPU/GPU multilayer RHS coverage
-  exists, so those physics terms cannot be silently dropped from
-  `FdmMultilayerPlanIR`.
-- [x] Reject public FDM materials with per-cell material fields (`ms_field`,
-  `a_field`, `alpha_field`, `ku*_field`, `kc*_field`) until FDM plan material
-  realization can carry those payloads. This prevents both single-grid and
-  multilayer FDM from silently lowering spatial material fields to uniform
-  constants.
-- [x] Emit runner field artifacts for multilayer snapshots as per-layer series:
-  `fields/<quantity>/manifest.json` records layer IDs, native origins,
-  vector shape, value offsets, and per-layer directories; each layer snapshot
-  stores only that layer's vector values while retaining the full multilayer
-  layout provenance. REST/data-plane layer fetching remains a separate product
-  API step.
-- [x] Add cached native CUDA per-grid cuFFT workspace planning for staged v2
-  demag: mixed `fft_grid` tensor kernels bind a cached
-  `DeviceMultilayerFftWorkspace` instead of freeing and recreating the context
-  FFT plan/buffers on every grid switch.
-- [x] Execute staged v2 multilayer demag cuFFT as one batched x/y/z forward and
-  one batched x/y/z inverse per tensor kernel, reusing the cached per-grid
-  workspace.
-- [x] Key staged v2 `push_pull` pull maps by tensor-kernel `fft_grid`: layer
-  push maps remain per source layer because they depend only on
-  native/convolution overlap, while each tensor kernel owns the destination
-  padded-FFT pull map used by `pull_h`.
-- [ ] Finish optimized interpolation backends and remaining local-field RHS
-  coverage for thermal noise, Oersted, spin torque,
-  per-layer/per-cell DMI and per-cell anisotropy fields, and the remaining v2
-  integrators beyond fixed-step Heun/RK4/RK23, including adaptive RK23/RK45
-  and multistep ABM3.
-
-### Phase 1: Data model
-- [ ] Add `Layer` concept to `ExchangeLlgProblem` (rect, cell count, cell size per layer)
-- [ ] Add `TransferMesh` for interpolation between native and convolution grids
-
-### Phase 2: Shifted Newell kernels
-- [ ] Implement `fill_f_vals_shifted` in `newell.rs` (z-shifted grid)
-- [ ] Implement `Ldia_shifted` / `Lodia_shifted` (shifted 27-point stencil)
-- [ ] Implement irregular variants for different cellsizes
-
-### Phase 3: Multi-layer convolution
-- [ ] Implement `DemagKernelCollection` equivalent (per-layer kernel store)
-- [ ] Implement `KernelMultiplication_MultipleInputs` (O(L²) tensor products)
-- [ ] Forward FFT / Inverse FFT per layer with transfer meshes
-
-### Phase 4: Optimization
-- [ ] Kernel reuse detection (shared_ptr pattern)
-- [ ] z-shifted symmetry reuse (inverse_shifted)
-- [ ] 2D mode for thin-film stacks
+| Claim | Path | Symbol | Responsibility | Lane | Tests | Evidence status | Immutable link |
+|---|---|---|---|---|---|---|---|
+| Python FDM wrapper | packages/fullmag-py/src/fullmag/model/discretization.py | class FDM | lowers the full public FDM wrapper | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_two_object_two_d_policy_preserves_requested_auto_in_ir | executable authoring contract only | UNCOMMITTED (no SHA) |
+| Python demag intent | packages/fullmag-py/src/fullmag/model/discretization.py | class FDMDemag | validates and lowers requested demag policy | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_auto_mode_preserves_common_cells_for_planner_resolution | executable authoring contract only | UNCOMMITTED (no SHA) |
+| Continuous kernel definition (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_f | anchors the continuous Newell primitive; no discrete runtime ownership claim | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | UNCOMMITTED (no SHA) |
+| Appendix A g primitive (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_g | anchors the off-diagonal Newell primitive; no unequal-cell production owner | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | UNCOMMITTED (no SHA) |
+| CPU production Newell tensor | crates/fullmag-fdm-demag/src/newell.rs | compute_newell_kernels | exact 64-corner 2D lane with bounded 3D asymptotic branch | FDM CPU reference | crates/fullmag-fdm-demag/src/newell.rs::tests::two_d_corner_kernel_matches_independent_reference_at_near_and_far_lags | runtime-verified CPU FP64; not production-qualified | UNCOMMITTED (no SHA) |
+| Volume-weighted reciprocity oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs | unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | independent unequal-volume oracle; not production proof | FDM numerical oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | oracle-only | UNCOMMITTED (no SHA) |
+| Shifted tensor | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel | builds current shifted tensor spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::shifted_kernel_matches_independent_cubature_for_both_z_lag_directions | code/test only; not production-qualified | UNCOMMITTED (no SHA) |
+| Tensor product | crates/fullmag-fdm-demag/src/multiply.rs | accumulate_tensor_convolution | accumulates source into destination spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/src/multiply.rs::tests::diagonal_kernel_scales_components_independently | code/test only; not production-qualified | UNCOMMITTED (no SHA) |
+| Field sign | crates/fullmag-fdm-demag/src/multiply.rs | negate_field | applies the field-sign convention after inverse transform | FDM CPU oracle input | planned sign-convention fixture | planned | UNCOMMITTED (no SHA) |
+| CPU multilayer energy | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs | observe_multilayer | reports current CPU demag energy | FDM CPU, current owner | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::multilayer_reference_run_executes_two_layers | code/test only; no independent energy oracle | UNCOMMITTED (no SHA) |
+| CUDA demag energy blocks | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | demag_energy_blocks_kernel | reduces FP64 demag-energy blocks | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | UNCOMMITTED (no SHA) |
+| CUDA demag energy reduction | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | reduce_demag_energy_fp64 | launches and reduces FP64 demag energy | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | UNCOMMITTED (no SHA) |
+| Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/newell.rs | newell_g | publication formulas only; no unequal-cell production owner | planned theory/oracle | planned independent Appendix-A oracle | theoretical-only; implementation planned | UNCOMMITTED (no SHA) |
+| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::tests::push_m_coarsening_averages | code/test only; adjointness unqualified | UNCOMMITTED (no SHA) |
+| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::tests::identity_transfer_is_noop | code/test only; adjointness unqualified | UNCOMMITTED (no SHA) |
+| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | UNCOMMITTED (no SHA) |
+| CPU catalog and workspace | crates/fullmag-engine/src/multilayer.rs | build_kernel_catalog | deduplicates kernels and binds ordered layer pairs to one descriptor | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace | runtime-verified CPU, not production-qualified | dd25252ec |
+| CPU checked refresh | crates/fullmag-engine/src/multilayer.rs | compute_demag_fields_checked | validates native/scratch geometry and executes catalog/workspace refresh | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::identity_path_rejects_native_scratch_cell_count_mismatch_without_panicking | fail-closed contract; no managed production artifact | dd25252ec |

@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
+#include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/runtime/availability.hpp"
 #include "cpu/mfem/runtime/backend_lifecycle.hpp"
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
@@ -4279,6 +4280,46 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
     handle->last_error.clear();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_set_stage_oersted_callback_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_stage_oersted_callback_v1 *callback)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_set_stage_oersted_callback_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::string error;
+    if (!fullmag::fem::configure_oersted_stage_callback(
+            handle->context, callback, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_set_stage_transport_callback_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_stage_transport_callback_v1 *callback)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_set_stage_transport_callback_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::string error;
+    if (!fullmag::fem::configure_transport_stage_callback(
+            handle->context, callback, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
 }
 

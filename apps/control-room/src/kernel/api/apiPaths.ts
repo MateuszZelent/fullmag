@@ -287,6 +287,10 @@ export const DATA_DOMAIN_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/meta",
 );
 
+export const DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH = openApiV2Path(
+  "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+);
+
 export const DATA_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/topology",
 );
@@ -533,6 +537,10 @@ export const MODEL_UNIVERSE_FIT_PATH = openApiV2Path(
 
 export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
+);
+
+export const MODEL_PHYSICS_GRAPH_PATH = openApiV2Path(
+  "/v2/sessions/current/model/physics-graph",
 );
 
 export const MODEL_CURRENT_TRANSPORTS_PATH = openApiV2Path(

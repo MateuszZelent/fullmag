@@ -46,6 +46,9 @@ import type {
 } from "../viewport3dRenderModel";
 import { buildLineIndexGeometry } from "../viewport3dSurfaceEdges";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
+import type { FdmMultilayerAirboxRenderView } from "../viewport3dDomainAdapter";
+import { resolveFdmMultilayerAirboxBoundsOverlay } from "../model/viewport3DFdmMultilayerAirboxOverlay";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -155,7 +158,7 @@ function BoundsPoints({
   );
 }
 
-function BoundsVolumeWireframe({
+export function BoundsVolumeWireframe({
   bounds,
   color,
   opacity,
@@ -275,9 +278,25 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     renderSettings.wireframeVisible,
   );
   const createEdgeGeometry = useCallback(() => {
-    const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
-    return next;
-  }, [edgeIndices, topologyModel.positions]);
+    const resolvedEdgeIndices = resolveAirboxWireframeEdgeIndices(
+      renderSettings.geometryScope,
+      {
+        edgeIndices: partModel.edgeIndices,
+        volumeEdgeIndices: partModel.volumeEdgeIndices,
+      },
+      renderSettings.wireframeVisible,
+    );
+    return buildLineIndexGeometry(
+      topologyModel.positions,
+      resolvedEdgeIndices,
+    );
+  }, [
+    partModel.edgeIndices,
+    partModel.volumeEdgeIndices,
+    renderSettings.geometryScope,
+    renderSettings.wireframeVisible,
+    topologyModel.positions,
+  ]);
   const edgeGeometry = useViewport3DGeometryUpload({
     createGeometry: createEdgeGeometry,
     dirtyReason: "airbox-wireframe",
@@ -452,7 +471,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
                 />
               </lineSegments>
             )}
-            {(renderSettings.geometryScope === "full" || !edgeGeometry) && (
+            {!edgeGeometry && (
               <AirboxWireframeFallback
                 bounds={resolveMeshPartBounds(part)}
                 color={wireframeColorFromSettings(renderSettings, colors.wire)}
@@ -549,7 +568,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
               />
             </lineSegments>
           )}
-          {(renderSettings.geometryScope === "full" || !edgeGeometry) && (
+          {!edgeGeometry && (
             <AirboxWireframeFallback
               bounds={resolveMeshPartBounds(part)}
               color={wireframeColorFromSettings(renderSettings, colors.wire)}
@@ -840,20 +859,40 @@ export function resolveAirboxTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
   topologyFreshness: Viewport3DTopologyFreshness,
 ): VisualizationTargetSettings {
+  const runtimeSettings = resolveAirboxRuntimeVisualizationSettings(settings);
   if (isViewport3DTopologyCurrent(topologyFreshness)) {
-    return settings;
+    return runtimeSettings;
   }
 
   return {
-    ...resolveUnavailableTopologyVisualizationSettings(settings),
-    geometryScope: settings.geometryScope,
+    ...resolveUnavailableTopologyVisualizationSettings(runtimeSettings),
+    geometryScope: runtimeSettings.geometryScope,
   };
 }
 
 export function resolveAirboxRuntimeVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
-  return settings;
+  const renderMode = settings.pointsVisible
+    ? "points"
+    : settings.wireframeVisible
+      ? "wireframe"
+      : "off";
+  if (
+    !settings.shaderVisible &&
+    settings.surfaceColorSource === "solid" &&
+    !settings.viewportColorbarVisible &&
+    settings.renderMode === renderMode
+  ) {
+    return settings;
+  }
+  return {
+    ...settings,
+    renderMode,
+    shaderVisible: false,
+    surfaceColorSource: "solid",
+    viewportColorbarVisible: false,
+  };
 }
 
 export function resolveAirboxSurfaceColorState(
@@ -970,11 +1009,13 @@ function lerp(start: number, end: number, factor: number): number {
 
 export const DomainBoxLayer = memo(function DomainBoxLayer({
   bounds,
+  boundsOpacityPercent = 35,
   boundsVisible = true,
   colors,
   onSelectDomain,
 }: {
   bounds: Viewport3DBounds | null;
+  boundsOpacityPercent?: number;
   boundsVisible?: boolean;
   colors: Viewport3DColors;
   onSelectDomain: () => void;
@@ -998,13 +1039,69 @@ export const DomainBoxLayer = memo(function DomainBoxLayer({
       />
       <meshBasicMaterial
         color={colors.accent}
-        opacity={0.35}
+        opacity={percentToUnit(boundsOpacityPercent)}
         transparent
         wireframe
       />
     </mesh>
   );
 });
+
+/**
+ * FDM universe extent is a regular-grid context overlay, never a FEM Airbox
+ * topology layer. Its visibility is driven by an explicit semantic role from
+ * the domain presentation; inactive membership values are not interpreted.
+ */
+export const FdmUniverseOutsideSupportLayer = memo(
+  function FdmUniverseOutsideSupportLayer({
+    colors,
+    model,
+    onSelect,
+    settings,
+  }: {
+    colors: Viewport3DColors;
+    model: FdmUniverseOutsideSupportOverlayModel | null;
+    onSelect: () => void;
+    settings: VisualizationTargetSettings | null;
+    tracker: Viewport3DResourceTracker;
+  }) {
+    if (!model || !settings?.visible) return null;
+    const universeBoundsOpacity = percentToUnit(
+      settings.boundsOpacityPercent,
+    );
+    const magneticSupportWireframeOpacity = percentToUnit(
+      settings.wireframeOpacityPercent,
+    );
+    const wireframeColor = wireframeColorFromSettings(settings, colors.accent);
+    return (
+      <group
+        name={model.target.id}
+        userData={{ semanticRole: model.kind }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        {settings.boundsVisible ? (
+          <BoundsBox
+            bounds={model.universeBounds}
+            color={wireframeColor}
+            opacity={universeBoundsOpacity}
+            policySemantic="hiddenEdges"
+          />
+        ) : null}
+        {settings.wireframeVisible ? (
+          <BoundsBox
+            bounds={model.magneticSupportBounds}
+            color={wireframeColor}
+            opacity={magneticSupportWireframeOpacity}
+            policySemantic="featureEdges"
+          />
+        ) : null}
+      </group>
+    );
+  },
+);
 
 export function AirboxLayerContent({
   adoptionRegistry,
@@ -1066,6 +1163,59 @@ export function AirboxLayerContent({
 }
 
 export const AirboxLayer = memo(AirboxLayerContent);
+
+/**
+ * Target-only FDM multilayer Airbox extent.  This is deliberately separate
+ * from the structured-universe overlay: both the bounds and the full hidden-
+ * edge volume grid come exclusively from the published target carrier.
+ */
+export const FdmMultilayerAirboxBoundsLayer = memo(
+  function FdmMultilayerAirboxBoundsLayer({
+    colors,
+    onSelect,
+    tracker,
+    view,
+  }: {
+    colors: Viewport3DColors;
+    onSelect: () => void;
+    tracker: Viewport3DResourceTracker;
+    view: FdmMultilayerAirboxRenderView | null;
+  }) {
+    const overlay = resolveFdmMultilayerAirboxBoundsOverlay(view);
+    if (!overlay) return null;
+    const settings = view?.settings;
+    if (!settings) return null;
+    const wireframeColor = wireframeColorFromSettings(settings, colors.accent);
+    return (
+      <group
+        name={overlay.targetId}
+        userData={{ semanticRole: "fdm-multilayer-airbox-target" }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        {overlay.boundsVisible ? (
+          <BoundsBox
+            bounds={overlay.bounds}
+            color={wireframeColor}
+            opacity={percentToUnit(settings.boundsOpacityPercent)}
+            policySemantic="hiddenEdges"
+          />
+        ) : null}
+        {overlay.fullWireframeVisible ? (
+          <BoundsVolumeWireframe
+            bounds={overlay.bounds}
+            color={wireframeColor}
+            opacity={percentToUnit(settings.wireframeOpacityPercent)}
+            policySemantic="hiddenEdges"
+            tracker={tracker}
+          />
+        ) : null}
+      </group>
+    );
+  },
+);
 
 export function SelectionHighlightLayerContent({
   bounds,

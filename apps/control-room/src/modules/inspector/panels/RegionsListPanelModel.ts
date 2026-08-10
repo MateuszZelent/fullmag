@@ -7,8 +7,11 @@ import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   ownerBoundsForObject,
+  type ObjectRegionDiagnosticItem,
   type RegionOwnerBounds,
 } from "./ObjectRegionsPanelModel";
+import type { MeshInspectorLane } from "./fdmMeshInspectorModel";
+import { resolveRegionDiagnosticsForLane } from "./region/regionDiagnosticPresentation";
 
 interface JsonRecord {
   [key: string]: unknown;
@@ -107,7 +110,7 @@ function shapeKindForRegion(region: RegionListResource["regions"][number]): stri
 }
 
 function isConflictDiagnostic(
-  diagnostic: RegionDiagnosticsResource["diagnostics"][number],
+  diagnostic: Pick<ObjectRegionDiagnosticItem, "code" | "message">,
 ): boolean {
   return (
     diagnostic.code.toLowerCase().includes("conflict") ||
@@ -119,14 +122,24 @@ function diagnosticsForRegion(
   objectId: string,
   regionId: string,
   regionDiagnostics: RegionDiagnosticsResource | null,
-): RegionDiagnosticsResource["diagnostics"] {
-  return (
-    regionDiagnostics?.diagnostics.filter(
-      (diagnostic) =>
-        diagnostic.owner_object_id === objectId &&
-        diagnostic.region_id === regionId,
-    ) ?? []
-  );
+  meshLane: MeshInspectorLane,
+): ObjectRegionDiagnosticItem[] {
+  const diagnostics =
+    regionDiagnostics?.diagnostics.flatMap((diagnostic) =>
+      diagnostic.owner_object_id === objectId && diagnostic.region_id === regionId
+        ? [
+            {
+              capabilityGate: diagnostic.capability_gate ?? null,
+              code: diagnostic.code,
+              diagnosticId: diagnostic.diagnostic_id,
+              message: diagnostic.message,
+              realizationStatus: diagnostic.realization_status ?? null,
+              severity: diagnostic.severity,
+            },
+          ]
+        : [],
+    ) ?? [];
+  return resolveRegionDiagnosticsForLane(diagnostics, meshLane);
 }
 
 export function resolveRegionsListPanelModel(
@@ -134,6 +147,7 @@ export function resolveRegionsListPanelModel(
   scene: SceneResource | null,
   regions: RegionListResource | null,
   regionDiagnostics: RegionDiagnosticsResource | null = null,
+  meshLane: MeshInspectorLane = "unknown",
 ): RegionsListPanelModel {
   const { object, objectId, revision } = sceneObjectForSelection(selection, scene);
   if (!object || !objectId) {
@@ -167,6 +181,7 @@ export function resolveRegionsListPanelModel(
         objectId,
         region.region_id,
         regionDiagnostics,
+        meshLane,
       );
       return {
         colorIndex: index % 8,

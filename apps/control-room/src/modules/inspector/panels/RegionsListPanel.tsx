@@ -8,6 +8,7 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { Button } from "@/shared/ui/Button";
 
@@ -27,6 +28,7 @@ import {
   type RegionShapeKind,
   type RegionsListItem,
 } from "./RegionsListPanelModel";
+import { resolveMeshInspectorLane } from "./fdmMeshInspectorModel";
 import { publishRegionAuthoringScene } from "./regionAuthoringInvalidation";
 import { syncAuthoringScriptBestEffort } from "./ObjectMagneticTexturePanelViewModel";
 
@@ -75,6 +77,10 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
+  const sessionDiscretization = useSessionStatusSelector(
+    (status) => status.data?.domain.discretization ?? null,
+  );
+  const meshLane = resolveMeshInspectorLane(sessionDiscretization);
   const model = useMemo(
     () =>
       resolveRegionsListPanelModel(
@@ -82,8 +88,9 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
         scene.data,
         regions.data ?? null,
         regionDiagnostics.data ?? null,
+        meshLane,
       ),
-    [regionDiagnostics.data, regions.data, scene.data, selection],
+    [meshLane, regionDiagnostics.data, regions.data, scene.data, selection],
   );
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<NewRegionDraft>(defaultNewRegionDraft);

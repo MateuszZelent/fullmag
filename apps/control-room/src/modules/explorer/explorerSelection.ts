@@ -1,8 +1,14 @@
-import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import type {
+  FdmDomainSelectionScope,
+  FdmDomainSelectionKind,
+  RegionVisualizationTargetId,
+  SelectionRef,
+} from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
+import { targetForFdmNativeLayer } from "@/modules/viewport-3d/model/viewport3DTargets";
 
 import type { ExplorerNode } from "./explorerTypes";
 
@@ -47,6 +53,51 @@ const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.change_device",
   "study.stage.save_state",
 ]);
+
+const FDM_DOMAIN_SELECTION_KINDS = new Set<FdmDomainSelectionKind>([
+  "mesh.grid",
+  "mesh.grid.descriptor",
+  "mesh.grid.common",
+  "mesh.grid.layers",
+  "mesh.grid.layer",
+  "mesh.grid.layer.native-grid",
+  "mesh.grid.layer.mask",
+  "mesh.grid.layer.transfer",
+  "mesh.grid.layer.provenance",
+  "mesh.grid.magnetic-support",
+  "mesh.grid.active-unassigned",
+  "mesh.grid.mask",
+  "mesh.grid.provenance",
+  "mesh.grid.region",
+  "mesh.grid.universe-outside-support",
+]);
+
+const FDM_DOMAIN_SELECTION_SCOPES: Record<
+  FdmDomainSelectionKind,
+  FdmDomainSelectionScope
+> = {
+  "mesh.grid": "domain",
+  "mesh.grid.active-unassigned": "active-unassigned",
+  "mesh.grid.descriptor": "descriptor",
+  "mesh.grid.common": "common",
+  "mesh.grid.layers": "layers",
+  "mesh.grid.layer": "layer",
+  "mesh.grid.layer.native-grid": "layer-native-grid",
+  "mesh.grid.layer.mask": "layer-mask",
+  "mesh.grid.layer.transfer": "layer-transfer",
+  "mesh.grid.layer.provenance": "layer-provenance",
+  "mesh.grid.magnetic-support": "magnetic-support",
+  "mesh.grid.mask": "mask",
+  "mesh.grid.provenance": "provenance",
+  "mesh.grid.region": "region",
+  "mesh.grid.universe-outside-support": "universe-outside-support",
+};
+
+function isFdmDomainSelectionKind(
+  kind: ExplorerNode["kind"],
+): kind is FdmDomainSelectionKind {
+  return FDM_DOMAIN_SELECTION_KINDS.has(kind as FdmDomainSelectionKind);
+}
 
 function isStudyStageSelectionKind(
   kind: ExplorerNode["kind"],
@@ -114,6 +165,83 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       type: "mesh-part",
       visualizationTargetId:
         node.visualizationTargetId ?? node.meshPartId,
+    };
+  }
+
+  // FDM uses the shared product-level Airbox labels but its visualization is
+  // a structured-grid outside-support target, not the FEM airbox target.
+  // Keep the Explorer selection kind (`airbox.visualization`) so the common
+  // visualization panel is used, while carrying the lane-specific ref.
+  if (
+    (node.kind === "airbox.visualization" ||
+      node.kind === "airbox.visualization.debug") &&
+    node.visualizationTargetId === "fdm-universe-outside-support"
+  ) {
+    return {
+      kind: "mesh.grid.universe-outside-support",
+      nodeId: node.id,
+      scope: "universe-outside-support",
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-universe-outside-support",
+    };
+  }
+
+  if (isFdmDomainSelectionKind(node.kind)) {
+    if (node.kind === "mesh.grid.region" && !node.regionId) return null;
+    const nativeLayerTarget =
+      node.layerId && node.kind.startsWith("mesh.grid.layer")
+        ? (targetForFdmNativeLayer(node.layerId).id as `fdm-native-layer:${string}`)
+        : null;
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.objectId ? { objectId: node.objectId } : {}),
+      ...(node.layerId ? { layerId: node.layerId } : {}),
+      ...(node.kind === "mesh.grid.region" ? { regionId: node.regionId } : {}),
+      scope: FDM_DOMAIN_SELECTION_SCOPES[node.kind],
+      type: "fdm-domain",
+      visualizationTargetId:
+        node.kind === "mesh.grid.universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : node.kind === "mesh.grid.region" && node.objectId && node.regionId
+            ? visualizationTargetIdForSceneObject(
+                node.objectId,
+                node.regionId,
+              ) as RegionVisualizationTargetId
+            : nativeLayerTarget ?? "fdm-domain",
+    };
+  }
+
+  if (
+    node.kind === "fdm.cell" &&
+    node.cellOrdinal &&
+    node.cellIJK &&
+    node.gridFingerprint &&
+    node.membershipRevision &&
+    node.cellMaskState
+  ) {
+    return {
+      cellOrdinal: node.cellOrdinal,
+      gridFingerprint: node.gridFingerprint,
+      ijk: node.cellIJK,
+      kind: "fdm.cell",
+      maskState: node.cellMaskState,
+      membershipRevision: node.membershipRevision,
+      nodeId: "model:mesh:grid",
+      numericRegionId: node.numericRegionId ?? null,
+      regionId: node.regionId ?? null,
+      type: "fdm-cell",
+      visualizationTargetId: "fdm-domain",
+    };
+  }
+
+  if (node.kind === "mesh.unassigned") {
+    return {
+      kind: "mesh-part",
+      nodeId: "model:mesh:unassigned",
+      objectId: null,
+      type: "mesh-part",
+      visualizationTargetId: "mesh:unassigned",
     };
   }
 
@@ -228,13 +356,17 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.kind === "airbox.mesh.topology" ||
     node.kind === "airbox.mesh.build" ||
     node.kind === "airbox.visualization" ||
-    node.kind === "airbox.visualization.debug"
+    node.kind === "airbox.visualization.debug" ||
+    node.kind === "airbox.multilayer.target"
   ) {
     return {
       kind: node.kind,
       nodeId: node.id,
       type: "airbox",
-      visualizationTargetId: "airbox",
+      visualizationTargetId:
+        node.visualizationTargetId === "fdm-universe-outside-support"
+          ? "fdm-universe-outside-support"
+          : "airbox",
     };
   }
 
@@ -359,54 +491,75 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
-  if (node.kind === "physics.spin-transports" || node.kind === "physics.spin-transport") {
+  if (
+    node.kind === "physics.module" &&
+    node.physicsModuleId &&
+    node.physicsModuleKind &&
+    node.physicsScopeKind
+  ) {
+    if (node.physicsModuleKind === "current_transport") {
+      return {
+        currentTransportId: node.physicsModuleId,
+        kind: "physics.current-transport",
+        nodeId: node.id,
+        type: "current-transport",
+      };
+    }
+    if (node.physicsModuleKind === "spin_transport") {
+      return {
+        kind: "physics.spin-transport",
+        nodeId: node.id,
+        spinTransportId: node.physicsModuleId,
+        type: "spin-transport",
+      };
+    }
+    if (node.physicsModuleKind === "spin_interface") {
+      return {
+        kind: "physics.spin-interface",
+        nodeId: node.id,
+        spinInterfaceId: node.physicsModuleId,
+        ...(node.physicsDependencyIds?.[0]
+          ? { spinInterfaceOwnerId: node.physicsDependencyIds[0] }
+          : {}),
+        type: "spin-interface",
+      };
+    }
+    if (node.physicsModuleKind === "spin_torque") {
+      return {
+        kind: "physics.spin-torque",
+        nodeId: node.id,
+        spinTorqueId: node.physicsModuleId,
+        type: "spin-torque",
+      };
+    }
+    if (node.physicsModuleKind === "oersted_field") {
+      return {
+        kind: "physics.oersted-field",
+        nodeId: node.id,
+        oerstedFieldId: node.physicsModuleId,
+        type: "oersted-field",
+      };
+    }
+    if (node.physicsModuleKind === "regional_field_drive") {
+      return {
+        fieldDriveId: node.physicsModuleId,
+        kind: "physics.field-drive",
+        nodeId: node.id,
+        type: "physics-field-drive",
+      };
+    }
     return {
-      kind: node.kind,
+      kind: "physics.module",
       nodeId: node.id,
-      ...(node.spinTransportId ? { spinTransportId: node.spinTransportId } : {}),
-      ...(node.spinTransportIndex !== undefined ? { spinTransportIndex: node.spinTransportIndex } : {}),
-      type: "spin-transport",
-    };
-  }
-
-  if (node.kind === "physics.current-transports" || node.kind === "physics.current-transport") {
-    return {
-      kind: node.kind,
-      nodeId: node.id,
-      ...(node.currentTransportId ? { currentTransportId: node.currentTransportId } : {}),
-      ...(node.currentTransportIndex !== undefined ? { currentTransportIndex: node.currentTransportIndex } : {}),
-      type: "current-transport",
-    };
-  }
-
-  if (node.kind === "physics.spin-interfaces" || node.kind === "physics.spin-interface") {
-    return {
-      kind: node.kind,
-      nodeId: node.id,
-      ...(node.spinInterfaceId ? { spinInterfaceId: node.spinInterfaceId } : {}),
-      ...(node.spinInterfaceIndex !== undefined ? { spinInterfaceIndex: node.spinInterfaceIndex } : {}),
-      ...(node.spinInterfaceOwnerId ? { spinInterfaceOwnerId: node.spinInterfaceOwnerId } : {}),
-      type: "spin-interface",
-    };
-  }
-
-  if (node.kind === "physics.spin-torques" || node.kind === "physics.spin-torque") {
-    return {
-      kind: node.kind,
-      nodeId: node.id,
-      ...(node.spinTorqueId ? { spinTorqueId: node.spinTorqueId } : {}),
-      ...(node.spinTorqueIndex !== undefined ? { spinTorqueIndex: node.spinTorqueIndex } : {}),
-      type: "spin-torque",
-    };
-  }
-
-  if (node.kind === "physics.oersted-fields" || node.kind === "physics.oersted-field") {
-    return {
-      kind: node.kind,
-      nodeId: node.id,
-      ...(node.oerstedFieldId ? { oerstedFieldId: node.oerstedFieldId } : {}),
-      ...(node.oerstedFieldIndex !== undefined ? { oerstedFieldIndex: node.oerstedFieldIndex } : {}),
-      type: "oersted-field",
+      physicsActivation: node.physicsActivation,
+      physicsModuleId: node.physicsModuleId,
+      physicsModuleKind: node.physicsModuleKind,
+      physicsScopeKind: node.physicsScopeKind,
+      ...(node.physicsScopeObjectIds
+        ? { physicsScopeObjectIds: node.physicsScopeObjectIds }
+        : {}),
+      ...(node.regionId ? { regionId: node.regionId } : {}),
+      type: "physics-module",
     };
   }
 
@@ -432,6 +585,7 @@ export function selectExplorerNode(
   node: ExplorerNode,
   source: ModuleId,
 ): void {
+  if (node.selectable === false) return;
   if (node.crossSectionPlotId) {
     selectCrossSectionPlot(node.crossSectionPlotId);
   }
@@ -442,7 +596,14 @@ export function selectExplorerNode(
         ref?.type === "cross-section-draft" ||
         ref?.type === "cross-section-plot" ||
         ref?.type === "planar-monitor-draft" ||
-        ref?.type === "mesh-part"
+        ref?.type === "mesh-part" ||
+        ref?.type === "current-transport" ||
+        ref?.type === "spin-transport" ||
+        ref?.type === "spin-interface" ||
+        ref?.type === "spin-torque" ||
+        ref?.type === "oersted-field" ||
+        ref?.type === "physics-field-drive" ||
+        ref?.type === "physics-module"
           ? ref.kind
           : node.kind,
       label: node.label,

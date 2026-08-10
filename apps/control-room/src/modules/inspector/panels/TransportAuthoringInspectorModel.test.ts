@@ -1,19 +1,54 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
   buildCurrentTransport,
   buildSpinTransport,
   currentTransportDraft,
+  currentTransportModelPatch,
+  currentTransportSupportsPrescribedDensity,
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
   resolveTransportRecord,
+  TRANSPORT_AUTHORING_DRAFT_INVENTORY,
   spinTransportDraft,
   transportIdentity,
   transportSelectionKey,
 } from "./TransportAuthoringInspectorModel";
 
+type ParityManifest = {
+  parameters: Array<{
+    family: string;
+    round_trip: string;
+    status: string;
+    ui_field: string;
+  }>;
+};
+
+function parityManifest(): ParityManifest {
+  return JSON.parse(readFileSync(
+    new URL("../../../../../../docs/specs/spin-transport-authoring-parameter-parity-v1.json", import.meta.url),
+    "utf8",
+  )) as ParityManifest;
+}
+
 describe("transport authoring drafts", () => {
+  it("covers every current/spin manifest field with a typed or opaque draft key", () => {
+    const manifest = parityManifest();
+    for (const parameter of manifest.parameters.filter(({ family }) => family === "current_transport" || family === "spin_transport")) {
+      if (parameter.status === "not_applicable" || parameter.ui_field.startsWith("not-exposed:")) continue;
+      const inventory = TRANSPORT_AUTHORING_DRAFT_INVENTORY[parameter.family as "current_transport" | "spin_transport"];
+      if (parameter.ui_field.startsWith("opaque:")) {
+        expect(inventory.opaque).toContain(parameter.ui_field.slice("opaque:".length));
+        expect(parameter.round_trip).toBe("preserve_and_reject");
+      } else {
+        expect(inventory.typed).toContain(parameter.ui_field);
+      }
+    }
+  });
+
   it("round-trips every complete charge-transport field", () => {
     const resource = {
       kind: "current_transport" as const,
@@ -34,6 +69,134 @@ describe("transport authoring drafts", () => {
       ...resource,
       materials: [{ region: { object_id: "stack" }, material: { sigma_Spm: 5.8e7 } }],
     })).toBe(false);
+  });
+
+  it("round-trips the explicit conservative RT0 current view without dropping closure fields", () => {
+    const conservativeCurrentView = {
+      stable_vertex_ids: [1, 2, 3, 4],
+      boundary_faces: [{
+        face_vertex_ids: [1, 2, 3],
+        role: "source_cut",
+        circuit_id: "drive",
+      }],
+      identity: {
+        source_module_id: "charge",
+        source_state_revision: "state-1",
+        source_field_digest: "field-digest",
+        conductivity_digest: "sigma-digest",
+        mesh_revision: "mesh-1",
+        topology_revision: "topology-1",
+        geometry_digest: "geometry-digest",
+        envelope_revision: "envelope-1",
+        envelope_digest: "envelope-digest",
+        evaluated_envelope_multiplier: 1,
+        evaluation_time_s: 0,
+        stage_identity: 1,
+      },
+      pins: {
+        required_source_state_revision: "state-1",
+        required_source_field_digest: "field-digest",
+        required_mesh_revision: "mesh-1",
+        required_topology_revision: "topology-1",
+      },
+      closure: {
+        kind: "closed_geometry",
+        operator_version: "fem_rt0_closed_current.v1",
+        revision: "closure-1",
+        digest: "closure-digest",
+        source_cuts: [{
+          id: "cut-x",
+          translation_m: [1e-6, 0, 0],
+          potential_drop_v: 0.1,
+          face_pairs: [{
+            minus_face_vertex_ids: [1, 2, 3],
+            plus_face_vertex_ids: [1, 2, 4],
+          }],
+        }],
+      },
+      algebraic_relative_tolerance: 1e-10,
+      physical_relative_gate: 1e-8,
+      physical_absolute_gate_a: 1e-12,
+      reference_mpi_gather_broadcast: false,
+    };
+    const resource = {
+      kind: "current_transport" as const,
+      model: "ohmic_poisson" as const,
+      name: "charge",
+      coupling: "one_way" as const,
+      domain: [{ object_id: "stack" }],
+      materials: [{ region: { object_id: "stack" }, material: { sigma_Spm: 5.8e7 } }],
+      boundaries: [{ id: "left", kind: "voltage_electrode" as const, potential_V: 0.1, surfaces: [{ object_id: "stack", surface_id: "x_min", orientation: [-1, 0, 0] }] }],
+      gauge: "dirichlet_reference" as const,
+      solver: { engine: "cg", linear: { relative_tolerance: 1e-10, absolute_tolerance: 1e-14, max_iterations: 123 }, operator_version: "fv_charge_harmonic_v1", physical_residual_version: "charge_balance_integrated_l2.v1" },
+      conservative_current_view: conservativeCurrentView,
+    };
+    expect(isKnownCurrentTransport(resource)).toBe(true);
+    const draft = currentTransportDraft(resource);
+    expect(JSON.parse(draft.conservativeCurrentView)).toEqual(conservativeCurrentView);
+    expect(buildCurrentTransport(draft)).toEqual(resource);
+
+    draft.conservativeCurrentView = "[]";
+    expect(() => buildCurrentTransport(draft)).toThrow(/JSON object/);
+  });
+
+  it("round-trips the canonical current-source time envelope", () => {
+    const resource = {
+      kind: "current_transport" as const,
+      model: "prescribed_density" as const,
+      name: "drive",
+      coupling: "one_way" as const,
+      current_density: [1e10, 0, 0],
+      time_envelope: {
+        kind: "sinusoidal" as const,
+        amplitude: 0.5,
+        frequency_hz: 2e9,
+        phase_rad: 0.25,
+        offset: 1,
+      },
+    };
+    expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
+  });
+
+  it("prefills a new object-scoped prescribed-current draft without losing the Poisson domain", () => {
+    const draft = currentTransportDraft(null, { objectId: "free-layer" });
+
+    expect(draft.model).toBe("prescribed_density");
+    expect(draft.solveRegion).toBe("free-layer");
+    expect(JSON.parse(draft.domain)).toEqual([{ object_id: "free-layer" }]);
+    expect(buildCurrentTransport(draft)).toMatchObject({
+      model: "prescribed_density",
+      solve_region: "free-layer",
+    });
+
+    Object.assign(draft, currentTransportModelPatch(draft, "ohmic_poisson"));
+    expect(buildCurrentTransport(draft)).toMatchObject({
+      domain: [{ object_id: "free-layer" }],
+      model: "ohmic_poisson",
+    });
+    expect(buildCurrentTransport(draft)).not.toHaveProperty("solve_region");
+
+    Object.assign(draft, currentTransportModelPatch(draft, "prescribed_density"));
+    expect(draft.solveRegion).toBe("free-layer");
+  });
+
+  it("uses the exact selected region for a new current solve instead of broadening it to the object", () => {
+    const draft = currentTransportDraft(null, {
+      objectId: "pillar",
+      regionId: "free-layer",
+    });
+
+    expect(draft.model).toBe("ohmic_poisson");
+    expect(draft.solveRegion).toBe("");
+    expect(JSON.parse(draft.domain)).toEqual([{
+      object_id: "pillar",
+      region_id: "free-layer",
+    }]);
+    expect(currentTransportSupportsPrescribedDensity(draft)).toBe(false);
+    expect(currentTransportModelPatch(draft, "prescribed_density")).toMatchObject({
+      model: "ohmic_poisson",
+      solveRegion: "",
+    });
   });
 
   it("round-trips every spin-transport field including requested execution", () => {

@@ -412,3 +412,420 @@ def restrict_fem_magnetization(
         dataset="m",
         metadata=metadata,
     )
+
+
+def _tet4_barycentric_coordinates(point: np.ndarray, tetrahedron: np.ndarray) -> np.ndarray:
+    """Return affine P1 barycentric coordinates for one tetrahedron point."""
+
+    origin = tetrahedron[0]
+    matrix = (tetrahedron[1:] - origin).T
+    scale = max(float(np.max(np.linalg.norm(matrix, axis=0))), np.finfo(np.float64).tiny)
+    determinant = float(np.linalg.det(matrix))
+    if abs(determinant) <= np.finfo(np.float64).eps * scale**3:
+        raise MagnetizationComparisonError("magnetic tet4 cell is degenerate")
+    tail = np.linalg.solve(matrix, point - origin)
+    return np.asarray((1.0 - float(np.sum(tail)), *tail), dtype=np.float64)
+
+
+def _convex_hull_indices(points: np.ndarray) -> np.ndarray:
+    """Return the counter-clockwise 2-D convex hull indices."""
+
+    if points.shape[0] < 3:
+        return np.zeros(0, dtype=np.int64)
+    ordered = sorted(
+        range(points.shape[0]),
+        key=lambda index: (float(points[index, 0]), float(points[index, 1]), index),
+    )
+
+    def cross(o: int, a: int, b: int) -> float:
+        oa = points[a] - points[o]
+        ob = points[b] - points[o]
+        return float(oa[0] * ob[1] - oa[1] * ob[0])
+
+    lower: list[int] = []
+    for index in ordered:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], index) <= 0.0:
+            lower.pop()
+        lower.append(index)
+    upper: list[int] = []
+    for index in reversed(ordered):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], index) <= 0.0:
+            upper.pop()
+        upper.append(index)
+    return np.asarray(lower[:-1] + upper[:-1], dtype=np.int64)
+
+
+def _clipped_tet4_volume_moment(
+    tetrahedron: np.ndarray,
+    box_min: np.ndarray,
+    box_max: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    """Return volume and first spatial moment of a tet4/voxel intersection.
+
+    The intersection is a convex polyhedron. Its vertices are intersections of
+    triples of the four tetrahedron planes and six Cartesian box planes. The
+    boundary is then triangulated plane-by-plane and decomposed into pyramids
+    from an interior point. This is exact for the affine geometry up to the
+    floating-point tolerances used for plane tests and linear solves.
+    """
+
+    axes = np.eye(3, dtype=np.float64)
+    scale = max(
+        float(np.max(np.ptp(tetrahedron, axis=0))),
+        float(np.max(box_max - box_min)),
+        np.finfo(np.float64).tiny,
+    )
+    plane_tolerance = 2.0e-11 * scale
+    vertex_tolerance = 4.0e-11 * scale
+    vertices = [np.asarray(point, dtype=np.float64) for point in tetrahedron]
+    # Face orientation is irrelevant for clipping and the final pyramid
+    # decomposition uses absolute volumes.  These four faces are the complete
+    # boundary of the initial tetrahedron.
+    faces: list[list[int]] = [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]]
+
+    def vertex_index(point: np.ndarray) -> int:
+        for index, existing in enumerate(vertices):
+            if float(np.linalg.norm(point - existing)) <= vertex_tolerance:
+                return index
+        vertices.append(np.asarray(point, dtype=np.float64))
+        return len(vertices) - 1
+
+    for normal, bound in (
+        (-axes[0], -float(box_min[0])),
+        (axes[0], float(box_max[0])),
+        (-axes[1], -float(box_min[1])),
+        (axes[1], float(box_max[1])),
+        (-axes[2], -float(box_min[2])),
+        (axes[2], float(box_max[2])),
+    ):
+        clipped_faces: list[list[int]] = []
+        cut_indices: set[int] = set()
+        for face in faces:
+            clipped: list[int] = []
+            previous = face[-1]
+            previous_distance = float(normal @ vertices[previous] - bound)
+            previous_inside = previous_distance <= plane_tolerance
+            for current in face:
+                current_distance = float(normal @ vertices[current] - bound)
+                current_inside = current_distance <= plane_tolerance
+                if previous_inside != current_inside:
+                    fraction = previous_distance / (previous_distance - current_distance)
+                    intersection = vertices[previous] + fraction * (
+                        vertices[current] - vertices[previous]
+                    )
+                    index = vertex_index(intersection)
+                    clipped.append(index)
+                    cut_indices.add(index)
+                if current_inside:
+                    clipped.append(current)
+                    if abs(current_distance) <= plane_tolerance:
+                        cut_indices.add(current)
+                previous = current
+                previous_distance = current_distance
+                previous_inside = current_inside
+            deduplicated: list[int] = []
+            for index in clipped:
+                if not deduplicated or deduplicated[-1] != index:
+                    deduplicated.append(index)
+            if len(deduplicated) > 1 and deduplicated[0] == deduplicated[-1]:
+                deduplicated.pop()
+            if len(deduplicated) >= 3:
+                clipped_faces.append(deduplicated)
+        if len(cut_indices) >= 3:
+            cut = np.asarray(sorted(cut_indices), dtype=np.int64)
+            cut_points = np.asarray([vertices[int(index)] for index in cut], dtype=np.float64)
+            center = np.mean(cut_points, axis=0)
+            unit_normal = normal / float(np.linalg.norm(normal))
+            reference_axis = axes[0] if abs(float(unit_normal @ axes[0])) < 0.9 else axes[1]
+            basis_u = np.cross(unit_normal, reference_axis)
+            basis_u /= float(np.linalg.norm(basis_u))
+            basis_v = np.cross(unit_normal, basis_u)
+            projected = np.column_stack(
+                ((cut_points - center) @ basis_u, (cut_points - center) @ basis_v)
+            )
+            hull = cut[_convex_hull_indices(projected)]
+            if hull.size >= 3:
+                clipped_faces.append([int(index) for index in hull])
+        faces = clipped_faces
+        if not faces:
+            return 0.0, np.zeros(3, dtype=np.float64)
+
+    points = np.asarray(vertices, dtype=np.float64)
+    reference = np.mean(np.asarray([points[index] for face in faces for index in face]), axis=0)
+    volume = 0.0
+    first_moment = np.zeros(3, dtype=np.float64)
+    seen_faces: set[frozenset[int]] = set()
+    for face in faces:
+        face_key = frozenset(int(index) for index in face)
+        if face_key in seen_faces:
+            continue
+        seen_faces.add(face_key)
+        anchor = points[face[0]]
+        for local_index in range(1, len(face) - 1):
+            first = points[face[local_index]]
+            second = points[face[local_index + 1]]
+            pyramid_volume = abs(
+                float(np.dot(anchor - reference, np.cross(first - reference, second - reference)))
+            ) / 6.0
+            if pyramid_volume <= np.finfo(np.float64).tiny:
+                continue
+            pyramid_centroid = (reference + anchor + first + second) / 4.0
+            volume += pyramid_volume
+            first_moment += pyramid_volume * pyramid_centroid
+    if volume <= np.finfo(np.float64).tiny:
+        return 0.0, np.zeros(3, dtype=np.float64)
+    return volume, first_moment
+
+
+def _cell_box_indices_3d(tetrahedron: np.ndarray, grid: CartesianGrid) -> tuple[range, range, range]:
+    """Return the bounded Cartesian cell ranges intersecting a tetrahedron."""
+
+    cell_size = np.asarray(grid.cell_size_xyz, dtype=np.float64)
+    lower = np.asarray(grid.bounds_min_xyz, dtype=np.float64)
+    shape_xyz = np.asarray((grid.shape_zyx[2], grid.shape_zyx[1], grid.shape_zyx[0]), dtype=np.int64)
+    minimum = np.maximum(
+        0,
+        np.floor((np.min(tetrahedron, axis=0) - lower) / cell_size).astype(np.int64) - 1,
+    )
+    maximum = np.minimum(
+        shape_xyz - 1,
+        np.ceil((np.max(tetrahedron, axis=0) - lower) / cell_size).astype(np.int64) + 1,
+    )
+    if np.any(maximum < minimum):
+        return range(0), range(0), range(0)
+    return (
+        range(int(minimum[0]), int(maximum[0]) + 1),
+        range(int(minimum[1]), int(maximum[1]) + 1),
+        range(int(minimum[2]), int(maximum[2]) + 1),
+    )
+
+
+def build_tet4_cartesian_restriction(
+    mesh: Any,
+    grid: CartesianGrid,
+    *,
+    magnetic_markers: tuple[int, ...] = (1,),
+) -> CartesianRestriction:
+    """Build an exact affine-P1 volume restriction for straight-sided tet4 cells.
+
+    Each voxel receives the integral of every tet4 barycentric basis function
+    over the tetrahedron/voxel intersection. The resulting CSR weights preserve
+    volume integrals and return voxel averages after ``CartesianRestriction.apply``.
+    The magnetic mesh must be non-overlapping and fully covered by ``grid``.
+    """
+
+    markers = tuple(int(marker) for marker in magnetic_markers)
+    if not markers:
+        raise ValueError("magnetic_markers must not be empty")
+    magnetic_cells = np.flatnonzero(np.isin(mesh.element_markers, markers))
+    if magnetic_cells.size == 0:
+        raise MagnetizationComparisonError("mesh contains no magnetic cells for the requested markers")
+    if any(str(mesh.cell_types[index]) != "tet4" for index in magnetic_cells):
+        raise MagnetizationComparisonError(
+            "exact FEM-to-Cartesian restriction supports only magnetic tet4 cells"
+        )
+
+    grid_min = np.asarray(grid.bounds_min_xyz, dtype=np.float64)
+    grid_max = np.asarray(grid.bounds_max_xyz, dtype=np.float64)
+    voxel_volume = grid.voxel_volume
+    rows: list[dict[int, float]] = [dict() for _ in range(grid.voxel_count)]
+    coverage = np.zeros(grid.shape_zyx, dtype=np.float64)
+    magnetic_volume = 0.0
+    node_count = int(mesh.n_nodes)
+    fem_node_volume_weights = np.zeros(node_count, dtype=np.float64)
+    for cell_index in magnetic_cells:
+        node_ids = np.asarray(mesh.cell_node_ids(int(cell_index)), dtype=np.int64)
+        if node_ids.shape != (4,) or np.any(node_ids < 0) or np.any(node_ids >= node_count):
+            raise MagnetizationComparisonError("magnetic tet4 connectivity is invalid")
+        tetrahedron = np.asarray(mesh.nodes[node_ids], dtype=np.float64)
+        determinant = float(np.linalg.det((tetrahedron[1:] - tetrahedron[0]).T))
+        cell_volume = abs(determinant) / 6.0
+        if cell_volume <= np.finfo(np.float64).tiny:
+            raise MagnetizationComparisonError("magnetic tet4 cell is degenerate")
+        magnetic_volume += cell_volume
+        fem_node_volume_weights[node_ids] += cell_volume / 4.0
+        x_range, y_range, z_range = _cell_box_indices_3d(tetrahedron, grid)
+        for iz in z_range:
+            z_min = grid_min[2] + iz * grid.cell_size_xyz[2]
+            z_max = z_min + grid.cell_size_xyz[2]
+            for iy in y_range:
+                y_min = grid_min[1] + iy * grid.cell_size_xyz[1]
+                y_max = y_min + grid.cell_size_xyz[1]
+                for ix in x_range:
+                    x_min = grid_min[0] + ix * grid.cell_size_xyz[0]
+                    x_max = x_min + grid.cell_size_xyz[0]
+                    intersection_volume, first_moment = _clipped_tet4_volume_moment(
+                        tetrahedron,
+                        np.asarray((x_min, y_min, z_min), dtype=np.float64),
+                        np.asarray((x_max, y_max, z_max), dtype=np.float64),
+                    )
+                    if intersection_volume <= np.finfo(np.float64).tiny:
+                        continue
+                    centroid = first_moment / intersection_volume
+                    lambda_integrals = intersection_volume * _tet4_barycentric_coordinates(
+                        centroid, tetrahedron
+                    )
+                    voxel = (iz * grid.shape_zyx[1] + iy) * grid.shape_zyx[2] + ix
+                    coverage.reshape(-1)[voxel] += intersection_volume / voxel_volume
+                    for local_index, node in enumerate(node_ids):
+                        rows[voxel][int(node)] = rows[voxel].get(int(node), 0.0) + float(
+                            lambda_integrals[local_index] / voxel_volume
+                        )
+
+    if np.any(coverage > 1.0 + 2.0e-9):
+        raise MagnetizationComparisonError(
+            "magnetic tet4 cells overlap in the Cartesian restriction grid"
+        )
+    projected_volume = float(np.sum(coverage) * voxel_volume)
+    volume_error = abs(projected_volume - magnetic_volume) / max(
+        abs(magnetic_volume), np.finfo(np.float64).tiny
+    )
+    if volume_error > 2.0e-9:
+        raise MagnetizationComparisonError(
+            "Cartesian grid does not fully cover the selected magnetic tet4 volume"
+        )
+
+    offsets = [0]
+    indices: list[int] = []
+    weights: list[float] = []
+    for row in rows:
+        for node in sorted(row):
+            indices.append(node)
+            weights.append(row[node])
+        offsets.append(len(indices))
+    mesh_fingerprint = None
+    fingerprint_method = getattr(mesh, "topology_fingerprint_v3", None)
+    if callable(fingerprint_method):
+        mesh_fingerprint = str(fingerprint_method())
+    return CartesianRestriction(
+        grid=grid,
+        voxel_offsets=np.asarray(offsets, dtype=np.int64),
+        node_indices=np.asarray(indices, dtype=np.int64),
+        node_weights=np.asarray(weights, dtype=np.float64),
+        coverage=coverage,
+        magnetic_volume=magnetic_volume,
+        magnetic_cell_count=int(magnetic_cells.size),
+        fem_node_volume_weights=fem_node_volume_weights,
+        mesh_topology_fingerprint=mesh_fingerprint,
+        metadata={
+            "method": "exact_tet4_p1_volume_restriction_v1",
+            "axis_order": "zyx",
+            "component_order": ["x", "y", "z"],
+            "magnetic_markers": list(markers),
+            "geometry": "straight_sided_affine_tet4",
+            "integration": "convex_clipped_polyhedron_p1_exact",
+        },
+    )
+
+
+def sample_fem_tet4_cartesian_centers(
+    mesh: Any,
+    nodal_values: np.ndarray,
+    grid: CartesianGrid,
+    *,
+    magnetic_markers: tuple[int, ...] = (1,),
+    barycentric_tolerance: float = 1.0e-10,
+    time_s: float = 0.0,
+) -> StructuredMagnetization:
+    """Sample a linear ``tet4`` FEM field at Cartesian cell centers.
+
+    This is an explicitly diagnostic comparison operator.  It evaluates the
+    exact affine P1 field at each FDM cell center; it does not claim the
+    volume-integrated ``prism6`` restriction used by the SP4 qualification
+    path.  Cells outside all selected magnetic tetrahedra are masked.  A
+    continuous FEM field can be covered by more than one tetrahedron on a
+    shared face; their values are averaged to avoid topology-order dependence.
+    """
+
+    if not np.isfinite(barycentric_tolerance) or barycentric_tolerance < 0.0:
+        raise ValueError("barycentric_tolerance must be finite and non-negative")
+    if not np.isfinite(time_s):
+        raise ValueError("time_s must be finite")
+    markers = tuple(int(marker) for marker in magnetic_markers)
+    if not markers:
+        raise ValueError("magnetic_markers must not be empty")
+    values = np.asanyarray(nodal_values, dtype=np.float64)
+    if values.ndim != 2 or values.shape != (int(mesh.n_nodes), 3):
+        raise MagnetizationComparisonError(
+            "FEM magnetization must have shape (mesh.n_nodes, component)"
+        )
+    if not np.all(np.isfinite(values)):
+        raise MagnetizationComparisonError("FEM magnetization contains non-finite values")
+
+    magnetic_cells = np.flatnonzero(np.isin(mesh.element_markers, markers))
+    if magnetic_cells.size == 0:
+        raise MagnetizationComparisonError(
+            "mesh contains no magnetic cells for the requested markers"
+        )
+    if any(str(mesh.cell_types[index]) != "tet4" for index in magnetic_cells):
+        raise MagnetizationComparisonError(
+            "tet4 center sampling supports only magnetic tet4 cells"
+        )
+
+    nx, ny, nz = grid.shape_zyx[2], grid.shape_zyx[1], grid.shape_zyx[0]
+    dx, dy, dz = grid.cell_size_xyz
+    x_centers = grid.bounds_min_xyz[0] + (np.arange(nx, dtype=np.float64) + 0.5) * dx
+    y_centers = grid.bounds_min_xyz[1] + (np.arange(ny, dtype=np.float64) + 0.5) * dy
+    z_centers = grid.bounds_min_xyz[2] + (np.arange(nz, dtype=np.float64) + 0.5) * dz
+    sampled = np.zeros((grid.voxel_count, 3), dtype=np.float64)
+    sample_count = np.zeros(grid.voxel_count, dtype=np.int32)
+
+    for cell_index in magnetic_cells:
+        node_ids = np.asarray(mesh.cell_node_ids(int(cell_index)), dtype=np.int64)
+        if node_ids.shape != (4,) or np.any(node_ids < 0) or np.any(node_ids >= mesh.n_nodes):
+            raise MagnetizationComparisonError("magnetic tet4 connectivity is invalid")
+        tetrahedron = np.asarray(mesh.nodes[node_ids], dtype=np.float64)
+        minimum = np.maximum(
+            np.min(tetrahedron, axis=0),
+            np.asarray(grid.bounds_min_xyz, dtype=np.float64),
+        )
+        maximum = np.minimum(
+            np.max(tetrahedron, axis=0),
+            np.asarray(grid.bounds_max_xyz, dtype=np.float64),
+        )
+        if np.any(maximum < minimum):
+            continue
+        x_indices = np.flatnonzero((x_centers >= minimum[0]) & (x_centers <= maximum[0]))
+        y_indices = np.flatnonzero((y_centers >= minimum[1]) & (y_centers <= maximum[1]))
+        z_indices = np.flatnonzero((z_centers >= minimum[2]) & (z_centers <= maximum[2]))
+        for iz in z_indices:
+            for iy in y_indices:
+                for ix in x_indices:
+                    point = np.asarray((x_centers[ix], y_centers[iy], z_centers[iz]))
+                    barycentric = _tet4_barycentric_coordinates(point, tetrahedron)
+                    if np.any(barycentric < -barycentric_tolerance) or np.any(
+                        barycentric > 1.0 + barycentric_tolerance
+                    ):
+                        continue
+                    voxel = (int(iz) * ny + int(iy)) * nx + int(ix)
+                    sampled[voxel] += barycentric @ values[node_ids]
+                    sample_count[voxel] += 1
+
+    valid = sample_count > 0
+    if not np.any(valid):
+        raise MagnetizationComparisonError(
+            "no Cartesian cell centers fall inside the selected magnetic tet4 cells"
+        )
+    sampled[valid] /= sample_count[valid, np.newaxis]
+    shaped = sampled.reshape((*grid.shape_zyx, 3))
+    mask = np.broadcast_to(
+        (~valid).reshape((*grid.shape_zyx, 1)),
+        (*grid.shape_zyx, 3),
+    )
+    return StructuredMagnetization(
+        values=np.ma.array(shaped[np.newaxis, ...], mask=mask[np.newaxis, ...]),
+        times=np.asarray([time_s], dtype=np.float64),
+        grid=grid,
+        dataset="m",
+        metadata={
+            "method": "tet4_cartesian_center_barycentric_v1",
+            "axis_order": "zyx",
+            "component_order": ["x", "y", "z"],
+            "magnetic_markers": list(markers),
+            "barycentric_tolerance": float(barycentric_tolerance),
+            "sample_count_min": int(np.min(sample_count[valid])),
+            "sample_count_max": int(np.max(sample_count[valid])),
+            "valid_voxel_count": int(np.count_nonzero(valid)),
+            "valid_fraction": float(np.mean(valid)),
+        },
+    )

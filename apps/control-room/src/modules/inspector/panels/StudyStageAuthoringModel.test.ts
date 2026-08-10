@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
   buildStudyStagesMergePatch,
@@ -10,7 +11,207 @@ import {
   validateStudyStageDraft,
 } from "./StudyStageAuthoringModel";
 
+function activeLaneSnapshot({
+  device,
+  mode,
+  operations,
+  precision,
+}: {
+  device: string;
+  mode: string;
+  operations: ActiveLaneCapabilitySnapshot["operations"];
+  precision: string;
+}): ActiveLaneCapabilitySnapshot {
+  const identity = {
+    backend: "fem",
+    device,
+    discretization: "fem",
+    mode,
+    precision,
+  };
+  return {
+    schema_version: "active-lane-capabilities.v2",
+    authored: identity,
+    requested: identity,
+    resolved: identity,
+    source: {
+      kind: "planner",
+      capability_profile_version: "test",
+      engine_id: "test-fem",
+      authored_intent: "problem_ir.runtime_selection",
+      effective_request: "session.runtime_resolution",
+    },
+    qualification: { status: "not_asserted", reason: "Test fixture." },
+    operations,
+  };
+}
+
 describe("StudyStageAuthoringModel", () => {
+  it.each([
+    ["cpu", "double", "strict"],
+    ["gpu", "single", "extended"],
+  ])(
+    "uses planner operation state for spectral stages on %s/%s/%s",
+    (device, precision, mode) => {
+      const activeLane = activeLaneSnapshot({
+        device,
+        mode,
+        precision,
+        operations: {
+          "study.eigenmodes": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Eigenmode execution is supported for this resolved lane.",
+            requires: [],
+          },
+          "study.frequency_response": {
+            state: "deferred",
+            reason_code: "capability_deferred",
+            reason: "Frequency response is deferred for this resolved lane.",
+            requires: ["planner:frequency_response"],
+          },
+          "study.fft": {
+            state: "unsupported",
+            reason_code: "capability_unsupported",
+            reason: "FFT is unavailable for this resolved lane.",
+            requires: ["field_quantity"],
+          },
+        },
+      });
+
+      expect(
+        validateStudyStageDraft(createDefaultStudyStageDraft("eigenmodes", 0), {
+          activeLane,
+          backend: "fem",
+          device,
+          mode,
+          precision,
+        }).filter((issue) => issue.message.includes("resolved lane")),
+      ).toEqual([]);
+      expect(
+        validateStudyStageDraft(createDefaultStudyStageDraft("frequency_response", 0), {
+          activeLane,
+          backend: "fem",
+          device,
+          mode,
+          precision,
+        }),
+      ).toContainEqual({
+        message: "Frequency response is deferred for this resolved lane.",
+        severity: "warning",
+      });
+      expect(
+        validateStudyStageDraft(createDefaultStudyStageDraft("fft_response", 0), {
+          activeLane,
+          backend: "fem",
+          device,
+          mode,
+          precision,
+        }),
+      ).toContainEqual({
+        message: "FFT is unavailable for this resolved lane.",
+        severity: "error",
+      });
+    },
+  );
+
+  it("fails closed for a spectral stage when active-lane status is unresolved", () => {
+    expect(
+      validateStudyStageDraft(createDefaultStudyStageDraft("eigenmodes", 0), {
+        activeLane: null,
+        backend: "auto",
+        device: "auto",
+        mode: "strict",
+        precision: "double",
+      }),
+    ).toContainEqual({
+      message: "Active-lane capability snapshot is unavailable.",
+      severity: "error",
+    });
+  });
+
+  it.each([
+    ["relax", "study.relaxation"],
+    ["run", "study.time_integration"],
+  ] as const)(
+    "blocks an unsupported %s draft through %s",
+    (kind, operationId) => {
+      const activeLane = activeLaneSnapshot({
+        device: "cpu",
+        mode: "strict",
+        precision: "double",
+        operations: {
+          [operationId]: {
+            state: "unsupported",
+            reason_code: "capability_unsupported",
+            reason: `${operationId} is unavailable for this resolved lane.`,
+            requires: ["planner:resolved_lane"],
+          },
+        },
+      });
+
+      expect(
+        validateStudyStageDraft(createDefaultStudyStageDraft(kind, 0), {
+          activeLane,
+          backend: "fdm",
+          device: "cpu",
+          mode: "strict",
+          precision: "double",
+        }),
+      ).toContainEqual({
+        message: `${operationId} is unavailable for this resolved lane.`,
+        severity: "error",
+      });
+    },
+  );
+
+  it.each(["relax", "run"] as const)(
+    "fails closed for an unresolved %s draft",
+    (kind) => {
+      expect(
+        validateStudyStageDraft(createDefaultStudyStageDraft(kind, 0), {
+          activeLane: null,
+          backend: "auto",
+          device: "auto",
+          mode: "strict",
+          precision: "double",
+        }),
+      ).toContainEqual({
+        message: "Active-lane capability snapshot is unavailable.",
+        severity: "error",
+      });
+    },
+  );
+
+  it.each([
+    ["relax", "study.relaxation"],
+    ["run", "study.time_integration"],
+  ] as const)("accepts a supported %s draft", (kind, operationId) => {
+    const activeLane = activeLaneSnapshot({
+      device: "cpu",
+      mode: "strict",
+      precision: "double",
+      operations: {
+        [operationId]: {
+          state: "supported",
+          reason_code: "capability_supported",
+          reason: `${operationId} is supported for this resolved lane.`,
+          requires: ["planner:resolved_lane"],
+        },
+      },
+    });
+
+    expect(
+      validateStudyStageDraft(createDefaultStudyStageDraft(kind, 0), {
+        activeLane,
+        backend: "fdm",
+        device: "cpu",
+        mode: "strict",
+        precision: "double",
+      }).some((issue) => issue.message.includes(operationId)),
+    ).toBe(false);
+  });
+
   it("uses canonical relaxation defaults", () => {
     expect(createDefaultStudyStageDraft("relax", 0)).toMatchObject({
       algorithm: "llg_overdamped",

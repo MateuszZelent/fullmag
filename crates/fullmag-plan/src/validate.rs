@@ -131,6 +131,16 @@ pub(crate) fn validate_region_owned_planning(
         ));
     }
     if resolved_backend == BackendTarget::Fdm && runtime_requests_cuda(problem) {
+        if problem
+            .magnets
+            .iter()
+            .any(|magnet| magnet.absorbing_boundary.is_some())
+        {
+            errors.push(
+                "fdm_cuda_absorbing_boundary_unsupported: CUDA native does not yet support cellwise damping fields; use FDM CPU reference or FEM"
+                    .to_string(),
+            );
+        }
         let has_cuda_region_fields = problem.material_parameter_fields.iter().any(|assignment| {
             let active = assignment.region_id.as_deref().is_none_or(|region_id| {
                 problem

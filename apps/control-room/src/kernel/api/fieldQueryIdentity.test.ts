@@ -66,6 +66,31 @@ describe("fieldQueryIdentity", () => {
     );
   });
 
+  it("keeps an owner-qualified FDM region request distinct in the resource identity", () => {
+    const first = fieldVectorResourceKey("m", {
+      component: "full",
+      owner_object_id: "body-a",
+      scope_id: "shared",
+      scope_kind: "region",
+    });
+    const second = fieldVectorResourceKey("m", {
+      component: "full",
+      owner_object_id: "body-b",
+      scope_id: "shared",
+      scope_kind: "region",
+    });
+
+    expect(first).toBe(
+      "/v2/sessions/current/data/fields/m/samples/vector?component=full&owner_object_id=body-a&scope_id=shared&scope_kind=region",
+    );
+    expect(second).not.toBe(first);
+    expect(parseCanonicalFieldVectorResourceKey(first)).toMatchObject({
+      ownerObjectId: "body-a",
+      scopeId: "shared",
+      scopeKind: "region",
+    });
+  });
+
   it("parses an exact recommended fetch regardless of query parameter order", () => {
     expect(
       parseCanonicalFieldVectorResourceKey(

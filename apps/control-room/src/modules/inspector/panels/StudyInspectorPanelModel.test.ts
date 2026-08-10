@@ -1,14 +1,205 @@
 import { describe, expect, it } from "vitest";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 
 import {
   resolveCommandSummary,
   resolveStudyInspectorModel,
+  studyRuntimeProvenanceFromCurrentRun,
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
 
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 
 describe("StudyInspectorPanelModel", () => {
+  it("separates authored intent from effective request without inventing fallback", () => {
+    const activeLane = {
+      ...activeLaneCapabilityFixture(),
+      authored: {
+        backend: "fdm",
+        device: "cpu",
+        discretization: "fdm",
+        mode: "strict",
+        precision: "double",
+      },
+      requested: {
+        backend: "fdm",
+        device: "gpu",
+        discretization: "fdm",
+        mode: "strict",
+        precision: "double",
+      },
+      resolved: {
+        backend: "fdm",
+        device: "gpu",
+        discretization: "fdm",
+        mode: "strict",
+        precision: "double",
+      },
+    };
+    const provenance = studyRuntimeProvenanceFromCurrentRun(
+      {
+        artifact_dir: "/tmp/fullmag/run-gpu",
+        requested_backend: "fdm",
+        requested_device: "gpu",
+        requested_mode: "strict",
+        requested_precision: "double",
+        resolved_backend: "fdm",
+        resolved_device: "gpu",
+        resolved_engine_id: "fdm_cuda",
+        resolved_mode: "strict",
+        resolved_precision: "double",
+        resolved_runtime_family: "fdm-cuda",
+        resolved_fallback: null,
+        revision: 4,
+        run_id: "run-gpu",
+        session_id: "session-gpu",
+        started_at: "2026-08-04T10:00:00Z",
+        status: "running",
+        total_steps: 8,
+      } as never,
+      activeLane,
+    );
+
+    expect(provenance.authored.device).toBe("cpu");
+    expect(provenance.effective.device).toBe("gpu");
+    expect(provenance.resolved.device).toBe("gpu");
+    expect(provenance.fallback.status).toBe("none");
+    expect(provenance.sources).toEqual({
+      authored: "problem_ir.runtime_selection",
+      effective: "session.runtime_resolution",
+    });
+  });
+
+  it("keeps runtime provenance explicitly unavailable while the current run is not loaded", () => {
+    expect(studyRuntimeProvenanceFromCurrentRun(null)).toEqual({
+      authored: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+      },
+      effective: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+      },
+      resolved: {
+        backend: "not loaded",
+        device: "not loaded",
+        mode: "not loaded",
+        precision: "not loaded",
+        runtimeFamily: "not loaded",
+        engine: "not loaded",
+      },
+      fallback: {
+        status: "not loaded",
+        originalEngine: "not loaded",
+        fallbackEngine: "not loaded",
+        reason: "not loaded",
+        message: "Current run provenance is not loaded.",
+      },
+      sources: {
+        authored: "not loaded",
+        effective: "not loaded",
+      },
+    });
+  });
+
+  it("projects resolved FDM provenance without resolving auto values locally", () => {
+    expect(
+      studyRuntimeProvenanceFromCurrentRun({
+        artifact_dir: "/tmp/fullmag/run-fdm",
+        requested_backend: "fdm",
+        requested_device: "auto",
+        requested_mode: "strict",
+        requested_precision: "double",
+        resolved_backend: "fdm",
+        resolved_device: "gpu",
+        resolved_engine_id: "fdm_cuda",
+        resolved_mode: "strict",
+        resolved_precision: "double",
+        resolved_runtime_family: "fdm-cuda",
+        resolved_fallback: null,
+        revision: 4,
+        run_id: "run-fdm",
+        session_id: "session-fdm",
+        started_at: "2026-08-04T10:00:00Z",
+        status: "running",
+        total_steps: 8,
+      } as never),
+    ).toEqual({
+      authored: {
+        backend: "not available",
+        device: "not available",
+        mode: "not available",
+        precision: "not available",
+      },
+      effective: {
+        backend: "fdm",
+        device: "auto",
+        mode: "strict",
+        precision: "double",
+      },
+      resolved: {
+        backend: "fdm",
+        device: "gpu",
+        mode: "strict",
+        precision: "double",
+        runtimeFamily: "fdm-cuda",
+        engine: "fdm_cuda",
+      },
+      fallback: {
+        status: "none",
+        originalEngine: "not applicable",
+        fallbackEngine: "not applicable",
+        reason: "not reported",
+        message: "No fallback reported.",
+      },
+      sources: {
+        authored: "not available",
+        effective: "not available",
+      },
+    });
+  });
+
+  it("exposes fallback status, engines, reason, and message from the run resource", () => {
+    const provenance = studyRuntimeProvenanceFromCurrentRun({
+      artifact_dir: "/tmp/fullmag/run-fallback",
+      requested_backend: "fdm",
+      requested_device: "gpu",
+      requested_mode: "strict",
+      requested_precision: "single",
+      resolved_backend: "fdm",
+      resolved_device: "cpu",
+      resolved_engine_id: "fdm_cpu_reference",
+      resolved_mode: "strict",
+      resolved_precision: "single",
+      resolved_runtime_family: "fdm-cpu",
+      resolved_fallback: {
+        occurred: true,
+        original_engine: "fdm_cuda",
+        fallback_engine: "fdm_cpu_reference",
+        reason: "cuda_unavailable",
+        message: "CUDA device unavailable; using the reference CPU engine.",
+      },
+      revision: 5,
+      run_id: "run-fallback",
+      session_id: "session-fallback",
+      started_at: "2026-08-04T10:00:00Z",
+      status: "running",
+      total_steps: 8,
+    } as never);
+
+    expect(provenance.fallback).toEqual({
+      status: "occurred",
+      originalEngine: "fdm_cuda",
+      fallbackEngine: "fdm_cpu_reference",
+      reason: "cuda_unavailable",
+      message: "CUDA device unavailable; using the reference CPU engine.",
+    });
+  });
+
   it("does not reconstruct canonical torque from the auxiliary Tesla field", () => {
     const model = resolveStudyInspectorModel({
       currentRun: null,

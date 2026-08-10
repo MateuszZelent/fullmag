@@ -466,6 +466,27 @@ function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
   );
 }
 
+export function shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+  appliedCameraState,
+  autoFittedBoundsSignature,
+  cameraState,
+  lastAutoFitCameraState,
+}: {
+  appliedCameraState: Viewport3DCameraState | null;
+  autoFittedBoundsSignature: string | null;
+  cameraState: Viewport3DCameraState;
+  lastAutoFitCameraState: Viewport3DCameraState | null;
+}): boolean {
+  return Boolean(
+    autoFittedBoundsSignature &&
+      appliedCameraState &&
+      lastAutoFitCameraState &&
+      isDefaultCameraState(cameraState) &&
+      nearCameraState(appliedCameraState, lastAutoFitCameraState) &&
+      !isDefaultCameraState(lastAutoFitCameraState),
+  );
+}
+
 export function shouldAutoFitViewport3DBoundsChange({
   currentCameraState,
   lastAutoFitCameraState,
@@ -575,6 +596,16 @@ export function CameraController({
 
   useEffect(() => {
     const state = cameraStateRef.current;
+    if (
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: appliedCameraStateRef.current,
+        autoFittedBoundsSignature: autoFittedBoundsRef.current,
+        cameraState: state,
+        lastAutoFitCameraState: lastAutoFitCameraStateRef.current,
+      })
+    ) {
+      return;
+    }
     applyViewport3DCameraUp(camera, state.up);
     camera.position.set(...state.position);
     applyCameraLookAt(camera, state.target);
@@ -595,6 +626,16 @@ export function CameraController({
         appliedCameraState: appliedCameraStateRef.current,
         currentCamera: camera,
         nextCameraState: cameraState,
+      })
+    ) {
+      return;
+    }
+    if (
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: appliedCameraStateRef.current,
+        autoFittedBoundsSignature: autoFittedBoundsRef.current,
+        cameraState,
+        lastAutoFitCameraState: lastAutoFitCameraStateRef.current,
       })
     ) {
       return;
@@ -717,6 +758,7 @@ function readViewport3DCameraControlsDiagnostics({
 }
 
 interface OrbitCameraControlsProps {
+  bounds: Viewport3DBounds | null;
   cameraGestureRef: Viewport3DCameraGestureRef;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -946,6 +988,7 @@ function useSmoothViewport3DWheelZoom({
 }
 
 function useOrbitCameraControlsModel({
+  bounds,
   cameraGestureRef,
   cameraOrthographicScale,
   cameraProjection,
@@ -969,6 +1012,7 @@ function useOrbitCameraControlsModel({
     normalizeViewport3DOrbitDebugAngles(orbitDebugAngles),
   );
   const controlsSyncingRef = useRef(false);
+  const cameraGestureEndedRef = useRef(false);
   const previousHudControlsEnabledRef = useRef<boolean | null>(null);
   const suppressNextRestCommitRef = useRef(false);
   const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
@@ -981,6 +1025,26 @@ function useOrbitCameraControlsModel({
     const currentTarget = controls?.target?.toArray();
     if (!controls || !currentTarget) return;
     const currentPosition = camera.position.toArray();
+    const fittedCamera = bounds ? resolveViewport3DCameraFit(bounds) : null;
+    if (
+      fittedCamera &&
+      shouldPreserveViewport3DAutoFitAgainstDefaultCamera({
+        appliedCameraState: {
+          position: tuple3(currentPosition),
+          target: tuple3(currentTarget),
+          up: tuple3(camera.up.toArray()),
+        },
+        autoFittedBoundsSignature: "orbit-bounds",
+        cameraState,
+        lastAutoFitCameraState: {
+          position: fittedCamera.position,
+          target: fittedCamera.target,
+          up: VIEWPORT_3D_WORLD_UP,
+        },
+      })
+    ) {
+      return;
+    }
     if (
       !shouldSyncCameraControlsPose({
         currentPosition,
@@ -1002,7 +1066,14 @@ function useOrbitCameraControlsModel({
     }
     invalidate();
     tracker.recordDirtyFrame("camera-control-target");
-  }, [camera, cameraGestureRef, cameraState, invalidate, tracker]);
+  }, [
+    bounds,
+    camera,
+    cameraGestureRef,
+    cameraState,
+    invalidate,
+    tracker,
+  ]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -1041,46 +1112,43 @@ function useOrbitCameraControlsModel({
 
   useEffect(() => {
     const element = gl.domElement;
+    const listenerController = new AbortController();
+    let pointerGestureActive = false;
     const endCanvasPointerGesture = () => {
-      window.removeEventListener("pointerup", endCanvasPointerGesture, {
-        capture: true,
-      });
-      window.removeEventListener("pointercancel", endCanvasPointerGesture, {
-        capture: true,
-      });
+      if (!pointerGestureActive) return;
+      pointerGestureActive = false;
       endViewport3DCameraGesture(cameraGestureRef);
     };
     const beginCanvasPointerGesture = (event: PointerEvent) => {
       if (event.button < 0 || event.button > 2) return;
+      pointerGestureActive = true;
       beginViewport3DCameraGesture(cameraGestureRef);
-      window.addEventListener("pointerup", endCanvasPointerGesture, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", endCanvasPointerGesture, {
-        capture: true,
-        once: true,
-      });
     };
 
+    window.addEventListener("pointerup", endCanvasPointerGesture, {
+      capture: true,
+      signal: listenerController.signal,
+    });
+    window.addEventListener("pointercancel", endCanvasPointerGesture, {
+      capture: true,
+      signal: listenerController.signal,
+    });
     element.addEventListener("pointerdown", beginCanvasPointerGesture, {
       capture: true,
+      signal: listenerController.signal,
     });
 
     return () => {
-      element.removeEventListener("pointerdown", beginCanvasPointerGesture, {
-        capture: true,
-      });
+      listenerController.abort();
       endCanvasPointerGesture();
     };
   }, [cameraGestureRef, gl]);
 
   useEffect(() => {
     const element = gl.domElement;
+    const listenerController = new AbortController();
 
     const restoreControls = () => {
-      window.removeEventListener("pointerup", restoreControls, { capture: true });
-      window.removeEventListener("pointercancel", restoreControls, { capture: true });
       const previousEnabled = previousHudControlsEnabledRef.current;
       previousHudControlsEnabledRef.current = null;
       const controls = controlsRef.current;
@@ -1094,23 +1162,22 @@ function useOrbitCameraControlsModel({
       if (!controls || previousHudControlsEnabledRef.current !== null) return;
       previousHudControlsEnabledRef.current = Boolean(controls.enabled);
       controls.enabled = false;
-      window.addEventListener("pointerup", restoreControls, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", restoreControls, {
-        capture: true,
-        once: true,
-      });
     };
 
+    window.addEventListener("pointerup", restoreControls, {
+      capture: true,
+      signal: listenerController.signal,
+    });
+    window.addEventListener("pointercancel", restoreControls, {
+      capture: true,
+      signal: listenerController.signal,
+    });
     element.addEventListener("pointerdown", handlePointerDownCapture, {
       capture: true,
+      signal: listenerController.signal,
     });
     return () => {
-      element.removeEventListener("pointerdown", handlePointerDownCapture, {
-        capture: true,
-      });
+      listenerController.abort();
       restoreControls();
     };
   }, [gl]);
@@ -1246,7 +1313,9 @@ function useOrbitCameraControlsModel({
     const controls = controlsRef.current;
     const controlTarget = controls?.target?.toArray();
     if (!controls || !controlTarget) {
-      endViewport3DCameraGesture(cameraGestureRef);
+      if (cameraGestureEndedRef.current) {
+        endViewport3DCameraGesture(cameraGestureRef);
+      }
       return;
     }
     const controlPosition = camera.position.toArray();
@@ -1270,7 +1339,9 @@ function useOrbitCameraControlsModel({
     if (currentAngles) {
       onOrbitDebugAnglesChange?.(currentAngles);
     }
-    endViewport3DCameraGesture(cameraGestureRef);
+    if (cameraGestureEndedRef.current) {
+      endViewport3DCameraGesture(cameraGestureRef);
+    }
   }, [
     camera,
     cameraGestureRef,
@@ -1316,18 +1387,32 @@ function useOrbitCameraControlsModel({
 
   const recordOrbitControlFrame = useCallback(() => {
     tracker.recordDirtyFrame("camera-control");
-    scheduleCameraControlsPoseCommit();
+    // OrbitControls emits change events continuously while the pointer is
+    // held. Do not publish intermediate poses into React/store state: that
+    // invalidates the viewport every 180 ms and can feed a stale pose back
+    // into the live controls. Commit only after onEnd, then let damping
+    // changes restart the quiet-period timer until the pose settles.
+    if (cameraGestureEndedRef.current) {
+      scheduleCameraControlsPoseCommit({ restart: true });
+    }
   }, [scheduleCameraControlsPoseCommit, tracker]);
 
   const handleTransitionStart = useCallback(() => {
     if (controlsSyncingRef.current) return;
     clearCameraControlsPoseCommit();
+    cameraGestureEndedRef.current = false;
     beginViewport3DCameraGesture(cameraGestureRef);
   }, [cameraGestureRef, clearCameraControlsPoseCommit]);
 
   const handleEnd = useCallback(() => {
+    // The canvas-level pointerup listener runs in capture phase and can end
+    // the shared gesture before Drei emits onEnd. Keep the hold active while
+    // OrbitControls damping settles and the final pose is committed; otherwise
+    // a remote/store update can re-apply the previous pose in that window.
+    beginViewport3DCameraGesture(cameraGestureRef);
+    cameraGestureEndedRef.current = true;
     scheduleCameraControlsPoseCommit({ restart: true });
-  }, [scheduleCameraControlsPoseCommit]);
+  }, [cameraGestureRef, scheduleCameraControlsPoseCommit]);
 
   useSmoothViewport3DWheelZoom({
     camera,

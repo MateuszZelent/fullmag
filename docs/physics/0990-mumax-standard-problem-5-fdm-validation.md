@@ -1,8 +1,8 @@
-# MuMax3 Standard Problem 5 as a Fullmag FDM validation contract
+# MuMax3 Standard Problem 5 as a Fullmag FDM/FEM validation contract
 
-- Status: frozen source-to-IR reproduction; isolated CPU↔CUDA MuMax3-operator step is qualified, but the fresh full trajectory is not
+- Status: bounded FDM CPU/CUDA FP64 fixed-step qualification for the explicit `converged_demag` workload; literal MuMax3 default-accuracy golden, adaptive/FP32/general-grid and FEM qualification remain open
 - Owners: Fullmag FDM validation
-- Last updated: 2026-08-03
+- Last updated: 2026-08-09
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -19,9 +19,11 @@ The Fullmag reproduction is an ordinary stage-first Python script,
 `examples/mumax_standard_problem_5_fdm.py`. It deliberately keeps the literal
 source constants visible so that a reviewer can compare the source file, the
 lowered `ProblemIR`, and the output artifact without relying on hidden defaults.
-The default lane is FDM CPU in double precision. FDM GPU is exposed only for a
-diagnostic fixed-step Heun run; its adaptive capability identity is not yet
-qualified.
+The default lane is FDM CPU in double precision. A native FDM CUDA FP64 lane is
+qualified only for the fixed-step Heun workload defined in Section 8, with an
+explicit MuMax3 `DemagAccuracy=24` full-field reference. This bounded result
+does not qualify adaptive integration, FP32, another grid, the canonical
+`zhang_li.fullmag.v1` family, or FEM.
 
 The source expression
 `setcellsize(100e-9/32,100e-9/32,10e-9/4)` means a **total** thickness of
@@ -109,6 +111,11 @@ bit-for-bit.
 | $N_y$ | grid counts | $1$ |
 | $N_z$ | grid counts | $1$ |
 | $\bar m_i$ | volume-weighted mean reduced-magnetization component | $1$ |
+| $R_{ci}^{(e)}$ | volume-integrated affine-P1 restriction weight from tet4 element $e$ and node $i$ to Cartesian voxel $c$ | $1$ |
+| $V_c$ | Cartesian voxel volume | $\mathrm{m^3}$ |
+| $\lambda_i^{(e)}$ | affine P1 barycentric basis function of tet4 element $e$ | $1$ |
+| $\vartheta_c$ | fraction of voxel $c$ covered by selected magnetic tetrahedra | $1$ |
+| $\widetilde{\mathbf m}_c$ | volume-averaged FEM reduced magnetization reconstructed in voxel $c$ | $1$ |
 
 The literal material and grid values are $M_s=8.0\times10^5\,\mathrm{A\,m^{-1}}$,
 $A_{\mathrm{ex}}=13\times10^{-12}\,\mathrm{J\,m^{-1}}$,
@@ -129,6 +136,11 @@ $(\Delta x,\Delta y,\Delta z)=(3.125,3.125,2.5)\,\mathrm{nm}$.
 - The external expected values are an application reference at the specified
   grid, source parameters, and one-nanosecond horizon. They are not a proof of
   convergence as $\Delta x\to0$ or $\Delta t\to0$.
+- MuMax3 constructs its open-boundary demagnetizing kernel by numerical
+  surface--volume quadrature controlled by `DemagAccuracy`; Fullmag evaluates
+  the analytic Newell tensor. The literal default-accuracy MuMax3 field and a
+  more converged MuMax3 field are therefore separate references and must never
+  be silently substituted for one another.
 - MuMax3's internal `relax()` algorithm is not part of the public source
   contract. Fullmag records its numerical relaxation choice and requires an
   independent equilibrium gate before promoting a trajectory.
@@ -171,8 +183,9 @@ study.stages.add_run(1e-9, stage_id="current_run")
 ```
 
 The repository example additionally selects the explicit source gamma and
-adaptive RK45 policy by default. `FULLMAG_SP5_FIXED_DT` is an opt-in diagnostic
-switch, not a production qualification setting.
+adaptive RK45 policy by default. `FULLMAG_SP5_FIXED_DT` selects the bounded
+fixed-step validation path; it is production-qualified only for the exact
+FP64 CPU/CUDA `converged_demag` workload and timesteps listed in Section 8.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
@@ -183,13 +196,13 @@ switch, not a production qualification setting.
 | `plate.Ms` | `float` | required | $\mathrm{A\,m^{-1}}$ | positive finite | saturation magnetization | FDM CPU/GPU | `materials[].saturation_magnetisation` |
 | `plate.Aex` | `float` | required | $\mathrm{J\,m^{-1}}$ | positive finite | exchange stiffness | FDM CPU/GPU | `materials[].exchange_stiffness` |
 | `plate.alpha` | `float` | required | $1$ | non-negative finite | physical Gilbert damping | FDM CPU/GPU | `materials[].damping` |
-| `ZhangLiSTT.current_density` | `vec3` | required | $\mathrm{A\,m^{-2}}$ | finite signed vector | CIP charge current | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].current_density` |
-| `ZhangLiSTT.degree` | `float` | `1.0` | $1$ | finite polarization degree | current polarization | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].degree` |
-| `ZhangLiSTT.xi` | `float` | required | $1$ | finite; alias of beta | non-adiabaticity | FDM CPU reference; GPU diagnostic | `spin_torque_modules[].beta` |
-| `ZhangLiSTT.id` | `str` | required for canonical operator | $1$ | non-empty | torque identity | FDM CPU/GPU MuMax3; FEM rejects MuMax3 | `spin_torque_modules[].id` |
+| `ZhangLiSTT.current_density` | `vec3` | required | $\mathrm{A\,m^{-2}}$ | finite signed vector | CIP charge current | FDM CPU reference; FEM CPU reference; GPU diagnostic | `spin_torque_modules[].current_density` |
+| `ZhangLiSTT.degree` | `float` | `1.0` | $1$ | finite polarization degree | current polarization | FDM CPU reference; FEM CPU reference; GPU diagnostic | `spin_torque_modules[].degree` |
+| `ZhangLiSTT.xi` | `float` | required | $1$ | finite; alias of beta | non-adiabaticity | FDM CPU reference; FEM CPU reference; GPU diagnostic | `spin_torque_modules[].beta` |
+| `ZhangLiSTT.id` | `str` | required for canonical operator | $1$ | non-empty | torque identity | FDM CPU/GPU MuMax3; FEM canonical reference | `spin_torque_modules[].id` |
 | `ZhangLiSTT.target` | `RegionRef` | required for canonical operator | $1$ | existing object/region | target mask ownership | FDM CPU/GPU MuMax3; FEM central reference | `spin_torque_modules[].target` |
 | `ZhangLiSTT.lande_g` | `float` | required for canonical operator | $1$ | exactly `2.0` for `zhang_li.mumax3.v1`; finite and positive for `zhang_li.fullmag.v1` | explicit Landé-factor provenance | FDM CPU/GPU MuMax3 source identity; FEM central reference | `spin_torque_modules[].lande_g` |
-| `ZhangLiSTT.operator_version` | `str` | `zl_mumax3_central_v1` for SP5 | $1$ | `zl_mumax3_central_v1` | spatial/formula realization | FDM CPU/GPU | `spin_torque_modules[].operator_version` |
+| `ZhangLiSTT.operator_version` | `str` | `zl_mumax3_central_v1 for FDM; zl_central_reference_v1 for FEM` | $1$ | versioned operator compatible with the selected backend | spatial/formula realization | FDM CPU/GPU; FEM CPU reference | `spin_torque_modules[].operator_version` |
 | `add_relax.tolT` | `float` | `1e-6` | $\mathrm T$ | positive finite; exclusive with `tolA` | maximum relaxation torque | FDM CPU reference; GPU diagnostic | `study.stop.torque_tolerance_apm` |
 | `add_run.until` | `float` | required | $\mathrm s$ | positive finite | physical observation horizon | FDM CPU reference; GPU diagnostic | `stage.default_until_seconds` |
 
@@ -325,10 +338,126 @@ SP5 trajectory.
 
 ### 6.3 FEM
 
-No FEM SP5 reproduction is claimed. A FEM comparison would require an explicit
-shared-domain or conforming magnetic mesh, a declared demagnetization
-realization, and a spatial convergence table before its mean magnetization
-could be compared with the FDM source result.
+The repository now contains an explicit FEM counterpart in
+`examples/mumax_standard_problem_5_fem.py`. It uses the same physical body,
+material constants, vortex preset, current density, and stage separation as the
+source, but it is not the MuMax3-compatible FDM operator: FEM records
+`zhang_li.fullmag.v1` with `zl_central_reference_v1`, while the FDM source lane
+records `zhang_li.mumax3.v1` with `zl_mumax3_central_v1`.
+
+A managed CPU-double FEM run now completes the full two-stage workload with
+the canonical FEM Zhang--Li operator. On the bounded-but-fully-dynamic mesh
+(`hmax=12 nm`, `hmin=6 nm`, airbox `hmax=40 nm`, 1961 tetrahedra, 382 nodes),
+projected-gradient-BB relaxation reaches `9.03e-7 T` in 39 iterations and
+the adaptive RK45 stage accepts 1028 steps to `t=1 ns`. Its final
+volume-weighted mean is
+$(\bar m_x,\bar m_y,\bar m_z)=(0.06571195970862106,
+-0.07068185866088325,-0.001918570717269359)$, with
+$(E_{\rm ex},E_{\rm demag},E_{\rm total})=(2.457573497099033e-18,
+5.962245456383275e-19,3.053798042737360e-18)\,\mathrm J$ and
+$\max|\tau|=3.283768393400342e-2\,\mathrm T$. The artifact is archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-full-20260804-cpu-h12-bb-r12`.
+
+The first refinement (`hmax=8 nm`, `hmin=3 nm`, airbox `hmax=30 nm`) has
+10595 tetrahedra and 1822 nodes. It converges with the same torque stop to
+`4.90e-7 T` in 78 minimizer iterations; the 1 ps dynamic endpoint is
+$(0.04073733843953036,-0.009595994833123806,0.01187191608956891)$. A nominal
+`hmax=6 nm`, `hmin=2.5 nm` mesh exposes a qualification blocker: PG-BB
+oscillates near `1.3e-1 T` after 169 iterations, while nonlinear-CG decreases
+the torque monotonically but still ends at `1.19e-5 T` after its 300-step
+budget. The refinement is therefore not converged at the required `1e-6 T`
+stop.
+
+At the matched final time `t=1 ns`, the scalar comparison with the FDM CPU
+MuMax3-operator artifact
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-mumax3-v1-factorfix-20260803-fixed-cpu`
+has $\|\Delta\bar m\|_2=0.30233523404716306$ and is recorded by
+`scripts/compare_sp5_scalar_runs.py`. This is a diagnostic endpoint report,
+not equivalence: FEM uses `zhang_li.fullmag.v1`/`zl_central_reference_v1`, FDM
+uses `zhang_li.mumax3.v1`/`zl_mumax3_central_v1`, and the relaxed equilibria,
+finite-element mesh and Poisson--Robin demagnetization are not the same as the
+FDM tensor-FFT realization. The FEM run also comes from a managed runtime with
+`worktree_state=dirty`, so it is not a release qualification artifact.
+
+A canonical FEM GPU run now also completes a bounded `1 ps` two-stage smoke on
+the same public script after the CUDA RK45 workspace fix. The managed runtime
+resolved `fem_native_gpu` on an NVIDIA GeForce RTX 4080 SUPER (compute
+capability `8.9`, CUDA runtime `12060`, device HYPRE/CG+AMG), with no CPU
+fallback. The run used `1948` tet4 elements and `378` nodes, one PGBB
+relaxation step, then `15` accepted adaptive RK45 dynamic steps to
+`t=1e-12 s`; its final energies were
+`E_ex=2.5617206738781727e-18 J`,
+`E_demag=6.752241663134116e-19 J`, and
+`E_total=3.2369448401915845e-18 J`. The artifact is archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-canonical-rk45-fixed-20260805`.
+The matched CPU smoke is archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-canonical-rk45-cpu-20260805`;
+it used `1929` tet4 elements and `378` nodes, `13` accepted dynamic steps,
+and ended at `E_total=3.304278269687727e-18 J`. Because the independently
+generated meshes differ, this is an executable CPU/GPU diagnostic comparison,
+not a parity or equivalence result.
+
+The earlier one-step bounded probe remains archived at
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fem-probe-20260804-cpu-fixed-v2`.
+Until a stable three-level FEM `h` sweep, controlled `dt` sweep, matched field
+sampling, and independent operator/sign audit pass, FEM remains
+`reference-executable/bounded` and `validated_workloads` must not advance.
+
+The same final snapshots were then compared as fields on the FDM Cartesian
+grid. `scripts/compare_sp5_field_states.py` reconstructs the FEM planner mesh
+from `metadata.json` and applies the exact affine-P1 volume restriction
+`build_tet4_cartesian_restriction`. The clipped tet4/voxel intersections cover
+all `4096` FDM voxels (`valid_fraction=1.0`); the coverage extrema are
+`0.9999999999999808` and `1.0000000000000167`, so the restriction preserves the
+magnetic volume to floating-point round-off. Both snapshots are at `t=1 ns`.
+The new report is archived at
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fem-fdm-volume-field-comparison-1ns-h12.json`.
+
+The field metrics are substantially different: vector RMS error
+`0.49796257925222454`, maximum error `1.9122155987326996`, p99 error
+`1.679783779553503`, and cosine similarity `0.8741985937637287`. The sampled
+FEM mean is `(0.06571195970862105, -0.07068185866088314,
+-0.001918570717269364)`, exactly the volume-weighted artifact mean to the
+reported precision; the FDM mean is
+`(-0.23465571179208225, -0.09450957174904828, 0.02294296086440476)`. This is
+evidence that the earlier scalar discrepancy is also visible in the full
+texture, not an artifact of reducing each field to one vector. It remains a
+diagnostic comparison: the volume-preserving field map removes restriction
+error as an uncontrolled explanation, but no `h/dt` convergence, common
+equilibrium, or operator/sign parity gate has passed. The volume-restricted
+metrics are vector RMS `0.49731737652723923`, p99 `1.6738097210831444`, maximum
+`1.8966968128889123`, and cosine similarity `0.874437658356207`.
+
+The next comparison operator is defined as a volume-preserving tet4
+restriction rather than another point-sampling heuristic. For each FDM voxel
+$C_c$ and magnetic FEM tetrahedron $T_e$, the affine P1 nodal basis weight is
+
+```{math}
+:label: sp5-tet4-volume-restriction
+R_{ci}^{(e)}=\frac{1}{V_c}\int_{C_c\cap T_e}\lambda_i^{(e)}(\mathbf r)\,dV,
+\qquad
+\vartheta_c=\frac{1}{V_c}\sum_e\lvert C_c\cap T_e\rvert,
+```
+
+where $V_c$ is the Cartesian voxel volume and $\lambda_i^{(e)}$ is the
+tetrahedral barycentric basis function. The reconstructed voxel field is
+
+```{math}
+:label: sp5-tet4-volume-field
+\widetilde{\mathbf m}_c
+=\frac{\sum_{e,i}R_{ci}^{(e)}\mathbf m_i}{\vartheta_c},
+\qquad 0<\vartheta_c\leq1,
+```
+
+and voxels with $\vartheta_c=0$ are masked. Because $\lambda_i^{(e)}$ is
+affine, integrating it over the clipped convex polyhedron is exact up to the
+floating-point geometry and clipping tolerance; it preserves the FEM volume
+integral when the Cartesian grid covers the magnetic domain. This operator is
+valid only for affine straight-sided tet4 cells and non-overlapping magnetic
+meshes. Curved/high-order cells, overlapping elements, and uncovered magnetic
+volume are rejected or remain outside the qualification scope. The operator is
+an analysis/restriction layer, not a replacement for either backend's native
+demagnetization or Zhang--Li solver.
 
 ### 6.4 Observables and artifact semantics
 
@@ -348,6 +477,16 @@ scalar-to-field-mean differences are below `3e-17`. A scalar row is therefore
 usable for this run, while the CPU accepted-step publication still needs a full
 trajectory gate.
 
+The FEM/FDM field comparator treats the final physical time as a hard
+comparability precondition. It still emits the numerical metrics when the
+caller supplies mismatched snapshots, so that the discrepancy can be
+diagnosed, but it marks the report `qualification.status="rejected"` and
+`equivalence_established=false` when
+$\lvert t_{\mathrm{FEM}}-t_{\mathrm{FDM}}\rvert$ exceeds the declared tolerance.
+Such metrics must not be interpreted as a cross-backend error estimate. A
+matched-time report remains `diagnostic` until the common equilibrium, operator,
+mesh, and $h/\Delta t$ convergence gates are satisfied.
+
 (implementation-mapping)=
 ## 7. Implementation mapping
 
@@ -361,9 +500,13 @@ The native CUDA one-step parity test is kept in the active inline CUDA test
 module in `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`; the historical
 orphan `native/tests.rs` file is not runtime evidence.
 
-No native FEM or GPU code is inferred from the Python presence. Source-visible,
-compiled, executed-device, parity, and scientific qualification statuses remain
-separate evidence levels.
+The FEM counterpart is intentionally mapped separately from the FDM source
+contract. Source-visible, compiled, executed-device, parity, and scientific
+qualification statuses remain separate evidence levels. The full FEM CPU
+trajectory is now executable and compared at a matched endpoint, but its
+different canonical Zhang--Li realization, mesh, demagnetization operator, and
+relaxed state prevent an equivalence claim. The managed runtime is dirty, so
+the run is diagnostic rather than release qualification.
 
 (validation)=
 ## 8. Validation strategy and current result
@@ -377,7 +520,7 @@ The external source expects:
 | $\bar m_z$ | `0.02296375` | absolute error $\le 1\times10^{-4}$ |
 
 The focused source-to-IR test passes. A fresh MuMax3 `v3.11.2` execution on the
-RTX 4080 SUPER returned
+RTX 4080 SUPER using its literal default demagnetizing accuracy returned
 $(\bar m_x,\bar m_y,\bar m_z)=(-0.23488366603851318,
 -0.09453280270099640,0.022961989045143127)$, within the source golden
 tolerance. The fresh Fullmag managed CUDA fixed-step run with `dt=1e-13 s`,
@@ -389,8 +532,9 @@ $(2.2795424643\times10^{-4},2.3230951948\times10^{-5},
 -1.9028180738\times10^{-5})$, with vector RMS
 $1.3274648427\times10^{-4}$. This is a substantial correction of the prior
 factor-of-two error, but the maximum component still exceeds the external
-$1\times10^{-4}$ tolerance; the executed result remains diagnostic and not
-validated. The artifact records `execution_engine=cuda_fdm`, FP64/cuFFT,
+$1\times10^{-4}$ tolerance. The literal-default comparison therefore remains
+a visible failure and is not used as the selected qualification reference. The
+artifact records `execution_engine=cuda_fdm`, FP64/cuFFT,
 `lossy_fallback_used=false`, and the scalar row agrees with the volume mean to
 below `3\times10^{-17}`. The one-step oracle does not substitute for the full
 trajectory comparison below.
@@ -405,16 +549,39 @@ The CPU and CUDA final fields agree to `6.94e-16` maximum component error and
 `time`, and `dt` identities. Physical trace quantities agree to machine
 precision apart from backend reduction round-off (maximum observed difference
 `1.29e-3` in `max_dm_dt`, on a scale of `1e10 s^-1`). This closes the fixed
-CPU↔CUDA trajectory parity gate, but both artifacts remain
-`qualification.json.status=not_evaluated` because the MuMax3 error is still
-above `1e-4` in the maximum mean component.
+CPU↔CUDA trajectory parity gate.
 
-The required final matrix is: CPU adaptive RK45 at the source horizon; fixed
-step refinement; independent equilibrium convergence; GPU adaptive capability
-identity and device-resident parity; then (only then) an FDM/FEM comparison.
-The isolated CPU↔CUDA MuMax3-operator step and the fixed-step trajectory parity
-are green, but neither substitutes for the remaining scientific qualification
-requirements.
+The remaining discrepancy was isolated with full-field diagnostics on a
+common initial state. The exchange field agrees with relative RMS
+$4.5025\times10^{-6}$. For the demagnetizing field, the relative RMS decreases
+monotonically from $1.1728\times10^{-3}$ at MuMax3 `DemagAccuracy=6`, through
+$4.9233\times10^{-4}$ at 12, to $2.2833\times10^{-4}$ at 24. This trend is
+consistent with convergence of MuMax3's numerical quadrature toward Fullmag's
+analytic Newell tensor; it does not justify degrading the Fullmag kernel to
+match the default external approximation.
+
+With the explicit MuMax3 `DemagAccuracy=24` full-field reference, the complete
+SP5 trajectory passes the $10^{-4}$ field criterion:
+
+| timestep | Fullmag CPU--MuMax3 full-field RMS | maximum component | CPU--CUDA maximum component |
+|---:|---:|---:|---:|
+| $1\times10^{-13}\,\mathrm{s}$ | $9.7093\times10^{-6}$ | $4.3982\times10^{-5}$ | $6.9389\times10^{-16}$ |
+| $5\times10^{-14}\,\mathrm{s}$ | $9.7045\times10^{-6}$ | $4.3967\times10^{-5}$ | $7.4940\times10^{-16}$ |
+
+`scripts/validate_fdm_sp5_runtime.py` records the literal and converged
+references independently. Qualification is `qualified` only when
+`qualification_reference=converged_demag` is requested explicitly and all
+problem, backend, device, precision, fixed-step schedule, full-field,
+physics-graph execution and CPU--CUDA parity checks pass. The two qualification
+artifacts are:
+
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-converged-demag-qualification-dt1e-13-20260809-v2.json`;
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-converged-demag-qualification-dt5e-14-20260809-v1.json`.
+
+This promotes only FDM CPU reference and native FDM CUDA FP64 strict execution
+for the named fixed-step SP5 workload. The required broader matrix still
+contains CPU/GPU adaptive RK45, FP32, grid convergence, general Zhang--Li
+workloads and the separate FEM comparison.
 
 (limitations)=
 ## 9. Limitations and deferred work
@@ -424,15 +591,18 @@ requirements.
 2. Execute and qualify the newly identity-bound CUDA adaptive controller before
    using GPU adaptive results as evidence; the identity alone is not a
    scientific qualification.
-3. Add timestep and grid convergence tables; the one diagnostic fixed-step
-   result is not a production tolerance claim.
-4. Isolate the central-v1 trajectory mismatch with independent equilibrium,
-   operator, demagnetization, and update-order controls before changing the
-   published equation.
-5. Add a FEM realization only after its own mesh, demag, and cross-backend
-   convergence gates.
-6. Keep the one-step CPU↔CUDA gate green while extending it to an accepted-step
-   trajectory and a device-resident parity matrix.
+3. Extend the two-point fixed-step refinement to grid convergence and at least
+   one independently chosen continuum observable; the current status is a
+   workload qualification, not a general discretization claim.
+4. Preserve the direct exchange/demag and torque-only diagnostics as regression
+   gates. The previously observed mismatch is isolated to the external demag
+   quadrature and is not evidence for changing the Zhang--Li equation.
+5. Complete the FEM three-level mesh, demagnetization, timestep, and matched
+   field-sampling gates. The volume-preserving tet4 restriction is now
+   implemented and tested, but the current hmax=6 nm minimizer budget is not
+   yet torque-qualified.
+6. Keep both the one-step and accepted-step CPU↔CUDA gates green while adding
+   FP32 and adaptive device-resident parity as separate qualification rows.
 
 (scientific-bibliography)=
 ## 10. Scientific bibliography
@@ -467,3 +637,16 @@ requirements.
 | `sp5-cuda-mumax3` | `backends/fdm/gpu/cuda/integrators/llg_fp64.cu` | `zhang_li_neighbor_index` | native CUDA central/PBC neighbour realization |
 | `sp5-cuda-cpu-parity-test` | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available` | managed FP64 one-step CPU↔CUDA operator gate |
 | `sp5-ir-mumax3` | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | execution provenance fields for formula/operator/target/Landé |
+| `sp5-mumax-demag-kernel` | `external_solvers/3/mag/demagkernel.go` | `CalcDemagKernel` | MuMax3 numerical surface--volume demagnetizing-kernel quadrature controlled by `DemagAccuracy` |
+| `sp5-fullmag-newell-kernel` | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | Fullmag analytic Newell open-boundary demagnetizing tensor |
+| `sp5-full-field-comparison` | `scripts/compare_fdm_sp5_mumax_fields.py` | `compare_fields` | fail-closed comparison of relaxed, zero-current, driven and current-induced full fields |
+| `sp5-effective-field-comparison` | `scripts/compare_fdm_sp5_mumax_effective_fields.py` | `compare_effective_fields` | unit-aware $B/\mu_0\to H$ comparison of exchange and demagnetizing fields |
+| `sp5-demag-accuracy-sweep` | `scripts/compare_fdm_sp5_mumax_effective_fields.py` | `compare_demag_sweep` | monotonic MuMax3 `DemagAccuracy` convergence diagnostic |
+| `sp5-runtime-validator` | `scripts/validate_fdm_sp5_runtime.py` | `validate_runs` | joint CPU/CUDA schedule, full-field, provenance and selected-reference qualification gate |
+| `sp5-converged-reference-loader` | `scripts/validate_fdm_sp5_runtime.py` | `load_converged_reference` | exact-grid OVF loader for the explicit `converged_demag` reference |
+| `sp5-fem-fixture` | `packages/fullmag-py/src/fullmag/world.py` | `study` | stage-first study builder invoked by the shared-domain FEM counterpart fixture |
+| `sp5-fem-demag-runtime` | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` | `context_compute_demag_poisson` | FEM Poisson--Robin demagnetization realization and volume-weighted observables |
+| `sp5-fem-zhangli-provenance` | `crates/fullmag-runner/src/artifacts.rs` | `fem_spin_torque_provenance` | resolved FEM CPU engine and versioned Zhang--Li provenance |
+| `sp5-comparison-script` | `scripts/compare_sp5_scalar_runs.py` | `compare` | matched-time FEM/FDM scalar endpoint comparison with diagnostic-only qualification |
+| `sp5-field-comparison-script` | `scripts/compare_sp5_field_states.py` | `compare` | matched-time FEM/FDM field comparison on the FDM grid with explicit restriction method and diagnostic qualification |
+| `sp5-tet4-volume-restriction` | `packages/fullmag-py/src/fullmag/analysis/fem_cartesian_restriction.py` | `build_tet4_cartesian_restriction` | exact affine-P1 volume-preserving tet4-to-Cartesian restriction used to separate field mapping error from solver physics |

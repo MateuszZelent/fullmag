@@ -38,9 +38,9 @@
   ],
   "public_api": {
     "parameters": [
-      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, `multilayer_convolution`", "meaning": "common-grid or multilayer topology", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.demag.strategy`"},
-      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack`, `three_d`", "meaning": "thin-film or full-3D mode", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.demag.mode`"},
-      {"python": "FDM.default_cell", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "default Cartesian cell", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.fdm.default_cell`"}
+      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, `multilayer_convolution`", "meaning": "common-grid or multilayer topology", "backend_support": "FDM CPU/GPU authoring; execution is lane-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"},
+      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack`, `three_d`", "meaning": "thin-film or full-3D mode", "backend_support": "FDM CPU/GPU authoring; execution is lane-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"},
+      {"python": "FDM.default_cell", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "default Cartesian cell", "backend_support": "FDM CPU/GPU authoring; execution is lane-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.cell` and `.default_cell`"}
     ]
   }
 }

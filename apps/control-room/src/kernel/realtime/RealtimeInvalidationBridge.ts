@@ -18,6 +18,9 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -60,6 +63,7 @@ import {
 } from "../api/fieldQueryIdentity";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { canonicalFrequencyDomainResourceKey } from "../resources/frequencyDomainResourceKeys";
+import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
 const PLANAR_FIELD_RESOURCE_PREFIX = DATA_PLANAR_FIELD_META_PATH.slice(
@@ -67,6 +71,11 @@ const PLANAR_FIELD_RESOURCE_PREFIX = DATA_PLANAR_FIELD_META_PATH.slice(
   DATA_PLANAR_FIELD_META_PATH.indexOf("{quantity_id}"),
 );
 const PLANAR_MONITOR_SEGMENT = "/planar-monitors/";
+const FDM_REGION_MEMBERSHIP_SCOPED_PREFIX =
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH.slice(
+    0,
+    DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH.indexOf("{region_id}"),
+  );
 
 interface RealtimeResourceEvent {
   artifact_path?: string;
@@ -743,6 +752,7 @@ export class RealtimeInvalidationBridge {
       this.resources.invalidatePrefix(resourceKey, revision);
       this.invalidateSceneDocumentDependents(resourceKey, revision);
       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
+      this.invalidateFdmMembershipDependents(resourceKey, revision);
       this.invalidateHysteresisAnalysisDependents(resourceKey, revision);
       const dependentStatusRevision =
         this.invalidateRuntimeLifecycleDependents(resourceKey, revision);
@@ -811,6 +821,15 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_META_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_TOPOLOGY_PATH, revision);
+    this.resources.invalidate(DATA_FDM_REGION_MEMBERSHIPS_PATH, revision);
+    this.resources.invalidate(
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+      revision,
+    );
+    this.resources.invalidatePrefix(
+      FDM_REGION_MEMBERSHIP_SCOPED_PREFIX,
+      revision,
+    );
     this.resources.invalidate(MESHING_SHARED_DOMAIN_QUALITY_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH, revision);
     this.resources.invalidate(
@@ -839,12 +858,29 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private invalidateFdmMembershipDependents(
+    recommendedFetch: string,
+    revision: ResourceRevision,
+  ): void {
+    if (recommendedFetch !== DATA_FDM_REGION_MEMBERSHIPS_PATH) return;
+
+    this.resources.invalidate(
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+      revision,
+    );
+    this.resources.invalidatePrefix(
+      FDM_REGION_MEMBERSHIP_SCOPED_PREFIX,
+      revision,
+    );
+  }
+
   private invalidateSceneDocumentDependents(
     recommendedFetch: string,
     revision: ResourceRevision,
   ): void {
     if (recommendedFetch !== MODEL_SCENE_PATH) return;
     const dependentRevision = dependentResourceRevision(MODEL_SCENE_PATH, revision);
+    this.resources.invalidate(PHYSICS_GRAPH_RESOURCE_KEY, dependentRevision);
     this.resources.invalidate(MODEL_REGIONS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_REALIZED_REGIONS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);

@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("RegionsListPanel region creation wiring", () => {
+  it("passes the resolved discretization lane into the regions model", () => {
+    const source = readFileSync(
+      new URL("./RegionsListPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("useSessionStatusSelector(");
+    expect(source).toContain("resolveMeshInspectorLane(sessionDiscretization)");
+    expect(source).toContain("regionDiagnostics.data ?? null,\n        meshLane,");
+  });
+
   it("uses compact Inspector groups without the legacy accordion shell", () => {
     const source = readFileSync(
       new URL("./RegionsListPanel.tsx", import.meta.url),

@@ -1,6 +1,94 @@
 //! Core types for FDM demagnetization tensor convolution.
 
 use rustfft::num_complex::Complex;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Error returned by the checked direct/shifted kernel builders.
+///
+/// The legacy builders intentionally keep their historic infallible API.  New
+/// source/destination pair builders use this error to reject malformed cell
+/// geometry or a pair that cannot be represented by one translational kernel
+/// instead of silently choosing a spacing or orientation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KernelBuildError {
+    /// A grid dimension is zero.
+    EmptyGrid,
+    /// A cell edge is non-finite or not strictly positive.
+    InvalidCellSize {
+        role: &'static str,
+        axis: usize,
+        value: f64,
+    },
+    /// A displacement/offset contains a NaN or infinity.
+    InvalidOffset { axis: usize, value: f64 },
+    /// The requested pair cannot be represented by one translational kernel.
+    UnsupportedGeometry { reason: String },
+}
+
+impl fmt::Display for KernelBuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyGrid => formatter.write_str("kernel grid dimensions must be positive"),
+            Self::InvalidCellSize { role, axis, value } => write!(
+                formatter,
+                "{role} cell size on axis {axis} must be finite and positive (got {value})"
+            ),
+            Self::InvalidOffset { axis, value } => write!(
+                formatter,
+                "kernel offset on axis {axis} must be finite (got {value})"
+            ),
+            Self::UnsupportedGeometry { reason } => formatter.write_str(reason),
+        }
+    }
+}
+
+impl std::error::Error for KernelBuildError {}
+
+/// Six independent components of a cell-pair demagnetization tensor.
+///
+/// Components are normalized as a field response per unit source
+/// magnetization, with the destination-cell volume in the denominator.  The
+/// displacement convention is always `destination_center - source_center`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CellPairTensor {
+    pub xx: f64,
+    pub yy: f64,
+    pub zz: f64,
+    pub xy: f64,
+    pub xz: f64,
+    pub yz: f64,
+}
+
+impl CellPairTensor {
+    pub const fn new(xx: f64, yy: f64, zz: f64, xy: f64, xz: f64, yz: f64) -> Self {
+        Self {
+            xx,
+            yy,
+            zz,
+            xy,
+            xz,
+            yz,
+        }
+    }
+
+    /// Return components in the stable `xx,yy,zz,xy,xz,yz` order.
+    pub fn components(self) -> [(&'static str, f64); 6] {
+        [
+            ("xx", self.xx),
+            ("yy", self.yy),
+            ("zz", self.zz),
+            ("xy", self.xy),
+            ("xz", self.xz),
+            ("yz", self.yz),
+        ]
+    }
+
+    /// Transpose the tensor while retaining the six-component storage.
+    pub const fn transpose(self) -> Self {
+        self
+    }
+}
 
 /// 6-component symmetric demag tensor kernel in FFT domain.
 ///
@@ -115,58 +203,15 @@ impl VectorFieldFftF32 {
 }
 
 /// Describes how a layer's native grid relates to the convolution grid.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransferKind {
     /// Native grid == convolution grid; no resampling needed.
     Identity,
     /// Needs resampling between native and convolution grids.
-    Resample {
-        native_cells: [usize; 3],
-        native_cell_size: [f64; 3],
-        conv_cells: [usize; 3],
-        conv_cell_size: [f64; 3],
-    },
+    PushPull,
 }
 
-/// Key for identifying mathematically identical kernel pairs.
-/// Used to deduplicate: if two layer-pairs have the same shift, cell sizes,
-/// and common grid, they share the same kernel.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KernelReuseKey {
-    /// Quantized z-shift in units of convolution cell size, to avoid float hashing.
-    pub z_shift_quantized: i64,
-    /// Source cell size quantized to integer picometers.
-    pub src_cell_pm: [i64; 3],
-    /// Destination cell size quantized to integer picometers.
-    pub dst_cell_pm: [i64; 3],
-    /// Common convolution grid cells.
-    pub common_cells: [usize; 3],
-}
-
-impl KernelReuseKey {
-    /// Create a reuse key from physical parameters.
-    /// Quantizes to picometer precision to enable hash-based dedup.
-    pub fn new(
-        z_shift: f64,
-        src_cell: [f64; 3],
-        dst_cell: [f64; 3],
-        conv_cell_z: f64,
-        common_cells: [usize; 3],
-    ) -> Self {
-        let quantize = |v: f64| -> i64 { (v * 1e12).round() as i64 };
-        Self {
-            z_shift_quantized: (z_shift / conv_cell_z).round() as i64,
-            src_cell_pm: [
-                quantize(src_cell[0]),
-                quantize(src_cell[1]),
-                quantize(src_cell[2]),
-            ],
-            dst_cell_pm: [
-                quantize(dst_cell[0]),
-                quantize(dst_cell[1]),
-                quantize(dst_cell[2]),
-            ],
-            common_cells,
-        }
-    }
-}
+/// Canonical multilayer kernel key lives in the descriptor module; this
+/// re-export keeps the historic `types::KernelReuseKey` path source-compatible.
+pub use crate::descriptors::KernelReuseKey;

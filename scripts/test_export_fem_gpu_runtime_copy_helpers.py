@@ -556,9 +556,9 @@ def test_export_script_restores_staging_owner_when_container_build_fails() -> No
 def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     lock_index = script.find(
-        'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"'
+        'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"'
     )
-    flock_index = script.find('flock 9')
+    flock_index = script.find('flock --close "${RUNTIME_LOCK}"')
     compose_index = script.find(
         'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
     )
@@ -567,6 +567,26 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     assert flock_index != -1
     assert compose_index != -1
     assert lock_index < flock_index < compose_index
+
+
+def test_export_lock_descriptor_is_not_inherited_by_child_processes() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'FULLMAG_RUNTIME_EXPORT_LOCK_HELD' in script
+    assert 'flock --close "${RUNTIME_LOCK}"' in script
+    assert 'exec 9>"${RUNTIME_LOCK}"' not in script
+    assert "flock -n 9" not in script
+    assert "flock -u 9" not in script
+    assert "exec 9>&-" not in script
+    assert '.fem-gpu-host.export.lock"' not in script
+
+
+def test_export_keeps_the_live_lock_wrapper_when_building_the_immutable_snapshot() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"' not in script
+    assert 'cd "${SOURCE_SNAPSHOT_ROOT}"' in script
+    assert 'verify_source_snapshot_identity\ncd "${SOURCE_SNAPSHOT_ROOT}"' in script
 
 
 def test_export_script_pins_built_image_id_across_export_and_validation() -> None:
@@ -902,7 +922,8 @@ def test_export_uses_immutable_source_snapshot_when_host_worktree_drifts() -> No
     assert '--materialize "${materialize_root}"' in exporter
     assert 'source-cache.${source_snapshot_sha256}' in exporter
     assert 'FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"' in exporter
-    assert 'exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"' in exporter
+    assert 'exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"' not in exporter
+    assert 'verify_source_snapshot_identity\ncd "${SOURCE_SNAPSHOT_ROOT}"' in exporter
     assert 'cd "${SOURCE_SNAPSHOT_ROOT}"' in exporter
     assert '-v "${SOURCE_SNAPSHOT_ROOT}:/workspace:ro"' in exporter
     assert '-v "${REPO_ROOT}:/workspace"' not in exporter

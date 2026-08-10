@@ -15,6 +15,8 @@ from fullmag.analysis.magnetization_comparison import (
 )
 from fullmag.analysis.fem_cartesian_restriction import (
     build_prism6_cartesian_restriction,
+    build_tet4_cartesian_restriction,
+    sample_fem_tet4_cartesian_centers,
     restrict_fem_magnetization,
 )
 from fullmag.meshing.gmsh_bridge import MeshData
@@ -55,6 +57,86 @@ def _square_prism_mesh() -> MeshData:
         facet_global_ordinals=np.asarray([], dtype=np.int64),
         cell_mesh_parts=np.asarray(["magnetic", "magnetic"]),
     )
+
+
+def _unit_tetra_mesh() -> MeshData:
+    nodes = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    return MeshData(
+        nodes=nodes,
+        cell_types=np.asarray(["tet4"]),
+        cell_offsets=np.asarray([0, 4]),
+        cell_nodes=np.asarray([0, 1, 2, 3], dtype=np.int32),
+        element_markers=np.asarray([1], dtype=np.int32),
+        facet_types=np.asarray([], dtype=np.str_),
+        facet_roles=np.asarray([], dtype=np.str_),
+        facet_offsets=np.asarray([0], dtype=np.int64),
+        facet_nodes=np.asarray([], dtype=np.int32),
+        boundary_markers=np.asarray([], dtype=np.int32),
+        cell_global_ordinals=np.asarray([0], dtype=np.int64),
+        facet_global_ordinals=np.asarray([], dtype=np.int64),
+        cell_mesh_parts=np.asarray(["magnetic"]),
+    )
+
+
+def test_tet4_center_sampling_interpolates_affine_field_and_masks_outside() -> None:
+    mesh = _unit_tetra_mesh()
+    grid = CartesianGrid(
+        shape_zyx=(1, 2, 2),
+        bounds_min_xyz=(0.0, 0.0, 0.0),
+        bounds_max_xyz=(1.0, 1.0, 0.5),
+    )
+    nodal_values = np.column_stack(
+        [
+            mesh.nodes[:, 0] + mesh.nodes[:, 1] + mesh.nodes[:, 2],
+            mesh.nodes[:, 0],
+            mesh.nodes[:, 1],
+        ]
+    )
+
+    texture = sample_fem_tet4_cartesian_centers(mesh, nodal_values, grid)
+
+    assert texture.metadata["method"] == "tet4_cartesian_center_barycentric_v1"
+    assert texture.values.shape == (1, 1, 2, 2, 3)
+    assert texture.values.mask[0, 0, 0, 1].all()
+    assert texture.values.mask[0, 0, 1, 0].all()
+    assert texture.values.mask[0, 0, 1, 1].all()
+    np.testing.assert_allclose(texture.values[0, 0, 0, 0], [0.75, 0.25, 0.25])
+
+
+def test_tet4_volume_restriction_preserves_affine_integral() -> None:
+    mesh = _unit_tetra_mesh()
+    grid = CartesianGrid(
+        shape_zyx=(2, 2, 2),
+        bounds_min_xyz=(0.0, 0.0, 0.0),
+        bounds_max_xyz=(1.0, 1.0, 1.0),
+    )
+    nodal_values = np.column_stack(
+        [
+            mesh.nodes[:, 0] + mesh.nodes[:, 1] + mesh.nodes[:, 2],
+            mesh.nodes[:, 0],
+            mesh.nodes[:, 1],
+        ]
+    )
+
+    restriction = build_tet4_cartesian_restriction(mesh, grid)
+    texture = restrict_fem_magnetization(nodal_values, restriction)
+    conservation = restriction.conservation(nodal_values)
+
+    assert restriction.metadata["method"] == "exact_tet4_p1_volume_restriction_v1"
+    np.testing.assert_allclose(restriction.magnetic_volume, 1.0 / 6.0, rtol=0.0, atol=1.0e-12)
+    np.testing.assert_allclose(conservation["projected_volume_m3"], 1.0 / 6.0, rtol=0.0, atol=1.0e-12)
+    np.testing.assert_allclose(conservation["volume_relative_error"], 0.0, rtol=0.0, atol=1.0e-12)
+    np.testing.assert_allclose(conservation["integral_absolute_error"], [0.0, 0.0, 0.0], rtol=0.0, atol=1.0e-12)
+    assert texture.values.shape == (1, 2, 2, 2, 3)
+    assert np.count_nonzero(~np.ma.getmaskarray(texture.values[..., 0])) > 0
 
 
 def test_cartesian_restriction_is_exact_for_an_affine_prism_field() -> None:

@@ -5,6 +5,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 
 export const AIRBOX_GRADING_MODES = ["auto", "geometric", "linear"] as const;
+export type AirboxMeshPolicyLane = "fem" | "fdm";
 
 type AirboxGradingMode = (typeof AIRBOX_GRADING_MODES)[number];
 
@@ -98,6 +99,7 @@ export function airboxMeshPolicyDraftDirty(
 
 export function buildAirboxMeshPolicyReplaceRequest(
   draft: AirboxMeshPolicyDraft,
+  options: { lane?: AirboxMeshPolicyLane } = {},
 ):
   | { error: string }
   | { request: MeshUniverseConfigReplaceRequest | null } {
@@ -112,46 +114,51 @@ export function buildAirboxMeshPolicyReplaceRequest(
   }
 
   const config = { ...parsed.value };
-  if (draft.airboxGradingAuthored) {
-    config.airbox_grading = draft.airboxGrading;
+  const lane = options.lane ?? "fem";
+  if (lane === "fdm") {
+    for (const key of FEM_ONLY_POLICY_KEYS) delete config[key];
   } else {
-    delete config.airbox_grading;
+    if (draft.airboxGradingAuthored) {
+      config.airbox_grading = draft.airboxGrading;
+    } else {
+      delete config.airbox_grading;
+    }
+
+    const hmax = parsePositiveNumber(
+      draft.airboxHmax,
+      "Airbox maximum element size",
+    );
+    if (!hmax.ok) return { error: hmax.error };
+    applyOptionalNumber(config, "airbox_hmax", hmax.value);
+
+    const hmin = parsePositiveNumber(
+      draft.airboxHmin,
+      "Airbox minimum element size",
+    );
+    if (!hmin.ok) return { error: hmin.error };
+    applyOptionalNumber(config, "airbox_hmin", hmin.value);
+
+    const growthRate = parsePositiveNumber(
+      draft.airboxGrowthRate,
+      "Maximum element growth rate",
+    );
+    if (!growthRate.ok) return { error: growthRate.error };
+    applyOptionalNumber(config, "airbox_growth_rate", growthRate.value);
+
+    const curvature = parsePositiveNumber(
+      draft.curvatureFactor,
+      "Curvature factor",
+    );
+    if (!curvature.ok) return { error: curvature.error };
+    applyOptionalNumber(config, "curvature_factor", curvature.value);
+
+    const narrowRegion = parsePositiveNumber(
+      draft.narrowRegionResolution,
+      "Resolution of narrow regions",
+    );
+    if (!narrowRegion.ok) return { error: narrowRegion.error };
+    applyOptionalNumber(config, "narrow_region_resolution", narrowRegion.value);
   }
-
-  const hmax = parsePositiveNumber(
-    draft.airboxHmax,
-    "Airbox maximum element size",
-  );
-  if (!hmax.ok) return { error: hmax.error };
-  applyOptionalNumber(config, "airbox_hmax", hmax.value);
-
-  const hmin = parsePositiveNumber(
-    draft.airboxHmin,
-    "Airbox minimum element size",
-  );
-  if (!hmin.ok) return { error: hmin.error };
-  applyOptionalNumber(config, "airbox_hmin", hmin.value);
-
-  const growthRate = parsePositiveNumber(
-    draft.airboxGrowthRate,
-    "Maximum element growth rate",
-  );
-  if (!growthRate.ok) return { error: growthRate.error };
-  applyOptionalNumber(config, "airbox_growth_rate", growthRate.value);
-
-  const curvature = parsePositiveNumber(
-    draft.curvatureFactor,
-    "Curvature factor",
-  );
-  if (!curvature.ok) return { error: curvature.error };
-  applyOptionalNumber(config, "curvature_factor", curvature.value);
-
-  const narrowRegion = parsePositiveNumber(
-    draft.narrowRegionResolution,
-    "Resolution of narrow regions",
-  );
-  if (!narrowRegion.ok) return { error: narrowRegion.error };
-  applyOptionalNumber(config, "narrow_region_resolution", narrowRegion.value);
 
   // Airbox mode
   const trimmedMode = draft.airboxMode.trim();
@@ -202,6 +209,15 @@ export function buildAirboxMeshPolicyReplaceRequest(
 
   return { request: { config } };
 }
+
+const FEM_ONLY_POLICY_KEYS = [
+  "airbox_grading",
+  "airbox_growth_rate",
+  "airbox_hmax",
+  "airbox_hmin",
+  "curvature_factor",
+  "narrow_region_resolution",
+] as const;
 
 function isUntouchedNullAuthoredDraft(
   draft: AirboxMeshPolicyDraft,

@@ -12,9 +12,7 @@ pub struct DomainMeta {
     pub domain_id: String,
     #[schema(example = "fem")]
     pub discretization: String,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub generation_id: u64,
+    pub generation_id: String,
     pub dimension: u8,
     pub coordinate_system: String,
     pub units: HashMap<String, String>,
@@ -49,6 +47,97 @@ pub struct StructuredGridDescriptor {
     /// `origin + (i + 0.5) * spacing` on non-zero axes.
     pub origin: [f64; 3],
     pub spacing: [f64; 3],
+}
+
+/// Thin, revision-driven description of the native carriers used by an FDM
+/// multilayer convolution.  The common transform layout is an FFT scratch
+/// layout and must never be interpreted as a physical mesh.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FdmMultilayerLayoutResource {
+    pub schema_version: String,
+    pub domain_generation_id: String,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    pub backend: String,
+    pub layout_revision: u64,
+    pub observation_revision: u64,
+    pub execution_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub common_transform_layout: Option<FdmCommonTransformLayoutResource>,
+    pub layers: Vec<FdmLayerLayoutResource>,
+    pub airbox: FdmMultilayerAirboxResource,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FdmCommonTransformLayoutResource {
+    pub shape: [u32; 3],
+    pub cell_size: [f64; 3],
+    pub origin: [f64; 3],
+    pub fft_shape: [u32; 3],
+    pub is_physical_mesh: bool,
+    pub provenance: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FdmLayerLayoutResource {
+    pub layer_id: String,
+    pub object_id: String,
+    pub magnet_name: String,
+    pub native_grid: [u32; 3],
+    pub native_cell_size: [f64; 3],
+    pub native_origin: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_grid_fingerprint: Option<String>,
+    pub convolution_grid: [u32; 3],
+    pub convolution_cell_size: [f64; 3],
+    pub transfer_kind: String,
+    pub active_mask_present: bool,
+    pub active_cell_count: u64,
+    pub inactive_cell_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mask_provenance: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FdmMultilayerAirboxResource {
+    pub carrier_available: bool,
+    pub h_demag_available: bool,
+    pub h_eff_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h_eff_unavailable_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cells: Option<[u32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_m: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_size_m: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_only: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_grid_fingerprints: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_runtime_identity: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -134,9 +223,7 @@ pub struct DomainSliceMeshOverlay {
     pub segment_count: usize,
     pub point_count: usize,
     pub topology_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    #[schema(value_type = String)]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub etag: String,
 }
 

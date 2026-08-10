@@ -10,6 +10,8 @@
 
 use std::f64::consts::PI;
 
+use crate::types::{CellPairTensor, KernelBuildError};
+
 // ---------------------------------------------------------------------------
 // Base functions (Boris formulation with log1p for numerical stability)
 // ---------------------------------------------------------------------------
@@ -159,10 +161,24 @@ fn ldia(
     hz: f64,
 ) -> f64 {
     // Shift indices: f_vals is stored with +1 offset
-    let i = i + 1;
-    let j = j + 1;
-    let k = k + 1;
+    ldia_at(i + 1, j + 1, k + 1, f_vals, sx, sy, hx, hy, hz)
+}
 
+/// Apply the 27-point stencil at explicit precomputed-grid coordinates.
+///
+/// Unlike [`ldia`], this accepts a caller-provided Z center so shifted kernels
+/// can evaluate positive and negative lags independently on one signed grid.
+fn ldia_at(
+    i: usize,
+    j: usize,
+    k: usize,
+    f_vals: &[f64],
+    sx: usize,
+    sy: usize,
+    hx: f64,
+    hy: f64,
+    hz: f64,
+) -> f64 {
     let idx = |a: usize, b: usize, c: usize| c * sy * sx + b * sx + a;
 
     let terms: [f64; 27] = [
@@ -200,6 +216,278 @@ fn ldia(
     ];
 
     kahan_sum(&terms) / (4.0 * PI * hx * hy * hz)
+}
+
+/// Apply the 27-point stencil directly at physical coordinates.
+///
+/// This is the correctness fallback for a large integer lag whose physical
+/// displacement becomes near-field after applying an offset. Such a lag can
+/// be outside the bounded precomputed window and must not use point-dipole
+/// asymptotics.
+fn ldia_direct<F>(x: f64, y: f64, z: f64, hx: f64, hy: f64, hz: f64, base: F) -> f64
+where
+    F: Fn(f64, f64, f64) -> f64,
+{
+    const WEIGHTS: [f64; 3] = [-1.0, 2.0, -1.0];
+    let mut terms = [0.0_f64; 27];
+    let mut index = 0;
+    for (k, wz) in WEIGHTS.into_iter().enumerate() {
+        for (j, wy) in WEIGHTS.into_iter().enumerate() {
+            for (i, wx) in WEIGHTS.into_iter().enumerate() {
+                terms[index] = wx
+                    * wy
+                    * wz
+                    * base(
+                        x + (i as f64 - 1.0) * hx,
+                        y + (j as f64 - 1.0) * hy,
+                        z + (k as f64 - 1.0) * hz,
+                    );
+                index += 1;
+            }
+        }
+    }
+
+    kahan_sum(&terms) / (4.0 * PI * hx * hy * hz)
+}
+
+/// Evaluate a double-volume Newell integral directly from its 64 corners.
+///
+/// The finite-difference stencil is efficient near the origin but loses
+/// significant bits at large in-plane lags.  The 2-D multilayer lane uses
+/// this formulation for its complete padded kernel, so the CPU reference can
+/// be checked against an independent exact cell-pair oracle.
+fn corner_sum_exact<F>(
+    x: f64,
+    y: f64,
+    z: f64,
+    source_cell: [f64; 3],
+    destination_cell: [f64; 3],
+    base: F,
+) -> f64
+where
+    F: Fn(f64, f64, f64) -> f64,
+{
+    let mut terms = [0.0_f64; 64];
+    let mut index = 0;
+    for destination_x in [-1.0, 1.0] {
+        for destination_y in [-1.0, 1.0] {
+            for destination_z in [-1.0, 1.0] {
+                for source_x in [-1.0, 1.0] {
+                    for source_y in [-1.0, 1.0] {
+                        for source_z in [-1.0, 1.0] {
+                            let coordinates = [
+                                x + destination_x * destination_cell[0] / 2.0
+                                    - source_x * source_cell[0] / 2.0,
+                                y + destination_y * destination_cell[1] / 2.0
+                                    - source_y * source_cell[1] / 2.0,
+                                z + destination_z * destination_cell[2] / 2.0
+                                    - source_z * source_cell[2] / 2.0,
+                            ];
+                            terms[index] = destination_x
+                                * destination_y
+                                * destination_z
+                                * source_x
+                                * source_y
+                                * source_z
+                                * base(coordinates[0], coordinates[1], coordinates[2]);
+                            index += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    kahan_sum(&terms) / (4.0 * PI * destination_cell.into_iter().product::<f64>())
+}
+
+/// Evaluate one oriented source/destination cell pair with the exact
+/// double-volume Newell corner sum.
+///
+/// `destination_cell` is deliberately the first argument because this is the
+/// orientation used by the pair descriptor and by the Appendix-A equations.
+/// The displacement is `destination_center - source_center`.  Unlike the
+/// translational FFT kernel builder, this direct helper supports independent
+/// cell sizes on all three axes and is therefore the correctness oracle for
+/// unequal 3-D pairs as well as the unequal-thickness 2-D lane.
+pub fn cell_pair_tensor(
+    destination_cell: [f64; 3],
+    source_cell: [f64; 3],
+    displacement: [f64; 3],
+) -> Result<CellPairTensor, KernelBuildError> {
+    for (role, cell) in [("source", source_cell), ("destination", destination_cell)] {
+        for (axis, value) in cell.into_iter().enumerate() {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(KernelBuildError::InvalidCellSize { role, axis, value });
+            }
+        }
+    }
+    for (axis, value) in displacement.into_iter().enumerate() {
+        if !value.is_finite() {
+            return Err(KernelBuildError::InvalidOffset { axis, value });
+        }
+    }
+
+    let tensor = cell_pair_tensor_exact(source_cell, destination_cell, displacement);
+    if tensor
+        .components()
+        .into_iter()
+        .any(|(_, value)| !value.is_finite())
+    {
+        return Err(KernelBuildError::UnsupportedGeometry {
+            reason: "cell-pair Newell evaluation overflowed to a non-finite tensor".to_string(),
+        });
+    }
+    Ok(tensor)
+}
+
+/// Compatibility spelling for callers that prefer an explicit `compute_`
+/// prefix.  The checked result is intentional: malformed geometry must not be
+/// silently converted to a different kernel family.
+pub fn compute_cell_pair_tensor(
+    destination_cell: [f64; 3],
+    source_cell: [f64; 3],
+    displacement: [f64; 3],
+) -> Result<CellPairTensor, KernelBuildError> {
+    cell_pair_tensor(destination_cell, source_cell, displacement)
+}
+
+fn permute_cell(cell: [f64; 3], permutation: [usize; 3]) -> [f64; 3] {
+    [
+        cell[permutation[0]],
+        cell[permutation[1]],
+        cell[permutation[2]],
+    ]
+}
+
+/// Exact six-component pair tensor.  Axis permutations are applied to both
+/// coordinates and cell extents; omitting the latter would be wrong for
+/// unequal source/destination dimensions.
+fn cell_pair_tensor_exact(
+    source_cell: [f64; 3],
+    destination_cell: [f64; 3],
+    displacement: [f64; 3],
+) -> CellPairTensor {
+    let n_xx = corner_sum_exact(
+        displacement[0],
+        displacement[1],
+        displacement[2],
+        source_cell,
+        destination_cell,
+        newell_f,
+    );
+    let n_yy = corner_sum_exact(
+        displacement[1],
+        displacement[0],
+        displacement[2],
+        permute_cell(source_cell, [1, 0, 2]),
+        permute_cell(destination_cell, [1, 0, 2]),
+        newell_f,
+    );
+    let n_zz = corner_sum_exact(
+        displacement[2],
+        displacement[1],
+        displacement[0],
+        permute_cell(source_cell, [2, 1, 0]),
+        permute_cell(destination_cell, [2, 1, 0]),
+        newell_f,
+    );
+    let n_xy = corner_sum_exact(
+        displacement[0],
+        displacement[1],
+        displacement[2],
+        source_cell,
+        destination_cell,
+        newell_g,
+    );
+    let n_xz = corner_sum_exact(
+        displacement[0],
+        displacement[2],
+        displacement[1],
+        permute_cell(source_cell, [0, 2, 1]),
+        permute_cell(destination_cell, [0, 2, 1]),
+        newell_g,
+    );
+    let n_yz = corner_sum_exact(
+        displacement[1],
+        displacement[2],
+        displacement[0],
+        permute_cell(source_cell, [1, 2, 0]),
+        permute_cell(destination_cell, [1, 2, 0]),
+        newell_g,
+    );
+    CellPairTensor::new(n_xx, n_yy, n_zz, n_xy, n_xz, n_yz)
+}
+
+fn point_dipole_pair_tensor(source_volume: f64, displacement: [f64; 3]) -> CellPairTensor {
+    let r2 = displacement[0] * displacement[0]
+        + displacement[1] * displacement[1]
+        + displacement[2] * displacement[2];
+    let r = r2.sqrt();
+    let inv_r3 = 1.0 / (r2 * r);
+    let inv_r5 = inv_r3 / r2;
+    let scale = source_volume / (4.0 * PI);
+    CellPairTensor::new(
+        scale * (inv_r3 - 3.0 * displacement[0] * displacement[0] * inv_r5),
+        scale * (inv_r3 - 3.0 * displacement[1] * displacement[1] * inv_r5),
+        scale * (inv_r3 - 3.0 * displacement[2] * displacement[2] * inv_r5),
+        scale * (-3.0 * displacement[0] * displacement[1] * inv_r5),
+        scale * (-3.0 * displacement[0] * displacement[2] * inv_r5),
+        scale * (-3.0 * displacement[1] * displacement[2] * inv_r5),
+    )
+}
+
+fn signed_lag_positions(cells: usize, padded: usize) -> Vec<(isize, usize)> {
+    let mut positions = Vec::with_capacity(cells.saturating_mul(2).saturating_sub(1));
+    positions.push((0, 0));
+    for lag in 1..cells {
+        positions.push((lag as isize, lag));
+        positions.push((-(lag as isize), padded - lag));
+    }
+    positions
+}
+
+fn validate_shifted_pair_inputs(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    source_cell: [f64; 3],
+    destination_cell: [f64; 3],
+    offset: [f64; 3],
+) -> Result<(), KernelBuildError> {
+    if nx == 0 || ny == 0 || nz == 0 {
+        return Err(KernelBuildError::EmptyGrid);
+    }
+    for (role, cell) in [("source", source_cell), ("destination", destination_cell)] {
+        for (axis, value) in cell.into_iter().enumerate() {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(KernelBuildError::InvalidCellSize { role, axis, value });
+            }
+        }
+    }
+    for (axis, value) in offset.into_iter().enumerate() {
+        if !value.is_finite() {
+            return Err(KernelBuildError::InvalidOffset { axis, value });
+        }
+    }
+
+    // A single Toeplitz kernel needs one centre-to-centre pitch on each
+    // translational axis.  Appendix A permits independent source/destination
+    // thickness while retaining common in-plane pitches.  For a true 3-D
+    // convolution, unequal source/destination spacing on any axis would make
+    // the displacement depend on both cell indices; use `cell_pair_tensor`
+    // directly for that irregular case instead of silently choosing a pitch.
+    if source_cell[0] != destination_cell[0] || source_cell[1] != destination_cell[1] {
+        return Err(KernelBuildError::UnsupportedGeometry {
+            reason: "shifted FFT kernel requires common source/destination x/y cell pitches"
+                .to_string(),
+        });
+    }
+    if nz > 1 && source_cell[2] != destination_cell[2] {
+        return Err(KernelBuildError::UnsupportedGeometry {
+            reason: "3-D shifted FFT kernel requires equal source/destination z pitch; use cell_pair_tensor for an irregular pair".to_string(),
+        });
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -369,12 +657,30 @@ pub fn compute_newell_kernels(
                              n_yz: &mut [f64]| {
         let (nxx, nyy, nzz, nxy, nxz, nyz);
         let dist2 = i * i + j * j + k * k;
-        let use_asymptotic = i >= ASYMPTOTIC_DISTANCE
-            || j >= ASYMPTOTIC_DISTANCE
-            || k >= ASYMPTOTIC_DISTANCE
-            || dist2 >= ASYMPTOTIC_DISTANCE * ASYMPTOTIC_DISTANCE;
+        // The 2D multilayer lane is small enough to retain the exact
+        // double-volume Newell integral for every in-plane lag.  This keeps
+        // the published CPU reference compatible with an independent exact
+        // oracle even when a padded FFT grid extends beyond 40 cells.  The
+        // point-dipole shortcut remains available for genuinely 3D grids,
+        // where the full tensor volume can be materially larger.
+        let use_asymptotic = nz > 1
+            && (i >= ASYMPTOTIC_DISTANCE
+                || j >= ASYMPTOTIC_DISTANCE
+                || k >= ASYMPTOTIC_DISTANCE
+                || dist2 >= ASYMPTOTIC_DISTANCE * ASYMPTOTIC_DISTANCE);
 
-        if use_asymptotic {
+        if nz == 1 {
+            let x = i as f64 * dx;
+            let y = j as f64 * dy;
+            let z = k as f64 * dz;
+            let cell = [dx, dy, dz];
+            nxx = corner_sum_exact(x, y, z, cell, cell, newell_f);
+            nyy = corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_f(y, x, z));
+            nzz = corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_f(z, y, x));
+            nxy = corner_sum_exact(x, y, z, cell, cell, newell_g);
+            nxz = corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_g(x, z, y));
+            nyz = corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_g(y, z, x));
+        } else if use_asymptotic {
             let x = i as f64 * dx;
             let y = j as f64 * dy;
             let z = k as f64 * dz;
@@ -385,13 +691,23 @@ pub fn compute_newell_kernels(
             nxy = asymptotic_nxy(x, y, z, vol);
             nxz = asymptotic_nxy(x, z, y, vol);
             nyz = asymptotic_nxy(y, z, x, vol);
-        } else {
+        } else if i < nx_dist && j < ny_dist && k < nz_dist {
             nxx = ldia(i, j, k, &f_vals_xx, fsx, fsy, dx, dy, dz);
             nyy = ldia(i, j, k, &f_vals_yy, fsx, fsy, dy, dx, dz);
             nzz = ldia(i, j, k, &f_vals_zz, fsx, fsy, dz, dy, dx);
             nxy = ldia(i, j, k, &g_vals_xy, fsx, fsy, dx, dy, dz);
             nxz = ldia(i, j, k, &g_vals_xz, fsx, fsy, dx, dz, dy);
             nyz = ldia(i, j, k, &g_vals_yz, fsx, fsy, dy, dz, dx);
+        } else {
+            let x = i as f64 * dx;
+            let y = j as f64 * dy;
+            let z = k as f64 * dz;
+            nxx = ldia_direct(x, y, z, dx, dy, dz, newell_f);
+            nyy = ldia_direct(x, y, z, dy, dx, dz, |x, y, z| newell_f(y, x, z));
+            nzz = ldia_direct(x, y, z, dz, dy, dx, |x, y, z| newell_f(z, y, x));
+            nxy = ldia_direct(x, y, z, dx, dy, dz, newell_g);
+            nxz = ldia_direct(x, y, z, dx, dz, dy, |x, y, z| newell_g(x, z, y));
+            nyz = ldia_direct(x, y, z, dy, dz, dx, |x, y, z| newell_g(y, z, x));
         }
 
         let pidx = |a: usize, b: usize, c: usize| c * py * px + b * px + a;
@@ -534,6 +850,10 @@ pub fn compute_newell_kernels_shifted(
     dz: f64,
     z_offset: f64,
 ) -> NewellKernels {
+    if z_offset == 0.0 {
+        return compute_newell_kernels(nx, ny, nz, dx, dy, dz);
+    }
+
     let px = 2 * nx;
     let py = 2 * ny;
     let pz = 2 * nz;
@@ -544,10 +864,12 @@ pub fn compute_newell_kernels_shifted(
     let nz_dist = nz.min(ASYMPTOTIC_DISTANCE);
     let fsx = nx_dist + 2;
     let fsy = ny_dist + 2;
-    let fsz = nz_dist + 2;
+    // Shifted kernels are not symmetric in Z. Store both signed lag ranges,
+    // including one halo point on either side for the 27-point stencil.
+    let fsz = 2 * nz_dist + 1;
     let flen = fsx * fsy * fsz;
 
-    // Step 1: Precompute f and g values with z_offset
+    // Step 1: Precompute f and g values with z_offset for signed Z lags.
     let mut f_vals_xx = vec![0.0; flen];
     let mut f_vals_yy = vec![0.0; flen];
     let mut f_vals_zz = vec![0.0; flen];
@@ -556,14 +878,14 @@ pub fn compute_newell_kernels_shifted(
     let mut g_vals_yz = vec![0.0; flen];
 
     for k in 0..fsz {
-        let kk = k as isize - 1;
+        let kk = k as isize - nz_dist as isize;
         for j in 0..fsy {
             let jj = j as isize - 1;
             for i in 0..fsx {
                 let ii = i as isize - 1;
                 let x = ii as f64 * dx;
                 let y = jj as f64 * dy;
-                let z = kk as f64 * dz + z_offset; // shifted!
+                let z = kk as f64 * dz + z_offset;
                 let idx = k * fsy * fsx + j * fsx + i;
                 f_vals_xx[idx] = newell_f(x, y, z);
                 f_vals_yy[idx] = newell_f(y, x, z);
@@ -575,9 +897,8 @@ pub fn compute_newell_kernels_shifted(
         }
     }
 
-    // Step 2: Apply 27-point stencil and place into padded grid.
-    // For shifted kernels, the octant symmetry in z is BROKEN
-    // (the kernel is no longer even/odd in z), so we fill all z positions directly.
+    // Step 2: Apply the stencil and place each signed Z lag independently.
+    // XY parity remains valid because the offset is purely along Z.
     let mut n_xx = vec![0.0; padded_len];
     let mut n_yy = vec![0.0; padded_len];
     let mut n_zz = vec![0.0; padded_len];
@@ -590,34 +911,7 @@ pub fn compute_newell_kernels_shifted(
     for k in 0..nz {
         for j in 0..ny {
             for i in 0..nx {
-                let (nxx, nyy, nzz, nxy, nxz, nyz);
-                let dist2 = i * i + j * j + k * k;
-                let use_asymptotic = i >= ASYMPTOTIC_DISTANCE
-                    || j >= ASYMPTOTIC_DISTANCE
-                    || k >= ASYMPTOTIC_DISTANCE
-                    || dist2 >= ASYMPTOTIC_DISTANCE * ASYMPTOTIC_DISTANCE;
-
-                if use_asymptotic {
-                    let x = i as f64 * dx;
-                    let y = j as f64 * dy;
-                    let z = k as f64 * dz + z_offset;
-                    nxx = asymptotic_nxx(x, y, z, vol);
-                    nyy = asymptotic_nxx(y, x, z, vol);
-                    nzz = asymptotic_nxx(z, y, x, vol);
-                    nxy = asymptotic_nxy(x, y, z, vol);
-                    nxz = asymptotic_nxy(x, z, y, vol);
-                    nyz = asymptotic_nxy(y, z, x, vol);
-                } else {
-                    nxx = ldia(i, j, k, &f_vals_xx, fsx, fsy, dx, dy, dz);
-                    nyy = ldia(i, j, k, &f_vals_yy, fsx, fsy, dy, dx, dz);
-                    nzz = ldia(i, j, k, &f_vals_zz, fsx, fsy, dz, dy, dx);
-                    nxy = ldia(i, j, k, &g_vals_xy, fsx, fsy, dx, dy, dz);
-                    nxz = ldia(i, j, k, &g_vals_xz, fsx, fsy, dx, dz, dy);
-                    nyz = ldia(i, j, k, &g_vals_yz, fsx, fsy, dy, dz, dx);
-                }
-
                 let pidx = |a: usize, b: usize, c: usize| c * py * px + b * px + a;
-                // XY octant symmetry preserved (shifted only in z)
                 let xs: &[(usize, f64)] = if i == 0 {
                     &[(0, 1.0)]
                 } else {
@@ -628,16 +922,64 @@ pub fn compute_newell_kernels_shifted(
                 } else {
                     &[(j, 1.0), (py - j, -1.0)]
                 };
-                // Z symmetry broken by shift — only forward z
-                let zs: &[(usize, f64)] = if k == 0 {
-                    &[(0, 1.0)]
+                let signed_z_lags: &[(isize, usize)] = if k == 0 {
+                    &[(0, 0)]
                 } else {
-                    &[(k, 1.0), (pz - k, 1.0)] // no sign flip (shifted breaks z-parity)
+                    &[(k as isize, k), (-(k as isize), pz - k)]
                 };
 
-                for &(ix, sx) in xs {
-                    for &(iy, sy) in ys {
-                        for &(iz, _sz) in zs {
+                for &(z_lag, iz) in signed_z_lags {
+                    let abs_z_lag = z_lag.unsigned_abs();
+                    let x = i as f64 * dx;
+                    let y = j as f64 * dy;
+                    let z = z_lag as f64 * dz + z_offset;
+                    let max_cell_size = dx.max(dy).max(dz);
+                    let far_field_radius = ASYMPTOTIC_DISTANCE as f64 * max_cell_size;
+                    let use_asymptotic =
+                        nz > 1 && x * x + y * y + z * z >= far_field_radius * far_field_radius;
+
+                    let cell = [dx, dy, dz];
+                    let (nxx, nyy, nzz, nxy, nxz, nyz) = if nz == 1 {
+                        (
+                            corner_sum_exact(x, y, z, cell, cell, newell_f),
+                            corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_f(y, x, z)),
+                            corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_f(z, y, x)),
+                            corner_sum_exact(x, y, z, cell, cell, newell_g),
+                            corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_g(x, z, y)),
+                            corner_sum_exact(x, y, z, cell, cell, |x, y, z| newell_g(y, z, x)),
+                        )
+                    } else if use_asymptotic {
+                        (
+                            asymptotic_nxx(x, y, z, vol),
+                            asymptotic_nxx(y, x, z, vol),
+                            asymptotic_nxx(z, y, x, vol),
+                            asymptotic_nxy(x, y, z, vol),
+                            asymptotic_nxy(x, z, y, vol),
+                            asymptotic_nxy(y, z, x, vol),
+                        )
+                    } else if i < nx_dist && j < ny_dist && abs_z_lag < nz_dist {
+                        let stencil_z = (z_lag + nz_dist as isize) as usize;
+                        (
+                            ldia_at(i + 1, j + 1, stencil_z, &f_vals_xx, fsx, fsy, dx, dy, dz),
+                            ldia_at(i + 1, j + 1, stencil_z, &f_vals_yy, fsx, fsy, dy, dx, dz),
+                            ldia_at(i + 1, j + 1, stencil_z, &f_vals_zz, fsx, fsy, dz, dy, dx),
+                            ldia_at(i + 1, j + 1, stencil_z, &g_vals_xy, fsx, fsy, dx, dy, dz),
+                            ldia_at(i + 1, j + 1, stencil_z, &g_vals_xz, fsx, fsy, dx, dz, dy),
+                            ldia_at(i + 1, j + 1, stencil_z, &g_vals_yz, fsx, fsy, dy, dz, dx),
+                        )
+                    } else {
+                        (
+                            ldia_direct(x, y, z, dx, dy, dz, newell_f),
+                            ldia_direct(x, y, z, dx, dy, dz, |x, y, z| newell_f(y, x, z)),
+                            ldia_direct(x, y, z, dx, dy, dz, |x, y, z| newell_f(z, y, x)),
+                            ldia_direct(x, y, z, dx, dy, dz, newell_g),
+                            ldia_direct(x, y, z, dx, dy, dz, |x, y, z| newell_g(x, z, y)),
+                            ldia_direct(x, y, z, dx, dy, dz, |x, y, z| newell_g(y, z, x)),
+                        )
+                    };
+
+                    for &(ix, sx) in xs {
+                        for &(iy, sy) in ys {
                             let p = pidx(ix, iy, iz);
                             n_xx[p] = nxx;
                             n_yy[p] = nyy;
@@ -663,6 +1005,181 @@ pub fn compute_newell_kernels_shifted(
         py,
         pz,
     }
+}
+
+/// Build a real-space shifted kernel for an oriented source/destination pair.
+///
+/// The returned arrays use the same x-fastest, tail-wrapped layout as the
+/// historic Newell builders.  `offset` is the physical destination-minus-
+/// source displacement added to every signed lag.  In the 2-D stack (`nz=1`)
+/// source and destination thicknesses may differ, exactly as in Appendix A;
+/// the in-plane pitches remain common.  A 3-D translational kernel requires
+/// equal pitches on all axes.  For a single irregular 3-D pair use
+/// [`cell_pair_tensor`] instead.
+pub fn try_compute_newell_kernels_shifted_pair(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    source_cell: [f64; 3],
+    destination_cell: [f64; 3],
+    offset: [f64; 3],
+) -> Result<NewellKernels, KernelBuildError> {
+    validate_shifted_pair_inputs(nx, ny, nz, source_cell, destination_cell, offset)?;
+
+    if offset == [0.0; 3] && source_cell == destination_cell {
+        let kernels =
+            compute_newell_kernels(nx, ny, nz, source_cell[0], source_cell[1], source_cell[2]);
+        ensure_newell_kernels_finite(&kernels)?;
+        return Ok(kernels);
+    }
+
+    let px = nx
+        .checked_mul(2)
+        .ok_or_else(|| KernelBuildError::UnsupportedGeometry {
+            reason: "x kernel extent overflows usize".to_string(),
+        })?;
+    let py = ny
+        .checked_mul(2)
+        .ok_or_else(|| KernelBuildError::UnsupportedGeometry {
+            reason: "y kernel extent overflows usize".to_string(),
+        })?;
+    let pz = nz
+        .checked_mul(2)
+        .ok_or_else(|| KernelBuildError::UnsupportedGeometry {
+            reason: "z kernel extent overflows usize".to_string(),
+        })?;
+    let padded_len = px
+        .checked_mul(py)
+        .and_then(|value| value.checked_mul(pz))
+        .ok_or_else(|| KernelBuildError::UnsupportedGeometry {
+            reason: "shifted kernel storage size overflows usize".to_string(),
+        })?;
+    let mut n_xx = vec![0.0; padded_len];
+    let mut n_yy = vec![0.0; padded_len];
+    let mut n_zz = vec![0.0; padded_len];
+    let mut n_xy = vec![0.0; padded_len];
+    let mut n_xz = vec![0.0; padded_len];
+    let mut n_yz = vec![0.0; padded_len];
+
+    let x_lags = signed_lag_positions(nx, px);
+    let y_lags = signed_lag_positions(ny, py);
+    // In 2-D, the second z half of the padded transform remains zero just as
+    // in `compute_newell_kernels` and `compute_newell_kernels_shifted`.
+    let z_lags = if nz == 1 {
+        vec![(0, 0)]
+    } else {
+        signed_lag_positions(nz, pz)
+    };
+    let source_volume = source_cell.into_iter().product::<f64>();
+    let max_cell = source_cell
+        .into_iter()
+        .chain(destination_cell)
+        .fold(0.0_f64, f64::max);
+    let far_field_radius = ASYMPTOTIC_DISTANCE as f64 * max_cell;
+    let pidx = |x: usize, y: usize, z: usize| z * py * px + y * px + x;
+
+    for &(x_lag, ix) in &x_lags {
+        for &(y_lag, iy) in &y_lags {
+            for &(z_lag, iz) in &z_lags {
+                // For 2-D each layer is represented by one scratch z cell;
+                // source/destination thickness enters the exact pair integral,
+                // not the lag pitch.
+                let displacement = [
+                    x_lag as f64 * source_cell[0] + offset[0],
+                    y_lag as f64 * source_cell[1] + offset[1],
+                    if nz == 1 {
+                        offset[2]
+                    } else {
+                        z_lag as f64 * source_cell[2] + offset[2]
+                    },
+                ];
+                let radius = displacement
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f64>()
+                    .sqrt();
+                let tensor = if nz > 1 && radius >= far_field_radius {
+                    point_dipole_pair_tensor(source_volume, displacement)
+                } else {
+                    cell_pair_tensor_exact(source_cell, destination_cell, displacement)
+                };
+                if tensor
+                    .components()
+                    .into_iter()
+                    .any(|(_, value)| !value.is_finite())
+                {
+                    return Err(KernelBuildError::UnsupportedGeometry {
+                        reason: "shifted Newell evaluation overflowed to a non-finite tensor"
+                            .to_string(),
+                    });
+                }
+                let p = pidx(ix, iy, iz);
+                n_xx[p] = tensor.xx;
+                n_yy[p] = tensor.yy;
+                n_zz[p] = tensor.zz;
+                n_xy[p] = tensor.xy;
+                n_xz[p] = tensor.xz;
+                n_yz[p] = tensor.yz;
+            }
+        }
+    }
+
+    let kernels = NewellKernels {
+        n_xx,
+        n_yy,
+        n_zz,
+        n_xy,
+        n_xz,
+        n_yz,
+        px,
+        py,
+        pz,
+    };
+    ensure_newell_kernels_finite(&kernels)?;
+    Ok(kernels)
+}
+
+fn ensure_newell_kernels_finite(kernels: &NewellKernels) -> Result<(), KernelBuildError> {
+    let all_finite = kernels
+        .n_xx
+        .iter()
+        .chain(kernels.n_yy.iter())
+        .chain(kernels.n_zz.iter())
+        .chain(kernels.n_xy.iter())
+        .chain(kernels.n_xz.iter())
+        .chain(kernels.n_yz.iter())
+        .all(|value| value.is_finite());
+    if all_finite {
+        Ok(())
+    } else {
+        Err(KernelBuildError::UnsupportedGeometry {
+            reason: "shifted Newell kernel contains a non-finite value".to_string(),
+        })
+    }
+}
+
+/// Descriptive alias for [`try_compute_newell_kernels_shifted_pair`].
+pub fn compute_newell_kernels_shifted_pair(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    source_cell: [f64; 3],
+    destination_cell: [f64; 3],
+    offset: [f64; 3],
+) -> Result<NewellKernels, KernelBuildError> {
+    try_compute_newell_kernels_shifted_pair(nx, ny, nz, source_cell, destination_cell, offset)
+}
+
+/// Alias naming the Appendix-A irregular source/destination construction.
+pub fn compute_newell_kernels_shifted_irregular(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    source_cell: [f64; 3],
+    destination_cell: [f64; 3],
+    offset: [f64; 3],
+) -> Result<NewellKernels, KernelBuildError> {
+    compute_newell_kernels_shifted_pair(nx, ny, nz, source_cell, destination_cell, offset)
 }
 
 // ---------------------------------------------------------------------------
@@ -874,6 +1391,149 @@ mod tests {
         );
     }
 
+    #[test]
+    fn two_d_far_field_uses_exact_newell_instead_of_point_dipole() {
+        let dx = 1.0;
+        let dy = 1.0;
+        let dz = 1.0;
+        let kernels = compute_newell_kernels(65, 1, 1, dx, dy, dz);
+        let index = 64;
+        let x = 64.0;
+        let y = 0.0;
+        let z = 0.0;
+        let expected = [
+            ldia_direct(x, y, z, dx, dy, dz, newell_f),
+            ldia_direct(x, y, z, dy, dx, dz, |x, y, z| newell_f(y, x, z)),
+            ldia_direct(x, y, z, dz, dy, dx, |x, y, z| newell_f(z, y, x)),
+            ldia_direct(x, y, z, dx, dy, dz, newell_g),
+            ldia_direct(x, y, z, dx, dz, dy, |x, y, z| newell_g(x, z, y)),
+            ldia_direct(x, y, z, dy, dz, dx, |x, y, z| newell_g(y, z, x)),
+        ];
+        let actual = [
+            kernels.n_xx[index],
+            kernels.n_yy[index],
+            kernels.n_zz[index],
+            kernels.n_xy[index],
+            kernels.n_xz[index],
+            kernels.n_yz[index],
+        ];
+        for (component, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 1e-14,
+                "component {component}: {actual} != {expected}"
+            );
+            assert!(actual.is_finite(), "component {component} is not finite");
+        }
+    }
+
+    #[test]
+    fn two_d_shifted_far_field_uses_exact_newell_instead_of_point_dipole() {
+        let dx = 1.0;
+        let dy = 1.0;
+        let dz = 1.0;
+        let z_offset = 3.5;
+        let kernels = compute_newell_kernels_shifted(65, 1, 1, dx, dy, dz, z_offset);
+        let index = 64;
+        let x = 64.0;
+        let y = 0.0;
+        let z = z_offset;
+        let expected = [
+            ldia_direct(x, y, z, dx, dy, dz, newell_f),
+            ldia_direct(x, y, z, dy, dx, dz, |x, y, z| newell_f(y, x, z)),
+            ldia_direct(x, y, z, dz, dy, dx, |x, y, z| newell_f(z, y, x)),
+            ldia_direct(x, y, z, dx, dy, dz, newell_g),
+            ldia_direct(x, y, z, dx, dz, dy, |x, y, z| newell_g(x, z, y)),
+            ldia_direct(x, y, z, dy, dz, dx, |x, y, z| newell_g(y, z, x)),
+        ];
+        let actual = [
+            kernels.n_xx[index],
+            kernels.n_yy[index],
+            kernels.n_zz[index],
+            kernels.n_xy[index],
+            kernels.n_xz[index],
+            kernels.n_yz[index],
+        ];
+        for (component, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 1e-14,
+                "component {component}: {actual} != {expected}"
+            );
+            assert!(actual.is_finite(), "component {component} is not finite");
+        }
+    }
+
+    #[test]
+    fn two_d_corner_kernel_matches_independent_reference_at_near_and_far_lags() {
+        let kernels = compute_newell_kernels(65, 65, 1, 1.0, 1.0, 1.0);
+        let index = |x: usize, y: usize| y * kernels.px + x;
+        let expected = [
+            (
+                1,
+                0,
+                [
+                    -1.350171805444950746e-1,
+                    6.750859027224741238e-2,
+                    6.750859027224750952e-2,
+                    -2.650462234552930558e-17,
+                    8.834874115176435705e-18,
+                    8.834874115176435705e-18,
+                ],
+            ),
+            (
+                1,
+                1,
+                [
+                    -1.378576204834822821e-2,
+                    -1.378576204834817617e-2,
+                    2.757152409669629683e-2,
+                    -4.556482263891421802e-2,
+                    -8.834874115176435705e-18,
+                    -8.834874115176435705e-18,
+                ],
+            ),
+            (
+                5,
+                5,
+                [
+                    -1.125344640979490126e-4,
+                    -1.125344640982317318e-4,
+                    2.250689282083375375e-4,
+                    -3.376429321227027852e-4,
+                    0.0,
+                    0.0,
+                ],
+            ),
+            (
+                64,
+                0,
+                [
+                    -6.071325582418357671e-7,
+                    3.035639631116778290e-7,
+                    3.035639631116778290e-7,
+                    7.237528875152536130e-14,
+                    7.237528875152536130e-14,
+                    0.0,
+                ],
+            ),
+        ];
+        for (x, y, expected) in expected {
+            let actual = [
+                kernels.n_xx[index(x, y)],
+                kernels.n_yy[index(x, y)],
+                kernels.n_zz[index(x, y)],
+                kernels.n_xy[index(x, y)],
+                kernels.n_xz[index(x, y)],
+                kernels.n_yz[index(x, y)],
+            ];
+            for (component, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+                assert!(
+                    (actual - expected).abs() <= 1e-14,
+                    "lag ({x},{y},0) component {component}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+
     /// Validate thin-film demagnetization factor ordering.
     ///
     /// For a thin cell (dz < dx), the out-of-plane demagnetization factor N_zz
@@ -904,5 +1564,68 @@ mod tests {
             "N_zz ({}) should be > 0.5 for 5:1 aspect ratio cell",
             kernels.n_zz[0]
         );
+    }
+
+    #[test]
+    fn shared_positive_lags_are_independent_of_target_z_extent() {
+        let narrow = compute_newell_kernels(160, 40, 18, 3.125e-9, 3.125e-9, 3.0e-9);
+        let wide = compute_newell_kernels(160, 40, 24, 3.125e-9, 3.125e-9, 3.0e-9);
+        for k in 0..18 {
+            for j in 0..40 {
+                for i in 0..160 {
+                    let narrow_index = k * narrow.py * narrow.px + j * narrow.px + i;
+                    let wide_index = k * wide.py * wide.px + j * wide.px + i;
+                    for (name, left, right) in [
+                        ("xx", narrow.n_xx[narrow_index], wide.n_xx[wide_index]),
+                        ("yy", narrow.n_yy[narrow_index], wide.n_yy[wide_index]),
+                        ("zz", narrow.n_zz[narrow_index], wide.n_zz[wide_index]),
+                        ("xy", narrow.n_xy[narrow_index], wide.n_xy[wide_index]),
+                        ("xz", narrow.n_xz[narrow_index], wide.n_xz[wide_index]),
+                        ("yz", narrow.n_yz[narrow_index], wide.n_yz[wide_index]),
+                    ] {
+                        assert_eq!(left, right, "{name} mismatch at ({i},{j},{k})");
+                    }
+                    if k > 0 {
+                        let narrow_negative =
+                            (narrow.pz - k) * narrow.py * narrow.px + j * narrow.px + i;
+                        let wide_negative = (wide.pz - k) * wide.py * wide.px + j * wide.px + i;
+                        for (name, left, right) in [
+                            (
+                                "xx-",
+                                narrow.n_xx[narrow_negative],
+                                wide.n_xx[wide_negative],
+                            ),
+                            (
+                                "yy-",
+                                narrow.n_yy[narrow_negative],
+                                wide.n_yy[wide_negative],
+                            ),
+                            (
+                                "zz-",
+                                narrow.n_zz[narrow_negative],
+                                wide.n_zz[wide_negative],
+                            ),
+                            (
+                                "xy-",
+                                narrow.n_xy[narrow_negative],
+                                wide.n_xy[wide_negative],
+                            ),
+                            (
+                                "xz-",
+                                narrow.n_xz[narrow_negative],
+                                wide.n_xz[wide_negative],
+                            ),
+                            (
+                                "yz-",
+                                narrow.n_yz[narrow_negative],
+                                wide.n_yz[wide_negative],
+                            ),
+                        ] {
+                            assert_eq!(left, right, "{name} mismatch at ({i},{j},-{k})");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

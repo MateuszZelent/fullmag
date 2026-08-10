@@ -14,8 +14,13 @@ export {
 } from "./periodicPairsCodec";
 export {
   decodeFdmRegionMembership,
+  FMRM_INACTIVE_REGION_ID,
   FMRM_HEADER_LEN,
+  validateFdmRegionMembershipContract,
   type DecodedFdmRegionMembership,
+  type FdmRegionMembershipContractResult,
+  type FdmRegionMembershipIncompatibilityReason,
+  type FdmRegionMembershipSemanticStatus,
 } from "./fdmRegionMembershipCodec";
 export { decodeTableRows } from "./tableRowsCodec";
 export {

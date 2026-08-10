@@ -50,6 +50,10 @@ import {
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
+  resolveMeshInspectorLane,
+  type MeshInspectorLane,
+} from "../fdmMeshInspectorModel";
+import {
   asRecord,
   firstRecord,
   formatValue,
@@ -66,6 +70,17 @@ import {
   resolveMixedTopologyPresentation,
   type MixedTopologyPresentation,
 } from "./MixedTopologyProvenanceSection";
+
+export type MeshDetailsLane = MeshInspectorLane;
+
+export const resolveMeshDetailsLane = resolveMeshInspectorLane;
+
+export function shouldLoadMeshDetailsFemResources(
+  lane: MeshDetailsLane,
+  enabled: boolean,
+): boolean {
+  return lane === "fem" && enabled;
+}
 
 type MeshDetailsRuntimeStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -90,6 +105,7 @@ export interface MeshDetailsModel {
   latestBuildJson: unknown;
   meshBuildReport: unknown;
   latestSuccessAvailable: boolean;
+  lane: MeshDetailsLane;
   lastBuildError: unknown;
   manifest: {
     domain_mesh_mode?: string | null;
@@ -313,43 +329,57 @@ export function useMeshDetailsModel(
     selectMeshDetailsRuntimeStatus,
     { isEqual: meshDetailsRuntimeStatusEquals },
   );
-  const scene = useSceneResource();
+  const lane = resolveMeshDetailsLane(runtimeStatus?.domain.discretization);
+  const femLane = lane === "fem";
+  const loadMeshSummary = shouldLoadMeshDetailsFemResources(
+    lane,
+    shouldLoadRuntimeMeshSummary(true, runtimeStatus),
+  );
+  const loadMeshBuild = shouldLoadMeshDetailsFemResources(
+    lane,
+    shouldLoadRuntimeMeshBuild(true, runtimeStatus),
+  );
+  const loadMeshManifest = shouldLoadMeshDetailsFemResources(
+    lane,
+    shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+  );
+  const scene = useSceneResource({ enabled: femLane });
   const summary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
+    enabled: loadMeshSummary,
   });
   const capabilities = useMeshCapabilitiesResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
+    enabled: loadMeshSummary,
   });
-  const semantics = useMeshSemanticsResource();
+  const semantics = useMeshSemanticsResource({ enabled: femLane });
   const activeBuild = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
+    enabled: loadMeshBuild,
   });
   const buildHistory = useMeshBuildHistoryResource({
-    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
+    enabled: loadMeshBuild,
   });
   const latestBuild = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
+    enabled: loadMeshBuild,
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+    enabled: loadMeshManifest,
   });
   const sharedReport = useMeshSharedDomainReportResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+    enabled: loadMeshManifest,
   });
   const sharedQuality = useMeshSharedDomainQualityResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+    enabled: loadMeshManifest,
   });
   const qualityGates = useMeshSharedDomainQualityGatesResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+    enabled: loadMeshManifest,
   });
   const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+    enabled: loadMeshManifest,
   });
   const universeReport = useMeshUniverseReportResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
+    enabled: loadMeshSummary,
   });
   const universeQuality = useMeshUniverseQualityResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
+    enabled: loadMeshSummary,
   });
 
   const meshSummary = asRecord(summary.data?.mesh_summary);
@@ -482,6 +512,10 @@ export function useMeshDetailsModel(
     },
     [kernel],
   );
+  const buildSharedDomain = useCallback(() => {
+    if (!femLane) return;
+    void kernel.commands.execute("mesh.build-shared-domain", buildContext);
+  }, [buildContext, femLane, kernel.commands]);
 
   return {
     activeBuildRevision: activeBuild.data?.revision,
@@ -495,6 +529,7 @@ export function useMeshDetailsModel(
     fallbacks: activeBuild.data?.shared_domain_build_report?.fallbacks_triggered,
     gateRows: qualityGateRows(gates),
     latestBuildJson: lastBuildSummary,
+    lane,
     meshBuildReport: semantics.data?.solver_mesh?.build_report,
     latestSuccessAvailable: Boolean(latestBuild.data?.last_success),
     lastBuildError:
@@ -546,8 +581,7 @@ export function useMeshDetailsModel(
     title: selectedSectionTitle(selection.kind),
     universeQualityData: universeQuality.data,
     universeReportData: universeReport.data,
-    onBuildSharedDomain: () =>
-      void kernel.commands.execute("mesh.build-shared-domain", buildContext),
+    onBuildSharedDomain: buildSharedDomain,
     onHoverSizeDistributionBin: hoverSizeDistributionBin,
     onOpenBuildDetails: () =>
       kernel.selection.set(

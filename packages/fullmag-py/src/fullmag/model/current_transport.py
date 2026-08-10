@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 from typing import Protocol, Sequence
 
 from fullmag._validation import (
@@ -10,7 +12,16 @@ from fullmag._validation import (
     require_positive,
     require_positive_int,
 )
-from fullmag.model.spin_torque import RegionRef
+from fullmag.model.spin_torque import (
+    ConstantEnvelope,
+    PiecewiseLinearEnvelope,
+    PulseEnvelope,
+    RegionRef,
+    SincEnvelope,
+    SinusoidalEnvelope,
+    TabulatedEnvelope,
+    TimeEnvelope,
+)
 from fullmag.model.spin_transport import SurfaceRef
 
 CURRENT_TRANSPORT_MODELS = {
@@ -19,6 +30,59 @@ CURRENT_TRANSPORT_MODELS = {
     "magnetoresistive_poisson",
 }
 CURRENT_TRANSPORT_COUPLINGS = {"one_way", "bidirectional"}
+CONSERVATIVE_CURRENT_BOUNDARY_ROLES = {
+    "insulating_outer",
+    "source_cut",
+    "closure_interface",
+}
+
+_FEM_CHARGE_OPERATOR_VERSION = "fem_charge_conforming_h1_p1.transparent.v1"
+_FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+_FEM_CLOSED_GEOMETRY_OPERATOR_VERSION = "fem_closed_current_geometry.v1"
+_FEM_EXTERNAL_LEAD_OPERATOR_VERSION = "fem_closed_current_extension.v1"
+
+_TIME_ENVELOPE_TYPES = (
+    ConstantEnvelope,
+    SinusoidalEnvelope,
+    PulseEnvelope,
+    PiecewiseLinearEnvelope,
+    SincEnvelope,
+    TabulatedEnvelope,
+)
+
+
+def _finite_vector3(value: Sequence[float], field_name: str) -> tuple[float, float, float]:
+    result = as_vector3(value, field_name)
+    if not all(math.isfinite(component) for component in result):
+        raise ValueError(f"{field_name} must contain only finite values")
+    return result
+
+
+def _canonical_face_vertex_ids(value: Sequence[int], field_name: str) -> tuple[int, int, int]:
+    if isinstance(value, (str, bytes)) or len(value) != 3:
+        raise ValueError(f"{field_name} must contain exactly three vertex IDs")
+    ids = tuple(value)
+    if any(isinstance(vertex_id, bool) or not isinstance(vertex_id, int) for vertex_id in ids):
+        raise TypeError(f"{field_name} must contain integer vertex IDs")
+    if any(vertex_id <= 0 for vertex_id in ids):
+        raise ValueError(f"{field_name} must contain positive vertex IDs")
+    canonical = tuple(sorted(ids))
+    if len(set(canonical)) != 3:
+        raise ValueError(f"{field_name} must contain three distinct vertex IDs")
+    return canonical  # type: ignore[return-value]
+
+
+def _stable_vertex_id_list(value: Sequence[int], field_name: str) -> tuple[int, ...]:
+    if isinstance(value, (str, bytes)) or not value:
+        raise ValueError(f"{field_name} must not be empty")
+    ids = tuple(value)
+    if any(isinstance(vertex_id, bool) or not isinstance(vertex_id, int) for vertex_id in ids):
+        raise TypeError(f"{field_name} must contain integer vertex IDs")
+    if any(vertex_id <= 0 for vertex_id in ids):
+        raise ValueError(f"{field_name} must contain positive vertex IDs")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{field_name} must contain unique vertex IDs")
+    return ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,14 +258,20 @@ class ChargeSolverPolicy:
         absolute = require_finite(self.absolute_tolerance, "absolute_tolerance")
         if relative <= 0.0 or absolute < 0.0:
             raise ValueError("charge solver requires relative_tolerance > 0 and absolute_tolerance >= 0")
-        expected_operator = (
-            "fv_charge_harmonic_v1"
-            if engine == "cg"
-            else "fdm_coupled_charge_spin_fv_block_gmres.v1"
-        )
-        if self.operator_version != expected_operator:
+        if engine == "cg":
+            allowed_operators = {
+                "fv_charge_harmonic_v1",
+                _FEM_CHARGE_OPERATOR_VERSION,
+            }
+        else:
+            allowed_operators = {
+                "fdm_coupled_charge_spin_fv_block_gmres.v1",
+                _FEM_M2_OPERATOR_VERSION,
+            }
+        if self.operator_version not in allowed_operators:
+            expected = " or ".join(sorted(allowed_operators))
             raise ValueError(
-                f"charge solver engine '{engine}' requires operator_version='{expected_operator}'"
+                f"charge solver engine '{engine}' requires operator_version in {{{expected}}}"
             )
         object.__setattr__(self, "engine", engine)
         object.__setattr__(self, "relative_tolerance", relative)
@@ -209,7 +279,7 @@ class ChargeSolverPolicy:
         object.__setattr__(self, "max_iterations", require_positive_int(self.max_iterations, "max_iterations"))
         expected_residual = (
             "charge_balance_integrated_l2.v1"
-            if engine == "cg"
+            if self.operator_version in {"fv_charge_harmonic_v1", _FEM_CHARGE_OPERATOR_VERSION}
             else "transport_balance_integrated_l2.v1"
         )
         physical_residual = self.physical_residual_version
@@ -220,11 +290,6 @@ class ChargeSolverPolicy:
         if physical_residual != expected_residual:
             raise ValueError("unsupported charge physical_residual_version for engine")
         object.__setattr__(self, "physical_residual_version", physical_residual)
-        if self.operator_version not in {
-            "fv_charge_harmonic_v1",
-            "fdm_coupled_charge_spin_fv_block_gmres.v1",
-        }:
-            raise ValueError("unsupported charge operator_version")
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -236,6 +301,501 @@ class ChargeSolverPolicy:
             },
             "physical_residual_version": self.physical_residual_version,
             "operator_version": self.operator_version,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentIdentity:
+    """Immutable identity of the accepted charge state consumed by RT0."""
+
+    source_module_id: str
+    source_state_revision: str
+    source_field_digest: str
+    conductivity_digest: str
+    mesh_revision: str
+    topology_revision: str
+    geometry_digest: str
+    envelope_revision: str
+    envelope_digest: str
+    evaluated_envelope_multiplier: float
+    evaluation_time_s: float
+    stage_identity: int
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "source_module_id",
+            "source_state_revision",
+            "source_field_digest",
+            "conductivity_digest",
+            "mesh_revision",
+            "topology_revision",
+            "geometry_digest",
+            "envelope_revision",
+            "envelope_digest",
+        ):
+            object.__setattr__(self, field_name, require_non_empty(getattr(self, field_name), field_name))
+        object.__setattr__(
+            self,
+            "evaluated_envelope_multiplier",
+            require_finite(self.evaluated_envelope_multiplier, "evaluated_envelope_multiplier"),
+        )
+        object.__setattr__(self, "evaluation_time_s", require_finite(self.evaluation_time_s, "evaluation_time_s"))
+        object.__setattr__(self, "stage_identity", require_positive_int(self.stage_identity, "stage_identity"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "source_module_id": self.source_module_id,
+            "source_state_revision": self.source_state_revision,
+            "source_field_digest": self.source_field_digest,
+            "conductivity_digest": self.conductivity_digest,
+            "mesh_revision": self.mesh_revision,
+            "topology_revision": self.topology_revision,
+            "geometry_digest": self.geometry_digest,
+            "envelope_revision": self.envelope_revision,
+            "envelope_digest": self.envelope_digest,
+            "evaluated_envelope_multiplier": self.evaluated_envelope_multiplier,
+            "evaluation_time_s": self.evaluation_time_s,
+            "stage_identity": self.stage_identity,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentPins:
+    """Required source/mesh identities checked before the native solve."""
+
+    required_source_state_revision: str
+    required_source_field_digest: str
+    required_mesh_revision: str
+    required_topology_revision: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "required_source_state_revision",
+            "required_source_field_digest",
+            "required_mesh_revision",
+            "required_topology_revision",
+        ):
+            object.__setattr__(self, field_name, require_non_empty(getattr(self, field_name), field_name))
+
+    def to_ir(self) -> dict[str, str]:
+        return {
+            "required_source_state_revision": self.required_source_state_revision,
+            "required_source_field_digest": self.required_source_field_digest,
+            "required_mesh_revision": self.required_mesh_revision,
+            "required_topology_revision": self.required_topology_revision,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentBoundaryFace:
+    """Authored classification of one canonical triangular FEM boundary face."""
+
+    face_vertex_ids: tuple[int, int, int]
+    role: str
+    circuit_id: str | None = None
+
+    def __init__(
+        self,
+        face_vertex_ids: Sequence[int],
+        role: str,
+        circuit_id: str | None = None,
+    ) -> None:
+        canonical = _canonical_face_vertex_ids(face_vertex_ids, "face_vertex_ids")
+        normalized_role = require_non_empty(role, "role").lower()
+        if normalized_role not in CONSERVATIVE_CURRENT_BOUNDARY_ROLES:
+            raise ValueError(
+                "role must be one of 'insulating_outer', 'source_cut', or 'closure_interface'"
+            )
+        normalized_circuit = (
+            require_non_empty(circuit_id, "circuit_id") if circuit_id is not None else None
+        )
+        if normalized_role == "insulating_outer" and normalized_circuit is not None:
+            raise ValueError("insulating_outer boundary faces must not define circuit_id")
+        if normalized_role != "insulating_outer" and normalized_circuit is None:
+            raise ValueError(f"{normalized_role} boundary faces require circuit_id")
+        object.__setattr__(self, "face_vertex_ids", canonical)
+        object.__setattr__(self, "role", normalized_role)
+        object.__setattr__(self, "circuit_id", normalized_circuit)
+
+    def to_ir(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "face_vertex_ids": list(self.face_vertex_ids),
+            "role": self.role,
+        }
+        if self.circuit_id is not None:
+            value["circuit_id"] = self.circuit_id
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentSourceCutFacePair:
+    minus_face_vertex_ids: tuple[int, int, int]
+    plus_face_vertex_ids: tuple[int, int, int]
+
+    def __init__(
+        self,
+        minus_face_vertex_ids: Sequence[int],
+        plus_face_vertex_ids: Sequence[int],
+    ) -> None:
+        minus = _canonical_face_vertex_ids(minus_face_vertex_ids, "minus_face_vertex_ids")
+        plus = _canonical_face_vertex_ids(plus_face_vertex_ids, "plus_face_vertex_ids")
+        if minus == plus:
+            raise ValueError("source-cut minus and plus faces must be distinct")
+        object.__setattr__(
+            self,
+            "minus_face_vertex_ids",
+            minus,
+        )
+        object.__setattr__(
+            self,
+            "plus_face_vertex_ids",
+            plus,
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "minus_face_vertex_ids": list(self.minus_face_vertex_ids),
+            "plus_face_vertex_ids": list(self.plus_face_vertex_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentLeadInterfacePair:
+    """Stable face pairing between the device and one volumetric lead."""
+
+    transport_face_vertex_ids: tuple[int, int, int]
+    lead_face_vertex_ids: tuple[int, int, int]
+
+    def __init__(
+        self,
+        transport_face_vertex_ids: Sequence[int],
+        lead_face_vertex_ids: Sequence[int],
+    ) -> None:
+        object.__setattr__(
+            self,
+            "transport_face_vertex_ids",
+            _canonical_face_vertex_ids(
+                transport_face_vertex_ids,
+                "transport_face_vertex_ids",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "lead_face_vertex_ids",
+            _canonical_face_vertex_ids(
+                lead_face_vertex_ids,
+                "lead_face_vertex_ids",
+            ),
+        )
+
+    def to_ir(self) -> list[list[int]]:
+        return [list(self.transport_face_vertex_ids), list(self.lead_face_vertex_ids)]
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentSourceCut:
+    id: str
+    translation_m: tuple[float, float, float]
+    potential_drop_v: float
+    face_pairs: tuple[ConservativeCurrentSourceCutFacePair, ...]
+
+    def __init__(
+        self,
+        id: str,
+        translation_m: Sequence[float],
+        potential_drop_v: float,
+        face_pairs: Sequence[ConservativeCurrentSourceCutFacePair],
+    ) -> None:
+        normalized_pairs = tuple(face_pairs)
+        if not normalized_pairs or not all(
+            isinstance(pair, ConservativeCurrentSourceCutFacePair) for pair in normalized_pairs
+        ):
+            raise ValueError("face_pairs must contain at least one ConservativeCurrentSourceCutFacePair")
+        object.__setattr__(self, "id", require_non_empty(id, "id"))
+        object.__setattr__(self, "translation_m", _finite_vector3(translation_m, "translation_m"))
+        if all(value == 0.0 for value in self.translation_m):
+            raise ValueError("translation_m must be non-zero")
+        object.__setattr__(self, "potential_drop_v", require_finite(potential_drop_v, "potential_drop_v"))
+        object.__setattr__(self, "face_pairs", normalized_pairs)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "translation_m": list(self.translation_m),
+            "potential_drop_v": self.potential_drop_v,
+            "face_pairs": [pair.to_ir() for pair in self.face_pairs],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentClosedGeometry:
+    operator_version: str
+    revision: str
+    digest: str
+    source_cuts: tuple[ConservativeCurrentSourceCut, ...]
+
+    def __init__(
+        self,
+        operator_version: str,
+        revision: str,
+        digest: str,
+        source_cuts: Sequence[ConservativeCurrentSourceCut],
+    ) -> None:
+        normalized_cuts = tuple(source_cuts)
+        if not normalized_cuts or not all(
+            isinstance(cut, ConservativeCurrentSourceCut) for cut in normalized_cuts
+        ):
+            raise ValueError("source_cuts must contain at least one ConservativeCurrentSourceCut")
+        object.__setattr__(self, "operator_version", require_non_empty(operator_version, "operator_version"))
+        if operator_version != _FEM_CLOSED_GEOMETRY_OPERATOR_VERSION:
+            raise ValueError(
+                "closed-geometry operator_version must be "
+                f"{_FEM_CLOSED_GEOMETRY_OPERATOR_VERSION!r}"
+            )
+        object.__setattr__(self, "revision", require_non_empty(revision, "revision"))
+        object.__setattr__(self, "digest", require_non_empty(digest, "digest"))
+        object.__setattr__(self, "source_cuts", normalized_cuts)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "closed_geometry",
+            "operator_version": self.operator_version,
+            "revision": self.revision,
+            "digest": self.digest,
+            "source_cuts": [cut.to_ir() for cut in self.source_cuts],
+        }
+
+
+def _lead_mesh_to_ir(mesh: object) -> dict[str, object]:
+    if isinstance(mesh, Mapping):
+        value = dict(mesh)
+    else:
+        converter = getattr(mesh, "to_ir", None)
+        if not callable(converter):
+            raise TypeError("lead_mesh must be a MeshData value or a MeshIR mapping")
+        value = converter("external_lead")
+        if not isinstance(value, Mapping):
+            raise TypeError("lead_mesh.to_ir() must return a mapping")
+        value = dict(value)
+    nodes = value.get("nodes")
+    cells = value.get("cells")
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("lead_mesh.nodes must be a non-empty list")
+    if not isinstance(cells, Mapping):
+        raise ValueError("lead_mesh.cells must be a mapping")
+    cell_types = cells.get("types")
+    cell_offsets = cells.get("offsets")
+    cell_nodes = cells.get("nodes")
+    if (
+        not isinstance(cell_types, list)
+        or not cell_types
+        or not isinstance(cell_offsets, list)
+        or len(cell_offsets) != len(cell_types) + 1
+        or not isinstance(cell_nodes, list)
+        or not cell_nodes
+    ):
+        raise ValueError("lead_mesh.cells must contain valid types, offsets, and nodes")
+    if any(str(cell_type) != "tet4" for cell_type in cell_types):
+        raise ValueError("external lead mesh must contain tet4 cells only")
+    if len(cell_nodes) != int(cell_offsets[-1]):
+        raise ValueError("lead_mesh.cells offsets do not cover cell connectivity")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentExternalLead:
+    """Volumetric tetrahedral lead closure for the FEM RT0 solve.
+
+    The lead is deliberately explicit: its mesh, per-element conductivity,
+    stable vertex identity, interface face pairing, and outer electrodes are
+    all part of the canonical IR.  No wire or lumped-circuit fallback is
+    implied.
+    """
+
+    operator_version: str
+    revision: str
+    digest: str
+    drive_id: str
+    outer_electrode_potential_drop_v: float
+    lead_mesh: dict[str, object]
+    lead_conductivity_spm_per_element: tuple[float, ...]
+    lead_stable_vertex_ids: tuple[int, ...]
+    interface_pairs: tuple[ConservativeCurrentLeadInterfacePair, ...]
+    minus_outer_electrode_face_vertex_ids: tuple[tuple[int, int, int], ...]
+    plus_outer_electrode_face_vertex_ids: tuple[tuple[int, int, int], ...]
+    lead_conductivity_digest: str
+
+    def __init__(
+        self,
+        *,
+        operator_version: str,
+        revision: str,
+        digest: str,
+        drive_id: str,
+        outer_electrode_potential_drop_v: float,
+        lead_mesh: object,
+        lead_conductivity_spm_per_element: Sequence[float],
+        lead_stable_vertex_ids: Sequence[int],
+        interface_pairs: Sequence[ConservativeCurrentLeadInterfacePair | Sequence[Sequence[int]]],
+        minus_outer_electrode_face_vertex_ids: Sequence[Sequence[int]],
+        plus_outer_electrode_face_vertex_ids: Sequence[Sequence[int]],
+        lead_conductivity_digest: str,
+    ) -> None:
+        mesh_ir = _lead_mesh_to_ir(lead_mesh)
+        cell_count = len(mesh_ir["cells"]["types"])
+        conductivity = tuple(
+            require_positive(value, "lead_conductivity_spm_per_element")
+            for value in lead_conductivity_spm_per_element
+        )
+        if len(conductivity) != cell_count:
+            raise ValueError(
+                "lead_conductivity_spm_per_element must contain one value per lead tet4 cell"
+            )
+        stable_ids = _stable_vertex_id_list(
+            lead_stable_vertex_ids,
+            "lead_stable_vertex_ids",
+        )
+        if len(stable_ids) != len(mesh_ir["nodes"]):
+            raise ValueError("lead_stable_vertex_ids must contain one ID per lead node")
+        normalized_pairs = []
+        for index, pair in enumerate(interface_pairs):
+            if isinstance(pair, ConservativeCurrentLeadInterfacePair):
+                normalized_pairs.append(pair)
+                continue
+            if isinstance(pair, (str, bytes)) or len(pair) != 2:
+                raise ValueError(
+                    "interface_pairs[{}] must contain exactly one device face and one lead face".format(index)
+                )
+            normalized_pairs.append(
+                ConservativeCurrentLeadInterfacePair(pair[0], pair[1])
+            )
+        normalized_pairs = tuple(normalized_pairs)
+        if not normalized_pairs:
+            raise ValueError("interface_pairs must not be empty")
+        minus_faces = tuple(
+            _canonical_face_vertex_ids(face, "minus_outer_electrode_face_vertex_ids")
+            for face in minus_outer_electrode_face_vertex_ids
+        )
+        plus_faces = tuple(
+            _canonical_face_vertex_ids(face, "plus_outer_electrode_face_vertex_ids")
+            for face in plus_outer_electrode_face_vertex_ids
+        )
+        if not minus_faces or not plus_faces:
+            raise ValueError("external lead requires both outer electrode face sets")
+        object.__setattr__(self, "operator_version", require_non_empty(operator_version, "operator_version"))
+        if operator_version != _FEM_EXTERNAL_LEAD_OPERATOR_VERSION:
+            raise ValueError(
+                "external-lead operator_version must be "
+                f"{_FEM_EXTERNAL_LEAD_OPERATOR_VERSION!r}"
+            )
+        object.__setattr__(self, "revision", require_non_empty(revision, "revision"))
+        object.__setattr__(self, "digest", require_non_empty(digest, "digest"))
+        object.__setattr__(self, "drive_id", require_non_empty(drive_id, "drive_id"))
+        object.__setattr__(
+            self,
+            "outer_electrode_potential_drop_v",
+            require_finite(outer_electrode_potential_drop_v, "outer_electrode_potential_drop_v"),
+        )
+        if outer_electrode_potential_drop_v == 0.0:
+            raise ValueError("outer_electrode_potential_drop_v must be non-zero")
+        object.__setattr__(self, "lead_mesh", mesh_ir)
+        object.__setattr__(self, "lead_conductivity_spm_per_element", conductivity)
+        object.__setattr__(self, "lead_stable_vertex_ids", stable_ids)
+        object.__setattr__(self, "interface_pairs", normalized_pairs)
+        object.__setattr__(self, "minus_outer_electrode_face_vertex_ids", minus_faces)
+        object.__setattr__(self, "plus_outer_electrode_face_vertex_ids", plus_faces)
+        object.__setattr__(
+            self,
+            "lead_conductivity_digest",
+            require_non_empty(lead_conductivity_digest, "lead_conductivity_digest"),
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "external_lead",
+            "operator_version": self.operator_version,
+            "revision": self.revision,
+            "digest": self.digest,
+            "drive_id": self.drive_id,
+            "outer_electrode_potential_drop_v": self.outer_electrode_potential_drop_v,
+            "lead_mesh": self.lead_mesh,
+            "lead_conductivity_spm_per_element": list(self.lead_conductivity_spm_per_element),
+            "lead_stable_vertex_ids": list(self.lead_stable_vertex_ids),
+            "interface_pairs": [pair.to_ir() for pair in self.interface_pairs],
+            "minus_outer_electrode_face_vertex_ids": [list(face) for face in self.minus_outer_electrode_face_vertex_ids],
+            "plus_outer_electrode_face_vertex_ids": [list(face) for face in self.plus_outer_electrode_face_vertex_ids],
+            "lead_conductivity_digest": self.lead_conductivity_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentView:
+    """Public, closure-aware FEM current view; no H1-to-RT0 fallback is implied."""
+
+    stable_vertex_ids: tuple[int, ...]
+    boundary_faces: tuple[ConservativeCurrentBoundaryFace, ...]
+    identity: ConservativeCurrentIdentity
+    pins: ConservativeCurrentPins
+    closure: ConservativeCurrentClosedGeometry | ConservativeCurrentExternalLead
+    algebraic_relative_tolerance: float
+    physical_relative_gate: float
+    physical_absolute_gate_a: float
+    reference_mpi_gather_broadcast: bool = False
+
+    def __init__(
+        self,
+        *,
+        stable_vertex_ids: Sequence[int],
+        boundary_faces: Sequence[ConservativeCurrentBoundaryFace],
+        identity: ConservativeCurrentIdentity,
+        pins: ConservativeCurrentPins,
+        closure: ConservativeCurrentClosedGeometry | ConservativeCurrentExternalLead,
+        algebraic_relative_tolerance: float,
+        physical_relative_gate: float,
+        physical_absolute_gate_a: float,
+        reference_mpi_gather_broadcast: bool = False,
+    ) -> None:
+        normalized_faces = tuple(boundary_faces)
+        if not normalized_faces or not all(
+            isinstance(face, ConservativeCurrentBoundaryFace) for face in normalized_faces
+        ):
+            raise ValueError("boundary_faces must contain at least one ConservativeCurrentBoundaryFace")
+        if not isinstance(identity, ConservativeCurrentIdentity):
+            raise TypeError("identity must be ConservativeCurrentIdentity")
+        if not isinstance(pins, ConservativeCurrentPins):
+            raise TypeError("pins must be ConservativeCurrentPins")
+        if not isinstance(closure, (ConservativeCurrentClosedGeometry, ConservativeCurrentExternalLead)):
+            raise TypeError(
+                "closure must be ConservativeCurrentClosedGeometry or "
+                "ConservativeCurrentExternalLead"
+            )
+        object.__setattr__(self, "stable_vertex_ids", _stable_vertex_id_list(stable_vertex_ids, "stable_vertex_ids"))
+        object.__setattr__(self, "boundary_faces", normalized_faces)
+        object.__setattr__(self, "identity", identity)
+        object.__setattr__(self, "pins", pins)
+        object.__setattr__(self, "closure", closure)
+        object.__setattr__(
+            self,
+            "algebraic_relative_tolerance",
+            require_positive(algebraic_relative_tolerance, "algebraic_relative_tolerance"),
+        )
+        object.__setattr__(self, "physical_relative_gate", require_positive(physical_relative_gate, "physical_relative_gate"))
+        object.__setattr__(self, "physical_absolute_gate_a", require_positive(physical_absolute_gate_a, "physical_absolute_gate_a"))
+        if not isinstance(reference_mpi_gather_broadcast, bool):
+            raise TypeError("reference_mpi_gather_broadcast must be boolean")
+        object.__setattr__(self, "reference_mpi_gather_broadcast", reference_mpi_gather_broadcast)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "stable_vertex_ids": list(self.stable_vertex_ids),
+            "boundary_faces": [face.to_ir() for face in self.boundary_faces],
+            "identity": self.identity.to_ir(),
+            "pins": self.pins.to_ir(),
+            "closure": self.closure.to_ir(),
+            "algebraic_relative_tolerance": self.algebraic_relative_tolerance,
+            "physical_relative_gate": self.physical_relative_gate,
+            "physical_absolute_gate_a": self.physical_absolute_gate_a,
+            "reference_mpi_gather_broadcast": self.reference_mpi_gather_broadcast,
         }
 
 
@@ -262,6 +822,8 @@ class CurrentTransport:
     boundaries: tuple[ChargeBoundary, ...] = ()
     gauge: ChargePotentialGauge | None = None
     solver: ChargeSolverPolicy | None = None
+    time_envelope: TimeEnvelope | None = None
+    conservative_current_view: ConservativeCurrentView | None = None
 
     def __init__(
         self,
@@ -277,6 +839,8 @@ class CurrentTransport:
         boundaries: Sequence[ChargeBoundary] = (),
         gauge: ChargePotentialGauge | None = None,
         solver: ChargeSolverPolicy | None = None,
+        time_envelope: TimeEnvelope | None = None,
+        conservative_current_view: ConservativeCurrentView | None = None,
     ) -> None:
         raw_model = require_non_empty(model, "model").lower()
         resolved_magnetoresistive_model = raw_model == "magnetoresistive_poisson"
@@ -308,6 +872,15 @@ class CurrentTransport:
         object.__setattr__(self, "boundaries", normalized_boundaries)
         object.__setattr__(self, "gauge", gauge)
         object.__setattr__(self, "solver", solver)
+        if time_envelope is not None and not isinstance(time_envelope, _TIME_ENVELOPE_TYPES):
+            raise TypeError(
+                "time_envelope must be one of the canonical TimeEnvelope values"
+            )
+        object.__setattr__(self, "time_envelope", time_envelope)
+        if conservative_current_view is not None and not isinstance(
+            conservative_current_view, ConservativeCurrentView
+        ):
+            raise TypeError("conservative_current_view must be ConservativeCurrentView")
         normalized_coupling = require_non_empty(coupling, "coupling").lower()
         if normalized_coupling not in CURRENT_TRANSPORT_COUPLINGS:
             raise ValueError(f"coupling must be one of {sorted(CURRENT_TRANSPORT_COUPLINGS)}")
@@ -320,6 +893,12 @@ class CurrentTransport:
                 "bidirectional current transport requires model='ohmic_poisson'"
             )
         object.__setattr__(self, "coupling", normalized_coupling)
+        if conservative_current_view is not None and (
+            normalized_model != "ohmic_poisson" or normalized_coupling != "one_way"
+        ):
+            raise ValueError(
+                "conservative_current_view currently requires model='ohmic_poisson' and coupling='one_way'"
+            )
         object.__setattr__(
             self,
             "solve_region",
@@ -332,6 +911,7 @@ class CurrentTransport:
             "conductivity_s_per_m",
             float(conductivity_s_per_m) if conductivity_s_per_m is not None else None,
         )
+        object.__setattr__(self, "conservative_current_view", conservative_current_view)
 
         if normalized_model == "prescribed_density":
             if current_density is None:
@@ -410,18 +990,32 @@ class CurrentTransport:
             ir["gauge"] = self.gauge.to_ir()
         if self.solver is not None:
             ir["solver"] = self.solver.to_ir()
+        if self.time_envelope is not None:
+            ir["time_envelope"] = self.time_envelope.to_ir()
+        if self.conservative_current_view is not None:
+            ir["conservative_current_view"] = self.conservative_current_view.to_ir()
         return ir
 
 
 __all__ = [
     "CURRENT_TRANSPORT_COUPLINGS",
     "CURRENT_TRANSPORT_MODELS",
+    "CONSERVATIVE_CURRENT_BOUNDARY_ROLES",
     "ChargeInsulating",
     "ChargePotentialGauge",
     "ChargeSolverPolicy",
     "ChargeTransportMaterial",
     "ChargeTransportMaterialAssignment",
     "CurrentTransport",
+    "ConservativeCurrentBoundaryFace",
+    "ConservativeCurrentClosedGeometry",
+    "ConservativeCurrentExternalLead",
+    "ConservativeCurrentIdentity",
+    "ConservativeCurrentLeadInterfacePair",
+    "ConservativeCurrentPins",
+    "ConservativeCurrentSourceCut",
+    "ConservativeCurrentSourceCutFacePair",
+    "ConservativeCurrentView",
     "NormalCurrentElectrode",
     "VoltageElectrode",
 ]

@@ -5,7 +5,10 @@ import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
   DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_FDM_DOMAIN_VISUALIZATION,
+  DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
   ObjectVisualizationController,
   mergeVisualizationStateTargetOverride,
   removeTargetOverrideField,
@@ -13,6 +16,7 @@ import {
   resolveAirboxVisualizationSettingsFromState,
   resetAirboxVisualizationState,
   resolveEffectiveVisualizationSettings,
+  resolveFdmViewportVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
   visualizationStateOverrideFromTargetPatch,
@@ -115,14 +119,181 @@ describe("ObjectVisualizationController", () => {
       });
   });
 
-  it("limits primary Airbox geometry controls without removing renderer compatibility", () => {
-    expect(visualizationTargetCapabilities("airbox")).toEqual({
+  it("limits Airbox rendering to wireframe, points, and field vectors", () => {
+    expect(visualizationTargetCapabilities(AIRBOX_VISUALIZATION_TARGET)).toEqual({
       primaryRenderModes: ["wireframe", "points"],
-      showBoundsControl: false,
+      showBoundsControl: true,
+      showGeometryScopeControl: true,
+      supportsFieldData: true,
+      supportsPoints: true,
+      supportsVectors: true,
     });
-    expect(visualizationTargetCapabilities("object")).toEqual({
+    expect(visualizationTargetCapabilities({ id: "film", kind: "object" })).toEqual({
       primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
       showBoundsControl: true,
+      showGeometryScopeControl: true,
+      supportsFieldData: true,
+      supportsPoints: true,
+      supportsVectors: true,
+    });
+  });
+
+  it("keeps vector field settings but rejects shader and point settings on the FDM Airbox target", () => {
+    const controller = new ObjectVisualizationController();
+
+    controller.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+      activeQuantityId: "H_demag",
+      shaderVisible: true,
+      surfaceColorSource: "magnitude",
+      vectorBudget: 400,
+      vectorsVisible: true,
+      vectorColorMode: "magnitude",
+      viewportColorbarVisible: true,
+    });
+
+    expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
+      activeQuantityId: "H_demag",
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      vectorBudget: 400,
+      vectorColorMode: "magnitude",
+      vectorsVisible: true,
+      viewportColorbarVisible: false,
+    });
+    expect(controller.getSnapshot().overrides).toEqual({
+      [FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id]: {
+        activeQuantityId: "H_demag",
+        vectorBudget: 400,
+        vectorColorMode: "magnitude",
+        vectorsVisible: true,
+      },
+    });
+  });
+
+  it("preserves generic Airbox points while rejecting the unsupported shader pass", () => {
+    const controller = new ObjectVisualizationController();
+
+    controller.patchTarget(AIRBOX_VISUALIZATION_TARGET, {
+      pointsVisible: true,
+      renderMode: "points",
+      shaderVisible: true,
+      surfaceColorSource: "magnitude",
+      vectorsVisible: true,
+      vectorBudget: 256,
+    });
+
+    expect(controller.getSettings(AIRBOX_VISUALIZATION_TARGET)).toMatchObject({
+      pointsVisible: true,
+      renderMode: "points",
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      vectorBudget: 256,
+      vectorsVisible: true,
+    });
+  });
+
+  it("exposes points as a primary geometry mode for FEM and FDM Airbox targets", () => {
+    expect(visualizationTargetCapabilities(AIRBOX_VISUALIZATION_TARGET)).toMatchObject({
+      primaryRenderModes: ["wireframe", "points"],
+      supportsPoints: true,
+    });
+    expect(visualizationTargetCapabilities(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
+      primaryRenderModes: ["wireframe", "points"],
+      supportsPoints: true,
+    });
+  });
+
+  it("normalizes surface render-mode patches and stale field overrides to FDM Airbox wireframe", () => {
+    const controller = new ObjectVisualizationController();
+
+    controller.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+      renderMode: "surface",
+    });
+    expect(visualizationTargetCapabilities(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET))
+      .toMatchObject({ primaryRenderModes: ["wireframe", "points"] });
+    expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+
+    const stale = resolveTargetVisualization({
+      snapshot: {
+        defaults: {},
+        overrides: {
+          "fdm-universe-outside-support": {
+            activeQuantityId: "H_demag",
+            pointsVisible: true,
+            shaderVisible: true,
+            surfaceColorSource: "magnitude",
+            vectorsVisible: true,
+          },
+        },
+        version: 1,
+      },
+      target: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+    });
+
+    expect(stale.settings).toMatchObject({
+      activeQuantityId: "H_demag",
+      pointsVisible: true,
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      vectorsVisible: true,
+      wireframeVisible: true,
+    });
+  });
+
+  it("maps supported FDM Airbox render modes to wireframe state without storing a renderMode override", () => {
+    const controller = new ObjectVisualizationController();
+
+    controller.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+      renderMode: "off",
+    });
+
+    expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
+      renderMode: "off",
+      shaderVisible: false,
+      wireframeVisible: false,
+    });
+    expect(
+      controller.getSnapshot().overrides[
+        FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+      ],
+    ).toEqual({ pointsVisible: false, wireframeVisible: false });
+
+    controller.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+      renderMode: "wireframe",
+    });
+
+    expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+    expect(
+      controller.getSnapshot().overrides[
+        FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+      ],
+    ).toEqual({ pointsVisible: false, wireframeVisible: true });
+  });
+
+  it("keeps field and vector capabilities on the magnetic FDM domain", () => {
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const controller = new ObjectVisualizationController();
+
+    controller.patchTarget(target, {
+      activeQuantityId: "H_demag",
+      vectorsVisible: true,
+    });
+
+    expect(visualizationTargetCapabilities(target)).toMatchObject({
+      supportsFieldData: true,
+      supportsVectors: true,
+    });
+    expect(controller.getSettings(target)).toMatchObject({
+      activeQuantityId: "H_demag",
+      vectorsVisible: true,
     });
   });
 
@@ -298,7 +469,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("serializes every backend-supported airbox property through one canonical patch", () => {
+  it("serializes only wireframe and vector Airbox properties through one canonical patch", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         activeQuantityId: "h_eff",
@@ -330,8 +501,6 @@ describe("ObjectVisualizationController", () => {
       layers: {
         airbox: {
           bounds: { visible: true },
-          points: { visible: true },
-          surface: { opacity: 0.44, visible: true },
           vectors: { density: 256, domain: "airbox_only", visible: true },
           visible: true,
           wireframe: { opacity: 0.75, visible: true },
@@ -344,26 +513,19 @@ describe("ObjectVisualizationController", () => {
           display: {
             bounds: { visible: true },
             geometry_scope: "surface",
-            points: { visible: true },
-            surface: { opacity: 0.44, visible: true },
             vectors: { visible: true },
             visible: true,
             wireframe: { opacity: 0.75, visible: true },
           },
           quantity: { active_quantity_id: "H_eff" },
           style: {
-            point_color: "#66eeff",
             scalar_color_palette: "inferno",
-            surface_color_source: "solid",
-            surface_mono_color: "#ffffff",
-            surface_projection_mode: "surface_faces",
             vector_alpha: 0.44,
             vector_budget: 256,
             vector_color_mode: "magnitude",
             vector_length_scale: 1.5,
             vector_mono_color: "#66aaff",
             vector_thickness: 2,
-            viewport_colorbar_visible: true,
             wireframe_color: "#888888",
           },
           visible: true,
@@ -416,8 +578,6 @@ describe("ObjectVisualizationController", () => {
       layers: {
         airbox: {
           bounds: { opacity: 1, visible: false },
-          points: { opacity: 1, visible: false },
-          surface: { opacity: 0.28, visible: false },
           vectors: { density: 1200, domain: "airbox_only", visible: false },
           visible: true,
           wireframe: { opacity: 1, visible: false },
@@ -555,6 +715,209 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("resolves an FDM cell selection to the structured-grid visualization target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "fdm.cell",
+        label: "Cell 7",
+        nodeId: "model:mesh:grid",
+        objectId: null,
+        ref: {
+          cellOrdinal: "7",
+          gridFingerprint: "grid-1",
+          ijk: [1, 2, 0],
+          kind: "fdm.cell",
+          maskState: "active-unassigned",
+          membershipRevision: "mesh-1:membership-1",
+          nodeId: "model:mesh:grid",
+          numericRegionId: 0,
+          regionId: null,
+          type: "fdm-cell",
+          visualizationTargetId: "fdm-domain",
+        },
+      }),
+    ).toEqual({
+      id: "fdm-domain",
+      kind: "fdm-domain",
+      label: "Cell 7",
+    });
+  });
+
+  it("does not fill the whole authored FDM universe before membership is realized", () => {
+    const settings = DEFAULT_FDM_DOMAIN_VISUALIZATION;
+
+    expect(settings).toMatchObject({
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+      visible: true,
+    });
+  });
+
+  it("fail-closes shader and vectors while the FDM membership is unavailable", () => {
+    const settings = resolveFdmViewportVisualizationSettings(
+      {
+        ...DEFAULT_FDM_DOMAIN_VISUALIZATION,
+        shaderVisible: true,
+        vectorsVisible: true,
+      },
+      false,
+    );
+
+    expect(settings).toMatchObject({
+      renderMode: "wireframe",
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      vectorsVisible: false,
+    });
+    expect(
+      resolveFdmViewportVisualizationSettings(
+        { ...DEFAULT_FDM_DOMAIN_VISUALIZATION, shaderVisible: true },
+        true,
+      ).shaderVisible,
+    ).toBe(true);
+  });
+
+  it("resolves structured-grid Explorer selections to the same FDM target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh.grid.descriptor",
+        label: "Structured Grid",
+        nodeId: "model:mesh:grid",
+        objectId: null,
+        ref: {
+          kind: "mesh.grid.descriptor",
+          nodeId: "model:mesh:grid",
+          scope: "descriptor",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-domain",
+        },
+      }),
+    ).toEqual({
+      id: "fdm-domain",
+      kind: "fdm-domain",
+      label: "Structured Grid",
+    });
+  });
+
+  it("keeps native multilayer targets local and excludes FFT scratch selections", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh.grid.layer",
+        label: "Bottom layer",
+        nodeId: "model:mesh:grid:layers:bottom",
+        objectId: "bottom",
+        ref: {
+          kind: "mesh.grid.layer",
+          layerId: "layer:bottom",
+          nodeId: "model:mesh:grid:layers:bottom",
+          scope: "layer",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-native-layer:layer%3Abottom",
+        },
+      }),
+    ).toEqual({
+      id: "fdm-native-layer:layer%3Abottom",
+      kind: "fdm-native-layer",
+      label: "Bottom layer",
+    });
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh.grid.common",
+        label: "FFT scratch",
+        nodeId: "model:mesh:grid:common",
+        objectId: null,
+        ref: {
+          kind: "mesh.grid.common",
+          nodeId: "model:mesh:grid:common",
+          scope: "common",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-domain",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      visualizationStateOverrideFromTargetPatch(
+        {
+          id: "fdm-native-layer:layer%3Abottom",
+          kind: "fdm-native-layer",
+        },
+        { visible: false },
+      ),
+    ).toBeNull();
+  });
+
+  it("preserves the dedicated FDM universe outside-support target from selection refs", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh.grid.universe-outside-support",
+        label: "Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "mesh.grid.universe-outside-support",
+          nodeId: "model:airbox:visualization",
+          scope: "universe-outside-support",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-universe-outside-support",
+        },
+      }),
+    ).toEqual(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET);
+  });
+
+  it("normalizes shared FDM Airbox child labels to the Airbox target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "airbox.mesh",
+        label: "Mesh",
+        nodeId: "model:airbox:mesh",
+        objectId: null,
+        ref: {
+          kind: "airbox.mesh",
+          nodeId: "model:airbox:mesh",
+          type: "airbox",
+          visualizationTargetId: "fdm-universe-outside-support",
+        },
+      }),
+    ).toEqual(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET);
+  });
+
+  it("keeps FDM universe outside-support settings isolated from the domain defaults", () => {
+    const controller = new ObjectVisualizationController();
+    const mainTarget = { id: "fdm-domain", kind: "fdm-domain" as const };
+
+    controller.patchDefaults("fdm-domain", {
+      surfaceOpacityPercent: 64,
+      visible: false,
+    });
+
+    expect(controller.getSettings(mainTarget)).toMatchObject({
+      surfaceOpacityPercent: 64,
+      visible: false,
+    });
+    expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject(
+      {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_demag",
+      },
+    );
+
+    controller.patchTarget(mainTarget, { wireframeOpacityPercent: 11 });
+    controller.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+      wireframeOpacityPercent: 22,
+    });
+
+    expect(Object.keys(controller.getSnapshot().overrides).sort()).toEqual([
+      "fdm-domain",
+      "fdm-universe-outside-support",
+    ]);
+    expect(controller.getSettings(mainTarget).wireframeOpacityPercent).toBe(11);
+    expect(
+      controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)
+        .wireframeOpacityPercent,
+    ).toBe(22);
+  });
+
   it("keeps an orphan part target separate from its Explorer node address", () => {
     expect(
       resolveVisualizationTargetFromSelection({
@@ -632,8 +995,54 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("resolves the multilayer Airbox target selection to the canonical Airbox target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "airbox.multilayer.target",
+        label: "Multilayer H_demag target",
+        nodeId: "model:airbox:multilayer-target",
+        objectId: null,
+        ref: {
+          kind: "airbox.multilayer.target",
+          nodeId: "model:airbox:multilayer-target",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      }),
+    ).toEqual(AIRBOX_VISUALIZATION_TARGET);
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "airbox.multilayer.target",
+        label: "Multilayer H_demag target",
+        nodeId: "model:airbox:multilayer-target",
+        objectId: null,
+        ref: {
+          kind: "airbox.multilayer.target",
+          nodeId: "model:airbox:multilayer-target",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      }),
+    ).not.toEqual(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET);
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "airbox.root",
+        label: "Airbox",
+        nodeId: "model:airbox",
+        objectId: null,
+        ref: {
+          kind: "airbox.root",
+          nodeId: "model:airbox",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      }),
+    ).toEqual(AIRBOX_VISUALIZATION_TARGET);
+  });
+
   it.each([
-    "airbox.root",
     "airbox.mesh",
     "airbox.mesh.parameters",
     "airbox.mesh.quality-gates",
@@ -1012,6 +1421,54 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("does not seed the FDM domain from global FEM visualization state", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const visualizationState = {
+      active_quantity_id: "H_eff",
+      colormap: "inferno",
+      layers: {
+        bounds: { opacity: 0.25, visible: true },
+        points: { opacity: 0.35, visible: true },
+        surface: { opacity: 0.45, visible: false },
+        vectors: { density: 17, visible: true },
+        wireframe: { visible: true },
+      },
+      revision: 19,
+      vector_glyphs: true,
+      vector_style: {
+        color_mode: "x",
+        length_scale: 2.5,
+        thickness: 3,
+      },
+    };
+
+    controller.patchDefaults("fdm-domain", { surfaceOpacityPercent: 64 });
+    controller.patchTarget(target, { activeQuantityId: "H_demag" });
+    controller.patchViewportPreferences(target, { vectorCenteringEnabled: false });
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: visualizationState as never,
+    });
+
+    expect(resolved.baseSettings).toEqual(DEFAULT_FDM_DOMAIN_VISUALIZATION);
+    expect(resolved.settings).toMatchObject({
+      activeQuantityId: "H_demag",
+      boundsVisible: false,
+      pointsVisible: false,
+      scalarColorPalette: "viridis",
+      shaderVisible: false,
+      surfaceOpacityPercent: 64,
+      vectorBudget: 1200,
+      vectorCenteringEnabled: false,
+      vectorColorMode: "orientation",
+      vectorsVisible: false,
+      wireframeVisible: true,
+    });
+  });
+
   it("uses the effective object registry settings instead of global visualization defaults", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };
@@ -1245,6 +1702,35 @@ describe("ObjectVisualizationController", () => {
       ],
     } as never);
     expect(controller.getSnapshot().pendingOverrides).toEqual({});
+  });
+
+  it("applies a pending FEM target patch before a backend target registry exists", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:fem-owned", kind: "object" as const };
+
+    controller.patchTargetPending(
+      target,
+      { shaderVisible: false, wireframeVisible: true },
+      14,
+    );
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: {
+          revision: 14,
+          layers: {
+            surface: { visible: true },
+            wireframe: { visible: false },
+          },
+          overrides: [],
+        } as never,
+      }).settings,
+    ).toMatchObject({
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
   });
 
   it("keeps client-only target rendering preferences outside pending registry patches", () => {
@@ -1582,6 +2068,26 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("keeps the viewport-local FDM domain out of FEM visualization overrides", () => {
+    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+    const existing = [
+      {
+        scope: "object" as const,
+        scope_id: "film",
+        visible: true,
+      },
+    ];
+
+    expect(
+      visualizationStateOverrideFromTargetPatch(target, { visible: false }),
+    ).toBeNull();
+    expect(
+      mergeVisualizationStateTargetOverride(existing, target, {
+        visible: false,
+      }),
+    ).toEqual(existing);
+  });
+
   it("defaults target surface projection to raw nodal", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       surfaceProjectionMode: "raw_nodal",
@@ -1810,7 +2316,7 @@ describe("ObjectVisualizationController", () => {
           airbox: {
             opacity: 0.31,
             points: { opacity: 1, visible: true },
-            surface: { opacity: 0.31, visible: false },
+          surface: { opacity: 0.31, visible: false },
             vectors: { density: 64, domain: "airbox_only", visible: true },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -2130,7 +2636,7 @@ describe("ObjectVisualizationController", () => {
 
     expect(configured).toMatchObject({
       pointsVisible: true,
-      shaderVisible: true,
+      shaderVisible: false,
       vectorsVisible: true,
       visible: false,
       wireframeVisible: true,
@@ -2160,7 +2666,6 @@ describe("ObjectVisualizationController", () => {
       layers: {
         airbox: {
           bounds: { visible: true },
-          surface: { opacity: 0.25, visible: true },
           vectors: { density: 64, domain: "airbox_only", visible: true },
           visible: false,
           wireframe: { visible: false },
@@ -2216,15 +2721,13 @@ describe("ObjectVisualizationController", () => {
     );
 
     expect(patch.layers?.airbox).toMatchObject({
-      points: { visible: false },
-      surface: { visible: false },
       wireframe: { visible: false },
     });
     expect(patch.layers?.airbox).not.toHaveProperty("visible");
     expect(patch.layers?.airbox).not.toHaveProperty("vectors");
   });
 
-  it("does not force airbox wireframe when visibility patch includes an explicit drawable pass", () => {
+  it("drops a shader request when an Airbox visibility patch includes it", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         shaderVisible: true,
@@ -2233,7 +2736,6 @@ describe("ObjectVisualizationController", () => {
     ).toMatchObject({
       layers: {
         airbox: {
-          surface: { visible: true },
           visible: true,
         },
       },

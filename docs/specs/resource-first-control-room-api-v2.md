@@ -163,7 +163,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
 | `data/material-fields` and `data/material-fields/{field_id}` | material-parameter field data catalog and per-assignment realized sample payloads for authored material fields; detail resources may include typed realized material-field asset metadata (`asset_id`, `artifact_path`, mesh identity, location, component count, source kind, algorithm, timing), while `model/material-fields` remains the summary/status resource |
-| `data/mesh-region-membership/{region_id}` and `data/mesh-region-memberships` | realized-region membership indices for current FEM mesh parts, with explicit `object_segments` fallback when no mesh-part entry exists and typed Box/Cylinder/Sphere geometry projection for authored regions without mesh parts; topology remains owned by mesh topology resources, and the list resource exposes available memberships plus unresolved authored region ids without moving heavy topology into status |
+| `data/mesh-region-membership/{region_id}` and `data/mesh-region-memberships` | realized-region membership indices for current FEM mesh parts, with explicit `object_segments` fallback when no mesh-part entry exists and typed Box/Cylinder/Sphere geometry projection for authored regions without mesh parts; topology remains owned by mesh topology resources, and the list resource exposes available memberships plus owner-qualified `unresolved_regions[]` entries without moving heavy topology into status |
+| `data/fdm-region-memberships` and `data/fdm-region-membership[/{region_id}]` | thin realized FDM membership descriptor plus full or region-scoped binary FMRM payloads. The descriptor owns grid/legend identity and an optional exact `magnetic_support` summary derived from the realized active and region masks: cell-edge support bounds and active, inactive, and active-unassigned cell counts. Legacy artifacts may omit the summary; consumers then fail closed instead of inferring support from authored or domain bounds. The binary payload remains the owner of per-cell membership. |
 | `meshing/summary` | lightweight mesh dashboard summary and revision pointers |
 | `meshing/builds` | mesh build history collection |
 | `meshing/builds/current` | current build/pipeline state, current resolved build target, and mesh provenance (`source_scene_revision`, `geometry_realization_revision`) |
@@ -201,6 +202,16 @@ envelope with `resource = "simulation"`, `resource_id = "preparation"`, the
 new revision, and the canonical
 `recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
 remains authoritative; the event is cache invalidation only.
+
+FDM membership realization has an independent
+`region_membership_revision`; neither `mesh_revision` nor
+`domain_generation_id` substitutes for it. A revision change emits a
+`resource.batch_changed` entry with `resource = "domain"`,
+`resource_id = "fdm-region-memberships"`, the current domain generation, and
+`recommended_fetch = "/v2/sessions/current/data/fdm-region-memberships"`.
+The event carries no descriptor or mask data. HTTP v2 remains authoritative,
+and the recommended fetch invalidates the descriptor and its revision-scoped
+binary membership consumers.
 
 ### Relaxation solver contract
 
@@ -293,6 +304,27 @@ Capability resources have distinct scopes:
 - `platform/capabilities`: process/runtime/server-level capability matrix.
 - `sessions/current/status.capabilities`: the only UI gating source for the active session.
 - `meshing/capabilities`: meshing policy/build feature matrix only; it must not drive global UI gating.
+
+`status.capabilities.active_lane` is the planner-owned operation snapshot for
+the current session. It carries authored ProblemIR intent, the effective
+execution request after managed-launcher/environment overrides, an optional
+resolved lane only when backend, discretization, device, precision, and mode
+were explicitly resolved, provenance for both intent layers, planner source identity, qualification as a separate
+non-claim, and stable operation entries with `state`, `reason_code`, `reason`,
+and `requires`. `reason_code` is machine-readable and version-stable;
+human-readable `reason` text may evolve. The active-lane snapshot schema is
+`active-lane-capabilities.v2`.
+The operation state vocabulary is `supported | semantic_only | deferred |
+unsupported | stale`. Missing planner capabilities produce `source.kind =
+unavailable`, `resolved = null`, and `stale` for every operation; clients must
+not reconstruct support from `domain.discretization`, engine-name heuristics,
+or platform/meshing capabilities.
+
+`active_lane.authored`, `active_lane.requested`, and `active_lane.resolved`
+must be labelled in the UI as **Authored request**, **Effective request**, and
+**Resolved**. In particular, `FULLMAG_FDM_EXECUTION=gpu` may produce authored
+`device=cpu`, effective `device=gpu`, and resolved `device=gpu`; collapsing
+those values destroys launcher-override provenance.
 
 ## 3.3 Model authoring and Geometry object lifecycle
 
@@ -672,27 +704,65 @@ optional fields are pass-through evidence: the API and frontend must not infer
 them from prose or promote an unsupported execution lane. A rejected build is
 not a solver-accepted topology certificate.
 
-Required field sample scopes:
+Wymagane zakresy próbek pola:
 
-| Query | Meaning |
-|---|---|
-| `scope_kind=full` | Full domain sample |
-| `scope_kind=object&scope_id=<object_id>` | Object node subset |
-| `scope_kind=part&scope_id=<part_id>` | Mesh-part node subset |
-| `scope_kind=airbox` | First airbox mesh part |
-| `scope_kind=airbox&scope_id=<part_id>` | Explicit airbox part |
-| `scope_kind=selection` | Current workspace selection resolved by the backend |
+| Domena backendu | `scope_kind` | `scope_id` | Rozwiązany nośnik |
+|---|---|---|---|
+| FEM | `full` | Pominięty | Pełna domena węzłowa |
+| FEM | `object` | Wymagany identyfikator obiektu | Podzbiór węzłów kwalifikowany właścicielem; zgodność samej geometrii nie wystarcza |
+| FEM | `part` | Wymagany identyfikator części siatki | Podzbiór węzłów części siatki |
+| FEM | `airbox` | Opcjonalny identyfikator części powietrznej | Jawna część powietrzna albo pierwsza kanoniczna część airbox |
+| FEM | `selection` | Pominięty | Bieżące zaznaczenie workspace rozwiązane przez backend |
+| Jednosiatkowy FDM | `full` | Pominięty | Pełna siatka komórek |
+| Jednosiatkowy FDM | `object` | Wymagany identyfikator obiektu | Komórki należące do bieżących wpisów legendy FMRM obiektu |
+| Jednosiatkowy FDM | `region` | Wymagany identyfikator regionu | Komórki zgodne z wpisem bieżącej legendy regionów FMRM |
+| Jednosiatkowy FDM | `airbox` | Opcjonalny | Komórki oznaczone jako powietrze przez bieżące członkostwo FMRM |
+| Wielowarstwowy FDM | `full` | Pominięty | Połączony payload warstw natywnych w kolejności artefaktu |
+| Wielowarstwowy FDM | `object` | Wymagany identyfikator magnesu/obiektu | Natywny payload warstwy obiektu bez projekcji na siatkę wspólną |
+| Wielowarstwowy FDM | `layer` | Wymagany identyfikator warstwy natywnej | Payload nazwanej warstwy natywnej bez projekcji na siatkę wspólną |
+
+Pozostałe kombinacje kończą się błędem bez niejawnego fallbacku. Jednosiatkowy
+FDM nie przyjmuje `part`, `layer` ani `selection`, a wielowarstwowy FDM nie
+przyjmuje `region`, `part`, `airbox` ani `selection`. Bieżący artefakt
+wielowarstwowy nazywa każdą warstwę natywną przez `magnet_name` jej właściciela,
+więc `object` i `layer` mogą wybrać ten sam natywny payload. Rozwiązany
+`scope_kind` zachowuje jednak dokładnie żądaną tożsamość i nie może być
+przepisywany z `object` na `layer`.
 
 Scope resolution is a backend contract. The frontend may request a selected scope, but it must not
 download full-domain data just to filter large FEM payloads client-side.
 
-FEM vector field payloads use versioned FMVP. FMVP v3 includes
-`domain_generation_id`, mesh topology revision/hash, scope kind/id, an indexing
-mode, and `node_indices` for explicit or sampled non-full-domain payloads.
-Clients must preserve `domain_generation_id` and mesh topology revision as
-exact revision tokens. JavaScript clients must not coerce FMVP v3 `u64`
-metadata into `number`, because valid backend revisions may exceed
+Payloady wektorowego pola w FMVP v3 używają 48-bajtowego nagłówka zewnętrznego,
+po którym występuje wyrównany blok metadanych `FMMI`. Metadane w wersji 2 mają
+następujący układ little-endian:
+
+| Offset metadanych | Typ | Znaczenie |
+|---:|---|---|
+| 0 | 4 bajty | Magic `FMMI` |
+| 4 | `u16` | Wersja metadanych, dokładnie `2` |
+| 6 | `u16` | Pole zastrzeżone, zero |
+| 8 | `u16` | Długość `domain_generation_id` w bajtach UTF-8 |
+| 10 | 6 bajtów | Pole zastrzeżone, zera |
+| 16 | `u64` | Rewizja topologii siatki albo nośnika |
+| 24 | 32 bajty | Hash topologii siatki albo nośnika FDM |
+| 56 | `u32` | Kod indeksowania pola |
+| 60 | `u32` | Liczba zakodowanych indeksów węzłów/komórek |
+| 64 | `u16` | Długość `scope_kind` w bajtach UTF-8 |
+| 66 | `u16` | Długość `scope_id` w bajtach UTF-8 |
+| 68 | zmienny | `scope_kind`, `scope_id`, dokładny `domain_generation_id`, następnie indeksy `u32` little-endian; dopełnienie zerami do wielokrotności 8 bajtów |
+
+`domain_generation_id` jest nieprzezroczystym tekstem, a nie rewizją liczbową.
+Jego bajty UTF-8 w FMVP metadata v2 muszą dokładnie odpowiadać zasobowi JSON i
+nagłówkowi `x-fullmag-domain-generation-id`. Klient zachowuje ten tekst bez
+parsowania, normalizacji i konwersji liczbowej. Liczbowa rewizja topologii nadal
+ma typ `u64`; klient JavaScript musi dekodować ją bez utraty precyzji, na
+przykład do tekstu dziesiętnego albo `bigint`, ponieważ może przekroczyć
 `Number.MAX_SAFE_INTEGER`.
+
+FMVP v3 przenosi również rodzaj/identyfikator zakresu, tryb indeksowania oraz
+`node_indices` dla jawnych lub próbkowanych payloadów niepełnej domeny. Dla
+nośników FDM są to numery porządkowe komórek; dla natywnego payloadu
+wielowarstwowego są lokalne względem siatki wybranej warstwy.
 `sampled_node_indices` payloads with a complete `node_indices` mapping and
 matching mesh topology are valid for vector glyph placement and the
 `surface_faces`/`thickness_average_z` surface projection modes. Raw nodal

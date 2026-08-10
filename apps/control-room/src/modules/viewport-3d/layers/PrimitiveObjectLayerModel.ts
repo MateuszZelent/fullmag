@@ -46,9 +46,35 @@ export function buildPrimitiveTransformGizmoSegments(
 }
 
 export function shouldRenderPrimitiveTransformGizmo(
-  settings: VisualizationTargetSettings,
+  _settings: VisualizationTargetSettings,
 ): boolean {
-  return settings.visible && settings.wireframeVisible;
+  // Wireframe is a display pass, not an implicit manipulate mode.  The
+  // texture-pivot marker has no user-facing mode/command yet, so rendering it
+  // here makes ordinary Shaded + Wireframe show a misleading red sphere.
+  return false;
+}
+
+/**
+ * A primitive-only carrier has no field-capable mesh surface. When the user
+ * requests the shaded pass, represent that pass with the field-free primitive
+ * preview instead of returning an empty group. Mesh-backed objects continue to
+ * use their real topology layers and are not changed by this fallback.
+ */
+export function resolvePrimitiveObjectRenderSettings(
+  object: Viewport3DPrimitiveObject,
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  if (
+    object.meshState === "mesh-ready" ||
+    settings.primitiveVisible ||
+    !settings.shaderVisible
+  ) {
+    return settings;
+  }
+  return {
+    ...settings,
+    primitiveVisible: true,
+  };
 }
 
 export function createPrimitiveObjectGeometry(
@@ -157,13 +183,17 @@ function remapExtrudedCardinalAxisGeometry(
 export function shouldRenderPrimitiveObject(
   object: Viewport3DPrimitiveObject,
   settings: VisualizationTargetSettings,
+  hasRealizedObjectGeometry = false,
 ): boolean {
+  const renderSettings = resolvePrimitiveObjectRenderSettings(object, settings);
   return (
+    !hasRealizedObjectGeometry &&
     object.meshState !== "mesh-ready" &&
-    settings.visible &&
-    (settings.primitiveVisible === true ||
-      settings.shaderVisible ||
-      settings.wireframeVisible ||
-      settings.boundsVisible)
+    renderSettings.visible &&
+    (renderSettings.primitiveVisible === true ||
+      renderSettings.shaderVisible ||
+      renderSettings.pointsVisible ||
+      renderSettings.wireframeVisible ||
+      renderSettings.boundsVisible)
   );
 }

@@ -80,6 +80,7 @@ import {
   buildFdmVectorSegmentsUncached,
   buildFdmPointPositions,
   type FdmCuboidBuildRequest,
+  type FdmCuboidCellSelection,
   type FdmCuboidInstanceModel,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
@@ -94,7 +95,9 @@ import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 
 export {
   buildFdmCuboidInstanceModel,
+  buildFdmDenseNativeLayerInstanceModel,
   buildFdmPointPositions,
+  buildFdmVectorSampledCellIndices,
   resolveFdmVectorGlyphScale,
   type FdmCuboidInstanceModel,
   type FdmCuboidInstanceModelOptions,
@@ -152,6 +155,17 @@ export function buildFdmCuboidUploadBatches(
   }
 
   return batches;
+}
+
+export function buildFdmCuboidColorUploadBatchesForView(
+  model: Pick<FdmCuboidInstanceModel, "count">,
+  instanceOrdinals?: Uint32Array | null,
+  batchSize = FDM_CUBOID_UPLOAD_BATCH_SIZE,
+): FdmCuboidUploadBatch[] {
+  return buildFdmCuboidUploadBatches(
+    instanceOrdinals?.length ?? model.count,
+    batchSize,
+  );
 }
 
 function requestFdmUploadTask(callback: () => void): FdmUploadTaskHandle {
@@ -252,11 +266,24 @@ export function buildFdmVectorSegments(
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
   maxVectors: number,
-  options: { anchorMode?: Viewport3DVectorAnchorMode } = {},
+  options: {
+    anchorMode?: Viewport3DVectorAnchorMode;
+    geometryScope?: "surface" | "full";
+    instanceOrdinals?: Uint32Array | null;
+  } = {},
 ): Float32Array | null {
   if (!model || !fieldVector) return null;
+  if (options.instanceOrdinals) {
+    return buildFdmVectorSegmentsUncached(
+      model,
+      fieldVector,
+      scale,
+      maxVectors,
+      options,
+    );
+  }
   const anchorMode = options.anchorMode ?? "center";
-  const cacheKey = `${scale}:${maxVectors}:${anchorMode}`;
+  const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? "full"}`;
   const cachedSegments = cachedFdmVectorSegments(model, fieldVector, cacheKey);
   if (cachedSegments !== undefined) return cachedSegments;
 
@@ -273,6 +300,7 @@ export function buildFdmVectorSegments(
 
 interface FdmInspectProjectionFallbackInput {
   camera: Camera;
+  instanceOrdinals?: Uint32Array | null;
   model: FdmCuboidInstanceModel;
   pointerX: number;
   pointerY: number;
@@ -289,11 +317,13 @@ function resolveProjectedFdmInspectHit({
   projected,
   rectHeight,
   rectWidth,
+  instanceOrdinals,
 }: FdmInspectProjectionFallbackInput): {
   instanceId: number;
   worldPosition: [number, number, number];
 } | null {
-  if (model.count > FDM_INSPECT_PROJECTION_FALLBACK_LIMIT) return null;
+  const renderCount = instanceOrdinals?.length ?? model.count;
+  if (renderCount > FDM_INSPECT_PROJECTION_FALLBACK_LIMIT) return null;
 
   const maxDistanceSq =
     FDM_INSPECT_PROJECTION_HIT_RADIUS_PX *
@@ -301,8 +331,14 @@ function resolveProjectedFdmInspectHit({
   let bestDistanceSq = maxDistanceSq;
   let bestInstanceId = -1;
 
-  for (let instanceId = 0; instanceId < model.count; instanceId += 1) {
-    const offset = instanceId * 3;
+  for (let instanceId = 0; instanceId < renderCount; instanceId += 1) {
+    const sourceInstance = resolveFdmCuboidSourceInstanceOrdinal(
+      instanceId,
+      instanceOrdinals,
+      model.count,
+    );
+    if (sourceInstance === null) continue;
+    const offset = sourceInstance * 3;
     const worldX = model.centers[offset] ?? 0;
     const worldY = model.centers[offset + 1] ?? 0;
     const worldZ = model.centers[offset + 2] ?? 0;
@@ -323,7 +359,13 @@ function resolveProjectedFdmInspectHit({
 
   if (bestInstanceId < 0) return null;
 
-  const offset = bestInstanceId * 3;
+  const sourceInstance = resolveFdmCuboidSourceInstanceOrdinal(
+    bestInstanceId,
+    instanceOrdinals,
+    model.count,
+  );
+  if (sourceInstance === null) return null;
+  const offset = sourceInstance * 3;
   return {
     instanceId: bestInstanceId,
     worldPosition: [
@@ -334,10 +376,59 @@ function resolveProjectedFdmInspectHit({
   };
 }
 
+export function resolveFdmCuboidSourceInstanceOrdinal(
+  renderedInstanceId: number,
+  instanceOrdinals: Uint32Array | null | undefined,
+  sourceCount: number,
+): number | null {
+  if (!Number.isInteger(renderedInstanceId) || renderedInstanceId < 0) return null;
+  const sourceInstance = instanceOrdinals
+    ? instanceOrdinals[renderedInstanceId]
+    : renderedInstanceId;
+  if (sourceInstance === undefined) return null;
+  return sourceInstance < sourceCount ? sourceInstance : null;
+}
+
+export function resolveFdmCuboidGeometryScopeInstanceOrdinals(
+  geometryScope: "surface" | "full",
+  instanceOrdinals: Uint32Array | null | undefined,
+  surfaceInstanceOrdinals: Uint32Array | null | undefined,
+): Uint32Array | null | undefined {
+  if (geometryScope === "surface" && surfaceInstanceOrdinals !== null && surfaceInstanceOrdinals !== undefined) {
+    return surfaceInstanceOrdinals;
+  }
+  return instanceOrdinals;
+}
+
+export function fdmCuboidSurfaceMeshKey(
+  modelCount: number,
+  usesInstanceColors: boolean,
+): string {
+  return `fdm-cuboids-surface-${modelCount}-${usesInstanceColors ? "field-colors" : "uniform-color"}`;
+}
+
+export function fdmCuboidUsesInstanceColors(
+  settings: Pick<VisualizationTargetSettings, "surfaceColorSource">,
+  surfaceColors: ScalarColorBuffer | null,
+  renderCount: number,
+): boolean {
+  return (
+    settings.surfaceColorSource !== "solid" &&
+    Boolean(surfaceColors && surfaceColors.colors.length === renderCount * 3)
+  );
+}
+
 interface FdmCuboidMatrixUploadOptions {
   invalidate: () => void;
+  instanceOrdinals?: Uint32Array | null;
   model: FdmCuboidInstanceModel | null;
   shaderVisible: boolean;
+  /**
+   * The surface mesh is reconstructed when its color carrier changes.
+   * Include the same identity in the upload lifecycle so a newly constructed
+   * InstancedMesh does not keep Three.js's default identity matrices.
+   */
+  surfaceMeshKey: string;
   surfaceRef: { current: InstancedMesh | null };
   tracker: Viewport3DResourceTracker;
   wireframeRef: { current: InstancedMesh | null };
@@ -346,8 +437,10 @@ interface FdmCuboidMatrixUploadOptions {
 
 function useFdmCuboidMatrixUpload({
   invalidate,
+  instanceOrdinals,
   model,
   shaderVisible,
+  surfaceMeshKey,
   surfaceRef,
   tracker,
   wireframeRef,
@@ -361,7 +454,8 @@ function useFdmCuboidMatrixUpload({
     );
     if (meshes.length === 0) return;
 
-    const batches = buildFdmCuboidUploadBatches(model.count);
+    const renderCount = instanceOrdinals?.length ?? model.count;
+    const batches = buildFdmCuboidUploadBatches(renderCount);
     if (batches.length === 0) return;
 
     const matrix = new Matrix4();
@@ -381,7 +475,13 @@ function useFdmCuboidMatrixUpload({
 
       for (const mesh of meshes) {
         for (let index = batch.start; index < batch.end; index += 1) {
-          const offset = index * 3;
+          const sourceInstance = resolveFdmCuboidSourceInstanceOrdinal(
+            index,
+            instanceOrdinals,
+            model.count,
+          );
+          if (sourceInstance === null) continue;
+          const offset = sourceInstance * 3;
           position.set(
             model.centers[offset] ?? 0,
             model.centers[offset + 1] ?? 0,
@@ -419,8 +519,10 @@ function useFdmCuboidMatrixUpload({
     };
   }, [
     invalidate,
+    instanceOrdinals,
     model,
     shaderVisible,
+    surfaceMeshKey,
     surfaceRef,
     tracker,
     wireframeRef,
@@ -430,6 +532,7 @@ function useFdmCuboidMatrixUpload({
 
 interface FdmCuboidColorUploadOptions {
   invalidate: () => void;
+  instanceOrdinals?: Uint32Array | null;
   model: FdmCuboidInstanceModel | null;
   onAdopted?: () => void;
   surfaceColors: ScalarColorBuffer | null;
@@ -440,6 +543,7 @@ interface FdmCuboidColorUploadOptions {
 
 function useFdmCuboidColorUpload({
   invalidate,
+  instanceOrdinals,
   model,
   onAdopted,
   surfaceColors,
@@ -451,7 +555,10 @@ function useFdmCuboidColorUpload({
     const mesh = surfaceRef.current;
     if (!mesh || !model || !usesInstanceColors || !surfaceColors) return;
 
-    const batches = buildFdmCuboidUploadBatches(model.count);
+    const batches = buildFdmCuboidColorUploadBatchesForView(
+      model,
+      instanceOrdinals,
+    );
     if (batches.length === 0) return;
 
     const color = new Color();
@@ -505,6 +612,7 @@ function useFdmCuboidColorUpload({
     };
   }, [
     invalidate,
+    instanceOrdinals,
     model,
     onAdopted,
     surfaceColors,
@@ -516,12 +624,13 @@ function useFdmCuboidColorUpload({
 
 export interface FdmCuboidAsyncBuildInput {
   buildKey: string | null;
+  cellSelection: FdmCuboidCellSelection;
   domain: FdmGridRenderDomain | null;
   enabled: boolean;
   groupKey: string | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
-  realizedRegionIds?: Uint32Array | null;
+  realizedRegionIds: Uint32Array | null;
   revisionSummary: string;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
@@ -533,6 +642,7 @@ export interface FdmCuboidAsyncBuildInput {
 
 export function useFdmCuboidBuildResult({
   buildKey,
+  cellSelection,
   domain,
   enabled,
   groupKey,
@@ -552,10 +662,11 @@ export function useFdmCuboidBuildResult({
     () =>
       enabled && domain
         ? {
+            cellSelection,
             domain,
             maxVectorGlyphs,
             modelFieldVector,
-            realizedRegionIds,
+            realizedRegionIds: realizedRegionIds ?? null,
             vectorAnchorMode,
             vectorField,
             vectorScale,
@@ -565,6 +676,7 @@ export function useFdmCuboidBuildResult({
           }
         : null,
     [
+      cellSelection,
       domain,
       enabled,
       maxVectorGlyphs,
@@ -621,7 +733,9 @@ export function useFdmCuboidBuildResult({
 
 const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   adoptionRegistry,
+  carrierId,
   colors,
+  instanceOrdinals,
   materialProfile,
   model,
   fieldBufferId,
@@ -635,7 +749,9 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   wireframeRef,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  carrierId: string;
   colors: Viewport3DColors;
+  instanceOrdinals?: Uint32Array | null;
   materialProfile: Viewport3DMaterialProfile;
   model: FdmCuboidInstanceModel;
   fieldBufferId: string | null;
@@ -650,13 +766,29 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
 }) {
   const invalidate = useBatchedInvalidate();
   const geometry = useMemo(
-    () => tracker.track("geometry", new BoxGeometry(1, 1, 1)),
+    () => {
+      const next = new BoxGeometry(1, 1, 1);
+      // MeshBasicMaterial enables the regular vertex-color channel together
+      // with InstancedMesh.instanceColor. Keep that channel neutral so the
+      // per-cell instance colors are not multiplied by WebGL's default (0,0,0,1).
+      const color = new Float32Array(next.getAttribute("position").count * 3);
+      color.fill(1);
+      next.setAttribute("color", new BufferAttribute(color, 3));
+      return tracker.track("geometry", next);
+    },
     [tracker],
   );
   const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
-  const usesInstanceColors = Boolean(
-    surfaceColors && surfaceColors.colors.length === model.count * 3,
+  const renderCount = instanceOrdinals?.length ?? model.count;
+  const usesInstanceColors = fdmCuboidUsesInstanceColors(
+    renderSettings,
+    surfaceColors,
+    renderCount,
+  );
+  const surfaceMeshKey = fdmCuboidSurfaceMeshKey(
+    renderCount,
+    usesInstanceColors,
   );
   const lastAdoptedSurfaceRef = useRef<{
     fieldBufferId: string | null;
@@ -666,17 +798,19 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     if (!adoptionRegistry || !surfaceColors) return;
     lastAdoptedSurfaceRef.current = { fieldBufferId, scalarBuffer: surfaceColors };
     recordFdmCuboidSurfaceAdoption({
+      carrierId,
       fieldBufferId,
       registry: adoptionRegistry,
       scalarBuffer: surfaceColors,
     });
-  }, [adoptionRegistry, fieldBufferId, surfaceColors]);
+  }, [adoptionRegistry, carrierId, fieldBufferId, surfaceColors]);
   useEffect(() => {
     if (!adoptionRegistry) return;
-    const unregister = adoptionRegistry.registerCarrierAdoptionReplay("fdm-domain", () => {
+    const unregister = adoptionRegistry.registerCarrierAdoptionReplay(carrierId, () => {
       const adopted = lastAdoptedSurfaceRef.current;
       if (!adopted) return;
       recordFdmCuboidSurfaceAdoption({
+        carrierId,
         fieldBufferId: adopted.fieldBufferId,
         registry: adoptionRegistry,
         scalarBuffer: adopted.scalarBuffer,
@@ -687,18 +821,20 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       const adopted = lastAdoptedSurfaceRef.current;
       if (!adopted) return;
       adoptionRegistry.clearAdoption(
-        fdmCuboidSurfaceAdoptionIdentity(adopted),
+        fdmCuboidSurfaceAdoptionIdentity({ ...adopted, carrierId }),
       );
       lastAdoptedSurfaceRef.current = null;
     };
-  }, [adoptionRegistry]);
+  }, [adoptionRegistry, carrierId]);
   useEffect(() => {
     if (usesInstanceColors || !adoptionRegistry) return;
     const adopted = lastAdoptedSurfaceRef.current;
     if (!adopted) return;
-    adoptionRegistry.clearAdoption(fdmCuboidSurfaceAdoptionIdentity(adopted));
+    adoptionRegistry.clearAdoption(
+      fdmCuboidSurfaceAdoptionIdentity({ ...adopted, carrierId }),
+    );
     lastAdoptedSurfaceRef.current = null;
-  }, [adoptionRegistry, usesInstanceColors]);
+  }, [adoptionRegistry, carrierId, usesInstanceColors]);
   const surfaceMaterialColor = surfaceMaterialColorFromSettings(
     renderSettings,
     colors.mesh,
@@ -756,8 +892,10 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
 
   useFdmCuboidMatrixUpload({
     invalidate,
+    instanceOrdinals,
     model,
     shaderVisible: renderPlan.surface.visible,
+    surfaceMeshKey,
     surfaceRef,
     tracker,
     wireframeRef,
@@ -765,6 +903,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   });
   useFdmCuboidColorUpload({
     invalidate,
+    instanceOrdinals,
     model,
     onAdopted: recordSurfaceAdoption,
     surfaceColors,
@@ -777,9 +916,9 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     <>
       {renderPlan.surface.visible ? (
         <instancedMesh
-          args={[geometry, surfaceMaterial, model.count]}
+          args={[geometry, surfaceMaterial, renderCount]}
           frustumCulled={false}
-          key={`fdm-cuboids-surface-${model.count}`}
+          key={surfaceMeshKey}
           onPointerMove={onPointerMove}
           onPointerOut={onPointerOut}
           ref={surfaceRef}
@@ -788,9 +927,9 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       ) : null}
       {renderPlan.wireframe.visible ? (
         <instancedMesh
-          args={[geometry, wireframeMaterial, model.count]}
+          args={[geometry, wireframeMaterial, renderCount]}
           frustumCulled={false}
-          key={`fdm-cuboids-wire-${model.count}`}
+          key={`fdm-cuboids-wire-${renderCount}`}
           onPointerMove={onPointerMove}
           onPointerOut={onPointerOut}
           ref={wireframeRef}
@@ -803,19 +942,25 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
 
 const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
   colors,
+  instanceOrdinals,
   model,
   renderSettings,
   opacity,
   tracker,
 }: {
   colors: Viewport3DColors;
+  instanceOrdinals?: Uint32Array | null;
   model: FdmCuboidInstanceModel;
   renderSettings: VisualizationTargetSettings;
   opacity: number;
   tracker: Viewport3DResourceTracker;
 }) {
   const geometry = useMemo(() => {
-    const positions = buildFdmPointPositions(model, renderSettings.geometryScope);
+    const positions = buildFdmPointPositions(
+      model,
+      renderSettings.geometryScope,
+      instanceOrdinals,
+    );
     if (!positions) return null;
     return tracker.track(
       "geometry",
@@ -824,7 +969,7 @@ const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
         new BufferAttribute(positions, 3),
       ),
     );
-  }, [model, renderSettings.geometryScope, tracker]);
+  }, [instanceOrdinals, model, renderSettings.geometryScope, tracker]);
   useEffect(
     () => () => tracker.release("geometry", geometry),
     [geometry, tracker],
@@ -848,9 +993,12 @@ const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
 
 export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   adoptionRegistry,
+  carrierId = "fdm-domain",
   colors,
   materialProfile,
   onSelectDomain,
+  onSelectTarget,
+  onSelectFdmCell,
   onSelectRegion,
   regionOverlays,
   settings,
@@ -861,7 +1009,10 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   vectorColorMode,
   vectorStyle,
   fieldVector,
+  geometryScopeInstanceOrdinals,
+  vectorGlyphColors,
   instanceModel,
+  instanceOrdinals,
   inspectEnabled,
   inspectQuantityId,
   onInspectClear,
@@ -869,9 +1020,13 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   vectorSegments,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  carrierId?: string;
   colors: Viewport3DColors;
   fieldVector: DecodedFieldVector | null | undefined;
+  geometryScopeInstanceOrdinals?: Uint32Array | null;
+  vectorGlyphColors?: Float32Array | null;
   instanceModel?: FdmCuboidInstanceModel | null;
+  instanceOrdinals?: Uint32Array | null;
   inspectEnabled: boolean;
   inspectQuantityId: string;
   materialProfile: Viewport3DMaterialProfile;
@@ -881,6 +1036,10 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     screenPosition: Viewport3DInspectScreenPosition,
   ) => void;
   onSelectDomain: () => void;
+  /** Target-aware selection for a target-partitioned FDM render view. */
+  onSelectTarget?: () => void;
+  /** Optional identity-gated cell selection; absent means fail closed. */
+  onSelectFdmCell?: (instanceId: number) => void;
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
   regionOverlays?: readonly RegionOverlayInput[];
   selectedObjectId?: string | null;
@@ -906,6 +1065,11 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const inspectFrameRef = useRef(0);
   const r3fInspectHitFrameRef = useRef(0);
   const renderSettings = settings;
+  const geometryScopeOrdinals = resolveFdmCuboidGeometryScopeInstanceOrdinals(
+    renderSettings.geometryScope,
+    instanceOrdinals,
+    geometryScopeInstanceOrdinals,
+  );
   const targetRenderPlan = resolveViewport3DTargetRenderPlan(
     renderSettings,
     materialProfile,
@@ -959,6 +1123,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         : resolveProjectedFdmInspectHit({
             camera,
             model,
+            instanceOrdinals: geometryScopeOrdinals,
             pointerX,
             pointerY,
             projected: inspectRaycastState.projected,
@@ -974,11 +1139,20 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         onInspectClear?.();
         return;
       }
+      const sourceInstance = resolveFdmCuboidSourceInstanceOrdinal(
+        instanceId,
+        geometryScopeOrdinals,
+        model.count,
+      );
+      if (sourceInstance === null) {
+        onInspectClear?.();
+        return;
+      }
 
       onInspectSample?.(
         buildViewport3DFdmInspectSample({
           fieldVector,
-          instanceId,
+          instanceId: sourceInstance,
           model,
           quantityId: inspectQuantityId,
           worldPosition,
@@ -1034,6 +1208,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     inspectEnabled,
     inspectQuantityId,
     inspectRaycastState,
+    geometryScopeOrdinals,
     model,
     onInspectClear,
     onInspectSample,
@@ -1055,6 +1230,22 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       onSelectRegion?.(pickedRegion);
       return;
     }
+    if (Number.isInteger(event.instanceId) && onSelectFdmCell) {
+      const sourceInstance = resolveFdmCuboidSourceInstanceOrdinal(
+        event.instanceId as number,
+        geometryScopeOrdinals,
+        model.count,
+      );
+      if (sourceInstance === null) return;
+      event.stopPropagation();
+      onSelectFdmCell(sourceInstance);
+      return;
+    }
+    if (onSelectTarget) {
+      event.stopPropagation();
+      onSelectTarget();
+      return;
+    }
     onSelectDomain();
   };
   const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
@@ -1064,7 +1255,14 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     onInspectSample?.(
       buildViewport3DFdmInspectSample({
         fieldVector,
-        instanceId: event.instanceId,
+        instanceId:
+          typeof event.instanceId === "number"
+            ? resolveFdmCuboidSourceInstanceOrdinal(
+                event.instanceId,
+                geometryScopeOrdinals,
+                model.count,
+              )
+            : null,
         model,
         quantityId: inspectQuantityId,
         worldPosition: [event.point.x, event.point.y, event.point.z],
@@ -1085,7 +1283,9 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       {passPlan.needsSurfaceInstances ? (
         <FdmCuboidSurfacePass
           adoptionRegistry={adoptionRegistry}
+          carrierId={carrierId}
           colors={colors}
+          instanceOrdinals={geometryScopeOrdinals}
           materialProfile={materialProfile}
           fieldBufferId={
             fieldVector
@@ -1106,6 +1306,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       {passPlan.needsPointGeometry ? (
         <FdmCuboidPointsPass
           colors={colors}
+          instanceOrdinals={geometryScopeOrdinals}
           model={model}
           opacity={targetRenderPlan.points.opacity}
           renderSettings={renderSettings}
@@ -1116,11 +1317,13 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       passPlan.needsVectors ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
-          carrierId="fdm-domain"
+          carrierId={carrierId}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
+          glyphColorsOverride={vectorGlyphColors}
           materialProfile={materialProfile.glyphs}
           opacity={targetRenderPlan.vectors.opacity}
+          renderOnTop
           fieldBufferId={
             fieldVector
               ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`
@@ -1136,15 +1339,18 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 });
 
 export function recordFdmCuboidSurfaceAdoption({
+  carrierId = "fdm-domain",
   fieldBufferId,
   registry,
   scalarBuffer,
 }: {
+  carrierId?: string;
   fieldBufferId: string | null;
   registry: Viewport3DRenderAdoptionRegistry;
   scalarBuffer: ScalarColorBuffer;
 }): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
   const adoption = fdmCuboidSurfaceAdoptionIdentity({
+    carrierId,
     fieldBufferId,
     scalarBuffer,
   });
@@ -1161,14 +1367,16 @@ export function recordFdmCuboidSurfaceAdoption({
 }
 
 function fdmCuboidSurfaceAdoptionIdentity({
+  carrierId = "fdm-domain",
   fieldBufferId,
   scalarBuffer,
 }: {
+  carrierId?: string;
   fieldBufferId: string | null;
   scalarBuffer: ScalarColorBuffer;
 }): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
   return {
-    carrierId: "fdm-domain",
+    carrierId,
     fieldBufferId: scalarBuffer.sourceFieldBufferId ?? fieldBufferId,
     kind: "surface",
     resourceKey: scalarBuffer.sourceResourceKey ?? null,

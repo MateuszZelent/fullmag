@@ -7,13 +7,20 @@
 //! - scalar traces and concatenated field snapshots.
 
 use fullmag_engine::{
-    multilayer::{FdmLayerRuntime, KernelPair, MultilayerDemagRuntime},
+    multilayer::{collapse_kernel_z_plane, FdmLayerRuntime, KernelPair, MultilayerDemagRuntime},
     AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem,
     ExchangeLlgState, FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
+#[cfg(test)]
+use fullmag_fdm_demag::compute_shifted_kernel;
 use fullmag_fdm_demag::{
-    compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
+    compute_shifted_kernel_pair,
+    descriptors::{
+        ActiveMaskIdentity, CommonTransformLayout, ConvolutionMode, FdmLayerDescriptor,
+        GridGeometry,
+    },
+    TransferBoundaryPolicy, TransferKind,
 };
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
@@ -23,6 +30,8 @@ use crate::derived_fields::max_torque_residual_apm_from_field;
 use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
+use crate::preview::flatten_vectors;
+use crate::quantities::{quantity_spatial_domain, quantity_unit};
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
@@ -30,8 +39,8 @@ use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewField, RunError, RunResult,
+    RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -100,6 +109,8 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let provenance = ExecutionProvenance {
         transport_modules: Vec::new(),
+        executed_physics_kinds: Vec::new(),
+        executed_physics_module_ids: Vec::new(),
         execution_engine: "cpu_reference_multilayer".to_string(),
         precision: "double".to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -126,6 +137,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         resolved_demag_realization: None,
         timestep_policy: Some(timestep_policy),
         fdm_multilayer_transfer_telemetry: None,
+        fdm_multilayer_stage_telemetry: None,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -335,6 +347,34 @@ pub(crate) fn execute_reference_fdm_multilayer(
         })?;
     }
 
+    // Multilayer fields are concatenated in native-layer order, so they cannot
+    // use the ordinary `grid` preview contract (the common FFT grid is not a
+    // physical carrier). Publish the final native payload explicitly as a
+    // multilayer field; the API then slices it using the artifact layout.
+    if !paused && !cancelled {
+        if let Some((grid, on_step)) = live.as_mut() {
+            let cached_preview_fields =
+                build_multilayer_live_preview_fields(plan, &final_observables, final_stats.step);
+            let _ = on_step(StepUpdate {
+                coupled_checkpoint: None,
+                stats: final_stats.clone(),
+                scalar_row_due: true,
+                grid: [grid[0], grid[1], grid[2]],
+                fem_mesh_generation_id: None,
+                magnetization: Some(flatten_vectors(&final_observables.magnetization)),
+                preview_field: None,
+                cached_preview_fields: (!cached_preview_fields.is_empty())
+                    .then_some(cached_preview_fields),
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                finished: false,
+            });
+        }
+    }
+
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
         RunStatus::Paused
@@ -367,6 +407,47 @@ pub(crate) fn execute_reference_fdm_multilayer(
         auxiliary_artifacts: Vec::new(),
         provenance,
     })
+}
+
+fn build_multilayer_live_preview_fields(
+    plan: &FdmMultilayerPlanIR,
+    observables: &StateObservables,
+    source_step: u64,
+) -> Vec<LivePreviewField> {
+    let common_grid = plan.common_cells;
+    let mut fields = Vec::with_capacity(if plan.enable_demag { 2 } else { 1 });
+    let mut push_field = |quantity: &'static str, values: &[[f64; 3]]| {
+        if values.is_empty() {
+            return;
+        }
+        fields.push(LivePreviewField {
+            config_revision: 0,
+            source_step,
+            source_revision: source_step,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
+            quantity: quantity.to_string(),
+            unit: quantity_unit(quantity).to_string(),
+            spatial_kind: "fdm_multilayer".to_string(),
+            quantity_domain: quantity_spatial_domain(quantity).to_string(),
+            preview_grid: common_grid,
+            original_grid: common_grid,
+            vector_field_values: flatten_vectors(values),
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            applied_x_chosen_size: 0,
+            applied_y_chosen_size: 0,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+    };
+    push_field("m", &observables.magnetization);
+    if plan.enable_demag {
+        push_field("H_demag", &observables.demag_field);
+    }
+    fields
 }
 
 fn build_contexts_and_states(
@@ -516,31 +597,209 @@ fn build_contexts_and_states(
 fn build_multilayer_demag_runtime(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<MultilayerDemagRuntime, RunError> {
+    if plan.layers.is_empty() {
+        return Err(RunError {
+            message: "FDM multilayer runtime requires at least one layer".to_string(),
+        });
+    }
+    if plan
+        .layers
+        .iter()
+        .any(|layer| layer.transfer_kind == "unsupported")
+    {
+        return Err(RunError {
+            message: "FDM multilayer runtime refuses transfer_kind='unsupported' before kernel allocation"
+                .to_string(),
+        });
+    }
+    let mode = match plan.planner_summary.resolved_mode.as_str() {
+        "two_d_stack" => ConvolutionMode::TwoDStack,
+        "three_d" => ConvolutionMode::ThreeD,
+        other => {
+            return Err(RunError {
+                message: format!("unsupported resolved multilayer mode '{other}'"),
+            })
+        }
+    };
     let conv_grid = [
         plan.common_cells[0] as usize,
         plan.common_cells[1] as usize,
         plan.common_cells[2] as usize,
     ];
+    if conv_grid.contains(&0) || (mode == ConvolutionMode::TwoDStack && conv_grid[2] != 1) {
+        return Err(RunError {
+            message: "resolved multilayer scratch grid is empty or incompatible with mode"
+                .to_string(),
+        });
+    }
     let conv_cell_size = plan
         .layers
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
+    if plan.periodicity.as_ref().is_some_and(|periodicity| {
+        periodicity
+            .axes
+            .iter()
+            .any(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
+            && plan
+                .layers
+                .iter()
+                .any(|layer| layer.transfer_kind != "identity")
+    }) {
+        return Err(RunError {
+            message: "CPU multilayer push/pull transfer is fail-closed for periodic boundaries"
+                .to_string(),
+        });
+    }
+
+    let descriptors = plan
+        .layers
+        .iter()
+        .map(|layer| {
+            let native = GridGeometry::new(
+                layer.native_origin,
+                layer.native_grid.map(|value| value as usize),
+                layer.native_cell_size,
+            )
+            .map_err(|error| RunError {
+                message: format!("native descriptor '{}': {error}", layer.layer_id),
+            })?;
+            let scratch = GridGeometry::new(
+                layer.convolution_origin,
+                layer.convolution_grid.map(|value| value as usize),
+                layer.convolution_cell_size,
+            )
+            .map_err(|error| RunError {
+                message: format!("scratch descriptor '{}': {error}", layer.layer_id),
+            })?;
+            let active_mask = layer
+                .native_active_mask
+                .as_deref()
+                .map(ActiveMaskIdentity::from_mask)
+                .unwrap_or_else(ActiveMaskIdentity::all_active);
+            let transfer_kind = match layer.transfer_kind.as_str() {
+                "identity" => TransferKind::Identity,
+                "push_pull" => TransferKind::PushPull,
+                other => {
+                    return Err(RunError {
+                        message: format!(
+                            "layer '{}' has unsupported transfer_kind '{other}'",
+                            layer.layer_id
+                        ),
+                    })
+                }
+            };
+            FdmLayerDescriptor::new(
+                layer.layer_id.clone(),
+                layer.object_id.clone(),
+                native,
+                scratch,
+                mode,
+                active_mask,
+                transfer_kind,
+            )
+            .map_err(|error| RunError {
+                message: format!("layer descriptor '{}': {error}", layer.layer_id),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if descriptors.iter().any(|descriptor| {
+        descriptor.scratch.shape != conv_grid || descriptor.scratch.spacing != conv_cell_size
+    }) {
+        return Err(RunError {
+            message: "CPU multilayer runtime currently requires one common scratch shape and spacing; native grids remain per-layer"
+                .to_string(),
+        });
+    }
+    let fft_shape = [conv_grid[0] * 2, conv_grid[1] * 2, conv_grid[2] * 2];
+    let layout = CommonTransformLayout::for_pair(
+        conv_grid,
+        conv_grid,
+        mode,
+        [0; 3],
+        [0; 3],
+        [0; 3],
+        conv_grid,
+        if mode == ConvolutionMode::TwoDStack {
+            [fft_shape[0], fft_shape[1], 1]
+        } else {
+            fft_shape
+        },
+        1.0 / (if mode == ConvolutionMode::TwoDStack {
+            fft_shape[0] * fft_shape[1]
+        } else {
+            fft_shape[0] * fft_shape[1] * fft_shape[2]
+        }) as f64,
+    )
+    .map_err(|error| RunError {
+        message: format!("common multilayer transform layout: {error}"),
+    })?;
+
     let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
-    for (src_index, src_layer) in plan.layers.iter().enumerate() {
-        for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
-            let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
-            let kernel = if src_index == dst_index {
-                compute_exact_self_kernel(
-                    conv_grid[0],
-                    conv_grid[1],
-                    conv_grid[2],
-                    conv_cell_size[0],
-                    conv_cell_size[1],
-                    conv_cell_size[2],
-                )
+    for (src_index, src_descriptor) in descriptors.iter().enumerate() {
+        for (dst_index, dst_descriptor) in descriptors.iter().enumerate() {
+            let source_cell_size = if mode == ConvolutionMode::TwoDStack {
+                if src_descriptor.native.shape[2] != 1 {
+                    return Err(RunError {
+                        message: format!(
+                            "two_d_stack source layer '{}' requires one native Z cell for its irregular thickness kernel",
+                            src_descriptor.layer_id
+                        ),
+                    });
+                }
+                [
+                    src_descriptor.scratch.spacing[0],
+                    src_descriptor.scratch.spacing[1],
+                    src_descriptor.native.spacing[2],
+                ]
             } else {
-                compute_shifted_kernel(conv_grid, conv_cell_size, z_shift)
+                src_descriptor.scratch.spacing
+            };
+            let destination_cell_size = if mode == ConvolutionMode::TwoDStack {
+                if dst_descriptor.native.shape[2] != 1 {
+                    return Err(RunError {
+                        message: format!(
+                            "two_d_stack destination layer '{}' requires one native Z cell for its irregular thickness kernel",
+                            dst_descriptor.layer_id
+                        ),
+                    });
+                }
+                [
+                    dst_descriptor.scratch.spacing[0],
+                    dst_descriptor.scratch.spacing[1],
+                    dst_descriptor.native.spacing[2],
+                ]
+            } else {
+                dst_descriptor.scratch.spacing
+            };
+            let offset = [
+                dst_descriptor.scratch.origin[0] - src_descriptor.scratch.origin[0]
+                    + 0.5 * (destination_cell_size[0] - source_cell_size[0]),
+                dst_descriptor.scratch.origin[1] - src_descriptor.scratch.origin[1]
+                    + 0.5 * (destination_cell_size[1] - source_cell_size[1]),
+                dst_descriptor.scratch.origin[2] - src_descriptor.scratch.origin[2]
+                    + 0.5 * (destination_cell_size[2] - source_cell_size[2]),
+            ];
+            let kernel = compute_shifted_kernel_pair(
+                conv_grid,
+                source_cell_size,
+                destination_cell_size,
+                offset,
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "kernel pair source='{}' destination='{}' rejected: {error}",
+                    src_descriptor.layer_id, dst_descriptor.layer_id
+                ),
+            })?;
+            let kernel = if mode == ConvolutionMode::TwoDStack {
+                collapse_kernel_z_plane(kernel).map_err(|error| RunError {
+                    message: format!("2-D multilayer kernel collapse: {error}"),
+                })?
+            } else {
+                kernel
             };
             kernel_pairs.push(KernelPair {
                 src_layer: src_index,
@@ -549,11 +808,16 @@ fn build_multilayer_demag_runtime(
             });
         }
     }
-    Ok(MultilayerDemagRuntime::new(
+    MultilayerDemagRuntime::new_with_layout_and_descriptors(
         kernel_pairs,
         conv_grid,
         conv_cell_size,
-    ))
+        layout,
+        descriptors,
+    )
+    .map_err(|error| RunError {
+        message: format!("multilayer CPU runtime descriptor validation: {error}"),
+    })
 }
 
 fn observe_multilayer(
@@ -561,7 +825,7 @@ fn observe_multilayer(
     states: &[ExchangeLlgState],
     demag_runtime: Option<&MultilayerDemagRuntime>,
 ) -> Result<StateObservables, RunError> {
-    let mut layer_demag = compute_demag_fields(contexts, states, demag_runtime);
+    let mut layer_demag = compute_demag_fields(contexts, states, demag_runtime)?;
     let mut magnetization = Vec::new();
     let mut exchange_field = Vec::new();
     let mut demag_field = Vec::new();
@@ -773,7 +1037,7 @@ fn llg_rhs_multilayer(
                 })?,
         );
     }
-    let mut layer_demag = compute_demag_fields(contexts, &states, demag_runtime);
+    let mut layer_demag = compute_demag_fields(contexts, &states, demag_runtime)?;
     let mut rhs_layers = Vec::with_capacity(contexts.len());
     for (index, context) in contexts.iter().enumerate() {
         let state = &states[index];
@@ -806,13 +1070,13 @@ fn compute_demag_fields(
     contexts: &[LayerContext],
     states: &[ExchangeLlgState],
     demag_runtime: Option<&MultilayerDemagRuntime>,
-) -> Vec<Vec<[f64; 3]>> {
+) -> Result<Vec<Vec<[f64; 3]>>, RunError> {
     let mut zero = contexts
         .iter()
         .map(|context| zero_vectors(context.problem.grid.cell_count()))
         .collect::<Vec<_>>();
     let Some(runtime) = demag_runtime else {
-        return zero;
+        return Ok(zero);
     };
 
     let mut layers = contexts
@@ -845,11 +1109,15 @@ fn compute_demag_fields(
             transfer_boundary_policy: context.transfer_boundary_policy,
         })
         .collect::<Vec<_>>();
-    runtime.compute_demag_fields(&mut layers);
+    runtime
+        .compute_demag_fields_checked(&mut layers)
+        .map_err(|error| RunError {
+            message: format!("CPU multilayer demag runtime: {error}"),
+        })?;
     for (index, layer) in layers.into_iter().enumerate() {
         zero[index] = layer.h_demag;
     }
-    zero
+    Ok(zero)
 }
 
 fn current_time(states: &[ExchangeLlgState]) -> f64 {
@@ -965,13 +1233,16 @@ fn max_norm(values: &[[f64; 3]]) -> f64 {
 mod tests {
     use super::*;
     use fullmag_ir::{
-        ExchangeBoundaryCondition, FdmLayerPlanIR, FdmMaterialIR, RelaxationControlIR,
+        AxisBoundary, ExchangeBoundaryCondition, FdmDemagPeriodicityIR, FdmLayerPlanIR,
+        FdmMaterialIR, FdmPeriodicityIR, RelaxationControlIR,
     };
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
         let layers = vec![
             FdmLayerPlanIR {
                 magnet_name: "free".to_string(),
+                layer_id: "layer:free".to_string(),
+                object_id: "free".to_string(),
                 native_grid: [4, 4, 1],
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 0.0],
@@ -991,6 +1262,8 @@ mod tests {
             },
             FdmLayerPlanIR {
                 magnet_name: "ref".to_string(),
+                layer_id: "layer:ref".to_string(),
+                object_id: "ref".to_string(),
                 native_grid: [4, 4, 1],
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 3e-9],
@@ -1039,6 +1312,8 @@ mod tests {
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),
                 selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "two_d_stack".to_string(),
+                resolved_mode: "two_d_stack".to_string(),
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 3,
@@ -1046,7 +1321,7 @@ mod tests {
                 warnings: Vec::new(),
             },
         };
-        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
         plan.grid_certificate = Some(
             fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
                 [-4e-9, -4e-9, 0.0],
@@ -1095,12 +1370,122 @@ mod tests {
     }
 
     #[test]
+    fn multilayer_runtime_builds_unequal_two_d_layer_thickness_kernel() {
+        let mut plan = make_plan(true);
+        plan.layers[1].native_cell_size[2] = 2.0e-9;
+        plan.layers[1].transfer_kind = "push_pull".to_string();
+        let runtime = build_multilayer_demag_runtime(&plan)
+            .expect("unequal two-dimensional source/destination thickness must be explicit");
+        let legacy_common_thickness =
+            compute_shifted_kernel([4, 4, 1], [2.0e-9, 2.0e-9, 1.0e-9], 3.0e-9);
+        let pair = runtime
+            .kernel_for_ordered_pair(0, 1)
+            .expect("ordered source/destination pair must exist in the runtime catalog");
+        let expected_pair = compute_shifted_kernel_pair(
+            [4, 4, 1],
+            [2.0e-9, 2.0e-9, 1.0e-9],
+            [2.0e-9, 2.0e-9, 2.0e-9],
+            [0.0, 0.0, 3.5e-9],
+        )
+        .expect("expected irregular pair kernel should build");
+        let expected_pair = collapse_kernel_z_plane(expected_pair)
+            .expect("expected irregular pair kernel should collapse");
+        assert_eq!(pair.k_xx, expected_pair.k_xx);
+        assert_eq!(pair.k_xy, expected_pair.k_xy);
+        assert_eq!(pair.k_xz, expected_pair.k_xz);
+        assert_eq!(pair.k_yy, expected_pair.k_yy);
+        assert_eq!(pair.k_yz, expected_pair.k_yz);
+        assert_eq!(pair.k_zz, expected_pair.k_zz);
+        let max_kernel_difference = pair
+            .k_xx
+            .iter()
+            .zip(legacy_common_thickness.k_xx.iter())
+            .map(|(actual, legacy)| (actual - legacy).norm())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_kernel_difference > 1.0e-12,
+            "unequal layer thickness must not reuse the common-thickness kernel"
+        );
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("unequal-thickness contexts should build");
+        let fields = compute_demag_fields(&contexts, &states, Some(&runtime))
+            .expect("unequal-thickness demag fields should compute");
+        assert_eq!(fields.len(), 2);
+        assert!(fields
+            .iter()
+            .flatten()
+            .all(|value| value.iter().all(|component| component.is_finite())));
+    }
+
+    #[test]
+    fn multilayer_live_preview_publishes_native_payloads_with_explicit_layout() {
+        let plan = make_plan(true);
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("test multilayer contexts should build");
+        let demag = build_multilayer_demag_runtime(&plan).expect("test demag runtime should build");
+        let observables = observe_multilayer(&contexts, &states, Some(&demag))
+            .expect("test observables should build");
+        let fields = build_multilayer_live_preview_fields(&plan, &observables, 7);
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            ["m", "H_demag"]
+        );
+        for field in fields {
+            assert_eq!(field.spatial_kind, "fdm_multilayer");
+            assert_eq!(field.preview_grid, [4, 4, 1]);
+            assert_eq!(field.original_grid, [4, 4, 1]);
+            assert_eq!(field.source_step, 7);
+            assert_eq!(field.source_revision, 7);
+            assert_eq!(field.vector_field_values.len(), 32 * 3);
+        }
+    }
+
+    #[test]
     fn multilayer_exchange_only_has_zero_demag_energy() {
         let plan = make_plan(false);
         let executed = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
             .expect("exchange-only multilayer run should execute");
         let final_step = executed.result.steps.last().unwrap();
         assert!(final_step.e_demag.abs() < 1e-30);
+    }
+
+    #[test]
+    fn multilayer_runtime_rejects_unsupported_transfer_before_allocation() {
+        let mut plan = make_plan(true);
+        plan.layers[0].transfer_kind = "unsupported".to_string();
+        let error = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
+            .expect_err("unsupported transfer must fail closed");
+        assert!(
+            error.message.contains("unsupported transfer") || error.message.contains("unsupported")
+        );
+    }
+
+    #[test]
+    fn multilayer_runtime_rejects_push_pull_for_periodic_boundaries() {
+        let mut plan = make_plan(true);
+        plan.layers[0].transfer_kind = "push_pull".to_string();
+        plan.periodicity = Some(FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Open,
+                AxisBoundary::Open,
+            ],
+            demag: FdmDemagPeriodicityIR::Open,
+            image_counts: None,
+        });
+
+        let error = match build_multilayer_demag_runtime(&plan) {
+            Ok(_) => panic!("push_pull with periodic boundaries must fail closed"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("periodic boundaries"));
+        assert!(error.message.contains("fail-closed"));
     }
 
     #[test]

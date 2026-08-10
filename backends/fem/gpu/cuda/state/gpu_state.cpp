@@ -68,6 +68,8 @@ void reset_metadata(FemGpuState &state)
     state.mesh_regions.has_periodic_reduced_nodes = false;
     state.mesh_regions.stt_active_node_mask = nullptr;
     state.mesh_regions.stt_active_node_count = 0;
+    state.mesh_regions.stt_active_element_mask = nullptr;
+    state.mesh_regions.stt_active_element_count = 0;
     state.magnetoelastic.strain_voigt_len = 0;
     state.magnetoelastic.strain_uploaded = false;
     state.mesh_geometry.element_count = 0;
@@ -455,6 +457,77 @@ bool gpu_state_upload_stt_target_mask(
 #else
     (void)audit;
     error = "FEM GPU STT target mask upload requires CUDA runtime support";
+    return false;
+#endif
+}
+
+bool gpu_state_upload_stt_element_mask(
+    FemGpuState &state,
+    const uint8_t *active_element_mask,
+    uint64_t active_element_mask_len,
+    uint64_t element_count,
+    TransferAudit &audit,
+    std::string &error)
+{
+    if ((active_element_mask == nullptr) != (active_element_mask_len == 0)) {
+        error = "FEM GPU Zhang-Li target element mask requires a pointer and non-zero length together";
+        return false;
+    }
+    if (active_element_mask_len != 0 && active_element_mask_len != element_count) {
+        error = "FEM GPU Zhang-Li target element mask length must match FEM element count";
+        return false;
+    }
+    if (active_element_mask_len > std::numeric_limits<size_t>::max()) {
+        error = "FEM GPU Zhang-Li target element mask is too large for device allocation";
+        return false;
+    }
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    auto &mesh_regions = state.mesh_regions;
+    if (mesh_regions.stt_active_element_mask != nullptr) {
+        const uint64_t old_bytes = mesh_regions.stt_active_element_count;
+        gpu_device_free_u8(mesh_regions.stt_active_element_mask);
+        state.lifecycle.device_bytes =
+            old_bytes <= state.lifecycle.device_bytes
+                ? state.lifecycle.device_bytes - old_bytes
+                : 0;
+        mesh_regions.stt_active_element_count = 0;
+    }
+    if (active_element_mask == nullptr) {
+        return true;
+    }
+
+    uint8_t *device_mask = nullptr;
+    if (!gpu_device_allocate_u8(
+            device_mask,
+            active_element_mask_len,
+            state.lifecycle.device_bytes,
+            error)) {
+        return false;
+    }
+    if (cudaMemcpy(
+            device_mask,
+            active_element_mask,
+            static_cast<size_t>(active_element_mask_len),
+            cudaMemcpyHostToDevice) != cudaSuccess) {
+        gpu_device_free_u8(device_mask);
+        state.lifecycle.device_bytes =
+            active_element_mask_len <= state.lifecycle.device_bytes
+                ? state.lifecycle.device_bytes - active_element_mask_len
+                : 0;
+        error = "cudaMemcpy FemGpuState Zhang-Li target element mask host->device failed";
+        return false;
+    }
+    record_host_to_device(audit, active_element_mask_len);
+    mesh_regions.stt_active_element_mask = device_mask;
+    mesh_regions.stt_active_element_count = active_element_mask_len;
+    return true;
+#else
+    (void)audit;
+    error = "FEM GPU Zhang-Li target element mask upload requires CUDA runtime support";
     return false;
 #endif
 }

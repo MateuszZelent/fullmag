@@ -5,7 +5,10 @@ import { useCallback, useMemo, useState } from "react";
 import type { RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
 
 import { useKernel } from "@/kernel/KernelContext";
-import { useFieldDrivesResource, MODEL_FIELD_DRIVES_RESOURCE_KEY } from "@/kernel/resources/fieldDriveResources";
+import {
+  fieldDriveMutationResourceKeys,
+  useFieldDrivesResource,
+} from "@/kernel/resources/fieldDriveResources";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { milliTeslaToTesla, teslaToMilliTesla, validateFieldDriveDraft } from "@/shared/domain/physics/fieldDrive";
 import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview";
@@ -16,11 +19,14 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
-import { regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
+import { commitRegionalFieldDrive, regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
 import { SincPulsePreview } from "./SincPulsePreview";
 
 export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
-  const { api, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, resources } = kernel;
   const resource = useFieldDrivesResource();
   const scene = useSceneResource();
   const selectorOptions = useMemo(
@@ -80,7 +86,11 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     [draft, samplingContext.durationS, samplingContext.samplePeriodS],
   );
   const validationErrors = draft ? validateFieldDriveDraft(draft) : [];
-  const dirty = Boolean(draft && drive && JSON.stringify(draft) !== JSON.stringify(drive));
+  const dirty = Boolean(
+    draft &&
+      (model.mode === "create" ||
+        (drive && JSON.stringify(draft) !== JSON.stringify(drive))),
+  );
 
   async function save(): Promise<boolean> {
     if (!draft || model.sceneRevision === null) return false;
@@ -91,12 +101,32 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     setPending(true);
     setFeedback(null);
     try {
-      const response = await api.model.replaceFieldDrive(draft.id, {
-        base_revision: model.sceneRevision,
-        drive: draft,
-      });
-      resources.invalidate(MODEL_FIELD_DRIVES_RESOURCE_KEY, response.scene_revision);
-      setFeedback("Field drive saved.");
+      if (model.mode !== "create" && model.mode !== "found") return false;
+      const response = await commitRegionalFieldDrive(
+        api.model,
+        model.mode,
+        model.sceneRevision,
+        draft,
+      );
+      for (const resourceKey of fieldDriveMutationResourceKeys()) {
+        resources.invalidate(resourceKey, response.scene_revision);
+      }
+      if (model.mode === "create") {
+        const nodeId = `model:physics:field-drives:${draft.id}`;
+        kernel.selection.set({
+          kind: "physics.field-drive",
+          label: draft.name,
+          nodeId,
+          objectId: null,
+          ref: {
+            fieldDriveId: draft.id,
+            kind: "physics.field-drive",
+            nodeId,
+            type: "physics-field-drive",
+          },
+        }, "inspector");
+      }
+      setFeedback(model.mode === "create" ? "Field drive created." : "Field drive saved.");
       return true;
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : String(error));
@@ -124,11 +154,40 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     resetInspectorDraft,
   );
 
+  const driveTarget = draft?.target;
+  const scope = driveTarget?.kind === "region"
+    ? {
+        kind: "region" as const,
+        objectId: driveTarget.object_id,
+        regionId: driveTarget.region_id,
+        stableRef: `region:${driveTarget.object_id}:${driveTarget.region_id}`,
+      }
+    : driveTarget?.kind === "object"
+      ? {
+          kind: "object" as const,
+          objectId: driveTarget.object_id,
+          stableRef: `object:${driveTarget.object_id}`,
+        }
+      : { kind: "global" as const, stableRef: "global:physics" };
+
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        execution: { sceneRevision: model.sceneRevision },
+        family: "field_drive",
+        scope,
+        source: {
+          id: model.driveId ?? draft?.id ?? "none",
+          kind: "field_drive",
+          status: model.mode === "create" ? "configured" : model.mode === "found" ? "active" : "absent",
+        },
+        status: model.mode === "create" ? "configured" : model.mode === "found" ? "active" : "absent",
+        statusReason: model.mode === "create" ? "Draft is not committed." : model.mode === "found" ? null : "Selected field drive is unavailable.",
+      })}
+      primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Regional field drive" collapsible defaultOpen>
-        {model.mode !== "found" ? <FeedbackBanner kind="warning" message="Selected field drive is unavailable." /> : null}
-        <FieldRow label="ID" value={model.driveId ?? "none"} />
+        {model.mode !== "create" && model.mode !== "found" ? <FeedbackBanner kind="warning" message="Selected field drive is unavailable." /> : null}
+        {model.mode === "create" ? <FormField label="ID" disabled={pending} value={draft?.id ?? ""} onChange={(event) => setDraft((value) => value ? { ...value, id: event.target.value } : value)} /> : <FieldRow label="ID" value={model.driveId ?? "none"} />}
         <FormField label="Name" disabled={!draft || pending} value={draft?.name ?? ""} onChange={(event) => setDraft((value) => value ? { ...value, name: event.target.value } : value)} />
         <FormField label="Enabled" type="checkbox" disabled={!draft || pending} checked={draft?.enabled ?? false} onChange={(event) => setDraft((value) => value ? { ...value, enabled: event.target.checked } : value)} />
         <FormField label="Amplitude" unit="mT" type="number" disabled={!draft || pending} min="0" step="0.001" value={draft ? teslaToMilliTesla(draft.amplitude_B_T) : 0} onChange={(event) => setDraft((value) => value ? { ...value, amplitude_B_T: milliTeslaToTesla(Number(event.currentTarget.value)) } : value)} />
@@ -139,7 +198,7 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
         <FormField label="Spatial profile" type="select" disabled={!draft || pending} value={draft?.spatial_profile.kind ?? "uniform"} onChange={(event) => setDraft((value) => value ? { ...value, spatial_profile: event.target.value === "uniform" ? { kind: "uniform" } : event.target.value === "sinc" ? { kind: "sinc", axis: [1, 0, 0], period_m: 1e-7, center_m: 0, window: "none" } : { kind: "geometry_mask", object_id: "", envelope: { kind: "uniform" } } } : value)}><option value="uniform">Uniform</option><option value="sinc">Spatial sinc</option><option value="geometry_mask">Geometry mask</option></FormField>
         {draft?.spatial_profile.kind === "geometry_mask" ? <><FormField label="Mask geometry" type="select" disabled={pending} value={draft.spatial_profile.object_id} onChange={(event) => setDraft((value) => value?.spatial_profile.kind === "geometry_mask" ? { ...value, spatial_profile: { ...value.spatial_profile, object_id: event.target.value } } : value)}><option value="">Select an object</option>{selectorOptions.objects.map((object) => <option key={object.id} value={object.id}>{object.label}</option>)}</FormField><FormField label="Envelope" type="select" disabled={pending} value={draft.spatial_profile.envelope.kind} onChange={(event) => setDraft((value) => value?.spatial_profile.kind === "geometry_mask" ? { ...value, spatial_profile: { ...value.spatial_profile, envelope: event.target.value === "sinc" ? { kind: "sinc", axis: [1, 0, 0], period_m: 1e-7, center_m: 0, window: "none" } : { kind: "uniform" } } } : value)}><option value="uniform">Uniform</option><option value="sinc">Spatial sinc</option></FormField>{draft.spatial_profile.envelope.kind === "sinc" ? <SpatialSincFields profile={draft.spatial_profile.envelope} pending={pending} onChange={(profile) => setDraft((value) => value?.spatial_profile.kind === "geometry_mask" ? { ...value, spatial_profile: { ...value.spatial_profile, envelope: profile } } : value)} /> : null}</> : null}
         {draft?.spatial_profile.kind === "sinc" ? <SpatialSincFields profile={draft.spatial_profile} pending={pending} onChange={(profile) => setDraft((value) => value ? { ...value, spatial_profile: profile } : value)} /> : null}
-        {feedback ? <FeedbackBanner kind={feedback === "Field drive saved." ? "success" : "error"} message={feedback} /> : null}
+        {feedback ? <FeedbackBanner kind={feedback === "Field drive saved." || feedback === "Field drive created." ? "success" : "error"} message={feedback} /> : null}
       </InspectorGroup>
       <InspectorGroup title="Waveform" collapsible defaultOpen>
         <FormField label="Kind" type="select" disabled={!draft || pending} value={draft?.waveform.kind ?? "constant"} onChange={(event) => setDraft((value) => value ? { ...value, waveform: event.target.value === "constant" ? { kind: "constant" } : event.target.value === "sinusoidal" ? { kind: "sinusoidal", frequency_hz: 1e9, phase_rad: 0, offset: 0 } : event.target.value === "pulse" ? { kind: "pulse", t_on: 0, t_off: 1e-9 } : event.target.value === "piecewise_linear" ? { kind: "piecewise_linear", points: [[0, 0], [1e-9, 1]] } : { kind: "sinc_pulse", cutoff_hz: 20e9, t0: 50e-12, amplitude: 1 } } : value)}><option value="constant">Constant</option><option value="sinusoidal">Sinusoidal</option><option value="pulse">Pulse</option><option value="piecewise_linear">Piecewise linear</option><option value="sinc_pulse">Sinc pulse</option></FormField>
@@ -161,7 +220,8 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
         <FormField label="Mode" type="select" disabled={!draft || pending} value={draft?.activation.kind ?? "all_time_evolution"} onChange={(event) => setDraft((value) => value ? { ...value, activation: event.target.value === "stage_ids" ? { kind: "stage_ids", stage_ids: [] } : { kind: "all_time_evolution" } } : value)}><option value="all_time_evolution">All time stages</option><option value="stage_ids">Selected stages</option></FormField>
         {draft?.activation.kind === "stage_ids" ? <div className="grid min-w-0 gap-fm-inspector-row">{selectorOptions.timeEvolutionStages.map((stage) => <FormField key={stage.id} label={stage.label} type="checkbox" disabled={pending} checked={selectedStageIdSet.has(stage.id)} onChange={(event) => setDraft((value) => { if (value?.activation.kind !== "stage_ids") return value; const stageIds = event.target.checked ? [...value.activation.stage_ids, stage.id] : value.activation.stage_ids.filter((id) => id !== stage.id); return { ...value, activation: { kind: "stage_ids", stage_ids: stageIds } }; })} />)}{selectorOptions.timeEvolutionStages.length === 0 ? <FeedbackBanner kind="warning" message="No run stage with a stable ID is available. Add a run stage before assigning this drive." /> : null}</div> : <FieldRow label="Stages" value="all time-evolution stages" />}
       </InspectorGroup>
-    </div>
+    </div>}
+    />
   );
 }
 

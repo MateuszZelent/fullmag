@@ -24,6 +24,7 @@ from fullmag.model.antenna import (
     CPWAntenna,
     DriveActivation,
     FieldTarget,
+    GaussianPlaneWaveFieldProfile,
     GeometryMaskFieldProfile,
     MicrostripAntenna,
     RegionalFieldDrive,
@@ -33,14 +34,18 @@ from fullmag.model.antenna import (
     UniformFieldProfile,
 )
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPolicy
+from fullmag.model.discretization import FDM, FDMGrid, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.spin_torque import (
-    DriftDiffusionSpinTorque,
+    DriftDiffusionSpinTorque as LegacyDriftDiffusionSpinTorque,
     InterfaceCppSTT,
     PrescribedSpinOrbitTorque,
     SlonczewskiSTT,
     SpinOrbitTorque,
     ZhangLiSTT,
+)
+from fullmag.model.spin_transport import (
+    DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
+    SpinDriftDiffusion,
 )
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import (
@@ -324,6 +329,10 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "current_modules": [
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
+        "spin_transports": [
+            _export_spin_transport_entry(base_problem, module)
+            for module in base_problem.spin_transports
+        ],
         "field_drives": [drive.to_ir() for drive in base_problem.field_drives],
         "planar_monitors": [monitor.to_ir() for monitor in base_problem.monitors],
         "spin_torques": [
@@ -336,6 +345,9 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    fdm_draft = _export_fdm(base_problem)
+    if fdm_draft is not None:
+        draft["fdm"] = fdm_draft
     solver_draft = draft["solver"]
     if base_dynamics is None or base_dynamics.fixed_timestep is None:
         solver_draft.pop("fixed_timestep", None)
@@ -449,6 +461,13 @@ def render_loaded_problem_as_script(
     if current_module_lines:
         lines.append("")
         lines.extend(current_module_lines)
+
+    spin_transport_lines = _render_spin_transports(
+        base_problem, surface=surface, overrides=overrides
+    )
+    if spin_transport_lines:
+        lines.append("")
+        lines.extend(spin_transport_lines)
 
     field_drive_lines = _render_field_drives(base_problem, surface=surface)
     if field_drive_lines:
@@ -910,6 +929,142 @@ def _render_header(script_path: Path, entrypoint_kind: str) -> list[str]:
     ]
 
 
+def _fdm_from_overrides(
+    problem: Problem,
+    overrides: dict[str, object],
+) -> FDM | None:
+    """Apply canonical SceneDocument FDM authoring to the exported script.
+
+    The scene owns requested FDM policy while the loaded Problem remains the
+    source of values that were not edited.  Keeping this merge here ensures a
+    UI transaction reaches the public ``fm.fdm`` authoring call and therefore
+    lowers through the same Python → ProblemIR path as a hand-written script.
+    """
+    base = problem.discretization.fdm if problem.discretization is not None else None
+    raw = overrides.get("fdm")
+    if not isinstance(raw, Mapping):
+        return base if isinstance(base, FDM) else None
+
+    if "default_cell" in raw:
+        default_cell = _fdm_vector(raw.get("default_cell"), "fdm.default_cell", 3)
+    else:
+        default_cell = base.default_cell if isinstance(base, FDM) else None
+
+    if "per_magnet" in raw:
+        raw_per_magnet = raw.get("per_magnet")
+        if raw_per_magnet is None:
+            per_magnet = None
+        elif isinstance(raw_per_magnet, Mapping):
+            per_magnet = {}
+            for name, raw_grid in raw_per_magnet.items():
+                if not isinstance(raw_grid, Mapping):
+                    raise ValueError(f"fdm.per_magnet[{name!r}] must be an object")
+                per_magnet[str(name)] = FDMGrid(
+                    cell=_fdm_vector(
+                        raw_grid.get("cell"),
+                        f"fdm.per_magnet[{name!r}].cell",
+                        3,
+                    )
+                )
+        else:
+            raise ValueError("fdm.per_magnet must be an object or null")
+    else:
+        per_magnet = base.per_magnet if isinstance(base, FDM) else None
+
+    if "demag" in raw:
+        raw_demag = raw.get("demag")
+        if raw_demag is None:
+            demag = None
+        elif isinstance(raw_demag, Mapping):
+            common_cells = _fdm_integer_vector(
+                raw_demag.get("common_cells"), "fdm.demag.common_cells", 3
+            )
+            common_cells_xy = _fdm_integer_vector(
+                raw_demag.get("common_cells_xy"), "fdm.demag.common_cells_xy", 2
+            )
+            explain = raw_demag.get("explain", True)
+            if not isinstance(explain, bool):
+                raise ValueError("fdm.demag.explain must be boolean")
+            demag = FDMDemag(
+                strategy=str(raw_demag.get("strategy", "auto")),
+                mode=str(raw_demag.get("mode", "auto")),
+                common_cells=common_cells,
+                common_cells_xy=common_cells_xy,
+                explain=explain,
+            )
+        else:
+            raise ValueError("fdm.demag must be an object or null")
+    else:
+        demag = base.demag if isinstance(base, FDM) else None
+
+    boundary_correction = (
+        raw.get("boundary_correction")
+        if "boundary_correction" in raw
+        else base.boundary_correction if isinstance(base, FDM) else None
+    )
+    if boundary_correction is not None and not isinstance(boundary_correction, str):
+        raise ValueError("fdm.boundary_correction must be a string or null")
+    boundary_phi_floor = (
+        _fdm_number(raw.get("boundary_phi_floor"), "fdm.boundary_phi_floor")
+        if "boundary_phi_floor" in raw
+        else base.boundary_phi_floor if isinstance(base, FDM) else None
+    )
+    boundary_delta_min = (
+        _fdm_number(raw.get("boundary_delta_min"), "fdm.boundary_delta_min")
+        if "boundary_delta_min" in raw
+        else base.boundary_delta_min if isinstance(base, FDM) else None
+    )
+    if default_cell is None and not per_magnet:
+        raise ValueError("fdm requires default_cell or per_magnet grid specifications")
+    return FDM(
+        default_cell=default_cell,
+        per_magnet=per_magnet,
+        demag=demag,
+        boundary_correction=boundary_correction,
+        boundary_phi_floor=boundary_phi_floor,
+        boundary_delta_min=boundary_delta_min,
+    )
+
+
+def _fdm_vector(value: object, label: str, length: int) -> tuple[float, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{label} must contain exactly {length} numbers or null")
+    result = tuple(float(component) for component in value)
+    if not all(math.isfinite(component) for component in result):
+        raise ValueError(f"{label} must contain finite numbers")
+    return result
+
+
+def _fdm_integer_vector(value: object, label: str, length: int) -> tuple[int, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{label} must contain exactly {length} integers or null")
+    if any(
+        isinstance(component, bool)
+        or not isinstance(component, int)
+        or component <= 0
+        for component in value
+    ):
+        raise ValueError(f"{label} values must be positive integers")
+    result = tuple(value)
+    return result
+
+
+def _fdm_number(value: object, label: str) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} must be a finite number or null") from error
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be a finite number or null")
+    return number
+
+
 def _render_runtime(
     problem: Problem,
     *,
@@ -996,7 +1151,7 @@ def _render_runtime(
             f"print_level={fem.demag_solver_policy.print_level})"
         )
 
-    fdm = problem.discretization.fdm if problem.discretization is not None else None
+    fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
         has_extended_policy = (
             fdm.demag is not None
@@ -1237,6 +1392,14 @@ def _render_geometry_and_materials(
         lines.append(f"{var_name}.Ms = {_py_number(magnet.material.Ms)}")
         lines.append(f"{var_name}.Aex = {_py_number(magnet.material.A)}")
         lines.append(f"{var_name}.alpha = {_py_number(magnet.material.alpha)}")
+        lines.extend(
+            _render_absorbing_boundary(
+                var_name,
+                magnet.absorbing_boundary.to_ir()
+                if magnet.absorbing_boundary is not None
+                else None,
+            )
+        )
         if magnet.material.Ku1 is not None:
             lines.append(f"{var_name}.Ku1 = {_py_number(magnet.material.Ku1)}")
         if magnet.material.anisU is not None:
@@ -1799,6 +1962,7 @@ def _render_geometries_from_override(
         lines.append(f"{var_name}.Ms = {_py_number(float(str(mat.get('Ms', 800000))))}")
         lines.append(f"{var_name}.Aex = {_py_number(float(str(mat.get('Aex', 1.3e-11))))}")
         lines.append(f"{var_name}.alpha = {_py_number(float(str(mat.get('alpha', 0.02))))}")
+        lines.extend(_render_absorbing_boundary(var_name, g.get("absorbing_boundary")))
         physics_stack = _ensure_geometry_physics_stack(
             g.get("physics_stack"),
             material_dind=mat.get("Dind"),
@@ -1869,6 +2033,28 @@ def _render_geometries_from_override(
     if lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+def _render_absorbing_boundary(var_name: str, raw: object) -> list[str]:
+    config = _normalize_mapping(raw)
+    if not config:
+        return []
+    faces = config.get("faces")
+    if not isinstance(faces, list) or not faces:
+        return []
+    face_expr = "(" + ", ".join(_py_repr(str(face)) for face in faces)
+    if len(faces) == 1:
+        face_expr += ","
+    face_expr += ")"
+    return [
+        f"{var_name}.alpha.absorbing_boundary("
+        f"total_width={_py_number(float(config['total_width_m']))}, "
+        f"ramp_width={_py_number(float(config['ramp_width_m']))}, "
+        f"max_damping={_py_number(float(config['max_damping']))}, "
+        f"faces={face_expr}, "
+        f"profile={_py_repr(str(config.get('profile', 'smootherstep')))}, "
+        f"frame={_py_repr(str(config.get('frame', 'object')))})"
+    ]
 
 
 _GEOMETRY_INTERACTION_ORDER = (
@@ -2103,6 +2289,429 @@ def _render_charge_solver_payload(payload: object) -> str:
     return f"fm.ChargeSolverPolicy({', '.join(kwargs)})"
 
 
+def _render_spin_material_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    required = (
+        "sigma_s_Spm",
+        "polarization_p",
+        "theta_sh",
+        "lambda_sf_m",
+    )
+    kwargs: list[str] = []
+    for key in required:
+        value = _number_or_none(entry.get(key))
+        if value is None:
+            raise ValueError(f"spin transport material requires {key}")
+        kwargs.append(f"{key}={_py_number(value)}")
+    for key in ("lambda_j_m", "lambda_phi_m"):
+        value = _number_or_none(entry.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    for key in ("spin_capacitance_As_per_V_m3", "density_of_states_per_spin_Jinv_m3"):
+        value = _number_or_none(entry.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    formula = entry.get("capacitance_formula_version")
+    if isinstance(formula, str) and formula:
+        kwargs.append(f"capacitance_formula_version={_py_repr(formula)}")
+    return f"fm.SpinTransportMaterial({', '.join(kwargs)})"
+
+
+def _render_spin_material_assignment_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    return (
+        "fm.SpinTransportMaterialAssignment("
+        f"{_render_region_ref_payload(entry.get('region'))}, "
+        f"{_render_spin_material_payload(entry.get('material'))})"
+    )
+
+
+def _render_spin_interface_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kind = str(entry.get("kind") or "")
+    interface_id = str(entry.get("id") or "")
+    if not interface_id:
+        raise ValueError("spin transport interface requires id")
+    if kind == "transparent":
+        normal = _optional_vec3(entry.get("normal_a_to_b"))
+        if normal is None:
+            raise ValueError("transparent spin interface requires normal_a_to_b")
+        return (
+            "fm.TransparentSpinInterface("
+            f"id={_py_repr(interface_id)}, "
+            f"side_a={_render_region_ref_payload(entry.get('side_a'))}, "
+            f"side_b={_render_region_ref_payload(entry.get('side_b'))}, "
+            f"normal_a_to_b={_py_tuple3(normal)})"
+        )
+    if kind != "mixing_conductance":
+        raise ValueError(f"unsupported spin transport interface kind {kind!r}")
+    normal = _optional_vec3(entry.get("normal_to_ferromagnet"))
+    if normal is None:
+        raise ValueError("mixing-conductance interface requires normal_to_ferromagnet")
+    kwargs = [
+        f"id={_py_repr(interface_id)}",
+        f"normal_to_ferromagnet={_py_tuple3(normal)}",
+        f"normal_side={_render_region_ref_payload(entry.get('normal_side'))}",
+        f"ferromagnet_side={_render_region_ref_payload(entry.get('ferromagnet_side'))}",
+    ]
+    for key in ("g_up_Spm2", "g_down_Spm2", "g_r_Spm2", "g_i_Spm2"):
+        value = _number_or_none(entry.get(key))
+        if value is None:
+            raise ValueError(f"mixing-conductance interface requires {key}")
+        kwargs.append(f"{key}={_py_number(value)}")
+    sml = entry.get("spin_memory_loss")
+    if isinstance(sml, Mapping):
+        sml_entry = _normalize_mapping(sml)
+        sml_kwargs: list[str] = []
+        for key in ("g_n_Spm2", "g_f_Spm2", "g_lattice_Spm2"):
+            value = _number_or_none(sml_entry.get(key))
+            if value is None:
+                raise ValueError(f"spin-memory-loss reservoir requires {key}")
+            sml_kwargs.append(f"{key}={_py_number(value)}")
+        formula = sml_entry.get("formula_version")
+        if isinstance(formula, str) and formula:
+            sml_kwargs.append(f"formula_version={_py_repr(formula)}")
+        kwargs.append(
+            "spin_memory_loss=fm.SpinMemoryLossReservoir("
+            + ", ".join(sml_kwargs)
+            + ")"
+        )
+    return f"fm.MixingConductanceSpinInterface({', '.join(kwargs)})"
+
+
+def _render_spin_boundary_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kind = str(entry.get("kind") or "")
+    boundary_id = str(entry.get("id") or "")
+    surfaces = entry.get("surfaces")
+    if not boundary_id or not isinstance(surfaces, list) or not surfaces:
+        raise ValueError("spin transport boundary is incomplete")
+    surfaces_expr = "[" + ", ".join(_render_surface_ref_payload(item) for item in surfaces) + "]"
+    if kind == "spin_insulating":
+        return f"fm.SpinInsulating({_py_repr(boundary_id)}, {surfaces_expr})"
+    if kind == "spin_sink":
+        return f"fm.SpinSink({_py_repr(boundary_id)}, {surfaces_expr})"
+    if kind == "specified_spin_potential":
+        value = _optional_vec3(entry.get("spin_potential_V"))
+        if value is None:
+            raise ValueError("specified spin potential requires spin_potential_V")
+        return (
+            f"fm.SpecifiedSpinPotential({_py_repr(boundary_id)}, {surfaces_expr}, "
+            f"{_py_tuple3(value)})"
+        )
+    if kind == "specified_spin_flux":
+        value = _optional_vec3(entry.get("normal_spin_flux_Apm2"))
+        if value is None:
+            raise ValueError("specified spin flux requires normal_spin_flux_Apm2")
+        return (
+            f"fm.SpecifiedSpinFlux({_py_repr(boundary_id)}, {surfaces_expr}, "
+            f"{_py_tuple3(value)})"
+        )
+    raise ValueError(f"unsupported spin transport boundary kind {kind!r}")
+
+
+def _render_periodic_spin_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    boundary_id = str(entry.get("id") or "")
+    translation = _optional_vec3(entry.get("translation_m"))
+    if not boundary_id or translation is None:
+        raise ValueError("periodic spin boundary is incomplete")
+    return (
+        "fm.PeriodicSpin("
+        f"{_py_repr(boundary_id)}, "
+        f"minus_surface={_render_surface_ref_payload(entry.get('minus_surface'))}, "
+        f"plus_surface={_render_surface_ref_payload(entry.get('plus_surface'))}, "
+        f"translation_m={_py_tuple3(translation)})"
+    )
+
+
+def _render_spin_solver_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    linear = _normalize_mapping(entry.get("linear"))
+    kwargs: list[str] = []
+    for key in ("engine", "operator_version", "default_external_boundary"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            kwargs.append(f"{key}={_py_repr(value)}")
+    for key in ("relative_tolerance", "absolute_tolerance"):
+        value = _number_or_none(linear.get(key))
+        if value is not None:
+            kwargs.append(f"{key}={_py_number(value)}")
+    max_iterations = linear.get("max_iterations")
+    if isinstance(max_iterations, int):
+        kwargs.append(f"max_iterations={max_iterations}")
+    nonlinear = entry.get("reciprocal_nonlinear")
+    if isinstance(nonlinear, Mapping):
+        nonlinear_entry = _normalize_mapping(nonlinear)
+        nonlinear_kwargs: list[str] = []
+        for key in ("gmres_restart", "max_picard_iterations"):
+            value = nonlinear_entry.get(key)
+            if isinstance(value, int):
+                nonlinear_kwargs.append(f"{key}={value}")
+        for key in ("relative_update_tolerance", "eta_transport"):
+            value = _number_or_none(nonlinear_entry.get(key))
+            if value is not None:
+                nonlinear_kwargs.append(f"{key}={_py_number(value)}")
+        kwargs.append(
+            "reciprocal_nonlinear=fm.ReciprocalNonlinearSolverPolicy("
+            + ", ".join(nonlinear_kwargs)
+            + ")"
+        )
+    return f"fm.SpinSolverPolicy({', '.join(kwargs)})"
+
+
+def _render_transport_execution_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    kwargs: list[str] = []
+    for key in ("discretization", "device", "precision", "execution_mode"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            kwargs.append(f"{key}={_py_repr(value)}")
+    return f"fm.TransportExecution({', '.join(kwargs)})"
+
+
+def _render_spin_transport_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    module_id = str(entry.get("id") or "")
+    source_id = str(entry.get("current_source_id") or "")
+    domain = entry.get("domain")
+    materials = entry.get("materials")
+    if not module_id or not source_id or not isinstance(domain, list) or not domain:
+        raise ValueError("spin transport requires id, current_source_id, and domain")
+    if not isinstance(materials, list) or not materials:
+        raise ValueError("spin transport requires materials")
+    kwargs = [
+        f"id={_py_repr(module_id)}",
+        f"current_source_id={_py_repr(source_id)}",
+        "domain=[" + ", ".join(_render_region_ref_payload(item) for item in domain) + "]",
+        "materials=["
+        + ", ".join(_render_spin_material_assignment_payload(item) for item in materials)
+        + "]",
+    ]
+    interfaces = entry.get("interfaces")
+    if isinstance(interfaces, list) and interfaces:
+        kwargs.append(
+            "interfaces=[" + ", ".join(_render_spin_interface_payload(item) for item in interfaces) + "]"
+        )
+    boundaries = entry.get("boundaries")
+    if isinstance(boundaries, list) and boundaries:
+        rendered_boundaries = []
+        for item in boundaries:
+            item_map = _normalize_mapping(item)
+            if item_map.get("kind") == "periodic_spin":
+                rendered_boundaries.append(_render_periodic_spin_payload(item))
+            else:
+                rendered_boundaries.append(_render_spin_boundary_payload(item))
+        kwargs.append("boundaries=[" + ", ".join(rendered_boundaries) + "]")
+    solver = entry.get("solver")
+    if isinstance(solver, Mapping):
+        kwargs.append(f"solver={_render_spin_solver_payload(solver)}")
+    requested_execution = entry.get("requested_execution")
+    if isinstance(requested_execution, Mapping):
+        kwargs.append(
+            f"requested_execution={_render_transport_execution_payload(requested_execution)}"
+        )
+    mode = entry.get("mode")
+    if isinstance(mode, str) and mode != "steady":
+        kwargs.append(f"mode={_py_repr(mode)}")
+    return f"fm.SpinDriftDiffusion({', '.join(kwargs)})"
+
+
+def _render_spin_transports(
+    problem: Problem,
+    *,
+    surface: str,
+    overrides: dict[str, object] | None = None,
+) -> list[str]:
+    resolved_overrides = overrides or {}
+    if "spin_transports" in resolved_overrides:
+        override_modules = resolved_overrides["spin_transports"]
+        if not isinstance(override_modules, list):
+            raise ValueError("spin_transports override must be a list")
+        modules: Sequence[object] = override_modules
+    else:
+        modules = problem.spin_transports
+    if not modules:
+        return []
+    lines = ["# Spin transport"]
+    for module in modules:
+        if isinstance(module, SpinDriftDiffusion):
+            payload = _export_spin_transport_entry(problem, module)
+        elif isinstance(module, Mapping):
+            payload = dict(module)
+        else:
+            raise ValueError(
+                "canonical flat-script rewrite does not yet support spin transport "
+                f"{type(module).__name__}"
+            )
+        lines.append(_render_spin_transport_payload(payload))
+    register = _surface_call(surface, "spin_transport")
+    return [lines[0], *(f"{register}({expression})" for expression in lines[1:])]
+
+
+def _render_int_triplet(value: object, context: str) -> str:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 3:
+        raise ValueError(f"{context} must contain three integer values")
+    values = tuple(value)
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in values):
+        raise ValueError(f"{context} must contain three integer values")
+    return "(" + ", ".join(str(item) for item in values) + ")"
+
+
+def _render_conservative_current_view_payload(payload: object) -> str:
+    entry = _normalize_mapping(payload)
+    stable_ids = entry.get("stable_vertex_ids")
+    if not isinstance(stable_ids, list) or not stable_ids:
+        raise ValueError("conservative current view stable_vertex_ids is incomplete")
+    stable_expr = "[" + ", ".join(str(item) for item in stable_ids) + "]"
+
+    boundary_value = entry.get("boundary_faces")
+    if not isinstance(boundary_value, list) or not boundary_value:
+        raise ValueError("conservative current view boundary_faces is incomplete")
+    boundary_exprs = []
+    for raw_face in boundary_value:
+        face = _normalize_mapping(raw_face)
+        face_ids = _render_int_triplet(face.get("face_vertex_ids"), "boundary face_vertex_ids")
+        role = face.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("conservative current view boundary role is incomplete")
+        kwargs = [f"role={_py_repr(role)}"]
+        circuit = face.get("circuit_id")
+        if circuit is not None:
+            kwargs.append(f"circuit_id={_py_repr(str(circuit))}")
+        boundary_exprs.append(
+            "fm.ConservativeCurrentBoundaryFace("
+            f"{face_ids}, {', '.join(kwargs)})"
+        )
+
+    identity = _normalize_mapping(entry.get("identity"))
+    identity_fields = (
+        "source_module_id",
+        "source_state_revision",
+        "source_field_digest",
+        "conductivity_digest",
+        "mesh_revision",
+        "topology_revision",
+        "geometry_digest",
+        "envelope_revision",
+        "envelope_digest",
+    )
+    identity_kwargs = [
+        f"{field}={_py_repr(str(identity.get(field) or ''))}" for field in identity_fields
+    ]
+    identity_kwargs.extend(
+        [
+            f"evaluated_envelope_multiplier={_py_number(_number_or_none(identity.get('evaluated_envelope_multiplier')) or 0.0)}",
+            f"evaluation_time_s={_py_number(_number_or_none(identity.get('evaluation_time_s')) or 0.0)}",
+            f"stage_identity={int(identity.get('stage_identity') or 0)}",
+        ]
+    )
+    identity_expr = f"fm.ConservativeCurrentIdentity({', '.join(identity_kwargs)})"
+
+    pins = _normalize_mapping(entry.get("pins"))
+    pin_fields = (
+        "required_source_state_revision",
+        "required_source_field_digest",
+        "required_mesh_revision",
+        "required_topology_revision",
+    )
+    pins_expr = "fm.ConservativeCurrentPins(" + ", ".join(
+        f"{field}={_py_repr(str(pins.get(field) or ''))}" for field in pin_fields
+    ) + ")"
+
+    closure = _normalize_mapping(entry.get("closure"))
+    if closure.get("kind") == "external_lead":
+        interface_value = closure.get("interface_pairs")
+        minus_faces = closure.get("minus_outer_electrode_face_vertex_ids")
+        plus_faces = closure.get("plus_outer_electrode_face_vertex_ids")
+        conductivity = closure.get("lead_conductivity_spm_per_element")
+        stable_lead_ids = closure.get("lead_stable_vertex_ids")
+        lead_mesh = closure.get("lead_mesh")
+        if (
+            not isinstance(interface_value, list)
+            or not interface_value
+            or not isinstance(minus_faces, list)
+            or not minus_faces
+            or not isinstance(plus_faces, list)
+            or not plus_faces
+            or not isinstance(conductivity, list)
+            or not isinstance(stable_lead_ids, list)
+            or not isinstance(lead_mesh, Mapping)
+        ):
+            raise ValueError("conservative current external-lead closure is incomplete")
+        pair_exprs = []
+        for raw_pair in interface_value:
+            if not isinstance(raw_pair, list) or len(raw_pair) != 2:
+                raise ValueError("external-lead interface_pairs must contain two faces")
+            pair_exprs.append(
+                "fm.ConservativeCurrentLeadInterfacePair("
+                f"{_py_literal(raw_pair[0])}, {_py_literal(raw_pair[1])})"
+            )
+        closure_expr = (
+            "fm.ConservativeCurrentExternalLead("
+            f"operator_version={_py_repr(str(closure.get('operator_version') or ''))}, "
+            f"revision={_py_repr(str(closure.get('revision') or ''))}, "
+            f"digest={_py_repr(str(closure.get('digest') or ''))}, "
+            f"drive_id={_py_repr(str(closure.get('drive_id') or ''))}, "
+            "outer_electrode_potential_drop_v="
+            f"{_py_number(_number_or_none(closure.get('outer_electrode_potential_drop_v')) or 0.0)}, "
+            f"lead_mesh={_py_literal(dict(lead_mesh))}, "
+            f"lead_conductivity_spm_per_element={_py_literal(conductivity)}, "
+            f"lead_stable_vertex_ids={_py_literal(stable_lead_ids)}, "
+            f"interface_pairs=[{', '.join(pair_exprs)}], "
+            f"minus_outer_electrode_face_vertex_ids={_py_literal(minus_faces)}, "
+            f"plus_outer_electrode_face_vertex_ids={_py_literal(plus_faces)}, "
+            f"lead_conductivity_digest={_py_repr(str(closure.get('lead_conductivity_digest') or ''))})"
+        )
+    elif closure.get("kind") == "closed_geometry":
+        cuts = closure.get("source_cuts")
+        if not isinstance(cuts, list) or not cuts:
+            raise ValueError("conservative current view source_cuts is incomplete")
+        cut_exprs = []
+        for raw_cut in cuts:
+            cut = _normalize_mapping(raw_cut)
+            pairs = cut.get("face_pairs")
+            if not isinstance(pairs, list) or not pairs:
+                raise ValueError("conservative current view source-cut face_pairs is incomplete")
+            pair_exprs = []
+            for raw_pair in pairs:
+                pair = _normalize_mapping(raw_pair)
+                pair_exprs.append(
+                    "fm.ConservativeCurrentSourceCutFacePair("
+                    f"{_render_int_triplet(pair.get('minus_face_vertex_ids'), 'minus face IDs')}, "
+                    f"{_render_int_triplet(pair.get('plus_face_vertex_ids'), 'plus face IDs')})"
+                )
+            cut_exprs.append(
+                "fm.ConservativeCurrentSourceCut("
+                f"{_py_repr(str(cut.get('id') or ''))}, "
+                f"{_py_tuple3(_optional_vec3(cut.get('translation_m')) or (0.0, 0.0, 0.0))}, "
+                f"{_py_number(_number_or_none(cut.get('potential_drop_v')) or 0.0)}, "
+                f"[{', '.join(pair_exprs)}])"
+            )
+        closure_expr = (
+            "fm.ConservativeCurrentClosedGeometry("
+            f"{_py_repr(str(closure.get('operator_version') or ''))}, "
+            f"{_py_repr(str(closure.get('revision') or ''))}, "
+            f"{_py_repr(str(closure.get('digest') or ''))}, "
+            f"[{', '.join(cut_exprs)}])"
+        )
+    else:
+        raise ValueError("canonical script export supports only known current closures")
+    view_kwargs = [
+        f"stable_vertex_ids={stable_expr}",
+        f"boundary_faces=[{', '.join(boundary_exprs)}]",
+        f"identity={identity_expr}",
+        f"pins={pins_expr}",
+        f"closure={closure_expr}",
+        f"algebraic_relative_tolerance={_py_number(_number_or_none(entry.get('algebraic_relative_tolerance')) or 0.0)}",
+        f"physical_relative_gate={_py_number(_number_or_none(entry.get('physical_relative_gate')) or 0.0)}",
+        f"physical_absolute_gate_a={_py_number(_number_or_none(entry.get('physical_absolute_gate_a')) or 0.0)}",
+    ]
+    if bool(entry.get("reference_mpi_gather_broadcast", False)):
+        view_kwargs.append("reference_mpi_gather_broadcast=True")
+    return f"fm.ConservativeCurrentView({', '.join(view_kwargs)})"
+
+
 def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     entry = _normalize_mapping(payload)
     kwargs = [f"name={_py_repr(str(entry.get('name') or 'transport'))}"]
@@ -2150,6 +2759,15 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
     solver = entry.get("solver")
     if isinstance(solver, Mapping):
         kwargs.append(f"solver={_render_charge_solver_payload(solver)}")
+    time_envelope = entry.get("time_envelope")
+    if isinstance(time_envelope, Mapping):
+        kwargs.append("time_envelope=" + _render_sot_envelope(time_envelope))
+    conservative_view = entry.get("conservative_current_view")
+    if isinstance(conservative_view, Mapping):
+        kwargs.append(
+            "conservative_current_view="
+            + _render_conservative_current_view_payload(conservative_view)
+        )
     return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
 
 
@@ -2234,6 +2852,18 @@ def _render_spatial_profile_expr(profile: object) -> str:
         if profile.window != "none":
             kwargs.append(f"window={_py_repr(profile.window)}")
         return f"fm.SincFieldProfile({', '.join(kwargs)})"
+    if isinstance(profile, GaussianPlaneWaveFieldProfile):
+        kwargs = [
+            f"center_x_m={_py_number(profile.center_x_m)}",
+            f"center_y_m={_py_number(profile.center_y_m)}",
+            f"carrier_origin_x_m={_py_number(profile.carrier_origin_x_m)}",
+            f"sigma_x_m={_py_number(profile.sigma_x_m)}",
+            f"sigma_y_m={_py_number(profile.sigma_y_m)}",
+            f"wavelength_m={_py_number(profile.wavelength_m)}",
+        ]
+        if abs(profile.carrier_phase_rad) > 0.0:
+            kwargs.append(f"carrier_phase_rad={_py_number(profile.carrier_phase_rad)}")
+        return f"fm.GaussianPlaneWaveFieldProfile({', '.join(kwargs)})"
     if isinstance(profile, GeometryMaskFieldProfile):
         return (
             "fm.GeometryMaskFieldProfile("
@@ -2307,6 +2937,20 @@ def _render_regional_field_drive_payload_expr(drive: dict[str, object]) -> str:
             f"object_id={_py_repr(str(profile.get('object_id') or ''))}, "
             f"envelope={_render_field_profile_payload_expr(envelope)})"
         )
+    elif profile_kind == "gaussian_plane_wave":
+        profile_args = [
+            f"center_x_m={_py_number(float(profile.get('center_x_m', 0.0)))}",
+            f"center_y_m={_py_number(float(profile.get('center_y_m', 0.0)))}",
+            f"carrier_origin_x_m={_py_number(float(profile.get('carrier_origin_x_m', 0.0)))}",
+            f"sigma_x_m={_py_number(float(profile.get('sigma_x_m', 0.0)))}",
+            f"sigma_y_m={_py_number(float(profile.get('sigma_y_m', 0.0)))}",
+            f"wavelength_m={_py_number(float(profile.get('wavelength_m', 0.0)))}",
+        ]
+        if abs(float(profile.get("carrier_phase_rad", 0.0))) > 0.0:
+            profile_args.append(
+                f"carrier_phase_rad={_py_number(float(profile['carrier_phase_rad']))}"
+            )
+        profile_expr = f"fm.GaussianPlaneWaveFieldProfile({', '.join(profile_args)})"
     else:
         raise ValueError(f"unsupported field profile kind: {profile_kind}")
 
@@ -2358,6 +3002,20 @@ def _render_field_profile_payload_expr(profile: dict[str, object]) -> str:
         if profile.get("window") not in (None, "none"):
             args.append(f"window={_py_repr(str(profile['window']))}")
         return f"fm.SincFieldProfile({', '.join(args)})"
+    if kind == "gaussian_plane_wave":
+        args = [
+            f"center_x_m={_py_number(float(profile.get('center_x_m', 0.0)))}",
+            f"center_y_m={_py_number(float(profile.get('center_y_m', 0.0)))}",
+            f"carrier_origin_x_m={_py_number(float(profile.get('carrier_origin_x_m', 0.0)))}",
+            f"sigma_x_m={_py_number(float(profile.get('sigma_x_m', 0.0)))}",
+            f"sigma_y_m={_py_number(float(profile.get('sigma_y_m', 0.0)))}",
+            f"wavelength_m={_py_number(float(profile.get('wavelength_m', 0.0)))}",
+        ]
+        if abs(float(profile.get("carrier_phase_rad", 0.0))) > 0.0:
+            args.append(
+                f"carrier_phase_rad={_py_number(float(profile['carrier_phase_rad']))}"
+            )
+        return f"fm.GaussianPlaneWaveFieldProfile({', '.join(args)})"
     raise ValueError(f"unsupported field profile kind: {kind}")
 
 
@@ -2610,7 +3268,15 @@ def _render_spin_torques(
                 kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
             lines.append(f"fm.InterfaceCppSTT({', '.join(kwargs)})")
             continue
-        if isinstance(module, DriftDiffusionSpinTorque):
+        if isinstance(module, CanonicalDriftDiffusionSpinTorque):
+            lines.append(
+                "fm.DriftDiffusionSpinTorque("
+                f"id={_py_repr(module.id)}, "
+                f"solve_id={_py_repr(module.solve_id)}, "
+                f"target={_render_region_ref_payload(module.target.to_ir())})"
+            )
+            continue
+        if isinstance(module, LegacyDriftDiffusionSpinTorque):
             kwargs = []
             if module.current_density is not None:
                 kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
@@ -2918,6 +3584,28 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
     kind = _required_entry(entry, "kind", context="spin_torque")
     if kind == "prescribed_sot":
         return _render_prescribed_sot_entry(entry)
+    if kind == "drift_diffusion_spin_torque":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "schema_version", "id", "solve_id", "target", "formula_version"},
+            context="drift_diffusion_spin_torque",
+        )
+        if entry.get("schema_version") != "drift_diffusion_spin_torque.v1":
+            raise ValueError("unsupported drift-diffusion spin-torque schema_version")
+        if entry.get("formula_version") != "transport_torque_angular_momentum.fullmag.v1":
+            raise ValueError("unsupported drift-diffusion spin-torque formula_version")
+        module_id = _required_nonempty_string(
+            entry, "id", context="drift_diffusion_spin_torque"
+        )
+        solve_id = _required_nonempty_string(
+            entry, "solve_id", context="drift_diffusion_spin_torque"
+        )
+        target = _required_mapping(entry, "target", context="drift_diffusion_spin_torque")
+        return (
+            "fm.DriftDiffusionSpinTorque("
+            f"id={_py_repr(module_id)}, solve_id={_py_repr(solve_id)}, "
+            f"target={_render_region_ref_payload(target)})"
+        )
     constructors = {
         "slonczewski": "SlonczewskiSTT",
         "zhang_li": "ZhangLiSTT",
@@ -3129,19 +3817,20 @@ def _render_oersted_entry(entry: Mapping[str, object]) -> str:
     if kind == "oersted_field":
         _reject_unexpected_fields(
             entry,
-            {"kind", "model", "source"},
+            {"kind", "id", "model", "source"},
             context="oersted_field",
         )
         model = _required_entry(entry, "model", context="oersted_field")
         if model != "from_current_solution":
             raise ValueError(f"unsupported OerstedField model {model!r}")
         source = _required_nonempty_string(entry, "source", context="oersted_field")
-        return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)})"
+        module_id = _required_nonempty_string(entry, "id", context="oersted_field")
+        return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)}, id={_py_repr(module_id)})"
     if kind != "oersted_cylinder":
         raise ValueError(f"unsupported Oersted term kind {kind!r}")
     _reject_unexpected_fields(
         entry,
-        {"kind", "current", "radius", "center", "axis", "time_dependence"},
+        {"kind", "id", "current", "radius", "center", "axis", "time_dependence"},
         context="oersted_cylinder",
     )
     kwargs = [
@@ -3151,6 +3840,7 @@ def _render_oersted_entry(entry: Mapping[str, object]) -> str:
         f"{_roundtrip_literal(list(_required_vec3(entry, 'center', context='oersted_cylinder')), context='oersted_cylinder.center')}",
         "axis="
         f"{_roundtrip_literal(list(_required_vec3(entry, 'axis', context='oersted_cylinder')), context='oersted_cylinder.axis')}",
+        f"id={_py_repr(_required_nonempty_string(entry, 'id', context='oersted_cylinder'))}",
     ]
     if "time_dependence" in entry:
         time_dependence = entry["time_dependence"]
@@ -6165,6 +6855,9 @@ def _export_geometry_entry(
         "material_parameter_fields": [
             assignment.to_ir() for assignment in magnet.material_parameter_fields
         ],
+        "absorbing_boundary": magnet.absorbing_boundary.to_ir()
+        if magnet.absorbing_boundary is not None
+        else None,
     }
 
 
@@ -6258,6 +6951,24 @@ def _export_excitation_analysis(problem: Problem) -> dict[str, object] | None:
     if analysis is None:
         return None
     return analysis.to_ir()
+
+
+def _export_spin_transport_entry(
+    problem: Problem,
+    module: SpinDriftDiffusion,
+) -> dict[str, object]:
+    """Export a spin-transport solve with its source-owned coupling."""
+    source = next(
+        (
+            candidate
+            for candidate in problem.current_modules
+            if isinstance(candidate, CurrentTransport)
+            and candidate.name == module.current_source_id
+        ),
+        None,
+    )
+    coupling = source.coupling if isinstance(source, CurrentTransport) else None
+    return copy.deepcopy(module.to_ir(coupling=coupling))
 
 
 def _export_spin_torque_entry(module: object) -> dict[str, object]:
@@ -6571,6 +7282,41 @@ def _override_bool(value: object, fallback: bool) -> bool:
 def _export_demag_realization(problem: Problem) -> str | None:
     realization = _problem_demag_realization(problem)
     return str(realization) if isinstance(realization, str) and realization.strip() else None
+
+
+def _export_fdm(problem: Problem) -> dict[str, object] | None:
+    fdm = problem.discretization.fdm if problem.discretization is not None else None
+    if not isinstance(fdm, FDM):
+        return None
+    payload: dict[str, object] = {
+        "default_cell": list(fdm.default_cell) if fdm.default_cell is not None else None,
+        "per_magnet": (
+            {
+                name: {"cell": list(grid.cell)}
+                for name, grid in sorted((fdm.per_magnet or {}).items())
+            }
+            if fdm.per_magnet
+            else None
+        ),
+        "boundary_correction": fdm.boundary_correction,
+        "boundary_phi_floor": fdm.boundary_phi_floor,
+        "boundary_delta_min": fdm.boundary_delta_min,
+    }
+    if fdm.demag is not None:
+        payload["demag"] = {
+            "strategy": fdm.demag.strategy,
+            "mode": fdm.demag.mode,
+            "common_cells": list(fdm.demag.common_cells)
+            if fdm.demag.common_cells is not None
+            else None,
+            "common_cells_xy": list(fdm.demag.common_cells_xy)
+            if fdm.demag.common_cells_xy is not None
+            else None,
+            "explain": fdm.demag.explain,
+        }
+    else:
+        payload["demag"] = None
+    return payload
 
 
 def _render_exchange(

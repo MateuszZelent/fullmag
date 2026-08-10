@@ -19,14 +19,19 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
+import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import {
   buildCurrentTransport,
   buildSpinTransport,
   currentTransportDraft,
+  currentTransportModelPatch,
+  currentTransportSupportsPrescribedDensity,
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
@@ -36,6 +41,7 @@ import {
   transportSelectionKey,
   type CurrentTransportDraft,
   type SpinTransportDraft,
+  type TransportAuthoringInitialScope,
 } from "./TransportAuthoringInspectorModel";
 
 type Family = "current_transport" | "spin_transport";
@@ -63,10 +69,12 @@ function requestedCapability(
 
 export function TransportAuthoringInspector({
   family,
+  initialScope,
   resourceId,
   resourceIndex,
 }: {
   family: Family;
+  initialScope?: TransportAuthoringInitialScope | null;
   resourceId?: string | null;
   resourceIndex?: number | null;
 }) {
@@ -91,8 +99,14 @@ export function TransportAuthoringInspector({
       : isKnownSpinTransport(selected as SceneSpinTransport)
     : true;
   const baseDraft = family === "current_transport"
-    ? currentTransportDraft(selected && known ? selected as Parameters<typeof currentTransportDraft>[0] : null)
-    : spinTransportDraft(selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null);
+    ? currentTransportDraft(
+        selected && known ? selected as Parameters<typeof currentTransportDraft>[0] : null,
+        selected ? null : initialScope,
+      )
+    : spinTransportDraft(
+        selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null,
+        selected ? null : initialScope,
+      );
   const draftKey = `${family}:${resourceId ?? resourceIndex ?? localSelectionKey}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState<{ draft: Draft; key: string }>({
     draft: baseDraft,
@@ -110,6 +124,21 @@ export function TransportAuthoringInspector({
     { enabled: true },
   );
   const capability = requestedCapability(family, draft, capabilities);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const valid = Boolean(
+    known &&
+      active.status === "ready" &&
+      capability?.authoring_allowed &&
+      validation?.semantic.valid === true &&
+      validation.execution.authoring_allowed === true,
+  );
+  const lockReason = !known
+    ? "Unknown transport variants are read-only."
+    : active.status !== "ready"
+      ? "Transport resources are not ready."
+      : !capability?.authoring_allowed
+        ? capability?.reason ?? "Transport authoring capability is unavailable."
+        : undefined;
 
   function validationRequest(): TransportValidationRequest {
     if (active.data?.scene_revision === undefined) {
@@ -171,8 +200,8 @@ export function TransportAuthoringInspector({
     key: draftKey,
   });
 
-  async function save(): Promise<void> {
-    if (active.data?.scene_revision === undefined) return;
+  async function save(): Promise<boolean> {
+    if (active.data?.scene_revision === undefined) return false;
     setPending(true);
     setFeedback(null);
     try {
@@ -200,11 +229,18 @@ export function TransportAuthoringInspector({
       }
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setFeedback({ kind: "success", message: "Transport resource committed." });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+      return false;
     } finally {
       setPending(false);
     }
+  }
+
+  function resetDraft(): void {
+    setDraftState({ draft: baseDraft, key: draftKey });
+    setFeedback(null);
   }
 
   async function remove(): Promise<void> {
@@ -227,6 +263,16 @@ export function TransportAuthoringInspector({
       setPending(false);
     }
   }
+
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    valid,
+    lockReason,
+    save,
+    resetDraft,
+  );
 
   return (
     <div className="fm-inspector-panel">
@@ -275,7 +321,43 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
   const resourceIndex = selection.ref?.type === "spin-transport"
     ? selection.ref.spinTransportIndex
     : null;
-  return <TransportAuthoringInspector family="spin_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
+  const selectedRegionId = selection.ref?.type === "spin-transport"
+    ? selection.ref.regionId ?? null
+    : null;
+  const initialScope = resourceId == null && selection.objectId
+    ? { objectId: selection.objectId, regionId: selectedRegionId }
+    : null;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "spin_transport",
+        scope: {
+          kind: selectedRegionId ? "region" : selection.objectId ? "object" : "global",
+          objectId: selection.objectId,
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId && selection.objectId
+            ? `region:${selection.objectId}:${selectedRegionId}`
+            : selection.objectId
+              ? `object:${selection.objectId}`
+              : "global:physics",
+        },
+        source: {
+          id: resourceId ?? "new",
+          kind: "spin_transport",
+          status: "active",
+        },
+        status: "active",
+      })}
+      primary={(
+        <TransportAuthoringInspector
+          family="spin_transport"
+          initialScope={initialScope}
+          resourceId={resourceId}
+          resourceIndex={resourceIndex}
+        />
+      )}
+    />
+  );
 }
 
 export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProps) {
@@ -285,15 +367,52 @@ export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProp
   const resourceIndex = selection.ref?.type === "current-transport"
     ? selection.ref.currentTransportIndex
     : null;
-  return <TransportAuthoringInspector family="current_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
+  const selectedRegionId = selection.ref?.type === "scene-object"
+    ? selection.ref.regionId ?? null
+    : null;
+  const initialScope = resourceId === null && selection.objectId
+    ? { objectId: selection.objectId, regionId: selectedRegionId }
+    : null;
+  return (
+    <PhysicsInspectorOverview
+      model={buildPhysicsInspectorOverviewModel({
+        family: "current_transport",
+        scope: {
+          kind: selectedRegionId ? "region" : selection.objectId ? "object" : "global",
+          objectId: selection.objectId,
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId && selection.objectId
+            ? `region:${selection.objectId}:${selectedRegionId}`
+            : selection.objectId
+              ? `object:${selection.objectId}`
+              : "global:physics",
+        },
+        source: {
+          id: resourceId ?? "new",
+          kind: "current_transport",
+          status: "active",
+        },
+        status: "active",
+      })}
+      primary={(
+        <TransportAuthoringInspector
+          family="current_transport"
+          initialScope={initialScope}
+          resourceId={resourceId}
+          resourceIndex={resourceIndex}
+        />
+      )}
+    />
+  );
 }
 
 function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTransportDraft; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {
   const field = (key: keyof CurrentTransportDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
   return <>
     <FormField label="Name" readOnly={identityReadOnly} value={draft.name} onChange={field("name")} />
-    <FormField label="Model" type="select" value={draft.model} onChange={field("model")}><option value="prescribed_density">Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
+    <FormField label="Model" type="select" value={draft.model} onChange={(event) => patch(currentTransportModelPatch(draft, event.target.value as CurrentTransportDraft["model"]))}><option value="prescribed_density" disabled={!currentTransportSupportsPrescribedDensity(draft)}>Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
     <FormField label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
+    <FormField label="Conservative RT0 current view (JSON; closed_geometry)" rows={12} type="textarea" value={draft.conservativeCurrentView} onChange={field("conservativeCurrentView")} />
     {draft.model === "prescribed_density" ? <FormField label="Current density vector" unit="A/m²" type="textarea" value={draft.currentDensity} onChange={field("currentDensity")} /> : <>
       <FormField label="Domain region refs" type="textarea" rows={5} value={draft.domain} onChange={field("domain")} />
       <FormField label="Material assignments (sigma_Spm; M2: sigma_parallel_Spm, sigma_perpendicular_Spm, sigma_AHE_Spm)" type="textarea" rows={9} value={draft.materials} onChange={field("materials")} />
@@ -301,6 +420,7 @@ function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTrans
       <FormField label="Gauge" type="select" value={draft.gauge} onChange={field("gauge")}><option value="dirichlet_reference">Dirichlet reference</option><option value="zero_mean">Zero mean</option></FormField>
       <SolverFields draft={draft} field={field} patch={patch} />
     </>}
+    <FormField label="Current-source time envelope (JSON; dimensionless)" rows={7} type="textarea" value={draft.timeEnvelope} onChange={field("timeEnvelope")} />
     <FormField label="Legacy solve region" value={draft.solveRegion} onChange={field("solveRegion")} />
     <FormField label="Legacy conductivity" unit="S/m" value={draft.conductivity} onChange={field("conductivity")} />
   </>;

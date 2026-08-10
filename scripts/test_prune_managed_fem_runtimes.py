@@ -220,3 +220,46 @@ def test_prune_reads_process_links_without_resolving_unrelated_mounts(
 
     assert result.returncode == 0, result.stderr
     assert not marker.exists()
+
+
+def test_prune_does_not_hang_on_runtime_process_links(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtimes"
+    variants = runtime / "fem-gpu-variants"
+    variants.mkdir(parents=True)
+    active = make_variant(variants.parent, f"hypre-baseline-{'a' * 64}", 20)
+    (runtime / "fem-gpu-host").symlink_to(f"fem-gpu-variants/{active.name}")
+
+    proc = tmp_path / "proc"
+    (proc / "100").mkdir(parents=True)
+    (proc / "100" / "cwd").symlink_to(active)
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    readlink_shim = shim_dir / "readlink"
+    readlink_shim.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = '-f' ]; then\n"
+        "  case \"${*: -1}\" in */proc/100/cwd) sleep 5 ;; esac\n"
+        "fi\n"
+        "exec /usr/bin/readlink \"$@\"\n",
+        encoding="utf-8",
+    )
+    readlink_shim.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(PRUNE)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{shim_dir}:{os.environ['PATH']}",
+            "FULLMAG_RUNTIME_PARENT": str(runtime),
+            "FULLMAG_RUNTIME_PROC_ROOT": str(proc),
+            "FULLMAG_RUNTIME_READLINK_TIMEOUT": "0.1",
+        },
+        text=True,
+        capture_output=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert active.exists()

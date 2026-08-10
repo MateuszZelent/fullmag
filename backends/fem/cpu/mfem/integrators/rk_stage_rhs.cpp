@@ -11,6 +11,8 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
+#include "cpu/mfem/interactions/sot.hpp"
+#include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/runtime/phase_timings.hpp"
 #include "fem_common.hpp"
@@ -22,6 +24,7 @@ bool evaluate_rk_stage_rhs(
     Context &ctx,
     const std::vector<double> &m_state,
     double evaluation_time_s,
+    uint64_t stage_identity,
     StepperWorkspace &ws,
     std::vector<double> &out_k,
     double *out_max_rhs,
@@ -41,6 +44,15 @@ bool evaluate_rk_stage_rhs(
             out_demag_energy,
             true,
             timings,
+            error,
+            stage_identity)) {
+        return false;
+    }
+    if (!materialize_transport_stage_rhs(
+            ctx,
+            m_state,
+            evaluation_time_s,
+            stage_identity,
             error)) {
         return false;
     }
@@ -53,6 +65,9 @@ bool evaluate_rk_stage_rhs(
                     ctx.base_plan.precession_enabled,
                     out_k, max_rhs);
         add_stt_rhs_aos(ctx, m_state, out_k, max_rhs, ws.stt);
+        add_sot_rhs_aos(
+            ctx, m_state, out_k, max_rhs, evaluation_time_s, ctx.zeeman.stage_start_time_s);
+        add_transport_stage_rhs(ctx, out_k, max_rhs);
         zero_non_magnetic_nodes_aos(out_k, ctx.mesh.magnetic_node_mask);
     }
     if (out_max_rhs != nullptr) {

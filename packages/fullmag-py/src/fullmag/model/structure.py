@@ -9,6 +9,7 @@ from fullmag.init import InitialMagnetization, SampledMagnetization
 from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,6 +692,7 @@ class Ferromagnet:
     object_regions: tuple[ObjectRegion, ...] = ()
     allocated_region_ids: tuple[str, ...] = ()
     material_parameter_fields: tuple[MaterialParameterAssignment, ...] = ()
+    absorbing_boundary: AbsorbingBoundaryLayer | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
@@ -717,6 +719,9 @@ class Ferromagnet:
             "material": self.material.name,
             "initial_magnetization": self.m0.to_ir() if self.m0 else None,
             "mesh_recipe": self.mesh.to_ir() if self.mesh else None,
+            "absorbing_boundary": self.absorbing_boundary.to_ir()
+            if self.absorbing_boundary is not None
+            else None,
         }
 
 

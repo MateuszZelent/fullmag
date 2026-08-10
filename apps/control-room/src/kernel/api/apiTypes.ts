@@ -32,11 +32,14 @@ export type CheckpointRestoreResponse =
   components["schemas"]["CheckpointRestoreResponse"];
 export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
+export type FdmMultilayerLayoutResource =
+  components["schemas"]["FdmMultilayerLayoutResource"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];
 export interface FieldMetaQuery {
   component?: string | null;
+  owner_object_id?: string | null;
   scope_id?: string | null;
   scope_kind?: string | null;
   snapshot_id?: string | null;
@@ -57,6 +60,29 @@ export type FieldStateInspectResponse =
 export type FieldStateTargetRef =
   components["schemas"]["FieldStateTargetRef"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+type FdmFieldVectorQueryBase = Omit<
+  FieldVectorQuery,
+  "geometry_scope" | "scope_id" | "scope_kind"
+> & {
+  geometry_scope?: never;
+};
+type FdmIdentifiedFieldVectorQueryBase = FdmFieldVectorQueryBase & {
+  scope_id: string;
+};
+export type FdmSingleGridFieldVectorQuery =
+  | (FdmIdentifiedFieldVectorQueryBase & {
+      scope_kind: "object" | "region";
+    })
+  | (FdmFieldVectorQueryBase & {
+      scope_id?: string | null;
+      scope_kind: "airbox";
+    });
+export type FdmMultilayerFieldVectorQuery = FdmIdentifiedFieldVectorQueryBase & {
+  scope_kind: "airbox" | "layer" | "object";
+};
+export type FdmScopedFieldVectorQuery =
+  | FdmSingleGridFieldVectorQuery
+  | FdmMultilayerFieldVectorQuery;
 export type PlanarFieldMetaResource =
   components["schemas"]["PlanarFieldMetaResource"];
 export type PlanarFieldProbeResource =
@@ -256,6 +282,9 @@ export type MeshRegionMembershipResource =
   components["schemas"]["MeshRegionMembershipResource"];
 export type FdmRegionMembershipResource =
   components["schemas"]["FdmRegionMembershipResource"];
+export type PendingJsonResourceResult<TData> =
+  | { data: TData; status: "ready" }
+  | { data: null; status: "pending" };
 export type MeshRegionQualityResource =
   components["schemas"]["MeshRegionQualityResource"];
 export type MeshSemanticsResource =
@@ -302,6 +331,18 @@ export type DynamicStructureFactorResource =
   components["schemas"]["DynamicStructureFactorResource"];
 export type FieldDriveListResource =
   components["schemas"]["FieldDriveListResource"];
+export type PhysicsGraphResource =
+  components["schemas"]["PhysicsGraphResource"];
+export type PhysicsGraphActivationResource =
+  components["schemas"]["PhysicsGraphActivationResource"];
+export type PhysicsGraphEdgeResource =
+  components["schemas"]["PhysicsGraphEdgeResource"];
+export type PhysicsGraphModuleResource =
+  components["schemas"]["PhysicsGraphModuleResource"];
+export type PhysicsGraphProvenanceResource =
+  components["schemas"]["PhysicsGraphProvenanceResource"];
+export type PhysicsGraphScopeResource =
+  components["schemas"]["PhysicsGraphScopeResource"];
 export type RegionalFieldDriveResource =
   components["schemas"]["RegionalFieldDriveResource"];
 export type FieldDriveCreateRequest =
@@ -496,6 +537,7 @@ export interface ObjectInteractionResource {
   present: boolean;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
+  absorbing_boundary?: JsonObject | null;
   geometry?: JsonObject | null;
   magnetization_ref?: string | null;
   material_ref?: string | null;

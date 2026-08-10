@@ -107,6 +107,9 @@ pub(crate) fn execute_fem_relax_with_context<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    physics_execution_context: Option<
+        &crate::physics_graph_execution::PhysicsGraphExecutionContext,
+    >,
 ) -> Result<ExecutedRun, RunError> {
     execute_fem_relax_with_context_in_mode(
         engine,
@@ -116,6 +119,7 @@ pub(crate) fn execute_fem_relax_with_context<'a>(
         outputs,
         live,
         artifact_writer,
+        physics_execution_context,
         ExecutionMode::Strict,
     )
 }
@@ -128,6 +132,9 @@ pub(crate) fn execute_fem_relax_with_context_in_mode<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    physics_execution_context: Option<
+        &crate::physics_graph_execution::PhysicsGraphExecutionContext,
+    >,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     algorithm::check_algorithm_support(plan.relaxation.as_ref(), engine)?;
@@ -143,6 +150,7 @@ pub(crate) fn execute_fem_relax_with_context_in_mode<'a>(
         outputs,
         live,
         artifact_writer,
+        physics_execution_context,
         execution_mode,
     )
 }

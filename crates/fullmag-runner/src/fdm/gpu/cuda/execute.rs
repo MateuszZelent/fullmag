@@ -101,6 +101,15 @@ pub(crate) fn execute_cuda_fdm(
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
         timestep_policy,
+        executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
+            && (plan.zhang_li_formula_version.is_some()
+                || plan.slonczewski_formula_version.is_some()
+                || plan.sot_formula_version.is_some())
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {

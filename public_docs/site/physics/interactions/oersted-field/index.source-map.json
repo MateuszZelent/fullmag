@@ -1,203 +1,1144 @@
 {
   "document": {
     "path": "public_docs/site/physics/interactions/oersted-field/index.md",
-    "title": "Oersted field",
-    "interaction": "prescribed Oersted effective field"
+    "title": "Solved-current Oersted field",
+    "interaction": "closure-aware solved-current OE-F1 and OE-F2"
   },
   "backend_matrix": [
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Analytic and midpoint source paths exist; generalized convergence remains separately qualified."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "CUDA basis and generalized upload paths exist; executed-device parity and precision evidence remain separate."
-    },
-    {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Native MFEM cylinder and explicit-field paths exist; generalized midpoint convergence remains open."
-    },
-    {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Native CUDA accumulation exists; executed-device field, snapshot, and parity evidence are required."
-    }
+    {"method": "OE-F1 direct tetrahedral quadrature", "solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "OE-F1 consumes a tetrahedral FEM RT0/H(div) current view and is not an FDM operator."},
+    {"method": "OE-F1 direct tetrahedral quadrature", "solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No FDM or CUDA realization of the OE-F1 tetrahedral operator exists."},
+    {"method": "OE-F1 direct tetrahedral quadrature", "solver": "FEM", "device": "CPU", "status": "semantic_only", "reason": "Bounded OE-T0/OE-F1 closed-geometry, external-lead, and callback slices execute, but public selection and production qualification remain open."},
+    {"method": "OE-F1 direct tetrahedral quadrature", "solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "There is no device-resident OE-F1 realization; strict GPU requests fail closed."},
+    {"method": "OE-F2 mixed vector potential", "solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The H(curl) x H1 exact-sequence formulation is FEM-only."},
+    {"method": "OE-F2 mixed vector potential", "solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No FDM realization or fallback is defined."},
+    {"method": "OE-F2 mixed vector potential", "solver": "FEM", "device": "CPU", "status": "semantic_only", "reason": "The bounded mixed-solve fixture executes in FP64, but airbox/convergence, explicit public selection, and production gates remain open."},
+    {"method": "OE-F2 mixed vector potential", "solver": "FEM", "device": "GPU", "status": "semantic_only", "reason": "Target vocabulary exists, but no executable or qualified device-resident solved-current implementation exists."}
+  ],
+  "equations": [
+    {"id": "eq-oersted-current", "symbols": ["E", "V", "Jc", "sigma"], "sources": ["native-current-solve"]},
+    {"id": "eq-oersted-biot-savart", "symbols": ["Hoe", "Jc", "x", "xp", "Omega_c"], "sources": ["oe-f1-operator"]},
+    {"id": "eq-oersted-vector-potential", "symbols": ["A", "p", "v", "q", "Jc", "Boe", "Hoe", "mu0"], "sources": ["oe-f2-operator"]}
+  ],
+  "symbols": [
+    {"id": "V", "latex": "$V$", "meaning": "electric potential", "si_unit": "$\\mathrm{V}$"},
+    {"id": "E", "latex": "$\\mathbf E$", "meaning": "electric field", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
+    {"id": "sigma", "latex": "$\\sigma$", "meaning": "charge conductivity", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "Jc", "latex": "$\\mathbf J_c$", "meaning": "signed conventional current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "Omega_c", "latex": "$\\Omega_c$", "meaning": "closed conductor and volumetric lead domain", "si_unit": "$1$"},
+    {"id": "x", "latex": "$\\mathbf x$", "meaning": "observation position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "xp", "latex": "$\\mathbf x'$", "meaning": "source position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Hoe", "latex": "$\\mathbf H_{\\mathrm{oe}}$", "meaning": "Oersted magnetic field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Boe", "latex": "$\\mathbf B_{\\mathrm{oe}}$", "meaning": "Oersted magnetic flux density", "si_unit": "$\\mathrm{T}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{H\\,m^{-1}}$"},
+    {"id": "A", "latex": "$\\mathbf A$", "meaning": "magnetic vector potential", "si_unit": "$\\mathrm{T\\,m}$"},
+    {"id": "p", "latex": "$p$", "meaning": "OE-F2 gauge multiplier", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "v", "latex": "$\\mathbf v$", "meaning": "H(curl) test function", "si_unit": "$\\mathrm{T\\,m}$"},
+    {"id": "q", "latex": "$q$", "meaning": "scalar gauge test function", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "t", "latex": "$t$", "meaning": "source evaluation time", "si_unit": "$\\mathrm{s}$"}
   ],
   "sources": [
-    {
-      "id": "python-cylinder",
-      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
-      "symbol": "class OerstedCylinder",
-      "responsibility": "Public analytic-cylinder parameters and oersted_cylinder IR lowering."
-    },
     {
       "id": "python-field",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class OerstedField",
-      "responsibility": "Source-bound model and source validation."
+      "responsibility": "Validate and lower the exact public source, model, and stable id boundary.",
+      "test_path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "test_symbol": "test_external_lead_round_trips_through_script_and_scene_document",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/energy.py",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "python-sinusoidal",
-      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
-      "symbol": "class Sinusoidal",
-      "responsibility": "Sinusoidal envelope validation and IR serialization."
-    },
-    {
-      "id": "python-current-transport",
+      "id": "python-current",
       "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
       "symbol": "class CurrentTransport",
-      "responsibility": "Prescribed-density, source-region, and conductivity contract."
+      "responsibility": "Own the solved-current source, coupling, envelope, and conservative RT0 view request.",
+      "test_path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "test_symbol": "test_public_external_lead_example_lowers_complete_stage_contract",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "ir-validation",
-      "path": "crates/fullmag-ir/src/validation.rs",
-      "symbol": "validate_oersted_energy_terms",
-      "responsibility": "Finite-value, non-zero-axis, source-existence, and term-count validation."
+      "id": "python-closed-geometry",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentClosedGeometry",
+      "responsibility": "Validate and lower the periodic closed-conductor identity and source-cut collection.",
+      "test_path": "packages/fullmag-py/tests/test_current_transport.py",
+      "test_symbol": "test_closed_conservative_current_view_round_trips_public_surfaces",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_current_transport.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
     },
     {
-      "id": "planner-dispatch",
+      "id": "python-source-cut",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentSourceCut",
+      "responsibility": "Preserve one nonzero translation, signed potential drop, and paired cut faces.",
+      "test_path": "packages/fullmag-py/tests/test_current_transport.py",
+      "test_symbol": "test_closed_conservative_current_view_round_trips_public_surfaces",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_current_transport.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "python-source-cut-pair",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentSourceCutFacePair",
+      "responsibility": "Canonicalize distinct minus/plus source-cut boundary faces.",
+      "test_path": "packages/fullmag-py/tests/test_current_transport.py",
+      "test_symbol": "test_closed_conservative_current_view_round_trips_public_surfaces",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_current_transport.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "python-lead",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentExternalLead",
+      "responsibility": "Preserve the typed volumetric external-lead closure.",
+      "test_path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "test_symbol": "test_external_lead_is_typed_and_serializes_complete_mesh_contract",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip; source/test worktree-uncommitted; immutable publication anchor unavailable",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "python-pair",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentLeadInterfacePair",
+      "responsibility": "Canonicalize oriented device-to-lead interface face pairs.",
+      "test_path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "test_symbol": "test_external_lead_is_typed_and_serializes_complete_mesh_contract",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip; source/test worktree-uncommitted; immutable publication anchor unavailable",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "python-view",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentView",
+      "responsibility": "Preserve immutable accepted-current identity, pins, closure, and physical gates.",
+      "test_path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "test_symbol": "test_external_lead_round_trips_through_script_and_scene_document",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "planner-current",
       "path": "crates/fullmag-plan/src/oersted.rs",
-      "symbol": "resolve_oersted_term",
-      "responsibility": "Common analytic-cylinder and source-bound dispatch."
+      "symbol": "resolve_solved_current_source",
+      "responsibility": "Resolve the named solved-current source and fail closed on incompatible requests.",
+      "test_path": "crates/fullmag-plan/src/spin_transport.rs",
+      "test_symbol": "fem_ohmic_oersted_binds_the_solved_charge_field",
+      "lane": "planner",
+      "evidence_status": "source mapped; focused planner contract",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/oersted.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_transport.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
     },
     {
-      "id": "planner-fem",
-      "path": "crates/fullmag-plan/src/oersted.rs",
-      "symbol": "resolve_fem_oersted_term",
-      "responsibility": "FEM analytic-cylinder or midpoint realization selection."
+      "id": "planner-closure",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_m1_fem_spin_transport",
+      "responsibility": "Preflight the bounded FEM current and closure contract.",
+      "test_path": "crates/fullmag-plan/src/spin_transport.rs",
+      "test_symbol": "planner_rejects_duplicate_boundary_and_accepts_complete_external_lead_view",
+      "lane": "FEM CPU planner",
+      "evidence_status": "source mapped; focused planner contract; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_transport.rs",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "planner-fdm",
-      "path": "crates/fullmag-plan/src/oersted.rs",
-      "symbol": "resolve_fdm_oersted_term",
-      "responsibility": "FDM analytic-cylinder or midpoint realization selection."
+      "id": "rt0-runner",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_steady_transport_rt0",
+      "responsibility": "Construct and verify the bounded immutable RT0 current view.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "midpoint-fem",
-      "path": "crates/fullmag-plan/src/oersted.rs",
-      "symbol": "midpoint_biot_savart_field",
-      "responsibility": "Tet4 centroid quadrature and equivalent-volume regularization."
+      "id": "native-current-solve",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.hpp",
+      "symbol": "class SteadyTransportOracle",
+      "responsibility": "Own the FEM potential solve and charge-current constitutive response consumed by RT0.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/transport/steady_transport.hpp",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "midpoint-fdm",
-      "path": "crates/fullmag-plan/src/oersted.rs",
-      "symbol": "midpoint_biot_savart_grid_field",
-      "responsibility": "FDM cell-centre quadrature and active-source-cell limit."
+      "id": "native-rt0-view",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp",
+      "symbol": "class ConservativeCurrentView",
+      "responsibility": "Own the immutable conservative RT0/H(div) current representation.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/transport/conservative_current_view.hpp",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "fdm-cpu",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "symbol": "oersted_field_add_into",
-      "responsibility": "FDM CPU analytic-cylinder field addition."
+      "id": "oe-f1-operator",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp",
+      "symbol": "class DirectTetraQuadrature",
+      "responsibility": "Evaluate bounded cutoff-free direct tetrahedral OE-F1 quadrature.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "fdm-cuda",
-      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
-      "symbol": "context_precompute_oersted_field",
-      "responsibility": "FDM CUDA unit-current basis generation and upload."
+      "id": "oe-f2-operator",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.hpp",
+      "symbol": "class VectorPotentialSolver",
+      "responsibility": "Evaluate the bounded mixed vector-potential OE-F2 realization.",
+      "test_path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
+      "test_symbol": "vector_potential_exact_sequence_contract",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/interactions/oersted/vector_potential.hpp",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/tests/oersted_vector_potential_contract.cpp",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
     },
     {
-      "id": "fem-cpu-cylinder",
-      "path": "backends/fem/cpu/mfem/interactions/oersted_cylinder.cpp",
-      "symbol": "initialize_oersted_cylinder_field",
-      "responsibility": "FEM CPU analytic-cylinder nodal basis."
+      "id": "oe-f1-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_rt0_oersted_v1",
+      "responsibility": "Expose the append-only native OE-F1 request/result ABI.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "lane": "FEM CPU ABI",
+      "evidence_status": "bounded append-only ABI contract; not production qualification; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/native/include/fullmag_fem.h",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "fem-cpu-dispatch",
-      "path": "backends/fem/cpu/mfem/interactions/oersted.cpp",
-      "symbol": "add_oersted_field",
-      "responsibility": "FEM CPU realized-field dispatch."
+      "id": "oe-f2-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1",
+      "responsibility": "Expose the append-only native OE-F2 request/result ABI.",
+      "test_path": "backends/fem/tests/steady_transport_rt0_contract.cpp",
+      "test_symbol": "run_closed_geometry_rt0_contract",
+      "lane": "FEM CPU ABI",
+      "evidence_status": "bounded append-only ABI contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/native/include/fullmag_fem.h",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/tests/steady_transport_rt0_contract.cpp",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
     },
     {
-      "id": "fem-cpu-explicit",
-      "path": "backends/fem/cpu/mfem/interactions/oersted_explicit.cpp",
-      "symbol": "add_explicit_oersted_field",
-      "responsibility": "FEM CPU final explicit field addition without cylinder rescaling."
+      "id": "lead-adapter-test",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "responsibility": "Provide bounded managed external-lead adapter execution evidence.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "lane": "FEM CPU evidence",
+      "evidence_status": "bounded managed adapter evidence; not production qualification; source/test worktree-uncommitted; immutable publication anchor unavailable",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
     },
     {
-      "id": "fem-cuda",
-      "path": "backends/fem/gpu/cuda/integrators/rk/rk_oersted_field.cu",
-      "symbol": "gpu_rk_accumulate_oersted_field",
-      "responsibility": "FEM CUDA stage-time scaling and device field accumulation."
-    },
-    {
-      "id": "relaxation-gate",
-      "path": "crates/fullmag-plan/src/validate.rs",
-      "symbol": "validate_conservative_relaxation",
-      "responsibility": "Fail-closed Oersted field-energy parity policy."
+      "id": "lead-stage-test",
+      "path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "symbol": "external_lead_stage_callback_solves_oersted_and_commits_observation",
+      "responsibility": "Provide bounded stage-callback transaction evidence.",
+      "test_path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "test_symbol": "external_lead_stage_callback_solves_oersted_and_commits_observation",
+      "lane": "FEM CPU evidence",
+      "evidence_status": "bounded managed callback evidence; not production qualification; source/test worktree-uncommitted; immutable publication anchor unavailable",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
     }
   ],
-  "symbols": [
-    {"id": "Hoe", "latex": "$\\mathbf H_{\\mathrm{oe}}$", "meaning": "Oersted effective field added to the total effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Heff", "latex": "$\\mathbf H_{\\mathrm{eff}}$", "meaning": "total effective field passed to the LLG right-hand side", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "It", "latex": "$I(t)$", "meaning": "time-dependent total current in the analytic conductor", "si_unit": "$\\mathrm{A}$"},
-    {"id": "I0", "latex": "$I_0$", "meaning": "current amplitude supplied to OerstedCylinder.current", "si_unit": "$\\mathrm{A}$"},
-    {"id": "g", "latex": "$g(t)$", "meaning": "dimensionless current envelope", "si_unit": "$1$"},
-    {"id": "R", "latex": "$R$", "meaning": "analytic cylinder radius", "si_unit": "$\\mathrm{m}$"},
-    {"id": "c", "latex": "$\\mathbf c$", "meaning": "point defining the cylinder cross-section centre", "si_unit": "$\\mathrm{m}$"},
-    {"id": "axis", "latex": "$\\hat{\\mathbf a}$", "meaning": "normalized current-flow axis", "si_unit": "$1$"},
-    {"id": "x", "latex": "$\\mathbf x$", "meaning": "destination position", "si_unit": "$\\mathrm{m}$"},
-    {"id": "xp", "latex": "$\\mathbf x'$", "meaning": "source integration position", "si_unit": "$\\mathrm{m}$"},
-    {"id": "rperp", "latex": "$\\mathbf r_\\perp$", "meaning": "displacement perpendicular to the cylinder axis", "si_unit": "$\\mathrm{m}$"},
-    {"id": "r", "latex": "$r$", "meaning": "perpendicular distance from the cylinder axis", "si_unit": "$\\mathrm{m}$"},
-    {"id": "Hphi", "latex": "$H_\\varphi$", "meaning": "azimuthal Oersted field magnitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "J", "latex": "$\\mathbf J$", "meaning": "prescribed charge-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "J0", "latex": "$\\mathbf J_0$", "meaning": "uniform prescribed current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "OmegaJ", "latex": "$\\Omega_J$", "meaning": "volume occupied by the prescribed current source", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "xs", "latex": "$\\mathbf x_s$", "meaning": "midpoint or centroid of source element $s$", "si_unit": "$\\mathrm{m}$"},
-    {"id": "Vs", "latex": "$V_s$", "meaning": "volume of source element $s$", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "as", "latex": "$a_s$", "meaning": "equivalent-sphere regularization radius", "si_unit": "$\\mathrm{m}$"},
-    {"id": "S", "latex": "$\\mathcal S$", "meaning": "selected set of source cells/elements", "si_unit": "$1$"},
-    {"id": "i", "latex": "$i$", "meaning": "destination node or cell index", "si_unit": "$1$"},
-    {"id": "f", "latex": "$f$", "meaning": "sinusoidal frequency", "si_unit": "$\\mathrm{Hz}$"},
-    {"id": "phi", "latex": "$\\phi$", "meaning": "sinusoidal phase", "si_unit": "$\\mathrm{rad}$"},
-    {"id": "o", "latex": "$o$", "meaning": "sinusoidal envelope offset", "si_unit": "$1$"},
-    {"id": "ton", "latex": "$t_{\\mathrm{on}}$", "meaning": "pulse activation time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "toff", "latex": "$t_{\\mathrm{off}}$", "meaning": "pulse deactivation time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"}
-  ],
-  "equations": [
-    {"id": "eq-oersted-perpendicular-vector", "symbols": ["rperp", "x", "c", "axis", "r"], "sources": ["fem-cpu-cylinder", "fdm-cpu"]},
-    {"id": "eq-oersted-cylinder-magnitude", "symbols": ["Hphi", "It", "R", "r"], "sources": ["fem-cpu-cylinder", "fem-cpu-dispatch", "fdm-cpu", "fdm-cuda"]},
-    {"id": "eq-oersted-cylinder-vector", "symbols": ["Hoe", "Hphi", "axis", "rperp", "r"], "sources": ["fem-cpu-cylinder", "fdm-cpu"]},
-    {"id": "eq-oersted-current-envelope", "symbols": ["It", "I0", "g"], "sources": ["fem-cpu-dispatch", "fem-cuda", "fdm-cpu"]},
-    {"id": "eq-oersted-time-envelopes", "symbols": ["g", "f", "phi", "o", "ton", "toff"], "sources": ["fem-cpu-dispatch", "fem-cuda", "fdm-cpu"]},
-    {"id": "eq-oersted-biot-savart", "symbols": ["Hoe", "J", "x", "xp", "OmegaJ"], "sources": ["planner-fem", "planner-fdm"]},
-    {"id": "eq-oersted-midpoint", "symbols": ["Hoe", "J", "i", "S", "xs", "as", "Vs"], "sources": ["midpoint-fem", "midpoint-fdm"]},
-    {"id": "eq-oersted-current-reduction", "symbols": ["It", "J0", "axis", "R"], "sources": ["planner-dispatch", "planner-fem", "planner-fdm"]}
+  "evidence_tests": [
+    {
+      "path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "symbol": "test_external_lead_round_trips_through_script_and_scene_document",
+      "claims": [
+        "python-field",
+        "python-current",
+        "python-lead",
+        "python-pair",
+        "python-view"
+      ]
+    },
+    {
+      "path": "packages/fullmag-py/tests/test_current_transport.py",
+      "symbol": "test_closed_conservative_current_view_round_trips_public_surfaces",
+      "claims": [
+        "python-closed-geometry",
+        "python-source-cut",
+        "python-source-cut-pair"
+      ]
+    },
+    {
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "planner_rejects_duplicate_boundary_and_accepts_complete_external_lead_view",
+      "claims": [
+        "planner-current",
+        "planner-closure"
+      ]
+    },
+    {
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit",
+      "claims": [
+        "rt0-runner",
+        "native-current-solve",
+        "native-rt0-view",
+        "oe-f1-operator",
+        "oe-f1-abi",
+        "lead-adapter-test"
+      ]
+    },
+    {
+      "path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
+      "symbol": "vector_potential_exact_sequence_contract",
+      "claims": [
+        "oe-f2-operator"
+      ]
+    },
+    {
+      "path": "backends/fem/tests/steady_transport_rt0_contract.cpp",
+      "symbol": "run_closed_geometry_rt0_contract",
+      "claims": [
+        "oe-f2-abi"
+      ]
+    },
+    {
+      "path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "symbol": "external_lead_stage_callback_solves_oersted_and_commits_observation",
+      "claims": [
+        "lead-stage-test"
+      ]
+    }
   ],
   "public_api": {
     "parameters": [
-      {"python": "OerstedCylinder.current", "type": "float", "default": "required", "si_unit": "$\\mathrm{A}$", "validation": "Python converts to float; ProblemIR requires finite", "meaning": "signed current amplitude and chirality", "backend_support": "FDM/FEM CPU/GPU subject to lane gates", "problem_ir": "energy_terms[].current"},
-      {"python": "OerstedCylinder.radius", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite and strictly positive in Python", "meaning": "cylinder radius", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "energy_terms[].radius"},
-      {"python": "OerstedCylinder.center", "type": "Sequence[float]", "default": "(0, 0, 0)", "si_unit": "$\\mathrm{m}$ per component", "validation": "exactly three values in Python; finite values required by IR", "meaning": "cross-section centre", "backend_support": "FEM CPU/GPU; FDM CPU; CUDA geometry constraints apply", "problem_ir": "energy_terms[].center"},
-      {"python": "OerstedCylinder.axis", "type": "Sequence[float]", "default": "(0, 0, 1)", "si_unit": "$1$", "validation": "exactly three values in Python; finite and non-zero in IR; CUDA requires exact +z", "meaning": "current-flow axis", "backend_support": "FEM CPU/GPU; FDM CPU/GPU with CUDA gate", "problem_ir": "energy_terms[].axis"},
-      {"python": "OerstedCylinder.time_dependence", "type": "TimeDependence or None", "default": "None", "si_unit": "$1$", "validation": "supported envelope object; planner rejects PWL/Sinc and CUDA non-Constant", "meaning": "current envelope", "backend_support": "CPU supports Constant/Sinusoidal/Pulse; CUDA currently Constant only", "problem_ir": "energy_terms[].time_dependence"},
-      {"python": "OerstedField.model", "type": "str", "default": "from_current_solution", "si_unit": "$1$", "validation": "only from_current_solution", "meaning": "source-bound realization selector", "backend_support": "FDM/FEM lanes subject to source resolution", "problem_ir": "energy_terms[].model"},
-      {"python": "OerstedField.source", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty; must name a CurrentTransport in Problem.current_modules", "meaning": "current source binding", "backend_support": "FDM/FEM lanes subject to source resolution", "problem_ir": "energy_terms[].source"},
-      {"python": "Constant()", "type": "constructor", "default": "—", "si_unit": "$1$", "validation": "no parameters; lowers to constant envelope", "meaning": "unit current envelope", "backend_support": "FDM/FEM CPU/GPU, subject to realization", "problem_ir": "energy_terms[].time_dependence.kind"},
-      {"python": "Sinusoidal.frequency_hz", "type": "float", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "finite and strictly positive", "meaning": "sinusoidal frequency", "backend_support": "FDM/FEM CPU; CUDA rejected for Oersted cylinder", "problem_ir": "...time_dependence.frequency_hz"},
-      {"python": "Sinusoidal.phase_rad", "type": "float", "default": "0", "si_unit": "$\\mathrm{rad}$", "validation": "finite", "meaning": "phase at t=0", "backend_support": "FDM/FEM CPU; CUDA rejected for Oersted cylinder", "problem_ir": "...time_dependence.phase_rad"},
-      {"python": "Sinusoidal.offset", "type": "float", "default": "0", "si_unit": "$1$", "validation": "finite", "meaning": "dimensionless DC offset in envelope", "backend_support": "FDM/FEM CPU; CUDA rejected for Oersted cylinder", "problem_ir": "...time_dependence.offset"},
-      {"python": "Pulse.t_on", "type": "float", "default": "required", "si_unit": "$\\mathrm{s}$", "validation": "finite and strictly less than t_off", "meaning": "activation edge, included", "backend_support": "FDM/FEM CPU; CUDA rejected for Oersted cylinder", "problem_ir": "...time_dependence.t_on"},
-      {"python": "Pulse.t_off", "type": "float", "default": "required", "si_unit": "$\\mathrm{s}$", "validation": "finite and strictly greater than t_on", "meaning": "deactivation edge, excluded", "backend_support": "FDM/FEM CPU; CUDA rejected for Oersted cylinder", "problem_ir": "...time_dependence.t_off"},
-      {"python": "PiecewiseLinear.points", "type": "Sequence[Sequence[float]]", "default": "required", "si_unit": "$\\mathrm{s}$ / $1$ per pair", "validation": "at least two finite pairs; times strictly increasing; planner rejects for Oersted", "meaning": "piecewise envelope authored but not executable here", "backend_support": "Python representation only for this interaction", "problem_ir": "...time_dependence.points"},
-      {"python": "SincPulse.cutoff_hz", "type": "float", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "finite and positive", "meaning": "normalized sinc cutoff", "backend_support": "Python representation only for this interaction", "problem_ir": "...time_dependence.cutoff_hz"},
-      {"python": "SincPulse.t0", "type": "float", "default": "0", "si_unit": "$\\mathrm{s}$", "validation": "finite and non-negative", "meaning": "sinc centre time", "backend_support": "Python representation only for this interaction", "problem_ir": "...time_dependence.t0"},
-      {"python": "SincPulse.amplitude", "type": "float", "default": "1", "si_unit": "$1$", "validation": "finite", "meaning": "sinc amplitude", "backend_support": "Python representation only for this interaction", "problem_ir": "...time_dependence.amplitude"},
-      {"python": "CurrentTransport.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "named source referenced by OerstedField.source", "backend_support": "common source API; planner checks lane", "problem_ir": "current_modules[].name"},
-      {"python": "CurrentTransport.model", "type": "str", "default": "prescribed_density", "si_unit": "$1$", "validation": "prescribed_density or ohmic_poisson", "meaning": "current transport model", "backend_support": "prescribed density is executable Oersted source; Ohmic is semantic-only", "problem_ir": "current_modules[].model"},
-      {"python": "CurrentTransport.current_density", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-2}}$", "validation": "exactly three values when supplied; required for prescribed density; forbidden for Ohmic", "meaning": "uniform source current density", "backend_support": "FDM/FEM source-bound path subject to geometry and parallelism", "problem_ir": "current_modules[].current_density"},
-      {"python": "CurrentTransport.solve_region", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "non-empty when supplied; required by from_current_solution", "meaning": "geometry or region used as current source", "backend_support": "FDM/FEM source-bound path", "problem_ir": "current_modules[].solve_region"},
-      {"python": "CurrentTransport.conductivity_s_per_m", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{S\\,m^{-1}}$", "validation": "finite and positive when supplied", "meaning": "conductivity metadata for transport", "backend_support": "not used by prescribed-density Oersted lowering", "problem_ir": "current_modules[].conductivity_s_per_m"},
-      {"python": "SaveField(\"H_oe\", every=...)", "type": "field request", "default": "—", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "requires one Oersted term and a lane that materializes H_oe", "meaning": "sampled realized Oersted field", "backend_support": "planner/lane-dependent", "problem_ir": "study.sampling.outputs[]"}
+      {
+        "python": "OerstedField.source",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and names one `CurrentTransport`",
+        "meaning": "solved-current source binding",
+        "backend_support": "planner-scoped; canonical OE-F1/OE-F2 are FEM CPU bounded slices",
+        "problem_ir": "energy_terms[].source"
+      },
+      {
+        "python": "OerstedField.model",
+        "type": "from_current_solution",
+        "default": "from_current_solution",
+        "si_unit": "$1$",
+        "validation": "no alternate canonical model accepted",
+        "meaning": "solved-source semantic identity",
+        "backend_support": "FDM/FEM authoring; realization is planner-scoped",
+        "problem_ir": "energy_terms[].model"
+      },
+      {
+        "python": "OerstedField.id",
+        "type": "str or None",
+        "default": "oersted:{source}",
+        "si_unit": "$1$",
+        "validation": "non-empty after normalization",
+        "meaning": "stable energy-term identity",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "energy_terms[].id"
+      },
+      {
+        "python": "CurrentTransport.model",
+        "type": "prescribed_density or ohmic_poisson",
+        "default": "prescribed_density",
+        "si_unit": "$1$",
+        "validation": "solved-current FEM requires `ohmic_poisson`",
+        "meaning": "charge-source model",
+        "backend_support": "bounded FEM CPU solved-current slice",
+        "problem_ir": "current_modules[].model"
+      },
+      {
+        "python": "CurrentTransport.coupling",
+        "type": "one_way or bidirectional",
+        "default": "one_way",
+        "si_unit": "$1$",
+        "validation": "closure-aware RT0 external lead currently requires one-way",
+        "meaning": "source coupling",
+        "backend_support": "FEM CPU one-way bounded; reciprocal closure-aware RT0 fails closed",
+        "problem_ir": "current_modules[].coupling"
+      },
+      {
+        "python": "CurrentTransport.time_envelope",
+        "type": "TimeEnvelope or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "canonical finite envelope; unresolved tabulated artifact fails closed",
+        "meaning": "exact-stage source multiplier",
+        "backend_support": "bounded CPU callback for supported non-tabulated envelopes",
+        "problem_ir": "current_modules[].time_envelope"
+      },
+      {
+        "python": "CurrentTransport.conservative_current_view",
+        "type": "ConservativeCurrentView or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "one-way Ohmic FEM, complete stable IDs, faces, pins, closure, and positive gates",
+        "meaning": "immutable RT0/H(div) source request",
+        "backend_support": "FEM CPU bounded; no GPU or reciprocal closure lane",
+        "problem_ir": "current_modules[].conservative_current_view"
+      },
+      {
+      "python": "ConservativeCurrentClosedGeometry.operator_version",
+          "type": "str",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "exactly `fem_closed_current_geometry.v1`",
+          "meaning": "closed-geometry operator identity",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.operator_version"
+        },
+        {
+      "python": "ConservativeCurrentClosedGeometry.revision",
+          "type": "str",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "non-empty",
+          "meaning": "closed-geometry revision",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.revision"
+        },
+        {
+      "python": "ConservativeCurrentClosedGeometry.digest",
+          "type": "str",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "non-empty and provenance-matched",
+          "meaning": "closed-geometry identity digest",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.digest"
+        },
+        {
+      "python": "ConservativeCurrentClosedGeometry.source_cuts",
+          "type": "Sequence[ConservativeCurrentSourceCut]",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "non-empty typed sequence",
+          "meaning": "periodic source-cut definitions",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts"
+        },
+        {
+      "python": "ConservativeCurrentSourceCut.id",
+          "type": "str",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "non-empty",
+          "meaning": "source-cut circuit identity",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts[].id"
+        },
+        {
+      "python": "ConservativeCurrentSourceCut.translation_m",
+          "type": "Sequence[float]",
+          "default": "required",
+          "si_unit": "$\\mathrm{m}$",
+          "validation": "finite nonzero three-vector",
+          "meaning": "periodic translation vector",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts[].translation_m"
+        },
+        {
+      "python": "ConservativeCurrentSourceCut.potential_drop_v",
+          "type": "float",
+          "default": "required",
+          "si_unit": "$\\mathrm{V}$",
+          "validation": "finite and signed; zero is permitted",
+          "meaning": "signed periodic potential drop",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts[].potential_drop_v"
+        },
+        {
+      "python": "ConservativeCurrentSourceCut.face_pairs",
+          "type": "Sequence[ConservativeCurrentSourceCutFacePair]",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "non-empty typed sequence",
+          "meaning": "minus/plus periodic face pairing",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts[].face_pairs"
+        },
+        {
+      "python": "ConservativeCurrentSourceCutFacePair.minus_face_vertex_ids",
+          "type": "Sequence[int]",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "exactly three distinct positive ids, canonicalized",
+          "meaning": "minus-side source-cut face",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts[].face_pairs[].minus_face_vertex_ids"
+        },
+        {
+      "python": "ConservativeCurrentSourceCutFacePair.plus_face_vertex_ids",
+          "type": "Sequence[int]",
+          "default": "required",
+          "si_unit": "$1$",
+          "validation": "exactly three distinct positive ids, canonicalized and different from minus",
+          "meaning": "plus-side source-cut face",
+          "backend_support": "FEM CPU bounded",
+          "problem_ir": "current_modules[].conservative_current_view.closure.source_cuts[].face_pairs[].plus_face_vertex_ids"
+        },
+      {
+        "python": "ConservativeCurrentExternalLead.operator_version",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "exactly `fem_closed_current_extension.v1`",
+        "meaning": "closure operator identity",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.operator_version"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "lead closure revision",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.revision"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and matched by runtime provenance",
+        "meaning": "lead geometry/closure digest",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.digest"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.drive_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "external voltage-drive identity",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.drive_id"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.outer_electrode_potential_drop_v",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{V}$",
+        "validation": "finite and nonzero",
+        "meaning": "signed outer-electrode drop",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.outer_electrode_potential_drop_v"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.lead_mesh",
+        "type": "MeshIR-compatible object",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$ for nodes",
+        "validation": "non-empty affine tet4 mesh with tri3 boundary",
+        "meaning": "volumetric lead geometry",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.lead_mesh"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.lead_conductivity_spm_per_element",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "one finite positive value per lead tet4",
+        "meaning": "lead material conductivity",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.lead_conductivity_spm_per_element"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.lead_stable_vertex_ids",
+        "type": "Sequence[int]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "one unique positive id per lead node",
+        "meaning": "numbering-independent lead identity",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.lead_stable_vertex_ids"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.interface_pairs",
+        "type": "Sequence[ConservativeCurrentLeadInterfacePair]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty, unique, canonical tri3 face pairs",
+        "meaning": "conservative device--lead trace pairing",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.interface_pairs"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.minus_outer_electrode_face_vertex_ids",
+        "type": "Sequence[tri3 ids]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty canonical lead boundary faces",
+        "meaning": "negative-side outer electrode",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.minus_outer_electrode_face_vertex_ids"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.plus_outer_electrode_face_vertex_ids",
+        "type": "Sequence[tri3 ids]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty, disjoint canonical lead boundary faces",
+        "meaning": "positive-side outer electrode",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.plus_outer_electrode_face_vertex_ids"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead.lead_conductivity_digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and provenance-matched",
+        "meaning": "conductivity-field identity",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.lead_conductivity_digest"
+      },
+      {
+        "python": "ConservativeCurrentLeadInterfacePair.transport_face_vertex_ids",
+        "type": "Sequence[int]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "three distinct positive canonical device ids",
+        "meaning": "device-side interface face",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.interface_pairs[][0]"
+      },
+      {
+        "python": "ConservativeCurrentLeadInterfacePair.lead_face_vertex_ids",
+        "type": "Sequence[int]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "three distinct positive canonical lead ids",
+        "meaning": "lead-side interface face",
+        "backend_support": "FEM CPU bounded",
+        "problem_ir": "current_modules[].conservative_current_view.closure.interface_pairs[][1]"
+      },
+      {
+        "python": "CurrentTransport.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "current-module identity",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "current_modules[].name"
+      },
+      {
+        "python": "CurrentTransport.domain",
+        "type": "Sequence[RegionRef]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "non-empty for solved current",
+        "meaning": "conducting domain",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].domain"
+      },
+      {
+        "python": "CurrentTransport.materials",
+        "type": "Sequence[ChargeTransportMaterialAssignment]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "complete typed region coverage",
+        "meaning": "conductivity assignments",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].materials"
+      },
+      {
+        "python": "CurrentTransport.boundaries",
+        "type": "Sequence[ChargeBoundary]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "typed, non-overlapping surface ownership",
+        "meaning": "charge boundary set",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].boundaries"
+      },
+      {
+        "python": "CurrentTransport.gauge",
+        "type": "ChargePotentialGauge or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "mandatory and compatible with closure",
+        "meaning": "potential gauge",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].gauge"
+      },
+      {
+        "python": "CurrentTransport.solver",
+        "type": "ChargeSolverPolicy or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "engine/operator/residual versions must agree",
+        "meaning": "current solver policy",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver"
+      },
+      {
+        "python": "ChargeTransportMaterialAssignment.region",
+        "type": "RegionRef",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "resolvable conducting region",
+        "meaning": "assignment target",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].materials[].region"
+      },
+      {
+        "python": "ChargeTransportMaterialAssignment.material",
+        "type": "ChargeTransportMaterial",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed material",
+        "meaning": "assigned conductivity",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].materials[].material"
+      },
+      {
+        "python": "ChargeTransportMaterial.sigma_Spm",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "finite and positive",
+        "meaning": "scalar charge conductivity",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].materials[].material.sigma_Spm"
+      },
+      {
+        "python": "ChargeInsulating.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "insulating-boundary identity",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].boundaries[].id"
+      },
+      {
+        "python": "ChargeInsulating.surfaces",
+        "type": "Sequence[SurfaceRef]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty typed surfaces",
+        "meaning": "zero-normal-current support",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].boundaries[].surfaces"
+      },
+      {
+        "python": "ChargePotentialGauge.kind",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "`dirichlet_reference` or `zero_mean`",
+        "meaning": "charge-potential null-space policy",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].gauge"
+      },
+      {
+        "python": "ChargeSolverPolicy.engine",
+        "type": "str",
+        "default": "cg",
+        "si_unit": "$1$",
+        "validation": "`cg` or `block_gmres`; must match operator",
+        "meaning": "linear engine",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver.engine"
+      },
+      {
+        "python": "ChargeSolverPolicy.relative_tolerance",
+        "type": "float",
+        "default": "1e-10",
+        "si_unit": "$1$",
+        "validation": "finite and positive",
+        "meaning": "relative tolerance",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver.linear.relative_tolerance"
+      },
+      {
+        "python": "ChargeSolverPolicy.absolute_tolerance",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$1$",
+        "validation": "finite and non-negative",
+        "meaning": "absolute tolerance",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver.linear.absolute_tolerance"
+      },
+      {
+        "python": "ChargeSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "10000",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "iteration cap",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver.linear.max_iterations"
+      },
+      {
+        "python": "ChargeSolverPolicy.physical_residual_version",
+        "type": "str",
+        "default": "charge_balance_integrated_l2.v1",
+        "si_unit": "$1$",
+        "validation": "exact supported charge-balance version",
+        "meaning": "physical residual contract",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver.physical_residual_version"
+      },
+      {
+        "python": "ChargeSolverPolicy.operator_version",
+        "type": "str",
+        "default": "fv_charge_harmonic_v1",
+        "si_unit": "$1$",
+        "validation": "exact lane-compatible version",
+        "meaning": "current operator",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].solver.operator_version"
+      },
+      {
+        "python": "ConservativeCurrentView.stable_vertex_ids",
+        "type": "Sequence[int]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty unique positive ids",
+        "meaning": "numbering-independent device vertices",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.stable_vertex_ids"
+      },
+      {
+        "python": "ConservativeCurrentView.boundary_faces",
+        "type": "Sequence[ConservativeCurrentBoundaryFace]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty complete canonical face classification",
+        "meaning": "closure/outer-face ownership",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.boundary_faces"
+      },
+      {
+        "python": "ConservativeCurrentView.identity",
+        "type": "ConservativeCurrentIdentity",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed immutable identity",
+        "meaning": "accepted source identity",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity"
+      },
+      {
+        "python": "ConservativeCurrentView.pins",
+        "type": "ConservativeCurrentPins",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed required revisions/digests",
+        "meaning": "preflight pins",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.pins"
+      },
+      {
+        "python": "ConservativeCurrentView.closure",
+        "type": "ConservativeCurrentClosedGeometry or ConservativeCurrentExternalLead",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed complete circuit closure",
+        "meaning": "closure realization",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.closure"
+      },
+      {
+        "python": "ConservativeCurrentView.algebraic_relative_tolerance",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite and positive",
+        "meaning": "algebraic RT0 acceptance tolerance",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.algebraic_relative_tolerance"
+      },
+      {
+        "python": "ConservativeCurrentView.physical_relative_gate",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite and positive",
+        "meaning": "relative physical-balance gate",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.physical_relative_gate"
+      },
+      {
+        "python": "ConservativeCurrentView.physical_absolute_gate_a",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{A}$",
+        "validation": "finite and positive",
+        "meaning": "absolute current-balance gate",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.physical_absolute_gate_a"
+      },
+      {
+        "python": "ConservativeCurrentView.reference_mpi_gather_broadcast",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "$1$",
+        "validation": "boolean",
+        "meaning": "bounded reference MPI assembly switch",
+        "backend_support": "bounded FEM CPU only",
+        "problem_ir": "current_modules[].conservative_current_view.reference_mpi_gather_broadcast"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.source_module_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted current module",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.source_module_id"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.source_state_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted state revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.source_state_revision"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.source_field_digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted current-field digest",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.source_field_digest"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.conductivity_digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted conductivity digest",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.conductivity_digest"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.mesh_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted mesh revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.mesh_revision"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.topology_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted topology revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.topology_revision"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.geometry_digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "accepted geometry digest",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.geometry_digest"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.envelope_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "envelope revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.envelope_revision"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.envelope_digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "envelope digest",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.envelope_digest"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.evaluated_envelope_multiplier",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite and signed",
+        "meaning": "evaluated source multiplier",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.evaluated_envelope_multiplier"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.evaluation_time_s",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{s}$",
+        "validation": "finite",
+        "meaning": "source observation time",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.evaluation_time_s"
+      },
+      {
+        "python": "ConservativeCurrentIdentity.stage_identity",
+        "type": "int",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "accepted stage identity",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.identity.stage_identity"
+      },
+      {
+        "python": "ConservativeCurrentPins.required_source_state_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "required state revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.pins.required_source_state_revision"
+      },
+      {
+        "python": "ConservativeCurrentPins.required_source_field_digest",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "required field digest",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.pins.required_source_field_digest"
+      },
+      {
+        "python": "ConservativeCurrentPins.required_mesh_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "required mesh revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.pins.required_mesh_revision"
+      },
+      {
+        "python": "ConservativeCurrentPins.required_topology_revision",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "required topology revision",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.pins.required_topology_revision"
+      },
+      {
+        "python": "ConservativeCurrentBoundaryFace.face_vertex_ids",
+        "type": "Sequence[int]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "exactly three distinct positive ids, canonicalized",
+        "meaning": "device boundary face",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.boundary_faces[].face_vertex_ids"
+      },
+      {
+        "python": "ConservativeCurrentBoundaryFace.role",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "insulating_outer`, `source_cut`, or `closure_interface",
+        "meaning": "boundary role",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.boundary_faces[].role"
+      },
+      {
+        "python": "ConservativeCurrentBoundaryFace.circuit_id",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required except for insulating outer faces",
+        "meaning": "closure circuit identity",
+        "backend_support": "bounded FEM CPU",
+        "problem_ir": "current_modules[].conservative_current_view.boundary_faces[].circuit_id"
+      }
     ]
   }
 }

@@ -1,12 +1,342 @@
 import { describe, expect, it } from "vitest";
+import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
+  FDM_SINGLE_GRID_MULTI_BODY_REASON,
+  isExplicitFdmStudy,
+  normalizeDemagRealizationForLane,
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 
+function activeLaneSnapshot({
+  device,
+  mode,
+  operations,
+  precision,
+}: {
+  device: string;
+  mode: string;
+  operations: ActiveLaneCapabilitySnapshot["operations"];
+  precision: string;
+}): ActiveLaneCapabilitySnapshot {
+  const identity = {
+    backend: "fdm",
+    device,
+    discretization: "fdm",
+    mode,
+    precision,
+  };
+  return {
+    schema_version: "active-lane-capabilities.v2",
+    authored: identity,
+    requested: identity,
+    resolved: identity,
+    source: {
+      kind: "planner",
+      capability_profile_version: "test",
+      engine_id: "test-fdm",
+      authored_intent: "problem_ir.runtime_selection",
+      effective_request: "session.runtime_resolution",
+    },
+    qualification: { status: "not_asserted", reason: "Test fixture." },
+    operations,
+  };
+}
+
 describe("StudyGlobalAuthoringModel", () => {
+  it.each([
+    ["cpu", "double", "strict"],
+    ["gpu", "single", "extended"],
+  ])(
+    "trusts planner global-study operation state on %s/%s/%s",
+    (device, precision, mode) => {
+      const draft = createStudyGlobalDraft({
+        study: {
+          requested_backend: "fdm",
+          requested_device: device,
+          requested_mode: mode,
+          requested_precision: precision,
+        },
+      });
+      const activeLane = activeLaneSnapshot({
+        device,
+        mode,
+        precision,
+        operations: {
+          "study.relaxation": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Relaxation is supported for this resolved lane.",
+            requires: [],
+          },
+          "study.time_integration": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Time integration is supported for this resolved lane.",
+            requires: [],
+          },
+        },
+      });
+
+      expect(
+        validateStudyGlobalDraft(draft, { activeLane }).filter((issue) =>
+          issue.message.includes("resolved lane"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("fails closed when the global draft has no active-lane capability snapshot", () => {
+    const draft = createStudyGlobalDraft({ study: {} });
+
+    expect(validateStudyGlobalDraft(draft, { activeLane: null })).toContainEqual({
+      message: "Active-lane capability snapshot is unavailable.",
+      severity: "error",
+    });
+  });
+
+  it("recognizes only an explicit FDM request or session discretization", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        sessionDiscretization: "auto",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fem",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(false);
+  });
+
+  it("prioritizes an explicit requested backend over stale resolved session state", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fem",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+  });
+
+  it("prioritizes an explicit requested discretization over stale resolved session state", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        requestedDiscretization: "fem",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        requestedDiscretization: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+  });
+
+  it("lets hybrid backend intent defer to requested or resolved discretization", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        requestedDiscretization: "fdm",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        requestedDiscretization: "fem",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(false);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(true);
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "hybrid",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe(false);
+  });
+
+  it("falls through auto and remains unresolved without any concrete lane", () => {
+    expect(
+      isExplicitFdmStudy({
+        requestedBackend: "auto",
+        requestedDiscretization: undefined,
+        sessionDiscretization: "fdm",
+      }),
+    ).toBe(true);
+    expect(isExplicitFdmStudy({})).toBe(false);
+  });
+
+  it("does not serialize the FEM solver policy for an explicit FDM study", () => {
+    const request = buildStudyGlobalMergePatch(
+      {
+        ...createStudyGlobalDraft({
+          study: {
+            requested_backend: "auto",
+            fem_demag_solver_policy: { solver: "CG" },
+          },
+        }),
+        demagRealization: "multilayer_convolution",
+      },
+      { sessionDiscretization: "fdm" },
+    );
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: null,
+      fem_demag_solver_policy: null,
+      fdm: {
+        demag: { strategy: "multilayer_convolution" },
+      },
+    });
+  });
+
+  it("normalizes a stale FDM strategy when an auto request resolves to FEM", () => {
+    const draft = {
+      ...createStudyGlobalDraft({
+        study: {
+          requested_backend: "auto",
+          demag_realization: "multilayer_convolution",
+          fem_demag_solver_policy: { solver: "CG" },
+        },
+      }),
+      demagRealization: "single_grid",
+    };
+    const request = buildStudyGlobalMergePatch(draft, {
+      sessionDiscretization: "fem",
+    });
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: "auto",
+      fem_demag_solver_policy: { solver: "CG" },
+    });
+    expect(
+      normalizeDemagRealizationForLane("multilayer_convolution", {
+        requestedBackend: "auto",
+        sessionDiscretization: "fem",
+      }),
+    ).toBe("auto");
+  });
+
+  it("honors requestedDiscretization when no backend field is explicit", () => {
+    const draft = {
+      ...createStudyGlobalDraft({
+        study: { requested_backend: "auto" },
+      }),
+      demagRealization: "multilayer_convolution",
+    };
+    const request = buildStudyGlobalMergePatch(draft, {
+      requestedDiscretization: "fdm",
+      sessionDiscretization: "fem",
+    });
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: null,
+      fdm: {
+        demag: { strategy: "multilayer_convolution" },
+      },
+    });
+    expect(
+      normalizeDemagRealizationForLane("single_grid", {
+        requestedDiscretization: "fem",
+      }),
+    ).toBe("auto");
+  });
+
+  it("validates FDM demag strategies without applying FEM policy validation", () => {
+    const draft = {
+      ...createStudyGlobalDraft({ study: { requested_backend: "fdm" } }),
+      demagRealization: "poisson_robin",
+      femDemagSolverPolicy: "not-json",
+    };
+    expect(
+      validateStudyGlobalDraft(draft, {
+        algorithmsAvailable: [],
+        sessionDiscretization: "fdm",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "FDM demag realization must be auto, single_grid, or multilayer_convolution.",
+    ]);
+  });
+
+  it.each([
+    [0, false],
+    [1, false],
+    [2, true],
+  ])(
+    "fails closed for a programmatic single-grid FDM draft with L=%i magnets",
+    (magneticObjectCount, expectSingleGridError) => {
+      const draft = {
+        ...createStudyGlobalDraft({
+          study: {
+            requested_backend: "fdm",
+            fdm: {
+              default_cell: [2e-9, 2e-9, 1e-9],
+              demag: { strategy: "single_grid", mode: "auto" },
+            },
+          },
+        }),
+        demagRealization: "single_grid",
+      };
+      const messages = validateStudyGlobalDraft(draft, {
+        magneticObjectCount,
+        sessionDiscretization: "fdm",
+      }).map((issue) => issue.message);
+
+      expect(messages.includes(FDM_SINGLE_GRID_MULTI_BODY_REASON)).toBe(
+        expectSingleGridError,
+      );
+    },
+  );
+
+  it("keeps multilayer convolution legal for the L=1 reduction", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: {
+          default_cell: [2e-9, 2e-9, 1e-9],
+          demag: { strategy: "multilayer_convolution", mode: "auto" },
+        },
+      },
+    });
+
+    expect(validateStudyGlobalDraft(draft, {
+      magneticObjectCount: 1,
+      sessionDiscretization: "fdm",
+    })).toEqual([]);
+  });
+
   it("creates a global study draft from scene study settings", () => {
     expect(
       createStudyGlobalDraft({
@@ -49,6 +379,62 @@ describe("StudyGlobalAuthoringModel", () => {
         relaxAlgorithm: "",
         timestepMode: "auto",
         torqueTolerance: "",
+      },
+    });
+  });
+
+  it("round-trips the complete FDM demag and boundary policy", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: {
+          default_cell: [2e-9, 2e-9, 1e-9],
+          per_magnet: {
+            free: { cell: [1e-9, 1e-9, 1e-9] },
+          },
+          demag: {
+            strategy: "multilayer_convolution",
+            mode: "two_d_stack",
+            common_cells_xy: [64, 32],
+            explain: false,
+          },
+          boundary_correction: "full",
+          boundary_phi_floor: 0.1,
+          boundary_delta_min: 0.2e-9,
+        },
+      },
+    });
+
+    expect(draft.fdm).toEqual({
+      boundaryCorrection: "full",
+      boundaryDeltaMin: "2e-10",
+      boundaryPhiFloor: "0.1",
+      commonCells: "",
+      commonCellsXy: "64, 32",
+      defaultCell: "2e-9, 2e-9, 1e-9",
+      demagExplain: false,
+      demagMode: "two_d_stack",
+      demagStrategy: "multilayer_convolution",
+      perMagnet: '{"free":{"cell":[1e-9,1e-9,1e-9]}}',
+    });
+
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: null,
+      fdm: {
+        default_cell: [2e-9, 2e-9, 1e-9],
+        per_magnet: { free: { cell: [1e-9, 1e-9, 1e-9] } },
+        demag: {
+          strategy: "multilayer_convolution",
+          mode: "two_d_stack",
+          common_cells_xy: [64, 32],
+          explain: false,
+        },
+        boundary_correction: "full",
+        boundary_phi_floor: 0.1,
+        boundary_delta_min: 0.2e-9,
       },
     });
   });

@@ -338,6 +338,78 @@ __global__ void multiply_demag_tensor_kernel_fp32(
     fz[idx] = hz;
 }
 
+__global__ void accumulate_demag_tensor_kernel_fp64(
+    const cufftDoubleComplex * __restrict__ source_x,
+    const cufftDoubleComplex * __restrict__ source_y,
+    const cufftDoubleComplex * __restrict__ source_z,
+    cufftDoubleComplex * __restrict__ destination_x,
+    cufftDoubleComplex * __restrict__ destination_y,
+    cufftDoubleComplex * __restrict__ destination_z,
+    const cufftDoubleComplex * __restrict__ kxx,
+    const cufftDoubleComplex * __restrict__ kyy,
+    const cufftDoubleComplex * __restrict__ kzz,
+    const cufftDoubleComplex * __restrict__ kxy,
+    const cufftDoubleComplex * __restrict__ kxz,
+    const cufftDoubleComplex * __restrict__ kyz,
+    uint64_t total)
+{
+    uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+
+    cufftDoubleComplex mx = source_x[idx];
+    cufftDoubleComplex my = source_y[idx];
+    cufftDoubleComplex mz = source_z[idx];
+    cufftDoubleComplex hx = cneg64(cadd64(
+        cadd64(cmul64(kxx[idx], mx), cmul64(kxy[idx], my)),
+        cmul64(kxz[idx], mz)));
+    cufftDoubleComplex hy = cneg64(cadd64(
+        cadd64(cmul64(kxy[idx], mx), cmul64(kyy[idx], my)),
+        cmul64(kyz[idx], mz)));
+    cufftDoubleComplex hz = cneg64(cadd64(
+        cadd64(cmul64(kxz[idx], mx), cmul64(kyz[idx], my)),
+        cmul64(kzz[idx], mz)));
+
+    destination_x[idx] = cadd64(destination_x[idx], hx);
+    destination_y[idx] = cadd64(destination_y[idx], hy);
+    destination_z[idx] = cadd64(destination_z[idx], hz);
+}
+
+__global__ void accumulate_demag_tensor_kernel_fp32(
+    const cufftComplex * __restrict__ source_x,
+    const cufftComplex * __restrict__ source_y,
+    const cufftComplex * __restrict__ source_z,
+    cufftComplex * __restrict__ destination_x,
+    cufftComplex * __restrict__ destination_y,
+    cufftComplex * __restrict__ destination_z,
+    const cufftComplex * __restrict__ kxx,
+    const cufftComplex * __restrict__ kyy,
+    const cufftComplex * __restrict__ kzz,
+    const cufftComplex * __restrict__ kxy,
+    const cufftComplex * __restrict__ kxz,
+    const cufftComplex * __restrict__ kyz,
+    uint64_t total)
+{
+    uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+
+    cufftComplex mx = source_x[idx];
+    cufftComplex my = source_y[idx];
+    cufftComplex mz = source_z[idx];
+    cufftComplex hx = cneg32(cadd32(
+        cadd32(cmul32(kxx[idx], mx), cmul32(kxy[idx], my)),
+        cmul32(kxz[idx], mz)));
+    cufftComplex hy = cneg32(cadd32(
+        cadd32(cmul32(kxy[idx], mx), cmul32(kyy[idx], my)),
+        cmul32(kyz[idx], mz)));
+    cufftComplex hz = cneg32(cadd32(
+        cadd32(cmul32(kxz[idx], mx), cmul32(kyz[idx], my)),
+        cmul32(kzz[idx], mz)));
+
+    destination_x[idx] = cadd32(destination_x[idx], hx);
+    destination_y[idx] = cadd32(destination_y[idx], hy);
+    destination_z[idx] = cadd32(destination_z[idx], hz);
+}
+
 __global__ void pull_multilayer_h_identity_fp64_kernel(
     const cufftDoubleComplex * __restrict__ fx,
     const cufftDoubleComplex * __restrict__ fy,
@@ -601,6 +673,164 @@ bool destination_identity_grid_supported(
     return true;
 }
 
+bool check_kernel_launch(Context &ctx, const char *operation) {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, operation, err);
+        return false;
+    }
+    return true;
+}
+
+const DeviceMultilayerTensorKernel *find_multilayer_tensor_kernel(
+    const Context &ctx,
+    uint32_t dst_layer,
+    uint32_t src_layer)
+{
+    for (size_t index = 0; index < ctx.multilayer_kernels.size(); ++index) {
+        const DeviceMultilayerTensorKernel &kernel = ctx.multilayer_kernels[index];
+        if (kernel.dst_layer == dst_layer && kernel.src_layer == src_layer) {
+            return &kernel;
+        }
+    }
+    return nullptr;
+}
+
+bool classify_multilayer_batch_plan(
+    Context &ctx,
+    const char *operation,
+    bool &use_batched)
+{
+    use_batched = false;
+    if (ctx.multilayer_layers.empty() || ctx.multilayer_kernels.empty()) {
+        return true;
+    }
+
+    bool has_push_pull = false;
+    for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        if (layer.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+            has_push_pull = true;
+        } else if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_IDENTITY) {
+            ctx.last_error = std::string(operation) +
+                ": unsupported multilayer transfer kind; refusing native refresh";
+            return false;
+        }
+    }
+    if (has_push_pull) {
+        // The existing pair-wise path is kept for the explicit assisted
+        // transfer lane.  It is never labelled device-resident by the runner.
+        return true;
+    }
+
+    if (ctx.periodic_x || ctx.periodic_y || ctx.periodic_z) {
+        ctx.last_error = std::string(operation) +
+            ": periodic multilayer demag is not supported by the D-07 native lane";
+        return false;
+    }
+
+    const uint64_t layer_count = ctx.multilayer_layers.size();
+    if (layer_count > std::numeric_limits<uint32_t>::max()) {
+        ctx.last_error = std::string(operation) +
+            ": D-07 native refresh layer count exceeds uint32";
+        return false;
+    }
+    const uint64_t expected_kernel_count = layer_count * layer_count;
+    if (ctx.multilayer_kernels.size() != expected_kernel_count) {
+        ctx.last_error = std::string(operation) +
+            ": D-07 native refresh requires exactly L^2 tensor kernels";
+        return false;
+    }
+    if (ctx.multilayer_batch_component_stride >
+            std::numeric_limits<uint64_t>::max() / 3u ||
+        ctx.multilayer_batch_layer_count != layer_count ||
+        ctx.multilayer_batch_component_stride == 0 ||
+        ctx.multilayer_batch_layer_stride != ctx.multilayer_batch_component_stride * 3u ||
+        ctx.multilayer_batch_source_fft_x == nullptr ||
+        ctx.multilayer_batch_source_fft_y == nullptr ||
+        ctx.multilayer_batch_source_fft_z == nullptr ||
+        ctx.multilayer_batch_destination_fft_x == nullptr ||
+        ctx.multilayer_batch_destination_fft_y == nullptr ||
+        ctx.multilayer_batch_destination_fft_z == nullptr ||
+        !ctx.fft_plan_valid)
+    {
+        ctx.last_error = std::string(operation) +
+            ": D-07 device-resident spectra were not prepared before refresh";
+        return false;
+    }
+
+    const DeviceMultilayerLayer &first_layer = ctx.multilayer_layers.front();
+    if (!same_grid_dimensions(first_layer.native_grid, first_layer.convolution_grid) ||
+        !same_grid_cell_size(first_layer.native_grid, first_layer.convolution_grid))
+    {
+        ctx.last_error = std::string(operation) +
+            ": D-07 native refresh requires identity native/convolution grids";
+        return false;
+    }
+    for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        if (!same_grid_dimensions(layer.native_grid, first_layer.native_grid) ||
+            !same_grid_cell_size(layer.native_grid, first_layer.native_grid) ||
+            !same_grid_dimensions(layer.convolution_grid, first_layer.convolution_grid) ||
+            !same_grid_cell_size(layer.convolution_grid, first_layer.convolution_grid))
+        {
+            ctx.last_error = std::string(operation) +
+                ": D-07 native refresh requires one common identity layer grid";
+            return false;
+        }
+    }
+
+    const DeviceMultilayerTensorKernel &first_kernel = ctx.multilayer_kernels.front();
+    if (!ensure_launch_size(
+            ctx, ctx.multilayer_batch_component_stride, operation) ||
+        !ensure_launch_size(ctx, first_layer.cell_count, operation))
+    {
+        return false;
+    }
+    if (first_kernel.kernel_len != ctx.multilayer_batch_component_stride ||
+        first_layer.native_grid.nx > first_kernel.fft_grid.nx ||
+        first_layer.native_grid.ny > first_kernel.fft_grid.ny ||
+        first_layer.native_grid.nz > first_kernel.fft_grid.nz ||
+        !same_grid_cell_size(first_layer.native_grid, first_kernel.fft_grid))
+    {
+        ctx.last_error = std::string(operation) +
+            ": D-07 native refresh requires one common padded FFT grid";
+        return false;
+    }
+
+    std::vector<uint8_t> seen(expected_kernel_count, 0);
+    for (size_t index = 0; index < ctx.multilayer_kernels.size(); ++index) {
+        const DeviceMultilayerTensorKernel &kernel = ctx.multilayer_kernels[index];
+        if (kernel.src_layer >= layer_count || kernel.dst_layer >= layer_count ||
+            kernel.kernel_len != ctx.multilayer_batch_component_stride ||
+            !same_grid_dimensions(kernel.fft_grid, first_kernel.fft_grid) ||
+            !same_grid_cell_size(kernel.fft_grid, first_kernel.fft_grid) ||
+            kernel.tensor.xx == nullptr || kernel.tensor.yy == nullptr ||
+            kernel.tensor.zz == nullptr || kernel.tensor.xy == nullptr ||
+            kernel.tensor.xz == nullptr || kernel.tensor.yz == nullptr)
+        {
+            ctx.last_error = std::string(operation) +
+                ": D-07 native refresh rejected an invalid tensor descriptor";
+            return false;
+        }
+        const uint64_t pair = static_cast<uint64_t>(kernel.dst_layer) * layer_count +
+            kernel.src_layer;
+        if (seen[pair] != 0) {
+            ctx.last_error = std::string(operation) +
+                ": D-07 native refresh rejected a duplicate tensor pair";
+            return false;
+        }
+        seen[pair] = 1;
+    }
+    for (uint8_t pair_seen : seen) {
+        if (pair_seen == 0) {
+            ctx.last_error = std::string(operation) +
+                ": D-07 native refresh rejected an incomplete tensor pair catalog";
+            return false;
+        }
+    }
+    use_batched = true;
+    return true;
+}
+
 bool convolution_grid_supported(
     Context &ctx,
     const DeviceMultilayerLayer &src,
@@ -736,9 +966,335 @@ bool zero_layer_h_demag_fp32(Context &ctx, cudaStream_t stream) {
     return true;
 }
 
+void launch_multilayer_demag_field_fp64_batched(Context &ctx) {
+    if (!context_begin_compute_stream_work(ctx, "launch_multilayer_demag_field_fp64_batched")) {
+        return;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+    const uint64_t layer_count = ctx.multilayer_layers.size();
+    const uint64_t component_stride = ctx.multilayer_batch_component_stride;
+    const uint64_t layer_stride = ctx.multilayer_batch_layer_stride;
+    const fullmag_fdm_grid_desc &fft_grid = ctx.multilayer_kernels.front().fft_grid;
+    const int grid_padded = static_cast<int>((component_stride + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    ctx.multilayer_demag_stage_counters.begin_refresh(layer_count);
+    if (!zero_layer_h_demag_fp64(ctx, stream)) {
+        context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp64_batched");
+        return;
+    }
+
+    for (uint32_t src_index = 0; src_index < layer_count; ++src_index) {
+        const DeviceMultilayerLayer &src = ctx.multilayer_layers[src_index];
+        auto *source_x = static_cast<cufftDoubleComplex *>(ctx.multilayer_batch_source_fft_x) +
+            static_cast<uint64_t>(src_index) * layer_stride;
+        auto *source_y = static_cast<cufftDoubleComplex *>(ctx.multilayer_batch_source_fft_y) +
+            static_cast<uint64_t>(src_index) * layer_stride;
+        auto *source_z = static_cast<cufftDoubleComplex *>(ctx.multilayer_batch_source_fft_z) +
+            static_cast<uint64_t>(src_index) * layer_stride;
+
+        push_multilayer_m_identity_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+            static_cast<const double *>(src.m.x),
+            static_cast<const double *>(src.m.y),
+            static_cast<const double *>(src.m.z),
+            src.active_mask,
+            source_x,
+            source_y,
+            source_z,
+            src.native_grid.nx,
+            src.native_grid.ny,
+            src.native_grid.nz,
+            fft_grid.nx,
+            fft_grid.ny,
+            fft_grid.nz,
+            src.has_active_mask ? 1 : 0,
+            src.material.saturation_magnetisation);
+        if (!check_kernel_launch(ctx, "launch_multilayer_demag_field_fp64_batched(push)")) {
+            break;
+        }
+
+        cufftResult fft_err = cufftExecZ2Z(
+            ctx.fft_plan, source_x, source_x, CUFFT_FORWARD);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftExecZ2Z(multilayer batched forward)", fft_err);
+            break;
+        }
+        ctx.multilayer_demag_stage_counters.note_forward_fft();
+    }
+
+    if (ctx.last_error.empty()) {
+        for (uint32_t dst_index = 0; dst_index < layer_count; ++dst_index) {
+            const DeviceMultilayerLayer &dst = ctx.multilayer_layers[dst_index];
+            auto *destination_x = static_cast<cufftDoubleComplex *>(ctx.multilayer_batch_destination_fft_x) +
+                static_cast<uint64_t>(dst_index) * layer_stride;
+            auto *destination_y = static_cast<cufftDoubleComplex *>(ctx.multilayer_batch_destination_fft_y) +
+                static_cast<uint64_t>(dst_index) * layer_stride;
+            auto *destination_z = static_cast<cufftDoubleComplex *>(ctx.multilayer_batch_destination_fft_z) +
+                static_cast<uint64_t>(dst_index) * layer_stride;
+            const size_t bytes = static_cast<size_t>(component_stride) * sizeof(cufftDoubleComplex);
+            cudaError_t err = cudaMemsetAsync(destination_x, 0, bytes, stream);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemsetAsync(multilayer_batch_destination.x)", err);
+                break;
+            }
+            err = cudaMemsetAsync(destination_y, 0, bytes, stream);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemsetAsync(multilayer_batch_destination.y)", err);
+                break;
+            }
+            err = cudaMemsetAsync(destination_z, 0, bytes, stream);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemsetAsync(multilayer_batch_destination.z)", err);
+                break;
+            }
+
+            for (uint32_t src_index = 0; src_index < layer_count; ++src_index) {
+                const DeviceMultilayerTensorKernel *kernel =
+                    find_multilayer_tensor_kernel(ctx, dst_index, src_index);
+                if (kernel == nullptr) {
+                    ctx.last_error =
+                        "launch_multilayer_demag_field_fp64_batched: tensor pair is missing";
+                    break;
+                }
+                const auto *source_x = static_cast<const cufftDoubleComplex *>(
+                    ctx.multilayer_batch_source_fft_x) +
+                    static_cast<uint64_t>(src_index) * layer_stride;
+                const auto *source_y = static_cast<const cufftDoubleComplex *>(
+                    ctx.multilayer_batch_source_fft_y) +
+                    static_cast<uint64_t>(src_index) * layer_stride;
+                const auto *source_z = static_cast<const cufftDoubleComplex *>(
+                    ctx.multilayer_batch_source_fft_z) +
+                    static_cast<uint64_t>(src_index) * layer_stride;
+
+                accumulate_demag_tensor_kernel_fp64<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+                    source_x,
+                    source_y,
+                    source_z,
+                    destination_x,
+                    destination_y,
+                    destination_z,
+                    static_cast<const cufftDoubleComplex *>(kernel->tensor.xx),
+                    static_cast<const cufftDoubleComplex *>(kernel->tensor.yy),
+                    static_cast<const cufftDoubleComplex *>(kernel->tensor.zz),
+                    static_cast<const cufftDoubleComplex *>(kernel->tensor.xy),
+                    static_cast<const cufftDoubleComplex *>(kernel->tensor.xz),
+                    static_cast<const cufftDoubleComplex *>(kernel->tensor.yz),
+                    component_stride);
+                if (!check_kernel_launch(
+                        ctx, "launch_multilayer_demag_field_fp64_batched(accumulate)")) {
+                    break;
+                }
+                ctx.multilayer_demag_stage_counters.note_pair_accumulation();
+            }
+            if (!ctx.last_error.empty()) {
+                break;
+            }
+
+            cufftResult fft_err = cufftExecZ2Z(
+                ctx.fft_plan, destination_x, destination_x, CUFFT_INVERSE);
+            if (fft_err != CUFFT_SUCCESS) {
+                set_cufft_error(ctx, "cufftExecZ2Z(multilayer batched inverse)", fft_err);
+                break;
+            }
+            ctx.multilayer_demag_stage_counters.note_inverse_fft();
+
+            const int grid_destination = static_cast<int>(
+                (dst.cell_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            pull_multilayer_h_identity_fp64_kernel<<<grid_destination, BLOCK_SIZE, 0, stream>>>(
+                destination_x,
+                destination_y,
+                destination_z,
+                dst.active_mask,
+                static_cast<double *>(dst.h_demag.x),
+                static_cast<double *>(dst.h_demag.y),
+                static_cast<double *>(dst.h_demag.z),
+                dst.native_grid.nx,
+                dst.native_grid.ny,
+                dst.native_grid.nz,
+                fft_grid.nx,
+                fft_grid.ny,
+                dst.has_active_mask ? 1 : 0,
+                1.0 / static_cast<double>(component_stride));
+            if (!check_kernel_launch(ctx, "launch_multilayer_demag_field_fp64_batched(pull)")) {
+                break;
+            }
+        }
+    }
+
+    if (ctx.last_error.empty() &&
+        !ctx.multilayer_demag_stage_counters.matches(
+            expected_multilayer_batch_counts(layer_count)))
+    {
+        ctx.last_error =
+            "launch_multilayer_demag_field_fp64_batched: D-07 stage counter mismatch";
+    }
+    context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp64_batched");
+}
+
+void launch_multilayer_demag_field_fp32_batched(Context &ctx) {
+    if (!context_begin_compute_stream_work(ctx, "launch_multilayer_demag_field_fp32_batched")) {
+        return;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+    const uint64_t layer_count = ctx.multilayer_layers.size();
+    const uint64_t component_stride = ctx.multilayer_batch_component_stride;
+    const uint64_t layer_stride = ctx.multilayer_batch_layer_stride;
+    const fullmag_fdm_grid_desc &fft_grid = ctx.multilayer_kernels.front().fft_grid;
+    const int grid_padded = static_cast<int>((component_stride + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    ctx.multilayer_demag_stage_counters.begin_refresh(layer_count);
+    if (!zero_layer_h_demag_fp32(ctx, stream)) {
+        context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp32_batched");
+        return;
+    }
+
+    for (uint32_t src_index = 0; src_index < layer_count; ++src_index) {
+        const DeviceMultilayerLayer &src = ctx.multilayer_layers[src_index];
+        auto *source_x = static_cast<cufftComplex *>(ctx.multilayer_batch_source_fft_x) +
+            static_cast<uint64_t>(src_index) * layer_stride;
+        auto *source_y = static_cast<cufftComplex *>(ctx.multilayer_batch_source_fft_y) +
+            static_cast<uint64_t>(src_index) * layer_stride;
+        auto *source_z = static_cast<cufftComplex *>(ctx.multilayer_batch_source_fft_z) +
+            static_cast<uint64_t>(src_index) * layer_stride;
+
+        push_multilayer_m_identity_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+            static_cast<const float *>(src.m.x),
+            static_cast<const float *>(src.m.y),
+            static_cast<const float *>(src.m.z),
+            src.active_mask,
+            source_x,
+            source_y,
+            source_z,
+            src.native_grid.nx,
+            src.native_grid.ny,
+            src.native_grid.nz,
+            fft_grid.nx,
+            fft_grid.ny,
+            fft_grid.nz,
+            src.has_active_mask ? 1 : 0,
+            static_cast<float>(src.material.saturation_magnetisation));
+        if (!check_kernel_launch(ctx, "launch_multilayer_demag_field_fp32_batched(push)")) {
+            break;
+        }
+
+        cufftResult fft_err = cufftExecC2C(
+            ctx.fft_plan, source_x, source_x, CUFFT_FORWARD);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftExecC2C(multilayer batched forward)", fft_err);
+            break;
+        }
+        ctx.multilayer_demag_stage_counters.note_forward_fft();
+    }
+
+    if (ctx.last_error.empty()) {
+        for (uint32_t dst_index = 0; dst_index < layer_count; ++dst_index) {
+            const DeviceMultilayerLayer &dst = ctx.multilayer_layers[dst_index];
+            auto *destination_x = static_cast<cufftComplex *>(ctx.multilayer_batch_destination_fft_x) +
+                static_cast<uint64_t>(dst_index) * layer_stride;
+            auto *destination_y = static_cast<cufftComplex *>(ctx.multilayer_batch_destination_fft_y) +
+                static_cast<uint64_t>(dst_index) * layer_stride;
+            auto *destination_z = static_cast<cufftComplex *>(ctx.multilayer_batch_destination_fft_z) +
+                static_cast<uint64_t>(dst_index) * layer_stride;
+            const size_t bytes = static_cast<size_t>(component_stride) * sizeof(cufftComplex);
+            cudaError_t err = cudaMemsetAsync(destination_x, 0, bytes, stream);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemsetAsync(multilayer_batch_destination.x)", err);
+                break;
+            }
+            err = cudaMemsetAsync(destination_y, 0, bytes, stream);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemsetAsync(multilayer_batch_destination.y)", err);
+                break;
+            }
+            err = cudaMemsetAsync(destination_z, 0, bytes, stream);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemsetAsync(multilayer_batch_destination.z)", err);
+                break;
+            }
+
+            for (uint32_t src_index = 0; src_index < layer_count; ++src_index) {
+                const DeviceMultilayerTensorKernel *kernel =
+                    find_multilayer_tensor_kernel(ctx, dst_index, src_index);
+                if (kernel == nullptr) {
+                    ctx.last_error =
+                        "launch_multilayer_demag_field_fp32_batched: tensor pair is missing";
+                    break;
+                }
+                const auto *source_x = static_cast<const cufftComplex *>(
+                    ctx.multilayer_batch_source_fft_x) +
+                    static_cast<uint64_t>(src_index) * layer_stride;
+                const auto *source_y = static_cast<const cufftComplex *>(
+                    ctx.multilayer_batch_source_fft_y) +
+                    static_cast<uint64_t>(src_index) * layer_stride;
+                const auto *source_z = static_cast<const cufftComplex *>(
+                    ctx.multilayer_batch_source_fft_z) +
+                    static_cast<uint64_t>(src_index) * layer_stride;
+
+                accumulate_demag_tensor_kernel_fp32<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
+                    source_x,
+                    source_y,
+                    source_z,
+                    destination_x,
+                    destination_y,
+                    destination_z,
+                    static_cast<const cufftComplex *>(kernel->tensor.xx),
+                    static_cast<const cufftComplex *>(kernel->tensor.yy),
+                    static_cast<const cufftComplex *>(kernel->tensor.zz),
+                    static_cast<const cufftComplex *>(kernel->tensor.xy),
+                    static_cast<const cufftComplex *>(kernel->tensor.xz),
+                    static_cast<const cufftComplex *>(kernel->tensor.yz),
+                    component_stride);
+                if (!check_kernel_launch(
+                        ctx, "launch_multilayer_demag_field_fp32_batched(accumulate)")) {
+                    break;
+                }
+                ctx.multilayer_demag_stage_counters.note_pair_accumulation();
+            }
+            if (!ctx.last_error.empty()) {
+                break;
+            }
+
+            cufftResult fft_err = cufftExecC2C(
+                ctx.fft_plan, destination_x, destination_x, CUFFT_INVERSE);
+            if (fft_err != CUFFT_SUCCESS) {
+                set_cufft_error(ctx, "cufftExecC2C(multilayer batched inverse)", fft_err);
+                break;
+            }
+            ctx.multilayer_demag_stage_counters.note_inverse_fft();
+
+            const int grid_destination = static_cast<int>(
+                (dst.cell_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            pull_multilayer_h_identity_fp32_kernel<<<grid_destination, BLOCK_SIZE, 0, stream>>>(
+                destination_x,
+                destination_y,
+                destination_z,
+                dst.active_mask,
+                static_cast<float *>(dst.h_demag.x),
+                static_cast<float *>(dst.h_demag.y),
+                static_cast<float *>(dst.h_demag.z),
+                dst.native_grid.nx,
+                dst.native_grid.ny,
+                dst.native_grid.nz,
+                fft_grid.nx,
+                fft_grid.ny,
+                dst.has_active_mask ? 1 : 0,
+                1.0f / static_cast<float>(component_stride));
+            if (!check_kernel_launch(ctx, "launch_multilayer_demag_field_fp32_batched(pull)")) {
+                break;
+            }
+        }
+    }
+
+    if (ctx.last_error.empty() &&
+        !ctx.multilayer_demag_stage_counters.matches(
+            expected_multilayer_batch_counts(layer_count)))
+    {
+        ctx.last_error =
+            "launch_multilayer_demag_field_fp32_batched: D-07 stage counter mismatch";
+    }
+    context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp32_batched");
+}
+
 } // namespace
 
-void launch_multilayer_demag_field_fp64(Context &ctx) {
+static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
     if (!ctx.enable_demag || ctx.multilayer_kernels.empty()) {
         return;
     }
@@ -896,7 +1452,7 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
     context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp64");
 }
 
-void launch_multilayer_demag_field_fp32(Context &ctx) {
+static void launch_multilayer_demag_field_fp32_assisted(Context &ctx) {
     if (!ctx.enable_demag || ctx.multilayer_kernels.empty()) {
         return;
     }
@@ -1052,6 +1608,46 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
         set_cuda_error(ctx, "launch_multilayer_demag_field_fp32", err);
     }
     context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp32");
+}
+
+void launch_multilayer_demag_field_fp64(Context &ctx) {
+    if (!ctx.enable_demag || ctx.multilayer_kernels.empty()) {
+        return;
+    }
+    if (!ctx.has_multilayer_plan_v2) {
+        ctx.last_error = "launch_multilayer_demag_field_fp64 requires a staged v2 multilayer plan";
+        return;
+    }
+    bool use_batched = false;
+    if (!classify_multilayer_batch_plan(
+            ctx, "launch_multilayer_demag_field_fp64", use_batched)) {
+        return;
+    }
+    if (use_batched) {
+        launch_multilayer_demag_field_fp64_batched(ctx);
+    } else {
+        launch_multilayer_demag_field_fp64_assisted(ctx);
+    }
+}
+
+void launch_multilayer_demag_field_fp32(Context &ctx) {
+    if (!ctx.enable_demag || ctx.multilayer_kernels.empty()) {
+        return;
+    }
+    if (!ctx.has_multilayer_plan_v2) {
+        ctx.last_error = "launch_multilayer_demag_field_fp32 requires a staged v2 multilayer plan";
+        return;
+    }
+    bool use_batched = false;
+    if (!classify_multilayer_batch_plan(
+            ctx, "launch_multilayer_demag_field_fp32", use_batched)) {
+        return;
+    }
+    if (use_batched) {
+        launch_multilayer_demag_field_fp32_batched(ctx);
+    } else {
+        launch_multilayer_demag_field_fp32_assisted(ctx);
+    }
 }
 
 } // namespace fdm

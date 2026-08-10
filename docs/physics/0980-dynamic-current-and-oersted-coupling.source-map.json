@@ -1,0 +1,861 @@
+{
+  "document": {
+    "path": "docs/physics/0980-dynamic-current-and-oersted-coupling.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "A bounded steady one-way Ohmic solved-current midpoint reference slice remains available. The closure-aware RT0/OE-F1/OE-F2 CPU/double path selects fem_stage_oersted_callback.v1 for public closed_geometry and complete external_lead views. Reciprocal M2 selects fem_stage_transport_callback.v1 for torque alone or fem_stage_transport_oersted_callback.v1 when torque and descriptor-free H1/P1 solved-current Oersted share one exact-stage solve. The external-lead path has managed three-step native CPU Heun, RK4, RK23 and RK45 trajectories plus adaptive RK23 rejection/rollback/retry proof; ABM3 is unsupported by native FEM and fails closed, while public Python-fixture execution, reciprocal external-lead, tabulated-artifact resolution, GPU and production qualification remain open."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "No device-resident solved-current Oersted realization is qualified; FEM transport/Oersted requests fail closed instead of falling back."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "semantic_only",
+      "reason": "The normative fdm_oersted_cell_integrated_open.v1 contract has a standalone native CPU/FP64 owner, independent long-double surface-potential oracle, adaptive surface spot checks and a managed contract gate. Public C ABI/planner/runner binding, named continuum workloads and production qualification remain absent, so the lane stays semantic_only."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "No cross-backend solved-current dynamic-Oersted qualification is asserted by this page."
+    }
+  ],
+  "equations": [
+    {
+      "id": "instantaneous-biot-savart-h",
+      "symbols": ["J_c", "H_oe", "r", "V_e", "r_reg"],
+      "sources": ["physics-biot-savart", "fem-midpoint-reference"]
+    },
+    {
+      "id": "reciprocal-transport-torque-rhs",
+      "symbols": ["J_c", "mu_s", "m_stage", "tau_tr"],
+      "sources": ["fem-stage-transport-callback-runner", "fem-stage-transport-contract"]
+    },
+    {
+      "id": "fdm-oersted-face-to-cell-current",
+      "symbols": [
+        "J_c_cell",
+        "J_c_face",
+        "chi_c",
+        "i",
+        "a",
+        "e_a",
+        "xyz_axes"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-cell-integrated-kernel",
+      "symbols": [
+        "k_a",
+        "x_i",
+        "x_j",
+        "x_prime",
+        "C_j",
+        "pi",
+        "euclidean_norm",
+        "dV_prime",
+        "source_sum",
+        "a",
+        "K",
+        "positive_zero_tensor",
+        "r",
+        "H_oe",
+        "i",
+        "j",
+        "J_c_cell"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cell-kernel", "fdm-oersted-direct-surface-oracle"]
+    },
+    {
+      "id": "fdm-oersted-fft-convolution",
+      "symbols": ["H_oe_hat", "k_hat", "J_c_hat", "xyz_axes"],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-post-reconstruction-differential-operators",
+      "symbols": [
+        "diagnostic_field",
+        "delta0_a",
+        "i",
+        "e_a",
+        "h_a",
+        "a",
+        "xyz_axes",
+        "D_h",
+        "C_h",
+        "J_c_cell",
+        "H_oe"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-post-reconstruction-residuals",
+      "symbols": [
+        "diagnostic_field",
+        "I_2",
+        "V_h",
+        "rms_norm",
+        "diagnostic_sum",
+        "euclidean_norm",
+        "S_J",
+        "S_A",
+        "h_min",
+        "rho_divJ",
+        "rho_divH",
+        "rho_A",
+        "D_h",
+        "C_h",
+        "J_c_cell",
+        "H_oe",
+        "i",
+        "h_a",
+        "xyz_axes",
+        "max_operator",
+        "min_operator"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-post-reconstruction-refinement",
+      "symbols": [
+        "rho_divJ",
+        "rho_divH",
+        "rho_A",
+        "p",
+        "p_min",
+        "h_refinement",
+        "epsilon_fp64",
+        "rho_generic",
+        "max_operator",
+        "log2_operator"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-direct-oracle-mixed-bound",
+      "symbols": [
+        "k_prod",
+        "k_ref",
+        "a",
+        "B_a",
+        "a_K",
+        "r_K",
+        "h_max",
+        "h_a",
+        "xyz_axes",
+        "max_operator",
+        "absolute_value"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-direct-surface-oracle", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-direct-oracle-surface-reduction",
+      "symbols": [
+        "k_ref",
+        "a",
+        "pi",
+        "F_a_plus",
+        "F_a_minus",
+        "x_i",
+        "x_prime",
+        "euclidean_norm",
+        "dS_prime"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-direct-surface-oracle", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-direct-oracle-spot-check",
+      "symbols": [
+        "A_spot",
+        "A_previous",
+        "E_spot",
+        "B_spot",
+        "k_ref",
+        "a",
+        "a_S",
+        "r_S",
+        "h_max",
+        "absolute_value"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-adaptive-surface-oracle", "fdm-oersted-native-cpu-contract-test"]
+    },
+    {
+      "id": "fdm-oersted-direct-oracle-exact-zero",
+      "symbols": [
+        "k_prod",
+        "k_hat_prod",
+        "a",
+        "r",
+        "q",
+        "Z_real",
+        "Z_spec",
+        "positive_zero_scalar",
+        "K",
+        "positive_zero_tensor"
+      ],
+      "sources": ["fdm-oersted-open-v1-doc-contract-test", "fdm-oersted-native-cell-kernel", "fdm-oersted-native-cpu-owner", "fdm-oersted-native-cpu-contract-test"]
+    }
+  ],
+  "symbols": [
+    {"id": "J_c", "latex": "J_c", "meaning": "conventional current density", "si_unit": "A/m^2"},
+    {"id": "mu_s", "latex": "mu_s", "meaning": "spin accumulation potential", "si_unit": "V"},
+    {"id": "H_oe", "latex": "H_{\\mathrm{oe}}", "meaning": "Oersted field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "r", "latex": "r", "meaning": "target-source displacement", "si_unit": "\\mathrm{m}"},
+    {"id": "o", "latex": "o", "meaning": "physical union-grid origin", "si_unit": "\\mathrm{m}"},
+    {"id": "V_e", "latex": "V_e", "meaning": "active tetrahedron volume", "si_unit": "m^3"},
+    {"id": "r_reg", "latex": "r_reg", "meaning": "equivalent-sphere self regularization radius of the bounded midpoint slice", "si_unit": "m"},
+    {"id": "mu_0", "latex": "mu_0", "meaning": "vacuum permeability used only when converting H to B or evaluating Zeeman energy", "si_unit": "H/m"},
+    {"id": "m_stage", "latex": "m_stage", "meaning": "normalized magnetization at an RK stage", "si_unit": "1"},
+    {"id": "tau_tr", "latex": "tau_tr", "meaning": "direct reciprocal transport contribution to `dm/dt`", "si_unit": "s^-1"},
+    {"id": "J_c_cell", "latex": "J_c^{\\mathrm{cell}}", "meaning": "reconstructed cell-centred conventional current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "J_c_face", "latex": "J_c^{\\mathrm{face}}", "meaning": "signed, globally oriented finite-volume face-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "chi_c", "latex": "\\chi_c", "meaning": "conductor-source cell mask", "si_unit": "1"},
+    {"id": "chi_m", "latex": "\\chi_m", "meaning": "magnetic-target cell mask", "si_unit": "1"},
+    {"id": "i", "latex": "i", "meaning": "target or active-cell multi-index, according to context", "si_unit": "1"},
+    {"id": "j", "latex": "j", "meaning": "source-cell multi-index", "si_unit": "1"},
+    {"id": "a", "latex": "a", "meaning": "Cartesian axis selector", "si_unit": "1"},
+    {"id": "e_a", "latex": "e_a", "meaning": "unit lattice-index vector along axis $a$", "si_unit": "1"},
+    {"id": "xyz_axes", "latex": "\\{x,y,z\\}", "meaning": "ordered Cartesian component set", "si_unit": "1"},
+    {"id": "k_a", "latex": "k_a", "meaning": "scalar component of the source-cell-integrated kernel", "si_unit": "\\mathrm{m}"},
+    {"id": "x_i", "latex": "x_i", "meaning": "target-cell centre on the union grid", "si_unit": "\\mathrm{m}"},
+    {"id": "x_j", "latex": "x_j", "meaning": "source-cell centre on the union grid", "si_unit": "\\mathrm{m}"},
+    {"id": "x_prime", "latex": "x'", "meaning": "source integration point", "si_unit": "\\mathrm{m}"},
+    {"id": "C_j", "latex": "C_j", "meaning": "rectangular source cell centred at $x_j$", "si_unit": "\\mathrm{m^3}"},
+    {"id": "pi", "latex": "\\pi", "meaning": "circle constant", "si_unit": "1"},
+    {"id": "euclidean_norm", "latex": "\\lVert\\cdot\\rVert_2", "meaning": "Euclidean norm; its value inherits the operand's SI unit", "si_unit": "1"},
+    {"id": "dV_prime", "latex": "dV'", "meaning": "source-volume integration measure", "si_unit": "\\mathrm{m^3}"},
+    {"id": "source_sum", "latex": "\\sum_j", "meaning": "discrete sum over all source cells indexed by $j$", "si_unit": "1"},
+    {"id": "K", "latex": "K", "meaning": "antisymmetric source-cell-integrated Oersted tensor", "si_unit": "\\mathrm{m}"},
+    {"id": "positive_zero_tensor", "latex": "+0_{3\\times3}", "meaning": "exact IEEE-754 positive-zero self tensor", "si_unit": "\\mathrm{m}"},
+    {"id": "H_oe_hat", "latex": "\\widehat{H}_{\\mathrm{oe},a}", "meaning": "unnormalised spectral Oersted-field component $a$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "k_hat", "latex": "\\widehat{k}_a", "meaning": "unnormalised forward R2C transform of kernel component $a$", "si_unit": "\\mathrm{m}"},
+    {"id": "J_c_hat", "latex": "\\widehat{J}_{c,a}", "meaning": "unnormalised forward R2C transform of current component $a$", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "N_a", "latex": "N_a", "meaning": "physical union-grid size along axis $a$", "si_unit": "1"},
+    {"id": "P_a", "latex": "P_a", "meaning": "padded convolution-grid size along axis $a$", "si_unit": "1"},
+    {"id": "q_a", "latex": "q_a", "meaning": "padded grid index along axis $a$", "si_unit": "1"},
+    {"id": "d_a", "latex": "d_a", "meaning": "signed lattice displacement along axis $a$", "si_unit": "1"},
+    {"id": "diagnostic_field", "latex": "f", "meaning": "scalar or Cartesian component sampled at cell centres for an independent diagnostic", "si_unit": "A/m^2 or A/m"},
+    {"id": "delta0_a", "latex": "\\delta_a^0", "meaning": "radius-one centred-difference operator along axis $a$", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "h_a", "latex": "h_a", "meaning": "FDM cell size along axis $a\\in\\{x,y,z\\}$", "si_unit": "\\mathrm{m}"},
+    {"id": "D_h", "latex": "D_h", "meaning": "independent cell-centred divergence operator", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "C_h", "latex": "C_h", "meaning": "independent cell-centred curl operator", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "I_2", "latex": "\\mathcal I_2", "meaning": "diagnostic cell-index set after removal of the open-boundary band", "si_unit": "1"},
+    {"id": "b_open", "latex": "b_{\\mathrm{open}}", "meaning": "excluded open-boundary-band width in cells", "si_unit": "1"},
+    {"id": "V_h", "latex": "V_h", "meaning": "Cartesian cell volume $h_xh_yh_z$", "si_unit": "\\mathrm{m^3}"},
+    {"id": "diagnostic_sum", "latex": "\\sum_{i\\in\\mathcal I_2}", "meaning": "discrete sum over the diagnostic cell-index set", "si_unit": "1"},
+    {"id": "rms_norm", "latex": "\\lVert\\cdot\\rVert_{2,h,\\mathcal I_2}", "meaning": "volume-weighted RMS norm on the diagnostic set", "si_unit": "1"},
+    {"id": "S_J", "latex": "S_J", "meaning": "reconstructed-current RMS diagnostic scale", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "S_A", "latex": "S_A", "meaning": "Ampere residual diagnostic scale", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "h_min", "latex": "h_{\\min}", "meaning": "smallest FDM cell dimension", "si_unit": "\\mathrm{m}"},
+    {"id": "h_max", "latex": "h_{\\max}", "meaning": "largest FDM cell dimension", "si_unit": "\\mathrm{m}"},
+    {"id": "rho_divJ", "latex": "\\rho_{\\mathrm{div}J}", "meaning": "normalized post-reconstruction current-divergence residual", "si_unit": "1"},
+    {"id": "rho_divH", "latex": "\\rho_{\\mathrm{div}H}", "meaning": "normalized Oersted-field divergence residual", "si_unit": "1"},
+    {"id": "rho_A", "latex": "\\rho_{\\mathrm A}", "meaning": "normalized discrete Ampere residual", "si_unit": "1"},
+    {"id": "rho_generic", "latex": "\\rho", "meaning": "one of the three normalized diagnostic residuals in a refinement rule", "si_unit": "1"},
+    {"id": "p", "latex": "p", "meaning": "observed spatial convergence order", "si_unit": "1"},
+    {"id": "p_min", "latex": "p_{\\min}", "meaning": "minimum accepted spatial convergence order", "si_unit": "1"},
+    {"id": "h_refinement", "latex": "h", "meaning": "common refinement-spacing scale", "si_unit": "\\mathrm{m}"},
+    {"id": "epsilon_fp64", "latex": "\\epsilon_{\\mathrm{FP64}}", "meaning": "IEEE-754 binary64 machine epsilon", "si_unit": "1"},
+    {"id": "k_prod", "latex": "k_a^{\\mathrm{prod}}", "meaning": "production scalar kernel component", "si_unit": "\\mathrm{m}"},
+    {"id": "k_hat_prod", "latex": "\\widehat{k}_a^{\\mathrm{prod}}", "meaning": "production spectral scalar-kernel component", "si_unit": "\\mathrm{m}"},
+    {"id": "k_ref", "latex": "k_a^{\\mathrm{ref}}", "meaning": "independently integrated reference scalar kernel component", "si_unit": "\\mathrm{m}"},
+    {"id": "B_a", "latex": "B_a", "meaning": "mixed absolute-plus-relative kernel acceptance budget", "si_unit": "\\mathrm{m}"},
+    {"id": "a_K", "latex": "a_K", "meaning": "dimensionless absolute-scale kernel tolerance", "si_unit": "1"},
+    {"id": "r_K", "latex": "r_K", "meaning": "dimensionless relative kernel tolerance", "si_unit": "1"},
+    {"id": "F_a_plus", "latex": "F_a^+", "meaning": "positive source-cell face normal to axis a", "si_unit": "\\mathrm{m^2}"},
+    {"id": "F_a_minus", "latex": "F_a^-", "meaning": "negative source-cell face normal to axis a", "si_unit": "\\mathrm{m^2}"},
+    {"id": "dS_prime", "latex": "dS'", "meaning": "source-face integration measure", "si_unit": "\\mathrm{m^2}"},
+    {"id": "A_spot", "latex": "A_a^{(L)}", "meaning": "independent adaptive surface-quadrature spot value at level L", "si_unit": "\\mathrm{m}"},
+    {"id": "A_previous", "latex": "A_a^{(L-1)}", "meaning": "previous adaptive surface-quadrature spot value", "si_unit": "\\mathrm{m}"},
+    {"id": "E_spot", "latex": "E_a^{\\mathrm{spot}}", "meaning": "successive-level adaptive spot-check difference", "si_unit": "\\mathrm{m}"},
+    {"id": "B_spot", "latex": "B_a^{\\mathrm{spot}}", "meaning": "independent adaptive spot-check budget", "si_unit": "\\mathrm{m}"},
+    {"id": "a_S", "latex": "a_S", "meaning": "dimensionless absolute-scale spot-check tolerance", "si_unit": "1"},
+    {"id": "r_S", "latex": "r_S", "meaning": "dimensionless relative spot-check tolerance", "si_unit": "1"},
+    {"id": "q", "latex": "q", "meaning": "padded R2C spectral-bin multi-index", "si_unit": "1"},
+    {"id": "Z_real", "latex": "\\mathcal Z_{\\mathrm{real}}", "meaning": "real-space exact-zero index pairs selected by self geometry or parity", "si_unit": "1"},
+    {"id": "Z_spec", "latex": "\\mathcal Z_{\\mathrm{spec}}", "meaning": "spectral exact-zero index pairs selected by DC or full self-conjugacy", "si_unit": "1"},
+    {"id": "positive_zero_scalar", "latex": "+0", "meaning": "IEEE-754 binary64 positive-zero scalar kernel value", "si_unit": "\\mathrm{m}"},
+    {"id": "S_H_i", "latex": "S_{H,i}", "meaning": "absolute field-error scale at target cell $i$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "max_operator", "latex": "\\max", "meaning": "maximum-value operator", "si_unit": "1"},
+    {"id": "min_operator", "latex": "\\min", "meaning": "minimum-value operator", "si_unit": "1"},
+    {"id": "log2_operator", "latex": "\\log_2", "meaning": "base-two logarithm operator", "si_unit": "1"},
+    {"id": "absolute_value", "latex": "|\\cdot|", "meaning": "scalar absolute-value operator", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "physics-biot-savart",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_oersted_term",
+      "responsibility": "Freeze the SI Biot-Savart H convention, energy semantics and the bounded FEM reference limits."
+    },
+    {
+      "id": "fdm-oersted-open-v1-doc-contract-test",
+      "path": "scripts/test_dynamic_current_oersted_contract_docs.py",
+      "symbol": "test_fdm_oersted_open_v1_is_fully_frozen_and_semantic_only",
+      "responsibility": "Documentation-only regression for the frozen FDM open-boundary operator, FFT layout, closure, oracle and semantic-only boundary; it is not runtime or physics-validation evidence."
+    },
+    {
+      "id": "fdm-oersted-native-cpu-owner",
+      "path": "backends/fdm/cpu/interactions/oersted/fft_open_v1.cpp",
+      "symbol": "class Solver::Impl",
+      "responsibility": "Standalone native CPU/FP64 closure-aware exact-2N open convolution owner with typed per-component source cuts, accepted/candidate/failure result separation, allocation-free trusted immutable-snapshot reuse, full-field pre-crop diagnostics and complete provenance; it has no public runtime binding."
+    },
+    {
+      "id": "fdm-oersted-native-cell-kernel",
+      "path": "backends/fdm/cpu/interactions/oersted/cell_integrated_kernel_v1.cpp",
+      "symbol": "cell_integrated_kernel_m",
+      "responsibility": "Exact source-cell rectangular integral at the target centre with SI J-cross-r sign and exact real-space zero classes."
+    },
+    {
+      "id": "fdm-oersted-direct-surface-oracle",
+      "path": "backends/fdm/tests/oersted_direct_oracle_v1.cpp",
+      "symbol": "OracleKernelResult integrate_source_cell_at_target_center",
+      "responsibility": "Independent long-double surface-potential direct oracle; it shares no production kernel helper."
+    },
+    {
+      "id": "fdm-oersted-adaptive-surface-oracle",
+      "path": "backends/fdm/tests/oersted_direct_oracle_v1.cpp",
+      "symbol": "adaptive_surface_spot_check",
+      "responsibility": "Independent compensated long-double tensor-product Gauss-Legendre-16 surface quadrature with bounded 1..64 subdivision levels and successive-level error acceptance."
+    },
+    {
+      "id": "fdm-oersted-native-cpu-contract-test",
+      "path": "backends/fdm/tests/cpu_oersted_fft_open_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed standalone CPU physics, numerics, zero-allocation trusted cache, typed source-cut, complete provenance, full-field diagnostic, oriented Ampere-contour and fail-closed contract."
+    },
+    {
+      "id": "fem-solved-current-marker",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_solved_current_source",
+      "responsibility": "Bind FromCurrentSolution to a named solved Ohmic/M2 transport module and reject unsupported FEM cadence/coupling."
+    },
+    {
+      "id": "fem-transport-descriptor",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_m1_fem_spin_transport",
+      "responsibility": "Publish the resolved FEM transport descriptor; resolve fem_stage_oersted_callback.v1 for one-way closed_geometry or complete external_lead Oersted, fem_stage_transport_callback.v1 for reciprocal M2 torque, and fem_stage_transport_oersted_callback.v1 for shared descriptor-free H1/P1 reciprocal torque plus Oersted, while failing closed for reciprocal closure-aware views and unsupported coupling."
+    },
+    {
+      "id": "fem-oef2-planner-selection",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Select the FemVectorPotential realization for solved-current Oersted while preserving the explicit CPU/double closed_geometry/external_lead boundary."
+    },
+    {
+      "id": "python-conservative-current-view",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentView",
+      "responsibility": "Expose the closure-aware RT0 identity, boundary classification, typed closed_geometry/external_lead closure and physical gates through Python and canonical script round-trip; never invent a return path."
+    },
+    {
+      "id": "python-external-lead-closure",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentExternalLead",
+      "responsibility": "Own the explicit volumetric tet4 lead mesh, conductivity vector, stable IDs, interface pairs, outer electrodes and exact fem_closed_current_extension.v1 operator identity."
+    },
+    {
+      "id": "python-external-lead-interface-pair",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ConservativeCurrentLeadInterfacePair",
+      "responsibility": "Canonicalize one device/lead Tri3 interface pair and preserve it in ProblemIR, SceneDocument and script export."
+    },
+    {
+      "id": "python-current-transport-envelope",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class CurrentTransport",
+      "responsibility": "Own the optional canonical dimensionless time envelope for prescribed and complete current sources and preserve it in ProblemIR/script round-trip."
+    },
+    {
+      "id": "python-charge-solver-fem-operators",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class ChargeSolverPolicy",
+      "responsibility": "Accept only the versioned FDM or FEM charge operators paired with their residual contract; FEM M1/M2 authoring cannot be rejected as an FDM-only policy."
+    },
+    {
+      "id": "python-fem-m2-problem-validation",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "Keep reciprocal FEM M2 on the linear conforming-H1 operator without FDM reciprocal_nonlinear policy, while preserving the FDM M2 policy and charge/spin operator identity."
+    },
+    {
+      "id": "python-spin-transport-model",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinDriftDiffusion",
+      "responsibility": "Define the canonical spin drift-diffusion materials, interfaces, boundary conditions, solver policy, execution request and mode used by both FDM and FEM authoring."
+    },
+    {
+      "id": "python-spin-transport-torque-model",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class DriftDiffusionSpinTorque",
+      "responsibility": "Bind a named spin-transport solve to the LLG torque RHS with an explicit angular-rate convention."
+    },
+    {
+      "id": "python-spin-transport-script-builder",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_spin_transports",
+      "responsibility": "Round-trip all canonical spin-transport materials, interfaces, boundaries, solver, execution and mode parameters into Python."
+    },
+    {
+      "id": "python-oersted-cylinder-model",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class OerstedCylinder",
+      "responsibility": "Define and validate the stable authored identity of the analytic cylinder Oersted term."
+    },
+    {
+      "id": "python-oersted-field-model",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class OerstedField",
+      "responsibility": "Define and validate the stable authored identity and named solved-current binding of the canonical Oersted field term."
+    },
+    {
+      "id": "python-oersted-script-builder",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_oersted_entry",
+      "responsibility": "Preserve the explicit Oersted module identity in canonical Python export."
+    },
+    {
+      "id": "problem-ir-oersted-id-validation",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_oersted_energy_terms",
+      "responsibility": "Reject present-but-empty Oersted IDs while preserving read compatibility for historical ID-less ProblemIR."
+    },
+    {
+      "id": "scene-spin-transport-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document.py",
+      "symbol": "_canonical_spin_transports",
+      "responsibility": "Preserve validated spin-transport and drift-diffusion torque payloads through the SceneDocument/UI builder round-trip."
+    },
+    {
+      "id": "python-spin-transport-roundtrip-test",
+      "path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "symbol": "test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script",
+      "responsibility": "Regression proof for Python, SceneDocument, flat-script and canonical FEM M2 torque authoring round-trip."
+    },
+    {
+      "id": "runner-time-envelope-evaluator",
+      "path": "crates/fullmag-runner/src/time_envelope.rs",
+      "symbol": "evaluate_time_envelope",
+      "responsibility": "Evaluate Constant, Sinusoidal, Pulse, PiecewiseLinear and Sinc source multipliers at exact stage time; fail closed for unresolved artifact-backed tables."
+    },
+    {
+      "id": "planner-conservative-current-view",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "validate_conservative_current_view",
+      "responsibility": "Validate stable IDs, exact Tri3 boundary ownership, identity/pins, closed source-cut references or complete external-lead mesh/interface/electrode maps; retain fail-closed runtime qualification."
+    },
+    {
+      "id": "scene-authoring-conservative-current-view",
+      "path": "crates/fullmag-authoring/src/validation.rs",
+      "symbol": "validate_scene_conservative_current_view",
+      "responsibility": "Validate the public SceneDocument descriptor shape and preserve explicit closed_geometry or complete external-lead closure fields through API/UI round-trip; native runtime still fails closed until qualified."
+    },
+    {
+      "id": "control-room-conservative-current-view",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "buildCurrentTransport",
+      "responsibility": "Expose the full conservative-current descriptor and dimensionless time envelope as explicit JSON editor fields and retain them when the current transport resource is replaced."
+    },
+    {
+      "id": "fem-midpoint-reference",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solved_current_midpoint_biot_savart_field",
+      "responsibility": "Derive a finite regularized midpoint field from the converged nodal current on affine tet4 source elements."
+    },
+    {
+      "id": "fem-rt0-oersted-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_rt0_oersted_v1",
+      "responsibility": "Append-only closure-aware RT0 request/result and direct OE-F1 public C ABI; legacy transport v1 remains byte-stable."
+    },
+    {
+      "id": "fem-rt0-oersted-vector-potential-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1",
+      "responsibility": "Append-only OE-F2 mixed H(curl) x H1 request/result on the exact RT0 view; publishes coefficients, compatible element fields, nodal H1 projection, residuals, gauge and source identity without modifying legacy ABI."
+    },
+    {
+      "id": "fem-stage-oersted-callback-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_set_stage_oersted_callback_v1",
+      "responsibility": "Append-only native CPU RK stage-provider hook with exact magnetization/time/stage identity and transactional begin/commit/rollback callbacks; complete external_lead uses the same envelope-scaled provider and GPU remains fail-closed."
+    },
+    {
+      "id": "fem-stage-oersted-callback-runtime",
+      "path": "backends/fem/cpu/mfem/interactions/oersted.cpp",
+      "symbol": "materialize_oersted_stage_field",
+      "responsibility": "Evaluate the stage provider, validate finite nodal H_oe, retain source revision and stage identity, and own attempt transaction hooks."
+    },
+    {
+      "id": "fem-stage-oersted-callback-runner",
+      "path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "symbol": "from_plan",
+      "responsibility": "Bind the public one-way closed_geometry or complete external_lead RT0 descriptor to the native CPU callback, evaluate OE-F1/OE-F2 at exact RK stage time/identity, and fail closed for missing view or invalid fields."
+    },
+    {
+      "id": "fem-stage-oersted-external-lead-managed-test",
+      "path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "symbol": "external_lead_stage_callback_solves_oersted_and_commits_observation",
+      "responsibility": "Managed regression from the coupled volumetric external-lead RT0 solve through OE-F1 reconstruction to a finite non-zero field, accepted-state-preserving rollback and bitwise-identical retry/commit."
+    },
+    {
+      "id": "fem-stage-oersted-external-lead-llg-step-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step",
+      "responsibility": "Managed native CPU Heun-step regression that installs the external-lead provider, drives RT0/OE-F1 through the real RK cadence, commits its observation and checks finite post-step magnetization."
+    },
+    {
+      "id": "fem-stage-oersted-external-lead-adaptive-retry-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt",
+      "responsibility": "Managed adaptive RK23 regression that forces at least one rejected native attempt and proves callback rollback count equals the integrator rejection count before an accepted retry."
+    },
+    {
+      "id": "fem-stage-oersted-external-lead-rk-family-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators",
+      "responsibility": "Managed three-step callback-trajectory regression for fixed Heun and RK4 plus adaptive RK23 and RK45 with persistent provider state and one commit per step."
+    },
+    {
+      "id": "fem-stage-reciprocal-m2-oersted-shared-provider",
+      "path": "crates/fullmag-runner/src/native_fem/stage_coupled.rs",
+      "symbol": "evaluate",
+      "responsibility": "Perform one reciprocal M2 solve per exact RK stage and publish direct torque plus descriptor-free H1/P1 solved-current Oersted with one shared source identity and bounded last-stage cache."
+    },
+    {
+      "id": "fem-stage-reciprocal-m2-oersted-shared-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted",
+      "responsibility": "Managed native CPU LLG regression requiring one shared solve per stage, a cache hit from the sibling callback, non-zero torque and identical accepted source revision/digest."
+    },
+    {
+      "id": "fem-stage-reciprocal-m2-oersted-adaptive-retry-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry",
+      "responsibility": "Managed adaptive RK23 regression requiring both torque and Oersted adapters to roll back every rejected attempt before one shared retry and accepted source identity are committed."
+    },
+    {
+      "id": "fem-stage-reciprocal-m2-oersted-rk-family-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators",
+      "responsibility": "Managed three-step shared-source trajectories for fixed Heun and RK4 plus adaptive RK23 and RK45, with one solve and at least one sibling-callback cache hit per exact stage."
+    },
+    {
+      "id": "python-external-lead-public-fixture",
+      "path": "examples/fem_external_lead_oersted_public.py",
+      "symbol": "cube_parts",
+      "responsibility": "Bounded public Python fixture with an imported tet4 device mesh, two explicit volumetric tet4 leads, conservative interface/electrode identity and one dynamic Oersted stage; managed runtime execution remains a separate gate."
+    },
+    {
+      "id": "python-external-lead-public-fixture-test",
+      "path": "packages/fullmag-py/tests/test_external_lead_roundtrip.py",
+      "symbol": "test_public_external_lead_example_lowers_complete_stage_contract",
+      "responsibility": "Load the real public fixture and prove complete current, spin, Oersted, external-lead MeshIR and declared-stage lowering without substituting a synthetic unit-only payload."
+    },
+    {
+      "id": "python-external-lead-public-runtime-validator",
+      "path": "scripts/validate_fem_external_lead_oersted_runtime.py",
+      "symbol": "validate_runtime_log",
+      "responsibility": "Fail closed unless the public run completed on strict native FEM CPU/double without fallback, materialized the external-lead stage policy, committed a digested Oersted observation and changed finite normalized magnetization."
+    },
+    {
+      "id": "python-external-lead-public-runtime-validator-test",
+      "path": "scripts/test_validate_fem_external_lead_oersted_runtime.py",
+      "symbol": "test_accepts_complete_external_lead_callback_artifacts",
+      "responsibility": "Regression coverage for accepted artifacts and rejection of missing callbacks, zero commits, mismatched execution provenance and unchanged magnetization."
+    },
+    {
+      "id": "fem-stage-oersted-callback-provenance",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Persist callback counters, accepted/last stage observation, source-view digest and field digest as an auxiliary transport artifact."
+    },
+    {
+      "id": "fem-stage-transport-callback-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_set_stage_transport_callback_v1",
+      "responsibility": "Append-only native CPU RK hook for reciprocal FEM M2: receive exact m_stage/time/stage identity and return a complete direct torque RHS in 1/s with transactional attempt hooks; GPU remains fail-closed."
+    },
+    {
+      "id": "fem-stage-transport-callback-runtime",
+      "path": "backends/fem/cpu/mfem/interactions/transport_stage.cpp",
+      "symbol": "materialize_transport_stage_rhs",
+      "responsibility": "Validate and materialize the callback torque, add it after LLG/STT/SOT, and keep stage/attempt state in the RK transaction without changing the Oersted ABI."
+    },
+    {
+      "id": "fem-stage-transport-callback-runner",
+      "path": "crates/fullmag-runner/src/native_fem/stage_transport.rs",
+      "symbol": "evaluate",
+      "responsibility": "Run the reciprocal FEM M2 charge--spin solve for each exact m_stage and t_stage, apply the canonical envelope to source-cut voltage, publish torque digest/revision and expose accepted/last observations."
+    },
+    {
+      "id": "fem-stage-transport-callback-provenance",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Persist reciprocal stage-transport callback counters and observations as an auxiliary artifact when the public FEM run reaches finalization."
+    },
+    {
+      "id": "fem-rt0-oersted-native-adapter",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
+      "symbol": "solve_rt0",
+      "responsibility": "Build the immutable ConservativeCurrentView and evaluate direct tetrahedral OE-F1 or mixed vector-potential OE-F2 on the same view, publishing balance, field and residual digests."
+    },
+    {
+      "id": "fem-rt0-oersted-runner",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_steady_transport_rt0",
+      "responsibility": "Own FFI buffers, select RT0/OE-F1 or RT0/OE-F2, validate digest/finite/length/operator contracts, and publish the OE-F2 nodal H1 field for LLG without H1-to-RT0 reconstruction."
+    },
+    {
+      "id": "fem-steady-source-cache",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs",
+      "symbol": "reuse",
+      "responsibility": "Require an exact immutable source/view identity for the compatibility invariant-source cache; the public stage callback uses the same identity contract without treating it as reciprocal M2."
+    },
+    {
+      "id": "fem-steady-source-stage-coordinator",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs",
+      "symbol": "begin_attempt",
+      "responsibility": "Checkpoint accepted source state around an RK attempt for legacy invariant-source fixtures; public callback transactions are owned by StageOerstedProvider and the native Oersted interaction."
+    },
+    {
+      "id": "fem-rt0-oersted-contract",
+      "path": "backends/fem/tests/steady_transport_rt0_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed CPU-only transport→RT0→OE-F1/OE-F2 contract including source-view digest equality, finite fields and residual certificate."
+    },
+    {
+      "id": "fem-oef2-nodal-projection",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp",
+      "symbol": "project_compatible_h_to_nodes",
+      "responsibility": "Project compatible RT0 H=curl(A)/mu0 into a bounded scalar H1/P1 nodal field for the LLG interface and publish the normalized projection residual."
+    },
+    {
+      "id": "fem-dispatch-injection",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "normalized_fem_plan_for_runtime",
+      "responsibility": "Inject the post-transport field into the normalized FEM plan before native LLG construction and reject incompatible cylinders/lengths."
+    },
+    {
+      "id": "fdm-stage-owner",
+      "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
+      "symbol": "solve_coupled_module",
+      "responsibility": "Own the existing FDM stage-consistent solved-current field snapshot."
+    },
+    {
+      "id": "fdm-stage-envelope",
+      "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
+      "symbol": "source_envelope_multiplier",
+      "responsibility": "Re-evaluate the resolved current-source envelope before every FDM CPU one-way or reciprocal M2 charge solve, publish the finite multiplier in the accepted snapshot, and keep the M2 solve/torque stage-consistent with m_stage."
+    },
+    {
+      "id": "fem-stage-transport-contract",
+      "path": "backends/fem/tests/rk_explicit_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed CPU/double RK4 direct-torque reference, adaptive rollback, native-failure rollback and GPU fail-closed contract for the reciprocal FEM stage callback."
+    },
+    {
+      "id": "planner-regression",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "fem_ohmic_oersted_binds_the_solved_charge_field",
+      "responsibility": "Verify source binding and the FEM descriptor provenance bit."
+    },
+    {
+      "id": "runtime-regression",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current",
+      "responsibility": "Verify finite field values and exact linear sign reversal for the bounded tet4 reference."
+    },
+    {
+      "id": "fem-oersted-artifact-provenance",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "execute_native_fem_steady_transport_plans",
+      "responsibility": "Publish the bounded solved-current Oersted field and stable field/source/mesh digests in the v2 transport artifact and transport provenance without implying RT0/H(div) qualification."
+    },
+    {
+      "id": "fem-public-abi-boundary",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_solve_steady_transport_v1",
+      "responsibility": "Keep the v1 H1/P1 nodal current byte-stable as the legacy visualization/reference lane; it is never relabelled as a ConservativeCurrentView RT0/H(div) source."
+    },
+    {
+      "id": "fem-public-abi-extension-contract",
+      "path": "backends/fem/tests/steady_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Guard the additive RT0/closure-aware request and result contract while preserving the legacy v1 ABI layout."
+    },
+    {
+      "id": "fem-public-abi-boundary-regression",
+      "path": "backends/fem/tests/steady_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Guard the explicit v1 boundary and prevent the bounded runner source kind from being relabelled as an RT0 view without the new descriptor."
+    },
+    {
+      "id": "managed-fem-transport-gate",
+      "path": "backends/fem/tests/steady_transport_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Build and test the native FEM transport lane in the managed MFEM/HYPRE container; this gate is required before promotion."
+    },
+    {
+      "id": "managed-fem-oet0-gate",
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed CPU/MPI proof for immutable conservative RT0/H(div) current-view certificates; this is an operator contract, not end-to-end LLG coupling."
+    },
+    {
+      "id": "managed-fem-oef1-gate",
+      "path": "backends/fem/tests/oersted_direct_tetra_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed CPU FP64 direct tetrahedral Biot-Savart quadrature contract and bounded refinement behavior."
+    },
+    {
+      "id": "managed-fem-oef2-gate",
+      "path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed CPU mixed H(curl)-H1 vector-potential contract with gauge and weak-Ampere diagnostics."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "CurrentTransport.model",
+        "type": "Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']",
+        "default": "prescribed_density",
+        "si_unit": "1",
+        "validation": "The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.",
+        "meaning": "charge solve producing the source current",
+        "backend_support": "FEM CPU bounded reference; other lanes remain capability-scoped",
+        "problem_ir": "current_modules[].model"
+      },
+      {
+        "python": "CurrentTransport.time_envelope",
+        "type": "TimeEnvelope",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.",
+        "meaning": "dimensionless source multiplier evaluated at the exact stage time",
+        "backend_support": "Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU and external-lead public-fixture qualification remain open",
+        "problem_ir": "current_modules[].time_envelope"
+      },
+      {
+        "python": "SpinDriftDiffusion.id`, `.current_source_id`, `.domain`, `.mode",
+        "type": "str`, `str`, `Sequence[RegionRef]`, `Literal['steady','transient']",
+        "default": "required`, `required`, `required`, `steady",
+        "si_unit": "1`, `1`, `1`, `1",
+        "validation": "IDs and domain are non-empty; transient mode requires a physical spin capacitance/DOS contract.",
+        "meaning": "named spin solve, charge-source binding, solved region set and temporal regime",
+        "backend_support": "Python/IR/UI authoring; runtime lane remains planner-scoped",
+        "problem_ir": "spin_transport_modules[].id/current_source_id/domain/mode"
+      },
+      {
+        "python": "SpinDriftDiffusion.materials`, `.interfaces`, `.boundaries",
+        "type": "Sequence[SpinTransportMaterialAssignment]`, `Sequence[...Interface]`, `Sequence[...Boundary]",
+        "default": "required`, `[]`, `[]",
+        "si_unit": "sigma: S/m`, `lambda: m`, conductances `S/m²`, flux `A/m²`, potential `V",
+        "validation": "Material/interface/boundary variants validate finite SI values, normalized normals and explicit external-boundary policy.",
+        "meaning": "constitutive coefficients and trace conditions for charge-coupled spin accumulation",
+        "backend_support": "Python/IR/UI round-trip; FEM M2 bounded CPU/double for the qualified subset",
+        "problem_ir": "spin_transport_modules[].materials/interfaces/boundaries"
+      },
+      {
+        "python": "SpinDriftDiffusion.requested_execution",
+        "type": "TransportExecution",
+        "default": "fdm/cpu/double/strict",
+        "si_unit": "1",
+        "validation": "Discretization, device, precision and mode are explicit; unsupported resolutions fail closed.",
+        "meaning": "requested numerical realization and execution policy",
+        "backend_support": "Planner-visible; FEM GPU remains unqualified",
+        "problem_ir": "spin_transport_modules[].requested_execution"
+      },
+      {
+        "python": "SpinDriftDiffusion.solver.operator_version",
+        "type": "str",
+        "default": "backend-specific, explicit",
+        "si_unit": "1",
+        "validation": "FDM M2 wymaga fdm_coupled_charge_spin_fv_block_gmres.v1; ograniczony FEM M2 wymaga fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1; operator ładunku i spinu muszą być identyczne.",
+        "meaning": "versioned charge--spin operator identity",
+        "backend_support": "FDM CPU/double reference lub FEM CPU/double bounded callback; GPU remains fail-closed",
+        "problem_ir": "spin_transport_modules[].solver.operator_version"
+      },
+      {
+        "python": "DriftDiffusionSpinTorque.id`, `.solve_id`, `.target",
+        "type": "str`, `str`, `RegionRef",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Torque must reference an existing `SpinDriftDiffusion`; its RHS contribution is angular rate in `s^-1`, not an H-field.",
+        "meaning": "explicit transport-to-LLG torque binding",
+        "backend_support": "FEM CPU/double callback bounded; other lanes fail closed or remain semantic-only",
+        "problem_ir": "spin_torque_modules[]"
+      },
+      {
+        "python": "OerstedCylinder.id`, `OerstedField.id",
+        "type": "str`, `str | None",
+        "default": "oersted:cylinder`, `oersted:{source}",
+        "si_unit": "1",
+        "validation": "Bieżący authoring wymaga niepustej, stabilnej tożsamości; brak pola jest akceptowany wyłącznie przy odczycie historycznego IR.",
+        "meaning": "stable module identity independent of energy-term ordering",
+        "backend_support": "Python/ProblemIR/SceneDocument/script/planner; numerical execution remains capability-scoped",
+        "problem_ir": "energy_terms[].id"
+      },
+      {
+        "python": "OerstedField.source",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.",
+        "meaning": "current-source identity",
+        "backend_support": "FEM/FDM authoring; executable status is planner-scoped",
+        "problem_ir": "energy_terms[].source"
+      },
+      {
+        "python": "OerstedField.model",
+        "type": "Literal['from_current_solution']",
+        "default": "from_current_solution",
+        "si_unit": "1",
+        "validation": "No alternate implicit model is accepted by the canonical IR.",
+        "meaning": "bind Oersted to the named solved current",
+        "backend_support": "FEM/FDM according to capability matrix",
+        "problem_ir": "energy_terms[].model"
+      },
+      {
+        "python": "CurrentTransport.conservative_current_view",
+        "type": "ConservativeCurrentView | None",
+        "default": "None",
+        "si_unit": "stable IDs: 1",
+        "validation": "For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closure and finite positive gates; no hidden defaults.",
+        "meaning": "accepted RT0/H(div) source view for OE-T0/OE-F1",
+        "backend_support": "FEM CPU/double closed_geometry or explicitly complete external_lead; planner and stage callback reject incomplete descriptors; managed public-adapter external-lead solve is contract-tested, while full Python-to-LLG qualification remains open",
+        "problem_ir": "current_modules[].conservative_current_view"
+      },
+      {
+        "python": "ConservativeCurrentExternalLead",
+        "type": "typed closure descriptor",
+        "default": "required when closure.kind=external_lead",
+        "si_unit": "mesh coordinates: m; conductivity: S/m; potential drop: V; IDs: 1",
+        "validation": "Exact fem_closed_current_extension.v1 operator; tet4 lead mesh with tri3 boundary; positive per-element conductivity; unique device/lead IDs; complete unique interface pairs; non-empty disjoint minus/plus outer electrodes; non-zero finite potential drop.",
+        "meaning": "volumetric external lead joined to the device by conservative interface flux continuity",
+        "backend_support": "Python/SceneDocument/script/planner preflight, one-way CPU stage callback and managed Rust-adapter -> C ABI -> MFEM coupled volumetric solve; convergence, Python fixture -> LLG and production qualification remain open",
+        "problem_ir": "current_modules[].conservative_current_view.closure"
+      },
+      {
+        "python": "ConservativeCurrentLeadInterfacePair",
+        "type": "tuple[face_vertex_ids, face_vertex_ids]",
+        "default": "required per interface",
+        "si_unit": "1",
+        "validation": "Exactly two canonical Tri3 faces with strictly positive, distinct, ascending stable IDs; each device face has closure_interface role and each lead face is a lead boundary face.",
+        "meaning": "oriented device/lead trace pairing used for conservative current transfer",
+        "backend_support": "Python/SceneDocument/script/planner preflight",
+        "problem_ir": "current_modules[].conservative_current_view.closure.interface_pairs"
+      }
+    ]
+  }
+}

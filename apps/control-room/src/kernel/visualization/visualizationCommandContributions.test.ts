@@ -35,7 +35,7 @@ describe("visualization target commands", () => {
       "visualization.target.set-vectors-visible",
       {
         selection,
-        source: "test",
+        source: "test" as const,
         visualization,
       },
       true,
@@ -46,6 +46,180 @@ describe("visualization target commands", () => {
       .toMatchObject({
         vectorsVisible: true,
       });
+  });
+
+  it("maps ordinary render-mode commands to the corresponding display passes", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "object.visualization",
+        label: "Free layer",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+      },
+      "test",
+    );
+    const context = { selection, source: "test" as const, visualization };
+    const target = { id: "object:free-layer", kind: "object" as const };
+
+    await expect(
+      commands.execute("visualization.target.set-render-mode", context, "wireframe"),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(visualization.getSettings(target)).toMatchObject({
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+      pointsVisible: false,
+    });
+
+    await expect(
+      commands.execute("visualization.target.set-render-mode", context, "points"),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(visualization.getSettings(target)).toMatchObject({
+      renderMode: "points",
+      shaderVisible: false,
+      wireframeVisible: false,
+      pointsVisible: true,
+    });
+
+    await expect(
+      commands.execute("visualization.target.set-render-mode", context, "off"),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(visualization.getSettings(target)).toMatchObject({
+      renderMode: "off",
+      shaderVisible: false,
+      wireframeVisible: false,
+      pointsVisible: false,
+    });
+  });
+
+  it("accepts vector commands and rejects shader modes for the FDM Airbox target", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "airbox.visualization",
+        label: "Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "mesh.grid.universe-outside-support",
+          nodeId: "model:airbox:visualization",
+          scope: "universe-outside-support",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-universe-outside-support",
+        },
+      },
+      "test",
+    );
+
+    const target = {
+      id: "fdm-universe-outside-support",
+      kind: "fdm-domain" as const,
+      label: "Airbox",
+    };
+    const queuedPatches: VisualizationStatePatch[] = [];
+    const context = {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: {
+            overrides: [],
+            revision: 7,
+          },
+        },
+        selection,
+        source: "test" as const,
+        visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
+        visualizationTarget: target,
+      };
+    const result = await commands.execute(
+      "visualization.target.set-vectors-visible",
+      context,
+      true,
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(visualization.getSettings(target).vectorsVisible).toBe(true);
+    expect(visualization.getSnapshot().overrides[target.id]).toMatchObject({
+      vectorsVisible: true,
+    });
+    expect(queuedPatches).toEqual([]);
+
+    await expect(
+      commands.execute(
+        "visualization.target.set-render-mode",
+        context,
+        "surface",
+      ),
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(visualization.getSettings(target)).toMatchObject({
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+  });
+
+  it("rejects unavailable field-style commands for the FDM Airbox target", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "airbox.visualization",
+        label: "Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: {
+          kind: "mesh.grid.universe-outside-support",
+          nodeId: "model:airbox:visualization",
+          scope: "universe-outside-support",
+          type: "fdm-domain",
+          visualizationTargetId: "fdm-universe-outside-support",
+        },
+      },
+      "test",
+    );
+
+    const target = {
+      id: "fdm-universe-outside-support",
+      kind: "fdm-domain" as const,
+      label: "Airbox",
+    };
+    const queuedPatches: VisualizationStatePatch[] = [];
+    const result = await commands.execute(
+      "visualization.target.set-surface-color-source",
+      {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+        },
+        selection,
+        source: "test",
+        visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
+        visualizationTarget: target,
+      },
+      "inherit",
+    );
+
+    expect(result.status).toBe("failed");
+    expect(queuedPatches).toEqual([]);
+    expect(visualization.getSnapshot().overrides).toEqual({});
   });
 
   it("does not let command palette or shortcut commands change passes on a hidden target", async () => {

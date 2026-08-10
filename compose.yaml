@@ -106,6 +106,16 @@ services:
       CMAKE_PREFIX_PATH: /opt/fullmag-deps
       LD_LIBRARY_PATH: /opt/fullmag-deps/lib
 
+  # GCC's ThreadSanitizer needs to reserve a fixed shadow-memory range.  The
+  # default Docker seccomp profile blocks the personality syscall used by
+  # setarch to disable ASLR, so keep the relaxed profile isolated to the
+  # sanitizer-only service and never use it for ordinary FEM builds.
+  fem-cpu-tsan:
+    extends:
+      service: fem-cpu
+    security_opt:
+      - seccomp:unconfined
+
   postgres:
     image: postgres:17-alpine
     environment:

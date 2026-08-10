@@ -1232,6 +1232,9 @@ version = "0.1.0"
 dependencies = [
  "rayon",
  "rustfft",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

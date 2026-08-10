@@ -19,6 +19,8 @@ export function ObjectRegionGeometryPanel({
   buildRegion,
   regionMeshLifecycle,
   canWriteRegion,
+  canWriteMeshRegion,
+  meshLane = "unknown",
   couplingDependencies,
   updateShape,
   updateShapeVector,
@@ -30,7 +32,7 @@ export function ObjectRegionGeometryPanel({
 }: RegionSubPanelProps) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Shape">
         <FormField
@@ -128,6 +130,8 @@ export function ObjectRegionGeometryPanel({
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}
         canWriteRegion={canWriteRegion}
+        canWriteMeshRegion={canWriteMeshRegion}
+        meshLane={meshLane}
         couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}
         revert={revert}

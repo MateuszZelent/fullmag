@@ -6,7 +6,7 @@ const FIELD_VECTOR_BINARY_VERSION_V3: u8 = 3;
 const FIELD_VECTOR_BINARY_KIND_F64: u8 = 1;
 const FIELD_VECTOR_BINARY_QUANTITY_ID_LEN: usize = 16;
 const FIELD_VECTOR_METADATA_FIXED_LEN: usize = 68;
-const FIELD_VECTOR_METADATA_VERSION: u16 = 1;
+const FIELD_VECTOR_METADATA_VERSION: u16 = 2;
 const FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN: usize = 32;
 const FEM_MESH_TOPOLOGY_BINARY_VERSION: u8 = 1;
 const FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN: usize = 64;
@@ -45,7 +45,7 @@ impl FieldVectorIndexing {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FieldVectorBinaryMetadata<'a> {
-    pub domain_generation_id: u64,
+    pub domain_generation_id: &'a str,
     pub mesh_topology_revision: u64,
     pub mesh_topology_hash: [u8; 32],
     pub scope_kind: &'a str,
@@ -189,11 +189,15 @@ fn encode_field_vector_metadata(
 ) -> Result<Vec<u8>, String> {
     let scope_kind_bytes = metadata.scope_kind.as_bytes();
     let scope_id_bytes = metadata.scope_id.as_bytes();
+    let generation_id_bytes = metadata.domain_generation_id.as_bytes();
     if scope_kind_bytes.len() > u16::MAX as usize {
         return Err("FMVP v3 scope_kind exceeds u16 length".to_string());
     }
     if scope_id_bytes.len() > u16::MAX as usize {
         return Err("FMVP v3 scope_id exceeds u16 length".to_string());
+    }
+    if generation_id_bytes.is_empty() || generation_id_bytes.len() > u16::MAX as usize {
+        return Err("FMVP v3 domain_generation_id must fit a non-empty u16 string".to_string());
     }
     if metadata.node_indices.len() > u32::MAX as usize {
         return Err("FMVP v3 node_indices exceeds u32 length".to_string());
@@ -202,13 +206,15 @@ fn encode_field_vector_metadata(
     let raw_len = FIELD_VECTOR_METADATA_FIXED_LEN
         + scope_kind_bytes.len()
         + scope_id_bytes.len()
+        + generation_id_bytes.len()
         + metadata.node_indices.len() * std::mem::size_of::<u32>();
     let metadata_len = align_to_eight(raw_len);
     let mut out = Vec::with_capacity(metadata_len);
     out.extend_from_slice(b"FMMI");
     out.extend_from_slice(&FIELD_VECTOR_METADATA_VERSION.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&metadata.domain_generation_id.to_le_bytes());
+    out.extend_from_slice(&(generation_id_bytes.len() as u16).to_le_bytes());
+    out.extend_from_slice(&[0u8; 6]);
     out.extend_from_slice(&metadata.mesh_topology_revision.to_le_bytes());
     out.extend_from_slice(&metadata.mesh_topology_hash);
     out.extend_from_slice(&metadata.indexing.code().to_le_bytes());
@@ -217,6 +223,7 @@ fn encode_field_vector_metadata(
     out.extend_from_slice(&(scope_id_bytes.len() as u16).to_le_bytes());
     out.extend_from_slice(scope_kind_bytes);
     out.extend_from_slice(scope_id_bytes);
+    out.extend_from_slice(generation_id_bytes);
     for node_index in metadata.node_indices {
         out.extend_from_slice(&node_index.to_le_bytes());
     }
@@ -786,7 +793,7 @@ mod tests {
     #[test]
     fn field_vector_serializer_v3_encodes_full_domain_metadata() {
         let metadata = FieldVectorBinaryMetadata {
-            domain_generation_id: 42,
+            domain_generation_id: "42",
             mesh_topology_revision: 7,
             mesh_topology_hash: [0xAB; 32],
             scope_kind: "full",
@@ -802,16 +809,18 @@ mod tests {
         assert_eq!(&binary[0..4], b"FMVP");
         assert_eq!(binary[4], 3);
         assert_eq!(&binary[48..52], b"FMMI");
-        assert_eq!(u64::from_le_bytes(binary[56..64].try_into().unwrap()), 42);
+        assert_eq!(u16::from_le_bytes(binary[52..54].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(binary[56..58].try_into().unwrap()), 2);
         assert_eq!(u64::from_le_bytes(binary[64..72].try_into().unwrap()), 7);
         assert_eq!(u32::from_le_bytes(binary[104..108].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(binary[108..112].try_into().unwrap()), 0);
+        assert_eq!(&binary[120..122], b"42");
     }
 
     #[test]
     fn field_vector_serializer_v3_encodes_explicit_node_indices() {
         let metadata = FieldVectorBinaryMetadata {
-            domain_generation_id: 42,
+            domain_generation_id: "42",
             mesh_topology_revision: 7,
             mesh_topology_hash: [0xCD; 32],
             scope_kind: "part",
@@ -833,7 +842,8 @@ mod tests {
 
         assert_eq!(u32::from_le_bytes(binary[104..108].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(binary[108..112].try_into().unwrap()), 2);
-        let node_indices_offset = 48 + 68 + "part".len() + "part:a".len();
+        let node_indices_offset =
+            48 + 68 + "part".len() + "part:a".len() + metadata.domain_generation_id.len();
         assert_eq!(
             &binary[node_indices_offset..node_indices_offset + 8],
             &[3, 0, 0, 0, 1, 0, 0, 0]
@@ -844,7 +854,7 @@ mod tests {
     #[test]
     fn field_vector_serializer_v3_validates_node_indices_by_indexing() {
         let sampled = FieldVectorBinaryMetadata {
-            domain_generation_id: 42,
+            domain_generation_id: "42",
             mesh_topology_revision: 7,
             mesh_topology_hash: [0xEF; 32],
             scope_kind: "part",

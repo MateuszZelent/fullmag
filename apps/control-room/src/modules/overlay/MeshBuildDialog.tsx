@@ -4,6 +4,12 @@ import { useEffect, useReducer, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
+  FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
+  UNKNOWN_MESH_COMMAND_LANE_REASON,
+  resolveMeshCommandLane,
+  type MeshCommandLane,
+} from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
   useModelRegionDiagnosticsResource,
@@ -33,6 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { Button } from "@/shared/ui/Button";
 import { MeshBuildConfirmDialogContent } from "./mesh-build/MeshBuildConfirmDialog";
 import { buildRegionMeshBuildReasonRows } from "./mesh-build/meshBuildRegionReasons";
 import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
@@ -149,7 +156,10 @@ function meshBuildDialogReducer(
 }
 
 type MeshBuildDialogRuntimeStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  capabilities: Pick<
+    LiveStatusResource["capabilities"],
+    "active_lane" | "explicit_topology"
+  >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -163,6 +173,7 @@ function selectMeshBuildDialogRuntimeStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
+      active_lane: status.data.capabilities.active_lane,
       explicit_topology: status.data.capabilities.explicit_topology,
     },
     domain: {
@@ -184,11 +195,42 @@ function meshBuildDialogRuntimeStatusEquals(
   return (
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
+    previous.capabilities.active_lane.operations.grid_build.reason ===
+      next.capabilities.active_lane.operations.grid_build.reason &&
+    previous.capabilities.active_lane.operations.grid_build.state ===
+      next.capabilities.active_lane.operations.grid_build.state &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision
   );
+}
+
+export function resolveMeshBuildDialogLane(
+  discretization: unknown,
+): MeshCommandLane {
+  return resolveMeshCommandLane(discretization);
+}
+
+export function shouldLoadMeshBuildDialogFemResources(
+  open: boolean,
+  lane: MeshCommandLane,
+): boolean {
+  return open && lane === "fem";
+}
+
+export function meshBuildDialogUnavailableMessage(
+  lane: MeshCommandLane,
+  fdmGridRefreshReason?: string,
+): string | null {
+  if (lane === "fdm") {
+    return (
+      fdmGridRefreshReason ??
+      "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists."
+    );
+  }
+  if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
+  return null;
 }
 
 export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
@@ -213,33 +255,52 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     };
   } | null>(null);
 
-  const resourceData = useStudyRuntimeCommandResourceData();
+  const runtimeStatus = useSessionStatusSelector(
+    selectMeshBuildDialogRuntimeStatus,
+    { enabled: state.open, isEqual: meshBuildDialogRuntimeStatusEquals },
+  );
+  const lane = resolveMeshBuildDialogLane(runtimeStatus?.domain.discretization);
+  const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
+    state.open,
+    lane,
+  );
+  const resourceData = useStudyRuntimeCommandResourceData({
+    enabled: explicitFemLane,
+  });
   const commandContext = createCommandContext(state.source, kernel, {
     input: state.input,
     resourceData,
     sourceDetail: state.sourceDetail,
   });
-  const runtimeStatus = useSessionStatusSelector(
-    selectMeshBuildDialogRuntimeStatus,
-    { enabled: state.open, isEqual: meshBuildDialogRuntimeStatusEquals },
+  const unavailableMessage = meshBuildDialogUnavailableMessage(
+    lane,
+    runtimeStatus?.capabilities.active_lane.operations.grid_build.reason,
   );
   const activeBuild = useMeshBuildCurrent({
-    enabled: state.open && (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) || state.phase === "submitting"),
+    enabled:
+      explicitFemLane &&
+      (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) ||
+        state.phase === "submitting"),
   });
   const latestBuild = useMeshBuildLatestSuccessful({
-    enabled: state.open && (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) || state.phase === "submitting"),
+    enabled:
+      explicitFemLane &&
+      (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) ||
+        state.phase === "submitting"),
   });
   const summary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(state.open, runtimeStatus),
+    enabled:
+      explicitFemLane && shouldLoadRuntimeMeshSummary(state.open, runtimeStatus),
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(state.open, runtimeStatus),
+    enabled:
+      explicitFemLane && shouldLoadRuntimeMeshManifest(state.open, runtimeStatus),
   });
   const sharedQuality = useMeshSharedDomainQualityResource({
-    enabled: state.open,
+    enabled: explicitFemLane && state.open,
   });
   const regionDiagnostics = useModelRegionDiagnosticsResource({
-    enabled: state.open,
+    enabled: explicitFemLane && state.open,
   });
 
   const currentSnapshot = state.open ? snapshotBefore : null;
@@ -260,39 +321,51 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const targetLabel =
     targetLabelForPendingCommand(state.commandId, state.input) ??
     targetLabelForBuild(activeBuild.data?.active_build);
-  const currentSummary = [
-    { label: "Mesh", value: manifest.data?.mesh_name ?? "not built" },
-    {
-      label: "Revision",
-      value: String(summary.data?.revision ?? activeBuild.data?.revision ?? "unknown"),
-    },
-    { label: "Build resource", value: activeBuild.status },
-    { label: "Active build", value: buildStatus },
-    {
-      label: "Last error",
-      value:
-        activeBuild.data?.last_build_error ??
-        latestBuild.data?.last_build_error ??
-        "none",
-    },
-  ];
+  const currentSummary = explicitFemLane
+    ? [
+        { label: "Mesh", value: manifest.data?.mesh_name ?? "not built" },
+        {
+          label: "Revision",
+          value: String(
+            summary.data?.revision ?? activeBuild.data?.revision ?? "unknown",
+          ),
+        },
+        { label: "Build resource", value: activeBuild.status },
+        { label: "Active build", value: buildStatus },
+        {
+          label: "Last error",
+          value:
+            activeBuild.data?.last_build_error ??
+            latestBuild.data?.last_build_error ??
+            "none",
+        },
+      ]
+    : [
+        { label: "Mesh lane", value: lane === "fdm" ? "FDM structured grid" : "unresolved" },
+        { label: "Availability", value: unavailableMessage ?? "not applicable" },
+      ];
   const regionReasonRows = buildRegionMeshBuildReasonRows(regionDiagnostics.data);
-  const newSummary = [
-    { label: "Requested target", value: targetLabel },
-    {
-      label: "Command",
-      value: state.commandId ?? "none",
-    },
-    {
-      label: "Policy changes",
-      value: diffRows.filter((r) => r.state !== "unchanged").length === 0 ? "No pending policy diff" : String(diffRows.filter((r) => r.state !== "unchanged").length),
-    },
-    {
-      label: "Expected result",
-      value: "New mesh revision, manifest, quality and viewport render",
-    },
-    ...regionReasonRows,
-  ];
+  const newSummary = explicitFemLane
+    ? [
+        { label: "Requested target", value: targetLabel },
+        {
+          label: "Command",
+          value: state.commandId ?? "none",
+        },
+        {
+          label: "Policy changes",
+          value:
+            diffRows.filter((r) => r.state !== "unchanged").length === 0
+              ? "No pending policy diff"
+              : String(diffRows.filter((r) => r.state !== "unchanged").length),
+        },
+        {
+          label: "Expected result",
+          value: "New mesh revision, manifest, quality and viewport render",
+        },
+        ...regionReasonRows,
+      ]
+    : [];
   const snapshotRows = buildMeshSnapshotRows({
     current: currentSnapshot?.stats ?? {
       build: asRecord(latestBuild.data),
@@ -405,6 +478,13 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
 
   async function confirmBuild(): Promise<void> {
     if (!state.commandId) return;
+    if (!explicitFemLane) {
+      dispatch({
+        message: unavailableMessage ?? UNKNOWN_MESH_COMMAND_LANE_REASON,
+        type: "error",
+      });
+      return;
+    }
     dispatch({ type: "submitting" });
     const result = await kernel.commands.execute(
       state.commandId,
@@ -432,33 +512,81 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       >
         <DialogHeader>
           <DialogTitle>
-            {state.phase === "post-build"
+            {!explicitFemLane
+              ? lane === "fdm"
+                ? "FDM Grid & Mask Refresh"
+                : "FEM Mesh Controls Unavailable"
+              : state.phase === "post-build"
               ? "Mesh Build Complete"
               : state.phase === "error"
                 ? "Mesh Build Failed"
                 : "Mesh Build Confirmation"}
           </DialogTitle>
           <DialogDescription id="fm-mesh-build-dialog-description">
-            Confirm the mesh target and parameter changes. Mesh Jobs tracks the long build log and pipeline.
+            {explicitFemLane
+              ? "Confirm the mesh target and parameter changes. Mesh Jobs tracks the long build log and pipeline."
+              : unavailableMessage}
           </DialogDescription>
         </DialogHeader>
         <div className="fm-dialog__body">
-          <MeshBuildConfirmDialogContent
-            commandId={state.acceptedCommandId ?? state.lastCommandId}
-            commandStatus={state.lastCommandStatus}
-            currentSummary={currentSummary}
-            diffRows={diffRows}
-            errorMessage={state.errorMessage}
-            mode={state.phase}
-            newSummary={newSummary}
-            postBuildRows={snapshotRows}
-            targetLabel={targetLabel}
-            onApplyBuild={() => {
-              void confirmBuild();
-            }}
-            onCancel={() => dispatch({ open: false, type: "open" })}
-            onOpenMeshJobs={() => openMeshBuildDiagnostics(kernel)}
-          />
+          {explicitFemLane ? (
+            <MeshBuildConfirmDialogContent
+              commandId={state.acceptedCommandId ?? state.lastCommandId}
+              commandStatus={state.lastCommandStatus}
+              currentSummary={currentSummary}
+              diffRows={diffRows}
+              errorMessage={state.errorMessage}
+              mode={state.phase}
+              newSummary={newSummary}
+              postBuildRows={snapshotRows}
+              targetLabel={targetLabel}
+              onApplyBuild={() => {
+                void confirmBuild();
+              }}
+              onCancel={() => dispatch({ open: false, type: "open" })}
+              onOpenMeshJobs={() => openMeshBuildDiagnostics(kernel)}
+            />
+          ) : (
+            <section
+               aria-label={
+                lane === "fdm"
+                  ? "FDM grid and mask refresh unavailable"
+                  : "FEM mesh controls unavailable"
+               }
+               className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner"
+               data-command-unavailable-reason={
+                 lane === "fdm"
+                   ? FDM_MESH_COMMAND_NOT_APPLICABLE_REASON
+                   : UNKNOWN_MESH_COMMAND_LANE_REASON
+               }
+             >
+              <h3 className="fm-mesh-build-confirm__section-title">
+                {lane === "fdm"
+                  ? "Structured-grid lifecycle"
+                  : "Structured-grid lane"}
+              </h3>
+              <p className="fm-mesh-build-confirm__empty">
+                {unavailableMessage}
+              </p>
+              {lane === "fdm" ? (
+                <p className="fm-mesh-build-confirm__empty">
+                  Grid dimensions and membership masks are materialized by the
+                  resolved execution plan; this dialog never substitutes FEM
+                  mesh policy controls for them.
+                </p>
+              ) : null}
+              <div className="fm-mesh-build-confirm__actions">
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => dispatch({ open: false, type: "open" })}
+                >
+                  Close
+                </Button>
+              </div>
+            </section>
+          )}
         </div>
       </DialogContent>
     </Dialog>

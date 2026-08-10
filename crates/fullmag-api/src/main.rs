@@ -121,6 +121,8 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
     let workspace_revision = current_live_workspace_revision(state).await;
     let domain_generation_id =
         router_v2::handlers::sessions::status::domain_generation_id(snapshot);
+    let domain_generation_revision =
+        router_v2::handlers::sessions::status::domain_generation_revision(snapshot);
     let field_catalog_revision =
         router_v2::handlers::sessions::status::field_catalog_revision(snapshot);
     let field_revision = router_v2::handlers::sessions::status::field_revision(snapshot);
@@ -134,7 +136,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
         revisions: RealtimeResourceRevisionMap {
             topology_revision: router_v2::handlers::sessions::status::topology_revision(
                 snapshot,
-                domain_generation_id,
+                domain_generation_revision,
             ),
             field_catalog_revision,
             field_revision,
@@ -152,6 +154,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             visualization_state_revision: display_revision,
             workspace_revision,
             mesh_revision: snapshot.mesh_revision,
+            region_membership_revision: snapshot.region_realization_revisions.membership,
             mesh_build_revision: snapshot.mesh_build_revision,
             commands_revision,
             stages_revision: snapshot.stage_execution_revision,
@@ -239,7 +242,7 @@ fn current_live_realtime_changes(
             resource_id: Some("catalog".to_string()),
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: Some("/v2/sessions/current/data/fields".to_string()),
         },
         RealtimeResourceChange {
@@ -253,7 +256,7 @@ fn current_live_realtime_changes(
                 .cloned()
                 .collect(),
             broad: true,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: None,
         },
         RealtimeResourceChange {
@@ -267,11 +270,11 @@ fn current_live_realtime_changes(
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Domain,
-            revision: realtime_state.revisions.domain_generation_id,
+            revision: realtime_state.revisions.topology_revision,
             resource_id: None,
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: Some("/v2/sessions/current/data/domain/meta".to_string()),
         },
         RealtimeResourceChange {
@@ -280,8 +283,17 @@ fn current_live_realtime_changes(
             resource_id: Some("topology".to_string()),
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: Some("/v2/sessions/current/data/domain/topology".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Domain,
+            revision: realtime_state.revisions.region_membership_revision,
+            resource_id: Some("fdm-region-memberships".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
+            recommended_fetch: Some("/v2/sessions/current/data/fdm-region-memberships".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Artifacts,
@@ -320,7 +332,7 @@ fn current_live_realtime_changes(
             resource_id: None,
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: Some("/v2/sessions/current/meshing/summary".to_string()),
         });
         for recommended_fetch in &realtime_state.mesh_resource_fetches {
@@ -330,7 +342,7 @@ fn current_live_realtime_changes(
                 resource_id: None,
                 quantity_ids: Vec::new(),
                 broad: false,
-                domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+                domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
                 recommended_fetch: Some(recommended_fetch.clone()),
             });
         }
@@ -342,7 +354,7 @@ fn current_live_realtime_changes(
             resource_id: None,
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: Some("/v2/sessions/current/meshing/builds/current".to_string()),
         });
         changes.push(RealtimeResourceChange {
@@ -351,7 +363,7 @@ fn current_live_realtime_changes(
             resource_id: None,
             quantity_ids: Vec::new(),
             broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: Some(
                 "/v2/sessions/current/meshing/builds/latest-successful".to_string(),
             ),
@@ -416,7 +428,7 @@ fn current_live_realtime_changes(
             resource_id: Some("monitor".to_string()),
             quantity_ids: Vec::new(),
             broad: true,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: None,
         });
     }
@@ -431,7 +443,7 @@ fn current_live_realtime_changes(
             .cloned()
             .collect(),
         broad: true,
-        domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+        domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
         recommended_fetch: None,
     });
     if realtime_state.revisions.mesh_revision > 0 {
@@ -441,7 +453,7 @@ fn current_live_realtime_changes(
             resource_id: Some("mesh".to_string()),
             quantity_ids: Vec::new(),
             broad: true,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
             recommended_fetch: None,
         });
     }
@@ -501,7 +513,8 @@ fn current_live_realtime_change_revision_changed(
 ) -> bool {
     let domain_generation_changed = change
         .domain_generation_id
-        .is_some_and(|revision| revision != previous.domain_generation_id);
+        .as_deref()
+        .is_some_and(|identity| identity != previous.domain_generation_id);
     match change.resource {
         RealtimeResourceName::Display => previous.display_revision != change.revision,
         RealtimeResourceName::VisualizationState => {
@@ -518,14 +531,17 @@ fn current_live_realtime_change_revision_changed(
             _ => previous.fields_revision != change.revision || domain_generation_changed,
         },
         RealtimeResourceName::Scalars => previous.scalars_revision != change.revision,
-        RealtimeResourceName::Domain => {
-            if change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/domain/meta")
-            {
-                previous.domain_generation_id != change.revision
-            } else {
-                previous.topology_revision != change.revision || domain_generation_changed
+        RealtimeResourceName::Domain => match change.resource_id.as_deref() {
+            Some("fdm-region-memberships") => {
+                previous.region_membership_revision != change.revision || domain_generation_changed
             }
-        }
+            _ if change.recommended_fetch.as_deref()
+                == Some("/v2/sessions/current/data/domain/meta") =>
+            {
+                previous.topology_revision != change.revision
+            }
+            _ => previous.topology_revision != change.revision || domain_generation_changed,
+        },
         RealtimeResourceName::Artifacts => previous.artifacts_revision != change.revision,
         RealtimeResourceName::Logs => previous.engine_log_revision != change.revision,
         RealtimeResourceName::Diagnostics => previous.solver_profile_revision != change.revision,
@@ -572,13 +588,14 @@ mod realtime_change_tests {
             command_completion_revision: 16,
             fields_revision: 13, // must equal field_revision — they share the same source
             scalars_revision: 18,
-            domain_generation_id: 19,
+            domain_generation_id: "19".to_string(),
             artifacts_revision: 20,
             engine_log_revision: 21,
             solver_profile_revision: 0,
             display_revision: 22,
             workspace_revision: 23,
             mesh_revision: 24,
+            region_membership_revision: 31,
             mesh_build_revision: 25,
             commands_revision: 26,
             stages_revision: 27,
@@ -610,6 +627,7 @@ mod realtime_change_tests {
             .collect::<BTreeSet<_>>();
 
         assert!(fetches.contains("/v2/sessions/current/data/domain/topology"));
+        assert!(fetches.contains("/v2/sessions/current/data/fdm-region-memberships"));
         assert!(fetches.contains("/v2/sessions/current/meshing/builds/current"));
         assert!(fetches.contains("/v2/sessions/current/meshing/builds/latest-successful"));
         assert!(fetches.contains("/v2/sessions/current/meshing/summary"));
@@ -622,6 +640,33 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
         assert!(fetches.contains("/v2/sessions/current/model/planar-monitors"));
         assert!(fetches.contains("/v2/sessions/current/visualization/state"));
+    }
+
+    #[test]
+    fn realtime_changes_since_refreshes_only_fdm_membership_when_its_revision_changes() {
+        let previous = revisions();
+        let mut current = previous.clone();
+        current.region_membership_revision += 1;
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current,
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
+        assert_eq!(changes.len(), 1);
+        let change = &changes[0];
+        assert!(matches!(change.resource, RealtimeResourceName::Domain));
+        assert_eq!(
+            change.resource_id.as_deref(),
+            Some("fdm-region-memberships")
+        );
+        assert_eq!(
+            change.recommended_fetch.as_deref(),
+            Some("/v2/sessions/current/data/fdm-region-memberships")
+        );
+        assert_eq!(change.domain_generation_id.as_deref(), Some("19"));
     }
 
     #[test]
@@ -812,7 +857,7 @@ mod realtime_change_tests {
     fn realtime_changes_since_refreshes_field_samples_when_only_domain_generation_changes() {
         let previous = revisions();
         let mut current_revisions = previous.clone();
-        current_revisions.domain_generation_id += 1;
+        current_revisions.domain_generation_id = "20".to_string();
         let state = CurrentLiveRealtimeState {
             session_id: "session-1".to_string(),
             run_id: Some("run-1".to_string()),
@@ -826,7 +871,7 @@ mod realtime_change_tests {
             matches!(change.resource, RealtimeResourceName::Fields)
                 && change.resource_id.as_deref() == Some("samples")
                 && change.revision == previous.field_revision
-                && change.domain_generation_id == Some(previous.domain_generation_id + 1)
+                && change.domain_generation_id.as_deref() == Some("20")
         }));
     }
 
@@ -945,7 +990,7 @@ mod realtime_change_tests {
                     resource_id: Some("samples".to_string()),
                     quantity_ids: vec!["m".to_string()],
                     broad: false,
-                    domain_generation_id: Some(1),
+                    domain_generation_id: Some("1".to_string()),
                     recommended_fetch: None,
                 },
             ],
@@ -991,7 +1036,7 @@ mod realtime_change_tests {
                     resource_id: Some("samples".to_string()),
                     quantity_ids: vec!["m".to_string()],
                     broad: false,
-                    domain_generation_id: Some(1),
+                    domain_generation_id: Some("1".to_string()),
                     recommended_fetch: None,
                 },
             ],

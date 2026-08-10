@@ -69,6 +69,12 @@ function titleCase(value: string): string {
 }
 
 function resolveFamily(kind: string): FamilyDescriptor {
+  if (kind === "airbox.multilayer.target") {
+    return { tabs: [], typeLabel: "Multilayer Airbox target" };
+  }
+  if (kind === "fdm.cell" || kind === "mesh.grid" || kind.startsWith("mesh.grid.")) {
+    return { tabs: [], typeLabel: "FDM mesh" };
+  }
   if (kind.endsWith(".visualization") || kind.includes(".visualization.")) {
     return { tabs: [], typeLabel: "Display" };
   }
@@ -126,7 +132,7 @@ function resolveBreadcrumbs(
       id: `${selection.objectId}:object`,
       label: objectLabel,
       selection: {
-        kind: "object",
+        kind: "object.root",
         label: objectLabel,
         nodeId: `model:object:${selection.objectId}`,
         objectId: selection.objectId,
@@ -165,6 +171,26 @@ export function resolveInspectorDescriptor(
   const metadata: InspectorMetadataItem[] = [
     { label: "Kind", value: selection.kind },
   ];
+  const fdmCellRef =
+    selection.ref?.type === "fdm-cell" ? selection.ref : null;
+  if (fdmCellRef) {
+    return {
+      breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
+      metadata: [
+        { label: "Selected IJK snapshot", value: `[${fdmCellRef.ijk.join(", ")}]` },
+        { label: "Selected mask snapshot", value: fdmCellRef.maskState },
+        { label: "Selected grid fingerprint", value: fdmCellRef.gridFingerprint },
+        {
+          label: "Selected membership revision",
+          value: fdmCellRef.membershipRevision,
+        },
+      ],
+      status: null,
+      tabs: family.tabs.slice(0, 4),
+      title,
+      typeLabel: family.typeLabel,
+    };
+  }
   const meshCellRef = selection.ref && "elementFamily" in selection.ref
     ? selection.ref
     : null;

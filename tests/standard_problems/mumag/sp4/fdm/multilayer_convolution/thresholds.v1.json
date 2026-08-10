@@ -1,0 +1,52 @@
+{
+  "schema_version": "fdm_multilayer_thresholds.v1",
+  "qualification_scope": "SP4-derived, not canonical SP4 qualification",
+  "units": {
+    "field": "A/m",
+    "dimensionless": "1"
+  },
+  "cpu_fp64_vs_direct": {
+    "metric": "H_demag field difference",
+    "norm": "relative_linf_with_absolute_floor",
+    "rtol": 1e-10,
+    "rtol_unit": "1",
+    "atol": 1e-6,
+    "atol_unit": "A/m"
+  },
+  "cuda_fp64_vs_cpu": {
+    "metric": "H_demag field difference",
+    "norm": "relative_linf_with_absolute_floor",
+    "rtol": 1e-8,
+    "rtol_unit": "1",
+    "atol": 1e-4,
+    "atol_unit": "A/m"
+  },
+  "cuda_fp32_vs_cuda_fp64": {
+    "metric": "H_demag field difference",
+    "norm": "weighted_rms_and_component_linf",
+    "weighted_rms_unit": "1",
+    "weighted_rms_max": 2e-4,
+    "max_component_normalized": 5e-4,
+    "max_component_normalized_unit": "1"
+  },
+  "transfer_moment_residual": {
+    "metric": "volume-weighted total magnetic moment residual",
+    "norm": "relative_l2",
+    "unit": "1",
+    "fp64": 1e-12,
+    "fp32": 5e-6
+  },
+  "energy_finite_difference_residual": {
+    "metric": "demagnetizing energy finite-difference residual",
+    "norm": "relative_absolute_residual",
+    "unit": "1",
+    "fp64": 1e-8,
+    "fp32": 5e-4
+  },
+  "field_floor": {
+    "metric": "relative field denominator floor",
+    "norm": "max",
+    "unit": "A/m",
+    "expression": "max(1 A/m, 1e-8*H_scale)"
+  }
+}

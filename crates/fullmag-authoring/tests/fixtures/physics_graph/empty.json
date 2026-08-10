@@ -1,0 +1,7 @@
+{
+  "id": "empty",
+  "scene": {"version": "scene.v2", "revision": 1, "scene": {"id": "empty", "name": "Empty"}},
+  "expected_modules": [],
+  "expected_edges": [],
+  "expected_explorer_groups": []
+}

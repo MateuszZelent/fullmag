@@ -1041,7 +1041,7 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_direct_torques.hpp\"") !=
                 std::string::npos &&
-            rhs_source.find("gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, reason)") !=
+            rhs_source.find("gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, evaluation_time_s, reason)") !=
                 std::string::npos &&
             rhs_source.find("gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)") !=
                 std::string::npos,

@@ -9,14 +9,20 @@ import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import {
   FDM_CUBOID_UPLOAD_BATCH_SIZE,
   buildFdmPointPositions,
-  buildFdmCuboidInstanceModel,
+  buildFdmCuboidInstanceModel as buildFdmCuboidInstanceModelWithMembership,
   buildFdmCuboidUploadBatches,
+  buildFdmCuboidColorUploadBatchesForView,
+  fdmCuboidUsesInstanceColors,
   buildFdmVectorSegments,
+  fdmCuboidSurfaceMeshKey,
   hasAnyEffectiveFdmPass,
   resolveFdmCuboidPassPlan,
   resolveFdmVectorGlyphScale,
   recordFdmCuboidSurfaceAdoption,
+  resolveFdmCuboidGeometryScopeInstanceOrdinals,
+  resolveFdmCuboidSourceInstanceOrdinal,
 } from "./FdmCuboidLayer";
+import type { FdmCuboidInstanceModelOptions } from "./fdmCuboidBuildModel";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 function domainFixture(
@@ -38,6 +44,22 @@ function domainFixture(
     totalCells: 8,
     ...overrides,
   };
+}
+
+function buildFdmCuboidInstanceModel(
+  domain: FdmGridRenderDomain | null,
+  options: Partial<FdmCuboidInstanceModelOptions> = {},
+) {
+  const {
+    cellSelection = "active",
+    realizedRegionIds = domain ? new Uint32Array(domain.totalCells) : null,
+    ...rest
+  } = options;
+  return buildFdmCuboidInstanceModelWithMembership(domain, {
+    ...rest,
+    cellSelection,
+    realizedRegionIds,
+  });
 }
 
 function vectorField(values: number[]): DecodedFieldVector {
@@ -70,6 +92,157 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("maps rendered target instances back to the shared sampled model", () => {
+    const instanceOrdinals = Uint32Array.from([3, 1]);
+
+    expect(resolveFdmCuboidSourceInstanceOrdinal(0, instanceOrdinals, 4)).toBe(3);
+    expect(resolveFdmCuboidSourceInstanceOrdinal(1, instanceOrdinals, 4)).toBe(1);
+    expect(resolveFdmCuboidSourceInstanceOrdinal(2, instanceOrdinals, 4)).toBeNull();
+    expect(resolveFdmCuboidSourceInstanceOrdinal(0, null, 4)).toBe(0);
+  });
+
+  it("uses target-local surface instances for every surface-scoped cell pass", () => {
+    const targetInstances = Uint32Array.from([0, 1, 2, 3]);
+    const targetSurfaceInstances = Uint32Array.from([0, 3]);
+
+    expect(
+      Array.from(
+        resolveFdmCuboidGeometryScopeInstanceOrdinals(
+          "surface",
+          targetInstances,
+          targetSurfaceInstances,
+        ) ?? [],
+      ),
+    ).toEqual([0, 3]);
+    expect(
+      Array.from(
+        resolveFdmCuboidGeometryScopeInstanceOrdinals(
+          "full",
+          targetInstances,
+          targetSurfaceInstances,
+        ) ?? [],
+      ),
+    ).toEqual([0, 1, 2, 3]);
+  });
+
+  it("builds points from a target view without copying the shared centers", () => {
+    const source = buildFdmCuboidInstanceModel(domainFixture());
+
+    expect(
+      Array.from(
+        buildFdmPointPositions(
+          source,
+          "full",
+          Uint32Array.from([3, 1]),
+        ) ?? [],
+      ),
+    ).toEqual([
+      source?.centers[9],
+      source?.centers[10],
+      source?.centers[11],
+      source?.centers[3],
+      source?.centers[4],
+      source?.centers[5],
+    ]);
+  });
+
+  it("builds vector segments only for target-view instances", () => {
+    const source = buildFdmCuboidInstanceModel(domainFixture());
+    const field = vectorField([
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+      1, 0, 0,
+    ]);
+
+    const segments = buildFdmVectorSegments(source, field, 1, 8, {
+      anchorMode: "tail",
+      instanceOrdinals: Uint32Array.from([3, 1]),
+    });
+
+    expect(segments).toHaveLength(2 * 7);
+    expect(Array.from(segments?.slice(0, 3) ?? [])).toEqual([
+      source?.centers[9],
+      source?.centers[10],
+      source?.centers[11],
+    ]);
+  });
+
+  it("keeps points and vectors for an internal target-local surface", () => {
+    const source = buildFdmCuboidInstanceModel(
+      domainFixture({
+        displayCellBudget: 27,
+        displayCellCount: 27,
+        shape: [3, 3, 3],
+        stride: 1,
+        totalCells: 27,
+      }),
+    );
+    const centerOnly = Uint32Array.from([13]);
+    const field = vectorField(
+      Array.from({ length: 27 }, () => [1, 0, 0]).flat(),
+    );
+
+    expect(buildFdmPointPositions(source, "surface", centerOnly)).toHaveLength(3);
+    expect(
+      buildFdmVectorSegments(source, field, 1, 8, {
+        geometryScope: "surface",
+        instanceOrdinals: centerOnly,
+      }),
+    ).toHaveLength(7);
+  });
+
+  it("keeps magnetic and Airbox FDM cuboids as independent membership-gated passes", () => {
+    const sceneModelSource = readFileSync(viewport3DSceneModelPath, "utf8");
+    const sceneSource = readFileSync(viewport3DScenePath, "utf8");
+
+    expect(sceneModelSource).toContain("const fdmMembershipCurrent = Boolean(");
+    expect(sceneModelSource).toContain(
+      "fdmRealizedRegionIds instanceof Uint32Array",
+    );
+    expect(sceneModelSource).toContain('cellSelection: "active"');
+    expect(sceneModelSource).toContain('cellSelection: "inactive"');
+    expect(sceneModelSource).toContain("fdmAirboxInstanceModel");
+    expect(sceneSource).toContain("fdmAirboxInstanceModel: FdmCuboidInstanceModel");
+    expect(sceneSource).toContain("settings={fdmUniverseOutsideSupportSettings}");
+  });
+
+  it("reconstructs the surface mesh when field colors become available", () => {
+    expect(fdmCuboidSurfaceMeshKey(4096, false)).not.toBe(
+      fdmCuboidSurfaceMeshKey(4096, true),
+    );
+    expect(fdmCuboidSurfaceMeshKey(4096, true)).toBe(
+      "fdm-cuboids-surface-4096-field-colors",
+    );
+  });
+
+  it("never lets stale field colors override an explicitly solid surface", () => {
+    const surfaceColors = {
+      buildKey: "field-colors",
+      colors: new Float32Array(12),
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      fdmCuboidUsesInstanceColors(
+        { surfaceColorSource: "solid" },
+        surfaceColors,
+        4,
+      ),
+    ).toBe(false);
+    expect(
+      fdmCuboidUsesInstanceColors(
+        { surfaceColorSource: "orientation" },
+        surfaceColors,
+        4,
+      ),
+    ).toBe(true);
+  });
+
   it("clears the exact FDM surface receipt when colors disappear or the pass unmounts", () => {
     const source = readFileSync(fdmCuboidLayerPath, "utf8");
 
@@ -97,6 +270,28 @@ describe("FdmCuboidLayer model", () => {
       fieldBufferId: "field-global",
       kind: "surface",
       scalarBufferKey: "scalar-global",
+    });
+  });
+
+  it("records target-aware FDM surface adoption against the exact carrier", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["region:left:core", ["region:left:core"]]]));
+    registry.retainDemand("region:left:core");
+
+    recordFdmCuboidSurfaceAdoption({
+      carrierId: "region:left:core",
+      fieldBufferId: "field-global",
+      registry,
+      scalarBuffer: {
+        buildKey: "scalar-left-core",
+        colors: new Float32Array(6),
+        range: { max: 1, min: -1 },
+      },
+    });
+
+    expect(registry.snapshot("region:left:core")[0]).toMatchObject({
+      carrierId: "region:left:core",
+      scalarBufferKey: "scalar-left-core",
     });
   });
   it("keeps every independently enabled FDM pass renderable", () => {
@@ -277,8 +472,8 @@ describe("FdmCuboidLayer model", () => {
       voxelMagnitudeThreshold: 0.5,
     });
 
-    expect(model?.count).toBe(2);
-    expect(Array.from(model?.cellIndices ?? [])).toEqual([2, 6]);
+    expect(model?.count).toBe(4);
+    expect(Array.from(model?.cellIndices ?? [])).toEqual([1, 2, 3, 6]);
   });
 
   it("applies stylized topography displacement from the selected field component", () => {
@@ -331,7 +526,10 @@ describe("FdmCuboidLayer model", () => {
       buildModelSource.indexOf("export function buildFdmVectorSegmentsUncached"),
     );
 
-    expect(instanceModelBlock).toContain("new Uint32Array(candidateCount)");
+    expect(instanceModelBlock).toContain("sampleFdmDisplayCellIndices(");
+    expect(instanceModelBlock).toContain(
+      "new Uint32Array(displayCellIndices.length)",
+    );
     expect(instanceModelBlock).not.toContain("sampledCellIndices.push");
     expect(instanceModelBlock).not.toContain("number[] = []");
   });
@@ -386,6 +584,48 @@ describe("FdmCuboidLayer model", () => {
     ]);
   });
 
+  it("maps explicit FDM vector payload indices to cell ordinals", () => {
+    const model = buildFdmCuboidInstanceModel(
+      domainFixture({
+        displayCellBudget: 4,
+        displayCellCount: 4,
+        shape: [4, 1, 1],
+        stride: 1,
+        totalCells: 4,
+      }),
+    );
+    const segments = buildFdmVectorSegments(
+      model,
+      {
+        ...vectorField([
+          1, 0, 0, // field index 0 is cell ordinal 3
+          0, 1, 0, // field index 1 is cell ordinal 1
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([3, 1]),
+      },
+      2e-9,
+      2,
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      expect.closeTo(1.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      1,
+      expect.closeTo(2.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(2.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      1,
+    ]);
+  });
+
   it("bounds FDM vector segment cache entries when vector scale changes", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
     const fieldVector = vectorField([
@@ -423,7 +663,8 @@ describe("FdmCuboidLayer model", () => {
     expect(sceneModelSource).toContain("const fdmInstanceModelEnabled = Boolean(");
     expect(sceneModelSource).toContain("useFdmCuboidBuildResult");
     expect(sceneModelSource).toContain("buildViewport3DFdmCuboidJobKey");
-    expect(sceneModelSource).toContain("fdmInstanceModel?.cellIndices");
+    expect(sceneModelSource).toContain("buildViewport3DFdmTargetViews");
+    expect(sceneModelSource).toContain("view.cellIndices");
     expect(sceneModelSource).toContain(
       "modelFieldVector: fdmInstanceModelFieldVector",
     );
@@ -434,8 +675,10 @@ describe("FdmCuboidLayer model", () => {
     expect(sceneModelSource).not.toContain("const fdmSurfaceInstanceModel");
     expect(sceneSource).toContain("fdmInstanceModel: FdmCuboidInstanceModel | null | undefined");
     expect(sceneSource).toContain("fdmVectorSegments: Float32Array | null");
-    expect(sceneSource).toContain("instanceModel={fdmInstanceModel}");
-    expect(sceneSource).toContain("vectorSegments={fdmVectorSegments}");
+    expect(sceneSource).toContain("instanceModel={view.sourceModel}");
+    expect(sceneSource).toContain("instanceOrdinals={view.instanceOrdinals}");
+    expect(sceneSource).toContain("carrierId={view.target.id}");
+    expect(sceneSource).toContain("vectorSegments={view.vectorSegments}");
     expect(layerSource).toContain("instanceModel?: FdmCuboidInstanceModel | null");
     expect(layerSource).toContain("const model = instanceModel ?? null");
     expect(layerSource).not.toContain("instanceModel !== undefined");
@@ -452,29 +695,39 @@ describe("FdmCuboidLayer model", () => {
 
     expect(layerSource).toContain("MeshBasicMaterial");
     expect(layerSource).not.toContain("MeshStandardMaterial");
+    expect(layerSource).toContain("color.fill(1);");
+    expect(layerSource).toContain("new BufferAttribute(color, 3)");
   });
 
-  it("keeps FDM matrix uploads independent from scalar color changes", () => {
+  it("keeps instance colors neutral against the regular vertex-color channel", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(layerSource).toContain(
+      'next.setAttribute("color", new BufferAttribute(color, 3))',
+    );
+    expect(layerSource).toContain("color.fill(1)");
+  });
+
+  it("re-uploads FDM matrices when the surface mesh identity changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const matrixUploadBlock = layerSource.slice(
       layerSource.indexOf("interface FdmCuboidMatrixUploadOptions"),
       layerSource.indexOf("interface FdmCuboidColorUploadOptions"),
     );
 
-    expect(matrixUploadBlock).not.toContain("usesInstanceColors");
+    expect(matrixUploadBlock).toContain("surfaceMeshKey");
   });
 
-  it("keeps the FDM surface mesh mounted while scalar coloring changes", () => {
+  it("reconstructs the FDM surface mesh when scalar coloring changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const surfaceMeshBlock = layerSource.slice(
       layerSource.indexOf("<instancedMesh"),
       layerSource.indexOf("ref={surfaceRef}"),
     );
 
-    expect(surfaceMeshBlock).toContain('key={`fdm-cuboids-surface-${model.count}`}');
-    expect(surfaceMeshBlock).not.toContain("usesInstanceColors");
-    expect(surfaceMeshBlock).not.toContain('"field"');
-    expect(surfaceMeshBlock).not.toContain('"solid"');
+    expect(surfaceMeshBlock).toContain(
+      "key={surfaceMeshKey}",
+    );
   });
 
   it("does not recreate FDM materials for vector-only setting changes", () => {
@@ -527,6 +780,17 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("if (eventIntersectsRegionOverlay(event)) return;");
     expect(layerSource).not.toContain("event.stopPropagation();\n    onSelectDomain();");
     expect(layerSource).toContain("onSelectDomain();");
+  });
+
+  it("routes target-view picks through a target-aware callback", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const sceneSource = readFileSync(viewport3DScenePath, "utf8");
+
+    expect(layerSource).toContain("onSelectTarget?: () => void");
+    expect(layerSource).toContain("if (onSelectTarget)");
+    expect(layerSource).toContain("onSelectTarget();");
+    expect(sceneSource).toContain("onSelectFdmTarget");
+    expect(sceneSource).toContain("onSelectTarget={() => onSelectFdmTarget(view.target)}");
   });
 
   it("reuses FDM vector segment buffers for the same model, field, and sampling options", () => {
@@ -592,6 +856,16 @@ describe("FdmCuboidLayer model", () => {
       { end: 5, start: 4 },
     ]);
     expect(FDM_CUBOID_UPLOAD_BATCH_SIZE).toBeLessThanOrEqual(4096);
+  });
+
+  it("bounds target color uploads by the target view, not the shared model", () => {
+    expect(
+      buildFdmCuboidColorUploadBatchesForView(
+        { count: 1_000_000 },
+        Uint32Array.from([999_999]),
+        256,
+      ),
+    ).toEqual([{ end: 1, start: 0 }]);
   });
 
   it("caps rendered FDM vector glyph scale to the local voxel size", () => {

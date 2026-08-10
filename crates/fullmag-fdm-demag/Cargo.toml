@@ -11,3 +11,6 @@ parallel = ["dep:rayon"]
 [dependencies]
 rustfft = "6.4"
 rayon = { version = "1.10", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"

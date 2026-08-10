@@ -1,6 +1,8 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
+import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
+
 import {
   normalizeViewport3DVectorColorMode,
   resolveViewport3DVectorColorRgb,
@@ -192,6 +194,83 @@ export function buildSampledScalarColors(
       colorPalette,
     );
     const target = index * 3;
+    colors[target] = red;
+    colors[target + 1] = green;
+    colors[target + 2] = blue;
+  }
+
+  return {
+    colors,
+    colorMode: resolvedColorMode,
+    colorPalette,
+    quantityId: fieldVector.quantityId,
+    range,
+    rangeDiagnostics: resolveScalarRangeDiagnostics(
+      fieldVector,
+      resolvedColorMode,
+    ),
+    scalarValues,
+  };
+}
+
+/**
+ * Builds scalar colors for FDM cuboids whose point indices are domain cell
+ * ordinals. FMVP full/legacy payloads are accepted only when their point count
+ * proves direct full-domain order; explicit/sampled payloads use nodeIndices as
+ * the cell-ordinal mapping. Invalid metadata fails closed so the layer keeps a
+ * neutral material instead of painting a wrong cell with a neighboring value.
+ */
+export function buildFdmSampledScalarColors(
+  fieldVector: DecodedFieldVector | null | undefined,
+  cellOrdinals: Uint32Array | null | undefined,
+  domainCellCount: number,
+  colorMode = "magnitude",
+  colorPalette = "viridis",
+  scalarRange?: ScalarRange | null,
+): ScalarColorBuffer | null {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  if (
+    !fieldVector ||
+    !cellOrdinals ||
+    cellOrdinals.length === 0 ||
+    fieldVector.pointCount === 0 ||
+    !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
+    resolvedColorMode === "monochrome"
+  ) {
+    return null;
+  }
+
+  const indexing = buildFdmFieldIndexResolver(fieldVector, domainCellCount);
+  if (indexing.status !== "compatible") return null;
+  for (const cellOrdinal of cellOrdinals) {
+    if (indexing.resolve(cellOrdinal) === null) return null;
+  }
+
+  const range =
+    resolveProvidedScalarRange(scalarRange) ??
+    resolveScalarRange(fieldVector, resolvedColorMode);
+  const colors = new Float32Array(cellOrdinals.length * 3);
+  const scalarValues = shaderScalarModeSupports(resolvedColorMode)
+    ? new Float32Array(cellOrdinals.length)
+    : undefined;
+
+  for (let index = 0; index < cellOrdinals.length; index += 1) {
+    const fieldIndex = indexing.resolve(cellOrdinals[index] ?? -1);
+    const target = index * 3;
+    if (fieldIndex === null) return null;
+    if (scalarValues) {
+      scalarValues[index] = scalarAt(fieldVector, fieldIndex, resolvedColorMode);
+    }
+    const [red, green, blue] = colorAt(
+      fieldVector,
+      fieldIndex,
+      resolvedColorMode,
+      range,
+      colorPalette,
+    );
     colors[target] = red;
     colors[target + 1] = green;
     colors[target + 2] = blue;

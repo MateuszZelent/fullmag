@@ -115,6 +115,56 @@ it("records full-airbox volume-edge hidden-edge semantics in topology telemetry"
   expect(boundsLayersSource).toContain("render-semantic=${resolveAirboxWireframeSemantic(renderSettings)}");
 });
 
+it("routes the distinct FDM universe overlay pick through its selection callback", () => {
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+  expect(source).toContain("name={model.target.id}");
+  expect(source).toContain("event.stopPropagation()");
+  expect(source).toContain("onSelect();");
+});
+
+it("uses the dedicated FDM universe target channels instead of fixed FEM airbox opacity", () => {
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+  expect(source).toContain("settings?.visible");
+  expect(source).toContain("settings.wireframeVisible");
+  expect(source).toContain("settings.wireframeOpacityPercent");
+  expect(source).toContain("settings.boundsVisible");
+  expect(source).toContain("settings.boundsOpacityPercent");
+  expect(source).not.toContain("opacity={0.55}");
+  expect(source).not.toContain("opacity={0.8}");
+});
+
+it("routes generic FDM domain-frame opacity and Airbox wireframe color through target settings", () => {
+  expect(boundsLayersSource).toContain(
+    "opacity={percentToUnit(boundsOpacityPercent)}",
+  );
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+  expect(source).toContain("const wireframeColor = wireframeColorFromSettings");
+  expect(source).not.toContain("color={colors.field}");
+});
+
+it("keeps FDM context bounds as extent boxes instead of a procedural volume grid", () => {
+  const start = boundsLayersSource.indexOf(
+    "export const FdmUniverseOutsideSupportLayer",
+  );
+  const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
+  const source = boundsLayersSource.slice(start, end);
+
+  expect(source).toContain("<BoundsBox");
+  expect(source).not.toContain("<BoundsVolumeWireframe");
+});
+
 it("maps an airbox surface triangle to its canonical cell identity", () => {
   expect(resolveAirboxMeshPartSurfacePickIdentity({
     expandedSurfaceFaces: false,
@@ -253,18 +303,26 @@ describe("AirboxLayer", () => {
     });
   });
 
-  it("preserves wireframe-only airbox settings at runtime", () => {
+  it("keeps wireframe-only airbox settings at runtime", () => {
     expect(resolveAirboxRuntimeVisualizationSettings(visibleWireframeAirbox))
       .toBe(visibleWireframeAirbox);
   });
 
-  it("preserves airbox settings that already have another drawable pass", () => {
+  it("preserves Airbox points while stripping unsupported shader passes at runtime", () => {
     const settings = {
       ...visibleWireframeAirbox,
+      pointsVisible: true,
       shaderVisible: true,
+      surfaceColorSource: "magnitude" as const,
     };
 
-    expect(resolveAirboxRuntimeVisualizationSettings(settings)).toBe(settings);
+    expect(resolveAirboxRuntimeVisualizationSettings(settings)).toMatchObject({
+      pointsVisible: true,
+      renderMode: "points",
+      shaderVisible: false,
+      surfaceColorSource: "solid",
+      wireframeVisible: true,
+    });
   });
 
   it("uses volume edges for full airbox wireframe and surface edges for surface mode", () => {
@@ -347,11 +405,14 @@ describe("AirboxLayer", () => {
     expect(resolveAirboxWireframePrimitive(true, false, "full")).toBe("bounds");
   });
 
-  it("routes the airbox render branch through the parallel wireframe layers", () => {
+  it("uses bounds fallback only when real Airbox edge geometry is unavailable", () => {
     expect(boundsLayersSource).toContain(
       'renderPlan.wireframe.visible && (',
     );
     expect(boundsLayersSource).toContain(
+      '!edgeGeometry',
+    );
+    expect(boundsLayersSource).not.toContain(
       'geometryScope === "full" || !edgeGeometry',
     );
     expect(boundsLayersSource).not.toContain(

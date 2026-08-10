@@ -125,6 +125,38 @@ describe("ObjectRegionMaterialFieldsModel", () => {
     });
   });
 
+  it("omits the FEM-only mesh-size conflict policy for an FDM field while preserving its physical value", () => {
+    const draft: MaterialFieldDraft = {
+      assignmentId: "field:fdm",
+      base: 900000,
+      center: [0, 0, 0],
+      conflictPolicy: "min_mesh_size_wins",
+      frame: "object",
+      gradient: [0, 0, 0],
+      inside: 900000,
+      kind: "constant",
+      outside: 900000,
+      parameter: "ms",
+      priority: 3,
+      radius: 30e-9,
+      scalar: 900000,
+      unit: "A/m",
+    };
+
+    const assignment = materialFieldFromDraft(
+      draft,
+      { objectId: "permalloy_box", regionId: "hole_shell" },
+      { meshPolicyLane: "fdm" },
+    );
+
+    expect(assignment).not.toHaveProperty("conflict_policy");
+    expect(assignment.value).toEqual({
+      kind: "constant",
+      unit: "A/m",
+      value: 900000,
+    });
+  });
+
   it("preserves sampled fields as unsupported instead of trying to edit them", () => {
     const assignment: SceneMaterialParameterAssignment = {
       assignment_id: "field:sampled",

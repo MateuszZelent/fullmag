@@ -38,6 +38,135 @@ def _base_problem(**kwargs) -> fm.Problem:
 
 
 class CurrentTransportTests(unittest.TestCase):
+    def _closed_current_view(self) -> fm.ConservativeCurrentView:
+        identity = fm.ConservativeCurrentIdentity(
+            source_module_id="drive",
+            source_state_revision="state-1",
+            source_field_digest="field-1",
+            conductivity_digest="sigma-1",
+            mesh_revision="mesh-1",
+            topology_revision="topology-1",
+            geometry_digest="geometry-1",
+            envelope_revision="envelope-1",
+            envelope_digest="envelope-digest-1",
+            evaluated_envelope_multiplier=1.0,
+            evaluation_time_s=0.0,
+            stage_identity=1,
+        )
+        return fm.ConservativeCurrentView(
+            stable_vertex_ids=[10, 20, 30, 40],
+            boundary_faces=[
+                fm.ConservativeCurrentBoundaryFace((10, 20, 30), "source_cut", "cut"),
+                fm.ConservativeCurrentBoundaryFace((10, 20, 40), "source_cut", "cut"),
+                fm.ConservativeCurrentBoundaryFace((10, 30, 40), "insulating_outer"),
+                fm.ConservativeCurrentBoundaryFace((20, 30, 40), "insulating_outer"),
+            ],
+            identity=identity,
+            pins=fm.ConservativeCurrentPins(
+                required_source_state_revision="state-1",
+                required_source_field_digest="field-1",
+                required_mesh_revision="mesh-1",
+                required_topology_revision="topology-1",
+            ),
+            closure=fm.ConservativeCurrentClosedGeometry(
+                "fem_closed_current_geometry.v1",
+                "closure-1",
+                "closure-digest-1",
+                [
+                    fm.ConservativeCurrentSourceCut(
+                        "cut",
+                        (1.0, 0.0, 0.0),
+                        0.1,
+                        [
+                            fm.ConservativeCurrentSourceCutFacePair(
+                                (10, 20, 30), (10, 20, 40)
+                            )
+                        ],
+                    )
+                ],
+            ),
+            algebraic_relative_tolerance=1.0e-10,
+            physical_relative_gate=1.0e-8,
+            physical_absolute_gate_a=1.0e-12,
+        )
+
+    def test_closed_conservative_current_view_round_trips_public_surfaces(self) -> None:
+        view = self._closed_current_view()
+        conductor = fm.RegionRef("layer")
+        transport = fm.CurrentTransport(
+            name="drive",
+            model="ohmic_poisson",
+            domain=[conductor],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    conductor, fm.ChargeTransportMaterial(sigma_Spm=5.8e7)
+                )
+            ],
+            boundaries=[
+                fm.ChargeInsulating(
+                    "outer",
+                    [fm.SurfaceRef("layer", "outer", (1.0, 0.0, 0.0))],
+                )
+            ],
+            gauge=fm.ChargePotentialGauge("zero_mean"),
+            solver=fm.ChargeSolverPolicy(),
+            conservative_current_view=view,
+        )
+        rendered = _render_current_modules(
+            _base_problem(current_modules=[transport]), overrides={}, surface="flat"
+        )
+        rebuilt = eval(rendered[1], {"fm": fm})
+        self.assertEqual(rebuilt.to_ir(), transport.to_ir())
+        entry = transport.to_ir()
+        scene = build_scene_document_from_builder(
+            {"revision": 1, "geometries": [], "current_modules": [entry]}
+        )
+        self.assertEqual(build_builder_from_scene_document(scene)["current_modules"], [entry])
+
+    def test_conservative_current_view_is_restricted_to_one_way_ohmic_transport(self) -> None:
+        view = self._closed_current_view()
+        with self.assertRaisesRegex(ValueError, "one_way"):
+            self._bidirectional_transport_with_view(view)
+        with self.assertRaisesRegex(ValueError, "ohmic_poisson"):
+            fm.CurrentTransport(
+                name="drive",
+                current_density=(1.0, 0.0, 0.0),
+                conservative_current_view=view,
+            )
+
+    def test_source_cut_requires_distinct_minus_and_plus_faces(self) -> None:
+        with self.assertRaisesRegex(ValueError, "distinct"):
+            fm.ConservativeCurrentSourceCutFacePair((10, 20, 30), (30, 20, 10))
+
+    def _bidirectional_transport_with_view(
+        self, view: fm.ConservativeCurrentView
+    ) -> fm.CurrentTransport:
+        conductor = fm.RegionRef("layer")
+        return fm.CurrentTransport(
+            name="m2-charge",
+            model="ohmic_poisson",
+            coupling="bidirectional",
+            domain=[conductor],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    conductor,
+                    fm.ChargeTransportMaterial(
+                        sigma_Spm=5.8e7,
+                        sigma_parallel_Spm=5.9e7,
+                        sigma_perpendicular_Spm=5.7e7,
+                        sigma_AHE_Spm=1.2e5,
+                    ),
+                )
+            ],
+            boundaries=[],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(
+                engine="block_gmres",
+                operator_version="fdm_coupled_charge_spin_fv_block_gmres.v1",
+            ),
+            conservative_current_view=view,
+        )
+
     def _bidirectional_transport(self) -> fm.CurrentTransport:
         conductor = fm.RegionRef("layer")
         x_min = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
@@ -96,6 +225,54 @@ class CurrentTransportTests(unittest.TestCase):
         self.assertEqual(ir["boundaries"][0]["kind"], "voltage_electrode")  # type: ignore[index]
         self.assertEqual(ir["gauge"], "dirichlet_reference")
         self.assertEqual(ir["solver"]["engine"], "cg")  # type: ignore[index]
+
+    def test_current_transport_time_envelope_round_trips_through_ir_scene_and_script(self) -> None:
+        conductor = fm.RegionRef("layer")
+        x_min = fm.SurfaceRef("layer", "x_min", (-1.0, 0.0, 0.0))
+        x_max = fm.SurfaceRef("layer", "x_max", (1.0, 0.0, 0.0))
+        transport = fm.CurrentTransport(
+            name="charge-envelope",
+            model="ohmic_poisson",
+            domain=[conductor],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    conductor,
+                    fm.ChargeTransportMaterial(sigma_Spm=5.8e7),
+                )
+            ],
+            boundaries=[
+                fm.VoltageElectrode("ground", [x_min], potential_V=0.0),
+                fm.VoltageElectrode("drive", [x_max], potential_V=0.1),
+            ],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(),
+            time_envelope=fm.SinusoidalEnvelope(
+                amplitude=0.25,
+                frequency_hz=2.0e9,
+                phase_rad=0.3,
+                offset=0.75,
+            ),
+        )
+        expected = {
+            "kind": "sinusoidal",
+            "amplitude": 0.25,
+            "frequency_hz": 2.0e9,
+            "phase_rad": 0.3,
+            "offset": 0.75,
+        }
+        self.assertEqual(transport.to_ir()["time_envelope"], expected)
+        scene = build_scene_document_from_builder(
+            {"revision": 3, "geometries": [], "current_modules": [transport.to_ir()]}
+        )
+        self.assertEqual(
+            build_builder_from_scene_document(scene)["current_modules"],
+            [transport.to_ir()],
+        )
+        rendered = _render_current_modules(
+            _base_problem(current_modules=[transport]), overrides={}, surface="flat"
+        )
+        rebuilt = eval(rendered[1], {"fm": fm})
+        self.assertEqual(rebuilt.to_ir(), transport.to_ir())
 
     def test_ohmic_poisson_rejects_ambiguous_legacy_definition(self) -> None:
         with self.assertRaisesRegex(ValueError, "complete charge contract"):

@@ -5,6 +5,7 @@ use crate::{
     RelaxationControlIR,
 };
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
@@ -50,7 +51,10 @@ pub struct FdmGridHintsIR {
     pub cell: [f64; 3],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub const FDM_DEMAG_STRATEGIES: &[&str] = &["auto", "single_grid", "multilayer_convolution"];
+pub const FDM_DEMAG_MODES: &[&str] = &["auto", "two_d_stack", "three_d"];
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FdmDemagHintsIR {
     pub strategy: String,
@@ -61,11 +65,122 @@ pub struct FdmDemagHintsIR {
     pub common_cells_xy: Option<[u32; 2]>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FdmDemagHintsWireIR {
+    strategy: String,
+    mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    common_cells: Option<[u32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    common_cells_xy: Option<[u32; 2]>,
+}
+
+impl<'de> Deserialize<'de> for FdmDemagHintsIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FdmDemagHintsWireIR::deserialize(deserializer)?;
+        let hints = Self {
+            strategy: wire.strategy,
+            mode: wire.mode,
+            common_cells: wire.common_cells,
+            common_cells_xy: wire.common_cells_xy,
+        };
+        hints
+            .validate()
+            .map_err(|errors| D::Error::custom(errors.join("; ")))?;
+        Ok(hints)
+    }
+}
+
+impl FdmDemagHintsIR {
+    /// Validate the public FDM demag wire contract without resolving `auto`.
+    ///
+    /// This is intentionally callable for programmatically-built IR as well as
+    /// being enforced by the serde boundary above.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if !FDM_DEMAG_STRATEGIES.contains(&self.strategy.as_str()) {
+            errors.push(format!(
+                "fdm.demag.strategy '{}' is unsupported; expected one of auto, single_grid, multilayer_convolution",
+                self.strategy
+            ));
+        }
+        if !FDM_DEMAG_MODES.contains(&self.mode.as_str()) {
+            errors.push(format!(
+                "fdm.demag.mode '{}' is unsupported; expected one of auto, two_d_stack, three_d",
+                self.mode
+            ));
+        }
+        if self.common_cells.is_some() && self.common_cells_xy.is_some() {
+            errors.push(
+                "fdm.demag.common_cells and common_cells_xy are mutually exclusive".to_string(),
+            );
+        }
+        if let Some(cells) = self.common_cells {
+            if cells.contains(&0) {
+                errors.push("fdm.demag.common_cells components must be positive".to_string());
+            }
+            if self.mode == "two_d_stack" {
+                errors.push(
+                    "fdm.demag.common_cells is incompatible with explicit mode='two_d_stack'"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(cells_xy) = self.common_cells_xy {
+            if cells_xy.contains(&0) {
+                errors.push("fdm.demag.common_cells_xy components must be positive".to_string());
+            }
+            if self.mode == "three_d" {
+                errors.push(
+                    "fdm.demag.common_cells_xy is incompatible with explicit mode='three_d'"
+                        .to_string(),
+                );
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Resolve the mode after native layer geometry is known.
+    ///
+    /// Explicit modes are never overridden. `common_cells` selects the full
+    /// three-dimensional path and `common_cells_xy` selects the one-cell-Z
+    /// stack path. With no explicit common layout, `auto` follows the native
+    /// layer Z resolution.
+    pub fn resolve_mode(&self, native_z_cells: &[u32]) -> Result<String, Vec<String>> {
+        self.validate()?;
+        if self.mode != "auto" {
+            return Ok(self.mode.clone());
+        }
+        if self.common_cells.is_some() {
+            return Ok("three_d".to_string());
+        }
+        if self.common_cells_xy.is_some() {
+            return Ok("two_d_stack".to_string());
+        }
+        Ok(if native_z_cells.iter().all(|cells| *cells == 1) {
+            "two_d_stack".to_string()
+        } else {
+            "three_d".to_string()
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multilayer convolution plan IR types
 // ---------------------------------------------------------------------------
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FdmMultilayerPlanIR {
+    /// Deprecated compatibility mirror of `planner_summary.resolved_mode`.
+    /// Runtime consumers must use the planner summary; deserialization
+    /// validates equality so the legacy field cannot diverge.
     pub mode: String,
     pub common_cells: [u32; 3],
     /// Validated certificate for the resolved common convolution grid.
@@ -99,9 +214,13 @@ pub struct FdmMultilayerPlanIR {
     pub planner_summary: FdmMultilayerSummaryIR,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FdmLayerPlanIR {
     pub magnet_name: String,
+    /// Stable layer identity derived from the authored object identity.
+    pub layer_id: String,
+    /// Stable authored object identity for this layer.
+    pub object_id: String,
     pub native_grid: [u32; 3],
     pub native_cell_size: [f64; 3],
     pub native_origin: [f64; 3],
@@ -115,11 +234,113 @@ pub struct FdmLayerPlanIR {
     pub transfer_kind: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct FdmLayerPlanWireIR {
+    magnet_name: String,
+    #[serde(default)]
+    layer_id: Option<String>,
+    #[serde(default)]
+    object_id: Option<String>,
+    native_grid: [u32; 3],
+    native_cell_size: [f64; 3],
+    native_origin: [f64; 3],
+    #[serde(default)]
+    native_active_mask: Option<Vec<bool>>,
+    initial_magnetization: Vec<[f64; 3]>,
+    material: FdmMaterialIR,
+    convolution_grid: [u32; 3],
+    convolution_cell_size: [f64; 3],
+    convolution_origin: [f64; 3],
+    transfer_kind: String,
+}
+
+impl<'de> Deserialize<'de> for FdmLayerPlanIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FdmLayerPlanWireIR::deserialize(deserializer)?;
+        Ok(Self {
+            layer_id: wire
+                .layer_id
+                .unwrap_or_else(|| format!("layer:{}", wire.magnet_name)),
+            object_id: wire.object_id.unwrap_or_else(|| wire.magnet_name.clone()),
+            magnet_name: wire.magnet_name,
+            native_grid: wire.native_grid,
+            native_cell_size: wire.native_cell_size,
+            native_origin: wire.native_origin,
+            native_active_mask: wire.native_active_mask,
+            initial_magnetization: wire.initial_magnetization,
+            material: wire.material,
+            convolution_grid: wire.convolution_grid,
+            convolution_cell_size: wire.convolution_cell_size,
+            convolution_origin: wire.convolution_origin,
+            transfer_kind: wire.transfer_kind,
+        })
+    }
+}
+
 /// Canonical topology payload for a multilayer FDM certificate.
 ///
 /// The payload is intentionally integer-encoded so the planner and runner can
 /// hash identical layer geometry/mask facts without floating-point formatting.
-pub fn fdm_multilayer_topology_tokens(layers: &[FdmLayerPlanIR]) -> Vec<u32> {
+pub fn fdm_multilayer_topology_tokens(mode: &str, layers: &[FdmLayerPlanIR]) -> Vec<u32> {
+    fn push_f64(tokens: &mut Vec<u32>, value: f64) {
+        let bits = value.to_bits();
+        tokens.push((bits >> 32) as u32);
+        tokens.push(bits as u32);
+    }
+    fn push_text(tokens: &mut Vec<u32>, value: &str) {
+        tokens.push(value.len() as u32);
+        tokens.extend(value.as_bytes().chunks(4).map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |packed, (index, byte)| {
+                    packed | (*byte as u32) << (index * 8)
+                })
+        }));
+    }
+
+    let mut tokens = Vec::new();
+    // The resolved mode changes the physical operator (2-D moment-preserving
+    // stack versus full 3-D convolution), so it is part of cache identity.
+    push_text(&mut tokens, mode);
+    tokens.push(layers.len() as u32);
+    for layer in layers {
+        push_text(&mut tokens, &layer.layer_id);
+        push_text(&mut tokens, &layer.object_id);
+        push_text(&mut tokens, &layer.magnet_name);
+        tokens.extend(layer.native_grid);
+        for value in layer.native_cell_size {
+            push_f64(&mut tokens, value);
+        }
+        for value in layer.native_origin {
+            push_f64(&mut tokens, value);
+        }
+        match layer.native_active_mask.as_deref() {
+            Some(mask) => {
+                tokens.push(mask.len() as u32);
+                tokens.extend(mask.iter().map(|active| u32::from(*active)));
+            }
+            None => tokens.push(u32::MAX),
+        }
+        tokens.extend(layer.convolution_grid);
+        for value in layer.convolution_cell_size {
+            push_f64(&mut tokens, value);
+        }
+        for value in layer.convolution_origin {
+            push_f64(&mut tokens, value);
+        }
+        push_text(&mut tokens, &layer.transfer_kind);
+    }
+    tokens
+}
+
+/// Pre-contract token encoding used by serialized 0.3 multilayer plans.  It
+/// is retained solely to explain/rebuild an old certificate while the plan is
+/// upgraded to the mode-and-identity-bound encoding above.
+pub fn fdm_multilayer_topology_tokens_legacy(layers: &[FdmLayerPlanIR]) -> Vec<u32> {
     fn push_f64(tokens: &mut Vec<u32>, value: f64) {
         let bits = value.to_bits();
         tokens.push((bits >> 32) as u32);
@@ -167,16 +388,383 @@ pub fn fdm_multilayer_topology_tokens(layers: &[FdmLayerPlanIR]) -> Vec<u32> {
     tokens
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FdmMultilayerSummaryIR {
     pub requested_strategy: String,
     pub selected_strategy: String,
+    /// Original requested mode; never rewritten when `auto` resolves.
+    pub requested_mode: String,
+    /// Planner-owned resolved execution mode.
+    pub resolved_mode: String,
     pub eligibility: String,
     pub estimated_pair_kernels: u32,
     pub estimated_unique_kernels: u32,
     pub estimated_kernel_bytes: u64,
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FdmMultilayerSummaryWireIR {
+    requested_strategy: String,
+    selected_strategy: String,
+    #[serde(default)]
+    requested_mode: Option<String>,
+    #[serde(default)]
+    resolved_mode: Option<String>,
+    eligibility: String,
+    estimated_pair_kernels: u32,
+    estimated_unique_kernels: u32,
+    estimated_kernel_bytes: u64,
+    #[serde(default)]
+    warnings: Vec<String>,
+}
+
+fn default_multilayer_mode() -> String {
+    "auto".to_string()
+}
+
+impl<'de> Deserialize<'de> for FdmMultilayerSummaryIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FdmMultilayerSummaryWireIR::deserialize(deserializer)?;
+        Ok(Self {
+            requested_strategy: wire.requested_strategy,
+            selected_strategy: wire.selected_strategy,
+            requested_mode: wire.requested_mode.unwrap_or_else(default_multilayer_mode),
+            resolved_mode: wire.resolved_mode.unwrap_or_else(default_multilayer_mode),
+            eligibility: wire.eligibility,
+            estimated_pair_kernels: wire.estimated_pair_kernels,
+            estimated_unique_kernels: wire.estimated_unique_kernels,
+            estimated_kernel_bytes: wire.estimated_kernel_bytes,
+            warnings: wire.warnings,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FdmMultilayerPlanWireIR {
+    mode: String,
+    common_cells: [u32; 3],
+    #[serde(default)]
+    grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
+    layers: Vec<FdmLayerPlanIR>,
+    enable_exchange: bool,
+    enable_demag: bool,
+    #[serde(default)]
+    external_field: Option<[f64; 3]>,
+    #[serde(default)]
+    interfacial_dmi: Option<f64>,
+    #[serde(default)]
+    bulk_dmi: Option<f64>,
+    gyromagnetic_ratio: f64,
+    precision: ExecutionPrecision,
+    exchange_bc: ExchangeBoundaryCondition,
+    #[serde(default)]
+    periodicity: Option<FdmPeriodicityIR>,
+    #[serde(default)]
+    resolved_periodic_images: Option<crate::execution::ResolvedPeriodicImagesIR>,
+    integrator: IntegratorChoice,
+    fixed_timestep: Option<f64>,
+    #[serde(default)]
+    field_refresh: Option<FieldRefreshPolicyIR>,
+    #[serde(default)]
+    relaxation: Option<RelaxationControlIR>,
+    planner_summary: FdmMultilayerSummaryIR,
+}
+
+fn infer_legacy_multilayer_resolved_mode(value: &Value) -> String {
+    let plan_mode = value.get("mode").and_then(Value::as_str);
+    if matches!(plan_mode, Some("two_d_stack" | "three_d")) {
+        return plan_mode.unwrap().to_string();
+    }
+    let common_z = value
+        .get("common_cells")
+        .and_then(|cells| cells.as_array())
+        .and_then(|cells| cells.get(2))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let all_native_single_z = value
+        .get("layers")
+        .and_then(Value::as_array)
+        .is_some_and(|layers| {
+            !layers.is_empty()
+                && layers.iter().all(|layer| {
+                    layer
+                        .get("native_grid")
+                        .and_then(Value::as_array)
+                        .and_then(|grid| grid.get(2))
+                        .and_then(Value::as_u64)
+                        == Some(1)
+                })
+        });
+    if common_z == 1 && all_native_single_z {
+        "two_d_stack".to_string()
+    } else {
+        "three_d".to_string()
+    }
+}
+
+/// Populate deterministic identities and planner-owned mode fields for plans
+/// written before the multilayer contract became explicit.  The migration is
+/// intentionally local to plan deserialization; current ProblemIR remains at
+/// the same public IR version and does not rewrite authored intent.
+fn migrate_legacy_multilayer_plan_value(value: &mut Value) -> Result<(), String> {
+    let inferred_mode = infer_legacy_multilayer_resolved_mode(value);
+    let legacy_layer_identity =
+        value
+            .get("layers")
+            .and_then(Value::as_array)
+            .is_some_and(|layers| {
+                layers.iter().any(|layer| {
+                    let object = layer.as_object();
+                    object.is_none_or(|object| {
+                        !object.contains_key("layer_id") || !object.contains_key("object_id")
+                    })
+                })
+            });
+    let legacy_summary_mode = value
+        .get("planner_summary")
+        .and_then(Value::as_object)
+        .is_some_and(|summary| {
+            !summary.contains_key("requested_mode") || !summary.contains_key("resolved_mode")
+        });
+    let legacy_top_level_mode = !matches!(
+        value.get("mode").and_then(Value::as_str),
+        Some("two_d_stack" | "three_d")
+    );
+    let legacy_certificate = legacy_layer_identity || legacy_summary_mode || legacy_top_level_mode;
+    match value.get("mode").and_then(Value::as_str) {
+        Some("two_d_stack" | "three_d") => {}
+        Some("multilayer_convolution" | "auto") | None => {}
+        Some(other) => {
+            return Err(format!(
+                "fdm multilayer mode '{other}' is not a recognized legacy alias"
+            ));
+        }
+    }
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "FdmMultilayerPlanIR payload must be an object".to_string())?;
+    if !matches!(
+        object.get("mode").and_then(Value::as_str),
+        Some("two_d_stack" | "three_d")
+    ) {
+        // Legacy plans used `multilayer_convolution` here as a strategy label.
+        // The resolved mode is now planner-owned and must be the only runtime
+        // authority, so normalize the legacy alias during read.
+        object.insert("mode".to_string(), Value::String(inferred_mode.clone()));
+    }
+    if let Some(layers) = object.get_mut("layers").and_then(Value::as_array_mut) {
+        for layer in layers {
+            let Some(layer_object) = layer.as_object_mut() else {
+                return Err("FdmMultilayerPlanIR.layers entries must be objects".to_string());
+            };
+            let magnet_name = layer_object
+                .get("magnet_name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "legacy multilayer layer is missing magnet_name".to_string())?
+                .to_string();
+            layer_object
+                .entry("layer_id")
+                .or_insert_with(|| Value::String(format!("layer:{magnet_name}")));
+            layer_object
+                .entry("object_id")
+                .or_insert_with(|| Value::String(magnet_name.to_string()));
+        }
+    }
+    let summary = object
+        .get_mut("planner_summary")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "FdmMultilayerPlanIR is missing planner_summary".to_string())?;
+    summary
+        .entry("requested_mode")
+        .or_insert_with(|| Value::String("auto".to_string()));
+    summary
+        .entry("resolved_mode")
+        .or_insert_with(|| Value::String(inferred_mode));
+
+    if legacy_certificate {
+        // The old certificate fingerprint did not include layer/object IDs or
+        // the resolved mode.  Rebind only its fingerprint to the canonical
+        // post-migration token payload, preserving certificate metadata and
+        // making old plans executable without accepting a stale topology hash.
+        let certificate_value = object.get("grid_certificate").cloned();
+        if let Some(certificate_value) = certificate_value {
+            let certificate: crate::plan::FdmGridCertificateIR =
+                serde_json::from_value(certificate_value)
+                    .map_err(|error| format!("legacy multilayer certificate: {error}"))?;
+            let layers_value = object
+                .get("layers")
+                .cloned()
+                .ok_or_else(|| "legacy multilayer plan is missing layers".to_string())?;
+            let layers: Vec<FdmLayerPlanIR> = serde_json::from_value(layers_value)
+                .map_err(|error| format!("legacy multilayer layers: {error}"))?;
+            let mode = object
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("three_d");
+            let tokens = fdm_multilayer_topology_tokens(mode, &layers);
+            let rebound = crate::plan::FdmGridCertificateIR::new_with_topology_tokens(
+                certificate.origin_m,
+                certificate.counts,
+                certificate.cell_m,
+                certificate.active_cells,
+                certificate.estimated_bytes,
+                None,
+                &tokens,
+            )
+            .map_err(|error| format!("legacy multilayer certificate rebind: {error}"))?;
+            if let Some(certificate_object) = object
+                .get_mut("grid_certificate")
+                .and_then(Value::as_object_mut)
+            {
+                certificate_object.insert(
+                    "grid_fingerprint".to_string(),
+                    Value::String(rebound.grid_fingerprint),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = Value::deserialize(deserializer)?;
+        migrate_legacy_multilayer_plan_value(&mut value).map_err(D::Error::custom)?;
+        let wire = FdmMultilayerPlanWireIR::deserialize(value).map_err(D::Error::custom)?;
+        let plan = Self {
+            mode: wire.mode,
+            common_cells: wire.common_cells,
+            grid_certificate: wire.grid_certificate,
+            layers: wire.layers,
+            enable_exchange: wire.enable_exchange,
+            enable_demag: wire.enable_demag,
+            external_field: wire.external_field,
+            interfacial_dmi: wire.interfacial_dmi,
+            bulk_dmi: wire.bulk_dmi,
+            gyromagnetic_ratio: wire.gyromagnetic_ratio,
+            precision: wire.precision,
+            exchange_bc: wire.exchange_bc,
+            periodicity: wire.periodicity,
+            resolved_periodic_images: wire.resolved_periodic_images,
+            integrator: wire.integrator,
+            fixed_timestep: wire.fixed_timestep,
+            field_refresh: wire.field_refresh,
+            relaxation: wire.relaxation,
+            planner_summary: wire.planner_summary,
+        };
+        plan.validate()
+            .map_err(|errors| D::Error::custom(errors.join("; ")))?;
+        Ok(plan)
+    }
+}
+
+impl FdmMultilayerPlanIR {
+    /// Validate the resolved multilayer wire contract before a runner can use
+    /// it.  Authored intent belongs to `planner_summary.requested_*`; runtime
+    /// consumers must only observe the canonical resolved mode and transfer
+    /// vocabulary here.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if !matches!(self.mode.as_str(), "two_d_stack" | "three_d") {
+            errors.push(format!(
+                "fdm multilayer resolved mode '{}' is unsupported",
+                self.mode
+            ));
+        }
+        if !matches!(
+            self.planner_summary.requested_mode.as_str(),
+            "auto" | "two_d_stack" | "three_d"
+        ) {
+            errors.push(format!(
+                "fdm multilayer requested mode '{}' is unsupported",
+                self.planner_summary.requested_mode
+            ));
+        }
+        if !matches!(
+            self.planner_summary.resolved_mode.as_str(),
+            "two_d_stack" | "three_d"
+        ) {
+            errors.push(format!(
+                "fdm multilayer summary resolved mode '{}' is unsupported",
+                self.planner_summary.resolved_mode
+            ));
+        }
+        if self.planner_summary.resolved_mode != self.mode {
+            errors.push(
+                "fdm multilayer top-level mode must equal planner_summary.resolved_mode"
+                    .to_string(),
+            );
+        }
+        if self.planner_summary.requested_mode != "auto"
+            && self.planner_summary.requested_mode != self.planner_summary.resolved_mode
+        {
+            errors.push(
+                "fdm multilayer explicit requested_mode must equal planner_summary.resolved_mode"
+                    .to_string(),
+            );
+        }
+        if self.planner_summary.resolved_mode == "two_d_stack" {
+            if self.common_cells[2] != 1 {
+                errors.push("fdm multilayer two_d_stack requires common_cells[2] == 1".to_string());
+            }
+            for (index, layer) in self.layers.iter().enumerate() {
+                if layer.native_grid[2] != 1 {
+                    errors.push(format!(
+                        "fdm multilayer two_d_stack layer[{index}] has native_grid[2]={}; an explicit moment_preserving transfer descriptor is required before 2-D reduction",
+                        layer.native_grid[2]
+                    ));
+                }
+            }
+        }
+        let mut layer_ids = BTreeSet::new();
+        let mut object_ids = BTreeSet::new();
+        for (index, layer) in self.layers.iter().enumerate() {
+            if layer.layer_id.trim().is_empty() {
+                errors.push(format!(
+                    "fdm multilayer layer[{index}] has an empty layer_id"
+                ));
+            }
+            if layer.object_id.trim().is_empty() {
+                errors.push(format!(
+                    "fdm multilayer layer[{index}] has an empty object_id"
+                ));
+            }
+            if !layer_ids.insert(layer.layer_id.clone()) {
+                errors.push(format!(
+                    "fdm multilayer layer[{index}] duplicates layer_id '{}'",
+                    layer.layer_id
+                ));
+            }
+            if !object_ids.insert(layer.object_id.clone()) {
+                errors.push(format!(
+                    "fdm multilayer layer[{index}] duplicates object_id '{}'",
+                    layer.object_id
+                ));
+            }
+            if !matches!(
+                layer.transfer_kind.as_str(),
+                "identity" | "push_pull" | "unsupported"
+            ) {
+                errors.push(format!(
+                    "fdm multilayer layer[{index}] transfer_kind '{}' is unsupported",
+                    layer.transfer_kind
+                ));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,6 +775,157 @@ pub struct FemHintsIR {
     pub mesh: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_solver_policy: Option<FemLinearSolverPolicy>,
+}
+
+#[cfg(test)]
+mod multilayer_contract_tests {
+    use super::*;
+    use crate::plan::FdmGridCertificateIR;
+
+    fn legacy_plan_fixture() -> FdmMultilayerPlanIR {
+        let layers = vec![FdmLayerPlanIR {
+            magnet_name: "free".to_string(),
+            layer_id: "layer:free".to_string(),
+            object_id: "free".to_string(),
+            native_grid: [2, 1, 2],
+            native_cell_size: [1.0, 1.0, 1.0],
+            native_origin: [0.0, 0.0, 0.0],
+            native_active_mask: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            material: FdmMaterialIR::default(),
+            convolution_grid: [2, 1, 2],
+            convolution_cell_size: [1.0, 1.0, 1.0],
+            convolution_origin: [0.0, 0.0, 0.0],
+            transfer_kind: "identity".to_string(),
+        }];
+        let legacy_tokens = fdm_multilayer_topology_tokens_legacy(&layers);
+        let grid_certificate = FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 0.0],
+            [2, 1, 2],
+            [1.0, 1.0, 1.0],
+            4,
+            128,
+            None,
+            &legacy_tokens,
+        )
+        .expect("legacy certificate");
+
+        FdmMultilayerPlanIR {
+            // Older plans used this field as a strategy-like label.  The
+            // migration derives the resolved mode from the actual geometry.
+            mode: "multilayer_convolution".to_string(),
+            common_cells: [2, 1, 2],
+            grid_certificate: Some(grid_certificate),
+            layers,
+            enable_exchange: false,
+            enable_demag: true,
+            external_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            gyromagnetic_ratio: 1.0,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            periodicity: None,
+            resolved_periodic_images: None,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(1e-13),
+            field_refresh: None,
+            relaxation: None,
+            planner_summary: FdmMultilayerSummaryIR {
+                requested_strategy: "multilayer_convolution".to_string(),
+                selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "auto".to_string(),
+                resolved_mode: "three_d".to_string(),
+                eligibility: "eligible".to_string(),
+                estimated_pair_kernels: 1,
+                estimated_unique_kernels: 1,
+                estimated_kernel_bytes: 0,
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn legacy_multilayer_plan_gets_stable_ids_and_resolved_mode() {
+        let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+        let object = value.as_object_mut().expect("plan object");
+        object
+            .get_mut("layers")
+            .and_then(Value::as_array_mut)
+            .expect("layers")
+            .iter_mut()
+            .for_each(|layer| {
+                let layer = layer.as_object_mut().expect("layer object");
+                layer.remove("layer_id");
+                layer.remove("object_id");
+            });
+        let summary = object
+            .get_mut("planner_summary")
+            .and_then(Value::as_object_mut)
+            .expect("summary");
+        summary.remove("requested_mode");
+        summary.remove("resolved_mode");
+
+        let decoded: FdmMultilayerPlanIR = serde_json::from_value(value).expect("legacy decodes");
+        assert_eq!(decoded.mode, "three_d");
+        assert_eq!(decoded.layers[0].layer_id, "layer:free");
+        assert_eq!(decoded.layers[0].object_id, "free");
+        assert_eq!(decoded.planner_summary.requested_mode, "auto");
+        assert_eq!(decoded.planner_summary.resolved_mode, "three_d");
+        let certificate = decoded.grid_certificate.as_ref().expect("certificate");
+        let expected = FdmGridCertificateIR::new_with_topology_tokens(
+            certificate.origin_m,
+            certificate.counts,
+            certificate.cell_m,
+            certificate.active_cells,
+            certificate.estimated_bytes,
+            None,
+            &fdm_multilayer_topology_tokens("three_d", &decoded.layers),
+        )
+        .expect("rebound certificate");
+        assert_eq!(certificate.grid_fingerprint, expected.grid_fingerprint);
+    }
+
+    #[test]
+    fn topology_identity_changes_with_resolved_mode() {
+        let plan = legacy_plan_fixture();
+        let two_d = fdm_multilayer_topology_tokens("two_d_stack", &plan.layers);
+        let three_d = fdm_multilayer_topology_tokens("three_d", &plan.layers);
+        assert_ne!(two_d, three_d);
+    }
+
+    #[test]
+    fn plan_wire_rejects_unknown_transfer_kind() {
+        let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+        value["mode"] = Value::String("three_d".to_string());
+        value["planner_summary"]["resolved_mode"] = Value::String("three_d".to_string());
+        value["layers"][0]["transfer_kind"] = Value::String("nearest".to_string());
+        let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
+            .expect_err("unknown transfer kind must fail closed");
+        assert!(error.to_string().contains("transfer_kind"));
+    }
+
+    #[test]
+    fn plan_wire_rejects_forged_two_d_thickness_without_explicit_average() {
+        let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+        value["mode"] = Value::String("two_d_stack".to_string());
+        value["common_cells"] = serde_json::json!([2, 1, 2]);
+        value["planner_summary"]["requested_mode"] = Value::String("two_d_stack".to_string());
+        value["planner_summary"]["resolved_mode"] = Value::String("two_d_stack".to_string());
+        value["layers"][0]["native_grid"] = serde_json::json!([2, 1, 2]);
+        let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
+            .expect_err("forged two-dimensional thickness must fail closed");
+        assert!(error.to_string().contains("moment_preserving"));
+    }
+
+    #[test]
+    fn plan_wire_rejects_unknown_mode_instead_of_normalizing_it() {
+        let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+        value["mode"] = Value::String("bogus".to_string());
+        let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
+            .expect_err("unknown mode must fail closed");
+        assert!(error.to_string().contains("not a recognized legacy alias"));
+    }
 }
 
 /// Per-domain element quality metrics, mirroring ``MeshQualityReport`` in Python.

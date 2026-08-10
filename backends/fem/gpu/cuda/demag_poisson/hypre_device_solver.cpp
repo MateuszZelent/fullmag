@@ -356,10 +356,12 @@ bool validate_demag_poisson_hypre_device_solve(
         workspace.b_par != nullptr &&
         workspace.residual != nullptr) {
         workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
+#if FULLMAG_HAS_CUDA_RUNTIME
         if (!mfem_default_stream_wait_for_hypre_validation(
                 workspace.stream_interop, error)) {
             return false;
         }
+#endif
         workspace.residual->Add(-1.0, *workspace.b_par);
         absolute_residual = workspace.residual->Norml2();
         residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;

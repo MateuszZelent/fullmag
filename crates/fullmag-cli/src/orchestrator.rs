@@ -130,9 +130,20 @@ fn fail_owned_preparation_stage(
     error_code: &str,
     safe_summary: &str,
 ) -> Result<()> {
+    fail_owned_preparation_stage_with_detail(workspace, stage_id, error_code, safe_summary, None)
+}
+
+fn fail_owned_preparation_stage_with_detail(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    error_code: &str,
+    safe_summary: &str,
+    detail: Option<String>,
+) -> Result<()> {
     let timestamp_unix_ms = preparation_unix_time_millis()?;
     transition_preparation(workspace, |preparation| {
         preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        preparation.set_failure_detail(detail);
         push_preparation_log_once(
             preparation,
             timestamp_unix_ms,
@@ -174,24 +185,64 @@ fn fail_owned_preparation_stage_with_diagnostics(
 }
 
 fn safe_validation_failure_summary(error: &anyhow::Error, fallback: &str) -> String {
-    let message = error.to_string();
+    error
+        .chain()
+        .find_map(|cause| safe_preparation_error_message(&cause.to_string()))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn safe_preparation_error_detail(error: &anyhow::Error) -> Option<String> {
+    error
+        .chain()
+        .filter_map(|cause| {
+            let message = cause.to_string();
+            safe_preparation_error_message(&message)
+                .or_else(|| sanitized_preparation_error_message(&message))
+        })
+        .last()
+}
+
+fn safe_preparation_error_message(message: &str) -> Option<String> {
     let trimmed = message.trim();
     let is_single_line = !trimmed.contains('\n') && !trimmed.contains('\r');
     let is_bounded = !trimmed.is_empty() && trimmed.chars().count() <= 240;
     let has_private_path = trimmed.contains('/') || trimmed.contains('\\');
     let normalized = trimmed.to_ascii_lowercase();
     let has_secret_marker = normalized.contains("secret") || normalized.contains("token");
-    if is_single_line && is_bounded && !has_private_path && !has_secret_marker {
-        trimmed.to_string()
-    } else {
-        fallback.to_string()
-    }
+    (is_single_line && is_bounded && !has_private_path && !has_secret_marker)
+        .then(|| trimmed.to_string())
 }
 
-fn fail_active_preparation_stage(
+fn sanitized_preparation_error_message(message: &str) -> Option<String> {
+    let line = message
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let normalized = line.to_ascii_lowercase();
+    if normalized.contains("secret") || normalized.contains("token") {
+        return None;
+    }
+    let sanitized = line
+        .split_whitespace()
+        .map(|token| {
+            if token.contains('/') || token.contains('\\') {
+                "<path>"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let is_bounded = !sanitized.is_empty() && sanitized.chars().count() <= 240;
+    is_bounded.then_some(sanitized)
+}
+
+fn fail_active_preparation_stage_with_detail(
     workspace: &LocalLiveWorkspace,
     error_code: &str,
     safe_summary: &str,
+    detail: Option<String>,
 ) -> Result<()> {
     let active_stage_id = workspace
         .snapshot()
@@ -199,7 +250,13 @@ fn fail_active_preparation_stage(
         .as_ref()
         .and_then(|preparation| preparation.active_stage_id);
     if let Some(active_stage_id) = active_stage_id {
-        fail_owned_preparation_stage(workspace, active_stage_id, error_code, safe_summary)?;
+        fail_owned_preparation_stage_with_detail(
+            workspace,
+            active_stage_id,
+            error_code,
+            safe_summary,
+            detail,
+        )?;
     }
     Ok(())
 }
@@ -213,7 +270,12 @@ fn run_active_preparation_operation<T>(
     match operation() {
         Ok(value) => Ok(value),
         Err(error) => {
-            fail_active_preparation_stage(workspace, error_code, safe_failure_summary)?;
+            fail_active_preparation_stage_with_detail(
+                workspace,
+                error_code,
+                safe_failure_summary,
+                safe_preparation_error_detail(&error),
+            )?;
             Err(error)
         }
     }
@@ -228,11 +290,12 @@ fn own_preparation_boundary_failure<T>(
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
-            if let Err(record_error) = fail_owned_preparation_stage(
+            if let Err(record_error) = fail_owned_preparation_stage_with_detail(
                 workspace,
                 PreparationStageId::ScriptMaterialization,
                 error_code,
                 safe_failure_summary,
+                safe_preparation_error_detail(&error),
             ) {
                 eprintln!(
                     "[fullmag-cli] WARNING: could not record safe preparation boundary failure: {}",
@@ -267,7 +330,7 @@ fn wait_for_failed_preparation_close(
             failure.summary
         );
         if let Some(detail) = failure.detail {
-            eprintln!("[fullmag] mesh failure detail: {detail}");
+            eprintln!("[fullmag] preparation failure detail: {detail}");
         }
         if let Some(correlation_id) = failure.diagnostics_correlation_id {
             eprintln!("[fullmag] diagnostic correlation id: {correlation_id}");
@@ -659,10 +722,11 @@ fn project_script_export_failure(
             project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)
         })?;
     } else {
-        fail_active_preparation_stage(
+        fail_active_preparation_stage_with_detail(
             workspace,
             "materialization_failed",
             "Simulation materialization failed",
+            safe_preparation_error_detail(&error),
         )?;
     }
     Ok(error)
@@ -872,19 +936,17 @@ fn current_live_metadata(
     let timestep_qualification = resolved_session_runtime.as_ref().and_then(|runtime| {
         fullmag_runner::timestep_qualification_for_plan(plan, &runtime.resolved_device)
     });
-    let resolved_execution = resolved_session_runtime
-        .as_ref()
-        .map(|runtime| {
-            serde_json::json!({
-                "backend": &runtime.resolved_backend,
-                "device": &runtime.resolved_device,
-                "precision": &runtime.resolved_precision,
-                "mode": &runtime.resolved_mode,
-                "runtime_family": &runtime.resolved_runtime_family,
-                "engine_id": &runtime.resolved_engine_id,
-                "lossy_fallback_used": runtime.resolved_fallback.is_some(),
-            })
-        });
+    let resolved_execution = resolved_session_runtime.as_ref().map(|runtime| {
+        serde_json::json!({
+            "backend": &runtime.resolved_backend,
+            "device": &runtime.resolved_device,
+            "precision": &runtime.resolved_precision,
+            "mode": &runtime.resolved_mode,
+            "runtime_family": &runtime.resolved_runtime_family,
+            "engine_id": &runtime.resolved_engine_id,
+            "lossy_fallback_used": runtime.resolved_fallback.is_some(),
+        })
+    });
     let capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
     let live_preview_supported_quantities = capabilities
         .as_ref()
@@ -2267,6 +2329,7 @@ pub(crate) fn requested_runtime_selection(
     SessionRuntimeSelection {
         requested_backend: requested_backend.to_string(),
         explicit_selection,
+        authored_requested_device: requested_device.to_string(),
         requested_device: requested_device.to_string(),
         requested_precision: requested_precision.to_string(),
         requested_mode: requested_mode.to_string(),
@@ -2307,6 +2370,7 @@ fn session_runtime_selection_for_problem(
     );
     match fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n) {
         Ok(resolved) => {
+            selection.requested_device = resolved.requested_device;
             selection.requested_cpu_threads = resolved
                 .requested_cpu_threads
                 .and_then(|threads| u32::try_from(threads).ok())
@@ -3572,6 +3636,71 @@ fn scripted_stage_execution_state(
         active_stage_kind,
         published_runtime_state,
     )
+}
+
+fn scripted_stage_execution_state_with_completion(
+    total_stages: usize,
+    active_index: usize,
+    active_stage_kind: &str,
+    runtime_state: &str,
+    command_id: Option<&str>,
+    started_at_unix_ms: Option<u128>,
+    completed_at_unix_ms: Option<u128>,
+    artifact_ref: Option<String>,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+    incoming_transition: Option<&StageTransitionMetadata>,
+) -> CurrentLiveStageExecutionState {
+    let mut execution = scripted_stage_execution_state(
+        total_stages,
+        active_index,
+        active_stage_kind,
+        runtime_state,
+        command_id,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        artifact_ref,
+        completion.and_then(|value| value.reason),
+        incoming_transition,
+    );
+    if let Some(stage) = execution.stages.get_mut(active_index) {
+        stage.reason = completion.and_then(|value| value.reason);
+        stage.converged = completion.is_some_and(|value| value.converged);
+        stage.metric = completion.and_then(|value| value.metric);
+        stage.metric_name = completion.and_then(|value| value.metric_name.clone());
+        stage.metric_value = completion.and_then(|value| value.metric_value);
+        stage.threshold = completion.and_then(|value| value.threshold);
+    }
+    execution
+}
+
+fn preserve_terminal_stage_history(
+    next: &mut CurrentLiveStageExecutionState,
+    previous: Option<&CurrentLiveStageExecutionState>,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let active_index = next.active_stage_index.unwrap_or(next.total_stages);
+    let limit = active_index
+        .min(next.stages.len())
+        .min(previous.stages.len());
+    for index in 0..limit {
+        if matches!(
+            previous.stages[index].status.as_str(),
+            "completed" | "skipped" | "cancelled" | "stopped" | "failed"
+        ) {
+            next.stages[index] = previous.stages[index].clone();
+        }
+    }
+    let runtime_state = next.runtime_state.clone();
+    let active_stage_index = next.active_stage_index;
+    let active_stage_kind = next.active_stage_kind.clone();
+    *next = stage_execution_from_records(
+        &next.stages,
+        active_stage_index,
+        active_stage_kind.as_deref(),
+        &runtime_state,
+    );
 }
 
 fn apply_stage_transition_metadata(
@@ -5310,6 +5439,7 @@ pub(crate) fn build_session_manifest(
         problem_name: problem_name.to_string(),
         requested_backend: runtime.requested_backend.clone(),
         explicit_selection: runtime.explicit_selection,
+        authored_requested_device: runtime.authored_requested_device.clone(),
         requested_device: runtime.requested_device.clone(),
         requested_precision: runtime.requested_precision.clone(),
         requested_mode: runtime.requested_mode.clone(),
@@ -8099,7 +8229,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &stage_initial_update,
             );
             state.live_state = live_state_manifest_from_update(stage_initial_update.clone());
-            state.stage_execution = Some(scripted_stage_execution_state(
+            let previous_stage_execution = state.stage_execution.clone();
+            let mut next_stage_execution = scripted_stage_execution_state(
                 stage_count,
                 stage_index,
                 &stage.entrypoint_kind,
@@ -8110,7 +8241,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Some(current_stage_artifact_dir.display().to_string()),
                 None,
                 stage.incoming_transition.as_ref(),
-            ));
+            );
+            preserve_terminal_stage_history(
+                &mut next_stage_execution,
+                previous_stage_execution.as_ref(),
+            );
+            state.stage_execution = Some(next_stage_execution);
             clear_cached_preview_fields(state);
         });
 
@@ -8184,19 +8320,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
             let synthetic_completed_at_unix_ms = unix_time_millis()?;
             live_workspace.update(|state| {
-                state.session.status = if final_update.finished {
-                    "completed".to_string()
-                } else {
-                    "running".to_string()
-                };
-                state.run = running_run_manifest_from_update(
+                // Synthetic stages still produce a real magnetization snapshot.  Route the
+                // terminal update through the same ingest path as solver callbacks so the
+                // field resource carries the synthetic stage's source step/revision instead of
+                // retaining an older preview (for example source_step=0 after a step-342 run).
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
                     &run_id,
                     &session_id,
                     &artifact_dir,
-                    &final_update,
+                    final_update,
+                    true,
                 );
-                state.live_state = live_state_manifest_from_update(final_update.clone());
-                state.stage_execution = Some(scripted_stage_execution_state(
+                let previous_stage_execution = state.stage_execution.clone();
+                let mut next_stage_execution = scripted_stage_execution_state(
                     stage_count,
                     stage_index,
                     &stage.entrypoint_kind,
@@ -8207,8 +8344,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(current_stage_artifact_dir.display().to_string()),
                     None,
                     stage.incoming_transition.as_ref(),
-                ));
-                set_latest_scalar_row_if_due(state, &final_update);
+                );
+                preserve_terminal_stage_history(
+                    &mut next_stage_execution,
+                    previous_stage_execution.as_ref(),
+                );
+                state.stage_execution = Some(next_stage_execution);
             });
 
             if matches!(action, ResolvedScriptStageAction::LoadState { .. }) {
@@ -8589,6 +8730,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
         }
 
+        let stage_failed = stage_result.status == fullmag_runner::RunStatus::Failed
+            || stage_result
+                .completion
+                .as_ref()
+                .is_some_and(|completion| completion.status == "failed");
         if let Some(final_update) = final_stage_step_update(
             &execution_plan.backend_plan,
             stage_fem_mesh_asset
@@ -8598,22 +8744,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &stage_result.final_magnetization,
             step_offset,
             time_offset,
-            is_session_final_stage,
+            is_session_final_stage && !stage_failed,
         ) {
             live_workspace.update(|state| {
-                state.session.status = if final_update.finished {
-                    "completed".to_string()
-                } else {
-                    "running".to_string()
-                };
-                state.run = running_run_manifest_from_update(
+                // The terminal solver payload must use the same ingest path as ordinary live
+                // callbacks; otherwise the latest-step view changes while latest_fields.m
+                // remains at source_step=0.
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
                     &run_id,
                     &session_id,
                     &artifact_dir,
-                    &final_update,
+                    final_update,
+                    true,
                 );
-                state.live_state = live_state_manifest_from_update(final_update.clone());
-                set_latest_scalar_row_if_due(state, &final_update);
             });
         }
 
@@ -8692,7 +8836,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     });
             }
             live_workspace.update(|state| {
-                state.stage_execution = Some(scripted_stage_execution_state(
+                let previous_stage_execution = state.stage_execution.clone();
+                let mut next_stage_execution = scripted_stage_execution_state(
                     stage_count,
                     stage_index,
                     &stage.entrypoint_kind,
@@ -8707,7 +8852,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         None
                     },
                     stage.incoming_transition.as_ref(),
-                ));
+                );
+                preserve_terminal_stage_history(
+                    &mut next_stage_execution,
+                    previous_stage_execution.as_ref(),
+                );
+                state.stage_execution = Some(next_stage_execution);
             });
             live_workspace.push_log(
                 "system",
@@ -8738,13 +8888,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             break;
         }
 
+        let stage_status = if stage_failed { "failed" } else { "completed" };
         {
             let final_step = stage_result.steps.last();
             eprintln!(
-                "[fullmag] stage {}/{} ({}) completed — steps={}  t={:.4e}  max_torque[T]={:.4e}  stop: {}",
+                "[fullmag] stage {}/{} ({}) {} — steps={}  t={:.4e}  max_torque[T]={:.4e}  stop: {}",
                 stage_index + 1,
                 stage_count,
                 stage.entrypoint_kind,
+                stage_status,
                 stage_result.steps.len(),
                 final_step.map(|s| s.time).unwrap_or(0.0),
                 final_step.map(|s| s.max_torque_T).unwrap_or(0.0),
@@ -8752,29 +8904,54 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
         }
         live_workspace.push_log(
-            "success",
+            if stage_failed { "error" } else { "success" },
             format!(
-                "Stage {}/{} ({}) completed",
+                "Stage {}/{} ({}) {}",
                 stage_index + 1,
                 stage_count,
-                stage.entrypoint_kind
+                stage.entrypoint_kind,
+                stage_status
             ),
         );
         let completed_at_unix_ms = unix_time_millis()?;
         live_workspace.update(|state| {
-            state.stage_execution = Some(scripted_stage_execution_state(
+            let previous_stage_execution = state.stage_execution.clone();
+            let mut next_stage_execution = scripted_stage_execution_state_with_completion(
                 stage_count,
                 stage_index,
                 &stage.entrypoint_kind,
-                "completed",
+                stage_status,
                 start_solver_command_id.as_deref(),
                 Some(stage_started_at_unix_ms),
                 Some(completed_at_unix_ms),
                 Some(current_stage_artifact_dir.display().to_string()),
-                None,
+                stage_result.completion.as_ref(),
                 stage.incoming_transition.as_ref(),
-            ));
+            );
+            preserve_terminal_stage_history(
+                &mut next_stage_execution,
+                previous_stage_execution.as_ref(),
+            );
+            state.stage_execution = Some(next_stage_execution);
+            if stage_failed {
+                state.session.status = "failed".to_string();
+                state.run.status = "failed".to_string();
+                set_live_state_status(&mut state.live_state, "failed", Some(true));
+            }
         });
+        if stage_failed {
+            let failure_detail = format_stop_reason(stage_result.completion.as_ref());
+            let message = format!(
+                "Stage {}/{} ({}) failed: {}",
+                stage_index + 1,
+                stage_count,
+                stage.entrypoint_kind,
+                failure_detail,
+            );
+            live_workspace.push_log("error", message.clone());
+            eprintln!("[fullmag] {}", message);
+            return Err(anyhow!(message));
+        }
     }
 
     if interactive_requested {
@@ -10628,11 +10805,13 @@ mod tests {
         mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
         mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
-        project_script_export_failure, resolve_adaptive_convergence_metric,
-        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
+        preserve_terminal_stage_history, project_script_export_failure,
+        resolve_adaptive_convergence_metric, resolve_preview_field_every_n,
+        resolved_shared_domain_object_region_markers, run_active_preparation_operation,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
-        shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
+        scripted_stage_execution_state_with_completion, shared_domain_object_region_mesh_specs,
+        stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
@@ -10842,6 +11021,7 @@ mod tests {
             name: "film".to_string(),
             region: "film_region".to_string(),
             material: "mat".to_string(),
+            absorbing_boundary: None,
             initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
@@ -11141,6 +11321,7 @@ mod tests {
                 problem_name: "test".to_string(),
                 requested_backend: "fem".to_string(),
                 explicit_selection: true,
+                authored_requested_device: "cpu".to_string(),
                 requested_device: "cpu".to_string(),
                 requested_precision: "double".to_string(),
                 requested_mode: "strict".to_string(),
@@ -11219,7 +11400,7 @@ mod tests {
             .simulation_preparation
             .expect("preparation state");
         assert_eq!(preparation.status, PreparationStatus::Failed);
-        let failure = preparation.failure.expect("owned failure");
+        let failure = preparation.failure.as_ref().expect("owned failure");
         assert_eq!(failure.stage_id, stage_id);
         assert_eq!(failure.error_code, error_code);
         assert_eq!(failure.summary, safe_summary);
@@ -11293,7 +11474,7 @@ mod tests {
             .snapshot()
             .simulation_preparation
             .expect("preparation state");
-        let failure = preparation.failure.expect("owned failure");
+        let failure = preparation.failure.as_ref().expect("owned failure");
         assert_eq!(failure.stage_id, PreparationStageId::Validation);
         assert_eq!(failure.error_code, "validation_failed");
         assert_eq!(failure.summary, raw_error);
@@ -11559,6 +11740,122 @@ mod tests {
             "Simulation materialization failed",
             raw_error,
         );
+        assert_eq!(
+            workspace
+                .snapshot()
+                .simulation_preparation
+                .expect("preparation state")
+                .failure
+                .expect("owned failure")
+                .detail
+                .as_deref(),
+            Some(raw_error)
+        );
+    }
+
+    #[test]
+    fn generic_materialization_failure_preserves_safe_root_cause_detail() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper failed: FDM universe membership is unavailable";
+
+        let error = run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("materialization should fail");
+
+        assert_eq!(error.to_string(), raw_error);
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(failure.summary, "Simulation materialization failed");
+        assert_eq!(failure.detail.as_deref(), Some(raw_error));
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn generic_materialization_failure_selects_safe_cause_from_wrapped_error() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper failed: FDM universe membership is unavailable";
+        let wrapped_error =
+            anyhow::anyhow!(raw_error).context("failed to export ProblemIR from /private/model.py");
+
+        run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(wrapped_error),
+        )
+        .expect_err("materialization should fail");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(failure.detail.as_deref(), Some(raw_error));
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn generic_materialization_failure_sanitizes_multiline_root_cause_detail() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "Traceback (most recent call last):\nValueError: FDM membership unavailable at /private/model.py:42";
+
+        run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("materialization should fail");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("ValueError: FDM membership unavailable at <path>")
+        );
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains("/private/model.py")));
+    }
+
+    #[test]
+    fn generic_materialization_failure_redacts_unsafe_root_cause_detail() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper failed /private/model.py\nsecret-token";
+
+        run_active_preparation_operation(
+            &workspace,
+            "script_materialization_failed",
+            "Simulation materialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("materialization should fail");
+
+        let failure = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state")
+            .failure
+            .expect("owned failure");
+        assert_eq!(failure.summary, "Simulation materialization failed");
+        assert_eq!(failure.detail, None);
     }
 
     #[test]
@@ -12754,6 +13051,46 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_final_magnetization_is_published_with_step_provenance() {
+        let mut state = test_workspace_state();
+        state.latest_fields.insert(
+            "m".to_string(),
+            serde_json::json!({
+                "quantity": "m",
+                "unit": "1",
+                "values": [1.0, 0.0, 0.0],
+                "source_step": 0,
+                "source_revision": 1,
+            }),
+        );
+        let mut update = test_step_update(342);
+        update.grid = [128, 32, 1];
+        update.magnetization = Some(vec![0.0, 1.0, 0.0]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            update,
+            true,
+        );
+
+        let field = state
+            .latest_fields
+            .0
+            .get("m")
+            .expect("magnetization must be published as a latest field");
+        assert_eq!(field["source_step"], serde_json::json!(342));
+        assert_eq!(field["source_revision"], serde_json::json!(342));
+        assert_eq!(
+            field["layout"]["grid_cells"],
+            serde_json::json!([128, 32, 1])
+        );
+        assert_eq!(field["values"], serde_json::json!([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
     fn publish_live_step_update_preserves_previous_magnetization_when_payload_is_thin() {
         let mut state = test_workspace_state();
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
@@ -13296,6 +13633,7 @@ mod tests {
             field_drives: Vec::new(),
             current_modules: Vec::new(),
             spin_torque_modules: Vec::new(),
+            physics_graph: None,
             excitation_analysis: None,
             current_density: None,
             stt_degree: None,
@@ -13559,6 +13897,44 @@ mod tests {
             Some(fullmag_ir::StageStopReason::MaxSteps)
         );
         assert_eq!(execution.stages[1].status, "pending");
+    }
+
+    #[test]
+    fn scripted_stage_execution_preserves_previous_relaxation_completion() {
+        let completion = stage_completion(fullmag_ir::StageStopReason::Torque);
+        let first_stage = scripted_stage_execution_state_with_completion(
+            2,
+            0,
+            "flat_relax",
+            "completed",
+            Some("cmd-stage-0"),
+            Some(1_700_000_000_000),
+            Some(1_700_000_001_000),
+            Some("artifacts/stage-000".to_string()),
+            Some(&completion),
+            None,
+        );
+        let mut second_stage = scripted_stage_execution_state(
+            2,
+            1,
+            "flat_save_state",
+            "completed",
+            None,
+            Some(1_700_000_001_001),
+            Some(1_700_000_001_002),
+            Some("artifacts/stage-001".to_string()),
+            None,
+            None,
+        );
+
+        preserve_terminal_stage_history(&mut second_stage, Some(&first_stage));
+
+        assert!(second_stage.stages[0].converged);
+        assert_eq!(
+            second_stage.stages[0].reason,
+            Some(fullmag_ir::StageStopReason::Torque)
+        );
+        assert_eq!(second_stage.stages[0].metric_value, Some(6.7e-5));
     }
 
     #[test]
@@ -14115,6 +14491,7 @@ mod tests {
                     name: "left_magnet".to_string(),
                     region: "left_region".to_string(),
                     material: "mat_left".to_string(),
+                    absorbing_boundary: None,
                     initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                         value: [1.0, 0.0, 0.0],
                     }),
@@ -14123,6 +14500,7 @@ mod tests {
                     name: "right_magnet".to_string(),
                     region: "right_region".to_string(),
                     material: "mat_right".to_string(),
+                    absorbing_boundary: None,
                     initial_magnetization: Some(InitialMagnetizationIR::Uniform {
                         value: [0.0, 1.0, 0.0],
                     }),

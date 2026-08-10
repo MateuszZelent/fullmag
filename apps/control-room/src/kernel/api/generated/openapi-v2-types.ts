@@ -836,6 +836,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_fdm_multilayer_layout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/domain/meta": {
         parameters: {
             query?: never;
@@ -2468,6 +2484,29 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_oersted_fields_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/physics-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Return the semantic physics-module graph for the current authoring scene.
+         * @description This endpoint is intentionally thin: mesh topology, field samples and the
+         *     constitutive family records stay on their dedicated resources.  The graph
+         *     is normalized once by `fullmag-authoring` so the planner and Control Room
+         *     consume the same stable module identity, scope and dependency semantics.
+         */
+        get: operations["model_get_sessions_current_model_physics_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/planar-monitors": {
         parameters: {
             query?: never;
@@ -3368,6 +3407,65 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Stable machine-readable classification for an active-lane operation reason.
+         *     Human-readable `reason` text may evolve without changing UI behavior.
+         * @enum {string}
+         */
+        ActiveLaneCapabilityReasonCode: "capability_supported" | "capability_semantic_only" | "capability_deferred" | "capability_unsupported" | "capability_stale";
+        ActiveLaneCapabilitySnapshot: {
+            authored: components["schemas"]["ActiveLaneIdentity"];
+            fallback?: null | components["schemas"]["ActiveLaneFallback"];
+            operations: {
+                [key: string]: components["schemas"]["ActiveLaneOperationCapability"];
+            };
+            qualification: components["schemas"]["ActiveLaneQualification"];
+            /** @description Effective execution request after launcher/environment overrides. */
+            requested: components["schemas"]["ActiveLaneIdentity"];
+            resolved?: null | components["schemas"]["ActiveLaneIdentity"];
+            schema_version: string;
+            source: components["schemas"]["ActiveLaneCapabilitySource"];
+        };
+        ActiveLaneCapabilitySource: {
+            /** @description Provenance of `authored`: canonical ProblemIR runtime selection. */
+            authored_intent: string;
+            capability_profile_version?: string | null;
+            /** @description Provenance of `requested`: runtime resolution after launch overrides. */
+            effective_request: string;
+            engine_id?: string | null;
+            /**
+             * @description `planner` when the snapshot is backed by resolved planner capabilities;
+             *     `unavailable` when status must fail closed.
+             */
+            kind: string;
+        };
+        /** @enum {string} */
+        ActiveLaneCapabilityState: "supported" | "semantic_only" | "deferred" | "unsupported" | "stale";
+        ActiveLaneFallback: {
+            fallback_engine: string;
+            message: string;
+            occurred: boolean;
+            original_engine: string;
+            reason: string;
+        };
+        ActiveLaneIdentity: {
+            backend: string;
+            device: string;
+            discretization: string;
+            mode: string;
+            precision: string;
+        };
+        ActiveLaneOperationCapability: {
+            reason: string;
+            reason_code: components["schemas"]["ActiveLaneCapabilityReasonCode"];
+            requires: string[];
+            state: components["schemas"]["ActiveLaneCapabilityState"];
+        };
+        ActiveLaneQualification: {
+            reason: string;
+            /** @description Capability availability does not imply scientific qualification. */
+            status: string;
+        };
         /** @enum {string} */
         AdaptiveSolverIntegratorRequest: "rk23" | "rk45";
         AirboxLayerPatch: {
@@ -3606,6 +3704,8 @@ export interface components {
             size: number[];
         };
         CapabilityMap: {
+            /** @description Planner-owned operation gating for the currently resolved execution lane. */
+            active_lane: components["schemas"]["ActiveLaneCapabilitySnapshot"];
             algorithms_available: string[];
             binary_fields: boolean;
             cell_fields: boolean;
@@ -4152,6 +4252,95 @@ export interface components {
             revision: number;
             total: number;
         };
+        FdmCommonTransformLayoutResource: {
+            cell_size: number[];
+            fft_shape: number[];
+            is_physical_mesh: boolean;
+            origin: number[];
+            provenance: string;
+            shape: number[];
+        };
+        FdmLayerLayoutResource: {
+            /** Format: int64 */
+            active_cell_count: number;
+            active_mask_present: boolean;
+            convolution_cell_size: number[];
+            convolution_grid: number[];
+            /** Format: int64 */
+            inactive_cell_count: number;
+            layer_id: string;
+            magnet_name: string;
+            mask_provenance?: string | null;
+            native_cell_size: number[];
+            native_grid: number[];
+            native_grid_fingerprint?: string | null;
+            native_origin: number[];
+            object_id: string;
+            transfer_kind: string;
+        };
+        /** @enum {string} */
+        FdmMagneticSupportSemanticRole: "magnetic-support";
+        FdmMagneticSupportSummaryResource: {
+            /** Format: int64 */
+            active_cell_count: number;
+            /** Format: int64 */
+            active_unassigned_cell_count: number;
+            /** @description Cell-edge AABB of the exact active-cell mask in meters. */
+            bounds_max_m: number[];
+            /** @description Cell-edge AABB of the exact active-cell mask in meters. */
+            bounds_min_m: number[];
+            /** @description Grid identity used to compute this exact support summary. */
+            grid_fingerprint: string;
+            /** Format: int64 */
+            inactive_cell_count: number;
+            semantic_role: components["schemas"]["FdmMagneticSupportSemanticRole"];
+        };
+        FdmMultilayerAirboxResource: {
+            carrier_available: boolean;
+            carrier_fingerprint?: string | null;
+            /** Format: int64 */
+            carrier_revision?: number | null;
+            cell_size_m?: number[] | null;
+            cells?: number[] | null;
+            h_demag_available: boolean;
+            h_eff_available: boolean;
+            h_eff_unavailable_reason?: string | null;
+            origin_m?: number[] | null;
+            /** Format: int64 */
+            sample_count?: number | null;
+            source_grid_fingerprints?: string[] | null;
+            source_policy?: string | null;
+            source_runtime_identity?: unknown;
+            target_only?: boolean | null;
+            unavailable_reason?: string | null;
+            /** Format: int64 */
+            value_count?: number | null;
+        };
+        /**
+         * @description Thin, revision-driven description of the native carriers used by an FDM
+         *     multilayer convolution.  The common transform layout is an FFT scratch
+         *     layout and must never be interpreted as a physical mesh.
+         */
+        FdmMultilayerLayoutResource: {
+            airbox: components["schemas"]["FdmMultilayerAirboxResource"];
+            available: boolean;
+            backend: string;
+            common_transform_layout?: null | components["schemas"]["FdmCommonTransformLayoutResource"];
+            domain_generation_id: string;
+            /** Format: int64 */
+            execution_revision: number;
+            layers: components["schemas"]["FdmLayerLayoutResource"][];
+            layout_fingerprint?: string | null;
+            /** Format: int64 */
+            layout_revision: number;
+            /** Format: int64 */
+            observation_revision: number;
+            requested_mode?: string | null;
+            resolved_mode?: string | null;
+            schema_version: string;
+            strategy?: string | null;
+            unavailable_reason?: string | null;
+        };
         /**
          * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
          *     on the binary data plane under the companion FMRM resource.
@@ -4170,9 +4359,11 @@ export interface components {
             cell_count: number;
             cell_m: number[];
             counts: number[];
+            domain_generation_id: string;
             encoding: string;
             freshness: string;
             grid_fingerprint: string;
+            magnetic_support?: null | components["schemas"]["FdmMagneticSupportSummaryResource"];
             /** Format: int64 */
             mesh_revision: number;
             object_ids?: string[];
@@ -4599,6 +4790,23 @@ export interface components {
             /** @enum {string} */
             kind: "geometry_mask";
             object_id: string;
+        } | {
+            /** Format: double */
+            carrier_origin_x_m: number;
+            /** Format: double */
+            carrier_phase_rad: number;
+            /** Format: double */
+            center_x_m: number;
+            /** Format: double */
+            center_y_m: number;
+            /** @enum {string} */
+            kind: "gaussian_plane_wave";
+            /** Format: double */
+            sigma_x_m: number;
+            /** Format: double */
+            sigma_y_m: number;
+            /** Format: double */
+            wavelength_m: number;
         };
         FieldStateExportRequest: {
             file_name?: string | null;
@@ -4710,19 +4918,35 @@ export interface components {
              *     mesh topology are valid for vector glyph placement and surface projection
              *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
              *     requires complete field coverage.
+             *     Full-domain FDM responses always return the complete cell-centred field,
+             *     even when this cap is provided, because FMVP v2 has no cell-index
+             *     mapping for a downsampled payload. Scoped FDM responses use FMVP v3
+             *     explicit cell ordinals; multilayer layer/object scopes carry the native
+             *     grid certificate fingerprint and scope provenance in FMMI metadata.
              */
             max_samples?: number | null;
+            /**
+             * @description Optional canonical owner of a `region` scope.
+             *
+             *     Required when the current single-grid FDM membership has the same
+             *     `region_id` under more than one magnetic object. It is ignored by
+             *     globally unique region IDs to preserve existing unqualified requests.
+             */
+            owner_object_id?: string | null;
             /**
              * Format: double
              * @description Phase angle in radians for `view=phase_rotated_real`.
              */
             phase_rad?: number | null;
-            /** @description Scope identifier for `object` and `part` scopes. */
+            /** @description Scope identifier for `object`, `region`, and `part` scopes. */
             scope_id?: string | null;
             /**
-             * @description Optional FEM scope for large-domain samples.
+             * @description Optional FEM or FDM scope for large-domain samples.
              *
-             *     Accepted values: `full`, `object`, `part`, `airbox`, `selection`.
+             *     Accepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,
+             *     `selection`. Single-grid FDM supports `object`, `region`, and `airbox`
+             *     from current FMRM membership. Multilayer FDM supports native `layer`
+             *     and `object` scopes without projecting payloads onto the common grid.
              *     `object` and `part` require `scope_id`; `airbox` may omit it and resolves
              *     to the first mesh part with role `air`; `selection` resolves from the
              *     current workspace selection.
@@ -5769,6 +5993,14 @@ export interface components {
             boundaries?: components["schemas"]["SceneChargeBoundary"][];
             /** Format: double */
             conductivity_s_per_m?: number | null;
+            /**
+             * @description Optional explicit accepted RT0/H(div) source descriptor.  It remains a
+             *     JSON object at the scene boundary so every closure field survives UI
+             *     round-trip; the planner performs mesh-exact typed validation.
+             */
+            conservative_current_view?: {
+                [key: string]: unknown;
+            } | null;
             coupling?: components["schemas"]["SceneTransportCoupling"];
             current_density?: number[] | null;
             domain?: components["schemas"]["SceneRegionRef"][];
@@ -5779,6 +6011,7 @@ export interface components {
             name: string;
             solve_region?: string | null;
             solver?: null | components["schemas"]["SceneChargeSolverPolicy"];
+            time_envelope?: null | components["schemas"]["SceneTimeEnvelope"];
         };
         KnownSceneOerstedField: {
             axis: number[];
@@ -5826,9 +6059,15 @@ export interface components {
             current_source?: string | null;
             /** Format: double */
             degree: number;
+            formula_version?: components["schemas"]["ZhangLiFormulaVersion"];
             id?: string;
             /** @enum {string} */
             kind: "zhang_li";
+            /** Format: double */
+            lande_g?: number | null;
+            operator_version?: null | components["schemas"]["ZhangLiOperatorVersion"];
+            schema_version?: string | null;
+            target?: null | components["schemas"]["SceneRegionRef"];
         } | {
             compatibility_origin?: null | components["schemas"]["SceneCompatibilityOrigin"];
             drive: components["schemas"]["ScenePrescribedSotDrive"];
@@ -6573,7 +6812,7 @@ export interface components {
             mesh_id: string;
             /** Format: int64 */
             mesh_revision: number;
-            unresolved_region_ids?: string[];
+            unresolved_regions?: components["schemas"]["MeshUnresolvedRegionResource"][];
         };
         MeshRegionMembershipResource: {
             boundary_face_indices: number[];
@@ -6586,6 +6825,11 @@ export interface components {
             /** Format: int64 */
             mesh_revision: number;
             node_indices: number[];
+            /**
+             * @description Canonical scene-object owner. Together with `region_id` this is the
+             *     stable authored-region identity.
+             */
+            owner_object_id: string;
             realization: string;
             realization_method?: string | null;
             realization_warnings?: string[];
@@ -6796,6 +7040,11 @@ export interface components {
             /** Format: int64 */
             revision: number;
         };
+        MeshUnresolvedRegionResource: {
+            /** @description Canonical scene-object owner. Region ids are not globally unique. */
+            owner_object_id: string;
+            region_id: string;
+        };
         MetricsSummary: {
             /**
              * Format: double
@@ -6880,6 +7129,7 @@ export interface components {
             time_seconds: number;
         };
         ObjectPatchRequest: {
+            absorbing_boundary?: Record<string, never> | null;
             /** Format: int64 */
             base_revision?: number | null;
             geometry?: Record<string, never> | null;
@@ -6931,6 +7181,74 @@ export interface components {
         };
         /** @enum {string} */
         PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
+        /** @enum {string} */
+        PhysicsGraphActivationResource: "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved";
+        PhysicsGraphEdgeResource: {
+            kind: string;
+            source_id: string;
+            status: components["schemas"]["PhysicsGraphActivationResource"];
+            target_id: string;
+        };
+        PhysicsGraphModuleResource: {
+            activation: components["schemas"]["PhysicsGraphActivationResource"];
+            applies_to: components["schemas"]["PhysicsGraphScopeResource"][];
+            authored_state: string;
+            capability: string;
+            depends_on: string[];
+            id: string;
+            kind: string;
+            presentation: components["schemas"]["PhysicsGraphPresentationResource"];
+            solve_domain: components["schemas"]["SceneRegionRef"][];
+            source_path: string;
+        };
+        PhysicsGraphPresentationResource: {
+            family: string;
+            label: string;
+        };
+        PhysicsGraphProvenanceResource: {
+            normalizer: string;
+        };
+        PhysicsGraphResource: {
+            edges: components["schemas"]["PhysicsGraphEdgeResource"][];
+            modules: components["schemas"]["PhysicsGraphModuleResource"][];
+            provenance: components["schemas"]["PhysicsGraphProvenanceResource"];
+            /** Format: int64 */
+            scene_revision: number;
+            schema_version: string;
+        };
+        /**
+         * @description Stable scope reference used by the graph-driven model tree.
+         *
+         *     The graph endpoint intentionally exposes scope and dependency metadata,
+         *     while constitutive family payloads remain on the family resources.
+         */
+        PhysicsGraphScopeResource: {
+            /** @enum {string} */
+            kind: "global";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "interface";
+            side_a: components["schemas"]["SceneRegionRef"];
+            side_b: components["schemas"]["SceneRegionRef"];
+        } | {
+            /** @enum {string} */
+            kind: "cross_object";
+            object_ids: string[];
+        } | {
+            /** @enum {string} */
+            kind: "unresolved";
+            reason: string;
+            source_path: string;
+        };
         /** @enum {string} */
         PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
         PlanarExtentSchema: {
@@ -7992,6 +8310,7 @@ export interface components {
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         SceneObjectResource: {
+            absorbing_boundary?: Record<string, never> | null;
             allocated_region_ids?: string[];
             geometry?: {
                 [key: string]: unknown;
@@ -9287,6 +9606,9 @@ export interface components {
             /** @enum {string} */
             kind: "mesh_build";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            /** @enum {string} */
+            kind: "fdm_grid_refresh";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             profile: components["schemas"]["SolverProfileCommandConfig"];
         } & {
             /** @enum {string} */
@@ -10159,6 +10481,10 @@ export interface components {
             left_dock?: string | null;
             right_dock?: string | null;
         };
+        /** @enum {string} */
+        ZhangLiFormulaVersion: "zhang_li.fullmag.v1" | "zhang_li.mumax3.v1" | "zhang_li.legacy_fullmag.v0";
+        /** @enum {string} */
+        ZhangLiOperatorVersion: "zl_central_reference_v1" | "zl_mumax3_central_v1";
     };
     responses: never;
     parameters: never;
@@ -11509,6 +11835,33 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_domain_fdm_multilayer_layout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FDM multilayer native and common transform layouts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FdmMultilayerLayoutResource"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_domain_meta: {
         parameters: {
             query?: never;
@@ -11674,6 +12027,12 @@ export interface operations {
             /** @description Binary realized FDM cell membership (FMRM) */
             200: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11683,6 +12042,12 @@ export interface operations {
             /** @description Partial FMRM payload */
             206: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11703,6 +12068,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Persisted membership does not belong to the current FDM domain */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Requested FMRM byte range is not satisfiable */
             416: {
                 headers: {
@@ -11714,7 +12086,10 @@ export interface operations {
     };
     data_get_sessions_current_data_fdm_region_membership_region_id: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Canonical object owner used to disambiguate duplicate region IDs. */
+                owner_object_id?: string;
+            };
             header?: {
                 /** @description Strong ETag from a previous scoped FMRM response */
                 "If-None-Match"?: string | null;
@@ -11732,6 +12107,12 @@ export interface operations {
             /** @description Scoped binary realized FDM cell membership (FMRM) */
             200: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11741,6 +12122,12 @@ export interface operations {
             /** @description Partial scoped FMRM payload */
             206: {
                 headers: {
+                    /** @description Exact domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Exact FDM grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current region-membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11756,6 +12143,13 @@ export interface operations {
             };
             /** @description No realized FDM membership or unknown region ID */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Persisted membership does not belong to the current FDM domain */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11802,6 +12196,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Persisted membership does not belong to the current FDM domain */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     data_get_sessions_current_data_fields: {
@@ -11836,10 +12237,12 @@ export interface operations {
             query?: {
                 /** @description Optional component projection used for statistics (`x`, `y`, `z`, `magnitude`, `full`). */
                 component?: string | null;
-                /** @description Optional FEM scope used for statistics (`full`, `object`, `part`, `airbox`, `selection`). */
+                /** @description Optional FEM or FDM scope used for statistics. */
                 scope_kind?: string | null;
-                /** @description Scope identifier for `object` and `part` scopes. */
+                /** @description Scope identifier for `object`, `layer`, `region`, and `part` scopes. */
                 scope_id?: string | null;
+                /** @description Optional canonical owner of a `region` scope. */
+                owner_object_id?: string | null;
                 /**
                  * @description Optional persisted analysis snapshot id, for example a saved
                  *     hysteresis-point magnetization state.
@@ -12957,16 +13360,27 @@ export interface operations {
                  */
                 component?: string | null;
                 /**
-                 * @description Optional FEM scope for large-domain samples.
+                 * @description Optional FEM or FDM scope for large-domain samples.
                  *
-                 *     Accepted values: `full`, `object`, `part`, `airbox`, `selection`.
+                 *     Accepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,
+                 *     `selection`. Single-grid FDM supports `object`, `region`, and `airbox`
+                 *     from current FMRM membership. Multilayer FDM supports native `layer`
+                 *     and `object` scopes without projecting payloads onto the common grid.
                  *     `object` and `part` require `scope_id`; `airbox` may omit it and resolves
                  *     to the first mesh part with role `air`; `selection` resolves from the
                  *     current workspace selection.
                  */
                 scope_kind?: string | null;
-                /** @description Scope identifier for `object` and `part` scopes. */
+                /** @description Scope identifier for `object`, `region`, and `part` scopes. */
                 scope_id?: string | null;
+                /**
+                 * @description Optional canonical owner of a `region` scope.
+                 *
+                 *     Required when the current single-grid FDM membership has the same
+                 *     `region_id` under more than one magnetic object. It is ignored by
+                 *     globally unique region IDs to preserve existing unqualified requests.
+                 */
+                owner_object_id?: string | null;
                 /**
                  * @description Optional geometric subset for scoped vector samples.
                  *
@@ -12983,6 +13397,11 @@ export interface operations {
                  *     mesh topology are valid for vector glyph placement and surface projection
                  *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
                  *     requires complete field coverage.
+                 *     Full-domain FDM responses always return the complete cell-centred field,
+                 *     even when this cap is provided, because FMVP v2 has no cell-index
+                 *     mapping for a downsampled payload. Scoped FDM responses use FMVP v3
+                 *     explicit cell ordinals; multilayer layer/object scopes carry the native
+                 *     grid certificate fingerprint and scope provenance in FMMI metadata.
                  */
                 max_samples?: number | null;
                 /**
@@ -13020,7 +13439,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads. */
+            /** @description Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads. */
             200: {
                 headers: {
                     /** @description Resolved component projection */
@@ -13153,7 +13572,13 @@ export interface operations {
     };
     data_get_sessions_current_data_mesh_region_membership_region_id: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Canonical owner object ID. Required when multiple objects expose the
+                 *     same authored region ID.
+                 */
+                owner_object_id?: string;
+            };
             header?: never;
             path: {
                 /** @description Authored or realized region id */
@@ -13174,6 +13599,13 @@ export interface operations {
             };
             /** @description No active mesh or membership for the region */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Region ID is ambiguous without owner_object_id */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16418,6 +16850,40 @@ export interface operations {
                     "application/json": components["schemas"]["OerstedFieldCommitResource"];
                 };
             };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_physics_graph: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Normalized authored physics graph */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicsGraphResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The authored scene cannot be normalized into a graph */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -6,6 +6,8 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
+  DATA_DOMAIN_META_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -46,6 +48,8 @@ import {
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type {
+  DomainMetaResource,
+  FdmMultilayerLayoutResource,
   GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryValidationResource,
@@ -70,6 +74,7 @@ import type {
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
   FdmRegionMembershipResource,
+  PendingJsonResourceResult,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigResource,
@@ -90,7 +95,10 @@ import {
 } from "../api/apiTypes";
 import {
   decodeFdmRegionMembership,
+  FMRM_HEADER_LEN,
+  validateFdmRegionMembershipContract,
   type DecodedFdmRegionMembership,
+  type FdmRegionMembershipContractResult,
   type DecodedMeshQualityData,
   type DecodedTopology,
 } from "../api/codecs";
@@ -109,10 +117,60 @@ export {
 } from "../visualization/useVisualizationStateResource";
 
 import { useResource } from "./useResource";
+import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 
 interface ResourceHookOptions {
   enabled?: boolean;
   revision?: ResourceRevision | null;
+}
+
+/** Single-grid membership is incompatible with a resolved FDM multilayer plan. */
+export function shouldLoadSingleGridFdmResources(
+  fdmLaneActive: boolean,
+  multilayerLayoutStatus: ResourceStatus,
+  multilayerLayout:
+    | Pick<FdmMultilayerLayoutResource, "available">
+    | null
+    | undefined,
+): boolean {
+  return (
+    fdmLaneActive &&
+    (multilayerLayoutStatus === "ready" || multilayerLayoutStatus === "error") &&
+    multilayerLayout?.available !== true
+  );
+}
+
+interface FdmMembershipBinaryResourceOptions extends ResourceHookOptions {
+  expectedGenerationId?: string | null;
+  expectedGridFingerprint?: string | null;
+  ownerObjectId?: string | null;
+}
+
+export type FdmRegionMembershipAvailability =
+  | { reason: "loading" | "not-materialized"; status: "pending" }
+  | { reason: string; status: "incompatible" }
+  | {
+      generationId: string;
+      gridFingerprint: string;
+      legendFingerprint: string | null;
+      status: "ready";
+    };
+
+export interface FdmRegionMembershipDescriptorResult
+  extends ResourceResult<FdmRegionMembershipResource> {
+  availability: FdmRegionMembershipAvailability;
+}
+
+type FdmRegionMembershipBinaryLoadResult =
+  | { reason: "not-materialized"; status: "pending" }
+  | Extract<FdmRegionMembershipContractResult, { status: "incompatible" }>
+  | (Extract<FdmRegionMembershipContractResult, { status: "ready" }> & {
+      data: DecodedFdmRegionMembership;
+    });
+
+export interface FdmRegionMembershipBinaryResult
+  extends ResourceResult<DecodedFdmRegionMembership> {
+  availability: FdmRegionMembershipAvailability;
 }
 
 const fdmRegionMembershipBinaryCache = new ResourceCache<DecodedFdmRegionMembership>({
@@ -161,16 +219,22 @@ export const FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY =
 export const resolveFdmRegionMembershipBinaryResourceKey = (
   regionId?: string | null,
   revision?: ResourceRevision | null,
+  ownerObjectId?: string | null,
 ) => {
   const baseKey = regionId
-    ? `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:${encodeURIComponent(regionId)}`
+    ? ownerObjectId
+      ? `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:owner:${encodeURIComponent(ownerObjectId)}:region:${encodeURIComponent(regionId)}`
+      : `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:${encodeURIComponent(regionId)}`
     : DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH;
   return revision == null
     ? baseKey
     : `${baseKey}#revision=${encodeURIComponent(String(revision))}`;
 };
-export const meshRegionMembershipResourceKey = (regionId: string) =>
-  `${DATA_MESH_REGION_MEMBERSHIP_PATH}:${encodeURIComponent(regionId)}`;
+export const meshRegionMembershipResourceKey = (
+  ownerObjectId: string,
+  regionId: string,
+) =>
+  `${DATA_MESH_REGION_MEMBERSHIP_PATH}:owner:${encodeURIComponent(ownerObjectId)}:region:${encodeURIComponent(regionId)}`;
 export const resolveMeshRegionMembershipsResourceKey = (
   regionIds: readonly string[],
 ) => {
@@ -349,11 +413,41 @@ export function resolveFdmRegionMembershipRevision(
   if (!resource) return null;
   return [
     resource.schema_version,
+    resource.domain_generation_id,
     resource.mesh_revision,
     resource.region_membership_revision,
     resource.grid_fingerprint,
     resource.region_legend_fingerprint ?? "unknown",
   ].join(":");
+}
+
+/**
+ * Stable identity for the domain presentation adapter. The generation id
+ * anchors the structured grid while the optional realized-resource suffix
+ * identifies the current FDM mask or FEM shared-domain manifest.
+ */
+export function resolveDomainPresentationRevision(
+  domain: DomainMetaResource | null | undefined,
+  options: {
+    fdmMembership?: FdmRegionMembershipResource | null;
+    femManifest?: MeshSharedDomainManifestResource | null;
+  } = {},
+): ResourceRevision | null {
+  if (!domain) return null;
+  if (domain.discretization.toLowerCase() === "fdm") {
+    const membershipRevision = resolveFdmRegionMembershipRevision(
+      options.fdmMembership,
+    );
+    return membershipRevision == null
+      ? domain.generation_id
+      : `${domain.generation_id}:${membershipRevision}`;
+  }
+  const manifestRevision = resolveMeshSharedDomainManifestRevision(
+    options.femManifest,
+  );
+  return manifestRevision == null
+    ? domain.generation_id
+    : `${domain.generation_id}:${manifestRevision}`;
 }
 
 export function resolveMeshRegionMembershipRevision(
@@ -364,6 +458,7 @@ export function resolveMeshRegionMembershipRevision(
     membership.mesh_id,
     membership.mesh_revision,
     membership.region_membership_revision,
+    membership.owner_object_id,
     membership.region_id,
     membership.source,
   ].join(":");
@@ -393,7 +488,10 @@ export function resolveMeshRegionMembershipListRevision(
     resource.mesh_id,
     resource.mesh_revision,
     membershipsRevision ?? "empty",
-    (resource.unresolved_region_ids ?? []).toSorted().join(","),
+    (resource.unresolved_regions ?? [])
+      .map((region) => `${region.owner_object_id}\u0000${region.region_id}`)
+      .toSorted()
+      .join(","),
   ].join(":");
 }
 
@@ -877,20 +975,21 @@ export function useMeshSharedDomainRealizedSizeFieldsResource(
 }
 
 export function useMeshRegionMembershipResource(
+  ownerObjectId: string | null | undefined,
   regionId: string | null | undefined,
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
-  const enabled = options.enabled !== false && Boolean(regionId);
-  const resourceKey = regionId
-    ? meshRegionMembershipResourceKey(regionId)
+  const enabled = options.enabled !== false && Boolean(ownerObjectId && regionId);
+  const resourceKey = ownerObjectId && regionId
+    ? meshRegionMembershipResourceKey(ownerObjectId, regionId)
     : `${DATA_MESH_REGION_MEMBERSHIP_PATH}:none`;
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      regionId
-        ? api.data.meshRegionMembership(regionId, { signal })
+      ownerObjectId && regionId
+        ? api.data.meshRegionMembership(ownerObjectId, regionId, { signal })
         : Promise.resolve(null),
-    [api, regionId],
+    [api, ownerObjectId, regionId],
   );
 
   return useResource<MeshRegionMembershipResource | null>({
@@ -936,35 +1035,178 @@ export function useFdmRegionMembershipResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const multilayerLayout = useFdmMultilayerLayoutResource({
+    enabled: options.enabled,
+  });
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.data.fdmRegionMemberships({ signal }),
     [api],
   );
 
-  return useResource<FdmRegionMembershipResource | null>({
+  const resource = useResource<PendingJsonResourceResult<FdmRegionMembershipResource>>({
+    enabled: shouldLoadSingleGridFdmResources(
+      options.enabled === true,
+      multilayerLayout.status,
+      multilayerLayout.data,
+    ),
+    load,
+    resolveRevision: (result) =>
+      result.status === "ready"
+        ? resolveFdmRegionMembershipRevision(result.data)
+        : null,
+    resourceKey: FDM_REGION_MEMBERSHIPS_RESOURCE_KEY,
+  });
+
+  return resolveFdmRegionMembershipDescriptorResult(resource);
+}
+
+export function resolveFdmRegionMembershipDescriptorResult(
+  resource: ResourceResult<PendingJsonResourceResult<FdmRegionMembershipResource>>,
+): FdmRegionMembershipDescriptorResult {
+  if (resource.error || resource.status === "error") {
+    return {
+      ...resource,
+      availability: { reason: "request-error", status: "incompatible" },
+      data: null,
+    };
+  }
+  if (resource.status !== "ready") {
+    return {
+      ...resource,
+      availability: { reason: "loading", status: "pending" },
+      data: null,
+    };
+  }
+  if (!resource.data) {
+    return {
+      ...resource,
+      availability: { reason: "loading", status: "pending" },
+      data: null,
+    };
+  }
+  if (resource.data.status === "pending") {
+    return {
+      ...resource,
+      availability: { reason: "not-materialized", status: "pending" },
+      data: null,
+    };
+  }
+  if (resource.data.data.freshness.trim().toLowerCase() !== "current") {
+    return {
+      ...resource,
+      availability: { reason: "stale-descriptor", status: "incompatible" },
+      data: null,
+    };
+  }
+  return {
+    ...resource,
+    availability: {
+      generationId: resource.data.data.domain_generation_id,
+      gridFingerprint: resource.data.data.grid_fingerprint,
+      legendFingerprint: resource.data.data.region_legend_fingerprint ?? null,
+      status: "ready",
+    },
+    data: resource.data.data,
+  };
+}
+
+function resolveDomainMetaRevision(meta: DomainMetaResource | null): ResourceRevision | null {
+  return meta?.generation_id ?? null;
+}
+
+/** Shared DomainMeta ownership for Explorer and other non-viewport consumers. */
+export function useDomainMetaResource(options: ResourceHookOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.data.domain.meta({ signal }),
+    [api],
+  );
+  return useResource<DomainMetaResource | null>({
     enabled: options.enabled,
     load,
-    resolveRevision: resolveFdmRegionMembershipRevision,
-    resourceKey: FDM_REGION_MEMBERSHIPS_RESOURCE_KEY,
+    resolveRevision: resolveDomainMetaRevision,
+    resourceKey: DATA_DOMAIN_META_PATH,
+  });
+}
+
+function resolveFdmMultilayerLayoutRevision(
+  layout: FdmMultilayerLayoutResource | null,
+): ResourceRevision | null {
+  if (!layout) return null;
+  return `${layout.layout_revision}:${layout.layout_fingerprint ?? "unfingerprinted"}`;
+}
+
+/** Native per-layer carriers and the common FFT scratch layout. */
+export function useFdmMultilayerLayoutResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.domain.fdmMultilayerLayout({ signal }),
+    [api],
+  );
+  return useResource<FdmMultilayerLayoutResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveFdmMultilayerLayoutRevision,
+    resourceKey: DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   });
 }
 
 export function useFdmRegionMembershipBinaryResource(
   regionId?: string | null,
-  options: ResourceHookOptions = {},
+  options: FdmMembershipBinaryResourceOptions = {},
 ) {
   const { api } = useKernel();
+  const descriptor = useFdmRegionMembershipResource({ enabled: options.enabled });
+  const domain = useDomainMetaResource({ enabled: options.enabled });
   const normalizedRegionId = regionId?.trim() || null;
+  const normalizedOwnerObjectId = options.ownerObjectId?.trim() || null;
+  const contractRevision =
+    descriptor.data && domain.data
+      ? [
+          domain.data.generation_id,
+          resolveFdmRegionMembershipRevision(descriptor.data),
+          options.expectedGenerationId ?? "current",
+          options.expectedGridFingerprint ?? "descriptor",
+        ].join(":")
+      : options.revision;
   const resourceKey = resolveFdmRegionMembershipBinaryResourceKey(
     normalizedRegionId,
-    options.revision,
+    contractRevision,
+    normalizedOwnerObjectId,
   );
+  const prerequisite: FdmRegionMembershipAvailability =
+    descriptor.availability.status !== "ready"
+      ? descriptor.availability
+      : domain.status !== "ready" || !domain.data
+        ? { reason: "loading", status: "pending" }
+        : descriptor.data?.domain_generation_id !== domain.data.generation_id
+          ? { reason: "generation-mismatch", status: "incompatible" }
+          : options.expectedGenerationId != null &&
+            options.expectedGenerationId !== domain.data.generation_id
+          ? { reason: "generation-mismatch", status: "incompatible" }
+          : options.expectedGridFingerprint != null &&
+              options.expectedGridFingerprint !== descriptor.data?.grid_fingerprint
+            ? { reason: "grid-fingerprint-mismatch", status: "incompatible" }
+            : {
+                generationId: domain.data.generation_id,
+                gridFingerprint: descriptor.data?.grid_fingerprint ?? "",
+                legendFingerprint:
+                  descriptor.data?.region_legend_fingerprint ?? null,
+                status: "ready",
+              };
+  const contractReady = prerequisite.status === "ready";
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
+      if (!descriptor.data || !domain.data) {
+        return { reason: "not-materialized", status: "pending" } as const;
+      }
       const cached = fdmRegionMembershipBinaryCache.peek(resourceKey);
       const result = await (normalizedRegionId
-        ? api.data.fdmRegionMembershipRegionBytes(normalizedRegionId, {
+        ? api.data.fdmRegionMembershipRegionBytes(normalizedOwnerObjectId, normalizedRegionId, {
             etag: cached?.etag,
             signal,
           })
@@ -975,39 +1217,107 @@ export function useFdmRegionMembershipBinaryResource(
 
       if (result.status === "not-applicable") {
         fdmRegionMembershipBinaryCache.delete(resourceKey);
-        return null;
+        return { reason: "not-materialized", status: "pending" } as const;
       }
+      let decoded: DecodedFdmRegionMembership;
       if (result.status === "not-modified") {
         if (!cached) {
           throw new Error(
             `FDM region membership ${resourceKey} returned 304 without cache entry`,
           );
         }
-        return cached.data;
+        decoded = cached.data;
+      } else {
+        decoded = decodeFdmRegionMembership(result.data);
       }
 
-      const decoded = decodeFdmRegionMembership(result.data);
+      const contract = await validateFdmRegionMembershipContract(
+        decoded,
+        descriptor.data,
+        domain.data,
+        {
+          expectedGenerationId: options.expectedGenerationId,
+          expectedGridFingerprint: options.expectedGridFingerprint,
+        },
+      );
+      if (contract.status === "incompatible") {
+        fdmRegionMembershipBinaryCache.delete(resourceKey);
+        return contract;
+      }
       fdmRegionMembershipBinaryCache.set(resourceKey, {
-        byteLength: result.byteLength,
+        byteLength:
+          result.status === "ready"
+            ? result.byteLength
+            : decoded.regionIds.byteLength + FMRM_HEADER_LEN,
         data: decoded,
-        etag: result.etag,
+        etag: result.etag ?? cached?.etag ?? null,
       });
-      return decoded;
+      return { ...contract, data: decoded };
     },
-    [api, normalizedRegionId, resourceKey],
+    [
+      api,
+      descriptor.data,
+      domain.data,
+      normalizedRegionId,
+      normalizedOwnerObjectId,
+      options.expectedGenerationId,
+      options.expectedGridFingerprint,
+      resourceKey,
+    ],
   );
   const resolveRevision = useCallback(
     () => fdmRegionMembershipBinaryCache.peek(resourceKey)?.etag ?? null,
     [resourceKey],
   );
 
-  return useResource<DecodedFdmRegionMembership | null>({
+  const resource = useResource<FdmRegionMembershipBinaryLoadResult>({
     abortStaleInflight: true,
-    enabled: options.enabled,
+    enabled: options.enabled !== false && contractReady,
     load,
     resolveRevision,
     resourceKey,
   });
+
+  return resolveFdmRegionMembershipBinaryResult(
+    resource,
+    prerequisite,
+  );
+}
+
+export function resolveFdmRegionMembershipBinaryResult(
+  resource: ResourceResult<FdmRegionMembershipBinaryLoadResult>,
+  prerequisite: FdmRegionMembershipAvailability,
+): FdmRegionMembershipBinaryResult {
+  if (prerequisite.status !== "ready") {
+    return { ...resource, availability: prerequisite, data: null };
+  }
+  if (resource.error || resource.status === "error") {
+    return {
+      ...resource,
+      availability: { reason: "request-error", status: "incompatible" },
+      data: null,
+    };
+  }
+  if (!resource.data) {
+    return {
+      ...resource,
+      availability: { reason: "loading", status: "pending" },
+      data: null,
+    };
+  }
+  if (resource.data.status !== "ready") {
+    return { ...resource, availability: resource.data, data: null };
+  }
+  return {
+    ...resource,
+    availability: {
+      generationId: resource.data.generationId,
+      gridFingerprint: resource.data.gridFingerprint,
+      legendFingerprint: resource.data.legendFingerprint,
+      status: "ready",
+    },
+    data: resource.data.data,
+  };
 }
 
 function normalizeMeshRegionMembershipIds(regionIds: readonly string[]): string[] {
@@ -1052,8 +1362,12 @@ export function useMeshUniverseQualityResource(
   });
 }
 
-export function useObjectTopologyResource(objectId: string | null | undefined) {
+export function useObjectTopologyResource(
+  objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectTopologyResourceKey(objectId)
     : MESHING_OBJECT_TOPOLOGY_PATH;
@@ -1069,6 +1383,7 @@ export function useObjectTopologyResource(objectId: string | null | undefined) {
   );
 
   return useResource<DecodedTopology | null>({
+    enabled,
     load,
     resourceKey,
   });
@@ -1076,8 +1391,10 @@ export function useObjectTopologyResource(objectId: string | null | undefined) {
 
 export function useObjectMeshReportResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectMeshReportResourceKey(objectId)
     : MESHING_OBJECT_REPORT_PATH;
@@ -1090,6 +1407,7 @@ export function useObjectMeshReportResource(
   );
 
   return useResource<MeshObjectReportResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
@@ -1098,8 +1416,10 @@ export function useObjectMeshReportResource(
 
 export function useObjectMeshQualityResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectMeshQualityResourceKey(objectId)
     : MESHING_OBJECT_QUALITY_PATH;
@@ -1112,6 +1432,7 @@ export function useObjectMeshQualityResource(
   );
 
   return useResource<MeshObjectQualityResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
@@ -1145,8 +1466,10 @@ export function useMeshRegionQualityResource(
 
 export function useObjectMeshSizeFieldResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? MESHING_OBJECT_SIZE_FIELD_PATH.replace(
         "{object_id}",
@@ -1162,6 +1485,7 @@ export function useObjectMeshSizeFieldResource(
   );
 
   return useResource<MeshObjectSizeFieldResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
@@ -1170,8 +1494,10 @@ export function useObjectMeshSizeFieldResource(
 
 export function useObjectMeshPolicyResource(
   objectId: string | null | undefined,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(objectId);
   const resourceKey = objectId
     ? resolveObjectMeshPolicyResourceKey(objectId)
     : MESHING_OBJECT_POLICY_PATH;
@@ -1184,13 +1510,14 @@ export function useObjectMeshPolicyResource(
   );
 
   return useResource<MeshObjectConfigResource>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
   });
 }
 
-export function useUniverseMeshPolicyResource() {
+export function useUniverseMeshPolicyResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -1199,6 +1526,7 @@ export function useUniverseMeshPolicyResource() {
   );
 
   return useResource<MeshUniverseConfigResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_UNIVERSE_POLICY_RESOURCE_KEY,

@@ -1,6 +1,8 @@
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type {
+  DomainMetaResource,
   FieldCatalogResource,
+  FdmRegionMembershipResource,
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
   MeshRegionMembershipResource,
@@ -34,10 +36,11 @@ import {
 } from "@/shared/domain/mesh/visualizationNodeSelection";
 import {
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
+  visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
   renderModePatch,
-  surfaceColorSourceToColorMode,
   type ObjectVisualizationController,
   type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
@@ -48,6 +51,9 @@ import {
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
+  type ViewportTargetRenderingPreferences,
+  isFdmUniverseOutsideSupportTarget,
+  visualizationTargetCapabilities,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   resolveVisualizationTopologyFreshness,
@@ -56,6 +62,71 @@ import {
 export {
   resolveVisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
+
+type AppliedVisualizationBaselineTarget = {
+  preferences: ViewportTargetRenderingPreferences | null;
+  settings: VisualizationTargetSettings;
+  target: VisualizationTargetRef;
+};
+
+/**
+ * Restore the inspector's applied baseline without serializing a viewport-only
+ * FDM target into the FEM VisualizationState resource. FDM targets are local
+ * controller state; FEM targets retain the existing backend override restore.
+ */
+export function restoreVisualizationAppliedBaseline({
+  baseline,
+  currentOverrides,
+  queuePatch,
+  visualization,
+  fdm = false,
+}: {
+  baseline: {
+    overrides: VisualizationStateResource["overrides"];
+    targets: readonly AppliedVisualizationBaselineTarget[];
+  };
+  currentOverrides: VisualizationStateResource["overrides"];
+  queuePatch: (patch: VisualizationStatePatch) => void;
+  visualization: Pick<
+    ObjectVisualizationController,
+    "clearTarget" | "patchTarget" | "patchViewportPreferences"
+  >;
+  fdm?: boolean;
+}): void {
+  const isFdmBaseline =
+    baseline.targets.length > 0 &&
+    (fdm ||
+      baseline.targets.every(
+        ({ target }) =>
+          target.kind === "fdm-domain" || target.kind === "fdm-native-layer",
+      ));
+
+  if (!isFdmBaseline) {
+    const baselineTargets = baseline.targets.map((entry) => entry.target);
+    const retainedOverrides = currentOverrides.filter(
+      (entry) =>
+        !baselineTargets.some((baselineTarget) =>
+          visualizationStateOverrideMatchesTarget(entry, baselineTarget),
+        ),
+    );
+    queuePatch({
+      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+    });
+  }
+
+  for (const { preferences, settings, target } of baseline.targets) {
+    visualization.clearTarget(target);
+    if (isFdmBaseline) {
+      const localPatch = persistentVisualizationTargetPatch(settings);
+      if (Object.keys(localPatch).length > 0) {
+        visualization.patchTarget(target, localPatch);
+      }
+    }
+    if (preferences) {
+      visualization.patchViewportPreferences(target, preferences);
+    }
+  }
+}
 
 export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   label: string;
@@ -235,7 +306,7 @@ export function shouldShowVectorFieldColorbar(
 export function fieldMetaScopeQueryForVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
   carrier?: RegionVisualizationCarrier | null,
-): Pick<FieldMetaQuery, "scope_id" | "scope_kind"> {
+): Pick<FieldMetaQuery, "owner_object_id" | "scope_id" | "scope_kind"> {
   switch (target?.kind) {
     case "object":
       return {
@@ -248,7 +319,33 @@ export function fieldMetaScopeQueryForVisualizationTarget(
       return { scope_id: target.id, scope_kind: "part" };
     case "airbox":
       return { scope_id: null, scope_kind: "airbox" };
+    case "fdm-domain":
+      // FDM-domain is a viewport-local structured-grid target.  It has no
+      // FEM VisualizationState scope and must never be serialized as one.
+      return { scope_id: null, scope_kind: null };
+    case "fdm-native-layer": {
+      const encodedLayerId = target.id.startsWith("fdm-native-layer:")
+        ? target.id.slice("fdm-native-layer:".length)
+        : "";
+      let layerId = encodedLayerId;
+      try {
+        layerId = decodeURIComponent(encodedLayerId);
+      } catch {
+        // Keep the opaque target suffix when it is not valid URI encoding.
+      }
+      return {
+        scope_id: layerId || null,
+        scope_kind: layerId ? "layer" : null,
+      };
+    }
     case "region":
+      if (carrier?.kind === "membership") {
+        return {
+          owner_object_id: carrier.objectId,
+          scope_id: carrier.regionId,
+          scope_kind: "region",
+        };
+      }
       if (carrier?.kind === "mesh-parts" && carrier.partIds.length === 1) {
         return { scope_id: carrier.partIds[0] ?? null, scope_kind: "part" };
       }
@@ -256,6 +353,192 @@ export function fieldMetaScopeQueryForVisualizationTarget(
     case undefined:
       return { scope_id: null, scope_kind: null };
   }
+}
+
+/**
+ * FDM visualization is backed by the structured-grid contract, not the FEM
+ * shared-domain manifest. Keep this predicate at the panel boundary so a
+ * missing/empty manifest can never be mistaken for an FDM resource state.
+ */
+export function isFdmVisualizationTarget(
+  target: VisualizationTargetRef | null | undefined,
+): boolean {
+  return target?.kind === "fdm-domain" || target?.kind === "fdm-native-layer";
+}
+
+export type ObjectVisualizationLane = "fdm" | "fem" | "unresolved";
+
+export function resolveObjectVisualizationLane(
+  discretization: string | null | undefined,
+): ObjectVisualizationLane {
+  const normalized = discretization?.trim().toLowerCase();
+  if (normalized === "fdm") return "fdm";
+  if (normalized === "fem") return "fem";
+  return "unresolved";
+}
+
+/**
+ * Resolve the actual visualization target only after the session lane is
+ * explicit. This prevents the initial status-loading render from treating a
+ * structured-grid selection as a FEM scene object.
+ */
+export function resolveObjectVisualizationTargetForLane({
+  lane,
+  selection,
+  selectionTarget,
+}: {
+  lane: ObjectVisualizationLane;
+  selection: Selection;
+  selectionTarget: VisualizationTargetRef | null;
+}): VisualizationTargetRef | null {
+  if (lane === "unresolved") return null;
+  if (selection.ref?.type === "fdm-cell") {
+    return lane === "fdm"
+      ? { id: "fdm-domain", kind: "fdm-domain", label: selection.label }
+      : null;
+  }
+  if (
+    lane === "fdm" &&
+    selection.ref?.type === "fdm-domain" &&
+    selection.ref.scope === "region"
+  ) {
+    return selectionTarget?.kind === "region" ? selectionTarget : null;
+  }
+  if (
+    lane === "fdm" &&
+    selection.ref?.type === "fdm-domain" &&
+    selection.ref.scope === "layer"
+  ) {
+    return selectionTarget?.kind === "fdm-native-layer"
+      ? selectionTarget
+      : null;
+  }
+  if (lane === "fem") {
+    return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
+  }
+
+  const objectVisualizationSelection =
+    selection.kind === "object.visualization" ||
+    selection.kind === "object.visualization.debug" ||
+    selection.kind === "object.region.visualization" ||
+    selection.kind === "object.region.visualization.debug";
+  if (objectVisualizationSelection) {
+    // An FDM object is still an authored scene object. Its primitive display
+    // preferences must address the same object target used by
+    // PrimitiveObjectLayer; the structured-grid target belongs to Mesh/Grid.
+    return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
+  }
+
+  const fdmVisualizationSelection =
+    selection.kind === "airbox.visualization" ||
+    selection.kind === "airbox.visualization.debug" ||
+    selection.kind === "mesh.grid.universe-outside-support";
+  if (!fdmVisualizationSelection) return null;
+  // Airbox is a shared Explorer vocabulary.  Keep the dedicated FDM Airbox
+  // target when the selection carries it; otherwise use the magnetic grid.
+  return selectionTarget?.kind === "fdm-domain"
+    ? selectionTarget
+    : { id: "fdm-domain", kind: "fdm-domain", label: selection.label };
+}
+
+export function resolveObjectVisualizationResourceGates({
+  lane,
+  target,
+}: {
+  lane: ObjectVisualizationLane;
+  target: VisualizationTargetRef | null;
+}): { fdm: boolean; fem: boolean } {
+  return {
+    fdm: lane === "fdm" && target !== null,
+    fem:
+      lane === "fem" &&
+      target !== null &&
+      target.kind !== "fdm-domain" &&
+      target.kind !== "fdm-native-layer",
+  };
+}
+
+export function fdmGridCellCount(
+  domain: DomainMetaResource | null | undefined,
+): number | null {
+  if (domain?.discretization.toLowerCase() !== "fdm") return null;
+  const shape = domain.grid?.shape;
+  if (!shape || shape.length < 3) return null;
+  const counts = shape.slice(0, 3);
+  if (
+    counts.some(
+      (value) => !Number.isInteger(value) || value < 0,
+    )
+  ) {
+    return null;
+  }
+  const cellCount = counts.reduce((total, value) => total * value, 1);
+  return Number.isSafeInteger(cellCount) ? cellCount : null;
+}
+
+/** Return a bounded, explicit resource state for the FDM visualization panel. */
+export function fdmVisualizationResourceNotice({
+  domain,
+  domainError,
+  domainStatus,
+  membership,
+  membershipError,
+  membershipStatus,
+  membershipBinaryReason,
+  membershipBinaryStatus,
+}: {
+  domain: DomainMetaResource | null | undefined;
+  domainError?: Error | null;
+  domainStatus: string;
+  membership: FdmRegionMembershipResource | null | undefined;
+  membershipError?: Error | null;
+  membershipStatus: string;
+  membershipBinaryReason?: string | null;
+  membershipBinaryStatus?: string | null;
+}): string | null {
+  if (domainError || domainStatus === "error") {
+    return `FDM grid descriptor could not be loaded${domainError?.message ? `: ${domainError.message}` : "."}`;
+  }
+  if (!domain) {
+    return domainStatus === "loading"
+      ? "Loading the FDM structured-grid descriptor."
+      : "FDM DomainMeta is not materialized; grid rendering is unavailable.";
+  }
+  if (domain.discretization.toLowerCase() !== "fdm") {
+    return "The selected visualization target is FDM-only, but the current domain is not FDM.";
+  }
+  if (!domain.grid) {
+    return "FDM DomainMeta has no structured-grid descriptor.";
+  }
+  if (membershipError || membershipStatus === "error") {
+    return `FDM cell membership could not be loaded${membershipError?.message ? `: ${membershipError.message}` : ". Grid geometry remains available."}`;
+  }
+  if (membershipStatus === "loading") {
+    return "Loading FDM cell membership; field overlays remain revision-gated.";
+  }
+  if (!membership) {
+    return "FDM grid geometry is available; cell membership/field overlays are not materialized.";
+  }
+  if (membership.freshness.toLowerCase() !== "current") {
+    return "FDM cell membership is stale; grid geometry remains visible, but mask-dependent overlays are unavailable.";
+  }
+  const expectedCellCount = fdmGridCellCount(domain);
+  if (
+    expectedCellCount !== null &&
+    membership.cell_count !== expectedCellCount
+  ) {
+    return "FDM cell membership does not match the current structured-grid descriptor.";
+  }
+  if (membershipBinaryStatus && membershipBinaryStatus !== "ready") {
+    if (membershipBinaryReason === "request-error") {
+      return "FDM membership mask could not be loaded; shaded, wireframe, and vector rendering remain unavailable.";
+    }
+    if (membershipBinaryReason === "not-materialized") {
+      return "FDM membership mask is not materialized; re-plan or run the study to publish it before rendering fields.";
+    }
+    return "FDM membership mask is not ready for this grid; re-plan or run the study before rendering fields.";
+  }
+  return null;
 }
 
 export function resolveObjectVisualizationPanelTarget({
@@ -342,6 +625,7 @@ export function resolveSelectedTargetVectorMeshParts({
   visualizationState: VisualizationStateResource | null | undefined;
 }): MeshPart[] {
   if (!target || !meshParts?.length) return [];
+  if (isFdmVisualizationTarget(target)) return [];
 
   if (target.kind === "airbox") {
     return meshParts.filter(isVisualizationAirboxIdentity);
@@ -460,13 +744,19 @@ const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
   scene,
+  targetObjectId,
+  targetKind,
 }: {
   manifest: unknown;
   scene: unknown;
+  targetObjectId?: string | null;
   targetKind: VisualizationTargetKind;
 }): VisualizationTopologyFreshness | null {
+  if (targetKind === "fdm-domain" || targetKind === "fdm-native-layer") {
+    return null;
+  }
   return scene && manifest
-    ? resolveVisualizationTopologyFreshness(scene, manifest)
+    ? resolveVisualizationTopologyFreshness(scene, manifest, { targetObjectId })
     : null;
 }
 
@@ -501,6 +791,7 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   { value: "m", label: "Magnetization / m" },
   { value: "H_eff", label: "Effective field / H_eff" },
   { value: "H_demag", label: "Demag field / H_demag" },
+  { value: "H_ext", label: "Zeeman field / H_ext" },
   { value: "H_ex", label: "Exchange field / H_ex" },
   { value: "H_ani", label: "Anisotropy field / H_ani" },
   { value: "torque", label: "Torque / torque" },
@@ -662,18 +953,38 @@ export function resolveVisualizationVectorAccounting({
 }
 
 export function resolveVisualizationVectorBudgetRange({
+  fdmCellCount: structuredGridCellCount,
   geometryScope = "full",
   manifestRegions,
   memberships,
   meshParts,
   target,
 }: {
+  fdmCellCount?: number | null;
   geometryScope?: VisualizationGeometryScope;
   manifestRegions?: readonly MeshRegion[] | null | undefined;
   memberships?: readonly MeshRegionMembershipResource[] | null | undefined;
   meshParts: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
+  if (structuredGridCellCount !== null && structuredGridCellCount !== undefined) {
+    const cellCount = structuredGridCellCount;
+    if (
+      cellCount !== null &&
+      cellCount !== undefined &&
+      Number.isSafeInteger(cellCount) &&
+      cellCount >= 0
+    ) {
+      return {
+        availableNodeCount: cellCount,
+        exact: true,
+        max: cellCount,
+        min: 0,
+        step: 1,
+      };
+    }
+    return fallbackVisualizationVectorBudgetRange();
+  }
   if (!target || !meshParts || meshParts.length === 0) {
     return fallbackVisualizationVectorBudgetRange();
   }
@@ -693,8 +1004,9 @@ export function resolveVisualizationVectorBudgetRange({
   }
 
   if (carrier?.kind === "membership") {
-    const regionId = carrier.regionId;
-    const membership = memberships?.find((m) => m.region_id === regionId);
+    const membership = memberships?.find((m) =>
+      meshRegionMembershipMatchesCarrier(m, carrier),
+    );
     const nodeCount = membership?.node_indices?.length ?? 0;
     if (nodeCount <= 0) {
       return fallbackVisualizationVectorBudgetRange();
@@ -843,18 +1155,17 @@ export function resolveRegionVisualizationCarrier({
 
   if (memberships) {
     for (const membership of memberships) {
-      if (membership.region_id === regionTarget.regionId) {
-        const hasElements = (membership.element_indices && membership.element_indices.length > 0) ||
-                            (membership.node_indices && membership.node_indices.length > 0) ||
-                            (membership.boundary_face_indices && membership.boundary_face_indices.length > 0);
-        if (hasElements) {
-          return {
-            kind: "membership",
-            objectId: regionTarget.objectId,
-            syntheticPartId: `membership:${encodeURIComponent(regionTarget.regionId)}`,
-            regionId: regionTarget.regionId,
-          };
-        }
+      if (!meshRegionMembershipMatchesTarget(membership, regionTarget)) continue;
+      const hasElements = (membership.element_indices && membership.element_indices.length > 0) ||
+                          (membership.node_indices && membership.node_indices.length > 0) ||
+                          (membership.boundary_face_indices && membership.boundary_face_indices.length > 0);
+      if (hasElements) {
+        return {
+          kind: "membership",
+          objectId: regionTarget.objectId,
+          syntheticPartId: `membership:${encodeURIComponent(regionTarget.objectId)}:${encodeURIComponent(regionTarget.regionId)}`,
+          regionId: regionTarget.regionId,
+        };
       }
     }
   }
@@ -912,25 +1223,67 @@ export function geometryScopeVectorBudgetPatch({
 export function visualizationQuantityItems(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Array<{ label: string; value: string }> {
-  let baseItems = VISUALIZATION_QUANTITY_ITEMS;
+  const staticItemsByQuantityId = new Map(
+    VISUALIZATION_QUANTITY_ITEMS.map((item) => [
+      resolveCanonicalQuantityId(item.value),
+      item,
+    ]),
+  );
+  let baseItems = fieldCatalog
+    ? fieldCatalog.quantities
+        .filter((quantity) => quantity.available)
+        .map((quantity) => {
+          const canonicalQuantityId = resolveCanonicalQuantityId(
+            quantity.quantity_id,
+          );
+          const staticItem = staticItemsByQuantityId.get(canonicalQuantityId);
+          return {
+            label: quantity.label || staticItem?.label || quantity.quantity_id,
+            value: quantity.quantity_id,
+          };
+        })
+    : VISUALIZATION_QUANTITY_ITEMS;
   if (targetKind === "airbox") {
-    baseItems = VISUALIZATION_QUANTITY_ITEMS.filter(
+    baseItems = baseItems.filter(
       (item) => !isMagneticOnlyQuantityId(item.value),
     );
   }
 
   if (
     !activeQuantityId ||
-    baseItems.some((item) => item.value === activeQuantityId)
+    baseItems.some(
+      (item) =>
+        resolveCanonicalQuantityId(item.value) ===
+        resolveCanonicalQuantityId(activeQuantityId),
+    )
   ) {
     return baseItems;
   }
 
   return [
-    { value: activeQuantityId, label: activeQuantityId },
+    {
+      value: activeQuantityId,
+      label: fieldCatalog
+        ? `Unavailable / ${activeQuantityId}`
+        : activeQuantityId,
+    },
     ...baseItems,
   ];
+}
+
+export function fieldCatalogQuantityAvailable(
+  fieldCatalog: FieldCatalogResource | null | undefined,
+  quantityId: string,
+): boolean {
+  if (!fieldCatalog) return true;
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  return fieldCatalog.quantities.some(
+    (quantity) =>
+      quantity.available &&
+      resolveCanonicalQuantityId(quantity.quantity_id) === canonicalQuantityId,
+  );
 }
 
 export function quantitySourcePatch(
@@ -1138,6 +1491,27 @@ export function parseRegionVisualizationTargetId(
   } catch {
     return null;
   }
+}
+
+function meshRegionMembershipMatchesTarget(
+  membership: MeshRegionMembershipResource,
+  target: { objectId: string; regionId: string },
+): boolean {
+  return (
+    membership.region_id === target.regionId &&
+    canonicalVisualizationSceneObjectId(membership.owner_object_id) ===
+      canonicalVisualizationSceneObjectId(target.objectId)
+  );
+}
+
+function meshRegionMembershipMatchesCarrier(
+  membership: MeshRegionMembershipResource,
+  carrier: Extract<RegionVisualizationCarrier, { kind: "membership" }>,
+): boolean {
+  return meshRegionMembershipMatchesTarget(membership, {
+    objectId: carrier.objectId,
+    regionId: carrier.regionId,
+  });
 }
 
 export function resolveObjectChildRegionVisualizationTargets({
@@ -1396,12 +1770,8 @@ export function buildAirboxVectorDiagnostic({
     vectorDomain === "magnetic_only" ||
     vectorDomain === "object" ||
     vectorDomain === "part";
-  const surfaceColorMode =
-    quantityCompatible && settings.visible && settings.shaderVisible
-      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-      : null;
   const sampleLimit =
-    settings.vectorsVisible && !surfaceColorMode
+    settings.vectorsVisible
       ? Math.max(0, Math.floor(settings.vectorBudget))
       : null;
   const quantity = fieldCatalog?.quantities.find(
@@ -1511,16 +1881,12 @@ export function buildAirboxVisibilityDiagnostic({
 }): AirboxVisibilityDiagnostic {
   const hasDrawablePass =
     settings.boundsVisible ||
-    settings.pointsVisible ||
-    settings.shaderVisible ||
     settings.vectorsVisible ||
     settings.wireframeVisible;
   const details = [
     { label: "Backend master", value: settings.visible ? "on" : "off" },
-    { label: "Surface pass", value: settings.shaderVisible ? "on" : "off" },
     { label: "Wireframe pass", value: settings.wireframeVisible ? "on" : "off" },
     { label: "Frame pass", value: settings.boundsVisible ? "on" : "off" },
-    { label: "Points pass", value: settings.pointsVisible ? "on" : "off" },
     { label: "Vectors pass", value: settings.vectorsVisible ? "on" : "off" },
     { label: "Effective display", value: displaySettings.visible ? "on" : "off" },
   ];
@@ -1539,7 +1905,7 @@ export function buildAirboxVisibilityDiagnostic({
     return {
       details,
       message:
-        "The airbox master flag is on, but all drawable airbox passes are off. Enable Wireframe, Frame, Surface, Points, or Vectors to make the airbox render.",
+        "The airbox master flag is on, but all drawable airbox passes are off. Enable Wireframe, Frame, or Vectors to make the airbox render.",
       status: "no-drawable-pass",
       title: "Airbox has no active pass",
     };
@@ -1576,21 +1942,70 @@ export function buildAirboxVisibilityDiagnostic({
 export function buildVisualizationPanelSections({
   effectiveSettings,
   settings,
+  target,
 }: {
   effectiveSettings: VisualizationTargetSettings;
   settings: VisualizationTargetSettings;
+  target?: VisualizationTargetRef;
 }): VisualizationPanelSection[] {
   const passDisabled = !settings.visible;
+  const capabilities = target ? visualizationTargetCapabilities(target) : null;
+  const isAirboxTarget = target?.kind === "airbox";
+  const isFdmAirboxTarget = target ? isFdmUniverseOutsideSupportTarget(target) : false;
 
-  return [
+  if (capabilities?.supportsFieldData === false) {
+    return [
+      {
+        disabled: passDisabled,
+        fields: [
+          { id: "visible", kind: "toggle", label: "Visible" },
+          { id: "boundsVisible", kind: "toggle", label: "Frame" },
+          { id: "boundsOpacityPercent", kind: "number", label: "Bounds opacity" },
+        ],
+        id: "display-passes",
+        title: "Display Passes",
+      },
+      {
+        disabled: passDisabled || !effectiveSettings.wireframeVisible,
+        fields: [
+          { id: "wireframeColor", kind: "color", label: "Wireframe color" },
+          {
+            id: "wireframeOpacityPercent",
+            kind: "number",
+            label: "Wireframe opacity",
+          },
+        ],
+        id: "wireframe",
+        title: "Wireframe",
+      },
+      {
+        disabled: false,
+        fields: [],
+        id: "overrides",
+        title: "Overrides",
+      },
+    ];
+  }
+
+  const sections: VisualizationPanelSection[] = [
     {
       disabled: passDisabled,
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
-        { id: "boundsVisible", kind: "toggle", label: "Frame" },
-        { id: "boundsOpacityPercent", kind: "number", label: "Bounds opacity" },
-        { id: "vectorsVisible", kind: "toggle", label: "Vectors" },
-      ],
+        ...(capabilities?.showBoundsControl === false
+          ? []
+          : [
+              { id: "boundsVisible", kind: "toggle", label: "Frame" },
+              {
+                id: "boundsOpacityPercent",
+                kind: "number",
+                label: "Bounds opacity",
+              },
+            ]),
+        ...(capabilities?.supportsVectors === false
+          ? []
+          : [{ id: "vectorsVisible", kind: "toggle", label: "Vectors" }]),
+      ] as VisualizationPanelField[],
       id: "display-passes",
       title: "Display Passes",
     },
@@ -1602,7 +2017,10 @@ export function buildVisualizationPanelSections({
       id: "quantity-source",
       title: "Quantity Source",
     },
-    {
+  ];
+
+  if (!isAirboxTarget && !isFdmAirboxTarget) {
+    sections.push({
       disabled: passDisabled || !effectiveSettings.shaderVisible,
       fields: [
         { id: "surfaceColorSource", kind: "mode", label: "Color source" },
@@ -1611,8 +2029,11 @@ export function buildVisualizationPanelSections({
       ],
       id: "surface-coloring",
       title: "Surface Coloring",
-    },
-    {
+    });
+  }
+
+  if (capabilities?.supportsPoints !== false) {
+    sections.push({
       disabled: passDisabled || !effectiveSettings.pointsVisible,
       fields: [
         { id: "pointColor", kind: "color", label: "Point color" },
@@ -1620,48 +2041,61 @@ export function buildVisualizationPanelSections({
       ],
       id: "points",
       title: "Points",
-    },
-    {
-      disabled: passDisabled || !effectiveSettings.wireframeVisible,
-      fields: [
-        { id: "wireframeColor", kind: "color", label: "Wireframe color" },
-        {
-          id: "wireframeOpacityPercent",
-          kind: "number",
-          label: "Wireframe opacity",
-        },
-      ],
-      id: "wireframe",
-      title: "Wireframe",
-    },
-    {
+    });
+  }
+
+  sections.push({
+    disabled: passDisabled || !effectiveSettings.wireframeVisible,
+    fields: [
+      { id: "wireframeColor", kind: "color", label: "Wireframe color" },
+      {
+        id: "wireframeOpacityPercent",
+        kind: "number",
+        label: "Wireframe opacity",
+      },
+    ],
+    id: "wireframe",
+    title: "Wireframe",
+  });
+
+  if (capabilities?.supportsVectors !== false) {
+    const vectorFields: VisualizationPanelField[] = [
+      { id: "vectorColorMode", kind: "mode", label: "Vector coloring" },
+      { id: "vectorMonoColor", kind: "color", label: "Vector mono color" },
+      { id: "vectorAlphaPercent", kind: "number", label: "Vector opacity" },
+      { id: "vectorThickness", kind: "number", label: "Vector thickness" },
+      { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
+      { id: "vectorBudget", kind: "number", label: "Arrow budget" },
+      { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
+      { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Lift above surface" },
+      { id: "vectorSurfaceOffsetScale", kind: "number", label: "Extra surface gap" },
+    ];
+    if (capabilities?.showGeometryScopeControl !== false) {
+      vectorFields.push({ id: "geometryScope", kind: "mode", label: "Arrow extent" });
+    }
+    sections.push({
       disabled: passDisabled || !effectiveSettings.vectorsVisible,
-      fields: [
-        { id: "vectorColorMode", kind: "mode", label: "Vector coloring" },
-        { id: "vectorMonoColor", kind: "color", label: "Vector mono color" },
-        { id: "vectorAlphaPercent", kind: "number", label: "Vector opacity" },
-        { id: "vectorThickness", kind: "number", label: "Vector thickness" },
-        { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
-        { id: "vectorBudget", kind: "number", label: "Arrow budget" },
-        { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
-        { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Lift above surface" },
-        { id: "vectorSurfaceOffsetScale", kind: "number", label: "Extra surface gap" },
-        { id: "geometryScope", kind: "mode", label: "Arrow extent" },
-      ],
+      fields: vectorFields,
       id: "vectors",
       title: "Vectors",
-    },
-    {
+    });
+  }
+
+  if (capabilities?.showGeometryScopeControl !== false) {
+    sections.push({
       disabled: passDisabled,
       fields: [{ id: "geometryScope", kind: "mode", label: "Geometry scope" }],
       id: "geometry-scope",
       title: "Geometry Scope",
-    },
-    {
-      disabled: false,
-      fields: [],
-      id: "overrides",
-      title: "Overrides",
-    },
-  ];
+    });
+  }
+
+  sections.push({
+    disabled: false,
+    fields: [],
+    id: "overrides",
+    title: "Overrides",
+  });
+
+  return sections;
 }

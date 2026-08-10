@@ -29,7 +29,7 @@ describe("PhysicsInteractionPanelModel", () => {
       "oersted_field",
       "magnetoelastic",
     ]);
-    expect(interactionLabel("oersted_field")).toBe("Regional field source");
+    expect(interactionLabel("oersted_field")).toBe("Oersted field");
   });
 
   it("classifies H_eff term toggles as study-level switches", () => {
@@ -127,7 +127,7 @@ describe("PhysicsInteractionPanelModel", () => {
       }),
     ).toEqual({
       error:
-        "Regional field source is not writable from the current control-room authoring surface.",
+        "Oersted field is not writable from the current control-room authoring surface.",
     });
   });
 

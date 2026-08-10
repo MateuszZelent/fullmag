@@ -73,6 +73,11 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import {
+  resolveActiveLaneOperation,
+  type ActiveLaneCapabilitySnapshot,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import type {
   Selection,
   VisualizationMeshPartLike,
@@ -88,6 +93,8 @@ import {
   resolveEffectiveVisualizationSettings,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  isFdmUniverseOutsideSupportTarget,
+  visualizationTargetCapabilities,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
   type SurfaceColorSource,
@@ -102,7 +109,10 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
-import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
+import {
+  interactionSpecsForDiscretization,
+  type InteractionDiscretization,
+} from "@/shared/domain/physics/interactions";
 
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
@@ -115,6 +125,9 @@ import {
 } from "./ribbonCommon";
 import {
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+  RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
+  RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
   RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
@@ -196,16 +209,80 @@ const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
 
 // statusMenu and separator imported from ./ribbonCommon
 
-function physicsInteractionMenu(): RibbonMenuNode[] {
+function physicsInteractionMenu(
+  discretization: InteractionDiscretization,
+  activeLane: ActiveLaneCapabilitySnapshot | null = null,
+  scope: "all" | "global" = "all",
+): RibbonMenuNode[] {
+  const specs = interactionSpecsForDiscretization(discretization).filter(
+    (spec) => scope === "all" || spec.scope === "global",
+  );
+  const menuId = scope === "global" ? "physics-global" : "physics-interactions";
+  const createFieldDriveItem: RibbonMenuNode = {
+    type: "item",
+    id: "physics-global:add-field-drive",
+    label: "Field Drive",
+    commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  };
+  const spinAuthoringItems: RibbonMenuNode[] = scope === "all" &&
+    (discretization === "fdm" || discretization === "fem")
+    ? [
+        {
+          type: "label",
+          id: "physics-resources:label",
+          label: "Transport Resources",
+        },
+        {
+          type: "item",
+          id: "physics-resources:spin-transport",
+          label: "Spin Transport / SHE",
+          disabled: false,
+          commandId: RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
+        },
+        {
+          type: "item",
+          id: "physics-resources:spin-interface",
+          label: "Spin Interface",
+          disabled: false,
+          commandId: RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
+        },
+        separator("physics-resources:separator"),
+      ]
+    : [];
+  if (specs.length === 0) {
+    return [
+      ...spinAuthoringItems,
+      { type: "label", id: `${menuId}:label`, label: scope === "global" ? "Global Physics" : "Interactions" },
+      {
+        type: "status",
+        id: `${menuId}:unresolved`,
+        label: "Lane",
+        value: "Discretization unresolved; FDM/FEM controls are unavailable",
+        tone: "warning",
+      },
+      ...(scope === "global" ? [createFieldDriveItem] : []),
+    ];
+  }
   return [
-    { type: "label", id: "physics-interactions:label", label: "Interactions" },
-    ...allInteractionSpecs().map((spec) => ({
-      type: "item" as const,
-      id: `physics-interactions:${spec.id}`,
-      label: spec.label,
-      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
-      commandInput: { interactionId: spec.id },
-    })),
+    ...spinAuthoringItems,
+    { type: "label", id: `${menuId}:label`, label: scope === "global" ? "Global Physics" : "Interactions" },
+    ...specs.map((spec) => {
+      const operation = resolveActiveLaneOperation(
+        activeLane,
+        `interaction.${spec.id}`,
+      );
+      return {
+        type: "item" as const,
+        id: `${menuId}:${spec.id}`,
+        label: spec.label,
+        shortcut: operation.enabled ? undefined : operation.state,
+        tooltip: operation.enabled ? undefined : operation.reason,
+        disabled: !operation.enabled,
+        commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+        commandInput: { interactionId: spec.id },
+      };
+    }),
+    ...(scope === "global" ? [createFieldDriveItem] : []),
   ];
 }
 
@@ -300,7 +377,7 @@ const geometryTab: RibbonTabContent = {
       actions: [
         { id: "builder-build-geometry", icon: icon(Hammer),      label: "Geometry Synced", disabled: true, iconColor: "text-emerald-400" },
         { id: "geometry.commit-object-draft", icon: icon(Save),  label: "Apply Draft",                  iconColor: "text-emerald-400" },
-        { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build FEM Mesh",               iconColor: "text-amber-400" },
+        { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build Mesh",                   iconColor: "text-amber-400" },
         { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",      disabled: true, iconColor: "text-emerald-400" },
       ],
     },
@@ -407,8 +484,8 @@ const physicsTab: RibbonTabContent = {
       subtitle: "interactions",
       tone: "neutral",
       actions: [
-        { id: "physics-interactions", icon: icon(Magnet), label: "Interactions", iconColor: "text-violet-400", menu: physicsInteractionMenu() },
-        { id: "physics-global", icon: icon(Cog),    label: "Global Physics", disabled: true, iconColor: "text-muted-foreground" },
+        { id: "physics-interactions", icon: icon(Magnet), label: "Add Physics", iconColor: "text-violet-400", menu: physicsInteractionMenu("unknown") },
+        { id: "physics-global", icon: icon(Cog),    label: "Global Physics", disabled: false, iconColor: "text-sky-400" },
       ],
     },
     {
@@ -419,16 +496,6 @@ const physicsTab: RibbonTabContent = {
       actions: [
         { id: "physics-add-dmi", icon: icon(Sparkles), label: "DMI",         disabled: true, iconColor: "text-cyan-400",  menu: radioMenu("physics-dmi-type", "DMI type", "bulk", [["bulk", "Bulk DMI"], ["interfacial", "Interfacial DMI"]]) },
         { id: "physics-add-ku",  icon: icon(Binary),   label: "Uniaxial Ku", disabled: true, iconColor: "text-rose-400" },
-      ],
-    },
-    {
-      id: "physics-drive",
-      title: "Drive / STT",
-      subtitle: "excitation",
-      actions: [
-        { id: "physics-oersted",      icon: icon(RadioTower),  label: "Oersted",     iconColor: "text-amber-400",   disabled: true },
-        { id: "physics-spin-torque",  icon: icon(Zap),         label: "Spin Torque", iconColor: "text-emerald-400", disabled: true },
-        { id: "physics-thermal",      icon: icon(FlaskConical),label: "Thermal",     iconColor: "text-orange-400",  disabled: true },
       ],
     },
     {
@@ -454,7 +521,7 @@ const meshTab: RibbonTabContent = {
       tone: "compute",
       actions: [
         { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
-        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM grid", "FEM shared domain", "Quality report"]) },
+        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM mesh", "FEM shared domain", "Quality report"]) },
         { id: "mesh-stats",     icon: icon(BarChart3),  label: "Statistics",               iconColor: C.peach },
       ],
     },
@@ -474,7 +541,7 @@ const meshTab: RibbonTabContent = {
       subtitle: "quality",
       tone: "neutral",
       actions: [
-        { id: "mesher",  icon: icon(Hexagon),    label: "Mesher",  disabled: true, iconColor: C.teal, menu: radioMenu("mesh-method", "Mesher", "auto", [["auto", "Auto"], ["fdm", "FDM grid"], ["tet", "Tetrahedral"], ["external", "External import"]]) },
+        { id: "mesher",  icon: icon(Hexagon),    label: "Mesher",  disabled: true, iconColor: C.teal, menu: radioMenu("mesh-method", "Mesher", "auto", [["auto", "Auto"], ["fdm", "FDM structured"], ["tet", "Tetrahedral"], ["external", "External import"]]) },
         { id: "quality", icon: icon(ListChecks), label: "Quality", iconColor: C.green },
       ],
     },
@@ -670,6 +737,8 @@ const automationTab: RibbonTabContent = {
 };
 
 type RibbonSessionStatus = {
+  capabilities?: Pick<LiveStatusResource["capabilities"], "active_lane">;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
     "field_revision" | "fields_revision"
@@ -693,6 +762,84 @@ export interface RibbonBuildContext {
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
   visualizationState?: VisualizationStateResource | null;
+}
+
+type RibbonDiscretization = "fdm" | "fem" | "unknown";
+
+function ribbonDiscretization(context: RibbonBuildContext): RibbonDiscretization {
+  // Older embedders built ribbon content without passing session status. Keep
+  // those pure view tests/renderers on the FEM-compatible static catalog; the
+  // live RibbonModule always passes an explicit resource result (including
+  // null while unresolved), which then fails closed below.
+  if (context.sessionStatus === undefined) return "fem";
+  if (context.sessionStatus === null) return "unknown";
+  const value = context.sessionStatus.domain?.discretization
+    ?.trim()
+    .toLowerCase();
+  if (value === "fdm") return "fdm";
+  if (value === "fem") return "fem";
+  return "unknown";
+}
+
+function buildGeometryTabContent(
+  content: RibbonTabContent,
+  context: RibbonBuildContext,
+): RibbonTabContent {
+  const discretization = ribbonDiscretization(context);
+  if (discretization === "fem") return content;
+
+  return {
+    ...content,
+    groups: content.groups.map((group) =>
+      group.id === "builder-lifecycle"
+        ? {
+            ...group,
+            // `mesh.build-selected` submits an object_mesh FEM command. Keep
+            // it out of FDM and unresolved sessions instead of relabelling it.
+            actions: group.actions.filter(
+              (action) => action.id !== "mesh.build-selected",
+            ),
+          }
+        : group,
+    ),
+  };
+}
+
+function buildPhysicsTabContent(
+  content: RibbonTabContent,
+  context: RibbonBuildContext,
+): RibbonTabContent {
+  const discretization = ribbonDiscretization(context);
+  return {
+    ...content,
+    groups: content.groups.map((group) =>
+      group.id === "physics-core"
+        ? {
+            ...group,
+            actions: group.actions.map((action) =>
+              action.id === "physics-interactions"
+                ? {
+                    ...action,
+                    menu: physicsInteractionMenu(
+                      discretization,
+                      context.sessionStatus?.capabilities?.active_lane ?? null,
+                    ),
+                  }
+                : action.id === "physics-global"
+                  ? {
+                      ...action,
+                      menu: physicsInteractionMenu(
+                        discretization,
+                        context.sessionStatus?.capabilities?.active_lane ?? null,
+                        "global",
+                      ),
+                    }
+                : action,
+            ),
+          }
+        : group,
+    ),
+  };
 }
 
 export function resolveRibbonVisualizationTarget({
@@ -829,6 +976,14 @@ export function buildRibbonTabContent(
     };
   }
 
+  if (tabId === "geometry" && context) {
+    resolvedContent = buildGeometryTabContent(content, context);
+  }
+
+  if (tabId === "physics" && context) {
+    resolvedContent = buildPhysicsTabContent(content, context);
+  }
+
   if (tabId === "results" && context) {
     resolvedContent = {
       ...content,
@@ -911,10 +1066,56 @@ function meshBuildStatus(context: RibbonBuildContext): {
   return { label: "not built", tone: "warning" };
 }
 
+function buildNonFemMeshTabContent(
+  content: RibbonTabContent,
+): RibbonTabContent {
+  const overviewLabel = "Open mesh overview";
+  const viewGroup = content.groups.find((group) => group.id === "mesh-view");
+  if (!viewGroup) return { ...content, groups: [] };
+
+  return {
+    ...content,
+    groups: [
+      {
+        ...viewGroup,
+        title: "Mesh",
+        actions: viewGroup.actions
+          .map((action) => {
+            if (action.id === "mesh-inspector") {
+              return {
+                ...action,
+                id: "mesh.open-overview",
+                label: "Mesh overview",
+                menu: [
+                  {
+                    type: "item" as const,
+                    id: "mesh.open-overview:grid",
+                    label: overviewLabel,
+                    commandId: "mesh.open-overview",
+                  },
+                ] satisfies RibbonMenuNode[],
+              };
+            }
+            // The build pipeline is FEM-only. Do not leave a navigational
+            // affordance that can later submit an object_mesh command.
+            if (action.id === "mesh-pipeline") return null;
+            return action;
+          })
+          .filter((action): action is NonNullable<typeof action> => action !== null),
+      },
+    ],
+  };
+}
+
 function buildMeshTabContent(
   content: RibbonTabContent,
   context: RibbonBuildContext,
 ): RibbonTabContent {
+  const discretization = ribbonDiscretization(context);
+  if (discretization !== "fem") {
+    return buildNonFemMeshTabContent(content);
+  }
+
   const status = meshBuildStatus(context);
   const summary = asRecord(context.meshSummary?.mesh_summary);
   const solverMesh = context.meshSemantics?.solver_mesh;
@@ -981,7 +1182,7 @@ function buildMeshTabContent(
                     label: "Open build pipeline",
                     commandId: "mesh.open-builds",
                   },
-                ],
+                ] satisfies RibbonMenuNode[],
               };
             }
             if (action.id === "mesh-stats") {
@@ -1008,7 +1209,7 @@ function buildMeshTabContent(
                     label: "Open mesh overview",
                     commandId: "mesh.open-overview",
                   },
-                ],
+                ] satisfies RibbonMenuNode[],
               };
             }
             return action;
@@ -1042,7 +1243,7 @@ function buildMeshTabContent(
                       label: "Open mesh semantics",
                       commandId: "mesh.open-overview",
                     },
-                  ],
+                  ] satisfies RibbonMenuNode[],
                 }
               : action,
           ),
@@ -1070,7 +1271,7 @@ function buildMeshTabContent(
                       label: "Open quality gates",
                       commandId: "mesh.open-quality",
                     },
-                  ],
+                  ] satisfies RibbonMenuNode[],
                 }
               : action,
           ),
@@ -1086,24 +1287,24 @@ function buildMeshTabContent(
                 id: "mesh.open-overview",
                 menu: [
                   {
-                    type: "item",
+                    type: "item" as const,
                     id: "mesh.open-shared-domain:item",
                     label: "Shared-domain mesh",
                     commandId: "mesh.open-shared-domain",
                   },
                   {
-                    type: "item",
+                    type: "item" as const,
                     id: "mesh.open-regions:item",
                     label: "Regions and mesh parts",
                     commandId: "mesh.open-regions",
                   },
                   {
-                    type: "item",
+                    type: "item" as const,
                     id: "mesh.open-quality:item",
                     label: "Quality gates",
                     commandId: "mesh.open-quality",
                   },
-                ],
+                ] satisfies RibbonMenuNode[],
               };
             }
             if (action.id === "mesh-pipeline") {
@@ -1186,8 +1387,13 @@ function shouldDisableMissingCommand(
 function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
   const base = context.commandContext ?? { source: "ribbon" as const };
   const resourceData =
-    context.visualizationState || context.meshCapabilities !== undefined
+    context.visualizationState ||
+    context.meshCapabilities !== undefined ||
+    context.sessionStatus !== undefined
     ? {
+        ...(context.sessionStatus !== undefined
+          ? { [SESSION_STATUS_RESOURCE_KEY]: context.sessionStatus }
+          : {}),
         ...(context.visualizationState
           ? { [VISUALIZATION_STATE_PATH]: context.visualizationState }
           : {}),
@@ -1252,12 +1458,24 @@ function applyCommandStateToMenuNode(
 
   if (node.type === "item") {
     const cmdId = node.commandId ?? node.id;
+    const nodeCommandContext = {
+      ...commandContext,
+      input: node.commandInput,
+    };
     const disabledByMissingCommand = shouldDisableMissingCommand(cmdId, context);
-    const disabledByCommand = isCommandDisabled(cmdId, context, commandContext);
+    const disabledByCommand = isCommandDisabled(
+      cmdId,
+      context,
+      nodeCommandContext,
+    );
+    const disabledReason = disabledByCommand
+      ? context.commands?.get(cmdId)?.disabledReason?.(nodeCommandContext)
+      : null;
 
     return {
       ...node,
       disabled: node.disabled || disabledByMissingCommand || disabledByCommand,
+      tooltip: node.tooltip ?? disabledReason ?? undefined,
     };
   }
 
@@ -1347,15 +1565,23 @@ function buildViewGlobalDisplayGroup(
 ): RibbonTabContent["groups"][number] {
   return {
     ...group,
-    actions: group.actions.map((action) => {
-      if (action.id === "view-surface") return buildSurfaceAction(context);
-      if (action.id === "view-texture") return buildTextureAction(context);
-      if (action.id === "view-quantity") return buildQuantityAction(context);
-      if (action.id === "view-vectors") return buildVectorsAction(context);
-      if (action.id === "view-airbox") return buildAirboxAction(context);
-      if (action.id === "view-render-quality") return buildRenderQualityAction(context);
-      if (action.id === "view-render-layers") return buildMeshViewAction(context);
-      return action;
+    actions: group.actions.flatMap((action) => {
+      if (action.id === "view-airbox") {
+        // The FEM airbox visualization target/state is not the FDM universe
+        // extent. FDM exposes its structured-grid extent from Grid/Inspector.
+        return ribbonDiscretization(context) === "fem"
+          ? [buildAirboxAction(context)]
+          : [];
+      }
+      if (action.id === "view-surface") return [buildSurfaceAction(context)];
+      if (action.id === "view-texture") return [buildTextureAction(context)];
+      if (action.id === "view-quantity") return [buildQuantityAction(context)];
+      if (action.id === "view-vectors") return [buildVectorsAction(context)];
+      if (action.id === "view-render-quality") {
+        return [buildRenderQualityAction(context)];
+      }
+      if (action.id === "view-render-layers") return [buildMeshViewAction(context)];
+      return [action];
     }),
   };
 }
@@ -1809,7 +2035,15 @@ function buildTopographyAction({
   commandContext = { source: "ribbon" },
   commands,
 }: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
-  const enabled = Boolean(
+  const commandId = "viewport-3d.fdm-topography-toggle";
+  const available = Boolean(
+    commands?.isEnabled(commandId, commandContext),
+  );
+  const disabledReason = available
+    ? null
+    : commands?.get(commandId)?.disabledReason?.(commandContext) ??
+      "Voxel topography is unavailable for this session.";
+  const enabled = available && Boolean(
     commands?.isActive("viewport-3d.fdm-topography-toggle", commandContext),
   );
   const component =
@@ -1825,7 +2059,9 @@ function buildTopographyAction({
     icon: icon(Sparkles),
     label: "Topography",
     active: enabled,
+    disabled: !available,
     iconColor: "text-amber-300",
+    tooltip: disabledReason ?? undefined,
     menu: [
       { type: "label", id: "topography:header", label: "Topography", badge: "FDM" },
       {
@@ -3035,6 +3271,12 @@ function buildSelectedVisualizationGroup(
 ): RibbonTabContent["groups"][number] {
   const { selection, visualizationSnapshot } = context;
   const target = resolveRibbonVisualizationTarget(context);
+  const targetCapabilities = target
+    ? visualizationTargetCapabilities(target)
+    : null;
+  const isAirboxLikeTarget =
+    target?.kind === "airbox" ||
+    (target ? isFdmUniverseOutsideSupportTarget(target) : false);
   const inheritedRegionSettings =
     target?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({
@@ -3156,7 +3398,7 @@ function buildSelectedVisualizationGroup(
                 ? visualizationTargetCommandInput(target, targetQuantityPatch(value))
                 : value,
           },
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected-texture:visible",
             label: "Surface on/off",
@@ -3165,7 +3407,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-surface-visible",
             commandInput: (checked: boolean) => checked,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "radio-group",
             id: "selected-texture:surface-coloring",
             label: "Color source",
@@ -3178,7 +3420,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-surface-color-source",
             commandInput: (value: unknown) => value,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "color",
             id: "selected-texture:solid-color",
             label: "Solid color",
@@ -3190,7 +3432,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-shader-mono-color",
             commandInput: (value: unknown) => value,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "status",
             id: "selected-texture:field-status",
             label: "Field status",
@@ -3317,10 +3559,9 @@ function buildSelectedVisualizationGroup(
             label: "Render mode",
             value: selectedRenderMode,
             disabled: !enabled || passControlsDisabled,
-            items: target?.kind === "airbox"
+            items: isAirboxLikeTarget
               ? [
                   { value: "wireframe", label: "Wireframe" },
-                  { value: "points", label: "Points" },
                   { value: "off", label: "Off" },
                 ]
               : SELECTED_RENDER_ITEMS.map((item) => ({ ...item })),
@@ -3339,7 +3580,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-geometry-scope",
             commandInput: (value: unknown) => value,
           },
-          ...(target?.kind === "airbox" ? [] : [{
+            ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected:wireframe",
             label: "Wireframe on/off",
@@ -3376,7 +3617,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-wireframe-opacity-percent",
             commandInput: (value: unknown) => value,
           },
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected:frame",
             label: "Frame on/off",
@@ -3385,7 +3626,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-bounds-visible",
             commandInput: (checked: boolean) => checked,
           } as RibbonMenuNode]),
-          ...(target?.kind === "airbox" ? [] : [{
+          ...(isAirboxLikeTarget ? [] : [{
             type: "checkbox",
             id: "selected:points",
             label: "Points on/off",
@@ -3394,18 +3635,20 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-points-visible",
             commandInput: (checked: boolean) => checked,
           } as RibbonMenuNode]),
-          {
-            type: "color",
-            id: "selected:point-color",
-            label: "Point color",
-            value: settings?.pointColor ?? targetDefaults.pointColor,
-            disabled:
-              !enabled ||
-              passControlsDisabled ||
-              !effectiveSettings?.pointsVisible,
-            commandId: "visualization.target.set-point-color",
-            commandInput: (value: unknown) => value,
-          },
+          ...(targetCapabilities?.supportsPoints === false
+            ? []
+            : [{
+                type: "color",
+                id: "selected:point-color",
+                label: "Point color",
+                value: settings?.pointColor ?? targetDefaults.pointColor,
+                disabled:
+                  !enabled ||
+                  passControlsDisabled ||
+                  !effectiveSettings?.pointsVisible,
+                commandId: "visualization.target.set-point-color",
+                commandInput: (value: unknown) => value,
+              } as RibbonMenuNode]),
           {
             type: "item",
             id: "selected:clear",

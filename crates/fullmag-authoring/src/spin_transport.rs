@@ -6,6 +6,10 @@ fn is_zero_f64(value: &f64) -> bool {
     *value == 0.0
 }
 
+fn is_legacy_zhang_li_formula(value: &ZhangLiFormulaVersion) -> bool {
+    *value == ZhangLiFormulaVersion::LegacyFullmagV0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SceneRegionRef {
     pub object_id: String,
@@ -58,6 +62,14 @@ pub struct KnownSceneCurrentTransport {
     pub gauge: Option<SceneChargePotentialGauge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver: Option<SceneChargeSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<SceneTimeEnvelope>,
+    /// Optional explicit accepted RT0/H(div) source descriptor.  It remains a
+    /// JSON object at the scene boundary so every closure field survives UI
+    /// round-trip; the planner performs mesh-exact typed validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub conservative_current_view: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
@@ -438,6 +450,25 @@ pub enum PrescribedSotFormulaVersion {
     LegacyFullmagV0,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, ToSchema)]
+pub enum ZhangLiFormulaVersion {
+    #[serde(rename = "zhang_li.fullmag.v1")]
+    FullmagV1,
+    #[serde(rename = "zhang_li.mumax3.v1")]
+    Mumax3V1,
+    #[default]
+    #[serde(rename = "zhang_li.legacy_fullmag.v0")]
+    LegacyFullmagV0,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub enum ZhangLiOperatorVersion {
+    #[serde(rename = "zl_central_reference_v1")]
+    CentralReferenceV1,
+    #[serde(rename = "zl_mumax3_central_v1")]
+    Mumax3CentralV1,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SceneTimeEnvelope {
@@ -558,11 +589,21 @@ pub enum KnownSceneSpinTorque {
         #[serde(default)]
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_version: Option<String>,
+        #[serde(default, skip_serializing_if = "is_legacy_zhang_li_formula")]
+        formula_version: ZhangLiFormulaVersion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operator_version: Option<ZhangLiOperatorVersion>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<SceneRegionRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         current_density: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_source: Option<String>,
         degree: f64,
         beta: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lande_g: Option<f64>,
     },
     PrescribedSot {
         #[serde(default)]

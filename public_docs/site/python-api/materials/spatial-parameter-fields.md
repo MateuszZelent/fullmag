@@ -40,12 +40,16 @@ No constructor parameters are owned by this conceptual page.
 # %% Define a spatially varying material parameter in SI units
 import fullmag as fm
 
+study = fm.study("spatial_param_study", engine="fem", device="gpu", mode="strict")
 ms_profile = fm.MaterialParameterField.linear(
     base=8.0e5,
     gradient=(0.0, 0.0, 1.0e12),
     frame="object",
     unit="A/m",
 )
+py = fm.Ferromagnet("Py", Ms=ms_profile, Aex=1.3e-11)
+study.set_state(film=fm.Box(size=(100e-9, 50e-9, 10e-9)), material=py)
+study.stages.add_relax(algorithm="llg_overdamped")
 ```
 
 

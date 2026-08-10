@@ -13,6 +13,8 @@ import {
 import type {
   AuthoringTransactionRequest,
   BinaryResourceResult,
+  FdmSingleGridFieldVectorQuery,
+  FdmScopedFieldVectorQuery,
   FieldVectorResponseMetadata,
   LiveStatusResource,
   SimulationPreparationResource,
@@ -20,6 +22,7 @@ import type {
 import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
+import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
 
@@ -263,6 +266,7 @@ function liveStatusFixture(
   return {
     api_contract_version: "1.0.0",
     capabilities: {
+      active_lane: activeLaneCapabilityFixture(),
       algorithms_available: [],
       binary_fields: true,
       cell_fields: true,
@@ -750,6 +754,35 @@ describe("ControlRoomApi", () => {
     expect(observedInit?.signal?.aborted).toBe(false);
     controller.abort();
     expect(observedInit?.signal?.aborted).toBe(true);
+  });
+
+  it("sends a request when the browser exposes crypto without randomUUID", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues(values: Uint8Array) {
+        values.fill(0xab);
+        return values;
+      },
+    });
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      return jsonResponse(liveStatusFixture({ fields_revision: 7 }), init);
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+    });
+
+    try {
+      await expect(api.sessions.current.status()).resolves.toMatchObject({
+        resources: { fields_revision: 7 },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const requestId = new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get(
+      "x-request-id",
+    );
+    expect(requestId).toBe("abababab-abab-4bab-abab-abababababab");
   });
 
   it("loads current session status through the v2 resource path", async () => {
@@ -1594,6 +1627,38 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("preserves an owner-qualified FEM region field metadata query", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          components: 3,
+          domain_generation_id: 3,
+          field_revision: 8,
+          kind: "vector",
+          label: "Magnetization",
+          location: "nodes",
+          quantity_id: "m",
+          stats: { max: 0.4, mean: 0.1, min: -0.2 },
+          unit: "",
+        });
+      },
+    });
+
+    await api.data.fields.meta("m", {
+      component: "magnitude",
+      owner_object_id: "body-b",
+      scope_id: "shared",
+      scope_kind: "region",
+    });
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/meta?component=magnitude&owner_object_id=body-b&scope_id=shared&scope_kind=region",
+    );
+  });
+
   it("materializes missing field metadata on demand before retrying", async () => {
     const calls: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     let metaRequests = 0;
@@ -1706,6 +1771,48 @@ describe("ControlRoomApi", () => {
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=permalloy_layer&scope_kind=object",
     );
+  });
+
+  it.each([
+    ["object", "object:film", "film"],
+    ["region", "edge", "edge"],
+    ["layer", "free_layer", "free_layer"],
+  ] as const)(
+    "sends typed FDM %s field scopes through the central field client",
+    async (scopeKind, scopeId, expectedScopeId) => {
+      let observedUrl = "";
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (url) => {
+          observedUrl = String(url);
+          return binaryResponse(makeFieldVectorBuffer());
+        },
+      });
+
+      await api.data.fields.fdmVector("m", {
+        scope_id: scopeId,
+        scope_kind: scopeKind,
+      });
+
+      expect(observedUrl).toBe(
+        `http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?scope_id=${expectedScopeId}&scope_kind=${scopeKind}`,
+      );
+    },
+  );
+
+  it("exposes a closed typed FDM field-scope query", () => {
+    const api = new ControlRoomApi();
+    expectTypeOf(api.data.fields.fdmVector)
+      .parameter(1)
+      .toEqualTypeOf<FdmScopedFieldVectorQuery>();
+  });
+
+  it("allows a single-grid FDM airbox query without a scope id", () => {
+    const query = {
+      scope_kind: "airbox",
+    } satisfies FdmSingleGridFieldVectorQuery;
+
+    expect(query).toEqual({ scope_kind: "airbox" });
   });
 
   it("materializes missing field vectors on demand before retrying", async () => {
@@ -3539,6 +3646,30 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("queries an owner-qualified FDM region field without collapsing its identity", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeFieldVectorBuffer(), {
+          headers: { etag: '"field-owner-b"', ...contractHeaders },
+        });
+      },
+    });
+
+    await api.data.fields.fdmVector("m", {
+      component: "full",
+      owner_object_id: "body-b",
+      scope_id: "shared",
+      scope_kind: "region",
+    });
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&owner_object_id=body-b&scope_id=shared&scope_kind=region",
+    );
+  });
+
   it("queries hysteresis snapshot field vectors through the data-plane facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -3754,11 +3885,13 @@ describe("ControlRoomApi", () => {
     });
 
     await api.model.scene();
+    await api.model.physicsGraph();
     await api.model.universe();
     await api.meshing.sharedDomainManifest();
 
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/model/scene",
+      "http://127.0.0.1:8765/v2/sessions/current/model/physics-graph",
       "http://127.0.0.1:8765/v2/sessions/current/model/universe",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/manifest",
     ]);
@@ -4162,6 +4295,7 @@ describe("ControlRoomApi", () => {
           mesh_part_ids: [],
           mesh_revision: 41,
           node_indices: [0, 1, 2, 3],
+          owner_object_id: "film",
           realization_method: "shape_centroid_geometry_projection_v1",
           realization_warnings: [
             "geometry_projection uses node and centroid membership; it is not a conformal mesh part",
@@ -4172,7 +4306,7 @@ describe("ControlRoomApi", () => {
       },
     });
 
-    const membership = await api.data.meshRegionMembership("film:core");
+    const membership = await api.data.meshRegionMembership("film", "film:core");
 
     expect(membership.source).toBe("geometry_projection");
     expect(membership.element_indices).toEqual([0, 2]);
@@ -4180,7 +4314,7 @@ describe("ControlRoomApi", () => {
       {
         body: null,
         method: "GET",
-        url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-membership/film%3Acore",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-membership/film%3Acore?owner_object_id=film",
       },
     ]);
   });
@@ -4210,7 +4344,9 @@ describe("ControlRoomApi", () => {
           ],
           mesh_id: "mesh:shared-domain",
           mesh_revision: 41,
-          unresolved_region_ids: ["film:csg"],
+          unresolved_regions: [
+            { owner_object_id: "film", region_id: "film:csg" },
+          ],
         });
       },
     });
@@ -4218,7 +4354,9 @@ describe("ControlRoomApi", () => {
     const list = await api.data.meshRegionMemberships();
 
     expect(list.memberships[0].region_id).toBe("film:core");
-    expect(list.unresolved_region_ids).toEqual(["film:csg"]);
+    expect(list.unresolved_regions).toEqual([
+      { owner_object_id: "film", region_id: "film:csg" },
+    ]);
     expect(requests).toEqual([
       {
         body: null,
@@ -4259,16 +4397,19 @@ describe("ControlRoomApi", () => {
     });
 
     const descriptor = await api.data.fdmRegionMemberships();
-    const membership = await api.data.fdmRegionMembershipRegionBytes("body:core");
+    const membership = await api.data.fdmRegionMembershipRegionBytes(
+      "body",
+      "body:core",
+    );
 
-    expect(descriptor).not.toBeNull();
-    if (!descriptor) throw new Error("expected FDM membership descriptor");
-    expect(descriptor.region_legend[0]?.numeric_id).toBe(1);
+    expect(descriptor.status).toBe("ready");
+    if (descriptor.status !== "ready") throw new Error("expected FDM membership descriptor");
+    expect(descriptor.data.region_legend[0]?.numeric_id).toBe(1);
     expect(membership.status).toBe("ready");
     expect(membership.status === "ready" ? membership.data.byteLength : 0).toBe(68);
     expect(requests).toEqual([
       "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-memberships",
-      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore",
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore?owner_object_id=body",
     ]);
   });
 
@@ -4282,7 +4423,10 @@ describe("ControlRoomApi", () => {
         }),
     });
 
-    await expect(api.data.fdmRegionMemberships()).resolves.toBeNull();
+    await expect(api.data.fdmRegionMemberships()).resolves.toEqual({
+      data: null,
+      status: "pending",
+    });
   });
 
   it("commits object region and coupling writes through model transactions", async () => {

@@ -1,4 +1,5 @@
 import type {
+  LiveStatusResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -10,10 +11,15 @@ import type {
 } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
+  interactionAvailabilityForDiscretization,
+  normalizeInteractionDiscretization,
+  type InteractionDiscretization,
   type PhysicsInteractionId,
 } from "@/shared/domain/physics/interactions";
 import {
@@ -26,6 +32,7 @@ import {
   resetAirboxVisualizationState,
   visualizationStateOverrideMatchesTarget,
   visualizationStatePatchFromDefaultTargetPatch,
+  visualizationTargetUnsupportedPatchFields,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -49,6 +56,12 @@ export const RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND =
   "ribbon.selection.focus-airbox";
 export const RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND =
   "ribbon.physics.select-interaction";
+export const RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND =
+  "ribbon.physics.create-field-drive";
+export const RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND =
+  "ribbon.physics.create-spin-transport";
+export const RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND =
+  "ribbon.physics.create-spin-interface";
 export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
   "ribbon.cross-section.begin-draft";
 
@@ -162,6 +175,8 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
+    isEnabled: (context) => ribbonInteractionDiscretization(context) === "fem",
+    disabledReason: airboxCommandDisabledReason,
     run: patchAirboxVisualizationFromCommand,
   },
   {
@@ -170,6 +185,8 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
+    isEnabled: (context) => ribbonInteractionDiscretization(context) === "fem",
+    disabledReason: airboxCommandDisabledReason,
     run: resetAirboxVisualizationFromCommand,
   },
   {
@@ -178,9 +195,12 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     group: "ribbon-selection",
     category: "View",
     scope: "workspace",
-    isEnabled: (context) => Boolean(context.selection),
+    isEnabled: (context) =>
+      Boolean(context.selection) && ribbonInteractionDiscretization(context) === "fem",
     disabledReason: (context) =>
-      context.selection ? null : "Selection controller is not available.",
+      context.selection
+        ? airboxCommandDisabledReason(context)
+        : "Selection controller is not available.",
     run: focusAirboxFromCommand,
   },
   {
@@ -192,14 +212,54 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     run: beginCrossSectionDraftFromCommand,
   },
   {
+    id: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+    title: "Create Global Field Drive",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createFieldDriveFromCommand,
+  },
+  {
+    id: RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
+    title: "Create Spin Transport / SHE",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createSpinTransportFromCommand,
+  },
+  {
+    id: RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
+    title: "Create Spin Interface",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createSpinInterfaceFromCommand,
+  },
+  {
     id: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
     title: "Select Physics Interaction",
     group: "ribbon-physics",
     category: "Physics",
     scope: "selection",
-    isEnabled: (context) => Boolean(context.selection),
-    disabledReason: (context) =>
-      context.selection ? null : "Selection controller is not available.",
+    isEnabled: (context) =>
+      Boolean(context.selection) && physicsInteractionOperation(context).enabled,
+    disabledReason: (context) => {
+      if (!context.selection) return "Selection controller is not available.";
+      const operation = physicsInteractionOperation(context);
+      return operation.enabled ? null : operation.reason;
+    },
     run: selectPhysicsInteractionFromCommand,
   },
 ];
@@ -292,7 +352,20 @@ async function patchVisualizationTargetFromCommand(
   }
 
   if (input.target.kind === "airbox") {
+    const guard = requireFemAirboxLane(context);
+    if (guard) return guard;
     return patchAirboxVisualization(context, input.patch);
+  }
+
+  const unsupportedFields = visualizationTargetUnsupportedPatchFields(
+    input.target,
+    input.patch,
+  );
+  if (unsupportedFields.length > 0) {
+    return {
+      message: `Visualization target does not support: ${unsupportedFields.join(", ")}.`,
+      status: "failed",
+    };
   }
 
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(input.patch);
@@ -326,6 +399,8 @@ async function clearVisualizationTargetFromCommand(
 async function patchAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   const patch = asRecord(context.input) as VisualizationTargetPatch | null;
   if (!patch) {
     return { message: "Airbox visualization patch is missing.", status: "failed" };
@@ -336,6 +411,8 @@ async function patchAirboxVisualizationFromCommand(
 async function resetAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   if (context.visualizationSync || context.api) {
     await patchVisualizationState(
       context,
@@ -349,6 +426,8 @@ async function resetAirboxVisualizationFromCommand(
 }
 
 function focusAirboxFromCommand(context: CommandContext): CommandResult {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   context.selection?.set(
     {
       kind: "airbox.visualization",
@@ -414,8 +493,28 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
     };
   }
 
+  const availability = interactionAvailabilityForDiscretization(
+    input.interactionId,
+    ribbonInteractionDiscretization(context),
+  );
+  if (availability.status !== "supported") {
+    return {
+      message:
+        availability.reason ??
+        `Interaction '${input.interactionId}' is unavailable for the current lane.`,
+      status: "failed",
+    };
+  }
+
   const current = context.selection?.get() as Selection | undefined;
-  const objectId = current?.objectId ?? null;
+  const selectedObjectId = current?.objectId ?? null;
+  if (spec.scope === "object_or_region" && !selectedObjectId) {
+    return {
+      message: `Select an object or region before adding '${spec.label}'.`,
+      status: "failed",
+    };
+  }
+  const objectId = spec.scope === "global" ? null : selectedObjectId;
   const regionId =
     current?.ref?.type === "scene-object" ? current.ref.regionId : undefined;
   const nodeId = objectId
@@ -444,10 +543,114 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
   return { status: "completed" };
 }
 
+function createFieldDriveFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const nodeId = "model:physics:field-drive:draft";
+  context.selection.set(
+    {
+      kind: "physics.field-drive",
+      label: "New field drive",
+      nodeId,
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.field-drive",
+        nodeId,
+        type: "physics-field-drive",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function createSpinTransportFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const current = context.selection.get() as Selection | null;
+  const objectId = current?.objectId ?? null;
+  const regionId = current?.ref && "regionId" in current.ref &&
+    typeof current.ref.regionId === "string"
+    ? current.ref.regionId
+    : null;
+  const nodeId = "model:physics:spin-transport:draft";
+  context.selection.set(
+    {
+      kind: "physics.spin-transport",
+      label: "New spin transport",
+      nodeId,
+      objectId,
+      ref: {
+        draft: true,
+        kind: "physics.spin-transport",
+        nodeId,
+        ...(objectId && regionId ? { regionId } : {}),
+        type: "spin-transport",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function createSpinInterfaceFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const nodeId = "model:physics:spin-interface:draft";
+  context.selection.set(
+    {
+      kind: "physics.spin-interface",
+      label: "New spin interface",
+      nodeId,
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.spin-interface",
+        nodeId,
+        type: "spin-interface",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function physicsInteractionOperation(context: CommandContext) {
+  const input = asPhysicsInteractionInput(context.input);
+  if (!input) {
+    return resolveActiveLaneOperation(null, "interaction.exchange");
+  }
+  const rawStatus = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  const record = asRecord(rawStatus);
+  const status = (record?.data ?? rawStatus) as
+    | LiveStatusResource
+    | null
+    | undefined;
+  return resolveActiveLaneOperation(
+    status?.capabilities?.active_lane ?? null,
+    `interaction.${input.interactionId}`,
+  );
+}
+
 async function patchAirboxVisualization(
   context: CommandContext,
   patch: VisualizationTargetPatch,
 ): Promise<CommandResult> {
+  const guard = requireFemAirboxLane(context);
+  if (guard) return guard;
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patch);
   if (Object.keys(localPatch).length > 0) {
     context.visualization?.patchViewportPreferences(
@@ -516,6 +719,11 @@ async function patchTargetOverrideResource(
   target: VisualizationTargetRef,
   patch: VisualizationTargetPatch,
 ): Promise<boolean> {
+  // The structured-grid FDM target is viewport-local.  The v2 visualization
+  // registry has no `fdm-domain` scope, so callers must fall back to the
+  // ObjectVisualizationController instead of queueing an unchanged backend
+  // override and reporting success.
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -535,6 +743,9 @@ async function clearTargetOverrideResource(
   context: CommandContext,
   target: VisualizationTargetRef,
 ): Promise<boolean> {
+  // See patchTargetOverrideResource: FDM display state is not a backend
+  // visualization-state scope.
+  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -636,11 +847,12 @@ function asPhysicsInteractionInput(
     : null;
 }
 
-function isVisualizationTargetKind(
+export function isVisualizationTargetKind(
   value: unknown,
 ): value is VisualizationTargetKind {
   return (
     value === "airbox" ||
+    value === "fdm-domain" ||
     value === "object" ||
     value === "part" ||
     value === "region"
@@ -651,4 +863,35 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function ribbonInteractionDiscretization(
+  context: CommandContext,
+): InteractionDiscretization {
+  const rawResource = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  // Keep direct command consumers that predate session-status injection
+  // compatible; live RibbonModule contexts publish the key explicitly and
+  // therefore still fail closed while the lane is unresolved.
+  if (rawResource === undefined) return "fem";
+  const resource = asRecord(rawResource);
+  const status = asRecord(resource?.data ?? resource);
+  return normalizeInteractionDiscretization(
+    asRecord(status?.domain)?.discretization,
+  );
+}
+
+function airboxCommandDisabledReason(context: CommandContext): string | null {
+  const lane = ribbonInteractionDiscretization(context);
+  if (lane === "fdm") {
+    return "FEM airbox visualization is not applicable to FDM; use the structured universe/grid extent.";
+  }
+  if (lane === "unknown") {
+    return "Discretization lane is unresolved; FEM airbox visualization is disabled.";
+  }
+  return null;
+}
+
+function requireFemAirboxLane(context: CommandContext): CommandResult | null {
+  const reason = airboxCommandDisabledReason(context);
+  return reason ? { message: reason, status: "failed" } : null;
 }

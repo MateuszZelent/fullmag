@@ -8,10 +8,10 @@ import {
   type RegionSubPanelProps,
 } from "./shared";
 
-export function ObjectRegionNestedRegionsPanel({ model }: RegionSubPanelProps) {
+export function ObjectRegionNestedRegionsPanel({ model, meshLane = "unknown" }: RegionSubPanelProps) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Nested Regions Limitation">
         <FeedbackBanner

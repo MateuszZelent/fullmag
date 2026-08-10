@@ -6,8 +6,7 @@ import {
   Settings2,
 } from "lucide-react";
 
-import { InspectorGroup } from "../primitives/InspectorGroup";
-import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
+import { InspectorOverviewFrame } from "../primitives/InspectorOverviewFrame";
 
 export interface ObjectVisualizationOverviewProps {
   advanced: ReactNode;
@@ -35,12 +34,15 @@ export function ObjectVisualizationOverview({
   vectors,
 }: ObjectVisualizationOverviewProps) {
   return (
-    <div
-      className="fm-object-visualization-overview grid min-w-0 gap-3 [container-type:inline-size]"
-      data-slot="object-visualization-overview"
-    >
-      {/* 4-column metric strip */}
-      <InspectorMetricStrip
+    <div className="fm-object-visualization-overview" data-slot="object-visualization-overview">
+      <InspectorOverviewFrame
+        className="fm-object-visualization-overview__frame"
+        leadingSections={
+          <>
+            {surfaceColoring}
+            {vectors}
+          </>
+        }
         metrics={[
           {
             label: "Display Passes",
@@ -58,56 +60,38 @@ export function ObjectVisualizationOverview({
             value: dataState,
           },
         ]}
+        primary={display}
+        primaryClassName="fm-viz-display-card"
+        primaryIcon={<Box size={18} strokeWidth={1.5} />}
+        primaryTitle="Display"
+        sections={[
+          {
+            content: clipping,
+            defaultOpen: false,
+            icon: <Scissors size={16} strokeWidth={1.75} />,
+            id: "clipping",
+            summary: "Section: Off",
+            title: "Clipping & Section",
+          },
+          {
+            content: camera,
+            defaultOpen: false,
+            icon: <Camera size={16} strokeWidth={1.75} />,
+            id: "camera",
+            summary: "Perspective • Auto",
+            title: "Camera & View",
+          },
+          {
+            content: advanced,
+            defaultOpen: false,
+            icon: <Settings2 size={16} strokeWidth={1.75} />,
+            id: "advanced",
+            summary: "Rendering • Performance",
+            title: "Advanced",
+          },
+        ]}
+        sectionsClassName="fm-viz-nav-sections"
       />
-
-      {/* Display section as a bordered card */}
-      <div className="fm-viz-display-card">
-        <InspectorGroup
-          icon={<Box size={18} strokeWidth={1.5} />}
-          title="Display"
-          collapsible
-          defaultOpen
-        >
-          {display}
-        </InspectorGroup>
-      </div>
-
-      {/* Nav rows for remaining sections */}
-      <div className="fm-viz-nav-sections">
-        {surfaceColoring}
-        {vectors}
-
-        <InspectorGroup
-          collapsible
-          defaultOpen={false}
-          icon={<Scissors size={16} strokeWidth={1.75} />}
-          summary="Section: Off"
-          title="Clipping & Section"
-          variant="nav"
-        >
-          {clipping}
-        </InspectorGroup>
-        <InspectorGroup
-          collapsible
-          defaultOpen={false}
-          icon={<Camera size={16} strokeWidth={1.75} />}
-          summary="Perspective • Auto"
-          title="Camera & View"
-          variant="nav"
-        >
-          {camera}
-        </InspectorGroup>
-        <InspectorGroup
-          collapsible
-          defaultOpen={false}
-          icon={<Settings2 size={16} strokeWidth={1.75} />}
-          summary="Rendering • Performance"
-          title="Advanced"
-          variant="nav"
-        >
-          {advanced}
-        </InspectorGroup>
-      </div>
     </div>
   );
 }

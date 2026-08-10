@@ -10,6 +10,8 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
         layers: vec![
             FdmLayerPlanIR {
                 magnet_name: "free".to_string(),
+                layer_id: "layer:free".to_string(),
+                object_id: "free".to_string(),
                 native_grid: [4, 4, 1],
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 0.0],
@@ -29,6 +31,8 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
             },
             FdmLayerPlanIR {
                 magnet_name: "ref".to_string(),
+                layer_id: "layer:ref".to_string(),
+                object_id: "ref".to_string(),
                 native_grid: [4, 4, 1],
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 3e-9],
@@ -70,6 +74,8 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
         planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
             requested_strategy: "multilayer_convolution".to_string(),
             selected_strategy: "multilayer_convolution".to_string(),
+            requested_mode: "two_d_stack".to_string(),
+            resolved_mode: "two_d_stack".to_string(),
             eligibility: "eligible".to_string(),
             estimated_pair_kernels: 4,
             estimated_unique_kernels: 3,
@@ -94,6 +100,8 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         layers: vec![
             FdmLayerPlanIR {
                 magnet_name: "bottom".to_string(),
+                layer_id: "layer:bottom".to_string(),
+                object_id: "bottom".to_string(),
                 native_grid: [2, 1, 1],
                 native_cell_size: [2e-9, 2e-9, 2e-9],
                 native_origin: [0.0, 0.0, 0.0],
@@ -113,6 +121,8 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
             },
             FdmLayerPlanIR {
                 magnet_name: "top".to_string(),
+                layer_id: "layer:top".to_string(),
+                object_id: "top".to_string(),
                 native_grid: [2, 1, 1],
                 native_cell_size: [2e-9, 2e-9, 2e-9],
                 native_origin: [0.0, 0.0, 2e-9],
@@ -146,6 +156,8 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
             requested_strategy: "multilayer_convolution".to_string(),
             selected_strategy: "multilayer_convolution".to_string(),
+            requested_mode: "three_d".to_string(),
+            resolved_mode: "three_d".to_string(),
             eligibility: "eligible".to_string(),
             estimated_pair_kernels: 4,
             estimated_unique_kernels: 1,

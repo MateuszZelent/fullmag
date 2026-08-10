@@ -174,6 +174,7 @@ pub(crate) struct ArtifactPipelineSender {
     tx: SyncSender<ArtifactJob>,
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
+    physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
     #[cfg(feature = "fem-gpu")]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
 }
@@ -218,6 +219,7 @@ pub(crate) struct ArtifactPipeline {
     handle: Option<JoinHandle<Result<ArtifactPipelineSummary, String>>>,
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
+    physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
     #[cfg(feature = "fem-gpu")]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
 }
@@ -238,6 +240,7 @@ impl ArtifactPipeline {
             field_context,
             capacity,
             None,
+            None,
         )
     }
 
@@ -249,6 +252,23 @@ impl ArtifactPipeline {
     ) -> Result<Self, RunError> {
         Self::start_for_problem_with_autosave_root(
             problem,
+            output_dir.clone(),
+            output_dir,
+            field_context,
+            capacity,
+        )
+    }
+
+    pub(crate) fn start_for_problem_and_plan(
+        problem: &fullmag_ir::ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
+        output_dir: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+    ) -> Result<Self, RunError> {
+        Self::start_for_problem_and_plan_with_autosave_root(
+            problem,
+            plan,
             output_dir.clone(),
             output_dir,
             field_context,
@@ -284,6 +304,44 @@ impl ArtifactPipeline {
             field_context,
             capacity,
             stage_autosave,
+            None,
+        )
+    }
+
+    pub(crate) fn start_for_problem_and_plan_with_autosave_root(
+        problem: &fullmag_ir::ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
+        output_dir: PathBuf,
+        autosave_root: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+    ) -> Result<Self, RunError> {
+        let stage_autosave = problem
+            .study
+            .sampling()
+            .stage_autosave
+            .clone()
+            .map(|policy| StageAutosavePipelineConfig {
+                stage_id: problem
+                    .problem_meta
+                    .runtime_metadata
+                    .get("active_stage_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(&problem.problem_meta.entrypoint_kind)
+                    .to_string(),
+                policy,
+            });
+        let physics_execution_context =
+            crate::physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
+                problem, plan,
+            )?;
+        Self::start_with_stage_autosave_roots(
+            output_dir,
+            autosave_root,
+            field_context,
+            capacity,
+            stage_autosave,
+            Some(physics_execution_context),
         )
     }
 
@@ -300,6 +358,24 @@ impl ArtifactPipeline {
             field_context,
             capacity,
             stage_autosave,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    fn start_with_physics_execution_context(
+        output_dir: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+        physics_execution_context: crate::physics_graph_execution::PhysicsGraphExecutionContext,
+    ) -> Result<Self, RunError> {
+        Self::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            output_dir,
+            field_context,
+            capacity,
+            None,
+            Some(physics_execution_context),
         )
     }
 
@@ -309,6 +385,9 @@ impl ArtifactPipeline {
         field_context: FieldArtifactContext,
         capacity: usize,
         stage_autosave: Option<StageAutosavePipelineConfig>,
+        physics_execution_context: Option<
+            crate::physics_graph_execution::PhysicsGraphExecutionContext,
+        >,
     ) -> Result<Self, RunError> {
         fs::create_dir_all(&output_dir).map_err(|error| RunError {
             message: format!(
@@ -362,6 +441,7 @@ impl ArtifactPipeline {
             handle: Some(handle),
             queue_depth,
             diagnostics,
+            physics_execution_context,
             #[cfg(feature = "fem-gpu")]
             accepted_step_fields,
         })
@@ -376,6 +456,7 @@ impl ArtifactPipeline {
                 .clone(),
             queue_depth: Arc::clone(&self.queue_depth),
             diagnostics: Arc::clone(&self.diagnostics),
+            physics_execution_context: self.physics_execution_context.clone(),
             #[cfg(feature = "fem-gpu")]
             accepted_step_fields: Arc::clone(&self.accepted_step_fields),
         }
@@ -690,6 +771,7 @@ pub(crate) struct ArtifactRecorder {
     solver_steps: Vec<StepStats>,
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
+    physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
     #[cfg(feature = "fem-gpu")]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
     #[cfg(feature = "fem-gpu")]
@@ -704,6 +786,7 @@ impl ArtifactRecorder {
             solver_steps: Vec::new(),
             pipeline: None,
             provenance,
+            physics_execution_context: None,
             #[cfg(feature = "fem-gpu")]
             accepted_step_fields: Arc::new(Vec::new()),
             #[cfg(feature = "fem-gpu")]
@@ -717,12 +800,14 @@ impl ArtifactRecorder {
     ) -> Self {
         #[cfg(feature = "fem-gpu")]
         let accepted_step_fields = Arc::clone(&pipeline.accepted_step_fields);
+        let physics_execution_context = pipeline.physics_execution_context.clone();
         Self {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
             solver_steps: Vec::new(),
             pipeline: Some(pipeline),
             provenance,
+            physics_execution_context,
             #[cfg(feature = "fem-gpu")]
             accepted_step_fields,
             #[cfg(feature = "fem-gpu")]
@@ -768,7 +853,20 @@ impl ArtifactRecorder {
     /// may be sparse (or absent), while accepted-step telemetry must preserve
     /// every controller decision and its attempt records.
     pub(crate) fn record_solver_step(&mut self, stats: &StepStats) {
+        self.observe_physics_execution();
         self.solver_steps.push(stats.clone());
+    }
+
+    pub(crate) fn observe_physics_execution(&mut self) {
+        if let Some(context) = self.physics_execution_context.as_ref() {
+            context.observe_workflow(&mut self.provenance);
+        }
+    }
+
+    pub(crate) fn observe_energy_evaluation(&mut self) {
+        if let Some(context) = self.physics_execution_context.as_ref() {
+            context.observe_energy_evaluation(&mut self.provenance);
+        }
     }
 
     pub(crate) fn take_solver_steps(&mut self) -> Vec<StepStats> {
@@ -1505,13 +1603,82 @@ mod tests {
             ("J_charge", 3, "A/m^2"),
             ("spin_current_tensor", 9, "A/m^2"),
         ] {
-            let bytes = fs::read(output_dir.join("fields").join(name).join("step_000000.json"))
-                .expect("streamed transport field");
+            let bytes = fs::read(
+                output_dir
+                    .join("fields")
+                    .join(name)
+                    .join("step_000000.json"),
+            )
+            .expect("streamed transport field");
             let payload: serde_json::Value =
                 serde_json::from_slice(&bytes).expect("transport field JSON");
             assert_eq!(payload["component_count"], components);
             assert_eq!(payload["unit"], unit);
         }
         fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
+    }
+
+    #[test]
+    fn streaming_field_metadata_captures_exact_ids_after_owner_observation() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-exact-physics-streaming-{}-{unique}",
+            std::process::id()
+        ));
+        let field_context = FieldArtifactContext {
+            problem_name: "exact-physics-streaming".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+        };
+        let execution_context =
+            crate::physics_graph_execution::PhysicsGraphExecutionContext::from_exact_ids_for_test(
+                ["torque:strip"],
+            );
+        let mut pipeline = ArtifactPipeline::start_with_physics_execution_context(
+            output_dir.clone(),
+            field_context,
+            2,
+            execution_context,
+        )
+        .expect("start artifact pipeline");
+        let mut recorder =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+
+        recorder.observe_physics_execution();
+        recorder
+            .record_field_snapshot(
+                FieldSnapshot::new(
+                    "m",
+                    1,
+                    1.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "cell",
+                    "full",
+                    1,
+                    vec![1.0, 0.0, 0.0],
+                )
+                .expect("valid field snapshot"),
+            )
+            .expect("enqueue field snapshot");
+        let (_, _, provenance) = recorder.finish();
+        assert_eq!(provenance.executed_physics_module_ids, vec!["torque:strip"]);
+        pipeline.finish().expect("finish artifact pipeline");
+
+        let bytes = fs::read(output_dir.join("fields/m/step_000001.json"))
+            .expect("streamed field metadata");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("field artifact JSON");
+        assert_eq!(
+            payload["provenance"]["executed_physics_module_ids"],
+            serde_json::json!(["torque:strip"])
+        );
+        fs::remove_dir_all(output_dir).expect("remove exact physics fixture");
     }
 }

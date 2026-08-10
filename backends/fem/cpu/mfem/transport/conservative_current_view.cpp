@@ -1612,11 +1612,12 @@ WeightedRt0Result solve_weighted_rt0_projection(
     auto space = std::make_unique<mfem::FiniteElementSpace>(
         mesh.get(), collection.get());
     const int global_dof_count = space->GetVSize();
+    const bool sparse_kkt = global_dof_count > 4096;
     // This is the deterministic serial reference realization.  Production
-    // large-mesh execution must use the separately qualified sparse KKT lane;
-    // silently switching to an un-constrained projection is forbidden.
-    require(global_dof_count > 0 && global_dof_count <= 4096,
-        "OE-T0 serial weighted KKT reference size limit exceeded");
+    // large-mesh execution uses the MFEM sparse KKT lane below; silently
+    // switching to an unconstrained projection is forbidden.
+    require(global_dof_count > 0,
+        "OE-T0 RT0 space has no degrees of freedom");
 
     std::map<FaceKey, int> face_by_key;
     std::vector<int> face_global_dof(mesh->GetNumFaces(), -1);
@@ -1683,9 +1684,14 @@ WeightedRt0Result solve_weighted_rt0_projection(
         }
     }
 
-    std::vector<std::vector<double>> mass(
-        static_cast<std::size_t>(global_dof_count),
-        std::vector<double>(static_cast<std::size_t>(global_dof_count), 0.0));
+    std::vector<std::vector<double>> mass;
+    std::unique_ptr<mfem::SparseMatrix> sparse_mass;
+    if (sparse_kkt) {
+        sparse_mass = std::make_unique<mfem::SparseMatrix>(global_dof_count);
+    } else {
+        mass.assign(static_cast<std::size_t>(global_dof_count),
+            std::vector<double>(static_cast<std::size_t>(global_dof_count), 0.0));
+    }
     std::vector<double> weighted_rhs(static_cast<std::size_t>(global_dof_count), 0.0);
     double raw_energy = 0.0;
     const mfem::IntegrationRule &rule = mfem::IntRules.Get(
@@ -1723,12 +1729,20 @@ WeightedRt0Result solve_weighted_rt0_projection(
                     for (int component = 0; component < 3; ++component) {
                         shape_j[component] = vshape(j, component) * sign_j;
                     }
-                    mass.at(static_cast<std::size_t>(dof_i)).at(
-                        static_cast<std::size_t>(dof_j)) +=
-                        inverse_sigma * (shape_i * shape_j) * weight;
+                    const double contribution = inverse_sigma *
+                        (shape_i * shape_j) * weight;
+                    if (sparse_kkt) {
+                        sparse_mass->Add(dof_i, dof_j, contribution);
+                    } else {
+                        mass.at(static_cast<std::size_t>(dof_i)).at(
+                            static_cast<std::size_t>(dof_j)) += contribution;
+                    }
                 }
             }
         }
+    }
+    if (sparse_kkt) {
+        sparse_mass->Finalize();
     }
     std::vector<WeightedRt0Constraint> constraints;
     constraints.reserve(static_cast<std::size_t>(mesh->GetNE()) + pairs.size());
@@ -1790,83 +1804,242 @@ WeightedRt0Result solve_weighted_rt0_projection(
     const std::size_t free_count = free_dofs.size();
     const std::size_t constraint_count = active.size();
     const std::size_t system_size = free_count + constraint_count;
-    require(system_size > 0 && system_size <= 8192,
+    require(system_size > 0 && (sparse_kkt || system_size <= 8192),
         "OE-T0 serial KKT system size limit exceeded");
-    std::vector<double> matrix(system_size * system_size, 0.0);
-    std::vector<double> rhs(system_size, 0.0);
-    for (std::size_t row = 0; row < free_count; ++row) {
-        const int global_row = free_dofs[row];
-        rhs[row] = weighted_rhs.at(static_cast<std::size_t>(global_row));
-        for (std::size_t column = 0; column < free_count; ++column) {
-            matrix[row * system_size + column] =
-                mass.at(static_cast<std::size_t>(global_row)).at(
-                    static_cast<std::size_t>(free_dofs[column]));
-        }
-    }
-    for (std::size_t row = 0; row < constraint_count; ++row) {
-        const std::size_t system_row = free_count + row;
-        rhs[system_row] = active[row].rhs;
-        for (const auto [dof, coefficient] : active[row].coefficients) {
-            const int index = free_index.at(static_cast<std::size_t>(dof));
-            require(index >= 0, "OE-T0 active constraint references fixed dof");
-            matrix[static_cast<std::size_t>(index) * system_size + system_row] +=
-                coefficient;
-            matrix[system_row * system_size + static_cast<std::size_t>(index)] +=
-                coefficient;
-        }
-    }
-    solve_dense_kkt(&matrix, &rhs);
-
     std::vector<double> solution(static_cast<std::size_t>(global_dof_count), 0.0);
-    for (std::size_t index = 0; index < free_count; ++index) {
-        solution.at(static_cast<std::size_t>(free_dofs[index])) = rhs[index];
-    }
-    double residual_squared = 0.0;
-    double residual_scale = 1.0;
-    for (std::size_t row = 0; row < free_count; ++row) {
-        const int global_row = free_dofs[row];
-        double residual = -weighted_rhs.at(static_cast<std::size_t>(global_row));
-        for (const int global_column : free_dofs) {
-            residual += mass.at(static_cast<std::size_t>(global_row)).at(
-                static_cast<std::size_t>(global_column)) *
-                solution.at(static_cast<std::size_t>(global_column));
+    double scaled_residual = 0.0;
+    double correction_energy = raw_energy;
+    if (!sparse_kkt) {
+        std::vector<double> matrix(system_size * system_size, 0.0);
+        std::vector<double> rhs(system_size, 0.0);
+        for (std::size_t row = 0; row < free_count; ++row) {
+            const int global_row = free_dofs[row];
+            rhs[row] = weighted_rhs.at(static_cast<std::size_t>(global_row));
+            for (std::size_t column = 0; column < free_count; ++column) {
+                matrix[row * system_size + column] =
+                    mass.at(static_cast<std::size_t>(global_row)).at(
+                        static_cast<std::size_t>(free_dofs[column]));
+            }
         }
-        for (std::size_t constraint = 0; constraint < constraint_count; ++constraint) {
-            for (const auto [dof, coefficient] : active[constraint].coefficients) {
-                if (dof == global_row) {
-                    residual += coefficient * rhs[free_count + constraint];
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            const std::size_t system_row = free_count + row;
+            rhs[system_row] = active[row].rhs;
+            for (const auto [dof, coefficient] : active[row].coefficients) {
+                const int index = free_index.at(static_cast<std::size_t>(dof));
+                require(index >= 0,
+                    "OE-T0 active constraint references fixed dof");
+                matrix[static_cast<std::size_t>(index) * system_size + system_row] +=
+                    coefficient;
+                matrix[system_row * system_size + static_cast<std::size_t>(index)] +=
+                    coefficient;
+            }
+        }
+        solve_dense_kkt(&matrix, &rhs);
+        for (std::size_t index = 0; index < free_count; ++index) {
+            solution.at(static_cast<std::size_t>(free_dofs[index])) = rhs[index];
+        }
+        double residual_squared = 0.0;
+        double residual_scale = 1.0;
+        for (std::size_t row = 0; row < free_count; ++row) {
+            const int global_row = free_dofs[row];
+            double residual = -weighted_rhs.at(
+                static_cast<std::size_t>(global_row));
+            for (const int global_column : free_dofs) {
+                residual += mass.at(static_cast<std::size_t>(global_row)).at(
+                    static_cast<std::size_t>(global_column)) *
+                    solution.at(static_cast<std::size_t>(global_column));
+            }
+            for (std::size_t constraint = 0;
+                    constraint < constraint_count; ++constraint) {
+                for (const auto [dof, coefficient] :
+                        active[constraint].coefficients) {
+                    if (dof == global_row) {
+                        residual += coefficient * rhs[free_count + constraint];
+                    }
+                }
+            }
+            residual_squared += residual * residual;
+            residual_scale = std::max(residual_scale,
+                std::abs(weighted_rhs.at(
+                    static_cast<std::size_t>(global_row))));
+        }
+        for (std::size_t constraint = 0;
+                constraint < constraint_count; ++constraint) {
+            double residual = -active[constraint].rhs;
+            for (const auto [dof, coefficient] :
+                    active[constraint].coefficients) {
+                residual += coefficient * solution.at(
+                    static_cast<std::size_t>(dof));
+            }
+            residual_squared += residual * residual;
+            residual_scale = std::max(residual_scale,
+                std::abs(active[constraint].rhs));
+        }
+        scaled_residual = std::sqrt(residual_squared) /
+            std::max(residual_scale, 1.0e-30);
+        for (int row = 0; row < global_dof_count; ++row) {
+            correction_energy -= 2.0 * solution.at(
+                static_cast<std::size_t>(row)) * weighted_rhs.at(
+                    static_cast<std::size_t>(row));
+            for (int column = 0; column < global_dof_count; ++column) {
+                correction_energy += solution.at(static_cast<std::size_t>(row)) *
+                    mass.at(static_cast<std::size_t>(row)).at(
+                        static_cast<std::size_t>(column)) *
+                    solution.at(static_cast<std::size_t>(column));
+            }
+        }
+    } else {
+        require(free_count > 0,
+            "OE-T0 sparse KKT lane requires at least one free RT0 dof");
+        require(free_count <= static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()) &&
+                constraint_count <= static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()) &&
+                system_size <= static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()),
+            "OE-T0 sparse KKT dimensions exceed MFEM integer indexing");
+        mfem::SparseMatrix free_mass(static_cast<int>(free_count));
+        const int *mass_rows = sparse_mass->GetI();
+        const int *mass_columns = sparse_mass->GetJ();
+        const double *mass_values = sparse_mass->GetData();
+        for (int row = 0; row < global_dof_count; ++row) {
+            const int free_row = free_index.at(static_cast<std::size_t>(row));
+            if (free_row < 0) continue;
+            for (int entry = mass_rows[row]; entry < mass_rows[row + 1]; ++entry) {
+                const int free_column = free_index.at(static_cast<std::size_t>(
+                    mass_columns[entry]));
+                if (free_column >= 0) {
+                    free_mass.Add(free_row, free_column, mass_values[entry]);
                 }
             }
         }
-        residual_squared += residual * residual;
-        residual_scale = std::max(residual_scale,
-            std::abs(weighted_rhs.at(static_cast<std::size_t>(global_row))));
-    }
-    for (std::size_t constraint = 0; constraint < constraint_count; ++constraint) {
-        double residual = -active[constraint].rhs;
-        for (const auto [dof, coefficient] : active[constraint].coefficients) {
-            residual += coefficient * solution.at(static_cast<std::size_t>(dof));
+        free_mass.Finalize();
+        mfem::SparseMatrix constraint_matrix(
+            static_cast<int>(constraint_count), static_cast<int>(free_count));
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            for (const auto [dof, coefficient] : active[row].coefficients) {
+                const int index = free_index.at(static_cast<std::size_t>(dof));
+                require(index >= 0,
+                    "OE-T0 sparse constraint references fixed dof");
+                constraint_matrix.Add(static_cast<int>(row), index, coefficient);
+            }
         }
-        residual_squared += residual * residual;
-        residual_scale = std::max(residual_scale,
-            std::abs(active[constraint].rhs));
+        constraint_matrix.Finalize();
+
+        mfem::Vector kkt_rhs(static_cast<int>(system_size));
+        kkt_rhs = 0.0;
+        for (std::size_t row = 0; row < free_count; ++row) {
+            kkt_rhs[static_cast<int>(row)] = weighted_rhs.at(
+                static_cast<std::size_t>(free_dofs[row]));
+        }
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            kkt_rhs[static_cast<int>(free_count + row)] = active[row].rhs;
+        }
+        mfem::Vector kkt_solution(static_cast<int>(system_size));
+        kkt_solution = 0.0;
+        const int free_size = static_cast<int>(free_count);
+        const int constraint_size = static_cast<int>(constraint_count);
+        const int total_size = static_cast<int>(system_size);
+        mfem::Array<int> offsets(3);
+        offsets[0] = 0;
+        offsets[1] = free_size;
+        offsets[2] = total_size;
+        mfem::BlockOperator kkt(offsets);
+        mfem::TransposeOperator constraint_transpose(&constraint_matrix);
+        kkt.SetDiagonalBlock(0, &free_mass);
+        kkt.SetBlock(0, 1, &constraint_transpose);
+        kkt.SetBlock(1, 0, &constraint_matrix);
+
+        std::size_t max_iterations = system_size > 50000
+            ? 200000u
+            : std::max<std::size_t>(2000u, system_size * 4u);
+        max_iterations = std::min<std::size_t>(max_iterations,
+            static_cast<std::size_t>(std::numeric_limits<int>::max()));
+        if (constraint_count == 0) {
+            mfem::GSSmoother preconditioner(free_mass);
+            mfem::CGSolver solver;
+            solver.SetPreconditioner(preconditioner);
+            solver.SetOperator(free_mass);
+            solver.SetRelTol(1.0e-12);
+            solver.SetAbsTol(1.0e-14);
+            solver.SetMaxIter(static_cast<int>(max_iterations));
+            solver.SetPrintLevel(-1);
+            solver.Mult(kkt_rhs, kkt_solution);
+            require(solver.GetConverged(),
+                "OE-T0 sparse mass solver did not converge");
+        } else {
+            mfem::GSSmoother mass_preconditioner(free_mass);
+            mfem::IdentityOperator constraint_preconditioner(constraint_size);
+            mfem::BlockDiagonalPreconditioner preconditioner(offsets);
+            preconditioner.SetDiagonalBlock(0, &mass_preconditioner);
+            preconditioner.SetDiagonalBlock(1, &constraint_preconditioner);
+            mfem::MINRESSolver solver;
+            solver.SetPreconditioner(preconditioner);
+            solver.SetOperator(kkt);
+            solver.SetRelTol(1.0e-12);
+            solver.SetAbsTol(1.0e-14);
+            solver.SetMaxIter(static_cast<int>(max_iterations));
+            solver.SetPrintLevel(-1);
+            solver.Mult(kkt_rhs, kkt_solution);
+            require(solver.GetConverged(),
+                "OE-T0 sparse KKT solver did not converge");
+        }
+        for (std::size_t index = 0; index < free_count; ++index) {
+            solution.at(static_cast<std::size_t>(free_dofs[index])) =
+                kkt_solution[static_cast<int>(index)];
+        }
+        mfem::Vector x_free(free_size);
+        mfem::Vector lambda(constraint_size);
+        for (int index = 0; index < free_size; ++index) {
+            x_free[index] = kkt_solution[index];
+        }
+        for (int index = 0; index < constraint_size; ++index) {
+            lambda[index] = kkt_solution[free_size + index];
+        }
+        mfem::Vector mass_x(free_size);
+        mfem::Vector constraint_x(constraint_size);
+        mfem::Vector constraint_transpose_lambda(free_size);
+        free_mass.Mult(x_free, mass_x);
+        constraint_matrix.Mult(x_free, constraint_x);
+        constraint_matrix.MultTranspose(lambda, constraint_transpose_lambda);
+        double residual_squared = 0.0;
+        double residual_scale = 1.0;
+        for (int row = 0; row < free_size; ++row) {
+            const int global_row = free_dofs[static_cast<std::size_t>(row)];
+            const double residual = mass_x[row] - weighted_rhs.at(
+                static_cast<std::size_t>(global_row)) +
+                constraint_transpose_lambda[row];
+            residual_squared += residual * residual;
+            residual_scale = std::max(residual_scale,
+                std::abs(weighted_rhs.at(static_cast<std::size_t>(global_row))));
+        }
+        for (int row = 0; row < constraint_size; ++row) {
+            const double residual = constraint_x[row] - active.at(
+                static_cast<std::size_t>(row)).rhs;
+            residual_squared += residual * residual;
+            residual_scale = std::max(residual_scale,
+                std::abs(active.at(static_cast<std::size_t>(row)).rhs));
+        }
+        scaled_residual = std::sqrt(residual_squared) /
+            std::max(residual_scale, 1.0e-30);
+        mfem::Vector full_solution(global_dof_count);
+        for (int row = 0; row < global_dof_count; ++row) {
+            full_solution[row] = solution.at(static_cast<std::size_t>(row));
+        }
+        mfem::Vector mass_full_solution(global_dof_count);
+        sparse_mass->Mult(full_solution, mass_full_solution);
+        double solution_rhs = 0.0;
+        double solution_mass_solution = 0.0;
+        for (int row = 0; row < global_dof_count; ++row) {
+            solution_rhs += full_solution[row] * weighted_rhs.at(
+                static_cast<std::size_t>(row));
+            solution_mass_solution += full_solution[row] *
+                mass_full_solution[row];
+        }
+        correction_energy += -2.0 * solution_rhs + solution_mass_solution;
     }
-    const double scaled_residual = std::sqrt(residual_squared) /
-        std::max(residual_scale, 1.0e-30);
     require(std::isfinite(scaled_residual) && scaled_residual <= 1.0e-10,
         "OE-T0 weighted KKT residual exceeds the physical gate");
-
-    double correction_energy = raw_energy;
-    for (int row = 0; row < global_dof_count; ++row) {
-        correction_energy -= 2.0 * solution.at(static_cast<std::size_t>(row)) *
-            weighted_rhs.at(static_cast<std::size_t>(row));
-        for (int column = 0; column < global_dof_count; ++column) {
-            correction_energy += solution.at(static_cast<std::size_t>(row)) *
-                mass.at(static_cast<std::size_t>(row)).at(
-                    static_cast<std::size_t>(column)) *
-                solution.at(static_cast<std::size_t>(column));
-        }
-    }
     const double correction_roundoff = 1.0e-12 * std::max(1.0, raw_energy);
     require(std::isfinite(correction_energy) &&
             correction_energy >= -correction_roundoff,

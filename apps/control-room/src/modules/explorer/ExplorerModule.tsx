@@ -20,11 +20,19 @@ import {
   useMeshSharedDomainQualityGatesResource,
   useMeshSharedDomainRealizedSizeFieldsResource,
   useMeshSummaryResource,
+  useDomainMetaResource,
+  useFdmMultilayerLayoutResource,
+  useFdmRegionMembershipResource,
   useModelCouplingsResource,
   useModelMaterialFieldsResource,
   useModelRegionsResource,
   useSceneResource,
+  useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import {
+  buildDomainPresentation,
+  deriveAuthoredFdmUniverseOutsideMagneticSupport,
+} from "@/shared/domain/mesh/domainPresentation";
 import {
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
@@ -41,13 +49,7 @@ import {
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
-import {
-  useCurrentTransportsResource,
-  useOerstedFieldsResource,
-  useSpinInterfacesResource,
-  useSpinTorquesResource,
-  useSpinTransportsResource,
-} from "@/kernel/resources/spinAuthoringResources";
+import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
@@ -86,6 +88,7 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
+import { resolveCurrentFemAirboxEvidence } from "./femAirboxEvidence";
 import {
   explorerCrossSectionsEqual,
   selectExplorerCrossSections,
@@ -237,6 +240,21 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
+  const domainMeta = useDomainMetaResource({ enabled: modelTabActive });
+  const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
+    enabled:
+      modelTabActive &&
+      sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
+  });
+  const universeMeshPolicy = useUniverseMeshPolicyResource({
+    enabled:
+      modelTabActive &&
+      sessionStatusData?.domain.discretization.toLowerCase() === "fem",
+  });
+  const fdmRegionMembership = useFdmRegionMembershipResource({
+    enabled:
+      modelTabActive && sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
+  });
   const modelRegions = useModelRegionsResource({ enabled: modelTabActive });
   const regionIds = useMemo(
     () => (modelRegions.data?.regions ?? []).map((region) => region.region_id),
@@ -249,11 +267,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: modelTabActive,
   });
   const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
-  const spinTransports = useSpinTransportsResource({ enabled: modelTabActive });
-  const currentTransports = useCurrentTransportsResource({ enabled: modelTabActive });
-  const spinInterfaces = useSpinInterfacesResource({ enabled: modelTabActive });
-  const spinTorques = useSpinTorquesResource({ enabled: modelTabActive });
-  const oerstedFields = useOerstedFieldsResource({ enabled: modelTabActive });
+  const physicsGraph = usePhysicsGraphResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
@@ -320,6 +334,29 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     });
 
   const nodes = useMemo(() => {
+    let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
+    let domainPresentationStatus = domainMeta.status;
+    if (domainMeta.data) {
+      try {
+        const authoredFdmRole =
+          domainMeta.data.discretization.toLowerCase() === "fdm"
+            ? deriveAuthoredFdmUniverseOutsideMagneticSupport({
+                domainBounds: domainMeta.data.bounds,
+                objects: modelResource.data?.objects,
+              })
+            : null;
+        domainPresentation = buildDomainPresentation({
+          domainMeta: domainMeta.data,
+          fdmMembership: fdmRegionMembership.data,
+          fdmMembershipStatus: fdmRegionMembership.status,
+          universeOutsideMagneticSupport: authoredFdmRole,
+        });
+      } catch {
+        // Keep DomainMeta's discretization visible to the Explorer. A failed
+        // derived presentation must never fall through to FEM controls.
+        domainPresentationStatus = "error";
+      }
+    }
     const modelSnapshot = modelTreeSnapshotWithHysteresisExecutionTree(
       modelTreeSnapshotWithStageExecution(
         modelTreeSnapshotFromScene(modelResource.data, {
@@ -327,12 +364,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
-          currentTransports: currentTransports.data,
-          spinInterfaces: spinInterfaces.data,
-          spinTorques: spinTorques.data,
-          oerstedFields: oerstedFields.data,
-          spinTransports: spinTransports.data,
+          // The graph resource is authoritative for electrical module
+          // presence. While it is unresolved, the builder shows one
+          // diagnostic node and never falls back to family list rows.
+          physicsGraph: physicsGraph.data,
+          physicsGraphStatus: physicsGraph.status,
           meshManifest: manifest.data,
+          domainMeta: domainMeta.data,
+          fdmMultilayerLayout: fdmMultilayerLayout.data,
+          fdmMultilayerLayoutStatus: fdmMultilayerLayout.status,
+          domainDiscretization:
+            sessionStatusData?.domain.discretization.toLowerCase() === "fdm"
+              ? "fdm"
+              : sessionStatusData?.domain.discretization.toLowerCase() === "fem"
+                ? "fem"
+                : null,
+          domainPresentationStatus,
+          domainPresentation,
         }),
         stageExecution.data,
       ),
@@ -397,10 +445,30 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             textureLoadEnabled: textureLoadObjectIds.has(object.id),
           }],
     );
+    const femAirbox =
+      sessionStatusData?.domain.discretization.toLowerCase() === "fem"
+        ? resolveCurrentFemAirboxEvidence({
+            currentMeshRevision: sessionStatusData.resources.mesh_revision,
+            manifest: { data: manifest.data, status: manifest.status },
+            policy: {
+              data: universeMeshPolicy.data,
+              status: universeMeshPolicy.status,
+            },
+            scene: { data: modelResource.data, status: modelResource.status },
+            summary: { data: meshSummary.data, status: meshSummary.status },
+          })
+        : null;
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
-            { ...modelSnapshot, crossSections, mesh, objects },
+            {
+              ...modelSnapshot,
+              airbox: femAirbox,
+              crossSections,
+              mesh,
+              objects,
+              domainPresentation,
+            },
             {
               activeAnalysisFieldOverlay,
               frequencyDomainManifest: frequencyDomainManifest.data,
@@ -430,16 +498,28 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     selectedNodeId,
     crossSections,
     manifest.data,
+    manifest.status,
     meshSummary.data,
+    meshSummary.status,
     modelResource.data,
+    modelResource.status,
+    domainMeta.data,
+    domainMeta.status,
+    fdmMultilayerLayout.data,
+    fdmMultilayerLayout.status,
+    universeMeshPolicy.data,
+    universeMeshPolicy.status,
+    sessionStatusData?.domain.discretization,
+    sessionStatusData?.resources.mesh_revision,
+    fdmRegionMembership.data,
+    fdmRegionMembership.status,
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
-    currentTransports.data,
-    spinInterfaces.data,
-    spinTorques.data,
-    oerstedFields.data,
-    spinTransports.data,
+    planarMonitorDraft,
+    planarMonitors.data,
+    physicsGraph.data,
+    physicsGraph.status,
     regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,
@@ -457,6 +537,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== "model") return;
+    ensureExplorerModelObjectDefaults(
+      nodes
+        .filter((node) => node.kind === "object.root")
+        .map((node) => node.id),
+    );
+  }, [activeTab, nodes]);
 
   useEffect(() => {
     const previous = previousSelectedNodeId.current;
@@ -500,7 +589,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [kernel.bus, kernel.selection]);
 
   useEffect(() => {
-    return kernel.bus.on("explorer:tab-requested", ({ tab }) => {
+    return kernel.bus.subscribe("explorer:tab-requested", ({ tab }) => {
       setExplorerActiveTab(tab);
     });
   }, [kernel.bus]);

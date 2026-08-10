@@ -232,7 +232,7 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
   );
 
   useEffect(() => {
-    return kernel.bus.on("command:submitted", ({ commandId }) => {
+    return kernel.bus.subscribe("command:submitted", ({ commandId }) => {
       if (commandId !== "workspace.command-palette") {
         close();
       }

@@ -35,6 +35,19 @@ struct OerstedRuntimeState {
     double time_dep_t_off = 0.0;
     std::vector<double> h_basis_per_ampere_xyz;
     std::vector<double> h_xyz;
+
+    /* Optional append-only native CPU RK stage provider.  This is interaction
+       state, not a second solver policy: the callback owns transport/cache
+       physics while this module owns stage identity and publication. */
+    bool has_stage_callback = false;
+    fullmag_fem_stage_oersted_callback_v1 stage_callback{};
+    uint64_t stage_identity = 0;
+    uint64_t stage_source_state_revision = 0;
+    bool stage_attempt_active = false;
+    uint64_t stage_attempt_target_step = 0;
+    uint64_t stage_attempt_identity = 0;
+    double stage_attempt_time_start_s = 0.0;
+    double stage_attempt_dt_seconds = 0.0;
 };
 
 /*
@@ -54,6 +67,32 @@ bool initialize_oersted_plan_fields(
 const std::vector<double> &materialize_oersted_field(
     Context &ctx,
     double evaluation_time_s);
+
+/* Evaluate the optional stage provider for the exact RK magnetization/time,
+ * or materialize the legacy static realization when no provider is installed.
+ */
+bool materialize_oersted_stage_field(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    double evaluation_time_s,
+    uint64_t stage_identity,
+    std::string &error);
+
+bool begin_oersted_stage_attempt(
+    Context &ctx,
+    uint64_t target_step,
+    uint64_t attempt_identity,
+    double time_start_s,
+    double dt_seconds,
+    std::string &error);
+
+bool commit_oersted_stage_attempt(Context &ctx, std::string &error);
+bool rollback_oersted_stage_attempt(Context &ctx, std::string &error);
+
+bool configure_oersted_stage_callback(
+    Context &ctx,
+    const fullmag_fem_stage_oersted_callback_v1 *callback,
+    std::string &error);
 
 /*
  * Aggregated include surface and public dispatcher for Oersted realizations.

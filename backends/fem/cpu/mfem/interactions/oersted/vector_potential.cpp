@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -120,6 +121,97 @@ void validate_options(
             source.field().FESpace()->FEColl()->Name() ==
                 std::string("RT_3D_P0"),
         "OE-F2 requires the certified RT0 current view");
+}
+
+class Rt0ComponentCoefficient final : public mfem::Coefficient {
+public:
+    Rt0ComponentCoefficient(const mfem::GridFunction &field, int component)
+        : field_(field), component_(component)
+    {
+        require(component >= 0 && component < 3,
+            "OE-F2 nodal projection component is outside xyz");
+    }
+
+    double Eval(mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point) override
+    {
+        mfem::Vector value(3);
+        field_.GetVectorValue(transformation, point, value);
+        const double component = value[component_];
+        require(std::isfinite(component),
+            "OE-F2 compatible H field is non-finite during nodal projection");
+        return component;
+    }
+
+private:
+    const mfem::GridFunction &field_;
+    int component_;
+};
+
+std::vector<double> project_compatible_h_to_nodes(
+    const mfem::Mesh &mesh,
+    const mfem::FiniteElementSpace &rt_space,
+    const mfem::Vector &compatible_h,
+    const mfem::H1_FECollection &h1_fec,
+    double relative_tolerance,
+    double &maximum_residual)
+{
+    mfem::GridFunction rt_h(const_cast<mfem::FiniteElementSpace *>(&rt_space));
+    require(rt_h.Size() == compatible_h.Size(),
+        "OE-F2 compatible H coefficient count does not match RT0 space");
+    rt_h = compatible_h;
+
+    mfem::FiniteElementSpace scalar_space(
+        const_cast<mfem::Mesh *>(&mesh), &h1_fec, 1,
+        mfem::Ordering::byNODES);
+    const int scalar_dofs = scalar_space.GetVSize();
+    require(scalar_dofs == mesh.GetNV(),
+        "OE-F2 nodal projection requires a P1 H1 space with one DOF per vertex");
+    mfem::BilinearForm mass(&scalar_space);
+    mass.AddDomainIntegrator(new mfem::MassIntegrator());
+    mass.Assemble();
+    mass.Finalize();
+    mfem::DenseMatrix mass_dense(scalar_dofs);
+    mass_dense = 0.0;
+    add_sparse_block(mass.SpMat(), mass_dense, 0, 0);
+    mfem::DenseMatrixInverse mass_inverse(mass_dense);
+    mfem::Vector solution(scalar_dofs);
+    mfem::Vector residual(scalar_dofs);
+    std::vector<double> nodal(static_cast<std::size_t>(scalar_dofs) * 3u, 0.0);
+    maximum_residual = 0.0;
+    for (int component = 0; component < 3; ++component) {
+        Rt0ComponentCoefficient source(rt_h, component);
+        mfem::LinearForm rhs(&scalar_space);
+        rhs.AddDomainIntegrator(new mfem::DomainLFIntegrator(source));
+        rhs.Assemble();
+        solution = 0.0;
+        mass_inverse.Mult(rhs, solution);
+        mass.Mult(solution, residual);
+        residual -= rhs;
+        const double residual_norm = residual.Norml2();
+        const double residual_scale = std::max(1.0, rhs.Norml2());
+        if (!(std::isfinite(residual_norm) &&
+                residual_norm <= relative_tolerance * residual_scale)) {
+            std::ostringstream message;
+            message.setf(std::ios::scientific);
+            message.precision(17);
+            message << "OE-F2 nodal H1 projection residual exceeds the declared tolerance: "
+                    << residual_norm << " > "
+                    << relative_tolerance * residual_scale;
+            throw std::invalid_argument(message.str());
+        }
+        maximum_residual = std::max(maximum_residual,
+            residual_norm / residual_scale);
+        for (int node = 0; node < scalar_dofs; ++node) {
+            nodal[static_cast<std::size_t>(node) * 3u +
+                static_cast<std::size_t>(component)] = solution[node];
+        }
+    }
+    for (double value : nodal) {
+        require(std::isfinite(value),
+            "OE-F2 nodal H1 projection produced a non-finite value");
+    }
+    return nodal;
 }
 
 } // namespace
@@ -276,6 +368,15 @@ VectorPotentialResult VectorPotentialSolver::Evaluate(
         result.compatible_h_dofs_apm[index] = compatible_b[index] /
             options.mu0_si;
     }
+    mfem::Vector compatible_h(compatible_b.Size());
+    for (int index = 0; index < compatible_b.Size(); ++index) {
+        compatible_h[index] = result.compatible_h_dofs_apm[index];
+    }
+    double nodal_projection_residual = 0.0;
+    result.nodal_h_xyz_apm = project_compatible_h_to_nodes(
+        mesh, rt_space, compatible_h, h1_fec,
+        std::max(options.relative_tolerance, 1.0e-12),
+        nodal_projection_residual);
     result.diagnostics.nd_dofs = nd_dofs;
     result.diagnostics.h1_dofs = h1_dofs;
     result.diagnostics.block_size = block_size;
@@ -288,6 +389,7 @@ VectorPotentialResult VectorPotentialSolver::Evaluate(
     result.diagnostics.compatible_divergence_residual =
         divergence_values.Norml2();
     result.diagnostics.source_pairing_norm = current_load.Norml2();
+    result.diagnostics.nodal_projection_residual = nodal_projection_residual;
     result.operator_version = operator_version;
     result.source_view_identity_digest =
         source.identity().view_identity_digest;

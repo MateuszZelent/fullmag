@@ -1,12 +1,15 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import { AirboxOverviewPanel } from "./panels/airbox/AirboxOverviewPanel";
-import { AirboxMeshBuildPanel } from "./panels/airbox/AirboxMeshBuildPanel";
-import { AirboxMeshOverviewPanel } from "./panels/airbox/AirboxMeshOverviewPanel";
-import { AirboxMeshParametersPanel } from "./panels/airbox/AirboxMeshParametersPanel";
-import { AirboxMeshQualityGatesPanel } from "./panels/airbox/AirboxMeshQualityGatesPanel";
-import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsPanel";
-import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
+import {
+  AirboxMeshBuildLanePanel,
+  AirboxMeshOverviewLanePanel,
+  AirboxMeshParametersLanePanel,
+  AirboxMeshQualityGatesLanePanel,
+  AirboxMeshStatisticsLanePanel,
+  AirboxMeshTopologyLanePanel,
+  AirboxOverviewLanePanel,
+} from "./panels/airbox/AirboxInspectorLanePanel";
+import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { LiveChartInspectorPanel } from "./panels/LiveChartInspectorPanel";
@@ -90,7 +93,9 @@ import {
   FmrResponseSweepInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
+import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
+import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import { ModeVisualizationInspectorPanel } from "./panels/ModeVisualizationInspectorPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
@@ -109,6 +114,7 @@ import {
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
+import { PhysicsGraphModuleInspectorPanel } from "./panels/PhysicsGraphModuleInspectorPanel";
 import { PlanarMonitorDraftInspectorPanel } from "./panels/PlanarMonitorDraftInspectorPanel";
 import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPanel";
 import {
@@ -517,7 +523,13 @@ const PANELS: InspectorPanelContribution[] = [
     id: "airbox-overview",
     title: "Airbox Overview",
     selectionKinds: ["airbox.root"],
-    component: AirboxOverviewPanel,
+    component: AirboxOverviewLanePanel,
+  },
+  {
+    id: "fdm-multilayer-airbox-target",
+    title: "Multilayer Airbox target",
+    selectionKinds: ["airbox.multilayer.target"],
+    component: FdmMultilayerAirboxTargetPanel,
   },
   {
     id: "boundary-faces-overview",
@@ -564,6 +576,12 @@ const PANELS: InspectorPanelContribution[] = [
     component: PhysicsInteractionPanel,
   },
   {
+    id: "physics-graph-module",
+    title: "Physics Module",
+    selectionKinds: ["physics.module"],
+    component: PhysicsGraphModuleInspectorPanel,
+  },
+  {
     id: "physics-coupling",
     title: "Coupling",
     selectionKinds: ["physics.coupling"],
@@ -572,31 +590,31 @@ const PANELS: InspectorPanelContribution[] = [
   {
     id: "physics-current-transport",
     title: "Current Transport",
-    selectionKinds: ["physics.current-transports", "physics.current-transport"],
+    selectionKinds: ["physics.current-transport"],
     component: CurrentTransportInspectorPanel,
   },
   {
     id: "physics-spin-transport",
     title: "Spin Transport",
-    selectionKinds: ["physics.spin-transports", "physics.spin-transport"],
+    selectionKinds: ["physics.spin-transport"],
     component: SpinTransportInspectorPanel,
   },
   {
     id: "physics-spin-interface",
     title: "Spin Interface",
-    selectionKinds: ["physics.spin-interfaces", "physics.spin-interface"],
+    selectionKinds: ["physics.spin-interface"],
     component: SpinInterfaceInspectorPanel,
   },
   {
     id: "physics-spin-torque",
     title: "Spin Torque",
-    selectionKinds: ["physics.spin-torques", "physics.spin-torque"],
+    selectionKinds: ["physics.spin-torque"],
     component: SpinTorqueInspectorPanel,
   },
   {
     id: "physics-oersted-field",
     title: "Oersted Field",
-    selectionKinds: ["physics.oersted-fields", "physics.oersted-field"],
+    selectionKinds: ["physics.oersted-field"],
     component: OerstedFieldInspectorPanel,
   },
   {
@@ -683,37 +701,37 @@ const PANELS: InspectorPanelContribution[] = [
     id: "airbox-mesh-overview",
     title: "Airbox Mesh Overview",
     selectionKinds: ["airbox.mesh"],
-    component: AirboxMeshOverviewPanel,
+    component: AirboxMeshOverviewLanePanel,
   },
   {
     id: "airbox-mesh-parameters",
     title: "Airbox Mesh Parameters",
     selectionKinds: ["airbox.mesh.parameters"],
-    component: AirboxMeshParametersPanel,
+    component: AirboxMeshParametersLanePanel,
   },
   {
     id: "airbox-mesh-quality-gates",
     title: "Airbox Mesh Quality Gates",
     selectionKinds: ["airbox.mesh.quality-gates"],
-    component: AirboxMeshQualityGatesPanel,
+    component: AirboxMeshQualityGatesLanePanel,
   },
   {
     id: "airbox-mesh-statistics",
     title: "Airbox Mesh Statistics",
     selectionKinds: ["airbox.mesh.statistics"],
-    component: AirboxMeshStatisticsPanel,
+    component: AirboxMeshStatisticsLanePanel,
   },
   {
     id: "airbox-mesh-topology",
     title: "Airbox Mesh Topology",
     selectionKinds: ["airbox.mesh.topology"],
-    component: AirboxMeshTopologyPanel,
+    component: AirboxMeshTopologyLanePanel,
   },
   {
     id: "airbox-mesh-build",
     title: "Airbox Mesh Build",
     selectionKinds: ["airbox.mesh.build"],
-    component: AirboxMeshBuildPanel,
+    component: AirboxMeshBuildLanePanel,
   },
   {
     id: "object-mesh-policy",
@@ -729,7 +747,7 @@ const PANELS: InspectorPanelContribution[] = [
   },
   {
     id: "mesh-details",
-    title: "Mesh Details",
+    title: "Mesh",
     selectionKinds: [
       "mesh.root",
       "mesh.shared-domain",
@@ -740,6 +758,29 @@ const PANELS: InspectorPanelContribution[] = [
       "resources.mesh",
     ],
     component: MeshDetailsPanel,
+  },
+  {
+    id: "fdm-grid",
+    title: "FDM Mesh",
+    selectionKinds: [
+      "mesh.grid",
+      "mesh.grid.descriptor",
+      "mesh.grid.common",
+      "mesh.grid.layers",
+      "mesh.grid.layer",
+      "mesh.grid.layer.native-grid",
+      "mesh.grid.layer.mask",
+      "mesh.grid.layer.transfer",
+      "mesh.grid.layer.provenance",
+      "mesh.grid.magnetic-support",
+      "mesh.grid.active-unassigned",
+      "mesh.grid.mask",
+      "mesh.grid.provenance",
+      "mesh.grid.region",
+      "mesh.grid.universe-outside-support",
+      "fdm.cell",
+    ],
+    component: FdmGridInspectorPanel,
   },
   {
     id: "cross-section",
@@ -776,6 +817,12 @@ const PANELS: InspectorPanelContribution[] = [
   },
   ...frequencyDomainPanels,
   {
+    id: "field-quantity",
+    title: "Field Quantity",
+    selectionKinds: ["results.field_quantity"],
+    component: FieldQuantityInspectorPanel,
+  },
+  {
     id: "placeholder",
     title: "Selection",
     selectionKinds: ["*"],
@@ -787,6 +834,10 @@ export function resolveInspectorPanel(
   selection: Pick<Selection, "kind">,
 ): InspectorPanelContribution | null {
   if (!selection.kind) return null;
+
+  if (selection.kind === "fdm.cell" || selection.kind.startsWith("mesh.grid.")) {
+    return PANELS.find((panel) => panel.id === "fdm-grid") ?? null;
+  }
 
   return (
     PANELS.find((panel) => panel.selectionKinds.includes(selection.kind!)) ??

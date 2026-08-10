@@ -109,11 +109,13 @@ set(FEM_SOURCES
     cpu/mfem/interactions/magnetoelastic_field.cpp
     cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp
     cpu/mfem/interactions/oersted.cpp
+    cpu/mfem/interactions/transport_stage.cpp
     cpu/mfem/interactions/oersted_cylinder.cpp
     cpu/mfem/interactions/oersted_explicit.cpp
     cpu/mfem/interactions/stt.cpp
     cpu/mfem/interactions/stt_slonczewski.cpp
     cpu/mfem/interactions/stt_zhang_li.cpp
+    cpu/mfem/interactions/sot.cpp
     cpu/mfem/interactions/thermal_brown.cpp
     cpu/mfem/interactions/thermal_brown_field.cpp
     cpu/mfem/interactions/thermal_brown_sampler.cpp
@@ -277,6 +279,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_rk4_accept_kernel.cu
             gpu/cuda/integrators/rk/rk_snapshot.cu
             gpu/cuda/integrators/rk/rk_slonczewski_torque.cu
+            gpu/cuda/integrators/rk/rk_sot_torque.cu
             gpu/cuda/integrators/rk/rk_scalar_readback.cu
             gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_schedule.cu
@@ -291,6 +294,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
             gpu/cuda/interactions/oersted/oersted_kernels.cu
             gpu/cuda/interactions/stt/stt_kernels.cu
+            gpu/cuda/interactions/sot/sot_kernels.cu
             gpu/cuda/interactions/thermal/thermal_kernels.cu
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
@@ -595,6 +599,24 @@ if(FULLMAG_USE_MFEM_STACK)
         ${CMAKE_SOURCE_DIR}/include
     )
     add_test(NAME fem_steady_transport_abi_contract COMMAND fem_steady_transport_abi_contract)
+
+    add_executable(
+        fem_steady_transport_rt0_contract
+        tests/steady_transport_rt0_contract.cpp
+    )
+    target_link_libraries(fem_steady_transport_rt0_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_steady_transport_rt0_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_steady_transport_rt0_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_steady_transport_rt0_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_steady_transport_rt0_contract
+        COMMAND fem_steady_transport_rt0_contract
+    )
 endif()
 
 add_executable(fem_gpu_state_info tests/gpu_state_info.cpp)
@@ -630,6 +652,18 @@ target_include_directories(fem_cuda_slonczewski_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
+
+add_executable(fem_cuda_sot_contract tests/cuda_sot_contract.cpp)
+target_link_libraries(fem_cuda_sot_contract PRIVATE fullmag_fem)
+if(FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_cuda_sot_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_cuda_sot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_sot_contract COMMAND fem_cuda_sot_contract)
 
 add_executable(fem_cuda_rk_guard_contract tests/cuda_rk_guard_contract.cpp)
 target_link_libraries(fem_cuda_rk_guard_contract PRIVATE fullmag_fem)

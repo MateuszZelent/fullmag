@@ -22,6 +22,7 @@ import {
   RestoreCheckpointDialog,
   StudyBoundarySection,
   StudyCommandButton,
+  StudyRuntimeSection,
   StudySelectedStageSection,
   studyInspectorRuntimeStatusEquals,
 } from "./StudyInspectorPanel";
@@ -30,6 +31,7 @@ import {
   StudySolverPolicyFields,
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
+import { createStudyGlobalDraft } from "./StudyGlobalAuthoringModel";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
@@ -200,6 +202,82 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("periodic_airbox_k0 requires a periodic certificate.");
     expect(html).toContain("periodic_airbox_k0 requires an accepted equilibrium.");
     expect(html).toContain("Strict GPU K0 modal demag prerequisites are unavailable.");
+  });
+
+  it("renders requested, resolved, and fallback runtime provenance rows", () => {
+    const html = renderToStaticMarkup(
+      <StudyRuntimeSection
+        commandDisabledReason={() => null}
+        model={{
+          runtime: {
+            activeStageLabel: "Relax 1",
+            commandBadge: "running",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 10,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "run-fdm",
+            runtimeProvenance: {
+              authored: {
+                backend: "fdm",
+                device: "cpu",
+                mode: "strict",
+                precision: "double",
+              },
+              effective: {
+                backend: "fdm",
+                device: "gpu",
+                mode: "strict",
+                precision: "double",
+              },
+              resolved: {
+                backend: "fdm",
+                device: "gpu",
+                mode: "strict",
+                precision: "double",
+                runtimeFamily: "fdm-cuda",
+                engine: "fdm_cuda",
+              },
+              fallback: {
+                status: "occurred",
+                originalEngine: "fdm_cuda",
+                fallbackEngine: "fdm_cpu_reference",
+                reason: "cuda_unavailable",
+                message: "CUDA device unavailable; using the reference CPU engine.",
+              },
+              sources: {
+                authored: "problem_ir.runtime_selection",
+                effective: "session.runtime_resolution",
+              },
+            },
+            state: "running",
+          },
+        } as never}
+        onOpenCommand={() => undefined}
+        runCommand={() => undefined}
+        stepValue={4}
+      />,
+    );
+
+    expect(html).toContain("Authored intent backend");
+    expect(html).toContain("fdm");
+    expect(html).toContain("Authored intent device");
+    expect(html).toContain("Effective request backend");
+    expect(html).toContain("Effective request device");
+    expect(html).toContain("problem_ir.runtime_selection");
+    expect(html).toContain("session.runtime_resolution");
+    expect(html).toContain("Resolved runtime family");
+    expect(html).toContain("fdm-cuda");
+    expect(html).toContain("Resolved engine");
+    expect(html).toContain("fdm_cuda");
+    expect(html).toContain("Fallback status");
+    expect(html).toContain("occurred");
+    expect(html).toContain("cuda_unavailable");
+    expect(html).toContain("CUDA device unavailable; using the reference CPU engine.");
   });
 
   it("renders global advanced adaptive guard controls", () => {
@@ -1187,7 +1265,7 @@ describe("StudyInspectorPanel", () => {
           authoringFeedback={null}
           draft={{
             demagEnabled: true,
-            demagRealization: "poisson_robin",
+            demagRealization: "multilayer_convolution",
             exchangeEnabled: true,
             externalField: "1e-3, 0, 0",
             femDemagSolverPolicy: '{"linear_solver":"cg"}',
@@ -1267,6 +1345,11 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Exchange enabled");
     expect(html).toContain("Demag enabled");
     expect(html).toContain("Poisson Robin");
+    const demagSelect = html.match(
+      /<select[^>]*aria-label="Demag"[^>]*>[\s\S]*?<\/select>/,
+    )?.[0];
+    expect(demagSelect).toContain('<option value="auto" selected="">Auto</option>');
+    expect(demagSelect).not.toContain("FDM multilayer convolution");
     expect(html).toContain("External field");
     expect(html).toContain("Timestep policy");
     expect(html).toContain("Maximum embedded vector error");
@@ -1278,6 +1361,144 @@ describe("StudyInspectorPanel", () => {
       "Adaptive execution is qualified only for double precision.",
     );
     expect(html).toContain("Save globals");
+  });
+
+  it("renders FDM demag controls and makes FEM policy read-only for an FDM session", () => {
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        algorithmsAvailable={[]}
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={{
+          demagEnabled: true,
+          demagRealization: "multilayer_convolution",
+          exchangeEnabled: true,
+          externalField: "",
+          femDemagSolverPolicy: '{"solver":"CG"}',
+          requestedBackend: "auto",
+          requestedCpuThreads: "",
+          requestedDevice: "auto",
+          requestedMode: "strict",
+          requestedPrecision: "double",
+          solver: {
+            adaptiveTimestep: null,
+            demagInterval: "",
+            dtInitial: "",
+            dtMax: "",
+            dtMin: "",
+            energyTolerance: "",
+            fixDt: "",
+            integrator: "",
+            maxErr: "",
+            maxRelaxSteps: "",
+            relaxAlgorithm: "",
+            timestepMode: "auto",
+            torqueTolerance: "",
+          },
+        }}
+        model={{
+          boundary: testBoundary({
+            demagRealization: "multilayer_convolution",
+            femDemagSolverPolicy: '{"solver":"CG"}',
+          }),
+          requested: testRequested(),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary({
+            demagRealization: "multilayer_convolution",
+            femDemagSolverPolicy: '{"solver":"CG"}',
+          }),
+          requested: testRequested(),
+          stages: [],
+        }}
+        onCommit={() => undefined}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("FDM demag");
+    expect(html).toContain("FDM multilayer convolution");
+    expect(html).toContain("Not applicable for an explicit FDM lane");
+    expect(html).not.toContain("FEM demag policy JSON object");
+    expect(html).not.toContain("Poisson Robin");
+  });
+
+  it("marks FDM single grid unsupported for a multi-magnet draft without hiding auto or multilayer", () => {
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        algorithmsAvailable={[]}
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={{
+          ...createStudyGlobalDraft({
+            study: {
+              requested_backend: "fdm",
+              fdm: {
+                default_cell: [2e-9, 2e-9, 1e-9],
+                demag: { strategy: "single_grid", mode: "auto" },
+              },
+            },
+          }),
+          demagRealization: "single_grid",
+        }}
+        magneticObjectCount={2}
+        model={{
+          boundary: testBoundary({ demagRealization: "single_grid" }),
+          requested: testRequested({ backend: "fdm" }),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary({ demagRealization: "single_grid" }),
+          requested: testRequested({ backend: "fdm" }),
+          stages: [],
+        }}
+        onCommit={() => undefined}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toMatch(
+      /<option disabled="" value="single_grid" selected="">FDM single grid \(unsupported for multiple magnets\)<\/option>/,
+    );
+    expect(html).toContain(
+      "multi-body FDM currently supports only the multilayer_convolution strategy",
+    );
+    expect(html).toContain('<option value="auto">Auto</option>');
+    expect(html).toContain('<option value="multilayer_convolution">FDM multilayer convolution</option>');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Save globals<\/button>/);
   });
 
   it("renders spectral stage authoring fields", () => {

@@ -129,4 +129,85 @@ describe("resolveInspectorDescriptor", () => {
       selection: { kind: "airbox.root", nodeId: "model:airbox" },
     });
   });
+
+  it("describes the target-only multilayer Airbox with its own inspector vocabulary", () => {
+    const descriptor = resolveInspectorDescriptor({
+      kind: "airbox.multilayer.target",
+      label: "Multilayer H_demag target",
+      moduleSource: "explorer",
+      nodeId: "model:airbox:multilayer-target",
+      objectId: null,
+      ref: {
+        kind: "airbox.multilayer.target",
+        nodeId: "model:airbox:multilayer-target",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+
+    expect(descriptor.typeLabel).toBe("Multilayer Airbox target");
+    expect(descriptor.breadcrumbs[0]).toMatchObject({ label: "Airbox" });
+  });
+
+  it("uses object.root for an object breadcrumb instead of an unregistered generic kind", () => {
+    const descriptor = resolveInspectorDescriptor(
+      selection("object.material", "Film"),
+    );
+
+    expect(descriptor.breadcrumbs[0]).toMatchObject({
+      label: "Film",
+      selection: { kind: "object.root", nodeId: "model:object:film" },
+    });
+  });
+
+  it("describes structured FDM selections under the product Mesh vocabulary", () => {
+    const descriptor = resolveInspectorDescriptor({
+      kind: "mesh.grid.descriptor",
+      label: "Structured Grid",
+      moduleSource: "explorer",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: null,
+    });
+
+    expect(descriptor.typeLabel).toBe("FDM mesh");
+    expect(descriptor.tabs).toEqual([]);
+  });
+
+  it("labels unverified FDM cell header metadata as a selection snapshot", () => {
+    const descriptor = resolveInspectorDescriptor({
+      kind: "fdm.cell",
+      label: "Cell 17",
+      moduleSource: "viewport-3d",
+      nodeId: "model:mesh:grid",
+      objectId: null,
+      ref: {
+        cellOrdinal: "17",
+        gridFingerprint: "grid-fingerprint-7",
+        ijk: [1, 2, 3],
+        kind: "fdm.cell",
+        maskState: "active-unassigned",
+        membershipRevision: "generation-7:11:12",
+        nodeId: "model:mesh:grid",
+        numericRegionId: 8,
+        regionId: null,
+        type: "fdm-cell",
+        visualizationTargetId: "fdm-domain",
+      },
+    });
+
+    expect(descriptor.metadata).toEqual(
+      expect.arrayContaining([
+        { label: "Selected IJK snapshot", value: "[1, 2, 3]" },
+        { label: "Selected mask snapshot", value: "active-unassigned" },
+        { label: "Selected grid fingerprint", value: "grid-fingerprint-7" },
+        { label: "Selected membership revision", value: "generation-7:11:12" },
+      ]),
+    );
+    expect(descriptor.metadata).not.toEqual(
+      expect.arrayContaining([
+        { label: "Element family", value: expect.any(String) },
+      ]),
+    );
+  });
 });

@@ -17,6 +17,8 @@ NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".codex/",
     ".github/",
+    # Control Room is not an input to the managed native FEM binary.
+    "apps/control-room/",
     "docs/",
     "public_docs/",
     "scripts/test_",

@@ -1922,6 +1922,37 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         "GPU CUDA Poisson demag module must document its non-owning module boundary");
 }
 
+void fem_oet0_large_mesh_has_sparse_kkt_lane() {
+    const auto source = read_text_file(
+        repo_root() / "backends" / "fem" / "cpu" / "mfem" / "transport" /
+            "conservative_current_view.cpp");
+    check(
+        source.find("mfem::SparseMatrix") != std::string::npos &&
+            source.find("mfem::MINRESSolver") != std::string::npos &&
+            source.find("sparse_kkt") != std::string::npos,
+        "OE-T0 must provide an MFEM sparse KKT/MINRES lane for large meshes");
+    check(
+        source.find("sparse KKT lane is not implemented") == std::string::npos &&
+            source.find("global_dof_count <= 4096") == std::string::npos,
+        "OE-T0 must not reject large meshes at the former dense-reference limit");
+}
+
+void gpu_demag_hypre_validation_is_cuda_guarded_for_cpu_builds() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string hypre_solver = read_text_file(
+        root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
+    const std::string guarded_call =
+        "#if FULLMAG_HAS_CUDA_RUNTIME\n"
+        "        if (!mfem_default_stream_wait_for_hypre_validation(\n"
+        "                workspace.stream_interop, error)) {\n"
+        "            return false;\n"
+        "        }\n"
+        "#endif";
+    check(
+        hypre_solver.find(guarded_call) != std::string::npos,
+        "GPU HYPRE residual validation must guard CUDA stream interop so the FEM CPU-only build compiles");
+}
+
 void gpu_frequency_domain_device_poisson_recovers_nodal_phi_from_true_dofs() {
     const std::filesystem::path root = fem_source_root();
     const std::string api = read_text_file(root / "src" / "api.cpp");
@@ -2161,6 +2192,8 @@ int main() {
     gpu_rk_final_refresh_is_owned_by_cuda_rk_module();
     gpu_rk_stage_schedule_is_owned_by_cuda_rk_module();
     gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module();
+    gpu_demag_hypre_validation_is_cuda_guarded_for_cpu_builds();
+    fem_oet0_large_mesh_has_sparse_kkt_lane();
     gpu_frequency_domain_device_poisson_recovers_nodal_phi_from_true_dofs();
     gpu_frequency_domain_operator_parity_reports_stiffness_components();
     return 0;

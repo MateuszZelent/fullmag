@@ -142,3 +142,31 @@ fn fdm_runner_field_snapshot_selection_has_artifact_owner() {
         );
     }
 }
+
+#[test]
+fn native_m1_v1_build_inputs_and_abi_translation_unit_are_fail_closed() {
+    let root = crate_root();
+    let build_rs = std::fs::read_to_string(root.join("../fullmag-fdm-sys/build.rs"))
+        .expect("read fullmag-fdm-sys build script");
+    assert!(
+        build_rs.contains("cargo:rerun-if-changed=../../backends/fdm/cpu"),
+        "native M1 owner sources must invalidate Cargo native builds"
+    );
+
+    let cmake = std::fs::read_to_string(root.join("../../backends/fdm/CMakeLists.txt"))
+        .expect("read FDM CMake contract");
+    assert!(
+        cmake.contains("add_library(fullmag_fdm_cpu_transport_abi OBJECT"),
+        "the public transport ABI must have a dedicated translation-unit target"
+    );
+    let target_start = cmake
+        .find("target_compile_options(fullmag_fdm_cpu_transport_abi PRIVATE")
+        .expect("ABI target must own strict compile options");
+    let target_contract = &cmake[target_start..];
+    for flag in ["-Wall", "-Wextra", "-Wpedantic", "-Werror"] {
+        assert!(
+            target_contract.contains(flag),
+            "ABI translation unit must compile with {flag}"
+        );
+    }
+}

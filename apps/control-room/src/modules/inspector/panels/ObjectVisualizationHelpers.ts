@@ -21,13 +21,17 @@ export function selectObjectVisualizationManifestStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
-      explicit_topology: status.data.capabilities.explicit_topology,
+      // A malformed/stale status response must not crash the inspector. The
+      // lane resolver still has enough information to keep an explicit FDM
+      // session on its structured-grid path; missing capability data disables
+      // FEM manifest loading through the existing fail-closed gate.
+      explicit_topology: status.data.capabilities?.explicit_topology ?? false,
     },
     domain: {
-      discretization: status.data.domain.discretization,
+      discretization: status.data.domain?.discretization ?? "",
     },
     resources: {
-      mesh_revision: status.data.resources.mesh_revision,
+      mesh_revision: status.data.resources?.mesh_revision,
     },
   };
 }
@@ -48,6 +52,11 @@ export function objectVisualizationManifestStatusEquals(
 
 export const OBJECT_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
   "airbox",
+  // FDM domain is a viewport-local target. It is included so the shared
+  // target registry can resolve its controls, while the serialization bridge
+  // fail-closes and never emits an FEM VisualizationState scope for it.
+  "fdm-domain",
+  "fdm-native-layer",
   "object",
   "part",
   "region",
@@ -100,6 +109,7 @@ export function selectObjectVisualizationPanelSnapshot(
 
   return {
     defaults,
+    pendingOverrides,
     viewportPreferenceDefaults,
     viewportPreferences,
     overrides,

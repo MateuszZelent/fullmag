@@ -11,13 +11,21 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    expect(configSource).toContain('distDir: auditBuild ? ".next-audit" : ".next"');
+    expect(configSource).toContain("FULLMAG_NEXT_DIST_DIR");
+    expect(configSource).toContain("isIsolatedSmokeDistDir");
+    expect(configSource).toContain(
+      'distDir: isolatedSmokeDistDir ?? (auditBuild ? ".next-audit" : ".next")',
+    );
   });
 
   it("allows the public Traefik origin used by the HMR websocket", () => {
     expect(nextConfig.allowedDevOrigins).toContain(
       "fullmag.amucontainers.orion.zfns.eu.org",
     );
+  });
+
+  it("allows the IPv4 loopback origin used by local browser smoke", () => {
+    expect(nextConfig.allowedDevOrigins).toContain("127.0.0.1");
   });
 
   it("derives an allowed dev origin from the WSL public host", () => {

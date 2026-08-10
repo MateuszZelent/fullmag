@@ -1,8 +1,44 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { isUnsupportedSpinAuthoringResource } from "./SpinAuthoringInspectorModel";
+import {
+  isUnsupportedSpinAuthoringResource,
+  SPIN_AUTHORING_DRAFT_INVENTORY,
+} from "./SpinAuthoringInspectorModel";
+
+type ParityManifest = {
+  parameters: Array<{
+    family: string;
+    round_trip: string;
+    status: string;
+    ui_field: string;
+  }>;
+};
+
+function parityManifest(): ParityManifest {
+  return JSON.parse(readFileSync(
+    new URL("../../../../../../docs/specs/spin-transport-authoring-parameter-parity-v1.json", import.meta.url),
+    "utf8",
+  )) as ParityManifest;
+}
 
 describe("spin authoring opaque compatibility records", () => {
+  it("covers every torque/Oersted manifest field with a typed or opaque draft key", () => {
+    const manifest = parityManifest();
+    for (const parameter of manifest.parameters.filter(({ family }) => family === "spin_torque" || family === "oersted")) {
+      if (parameter.status === "not_applicable" || parameter.ui_field.startsWith("not-exposed:")) continue;
+      const family = parameter.family === "oersted" ? "oersted_field" : "spin_torque";
+      const inventory = SPIN_AUTHORING_DRAFT_INVENTORY[family];
+      if (parameter.ui_field.startsWith("opaque:")) {
+        expect(inventory.opaque).toContain(parameter.ui_field.slice("opaque:".length));
+        expect(parameter.round_trip).toBe("preserve_and_reject");
+      } else {
+        expect(inventory.typed).toContain(parameter.ui_field);
+      }
+    }
+  });
+
   it("keeps future variants inspectable but read-only", () => {
     const future = {
       id: "future",

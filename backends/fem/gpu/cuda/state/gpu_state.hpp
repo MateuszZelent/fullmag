@@ -180,6 +180,15 @@ bool gpu_state_upload_stt_target_mask(
     TransferAudit &audit,
     std::string &error);
 
+/* Upload the optional canonical Zhang-Li target-element mask. */
+bool gpu_state_upload_stt_element_mask(
+    FemGpuState &state,
+    const uint8_t *active_element_mask,
+    uint64_t active_element_mask_len,
+    uint64_t element_count,
+    TransferAudit &audit,
+    std::string &error);
+
 bool gpu_state_upload_magnetoelastic_strain(
     FemGpuState &state,
     const double *strain_voigt,

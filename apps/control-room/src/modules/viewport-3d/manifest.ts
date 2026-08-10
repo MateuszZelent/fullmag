@@ -1,4 +1,6 @@
 import type { ModuleManifest } from "@/kernel/types";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import { viewport3dStore } from "./viewport3dStore";
@@ -140,6 +142,36 @@ const FDM_TOPOGRAPHY_COMPONENT_COMMANDS: Array<{
     title: "Use Y FDM Topography",
   },
 ];
+
+function fdmTopographyDisabledReason(context: CommandContext): string | null {
+  const status = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  if (!status || typeof status !== "object" || Array.isArray(status)) {
+    return "Session domain capabilities are unavailable.";
+  }
+  const record = status as Record<string, unknown>;
+  const domain = record.domain;
+  const capabilities = record.capabilities;
+  const discretization =
+    domain && typeof domain === "object" && !Array.isArray(domain)
+      ? (domain as Record<string, unknown>).discretization
+      : null;
+  const structuredGrid =
+    capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
+      ? (capabilities as Record<string, unknown>).structured_grid
+      : null;
+  const explicitTopology =
+    capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
+      ? (capabilities as Record<string, unknown>).explicit_topology
+      : null;
+
+  if (discretization === "fem" || explicitTopology === true) {
+    return "Voxel topography is not applicable to a FEM explicit-topology session.";
+  }
+  if (discretization !== "fdm" || structuredGrid !== true) {
+    return "Voxel topography requires an FDM structured-grid session.";
+  }
+  return null;
+}
 
 export const viewport3dManifest: ModuleManifest = {
   id: "viewport-3d",
@@ -395,6 +427,8 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
+        isEnabled: (context) => fdmTopographyDisabledReason(context) === null,
+        disabledReason: fdmTopographyDisabledReason,
         isActive: () =>
           viewport3dStore.getSnapshot().widgets.fdmTopographyEnabled,
         run: () => {
@@ -410,6 +444,8 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
+        isEnabled: (context) => fdmTopographyDisabledReason(context) === null,
+        disabledReason: fdmTopographyDisabledReason,
         run: (context) => {
           const value = Number(context.input);
           viewport3dStore.setFdmTopographyAmplitudeCells(value);
@@ -422,6 +458,9 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport" as const,
+        isEnabled: (context: CommandContext) =>
+          fdmTopographyDisabledReason(context) === null,
+        disabledReason: fdmTopographyDisabledReason,
         isActive: () =>
           viewport3dStore.getSnapshot().widgets.fdmTopographyComponent ===
           command.component,

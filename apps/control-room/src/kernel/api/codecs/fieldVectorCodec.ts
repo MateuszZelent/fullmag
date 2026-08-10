@@ -10,7 +10,7 @@ const KIND_F64 = 1;
 const MAGIC = "FMVP";
 const METADATA_FIXED_LEN = 68;
 const METADATA_MAGIC = "FMMI";
-const SUPPORTED_METADATA_VERSION = 1;
+const SUPPORTED_METADATA_VERSION = 2;
 const SUPPORTED_VERSIONS = new Set([2, 3]);
 
 function readMagic(view: DataView): string {
@@ -168,9 +168,18 @@ function decodeFieldVectorMetadata(
     );
   }
 
-  const domainGenerationId = view
-    .getBigUint64(metadataStart + 8, true)
-    .toString();
+  if (view.getUint16(metadataStart + 6, true) !== 0) {
+    throw new Error("FMVP metadata reserved flags must be zero");
+  }
+  const domainGenerationIdLength = view.getUint16(metadataStart + 8, true);
+  if (domainGenerationIdLength === 0) {
+    throw new Error("FMVP metadata domain generation identity must not be empty");
+  }
+  for (let offset = metadataStart + 10; offset < metadataStart + 16; offset += 1) {
+    if (view.getUint8(offset) !== 0) {
+      throw new Error("FMVP metadata reserved bytes must be zero");
+    }
+  }
   const meshTopologyRevision = view
     .getBigUint64(metadataStart + 16, true)
     .toString();
@@ -185,18 +194,35 @@ function decodeFieldVectorMetadata(
   const scopeIdLength = view.getUint16(metadataStart + 66, true);
   const scopeKindStart = metadataStart + METADATA_FIXED_LEN;
   const scopeIdStart = scopeKindStart + scopeKindLength;
-  const nodeIndicesStart = scopeIdStart + scopeIdLength;
+  const domainGenerationIdStart = scopeIdStart + scopeIdLength;
+  const nodeIndicesStart = domainGenerationIdStart + domainGenerationIdLength;
   const nodeIndicesByteLength = nodeIndexCount * Uint32Array.BYTES_PER_ELEMENT;
-  if (nodeIndicesStart + nodeIndicesByteLength > metadataEnd) {
+  const metadataPayloadEnd = nodeIndicesStart + nodeIndicesByteLength;
+  if (metadataPayloadEnd > metadataEnd) {
     throw new Error("FMVP metadata string/node-index lengths exceed metadata block");
   }
+  if (metadataEnd - metadataPayloadEnd >= Float64Array.BYTES_PER_ELEMENT) {
+    throw new Error("FMVP metadata contains excess trailing bytes");
+  }
+  for (let offset = metadataPayloadEnd; offset < metadataEnd; offset += 1) {
+    if (view.getUint8(offset) !== 0) {
+      throw new Error("FMVP metadata padding bytes must be zero");
+    }
+  }
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   const rawScopeKind = decoder.decode(
     new Uint8Array(view.buffer, view.byteOffset + scopeKindStart, scopeKindLength),
   );
   const rawScopeId = decoder.decode(
     new Uint8Array(view.buffer, view.byteOffset + scopeIdStart, scopeIdLength),
+  );
+  const domainGenerationId = decoder.decode(
+    new Uint8Array(
+      view.buffer,
+      view.byteOffset + domainGenerationIdStart,
+      domainGenerationIdLength,
+    ),
   );
   const nodeIndices =
     nodeIndexCount > 0
@@ -258,8 +284,10 @@ function decodeFieldVectorScopeKind(
     case "airbox":
     case "full":
     case "magnetic_only":
+    case "layer":
     case "object":
     case "part":
+    case "region":
     case "selection":
       return value;
     default:

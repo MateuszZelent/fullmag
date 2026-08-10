@@ -1,0 +1,17 @@
+{
+  "id": "cross_object_interface",
+  "scene": {
+    "version": "scene.v2",
+    "revision": 5,
+    "scene": {"id": "interface", "name": "Cross-object interface"},
+    "objects": [
+      {"id": "normal", "name": "Normal", "geometry": {"geometry_kind": "box"}, "material_ref": "mat-n"},
+      {"id": "ferro", "name": "Ferro", "geometry": {"geometry_kind": "box"}, "material_ref": "mat-f"}
+    ],
+    "current_transports": [{"kind": "current_transport", "name": "current:stack", "model": "prescribed_density", "domain": [{"object_id": "normal"}, {"object_id": "ferro"}]}],
+    "spin_transports": [{"schema_version": "spin_transport.v1", "id": "spin:stack", "current_source_id": "current:stack", "mode": "steady", "domain": [{"object_id": "normal"}, {"object_id": "ferro"}], "interfaces": [{"kind": "transparent", "id": "interface:n-f", "side_a": {"object_id": "normal"}, "side_b": {"object_id": "ferro"}, "normal_a_to_b": [0.0, 0.0, 1.0]}], "materials": [], "solver": {"engine": "cg", "linear": {"relative_tolerance": 1e-8, "absolute_tolerance": 1e-12, "max_iterations": 100}, "physical_residual_version": "transport_residual.v1", "operator_version": "spin_transport.v1", "default_external_boundary": "spin_insulating"}, "requested_execution": {"discretization": "fem", "device": "cpu", "precision": "double", "execution_mode": "strict"}, "constitutive_version": "spin_transport_constitutive.v1"}]
+  },
+  "expected_modules": [{"id": "interface:n-f", "kind": "spin_interface", "activation": "active", "scope": {"kind": "cross_object", "object_ids": ["normal", "ferro"]}}],
+  "expected_edges": [],
+  "expected_explorer_groups": ["cross_object"]
+}

@@ -72,7 +72,8 @@ bool compute_effective_fields_for_magnetization(
     double *demag_energy,
     bool allow_interrupt,
     PhaseTimings *timings,
-    std::string &error);
+    std::string &error,
+    uint64_t stage_identity = 0);
 #endif
 
 } // namespace fullmag::fem

@@ -3,9 +3,9 @@ set -euo pipefail
 
 scenario="${1:-}"
 case "$scenario" in
-  steady-transport|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2) ;;
+  steady-transport|steady-transport-rt0|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2) ;;
   *)
-    echo "usage: $0 {steady-transport|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2}" >&2
+    echo "usage: $0 {steady-transport|steady-transport-rt0|time-domain|oersted-oet0|oersted-oet0-tsan|oersted-oef1|oersted-oef2}" >&2
     exit 2
     ;;
 esac
@@ -107,8 +107,13 @@ fi
 
 case "$scenario" in
   steady-transport)
-    targets=(fem_steady_transport_contract fem_steady_transport_abi_contract)
+    targets=(fem_steady_transport_contract fem_steady_transport_abi_contract fem_steady_transport_rt0_contract)
     executables=(fem_steady_transport_contract fem_steady_transport_abi_contract)
+    executables+=(fem_steady_transport_rt0_contract)
+    ;;
+  steady-transport-rt0)
+    targets=(fem_steady_transport_rt0_contract)
+    executables=(fem_steady_transport_rt0_contract)
     ;;
   time-domain)
     targets=(
@@ -143,9 +148,13 @@ CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-1}" \
   2>&1 | tee "$report_dir/build.log"
 
 if [[ "$scenario" == "oersted-oet0-tsan" ]]; then
+  command -v setarch >/dev/null 2>&1 || {
+    echo 'TSan requires setarch to disable ASLR before the instrumented process starts' >&2
+    exit 1
+  }
   TSAN_OPTIONS="halt_on_error=1:exitcode=66" \
   LD_LIBRARY_PATH="$build_dir/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}" \
-    ctest --test-dir "$build_dir/backends/fem" --output-on-failure \
+    setarch x86_64 -R ctest --test-dir "$build_dir/backends/fem" --output-on-failure \
       --tests-regex '^fem_conservative_current_view_contract$' \
       2>&1 | tee -a "$report_dir/test.log"
 elif [[ "$scenario" == oersted-oe* ]]; then

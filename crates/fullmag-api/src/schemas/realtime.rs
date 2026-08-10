@@ -17,14 +17,15 @@ pub struct RealtimeResourceRevisionMap {
     pub command_completion_revision: u64,
     pub fields_revision: u64,
     pub scalars_revision: u64,
-    #[serde(with = "crate::schemas::decimal_u64")]
-    pub domain_generation_id: u64,
+    pub domain_generation_id: String,
     pub artifacts_revision: u64,
     pub engine_log_revision: u64,
     pub solver_profile_revision: u64,
     pub display_revision: u64,
     pub workspace_revision: u64,
     pub mesh_revision: u64,
+    /// Independent realized FDM region-membership revision.
+    pub region_membership_revision: u64,
     pub mesh_build_revision: u64,
     pub commands_revision: u64,
     pub stages_revision: u64,
@@ -69,8 +70,7 @@ pub struct RealtimeResourceChange {
     #[serde(default, skip_serializing_if = "is_false")]
     pub broad: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "crate::schemas::decimal_u64::optional")]
-    pub domain_generation_id: Option<u64>,
+    pub domain_generation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_fetch: Option<String>,
 }

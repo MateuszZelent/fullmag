@@ -1843,6 +1843,27 @@ void layered_conductor_preserves_series_current()
         "layered periodic terminal currents do not balance");
 }
 
+void large_tetrahedral_projection_uses_sparse_kkt_lane()
+{
+    ChargeFixture fixture(mfem::Mesh::MakeCartesian3D(
+        7, 7, 7, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0));
+    require(fixture.mesh.GetNE() > 0,
+        "large OE-T0 fixture did not create tetrahedra");
+    const auto ids = stable_vertex_ids(fixture.mesh);
+    const auto request = periodic_request(fixture, ids, identity_input());
+    const auto view = ConservativeCurrentView::Build(request);
+    require(view->space().GetVSize() > 4096,
+        "large OE-T0 fixture did not exceed the dense-reference dof bound");
+    require(std::isfinite(view->balance().scaled_kkt_residual) &&
+            view->balance().scaled_kkt_residual <= 1.0e-10,
+        "large OE-T0 sparse KKT residual exceeds the physical gate");
+    require(view->balance().max_element_divergence_a <=
+            kAbsoluteCurrentToleranceA,
+        "large OE-T0 sparse KKT field is not elementwise conservative");
+    require(view->balance().electrode_balance_relative <= 1.0e-10,
+        "large OE-T0 sparse KKT terminal fluxes do not balance");
+}
+
 void identity_and_source_snapshot_are_immutable()
 {
     ConservativeCurrentView::Ptr view;
@@ -3298,6 +3319,9 @@ int main(int argc, char **argv)
         deterministic_constraint_rank_rejects_malformed_rows();
         orientation_conservation_and_source_cut_are_canonical();
         layered_conductor_preserves_series_current();
+        if (std::getenv("FULLMAG_OET0_LARGE_MESH") != nullptr) {
+            large_tetrahedral_projection_uses_sparse_kkt_lane();
+        }
         identity_and_source_snapshot_are_immutable();
         all_four_digests_match_independent_frozen_preimages();
         balance_decoder_rejects_unbounded_or_invalid_text();

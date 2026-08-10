@@ -194,6 +194,61 @@ describe("Airbox mesh policy draft", () => {
     });
   });
 
+  it("builds the shared geometry PUT payload used by FDM Airbox", () => {
+    const draft = draftFromUniverseMeshPolicyResource({
+      config: {
+        center: [0, 0, 0],
+        mode: "manual",
+        padding: [1e-7, 2e-7, 3e-7],
+        size: [8e-7, 3.25e-7, 9e-8],
+      },
+      revision: 18,
+    });
+
+    expect(buildAirboxMeshPolicyReplaceRequest(draft)).toEqual({
+      request: {
+        config: {
+          center: [0, 0, 0],
+          mode: "manual",
+          padding: [1e-7, 2e-7, 3e-7],
+          size: [8e-7, 3.25e-7, 9e-8],
+        },
+      },
+    });
+  });
+
+  it("strips FEM-only policy keys and validation from an FDM request", () => {
+    const result = buildAirboxMeshPolicyReplaceRequest(
+      {
+        ...draftFromUniverseMeshPolicyResource({
+          config: {
+            airbox_grading: "linear",
+            airbox_hmax: 1e-9,
+            mode: "manual",
+            padding: [1e-7, 2e-7, 3e-7],
+          },
+          revision: 19,
+        }),
+        airboxGrading: "linear",
+        airboxGradingAuthored: true,
+        airboxGrowthRate: "not-a-number",
+        airboxHmax: "-1",
+        curvatureFactor: "not-a-number",
+        narrowRegionResolution: "not-a-number",
+      },
+      { lane: "fdm" },
+    );
+
+    expect(result).toEqual({
+      request: {
+        config: {
+          mode: "manual",
+          padding: [1e-7, 2e-7, 3e-7],
+        },
+      },
+    });
+  });
+
   it("rejects malformed JSON and non-positive numeric Airbox policy fields", () => {
     expect(
       buildAirboxMeshPolicyReplaceRequest({

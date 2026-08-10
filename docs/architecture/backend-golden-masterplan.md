@@ -2,7 +2,7 @@
 
 - Status: szkic resetu backends-first
 - Właściciele: Fullmag core
-- Ostatnia aktualizacja: 2026-07-05
+- Ostatnia aktualizacja: 2026-08-09
 - Zakres: własność backendów solverów, natywna implementacja kompilowana,
   orkiestracja Rust runnera, bramki walidacyjne i kolejność migracji po
   resecie układu źródeł z 2026-06-03.
@@ -603,6 +603,58 @@ Dopracowania natywnego FDM CUDA są dozwolone, ale powinny być wąskie:
 - utrzymywać stabilne artefakty i preview,
 - unikać równoległych implementacji hot-loop behavior CUDA w Rust.
 
+### 8.1 Własność transportu FDM GPU M1
+
+Pierwszy milestone charge + steady spin/direct-SHE FP64 ma jednego przyszłego
+właściciela: `backends/fdm/gpu/cuda/transport/**`. Osobny opaque
+`GpuTransportContext` posiada urządzenie, stream/eventy, allocator, niezmienny
+descriptor, stany charge/spin, persistent Krylov workspaces, zaakceptowane
+generacje snapshotów i transfer audit. Nie wolno dodawać tych pól ani fizyki do
+LLG `Context`, `mfem_bridge.cpp`, Rust engine ani runnera.
+
+CPU i GPU współdzielą kontrakt fizyki, znaki, SI, identyfikatory formuł i
+operatorów, orientację ścian/interfejsów, obserwable i bilanse. Nie współdzielą
+mutable implementation, buforów Kryłowa ani fallback state. GPU konsumuje
+niemutowalny device-resident snapshot charge z $V$, jednym globalnie
+zorientowanym face $J_c$, dokładnymi density-face BC i dwoma śladami
+interfejsowymi. Append-only GPU ABI używa osobnych opaque handles; nie rozszerza
+host-pointer ABI CPU. Publiczne context/snapshot handles są typowanymi
+generacyjnymi tokenami rejestru, a rekord informacji o snapshotcie ma odrębną
+nazwę i wersjonowany prefix. Restart jest pełnym atomowym checkpoint
+export/import zaakceptowanych charge/spin arrays i warm startów; sam digest,
+host-pointer snapshot lub ponowne rozwiązanie charge nie spełnia kontraktu.
+Każdy rekord ABI ma zamrożone offsety, `MIN_SIZE_V1`, maskę feature i exact
+numeric enum/ID/flag registry. `FMGPUTR1` ma jeden kanoniczny layout bajtowy,
+osobny codec-only golden oraz kompletny restore-valid checkpoint golden; tylko
+drugi jest legalnym runtime export/import payloadem. Digest kontynuacji
+naukowej jest oddzielony od append-only operation audit, który zachowuje
+również nieudane realne transfery.
+Oba payloady mają jeden minimalny canonical layout: section/field offsets i
+`total_size` są dokładnymi wynikami `align_up`, a dodatkowe zerowe szczeliny
+lub końcowe bloki są nielegalne nawet po poprawnym przeliczeniu hashy.
+
+Milestone jest FP64-only i strict-device-resident. W hot loop nie ma CPU solve,
+host reconstruction, per-stage vector transfer ani ukrytego fallbacku. Każdy
+transfer/synchronizacja ma wersjonowaną telemetrię i proweniencję; naruszenie
+kończy run. FP32, M2/M3, SML, periodic i multi-device pozostają fail-closed do
+osobnych kontraktów i dowodów.
+
+Pierwszy bounded charge-only slice jest zaimplementowany. Lifecycle i
+transaction owner znajduje się w
+`backends/fdm/gpu/cuda/transport/context.cu`, operator FV/CG/strength-graph AMG
+w `backends/fdm/gpu/cuda/transport/charge/device_solver.cu`, a kanoniczny
+checkpoint w `backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp`.
+Managed bramka wykonuje uniform, layered, snapshot i boundary-mutation gates na
+rzeczywistym GPU oraz raportuje `host_fallback_count=0`. Nie istnieją jeszcze
+free-component zero-mean gauge, next-solve Krylov warm-start continuation,
+publiczny ProblemIR/planner/runner ani CUDA spin/SHE/mixing/torque.
+
+Dlatego capability FDM GPU M1 pozostaje `semantic_only`, agregat ma
+`implementation_state=partial`, `validation_state=unvalidated` i
+`validated_workloads=[]`. Actual-device contract proof nie jest publiczną ani
+produkcyjną kwalifikacją; awans wymaga zamknięcia pozostałych gate'ów oraz
+osobnej decyzji kwalifikacyjnej.
+
 ## 9. Strategia Demagnetyzacji
 
 `Demag()` pozostaje publicznym terminem fizycznym. Strategia specyficzna dla
@@ -669,6 +721,23 @@ Każde twierdzenie o backendzie musi podać poziom walidacji.
 
 Nie używamy niższego poziomu walidacji do twierdzenia, że wyższy poziom jest
 zamknięty.
+
+### 11.1. Bounded validation ledger: FDM Zhang--Li SP5
+
+`zhang_li.mumax3.v1` z `zl_mumax3_central_v1` ma status
+`reference_executable` dla FDM CPU oraz `production_executable` dla natywnego
+FDM CUDA wyłącznie w workloadzie FP64 strict, fixed-step MuMax3 Standard
+Problem 5 z jawną referencją `converged_demag`. Dla `dt=1e-13 s` i `dt/2`
+przechodzą: dokładny accepted schedule, full-field CPU--CUDA oraz full-field
+próg `1e-4` względem MuMax3 `DemagAccuracy=24`.
+
+Ten wpis nie promuje Rustowego CPU reference do właściciela produkcyjnego FDM.
+Produkcyjna realizacja GPU pozostaje w `backends/fdm`; Rustowy CPU jest
+niezależnym oraklem. Literalny golden przy domyślnym `DemagAccuracy` pozostaje
+raportowanym failure, ponieważ MuMax3 używa zbieżnej kwadratury numerycznej, a
+Fullmag analitycznego kernela Newella. Adaptive, FP32, inne siatki,
+`zhang_li.fullmag.v1` oraz FEM nie dziedziczą tego statusu. Wykonywalną bramą
+jest `just verify-fdm-sp5-converged-demag-artifacts`.
 
 ## 12. Natychmiastowy Plan Pracy
 

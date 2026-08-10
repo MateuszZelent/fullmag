@@ -30,7 +30,11 @@ pub(crate) fn record_due_fields(
             location: "sample".into(),
             scope: "full".into(),
             revision: step.saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(select_state_observable_field(observables, &name, false)?),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                observables,
+                &name,
+                false,
+            )?),
         })?;
     }
 

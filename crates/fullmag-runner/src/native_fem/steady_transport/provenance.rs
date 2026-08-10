@@ -32,6 +32,13 @@ pub(super) fn transport_provenance(
         constitutive_version: resolved.constitutive_version.clone(),
         operator_version: resolved.operator_version.clone(),
         physical_residual_version: resolved.physical_residual_version.clone(),
+        charge_operator_version: None,
+        spin_operator_version: None,
+        interface_formula_versions: Vec::new(),
+        torque_formula_version: descriptor
+            .torque_target
+            .as_ref()
+            .map(|target| target.formula_version.clone()),
         interface_realization: descriptor.interface_realization.clone(),
         stage_coupling: descriptor.stage_coupling.clone(),
         capability_status: descriptor.capability_status.clone(),
@@ -45,7 +52,21 @@ pub(super) fn transport_provenance(
         spin_insulating_boundaries: descriptor.spin_insulating_boundaries.clone(),
         interfaces: descriptor.interfaces.clone(),
         torque_target: descriptor.torque_target.clone(),
+        fdm_interfaces: Vec::new(),
+        fdm_torque_target_cells: Vec::new(),
         fallback: None,
         degradation: None,
+        oersted_source_kind: None,
+        oersted_source_current_sha256: None,
+        oersted_mesh_source_sha256: None,
+        oersted_field_sha256: None,
+        conservative_current_view_identity_digest: None,
+        conservative_current_balance_certificate_digest: None,
+        stage_cache_policy: None,
+        stage_cache_key_digest: None,
+        stage_cache_last_observation: None,
+        stage_cache_hit_count: None,
+        stage_cache_miss_count: None,
+        stage_cache_invalidation_count: None,
     })
 }

@@ -40,9 +40,12 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
         || ctx.anisotropy.cubic_enabled
         || ctx.oersted.has_cylinder
         || ctx.oersted.has_explicit_field
+        || ctx.oersted.has_stage_callback
+        || ctx.stage_transport.has_stage_callback
         || ctx.magnetoelastic.enabled
         || ctx.stt.zhang_li_enabled
         || ctx.stt.slonczewski_enabled
+        || ctx.sot.enabled
         || (ctx.thermal_brown.temperature > 0.0);
 }
 
@@ -72,7 +75,8 @@ bool compute_effective_fields_for_magnetization(
     double *demag_energy,
     bool allow_interrupt,
     PhaseTimings *timings,
-    std::string &error)
+    std::string &error,
+    uint64_t stage_identity)
 {
     if (ctx.exchange.enabled) {
         h_ex_xyz.resize(m_xyz.size());
@@ -178,6 +182,14 @@ bool compute_effective_fields_for_magnetization(
             }
         }
 
+        if (!materialize_oersted_stage_field(
+                ctx,
+                m_xyz,
+                evaluation_time_s,
+                stage_identity,
+                error)) {
+            return false;
+        }
         add_oersted_field(ctx, evaluation_time_s, h_eff_xyz);
 
         if (ctx.thermal_brown.temperature > 0.0) {

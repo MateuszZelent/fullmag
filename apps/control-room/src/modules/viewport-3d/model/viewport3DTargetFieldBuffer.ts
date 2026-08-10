@@ -93,6 +93,7 @@ export function buildViewport3DTargetFieldBuffer({
   const requestedScopeId = canonicalTargetFieldBufferScopeId(
     requestedScopeKind,
     query.scope_id ?? null,
+    query.owner_object_id ?? null,
   );
   const hasDecodedScopeIdentity = fieldVector.formatVersion === 3;
   const scopeKind = hasDecodedScopeIdentity
@@ -339,8 +340,10 @@ function resolveTargetFieldBufferScopeKind(
 ): Viewport3DFieldScopeKind {
   if (
     scopeKind === "airbox" ||
+    scopeKind === "layer" ||
     scopeKind === "object" ||
     scopeKind === "part" ||
+    scopeKind === "region" ||
     scopeKind === "selection"
   ) {
     return scopeKind;
@@ -351,7 +354,14 @@ function resolveTargetFieldBufferScopeKind(
 function canonicalTargetFieldBufferScopeId(
   scopeKind: Viewport3DFieldScopeKind,
   scopeId: string | null,
+  ownerObjectId: string | null = null,
 ): string | null {
+  if (scopeId && scopeKind === "region" && ownerObjectId) {
+    const canonicalPrefix = `region:${ownerObjectId}:`;
+    return scopeId.startsWith(canonicalPrefix)
+      ? scopeId
+      : `${canonicalPrefix}${scopeId}`;
+  }
   if (!scopeId || scopeKind !== "object") return scopeId;
   return scopeId.startsWith("object:")
     ? scopeId.slice("object:".length)

@@ -113,15 +113,15 @@ MagnetoresistiveMaterial = {
 ElectrodeDrive =
   | {kind:"voltage", driven_boundary_ids:[id,...],
      reference_boundary_ids:[id,...]}
-  | {kind:"total_current", driven_boundary_id:id,
+  | {kind:"normal_current", driven_boundary_id:id,
      return_boundary_ids:[id,...]}
   | {kind:"periodic_potential_drop", periodic_boundary_id:id}
 
 ChargeBoundary =
   | {kind:"voltage_electrode", id, surface:SurfaceRef, potential_V:finite}
   | {kind:"ground", id, surface:SurfaceRef}
-  | {kind:"total_current_electrode", id, surface:SurfaceRef,
-     total_current_A:finite, equipotential:true}
+  | {kind:"normal_current_electrode", id, surfaces:[SurfaceRef,...] nonempty,
+     outward_current_density_Apm2:finite}
   | {kind:"insulating", id, surfaces:[SurfaceRef,...] nonempty}
   | {kind:"periodic_potential_drop", id, minus_surface:SurfaceRef,
      plus_surface:SurfaceRef, translation_m:Vector3 nonzero, drop_V:finite}
@@ -142,7 +142,7 @@ ChargeGauge =
 ChargeSolverPolicy = {
   engine:"auto"|named_engine,
   linear:LinearSolverPolicy,
-  physical_residual_version:"transport_balance_integrated_l2.v1"
+  physical_residual_version:"charge_balance_integrated_l2.v1"
 }
 ```
 
@@ -204,9 +204,21 @@ summed into `J_mr`. Resistivity inputs are authoring adapters only and MUST be
 normalized before `ProblemIR`; omitting the base material or supplying a
 different reciprocal reference conductivity is invalid.
 
-`ChargeBoundary` is a tagged union of voltage, ground, total-current,
+`ChargeBoundary` is a tagged union of voltage, ground, normal-current-density,
 insulating, and periodic-potential-drop conditions. Conflicting boundary
 conditions and a missing gauge MUST be rejected.
+
+The public Python/`ProblemIR` boundary is
+`NormalCurrentElectrode(outward_current_density_Apm2)` and its prescribed value
+is a uniform outward-normal current density in `A/m^2` on every selected
+surface. The bounded standalone native FDM CPU charge owner currently also has
+an implementation-local total-current electrode in `A`, with one unknown
+equipotential value per coordinate boundary. That native-only boundary is not a
+public authoring mapping. The opt-in native FDM CPU M1 binding materializes the
+public density contract as exact external structured faces. Every selected face
+MUST have an active adjacent charge cell; otherwise the planner rejects the
+complete source and identifies the source ID, face index, and adjacent cell.
+Silently clipping a partly inactive authored electrode scope is forbidden.
 
 ### 3.3 Spin transport
 
@@ -1213,9 +1225,10 @@ category.
 | Category | Canonical identifiers |
 |---|---|
 | formula | `gilbert_transform.fullmag.v1`; `zhang_li.fullmag.v1`; `zhang_li.legacy_fullmag.v0`; `slonczewski.fullmag.v2`; `slonczewski.fullmag.v1` (read-only provenance); `prescribed_sot.fullmag.v1`; `prescribed_sot.legacy_fullmag.v0`; `transport_constitutive.one_way.fullmag.v1`; `transport_constitutive.reciprocal.fullmag.v1`; `conductivity_tensor_3d.fullmag.v1`; `magnetoelectronic.fullmag.v2`; `sml_reservoir.fullmag.v2`; `dos_isotropic_nonmagnetic.fullmag.v1`; `transport_absorption.fullmag.v1`; `current_transport.fullmag.v1`; `current_transport.prescribed_density.legacy_fullmag.v0` |
-| operator | `zl_upwind_first_order_v1`; `zl_central_reference_v1`; `fv_charge_face_flux.v1`; `fv_spin_upwind_v1`; `fv_spin_central_reference_v1`; `structured_cross_gradient_v1`; `fdm_face_to_cell_current.v1`; `fdm_oersted_cell_integrated_open.v1`; `fem_charge_spin_broken_h1_mortar.v1`; `fem_conservative_current_rt0_view.v1`; `fem_closed_current_extension.v1`; `fem_oersted_direct_tetra_quadrature.v1`; `fem_oersted_hcurl_h1_gauge.v1`; `fem_oersted_hcurl_h1_zero_mean_natural.v1`; `coupled_imex_ark2.v1`; `coupled_bdf2_small_oracle.v1` |
+| operator | `zl_upwind_first_order_v1`; `zl_central_reference_v1`; `fv_charge_harmonic_v1`; `fv_charge_mixing_series_trace.v1`; `fv_spin_upwind_v1`; `fv_spin_central_reference_v1`; `structured_cross_gradient_v1`; `fdm_exact_face_current_electric_reconstruction.v1`; `fdm_transport_torque_cell_surface_balance.v1`; `fdm_face_to_cell_current.v1`; `fdm_oersted_cell_integrated_open.v1`; `fem_charge_spin_broken_h1_mortar.v1`; `fem_conservative_current_rt0_view.v1`; `fem_closed_current_extension.v1`; `fem_oersted_direct_tetra_quadrature.v1`; `fem_oersted_hcurl_h1_gauge.v1`; `fem_oersted_hcurl_h1_zero_mean_natural.v1`; `coupled_imex_ark2.v1`; `coupled_bdf2_small_oracle.v1` |
 | realization | `slonczewski_thin_layer_homogenized.v1`; `slonczewski_interface_flux.v1`; `oersted_analytic_cylinder.v1`; `oersted_direct_biot_savart.v1`; `oersted_analytic_return_additive.v1`; `oersted_fdm_fft_open.v1`; `oersted_fem_vector_potential.v1` |
-| engine | `fdm_charge_cg_matrix_free_v1`; `fdm_charge_cg_cuda_v1`; `fdm_spin_block_gmres_csr_v1`; `fdm_spin_block_gmres_cuda_v1`; `fdm_charge_spin_block_gmres_v1`; `fdm_charge_spin_block_gmres_cuda_v1`; `fem_charge_h1_hypre_v1`; `fem_charge_h1_hypre_device_v1`; `fem_spin_broken_h1_mortar_v1`; `fem_spin_broken_h1_mortar_device_v1`; `fem_charge_spin_block_gmres_v1`; `fem_charge_spin_block_gmres_device_v1`; `fdm_oersted_fft_open_v1`; `fdm_oersted_cufft_open_v1`; `fem_oersted_direct_tetra_cpu_v1`; `fem_oersted_hcurl_h1_gauge_v1`; `fem_oersted_hcurl_h1_gauge_device_v1` |
+| engine | `fdm_charge_cg_matrix_free_v1`; `fdm_charge_cg_cuda_v1`; `fdm_spin_block_gmres_matrix_free_reference_v1`; `fdm_spin_block_gmres_csr_v1`; `fdm_spin_block_gmres_cuda_v1`; `fdm_charge_spin_block_gmres_v1`; `fdm_charge_spin_block_gmres_cuda_v1`; `fem_charge_h1_hypre_v1`; `fem_charge_h1_hypre_device_v1`; `fem_spin_broken_h1_mortar_v1`; `fem_spin_broken_h1_mortar_device_v1`; `fem_charge_spin_block_gmres_v1`; `fem_charge_spin_block_gmres_device_v1`; `fdm_oersted_fft_open_v1`; `fdm_oersted_cufft_open_v1`; `fem_oersted_direct_tetra_cpu_v1`; `fem_oersted_hcurl_h1_gauge_v1`; `fem_oersted_hcurl_h1_gauge_device_v1` |
+| residual | `charge_balance_integrated_l2.v1`; `transport_balance_integrated_l2.v1`; `transport_balance_local_fv.v1` |
 
 Every resolved plan names all applicable IDs by their category. For example,
 FDM Oersted uses operator `fdm_oersted_cell_integrated_open.v1`, realization
@@ -1229,6 +1242,20 @@ FEM direct quadrature uses operator
 `fem_oersted_direct_tetra_cpu_v1`. Both FEM methods require
 `fem_conservative_current_rt0_view.v1`; that prerequisite is not itself an
 Oersted realization.
+
+`fdm_spin_block_gmres_matrix_free_reference_v1` is restricted to the bounded
+native FDM CPU/FP64 one-way M1 owner. It denotes restarted matrix-free GMRES
+without AMG/ILU and MUST NOT be reported as
+`fdm_spin_block_gmres_csr_v1`. Its electric reconstruction and torque mapping
+are the separate operators
+`fdm_exact_face_current_electric_reconstruction.v1` and
+`fdm_transport_torque_cell_surface_balance.v1`. Full one-way mixing uses the
+charge-interface trace elimination `fv_charge_mixing_series_trace.v1`.
+That interface operator composes with, and never replaces, the bulk
+`fv_charge_harmonic_v1` face-flux operator. Charge acceptance reports
+`charge_balance_integrated_l2.v1`; spin acceptance reports
+`transport_balance_integrated_l2.v1` and the additional local gate
+`transport_balance_local_fv.v1`.
 
 `current_transport.prescribed_density.legacy_fullmag.v0` identifies only the
 existing bounded prescribed-density source bridge used by analytic-cylinder
@@ -1275,7 +1302,9 @@ GMRES. The plan records the actual preconditioner and stopping norm.
 
 ### 8.3 Physical residual normalization
 
-All charge/spin linear policies use
+Charge linear policies use
+`physical_residual_norm_version="charge_balance_integrated_l2.v1"`; spin
+linear policies use
 `physical_residual_norm_version="transport_balance_integrated_l2.v1"`.
 For each control volume or FEM test-function row `K`, after essential-row
 elimination, define integrated residuals in amperes:
@@ -1338,6 +1367,7 @@ precision:
 | M1 charge | FEM CPU/double | `fem_charge_h1_hypre_v1` | hypre PCG + BoomerAMG | n/a / `500` | FP64 |
 | M1 charge | FEM GPU/double | `fem_charge_h1_hypre_device_v1` | device hypre PCG + device BoomerAMG | n/a / `500` | FP64 |
 | M1 spin | FDM CPU/double | `fdm_spin_block_gmres_csr_v1` | GMRES + component geometric-MG/ILU(0) | `50` / `1000` | FP64 |
+| M1 spin bounded native reference | FDM CPU/double | `fdm_spin_block_gmres_matrix_free_reference_v1` | restarted matrix-free GMRES; no preconditioner | `40` / `2000` | FP64; bounded owner only, not production/HPC |
 | M1 spin | FDM GPU/double | `fdm_spin_block_gmres_cuda_v1` | device GMRES + component AMG/block-Jacobi | `50` / `1000` | FP64 |
 | M1 spin | FDM GPU/single | `fdm_spin_block_gmres_cuda_v1` | device GMRES + component AMG/block-Jacobi | `50` / `1000` | FP32, qualified workloads only |
 | M1 spin | FEM CPU/double | `fem_spin_broken_h1_mortar_v1` | hypre GMRES + field-split BoomerAMG/interface Jacobi | `50` / `1000` | FP64 |
@@ -1749,6 +1779,853 @@ Required migration fixtures cover deserialize legacy, normalize, canonical
 export, deserialize again, lower to `ProblemIR`, and field-by-field semantic
 comparison. Unsupported legacy payloads produce a versioned error containing
 the exact missing semantic fields.
+
+(fdm-gpu-m1-abi-v1)=
+### 13.4 Append-only FDM GPU M1 ABI and bounded charge implementation
+
+Ten podrozdział pozostaje normatywnym kontraktem ABI PR-15. Header, C11/Rust
+mirror oraz ograniczona realizacja CUDA charge-only istnieją, dlatego agregat
+FDM GPU M1 ma `implementation_state=partial`. Nie istnieją jeszcze CUDA steady
+spin/direct-SHE, mixing ani torque, a publiczny planner/runner nie wywołuje tego
+ABI. Capability pozostaje `semantic_only`, `validation_state=unvalidated`, z
+`validated_workloads=[]`; managed actual-device contract proof nie jest
+kwalifikacją ani promocją publicznej ścieżki.
+
+The ABI is separate from `fullmag_fdm_cpu_*` and from the LLG `Context`. It
+uses two opaque, non-interchangeable **handle types** whose names cannot also
+name a public descriptor or information record:
+
+```text
+fullmag_fdm_gpu_transport_context_handle_v1
+fullmag_fdm_gpu_charge_snapshot_handle_v1
+```
+
+The context owns one CUDA device, stream/events, allocator/pool, immutable
+static descriptor, charge/spin solver state, persistent Krylov workspaces,
+telemetry, and snapshot generations. The snapshot owns or retains the exact
+device-resident accepted charge state and cannot outlive its context.
+
+Each handle is a fixed by-value capability token with four unsigned 64-bit
+words named `registry_cookie`, `slot`, `generation`, and `type_tag`. The fields
+are ABI-visible for copying but semantically opaque: callers may compare or
+zero-initialize the whole token and must not manufacture or edit individual
+words. A token is never a pointer and is never serialized. Context and
+snapshot handles have distinct C struct types and distinct constant
+`type_tag` values, so C and Rust FFI reject accidental interchange.
+
+One process-local registry owns a bounded slot table. Create chooses an empty
+or retired slot, increments its monotonic generation, assigns the registry
+cookie and type tag, and publishes the token only after initialization
+succeeds. Destroy atomically changes `active` to a retired tombstone while
+retaining the token tuple. Repeating destroy on that retired tuple returns
+`already_destroyed`; using the tuple for another operation returns
+`stale_snapshot` or `invalid_state` according to its type. If a slot has since
+been reused, the old generation is stale. A generation exhaustion event never wraps:
+the slot is permanently retired and create returns `out_of_resources` when no
+fresh slot remains. Context destroy with live snapshots returns
+`live_snapshot` and leaves the context active. This registry/tombstone rule
+makes stale use and double destroy safe without dereferencing freed memory.
+
+Every public request, result, descriptor, view, and telemetry record starts
+with this exact self-description:
+
+The ordered common fields are `abi_version, struct_version, struct_size,
+reserved_flags`, followed by the feature word and reserved word shown below.
+
+```text
+0:abi_version:u32
+4:struct_version:u32
+8:struct_size:u32
+12:reserved_flags:u32
+16:required_features:u64
+24:reserved0:u64
+COMMON_PREFIX_SIZE=32
+COMMON_PREFIX_ALIGNMENT=8
+KNOWN_GLOBAL_FEATURES_V1=0x000000000000007f
+```
+
+All ABI integers are exact-width two's-complement or unsigned values from
+`stdint.h`; all floating values are IEEE-754 binary64. Every enum occupies
+`u32`. Every record is `alignas(8)`, uses the offsets below, contains no
+implicit padding, and zeroes every explicit `reserved*` byte. The ABI is
+little-endian v1; a big-endian host returns `incompatible_abi`. `handle32`
+means four consecutive `u64` words in the order
+`registry_cookie,slot,generation,type_tag`. `u8[16]` and `u8[32]` have byte
+alignment one and do not change the next published offset.
+
+Feature bits are fixed: bit 0 strict residency, bit 1 deterministic
+reductions, bit 2 M1 charge, bit 3 steady spin, bit 4 mixing v2, bit 5
+checkpoint v1, and bit 6 artifact readback. `required_features` is therefore
+inside every `MIN_SIZE_V1`, always at byte 16. A set bit outside the record's
+`KNOWN_FEATURES_V1` is rejected before any tail field is read.
+
+For v1, `abi_version=1`, `struct_version=1`, all `reserved_flags=0`, and every
+reserved byte/pointer is zero. Each generated record defines a named
+`MIN_SIZE_V1`; a caller must pass `struct_size>=MIN_SIZE_V1`. Adding optional
+tail fields keeps the same struct_version. A struct_version increases only
+when that record gains a new required field or changes semantics. The callee
+reads only fields fully covered by `struct_size`, zero-defaults an absent
+optional v1 tail, and never writes beyond a result's advertised size.
+
+The negotiation table is normative:
+
+| Caller record | Callee support | Result |
+|---|---|---|
+| `abi_version=1`, `struct_version=1`, `struct_size=MIN_SIZE_V1` | v1 | accept; absent optional tail has frozen zero/default meaning |
+| same struct_version and `struct_size>MIN_SIZE_V1` | v1 | accept only when every set `required_features` bit is known; ignore unknown optional tail bytes |
+| `struct_size<MIN_SIZE_V1` | any | `incompatible_abi` before field access |
+| `abi_version!=1` | v1 | `incompatible_abi`; major ABI never guesses compatibility |
+| unknown struct_version | v1 | `incompatible_abi`; an append-only tail must not increment the version |
+| known newer struct version | newer callee with an explicit per-record minimum-size table | accept only against that version's minimum and feature mask |
+| any unknown set `required_features` bit | any | `unsupported_required_feature`; no partial execution |
+| nonzero reserved flags/bytes | any | `invalid_descriptor` before allocation or pointer access |
+
+Thus an old callee may accept a larger record only at the same struct_version;
+it never accepts an unknown struct_version. A new callee accepts an old v1
+caller only if the operation does not require a missing later-version field.
+Arithmetic overflow in counts or strides also fails before allocation or
+pointer dereference.
+
+#### Pointer spaces, layouts, and ownership
+
+Every buffer view carries element type, count, byte stride, component order,
+and one of the closed pointer-space values:
+
+```text
+host_read_only
+host_write_only
+device_read_only
+device_write_only
+```
+
+There is no ambiguous `auto`/unified pointer space in v1. Static descriptors
+and exact face lists enter as `host_read_only` during the explicit upload
+transaction and are copied once into context-owned device storage. `m_stage`
+and the torque destination are `device_read_only` and `device_write_only` on
+the context device. Charge and spin fields are exposed only as opaque snapshot
+or artifact views; callers cannot forge device ownership by casting a host
+pointer. The ABI validates device ordinal, pointer attributes, alignment,
+count, stride, shape product, aliasing rules, and context identity.
+
+The frozen FP64 layouts are x-fastest SoA: `V[N]`,
+`Jx[(nx+1)ny nz]`, `Jy[nx(ny+1)nz]`, `Jz[nx ny(nz+1)]`, three spin-potential
+arrays, three-vector face-spin arrays per flow axis, and three torque arrays.
+Public tensor artifacts remain `row_major_Q_ia`; internal SoA does not change
+that order. Every size is derived with checked integer arithmetic. Misaligned,
+undersized, overlapping where forbidden, wrong-device, or wrong-space views
+return `invalid_descriptor`.
+
+#### Frozen v1 records
+
+##### Typed steady-spin payload records outside the manifest
+
+The 18-record operation manifest is closed and unchanged. Static payload
+records are selected by the six existing views and therefore do not consume
+record IDs. A steady-spin descriptor uses these exact 8-byte-aligned layouts:
+
+| Payload | Size | Ordered tail after the common 32-byte prefix | Known features |
+|---|---:|---|---:|
+| `spin_cell_v1` | 72 | `active:u32`, `conductor:u32`, `material_index:u32`, `reserved1:u32`, `spin_active:u32`, `torque_target:u32`, `region_id:u32`, `reserved2:u32`, `saturation_magnetization:f64` | `0x0c` |
+| `spin_material_v1` | 112 | charge-material fields `material_index`, `reserved1`, `conductivity`, `material_revision`, followed by `spin_conductivity:f64`, `polarization:f64`, `spin_hall_angle:f64`, `spin_flip_length:f64`, `exchange_length:f64`, `dephasing_length:f64`, `spin_revision:u64` | `0x0c` |
+| `spin_boundary_face_v1` | 104 | `kind:u32`, `axis:u32`, `side:i32`, `outward_sign:i32`, `adjacent_cell:u64`, `canonical_face_index:u64`, `area:f64`, `potential_xyz:f64[3]`, `source_id:u64` | `0x08` |
+| `spin_interface_v1` | 176 | `kind:u32`, `axis:u32`, `orientation:i32`, `reserved1:u32`, `negative_cell:u64`, `positive_cell:u64`, `from_cell:u64`, `to_cell:u64`, `canonical_face_index:u64`, `area:f64`, `G_up/G_down/G_r/G_i:f64`, `magnetization_xyz:f64[3]`, `source_id:u64`, `topology_id:u64`, `charge_edge_enabled:u32`, `reserved2:u32` | `0x1c` |
+| `formula_ids_v1` | 144 | charge formula fields through byte 63, then nine spin IDs at offsets 64--99, `reserved2:u32`, `spin_operator_revision:u64`, `preconditioner_revision:u64`, `gamma_e:f64`, `gmres_restart:u64`, `reserved3:u64` | `0x1c` |
+
+The exact offsets and C names are normative in the physics note under
+`DOC-ANCHOR:fdm-gpu-m1-fp64-contract`. View order remains cells/materials/
+interfaces/charge-faces/spin-faces/formula-IDs. The first, second and sixth
+records are strict supersets of their existing charge records. Mixed positional
+interface matching is forbidden: the full source-plus-topology tuple is the
+identity and input order has no semantic effect. Boundary enum values are
+`0 invalid`, `1 insulating`, `2 sink`, `3 specified_potential`. Interface enum
+values are `0 invalid`, `1 transparent`, `2 mixing_conductance_v2`,
+`3 sml_reservoir_v2`; v1 bounded GPU rejects value 3. Every unlisted enum,
+nonzero reserved field, invalid feature mask, malformed extent, duplicate
+identity, inactive endpoint, wrong face area/sign/index, nonunit magnetization,
+or nonfinite physical value is rejected before static publication.
+
+The future ABI records have these complete semantic responsibilities:
+
+| Record | Required v1 content |
+|---|---|
+| `fullmag_fdm_gpu_transport_context_create_request_v1` | device ordinal/UUID constraint, precision=`double`, strict residency=true, deterministic-reduction policy, allocator/workspace byte limits, required features |
+| `fullmag_fdm_gpu_transport_context_create_result_v1` | typed context handle, resolved device UUID/runtime/build identity, registry generation, supported feature bits and initial telemetry cursor |
+| `fullmag_fdm_gpu_transport_static_descriptor_v1` | grid/cell sizes, active/conductor/torque masks, region/material tables, formula/operator IDs, oriented transparent/mixing interfaces, exact external charge/spin faces, descriptor and source revisions |
+| `fullmag_fdm_gpu_charge_solve_request_v1` | context handle, charge solver policy, component-gauge policy, attempt/stage/source identity, expected static revision |
+| `fullmag_fdm_gpu_charge_solve_result_v1` | provisional generation, algebraic/physical residuals, component/electrode balances, iterations/reason, transfer and peak-memory counters; no host vector pointers |
+| `fullmag_fdm_gpu_charge_snapshot_info_v1` | typed snapshot handle plus context, `snapshot_lineage_id`, `accepted_sequence`, local generation, source/operator revisions, `snapshot_content_digest`, convergence digest and device-resident byte count; no field pointers |
+| `fullmag_fdm_gpu_steady_spin_solve_request_v1` | context and accepted snapshot handles/generation, device `m_stage`, spin solver policy, torque destination, attempt/stage identity, expected revisions |
+| `fullmag_fdm_gpu_steady_spin_solve_result_v1` | algebraic/local/global/interface/torque balances, iterations/reason, snapshot identity, transfer/synchronization and peak-memory counters; no host vector pointers |
+| `fullmag_fdm_gpu_transport_telemetry_v1` | versioned event cursor plus direction, bytes, reason, count, attempt/stage/iteration scope, stream/event identity, convergence reductions, `host_fallback_count` |
+| `fullmag_fdm_gpu_transport_artifact_request_v1` | explicit accepted snapshot/field id, output cadence authorization, host destination, layout/unit/component metadata, bounded range |
+| `fullmag_fdm_gpu_transport_checkpoint_size_request_v1` | context/snapshot handles, accepted sequence, checkpoint schema version, inclusion mask and expected identities |
+| `fullmag_fdm_gpu_transport_checkpoint_size_result_v1` | exact required bytes, section count, alignment, schema/feature mask and current accepted-state digest |
+| `fullmag_fdm_gpu_transport_checkpoint_export_request_v1` | context/snapshot handles, accepted sequence, explicit checkpoint cadence authorization, host-write destination and exact capacity |
+| `fullmag_fdm_gpu_transport_checkpoint_export_result_v1` | committed byte count, payload SHA-256, snapshot/spin/warm-start digests, telemetry event and immutable accepted identities |
+| `fullmag_fdm_gpu_transport_checkpoint_import_request_v1` | fresh context in `static_uploaded`, host-read checkpoint bytes, expected SHA-256, expected device/build/static descriptor and restore policy |
+| `fullmag_fdm_gpu_transport_checkpoint_restore_result_v1` | new local snapshot handle/info, restored lineage/sequence/content digests, restored spin/warm-start state, transfer event and atomic commit status |
+| `fullmag_fdm_gpu_transport_error_v1` | stable status code, failed record/field, requested and available versions/features, context/snapshot/attempt ids, bounded UTF-8 diagnostic |
+
+The normative byte layouts use shortened record IDs below; generated C names
+prepend `fullmag_fdm_gpu_transport_` except for the already frozen charge and
+spin solve/snapshot names. The ordered tail is complete through `MIN_SIZE_V1`.
+
+| Record ID | MIN_SIZE_V1 | KNOWN_FEATURES_V1 | Ordered tail fields (`offset:name:type`) |
+|---|---:|---:|---|
+| `buffer_view_v1` | `80` | `0x0000000000000000` | `32:address:u64;40:element_count:u64;48:byte_stride:u64;56:byte_length:u64;64:element_type:u32;68:pointer_space:u32;72:component_order:u32;76:reserved0:u32` |
+| `context_create_request_v1` | `104` | `0x000000000000007f` | `32:device_uuid:u8[16];48:device_ordinal:i32;52:precision:u32;56:strict_residency:u32;60:deterministic:u32;64:allocator_limit:u64;72:workspace_limit:u64;80:stream_policy:u32;84:reserved0:u32;88:requested_device_features:u64;96:reserved1:u64` |
+| `context_create_result_v1` | `136` | `0x000000000000007f` | `32:context_handle:handle32;64:device_uuid:u8[16];80:compute_major:u32;84:compute_minor:u32;88:cuda_runtime:u32;92:cuda_driver:u32;96:build_digest:u8[32];128:supported_features:u64` |
+| `static_descriptor_v1` | `184` | `0x000000000000001c` | `32:grid:u64[3];56:cell_size:f64[3];80:descriptor_revision:u64;88:source_revision:u64;96:descriptor_digest:u8[32];128:masks_view_ptr:u64;136:materials_view_ptr:u64;144:interfaces_view_ptr:u64;152:charge_faces_view_ptr:u64;160:spin_faces_view_ptr:u64;168:formula_ids_view_ptr:u64;176:reserved0:u64` |
+| `charge_solve_request_v1` | `120` | `0x0000000000000007` | `32:context_handle:handle32;64:solver_policy:u32;68:gauge_policy:u32;72:attempt_id:u64;80:stage_id:u64;88:source_revision:u64;96:static_revision:u64;104:relative_tolerance:f64;112:max_iterations:u64` |
+| `charge_solve_result_v1` | `144` | `0x0000000000000007` | `32:provisional_generation:u64;40:iterations:u64;48:reason:u32;52:reserved0:u32;56:algebraic_residual:f64;64:physical_residual:f64;72:component_balance:f64;80:electrode_balance:f64;88:transfer_count:u64;96:transfer_bytes:u64;104:peak_bytes:u64;112:candidate_digest:u8[32]` |
+| `charge_snapshot_info_v1` | `216` | `0x0000000000000027` | `32:snapshot_handle:handle32;64:context_handle:handle32;96:snapshot_lineage_id:u8[16];112:accepted_sequence:u64;120:local_generation:u64;128:source_revision:u64;136:operator_revision:u64;144:snapshot_content_digest:u8[32];176:convergence_digest:u8[32];208:device_bytes:u64` |
+| `steady_spin_solve_request_v1` | `176` | `0x000000000000001f` | `32:context_handle:handle32;64:snapshot_handle:handle32;96:accepted_sequence:u64;104:m_stage_view_ptr:u64;112:torque_view_ptr:u64;120:solver_policy:u32;124:reserved0:u32;128:attempt_id:u64;136:stage_id:u64;144:source_revision:u64;152:operator_revision:u64;160:relative_tolerance:f64;168:max_iterations:u64` |
+| `steady_spin_solve_result_v1` | `176` | `0x000000000000001f` | `32:iterations:u64;40:reason:u32;44:reserved0:u32;48:algebraic_residual:f64;56:local_balance:f64;64:global_balance:f64;72:interface_balance:f64;80:torque_balance:f64;88:transfer_count:u64;96:transfer_bytes:u64;104:peak_bytes:u64;112:snapshot_content_digest:u8[32];144:deterministic_compute_digest:u8[32]` |
+| `transport_telemetry_v1` | `176` | `0x000000000000007f` | `32:audit_sequence:u64;40:direction:u32;44:reason:u32;48:status:u32;52:event_flags:u32;56:bytes:u64;64:count:u64;72:attempt_id:u64;80:stage_id:u64;88:iteration:u64;96:stream_id:u64;104:event_id:u64;112:operation_audit_digest:u8[32];144:scientific_continuation_digest:u8[32]` |
+| `artifact_request_v1` | `144` | `0x0000000000000044` | `32:context_handle:handle32;64:snapshot_handle:handle32;96:field_id:u32;100:cadence:u32;104:range_begin:u64;112:range_count:u64;120:destination_view_ptr:u64;128:expected_bytes:u64;136:accepted_sequence:u64` |
+| `checkpoint_size_request_v1` | `144` | `0x000000000000003f` | `32:context_handle:handle32;64:snapshot_handle:handle32;96:accepted_sequence:u64;104:schema_version:u32;108:inclusion_mask:u32;112:static_descriptor_digest:u8[32]` |
+| `checkpoint_size_result_v1` | `88` | `0x000000000000003f` | `32:required_bytes:u64;40:section_count:u32;44:alignment:u32;48:schema_version:u32;52:inclusion_mask:u32;56:snapshot_content_digest:u8[32]` |
+| `checkpoint_export_request_v1` | `144` | `0x000000000000003f` | `32:context_handle:handle32;64:snapshot_handle:handle32;96:accepted_sequence:u64;104:cadence_id:u64;112:destination_view_ptr:u64;120:exact_capacity:u64;128:expected_size:u64;136:inclusion_mask:u32;140:reserved0:u32` |
+| `checkpoint_export_result_v1` | `232` | `0x000000000000003f` | `32:committed_bytes:u64;40:payload_sha256:u8[32];72:snapshot_digest:u8[32];104:spin_digest:u8[32];136:warm_start_digest:u8[32];168:audit_sequence:u64;176:snapshot_lineage_id:u8[16];192:accepted_sequence:u64;200:operation_audit_digest:u8[32]` |
+| `checkpoint_import_request_v1` | `232` | `0x000000000000003f` | `32:context_handle:handle32;64:source_view_ptr:u64;72:expected_payload_sha256:u8[32];104:device_uuid:u8[16];120:build_digest:u8[32];152:static_descriptor_digest:u8[32];184:restore_policy:u32;188:reserved0:u32;192:expected_bytes:u64;200:audit_parent_digest:u8[32]` |
+| `checkpoint_restore_result_v1` | `232` | `0x000000000000003f` | `32:snapshot_handle:handle32;64:snapshot_lineage_id:u8[16];80:accepted_sequence:u64;88:snapshot_content_digest:u8[32];120:spin_digest:u8[32];152:warm_start_digest:u8[32];184:audit_sequence:u64;192:restored_state:u32;196:reserved0:u32;200:operation_audit_digest:u8[32]` |
+| `transport_error_v1` | `176` | `0x000000000000007f` | `32:status:u32;36:record_id:u32;40:field_offset:u32;44:reserved0:u32;48:requested_abi:u32;52:available_abi:u32;56:requested_struct:u32;60:available_struct:u32;64:requested_features:u64;72:available_features:u64;80:context_handle:handle32;112:snapshot_handle:handle32;144:attempt_id:u64;152:diagnostic_ptr:u64;160:diagnostic_capacity:u64;168:diagnostic_length:u64` |
+
+All ABI discriminants use the following closed numeric registries. Generated C
+and Rust bindings copy these values; they do not choose them. `u32_bool` owns
+both `strict_residency` and `deterministic`. `reason` in both solve-result
+records uses `convergence_reason`; charge and spin requests use their separate
+solver-policy registries. `schema_version` is u32 value 1 in every checkpoint
+request/result that carries it.
+
+| U32 registry | Name | Exact value | Zero/unknown rule |
+|---|---|---:|---|
+| `u32_bool` | `false` | `0` | zero/sentinel as named; other values rejected |
+| `u32_bool` | `true` | `1` | closed value |
+| `element_type` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `element_type` | `u8` | `1` | closed value |
+| `element_type` | `u32` | `2` | closed value |
+| `element_type` | `u64` | `3` | closed value |
+| `element_type` | `i32` | `4` | closed value |
+| `element_type` | `f64` | `5` | closed value |
+| `element_type` | `raw_bytes` | `6` | closed value |
+| `pointer_space` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `pointer_space` | `host_read_only` | `1` | closed value |
+| `pointer_space` | `host_write_only` | `2` | closed value |
+| `pointer_space` | `device_read_only` | `3` | closed value |
+| `pointer_space` | `device_write_only` | `4` | closed value |
+| `component_order` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `component_order` | `scalar` | `1` | closed value |
+| `component_order` | `xyz` | `2` | closed value |
+| `component_order` | `soa_xyz` | `3` | closed value |
+| `component_order` | `row_major_Q_ia` | `4` | closed value |
+| `component_order` | `oriented_face_xyz` | `5` | closed value |
+| `precision` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `precision` | `double` | `1` | closed value |
+| `precision` | `single_known_unsupported` | `2` | closed value |
+| `stream_policy` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `stream_policy` | `context_owned_single_stream` | `1` | closed value |
+| `charge_solver_policy` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `charge_solver_policy` | `cg_device_amg_v1` | `1` | closed value |
+| `spin_solver_policy` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `spin_solver_policy` | `restarted_gmres_component_amg_v1` | `1` | closed value |
+| `spin_solver_policy` | `restarted_gmres_block_jacobi_prototype_v1` | `2` | closed value |
+| `gauge_policy` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `gauge_policy` | `boundary_reference_per_component` | `1` | closed value |
+| `gauge_policy` | `zero_mean_per_free_component` | `2` | closed value |
+| `convergence_reason` | `unset` | `0` | zero/sentinel as named; other values rejected |
+| `convergence_reason` | `converged` | `1` | closed value |
+| `convergence_reason` | `max_iterations` | `2` | closed value |
+| `convergence_reason` | `non_finite` | `3` | closed value |
+| `convergence_reason` | `algebraic_failure` | `4` | closed value |
+| `convergence_reason` | `physical_balance_failure` | `5` | closed value |
+| `convergence_reason` | `cancelled` | `6` | closed value |
+| `telemetry_direction` | `none` | `0` | zero/sentinel as named; other values rejected |
+| `telemetry_direction` | `h2d` | `1` | closed value |
+| `telemetry_direction` | `d2h` | `2` | closed value |
+| `telemetry_direction` | `device_internal` | `3` | closed value |
+| `telemetry_direction` | `d2d` | `4` | closed value |
+| `telemetry_reason` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `telemetry_reason` | `static_upload_h2d` | `1` | closed value |
+| `telemetry_reason` | `scalar_reduction_d2h` | `2` | closed value |
+| `telemetry_reason` | `artifact_readback_d2h` | `3` | closed value |
+| `telemetry_reason` | `checkpoint_export_d2h` | `4` | closed value |
+| `telemetry_reason` | `checkpoint_import_h2d` | `5` | closed value |
+| `telemetry_reason` | `stream_synchronize` | `6` | closed value |
+| `telemetry_reason` | `event_wait` | `7` | closed value |
+| `telemetry_reason` | `rejected_attempt` | `8` | closed value |
+| `telemetry_reason` | `solve_state_d2d` | `9` | closed value |
+| `telemetry_status` | `success` | `0` | zero/sentinel as named; other values rejected |
+| `telemetry_status` | `failed` | `1` | closed value |
+| `telemetry_status` | `rejected` | `2` | closed value |
+| `artifact_field_id` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `artifact_field_id` | `V` | `1` | closed value |
+| `artifact_field_id` | `J_c` | `2` | closed value |
+| `artifact_field_id` | `mu_s` | `3` | closed value |
+| `artifact_field_id` | `Q_ia` | `4` | closed value |
+| `artifact_field_id` | `torque_stt` | `5` | closed value |
+| `artifact_field_id` | `charge_interface_trace` | `6` | closed value |
+| `artifact_field_id` | `transport_observations` | `7` | closed value |
+| `artifact_cadence` | `forbidden` | `0` | zero/sentinel as named; other values rejected |
+| `artifact_cadence` | `accepted_step` | `1` | closed value |
+| `artifact_cadence` | `final_state` | `2` | closed value |
+| `artifact_cadence` | `explicit_request` | `3` | closed value |
+| `checkpoint_schema_version` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `checkpoint_schema_version` | `v1` | `1` | closed value |
+| `checkpoint_restore_policy` | `invalid` | `0` | zero/sentinel as named; other values rejected |
+| `checkpoint_restore_policy` | `exact_same_device_build` | `1` | closed value |
+| `checkpoint_restored_state` | `not_restored` | `0` | zero/sentinel as named; other values rejected |
+| `checkpoint_restored_state` | `restored_charge_accepted` | `1` | closed value |
+| `checkpoint_restored_state` | `restored_spin_accepted` | `2` | closed value |
+| `error_status` | `ok` | `0` | zero/sentinel as named; other values rejected |
+| `error_status` | `unsupported` | `1` | closed value |
+| `error_status` | `incompatible_abi` | `2` | closed value |
+| `error_status` | `invalid_descriptor` | `3` | closed value |
+| `error_status` | `invalid_pointer_space` | `4` | closed value |
+| `error_status` | `invalid_state` | `5` | closed value |
+| `error_status` | `out_of_memory` | `6` | closed value |
+| `error_status` | `nonconverged` | `7` | closed value |
+| `error_status` | `balance_failure` | `8` | closed value |
+| `error_status` | `stale_snapshot` | `9` | closed value |
+| `error_status` | `strict_gpu_residency_violation` | `10` | closed value |
+| `error_status` | `cuda_runtime_error` | `11` | closed value |
+| `error_status` | `live_snapshot` | `12` | closed value |
+| `error_status` | `already_destroyed` | `13` | closed value |
+| `error_status` | `out_of_resources` | `14` | closed value |
+| `error_status` | `unsupported_required_feature` | `15` | closed value |
+| `error_status` | `checkpoint_incompatible` | `16` | closed value |
+| `record_id` | `none` | `0` | zero/sentinel as named; other values rejected |
+| `record_id` | `buffer_view_v1` | `1` | closed value |
+| `record_id` | `context_create_request_v1` | `2` | closed value |
+| `record_id` | `context_create_result_v1` | `3` | closed value |
+| `record_id` | `static_descriptor_v1` | `4` | closed value |
+| `record_id` | `charge_solve_request_v1` | `5` | closed value |
+| `record_id` | `charge_solve_result_v1` | `6` | closed value |
+| `record_id` | `charge_snapshot_info_v1` | `7` | closed value |
+| `record_id` | `steady_spin_solve_request_v1` | `8` | closed value |
+| `record_id` | `steady_spin_solve_result_v1` | `9` | closed value |
+| `record_id` | `transport_telemetry_v1` | `10` | closed value |
+| `record_id` | `artifact_request_v1` | `11` | closed value |
+| `record_id` | `checkpoint_size_request_v1` | `12` | closed value |
+| `record_id` | `checkpoint_size_result_v1` | `13` | closed value |
+| `record_id` | `checkpoint_export_request_v1` | `14` | closed value |
+| `record_id` | `checkpoint_export_result_v1` | `15` | closed value |
+| `record_id` | `checkpoint_import_request_v1` | `16` | closed value |
+| `record_id` | `checkpoint_restore_result_v1` | `17` | closed value |
+| `record_id` | `transport_error_v1` | `18` | closed value |
+
+Bitmask fields use these exact bits:
+
+| U32 flag registry | Name | Exact bit | Legality |
+|---|---|---:|---|
+| `telemetry_event_flags` | `none` | `0x00000000` | known v1 bit/value |
+| `telemetry_event_flags` | `transfer` | `0x00000001` | known v1 bit/value |
+| `telemetry_event_flags` | `synchronization` | `0x00000002` | known v1 bit/value |
+| `telemetry_event_flags` | `cadence_authorized` | `0x00000004` | known v1 bit/value |
+| `telemetry_event_flags` | `scientific_commit` | `0x00000008` | known v1 bit/value |
+| `telemetry_event_flags` | `provisional` | `0x00000010` | known v1 bit/value |
+| `telemetry_event_flags` | `failed` | `0x00000020` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `none` | `0x00000000` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `charge_arrays` | `0x00000001` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `charge_observations` | `0x00000002` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `spin_arrays` | `0x00000004` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `spin_observations_and_torque` | `0x00000008` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `warm_starts` | `0x00000010` | known v1 bit/value |
+| `checkpoint_inclusion_mask` | `continuation_meta` | `0x00000020` | known v1 bit/value |
+
+| U32 flag registry | LEGAL_MASK_V1 |
+|---|---:|
+| `telemetry_event_flags` | `0x0000003f` |
+| `checkpoint_inclusion_mask` | `0x0000003f` |
+
+For every registry, closed enum unknown u32 values are invalid_descriptor. The zero entry is
+the only sentinel: it is legal only where named `none`, `unset`, `success`,
+`forbidden`, `not_restored`, or `ok`; every `invalid` entry is rejected.
+`error_status ok=0 is forbidden in transport_error_v1`; `record_id none=0` is
+legal only when no error record is emitted. `strict_residency and deterministic
+are u32 booleans restricted to 0 or 1`. `schema_version is u32 value 1`.
+
+`telemetry_event_flags unknown bits are incompatible_abi`. A transfer event
+sets `transfer`, uses direction `h2d`, `d2h`, or `d2d`, and has an exact transfer
+reason. A synchronization event sets `synchronization` and uses direction
+`device_internal`. `failed` and `scientific_commit` are mutually exclusive;
+`cadence_authorized` is legal only for artifact/checkpoint transfer reasons.
+`checkpoint_inclusion_mask unknown bits are unsupported_required_feature`.
+The checkpoint charge-only required mask is 0x00000033; the checkpoint
+spin-required mask is 0x0000003f. Other inclusion combinations are rejected in
+v1 rather than silently dropping state.
+
+`struct_size` may exceed the listed minimum only for an optional same-version
+tail. Old-v1/new-v1 accepts that tail only when `required_features` is a subset
+of the row mask. A v1 callee rejects struct version 2 even when its size is
+larger; a v2 callee uses a separately published `MIN_SIZE_V2` and may accept
+the exact v1 prefix only for operations whose v2-required mask is empty. These
+rules, the offsets above and the common prefix are the independent ABI layout
+oracle; generated headers must match them, not define them.
+
+#### Operations and state machine
+
+The append-only operation family is semantically:
+
+```text
+context_create
+upload_static_descriptor
+solve_charge
+accept_charge_snapshot
+solve_steady_spin
+query_telemetry
+readback_artifact
+checkpoint_query_size
+checkpoint_export
+checkpoint_import
+charge_snapshot_destroy
+context_destroy
+```
+
+`context_create` selects one device and FP64 strict policy. A successful
+`upload_static_descriptor` atomically replaces no state: the first upload
+establishes the immutable operator identity; a changed descriptor requires a
+new context in v1. `solve_charge` creates provisional device state. Only
+`accept_charge_snapshot` after all charge gates pass creates the next immutable
+accepted generation. `solve_steady_spin` requires that exact generation and
+does not read or reconstruct charge data on the host.
+
+`query_telemetry` returns bounded scalar/event records by cursor without
+transferring fields. `readback_artifact` is legal only for an accepted state
+and explicit configured cadence; it records direction, bytes, reason, and
+field metadata. Checkpoint operations follow the separate committed-payload
+contract below. Snapshot destruction retires its registry token without
+free-pointer reuse. Context destruction fails while live snapshots or
+operations remain. Reusing a retired token is safe and typed as specified by
+the registry state; it never dereferences released storage.
+
+The state machine is:
+
+```text
+empty -> static_uploaded -> charge_provisional -> charge_accepted
+charge_accepted -> spin_provisional -> spin_accepted
+*_provisional -> rejected -> previous accepted state
+charge_accepted|spin_accepted -> checkpoint_exporting -> same accepted state
+fresh static_uploaded -> checkpoint_importing -> restored_charge_accepted|restored_spin_accepted
+checkpoint_importing -> rejected -> static_uploaded
+```
+
+A rejected attempt appends telemetry but does not advance snapshot, field,
+cache, or accepted-stage revisions. New charge acceptance invalidates spin
+cache entries that name an older generation but does not mutate already held
+snapshots. Cache keys and checkpoints include ABI/layout, device/build,
+descriptor/source/operator, precision/determinism, snapshot generation, and
+formula/operator/engine/residual identities. Restart validates all identities
+before allocation and never performs an implicit cross-device migration.
+
+#### Checkpoint payload and atomic restore
+
+FDM GPU M1 uses full committed-state export/import; restart never silently
+re-solves charge. The canonical payload schema is
+`fullmag.fdm_gpu_transport_checkpoint.v1`. Its integer fields and IEEE-754
+binary64 payloads are little-endian. Raw pointers, process registry tokens,
+CUDA handles, stream/event handles and allocator addresses are forbidden.
+
+The fixed v1 header is exactly 320 bytes:
+
+| Offset | Field | Type and v1 rule |
+|---:|---|---|
+| 0 | `magic` | `u8[8]`, exactly `FMGPUTR1` |
+| 8 | `schema_major` | `u16`, exactly 1 |
+| 10 | `schema_minor` | `u16`, exactly 0 |
+| 12 | `header_size` | `u32`, exactly 320 |
+| 16 | `endian_tag` | `u32`, exactly `0x01020304` |
+| 20 | `section_descriptor_size` | `u32`, exactly 96 |
+| 24 | `section_count` | `u32` |
+| 28 | `reserved0` | `u32`, zero |
+| 32 | `total_size` | `u64`, complete file bytes |
+| 40 | `section_table_offset` | `u64`, exactly 320 |
+| 48 | `payload_offset` | `u64`, first 64-byte-aligned section |
+| 56 | `flags` | `u64`, zero in v1 |
+| 64 | `required_features` | `u64`, subset of `KNOWN_GLOBAL_FEATURES_V1` |
+| 72 | `accepted_sequence` | `u64` |
+| 80 | `snapshot_lineage_id` | `u8[16]` |
+| 96 | `device_uuid` | `u8[16]` |
+| 112 | `build_digest` | `u8[32]` |
+| 144 | `static_descriptor_digest` | `u8[32]` |
+| 176 | `snapshot_content_digest` | `u8[32]` |
+| 208 | `descriptor_table_sha256` | `u8[32]` |
+| 240 | `ordered_section_data_sha256` | `u8[32]` |
+| 272 | `file_sha256` | `u8[32]` |
+| 304 | `reserved1` | `u8[16]`, zero |
+
+Every section descriptor is exactly 96 bytes:
+
+| Offset | Field | Type and v1 rule |
+|---:|---|---|
+| 0 | `section_id` | `u32`, strictly ascending |
+| 4 | `section_version` | `u16`, exactly 1 for known v1 IDs |
+| 6 | `section_flags` | `u16`; bit 0 means required, all other bits zero |
+| 8 | `element_type` | `u32`: 1=`u8`, 2=`u32`, 3=`u64`, 4=`i32`, 5=`f64`, 6=raw bytes |
+| 12 | `element_size` | `u32`, exact width for the element type |
+| 16 | `element_count` | `u64` |
+| 24 | `file_offset` | `u64`, 64-byte aligned |
+| 32 | `byte_length` | `u64`, checked `element_count*element_size` |
+| 40 | `uncompressed_length` | `u64`, equal to `byte_length` in v1 |
+| 48 | `section_sha256` | `u8[32]` over exactly `byte_length` bytes at `file_offset` |
+| 80 | `reserved` | `u8[16]`, zero |
+
+Descriptors are contiguous at byte 320. The first payload offset is
+`align_up(320 + 96*section_count, 64)`. Sections occur in ascending ID order,
+each starts at `align_up(previous_end,64)`, and `total_size` is
+`align_up(last_end,64)`. Every byte in header, descriptor, inter-section and
+final padding is zero unless assigned above. Checked arithmetic rejects
+overlap, wraparound, a section outside `total_size`, inconsistent element
+length, duplicate/out-of-order IDs, or non-canonical padding.
+
+Every equality in that layout algorithm is exact and minimal. A section
+`file_offset` must equal, not merely exceed,
+`align_up(previous_end,64)`. File length, header `total_size`, and
+`align_up(last_section_end,64)` must be identical. Therefore an additional
+aligned zero block after canonical trailing padding or an extra zero gap before
+a section is non-canonical and rejected even when every digest is recomputed.
+
+Hash domains are exact. `descriptor_table_sha256` covers only the
+`96*section_count` descriptor bytes. `ordered_section_data_sha256` covers the
+concatenation of section data in descriptor order and excludes padding.
+`file_sha256` covers bytes `[0,total_size)` with only bytes 272--303 replaced
+by zero. The published file retains the computed digest in those bytes. The
+external payload SHA-256 in the ABI result is the ordinary SHA-256 over all
+published file bytes, including the populated `file_sha256` field.
+
+The complete v1 section-ID registry is:
+
+| ID | Name | Presence |
+|---:|---|---|
+| 1 | `charge_meta` | required |
+| 2 | `V` | required |
+| 3--5 | `Jx`, `Jy`, `Jz` | required |
+| 6 | `masks` | required |
+| 7 | `exact_density_faces` | required |
+| 8 | `charge_interface_traces` | required |
+| 9 | `charge_observations` | required |
+| 10 | `spin_meta` | optional; when present, IDs 11--17 are required |
+| 11 | `mu_s` | conditional |
+| 12--14 | `Qx`, `Qy`, `Qz` | conditional |
+| 15 | `spin_reactions` | conditional |
+| 16 | `spin_interface_observations` | conditional |
+| 17 | `torque` | conditional |
+| 18 | `charge_warm_start` | required |
+| 19 | `spin_warm_start` | required when ID 10 is present |
+| 20 | `solver_continuation_meta` | required |
+
+IDs 2--5 and 11--14 contain raw little-endian FP64 values in the frozen SoA
+order above. Every other section uses the following exact canonical subrecord
+codec and has descriptor `element_type=6`, `element_size=1`, and
+`element_count=byte_length`:
+
+```text
+subrecord header (16 bytes)
+0:record_version:u16 = 1
+2:record_flags:u16 = 0
+4:field_count:u32
+8:record_bytes:u64 = section byte_length
+
+field descriptor (32 bytes, repeated field_count times)
+0:field_id:u16
+2:field_type:u16
+4:field_flags:u32       # bit 0 required; other bits zero
+8:element_count:u64
+16:data_offset:u64      # from section start, 8-byte aligned
+24:byte_length:u64
+```
+
+Field descriptors start at byte 16, are strictly ascending by `field_id`, and
+do not overlap. First data is at `align_up(16+32*field_count,8)`; each later
+field is at `align_up(previous_end,8)` and `record_bytes` is
+`align_up(last_end,8)`. All padding is zero. Field types are 1=`u8`, 2=`u32`,
+3=`u64`, 4=`i32`, 5=`f64`, 6=`u8[16]`, 7=`u8[32]`, 8=`UTF-8`, and 9=`UTF-8
+list`. Fixed-width fields require exact `count*width`. Type 8 has one
+NFC-normalized UTF-8 string, no NUL. Type 9 has exactly `element_count`
+strings encoded consecutively as `byte_count:u32` plus NFC-normalized bytes,
+without NUL, and `byte_length` covers the complete sequence.
+
+Those subrecord offsets are also exact minimal equalities: every `data_offset`
+must equal the stated `align_up`, and `record_bytes` must equal the first
+aligned byte after the final field. Extra zero bytes before field data or after
+canonical record padding are invalid even when descriptor lengths and hashes
+are internally consistent.
+
+The per-section v1 field registry is normative; every listed field is required
+and its position in the list is its `field_id`:
+
+| Section | Ordered field names and types |
+|---|---|
+| 1 `charge_meta` | `compute_capability:u32[2]`, `cuda_driver:u32`, `cuda_runtime:u32`, `compiler_identity:utf8`, `deterministic_policy_digest:sha256`, `formula_id:utf8`, `operator_id:utf8`, `engine_id:utf8`, `residual_id:utf8`, `grid:u64[3]`, `cell_size:f64[3]`, `descriptor_revision:u64`, `source_revision:u64`, `operator_revision:u64`, `component_count:u64`, `gauge_component_ids:u32[]`, `gauge_values:f64[]`, `convergence_reason:u32`, `iterations:u64`, `work_budget:u64` |
+| 6 `masks` | `active:u8[]`, `conductor:u8[]`, `torque_target:u8[]`, `material_region:u32[]`, `conductivity_revision:u64` |
+| 7 `exact_density_faces` | `cell_linear:u64[]`, `axis:u32[]`, `side:i32[]`, `area:f64[]`, `density:f64[]`, `source_ids:utf8_list` |
+| 8 `charge_interface_traces` | `interface_ids:utf8_list`, `face_linear:u64[]`, `orientation:i32[]`, `V_N:f64[]`, `V_F:f64[]`, `J_N:f64[]`, `J_F:f64[]` |
+| 9 `charge_observations` | `electrode_ids:utf8_list`, `electrode_current:f64[]`, `component_balance:f64[]`, `physical_residual:f64[]` |
+| 10 `spin_meta` | `formula_id:utf8`, `operator_id:utf8`, `engine_id:utf8`, `residual_id:utf8`, `source_revision:u64`, `operator_revision:u64`, `convergence_reason:u32`, `iterations:u64`, `work_budget:u64`, `deterministic_compute_digest:sha256` |
+| 15 `spin_reactions` | `R_sf_x:f64[]`, `R_sf_y:f64[]`, `R_sf_z:f64[]`, `R_J_x:f64[]`, `R_J_y:f64[]`, `R_J_z:f64[]`, `R_phi_x:f64[]`, `R_phi_y:f64[]`, `R_phi_z:f64[]` |
+| 16 `spin_interface_observations` | `interface_ids:utf8_list`, `face_linear:u64[]`, `orientation:i32[]`, `incoming_x:f64[]`, `incoming_y:f64[]`, `incoming_z:f64[]`, `backflow_x:f64[]`, `backflow_y:f64[]`, `backflow_z:f64[]`, `absorbed_x:f64[]`, `absorbed_y:f64[]`, `absorbed_z:f64[]` |
+| 17 `torque` | `volume_x:f64[]`, `volume_y:f64[]`, `volume_z:f64[]`, `surface_x:f64[]`, `surface_y:f64[]`, `surface_z:f64[]`, `balance:f64[]` |
+| 18 `charge_warm_start` | `engine_id:utf8`, `preconditioner_revision:u64`, `restart_position:u64`, `basis_count:u64`, `iterate:f64[]`, `basis:f64[]`, `deterministic_reduction_state:u8[]` |
+| 19 `spin_warm_start` | same seven fields and types as section 18, for the spin engine |
+| 20 `solver_continuation_meta` | `accepted_sequence:u64`, `attempt_id:u64`, `stage_id:u64`, `telemetry_cursor:u64`, `charge_work_budget:u64`, `spin_work_budget:u64`, `scientific_continuation_digest:sha256` |
+
+For a spin-accepted state, the inclusion mask is exactly `0x3f` and sections
+10--17, 19 and 20 are mandatory in addition to charge sections 1--9 and 18.
+Section 10 fixes formula/operator/electric/interface/torque/engine/
+preconditioner/residual IDs, revisions, convergence reason, iteration/work
+budget and deterministic compute digest. Section 15 contains separate SoA
+`R_sf`, `R_J` and `R_phi`; section 16 keys each observation by the complete
+source-plus-topology tuple and stores incoming, backflow, absorbed, both
+one-sided fluxes and explicit zero-or-valued SML channels; section 17 stores
+volume, surface and final torque plus closure; section 19 stores the restarted
+GMRES iterate, component-AMG/block-Jacobi revision, restart position, basis and
+fixed-tree reduction continuation. Spin checkpoint size is dynamic and must
+never reuse the charge-only 4352-byte oracle as an expected size.
+
+Parallel arrays within one subrecord have equal element counts unless a field
+is explicitly scalar; vector component arrays have the corresponding cell or
+face count from section 1. A mismatch is `checkpoint_incompatible`. A v1
+exporter emits only known IDs and exactly the listed fields. An unknown
+required section or field is rejected. An unknown optional section or field
+may be skipped only at schema minor 0 with no unknown required feature bit; it
+remains inside its containing hash domains.
+
+`checkpoint_query_size` uses the same checked alignment algorithm and returns
+the exact `total_size`; export rejects any capacity other than that value.
+
+Two byte oracles have separate jobs. The codec-only golden contains complete
+section 1 `charge_meta` with all 20 registered fields and section 2
+`V=[1.0]`. Both section descriptors and the complete subrecord are canonical,
+so the independent decoder must accept its byte grammar. It deliberately lacks
+required charge sections 3--9, 18, and 20, so a scientific importer rejects it
+as incomplete and a runtime exporter never emits it. codec-only golden
+length=1600 bytes; codec-only golden SHA-256=ad8d00c7c4d3c349ee203946145b9d02f8e34f331ee9687645c9c981bb33b803; its embedded
+zeroed-field file hash is `89a625b9d60665cb3af867bd648da62dbb4ea255e23ef785139d43bc08bfed02`.
+
+```text
+FMGPUTR1_GOLDEN_HEX_BEGIN
+464d4750555452310100000040010000040302016000000002000000000000004006000000000000400100000000000000020000000000000000000000000000
+20000000000000000700000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f11111111111111111111111111111111
+1111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221bac8a12f6f01e209eb89003bf85ec6a
+32ec36c5a0e2db7bd358c821686a1178946642161d639a63c9393149a1f6f4238e097c92abbd87d046479ff8d4d98a691bac8a12f6f01e209eb89003bf85ec6a
+32ec36c5a0e2db7bd358c821686a117889a625b9d60665cb3af867bd648da62dbb4ea255e23ef785139d43bc08bfed0200000000000000000000000000000000
+01000000010001000600000001000000d8030000000000000002000000000000d803000000000000d80300000000000050665af27e6eea713655954d8c26eabc
+137cb7853cde6cc2096a3c800e775f80000000000000000000000000000000000200000001000100050000000800000001000000000000000006000000000000
+080000000000000008000000000000006c3c396ed6b5c36dcae172271f462051b1266b851e92df3deea8ac65478fd71200000000000000000000000000000000
+0100000014000000d803000000000000010002000100000002000000000000009002000000000000080000000000000002000200010000000100000000000000
+9802000000000000040000000000000003000200010000000100000000000000a002000000000000040000000000000004000800010000000100000000000000
+a8020000000000000b0000000000000005000700010000000100000000000000b802000000000000200000000000000006000800010000000100000000000000
+d8020000000000002900000000000000070008000100000001000000000000000803000000000000150000000000000008000800010000000100000000000000
+200300000000000020000000000000000900080001000000010000000000000040030000000000001f000000000000000a000300010000000300000000000000
+600300000000000018000000000000000b000500010000000300000000000000780300000000000018000000000000000c000300010000000100000000000000
+900300000000000008000000000000000d000300010000000100000000000000980300000000000008000000000000000e000300010000000100000000000000
+a00300000000000008000000000000000f000300010000000100000000000000a803000000000000080000000000000010000200010000000100000000000000
+b003000000000000040000000000000011000500010000000100000000000000b803000000000000080000000000000012000200010000000100000000000000
+c003000000000000040000000000000013000300010000000100000000000000c803000000000000080000000000000014000300010000000100000000000000
+d00300000000000008000000000000000800000000000000e02e000000000000e02e0000000000006e7663632d676f6c64656e00000000004444444444444444
+4444444444444444444444444444444444444444444444447472616e73706f72745f636f6e7374697475746976652e6f6e655f7761792e66756c6c6d61672e76
+310000000000000066765f6368617267655f6861726d6f6e69635f763100000066646d5f6368617267655f63675f6465766963655f616d675f637564615f7631
+6368617267655f62616c616e63655f696e74656772617465645f6c322e763100010000000000000001000000000000000100000000000000000000000000f03f
+000000000000f03f000000000000f03f01000000000000000100000000000000010000000000000001000000000000000000000000000000000000000000f03f
+01000000000000000100000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000f03f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+FMGPUTR1_GOLDEN_HEX_END
+```
+
+The restore-valid charge-only golden is a distinct conforming codec payload for
+a one-cell `grid=[1,1,1]`, `V=[1.0]`, two zero x/y/z boundary-face currents,
+one active conductor/material cell, no density or interface faces, one zero
+ground-current observation, one charge warm start, and accepted sequence 7.
+It contains exactly required IDs 1--9, 18, and 20. Its charge-only inclusion
+mask is `0x00000033`. Snapshot content is SHA-256 over section data IDs 1--9
+in order. Its `scientific_continuation_digest` is SHA-256 over the header
+`snapshot_content_digest`, section 18 bytes, and section 20 bytes with field
+7 data zeroed. restore-valid checkpoint length=4352 bytes;
+restore-valid checkpoint SHA-256=ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5; its embedded zeroed-field file hash
+is `bc3bcc1b51314fe46e0bbd2f71e94f1517f8e438943853e33b8e79b1495c7b60`.
+
+Ten frozen payload jest **torem A**: ma syntetyczne pola device UUID, build
+digest i static-descriptor digest. Niezależny validator musi zaakceptować jego
+gramatykę, section set, hashe i scientific content, lecz actual-runtime import
+do kontekstu o bieżącej tożsamości musi zwrócić `checkpoint_incompatible`.
+Nie jest to błąd oracla i nie wolno konstruować fikcyjnego kontekstu, aby
+przepchnąć syntetyczną tożsamość przez exact-identity policy.
+
+**Tor B** jest osobnym actual-runtime dowodem: backend rozwiązuje rzeczywisty
+one-cell charge state do accepted sequence 7, eksportuje ten sam kanoniczny
+11-section layout o rozmiarze 4352 bajty, a następnie importuje go do świeżego
+kontekstu z dokładnie zgodnym device/build/static identity. Payload SHA-256
+toru B zależy od tej tożsamości oraz builda i nie ma być równy frozen SHA toru
+A. W runie z build digest
+`700e798c56bdde3029759e3460a39762e325d5108401e5907819a7b064a9ca3d`
+wyniósł
+`d2b25960eb31376b1b2fe6aa8ba07944ba69a695125a381a398da46f891123f9`.
+Po imporcie odczyty $V$ i $J_c$ muszą być bitowo równe stanowi eksportowanemu
+bez deterministycznego re-solve. Frozen SHA toru A jest stabilnym oraclem
+kodeka; observed SHA toru B jest dowodem konkretnego runtime runu, nie nową
+stałą ABI.
+
+```text
+FMGPUTR1_RESTORE_GOLDEN_HEX_BEGIN
+464d475055545231010000004001000004030201600000000b000000000000000011000000000000400100000000000080050000000000000000000000000000
+20000000000000000700000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f11111111111111111111111111111111
+111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222ec18e12165a6161b4b055050c2fdff1b
+fc2e55a5c9ea42e282793ac12ec5c5d756e2f29d17e3c58d64abc40007d755e614fd8114afee6a225a3bc8ecda2f69d036f78555d34b7ac31363d38b4737f469
+fefcab013e91260d434976b32e45f420bc3bcc1b51314fe46e0bbd2f71e94f1517f8e438943853e33b8e79b1495c7b6000000000000000000000000000000000
+01000000010001000600000001000000d8030000000000008005000000000000d803000000000000d80300000000000050665af27e6eea713655954d8c26eabc
+137cb7853cde6cc2096a3c800e775f80000000000000000000000000000000000200000001000100050000000800000001000000000000008009000000000000
+080000000000000008000000000000006c3c396ed6b5c36dcae172271f462051b1266b851e92df3deea8ac65478fd71200000000000000000000000000000000
+030000000100010005000000080000000200000000000000c00900000000000010000000000000001000000000000000374708fff7719dd5979ec875d56cd228
+6f6d3cf7ec317a3b25632aab28ec37bb00000000000000000000000000000000040000000100010005000000080000000200000000000000000a000000000000
+10000000000000001000000000000000374708fff7719dd5979ec875d56cd2286f6d3cf7ec317a3b25632aab28ec37bb00000000000000000000000000000000
+050000000100010005000000080000000200000000000000400a00000000000010000000000000001000000000000000374708fff7719dd5979ec875d56cd228
+6f6d3cf7ec317a3b25632aab28ec37bb0000000000000000000000000000000006000000010001000600000001000000d800000000000000800a000000000000
+d800000000000000d800000000000000ae6cc629869bf1d3d7f94bcfba569723fff5c5a820304a87b21b8c294f0bbc0900000000000000000000000000000000
+07000000010001000600000001000000d000000000000000800b000000000000d000000000000000d0000000000000005824bc51c8067b278ac68716a2596152
+26b3ddf4c8ad42d02cfa46ecc2d9ee8a0000000000000000000000000000000008000000010001000600000001000000f000000000000000800c000000000000
+f000000000000000f000000000000000aca69bbaceb0278503bdfffd1b3d1b60095581d0be723385e685b2cb6d35cf5c00000000000000000000000000000000
+09000000010001000600000001000000b800000000000000800d000000000000b800000000000000b800000000000000c1aef0f0d15961f0524f80cc45f12fb2
+4f6135ff02d964b3de8f202843acb2b400000000000000000000000000000000120000000100010006000000010000005001000000000000400e000000000000
+50010000000000005001000000000000c71895e9f128587ed5085bf7fb65d8ee39481717a7f11eac6df28de27be66b9600000000000000000000000000000000
+140000000100010006000000010000004001000000000000c00f000000000000400100000000000040010000000000000df7cd3187feac0851e8022841d9c49c
+38a6305043c90b946425b3b259a54140000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0100000014000000d803000000000000010002000100000002000000000000009002000000000000080000000000000002000200010000000100000000000000
+9802000000000000040000000000000003000200010000000100000000000000a002000000000000040000000000000004000800010000000100000000000000
+a8020000000000000b0000000000000005000700010000000100000000000000b802000000000000200000000000000006000800010000000100000000000000
+d8020000000000002900000000000000070008000100000001000000000000000803000000000000150000000000000008000800010000000100000000000000
+200300000000000020000000000000000900080001000000010000000000000040030000000000001f000000000000000a000300010000000300000000000000
+600300000000000018000000000000000b000500010000000300000000000000780300000000000018000000000000000c000300010000000100000000000000
+900300000000000008000000000000000d000300010000000100000000000000980300000000000008000000000000000e000300010000000100000000000000
+a00300000000000008000000000000000f000300010000000100000000000000a803000000000000080000000000000010000200010000000100000000000000
+b003000000000000040000000000000011000500010000000100000000000000b803000000000000080000000000000012000200010000000100000000000000
+c003000000000000040000000000000013000300010000000100000000000000c803000000000000080000000000000014000300010000000100000000000000
+d00300000000000008000000000000000800000000000000e02e000000000000e02e0000000000006e7663632d676f6c64656e00000000004444444444444444
+4444444444444444444444444444444444444444444444447472616e73706f72745f636f6e7374697475746976652e6f6e655f7761792e66756c6c6d61672e76
+310000000000000066765f6368617267655f6861726d6f6e69635f763100000066646d5f6368617267655f63675f6465766963655f616d675f637564615f7631
+6368617267655f62616c616e63655f696e74656772617465645f6c322e763100010000000000000001000000000000000100000000000000000000000000f03f
+000000000000f03f000000000000f03f01000000000000000100000000000000010000000000000001000000000000000000000000000000000000000000f03f
+01000000000000000100000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000f03f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0100000005000000d80000000000000001000100010000000100000000000000b000000000000000010000000000000002000100010000000100000000000000
+b800000000000000010000000000000003000100010000000100000000000000c000000000000000010000000000000004000200010000000100000000000000
+c800000000000000040000000000000005000300010000000100000000000000d000000000000000080000000000000001000000000000000100000000000000
+00000000000000000100000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0100000006000000d00000000000000001000300010000000000000000000000d000000000000000000000000000000002000200010000000000000000000000
+d000000000000000000000000000000003000400010000000000000000000000d000000000000000000000000000000004000500010000000000000000000000
+d000000000000000000000000000000005000500010000000000000000000000d000000000000000000000000000000006000900010000000000000000000000
+d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0100000007000000f00000000000000001000900010000000000000000000000f000000000000000000000000000000002000300010000000000000000000000
+f000000000000000000000000000000003000400010000000000000000000000f000000000000000000000000000000004000500010000000000000000000000
+f000000000000000000000000000000005000500010000000000000000000000f000000000000000000000000000000006000500010000000000000000000000
+f000000000000000000000000000000007000500010000000000000000000000f000000000000000000000000000000000000000000000000000000000000000
+0100000004000000b8000000000000000100090001000000010000000000000090000000000000000a0000000000000002000500010000000100000000000000
+a000000000000000080000000000000003000500010000000100000000000000a800000000000000080000000000000004000500010000000100000000000000
+b00000000000000008000000000000000600000067726f756e640000000000000000000000000000000000000000000000000000000000000000000000000000
+0100000007000000500100000000000001000800010000000100000000000000f000000000000000200000000000000002000300010000000100000000000000
+10010000000000000800000000000000030003000100000001000000000000001801000000000000080000000000000004000300010000000100000000000000
+20010000000000000800000000000000050005000100000001000000000000002801000000000000080000000000000006000500010000000000000000000000
+30010000000000000000000000000000070001000100000020000000000000003001000000000000200000000000000066646d5f6368617267655f63675f6465
+766963655f616d675f637564615f7631010000000000000000000000000000000000000000000000000000000000f03f00000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0100000007000000400100000000000001000300010000000100000000000000f000000000000000080000000000000002000300010000000100000000000000
+f8000000000000000800000000000000030003000100000001000000000000000001000000000000080000000000000004000300010000000100000000000000
+08010000000000000800000000000000050003000100000001000000000000001001000000000000080000000000000006000300010000000100000000000000
+18010000000000000800000000000000070007000100000001000000000000002001000000000000200000000000000007000000000000000100000000000000
+0100000000000000000000000000000008000000000000000000000000000000861efbdc60cca6a24e74e9b60d2ca391567bd1e5ec4e08b9c4acd93b6c754000
+FMGPUTR1_RESTORE_GOLDEN_HEX_END
+```
+
+`snapshot_content_digest` covers canonical scientific arrays, metadata and
+accepted identities but excludes process-local handle tokens. Export is legal
+only from `charge_accepted` or `spin_accepted` at explicit checkpoint cadence.
+Its D2H event reason is exactly `checkpoint_export_d2h`; query-size transfers
+no vectors. Export failure leaves the accepted state unchanged and the caller
+must not publish a partial payload.
+
+Two digest lanes are normative and deliberately non-equivalent. The
+append-only operation audit is never rolled back.
+`scientific_continuation_digest` covers accepted scientific arrays,
+continuation metadata, deterministic reductions, solver restart positions and
+warm starts needed to make the next accepted computation identical. It
+excludes checkpoint transfer, artifact readback, synchronization and other
+operational audit events. `operation_audit_digest` is an append-only SHA-256
+chain over every actual transfer, synchronization, and explicitly classified
+rejected attempt, successful or failed. Pure handle/state operations without
+CUDA activity do not invent zero-byte transfer records:
+`SHA256(previous_operation_audit_digest || canonical_event_bytes)`,
+where `canonical_event_bytes` is the exact 112-byte telemetry prefix through
+`event_id` plus a zeroed 32-byte audit-digest field. `audit_sequence` increments
+once per appended event; event bytes include status, direction, reason, bytes,
+count and operation scope.
+
+Import requires a newly created context with the same explicit CUDA device
+UUID/runtime/build/deterministic identity and an already uploaded static
+descriptor whose digest matches the payload. Its H2D event reason is exactly
+`checkpoint_import_h2d`. The runtime validates header, checked sizes,
+endianness, feature/version table, every section digest, overall SHA-256,
+device/build/layout/operator/source IDs and workspace limit before allocating
+provisional restore buffers. It then uploads all committed arrays and warm
+starts, recomputes device digests, and performs one atomic restore only if
+every digest matches. Failure frees provisional buffers and returns to
+`static_uploaded` without an accepted snapshot, field revision, warm start or
+scientific-state commit. Every actual transfer remains observable: an import
+that fails after H2D appends the failure event with the actual bytes, count and
+status before provisional scientific rollback. No
+failure path deletes or rewinds the operation audit.
+A failed checkpoint_import_h2d therefore remains a first-class audit event.
+
+Successful restore creates fresh process-local handle tokens while preserving
+`snapshot_lineage_id`, `accepted_sequence` and `snapshot_content_digest`; the
+new registry generation is deliberately not serialized. `checkpoint_import`
+commits either `restored_charge_accepted` or `restored_spin_accepted` and
+continues from the serialized warm-start/restart position. Bitwise restart
+means that, on the same device UUID/runtime/build and deterministic policy,
+the restored content digest is identical and the next accepted field,
+balance, iteration, deterministic-compute and
+`scientific_continuation_digest` values equal the uninterrupted run. The
+full telemetry stream is not compared: uninterrupted and restarted runs have
+different valid export/import events. Qualification instead verifies those
+events and their `operation_audit_digest` parent chain separately. Cross-
+device, cross-build, cross-layout, partial-section and deterministic-policy
+mismatches return `checkpoint_incompatible`; there is no migration or
+deterministic re-solve fallback.
+
+#### Error model and fail-closed combinations
+
+All operations return a stable status and, when the result prefix permits, a
+`fullmag_fdm_gpu_transport_error_v1`. Required v1 statuses are:
+
+```text
+ok
+unsupported
+incompatible_abi
+invalid_descriptor
+invalid_pointer_space
+invalid_state
+out_of_memory
+nonconverged
+balance_failure
+stale_snapshot
+strict_gpu_residency_violation
+cuda_runtime_error
+live_snapshot
+already_destroyed
+out_of_resources
+unsupported_required_feature
+checkpoint_incompatible
+```
+
+GPU unavailable, CUDA/device mismatch, precision other than FP64, FP32,
+non-strict residency, unsupported periodic/M2/M3/SML/multi-device features,
+missing component gauge, invalid exact-density face, missing interface trace,
+wrong-context or stale snapshot, workspace exhaustion, nonconvergence, balance
+failure, and forbidden transfer all fail closed. No status authorizes CPU
+charge/spin solve, host field reconstruction, precision downgrade, or another
+backend. Capability query reports only the implemented and qualified tuple; a
+future ABI symbol alone must not report this milestone executable.
 
 ## 14. Capability gates M0–M3
 

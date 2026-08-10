@@ -19,8 +19,17 @@ enum class SpinInterfaceModel {
     MixingBrokenH1,
 };
 
+enum class TransportConstitutiveModel {
+    OneWay,
+    Reciprocal,
+};
+
 struct SteadyTransportParameters {
+    TransportConstitutiveModel constitutive_model = TransportConstitutiveModel::OneWay;
     double sigma_s_spm = 1.0;
+    double sigma_parallel_spm = 1.0;
+    double sigma_perpendicular_spm = 1.0;
+    double sigma_ahe_spm = 0.0;
     double polarization_p = 0.0;
     double theta_sh = 0.0;
     double lambda_sf_m = 1.0;
@@ -53,7 +62,12 @@ struct SpinSolveDiagnostics {
     std::array<double, 3> spin_potential_top_minus_bottom_v{};
 };
 
-// CPU-double M1 oracle for transparent interfaces. It owns its MFEM spaces,
+struct ReciprocalSolveDiagnostics {
+    ChargeSolveDiagnostics charge;
+    SpinSolveDiagnostics spin;
+};
+
+// CPU-double M1/M2 reference oracle for transparent interfaces. It owns its MFEM spaces,
 // forms, solves, projections and diagnostics; Context and mfem_bridge own none
 // of this physics. Mixing/SML requires broken-H1 mortar coupling and is
 // rejected until that separately versioned realization exists.
@@ -82,6 +96,13 @@ public:
     SpinSolveDiagnostics solve_spin(
         const mfem::Array<int> &dirichlet_boundary_marker,
         mfem::VectorCoefficient *boundary_spin_potential);
+
+    ReciprocalSolveDiagnostics solve_reciprocal(
+        const mfem::Array<int> &charge_dirichlet_boundary_marker,
+        mfem::Coefficient &boundary_potential,
+        const mfem::Array<int> &spin_dirichlet_boundary_marker,
+        mfem::VectorCoefficient *boundary_spin_potential,
+        ChargeGauge gauge);
 
     const mfem::GridFunction &electric_potential() const;
     const mfem::GridFunction &charge_current_density() const;

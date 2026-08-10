@@ -440,8 +440,8 @@ impl Default for TimestepQualificationResource {
             integrator: "unknown".to_string(),
             timestep_policy: "unknown".to_string(),
             validation_state: TimestepValidationStateResource::Unvalidated,
-            qualification_registry_version:
-                "fullmag.llg_timestep_qualification_registry.v1".to_string(),
+            qualification_registry_version: "fullmag.llg_timestep_qualification_registry.v1"
+                .to_string(),
             qualification_artifact_sha256: None,
             runtime_source_inputs_sha256: None,
             validated_scope: None,
@@ -474,8 +474,8 @@ impl Default for SolverProfileResource {
 #[cfg(test)]
 mod compatibility_tests {
     use super::{
-        SolverProfileResource, SolverProfileStepSampleResource,
-        SolverTraceCompletenessResource, TimestepValidationStateResource,
+        SolverProfileResource, SolverProfileStepSampleResource, SolverTraceCompletenessResource,
+        TimestepValidationStateResource,
     };
 
     #[test]
@@ -608,29 +608,37 @@ mod compatibility_tests {
         ] {
             assert_eq!(encoded[key], expected);
         }
-        assert!(encoded["timing_semantics"].as_array().unwrap().iter().any(|entry| {
-            entry["id"] == "demag_hypre_device_elapsed_time_ns"
-                && entry["kind"] == "device_elapsed"
-        }));
+        assert!(encoded["timing_semantics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["id"] == "demag_hypre_device_elapsed_time_ns"
+                    && entry["kind"] == "device_elapsed"
+            }));
     }
 
     #[test]
     fn solver_trace_round_trips_through_the_profile_resource() {
-        let mut runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
-            &fullmag_runner::StepStats {
+        let mut runner_sample =
+            fullmag_runner::SolverProfileStepSample::from_step_stats(&fullmag_runner::StepStats {
                 step: 7,
                 ..fullmag_runner::StepStats::default()
-            },
-        );
+            });
         runner_sample.trace = Some(fullmag_runner::SolverTrace::server_only(
             fullmag_runner::SolverTraceId::new("run-1", 2, 7, 1).unwrap(),
         ));
         let decoded: SolverProfileStepSampleResource =
             serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap();
 
-        let trace = decoded.trace.expect("trace should be exposed by the API resource");
+        let trace = decoded
+            .trace
+            .expect("trace should be exposed by the API resource");
         assert_eq!(trace.trace_id.value, "run-1:2:7:1");
-        assert_eq!(trace.completeness, SolverTraceCompletenessResource::ServerOnly);
+        assert_eq!(
+            trace.completeness,
+            SolverTraceCompletenessResource::ServerOnly
+        );
         assert!(trace.segments.is_empty());
     }
 }

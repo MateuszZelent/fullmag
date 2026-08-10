@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveFieldMapAuxiliaryDiagnostics,
   resolvePlanarVectorComponents,
   surfaceProjectionStatus,
 } from "./fieldMapRenderModel";
@@ -55,5 +56,44 @@ describe("field-map render model", () => {
         overlap_count: 2,
       }),
     ).toBe("ambiguous");
+  });
+
+  it("reports auxiliary failures without suppressing the scalar layer", () => {
+    expect(
+      resolveFieldMapAuxiliaryDiagnostics([
+        {
+          errorMessage: "mask 422",
+          hasData: false,
+          label: "Occupancy mask",
+          requested: true,
+          status: "error",
+        },
+        {
+          errorMessage: null,
+          hasData: true,
+          label: "Vector overlay",
+          requested: true,
+          status: "stale",
+        },
+        {
+          errorMessage: null,
+          hasData: false,
+          label: "Mesh overlay",
+          requested: true,
+          status: "ready",
+        },
+        {
+          errorMessage: null,
+          hasData: true,
+          label: "Scalar field",
+          requested: false,
+          status: "ready",
+        },
+      ]),
+    ).toEqual([
+      "Occupancy mask: degraded — mask 422.",
+      "Vector overlay: stale — the last revision is not current.",
+      "Mesh overlay: not materialized for this scope.",
+    ]);
   });
 });

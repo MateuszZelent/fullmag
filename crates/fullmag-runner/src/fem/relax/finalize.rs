@@ -12,8 +12,8 @@ use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
-    ExecutedRun, FieldSnapshot, LiveStepConsumer, RunError, RunResult, RunStatus, StepStats,
-    StepUpdate,
+    AuxiliaryArtifact, ExecutedRun, FieldSnapshot, LiveStepConsumer, RunError, RunResult,
+    RunStatus, StepStats, StepUpdate,
 };
 
 use super::preview::FemPreviewHandoff;
@@ -278,11 +278,11 @@ pub(crate) fn finalize_native_fem_relaxation(
                     step: final_stats.step,
                     time: final_stats.time,
                     solver_dt: final_stats.dt,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (final_stats.step as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (final_stats.step as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(values),
                 });
             }
@@ -301,11 +301,11 @@ pub(crate) fn finalize_native_fem_relaxation(
                 step: final_stats.step,
                 time: final_stats.time,
                 solver_dt: final_stats.dt,
-               component_count: 3,
-               component_order: "xyz".into(),
-               location: "sample".into(),
-               scope: "full".into(),
-               revision: (final_stats.step as u64).saturating_add(1),
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (final_stats.step as u64).saturating_add(1),
                 values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
@@ -318,6 +318,23 @@ pub(crate) fn finalize_native_fem_relaxation(
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
     let (mut field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    let mut auxiliary_artifacts = Vec::new();
+    if let Some(telemetry) = backend.stage_oersted_telemetry() {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "transport/fem_stage_oersted_callback.v1.json".into(),
+            bytes: serde_json::to_vec_pretty(&telemetry).map_err(|error| RunError {
+                message: format!("failed to encode FEM stage Oersted telemetry: {error}"),
+            })?,
+        });
+    }
+    if let Some(telemetry) = backend.stage_transport_telemetry() {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "transport/fem_stage_transport_callback.v1.json".into(),
+            bytes: serde_json::to_vec_pretty(&telemetry).map_err(|error| RunError {
+                message: format!("failed to encode FEM stage transport telemetry: {error}"),
+            })?,
+        });
+    }
     field_snapshots.extend(diagnostic_field_snapshots);
     let finalization_wall_time_ns = elapsed_ns(finalization_start);
     final_stats.finalization_wall_time_ns = finalization_wall_time_ns;
@@ -385,7 +402,7 @@ pub(crate) fn finalize_native_fem_relaxation(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
+        auxiliary_artifacts,
         provenance,
     })
 }

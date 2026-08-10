@@ -1,0 +1,57 @@
+{
+  "document": {"path": "docs/physics/0981-fem-oet0-sparse-kkt.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "reference-executable-bounded", "reason": "Managed CPU-double small fixtures and an opt-in 7x7x7 tetrahedral sparse-KKT fixture execute; distributed, GPU and continuum Oersted qualification remain open."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No device-resident OE-T0 sparse KKT implementation or managed GPU qualification exists."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses its own conservative face/cell current and Oersted convolution operators; this page documents only the FEM RT0 realization."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM GPU does not use the FEM RT0/KKT operator; its qualification is tracked by the FDM Oersted contract."}
+  ],
+  "equations": [
+    {"id": "oet0-kkt", "symbols": ["M", "B", "C", "j", "lambda", "eta", "g", "q", "d", "sigma", "w_a", "j_0"], "sources": ["weighted-projection"]},
+    {"id": "oet0-sparse-block", "symbols": ["K_s", "M_f", "C_f", "x_s", "eta_s", "g", "d"], "sources": ["weighted-projection"]},
+    {"id": "oet0-residual", "symbols": ["r_s", "K_s", "x_s", "eta_s", "g", "d"], "sources": ["weighted-projection", "sparse-runtime-test"]}
+  ],
+  "symbols": [
+    {"id": "j_0", "latex": "j_0", "meaning": "potential-derived unconstrained current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "j", "latex": "j", "meaning": "accepted conservative RT0 current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "sigma", "latex": "\\sigma", "meaning": "scalar conductivity", "si_unit": "\\mathrm{S\\,m^{-1}}"},
+    {"id": "V", "latex": "V", "meaning": "electric potential", "si_unit": "\\mathrm{V}"},
+    {"id": "w_a", "latex": "w_a", "meaning": "RT0 basis vector", "si_unit": "1"},
+    {"id": "M", "latex": "M", "meaning": "weighted RT0 mass matrix", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "B", "latex": "B", "meaning": "integrated divergence constraint operator", "si_unit": "\\mathrm{m^2}"},
+    {"id": "C", "latex": "C", "meaning": "closure/interface flux constraint operator", "si_unit": "1"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "divergence-constraint multiplier", "si_unit": "constraint-dual units"},
+    {"id": "eta", "latex": "\\eta", "meaning": "closure-constraint multiplier", "si_unit": "constraint-dual units"},
+    {"id": "g", "latex": "g", "meaning": "weighted current projection vector", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "q", "latex": "q", "meaning": "divergence right-hand side", "si_unit": "\\mathrm{A}"},
+    {"id": "d", "latex": "d", "meaning": "closure-pair right-hand side", "si_unit": "\\mathrm{A}"},
+    {"id": "M_f", "latex": "M_f", "meaning": "free-DOF sparse weighted mass matrix", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "C_f", "latex": "C_f", "meaning": "free-DOF sparse constraint matrix", "si_unit": "1"},
+    {"id": "K_s", "latex": "K_s", "meaning": "sparse symmetric KKT operator", "si_unit": "\\mathrm{(discrete\\;SI)}"},
+    {"id": "x_s", "latex": "x_s", "meaning": "free RT0 solution vector", "si_unit": "\\mathrm{RT0\\;DOF}"},
+    {"id": "eta_s", "latex": "\\eta_s", "meaning": "sparse KKT constraint multiplier vector", "si_unit": "\\mathrm{constraint\\mbox{-}dual}"},
+    {"id": "r_s", "latex": "r_s", "meaning": "scaled KKT residual", "si_unit": "1"},
+    {"id": "n_f", "latex": "n_f", "meaning": "free RT0 degree-of-freedom count", "si_unit": "1"},
+    {"id": "n_s", "latex": "n_s", "meaning": "active constraint-row count", "si_unit": "1"},
+    {"id": "k_max", "latex": "k_{\\max}", "meaning": "bounded MINRES iteration budget", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "weighted-projection", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "class ConservativeCurrentView", "responsibility": "Own the accepted current-view implementation containing dense and sparse RT0 projection lanes."},
+    {"id": "dense-reference", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp", "symbol": "class ConservativeCurrentView", "responsibility": "Own the bounded deterministic small-mesh Gaussian-elimination reference used by the view."},
+    {"id": "sparse-runtime-test", "path": "backends/fem/tests/conservative_current_view_contract.cpp", "symbol": "main", "responsibility": "Dispatch the optional sparse runtime fixture beyond 4096 RT0 DOFs."},
+    {"id": "source-regression", "path": "backends/fem/tests/source_facade_gpu_rk_contract.cpp", "symbol": "main", "responsibility": "Run the source ownership regression that guards sparse MFEM/MINRES selection."},
+    {"id": "view-boundary", "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp", "symbol": "class ConservativeCurrentView", "responsibility": "Expose the immutable accepted FEM current-view boundary."},
+    {"id": "managed-oet0-gate", "path": "justfile", "symbol": "verify-fem-oersted-oet0-cpu-contract", "responsibility": "Build and run the managed CPU OE-T0 serial and real MPI n1/n2 byte-identity qualification."},
+    {"id": "managed-oet0-tsan-gate", "path": "justfile", "symbol": "verify-fem-oersted-oet0-tsan-cpu-contract", "responsibility": "Run the isolated sanitizer contract through the seccomp-relaxed TSan service and ASLR-disabled launcher."},
+    {"id": "tsan-service", "path": "compose.yaml", "symbol": "fem-cpu-tsan", "responsibility": "Isolate the sanitizer-only seccomp relaxation from the ordinary FEM CPU service."},
+    {"id": "tsan-runner", "path": "scripts/run_fem_cpu_only_contract.sh", "symbol": "oersted-oet0-tsan", "responsibility": "Disable ASLR before loading the instrumented OE-T0 executable and fail closed on sanitizer reports."}
+  ],
+  "public_api": {"parameters": [
+    {"python": "CurrentTransport.name", "type": "str", "default": "required", "si_unit": "1", "validation": "non-empty", "meaning": "named current source", "backend_support": "FEM/FDM authoring", "problem_ir": "current_transport[].name"},
+    {"python": "CurrentTransport.model", "type": "str", "default": "prescribed_density", "si_unit": "1", "validation": "supported current model", "meaning": "charge-source model", "backend_support": "FEM/FDM according to planner", "problem_ir": "current_transport[].model"},
+    {"python": "CurrentTransport.current_density", "type": "vec3", "default": "required for prescribed_density", "si_unit": "\\mathrm{A\\,m^{-2}}", "validation": "finite signed vector", "meaning": "prescribed conventional current density", "backend_support": "authoring; execution remains planner-scoped", "problem_ir": "current_transport[].current_density"},
+    {"python": "OerstedField.source", "type": "str", "default": "required", "si_unit": "1", "validation": "must name one CurrentTransport", "meaning": "source identity", "backend_support": "FEM/FDM authoring", "problem_ir": "oersted[].source"},
+    {"python": "OerstedField.model", "type": "str", "default": "from_current_solution", "si_unit": "1", "validation": "versioned Oersted model", "meaning": "field realization intent", "backend_support": "FEM/FDM according to planner", "problem_ir": "oersted[].model"},
+    {"python": "resolved FEM sparse lane", "type": "enum", "default": "automatic", "si_unit": "1", "validation": "requires FEM CPU double and complete closure", "meaning": "resolved MFEM sparse KKT realization", "backend_support": "FEM CPU reference only", "problem_ir": "resolved_oersted[].current_view_solver"}
+  ]}
+}

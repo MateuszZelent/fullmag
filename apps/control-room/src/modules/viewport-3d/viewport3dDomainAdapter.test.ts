@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import type {
   DomainMetaResource,
+  FdmRegionMembershipResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
+import type { DecodedFdmRegionMembership } from "@/kernel/api/codecs";
 
 import {
   adaptFdmDomainMeta,
   adaptFemSharedDomainManifest,
+  adaptDomainPresentation,
+  adaptFdmDomainPresentation,
+  resolveViewport3DFdmRealizedRegionIds,
   resolveFemPartSelectionByBoundaryFace,
   resolveMeshPartBounds,
   selectionForMeshPart,
@@ -96,6 +101,102 @@ function manifestFixture(): MeshSharedDomainManifestResource {
 }
 
 describe("viewport3dDomainAdapter", () => {
+  const fdmMembership: FdmRegionMembershipResource = {
+    binary_path: "membership.bin",
+    cell_count: 10_000,
+    cell_m: [0.1, 0.1, 1],
+    counts: [100, 100, 1],
+    domain_generation_id: "generation-current",
+    encoding: "u32le",
+    freshness: "current",
+    grid_fingerprint: "grid-current",
+    mesh_revision: 2,
+    origin_m: [0, 0, 0],
+    region_legend: [],
+    region_membership_revision: 3,
+    schema_version: "fdm_region_membership.v1",
+  };
+  const fdmMembershipBinary: DecodedFdmRegionMembership = {
+    cellCount: 10_000,
+    counts: [100, 100, 1],
+    formatVersion: 2,
+    gridFingerprint: "grid-current",
+    legendCount: 0,
+    payloadKind: 2,
+    regionIds: new Uint32Array(10_000),
+    semanticStatus: "canonical",
+  };
+
+  it("renders FDM membership only after the central presentation proves current matching identities", () => {
+    const presentation = adaptDomainPresentation({
+      domainMeta: fdmMeta(10_000),
+      expectedFdmGridFingerprint: fdmMembershipBinary.gridFingerprint,
+      fdmMembership,
+      fdmMembershipStatus: "ready",
+    });
+
+    expect(
+      resolveViewport3DFdmRealizedRegionIds(
+        presentation,
+        fdmMembershipBinary,
+      ),
+    ).toBe(fdmMembershipBinary.regionIds);
+  });
+
+  it("fails closed when DomainMeta cell count disagrees with the structured shape", () => {
+    const presentation = adaptDomainPresentation({
+      domainMeta: fdmMeta(9_999),
+      fdmMembership: null,
+      fdmMembershipStatus: "ready",
+    });
+
+    expect(presentation.resourceStatus).toBe("incompatible");
+    expect(adaptFdmDomainPresentation(presentation, 1_000)).toBeNull();
+  });
+
+  it("fails closed instead of throwing when a malformed presentation omits bounds", () => {
+    expect(
+      adaptFdmDomainPresentation(
+        {
+          discretization: "fdm",
+          fdmGrid: {
+            descriptorCellCountCompatible: true,
+            origin: [0, 0, 0],
+            shape: [1, 1, 1],
+            spacing: [1, 1, 1],
+            totalCells: 1,
+          },
+        } as never,
+        1_000,
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["stale descriptor", { ...fdmMembership, freshness: "stale" }, fdmMembershipBinary],
+    [
+      "descriptor and binary fingerprint mismatch",
+      fdmMembership,
+      { ...fdmMembershipBinary, gridFingerprint: "grid-stale" },
+    ],
+    [
+      "binary geometry mismatch",
+      fdmMembership,
+      { ...fdmMembershipBinary, counts: [50, 200, 1] as [number, number, number] },
+    ],
+  ] as const)("fails closed for %s", (_label, descriptor, binary) => {
+    const presentation = adaptDomainPresentation({
+      domainMeta: fdmMeta(10_000),
+      expectedFdmGridFingerprint: binary.gridFingerprint,
+      fdmMembership: descriptor,
+      fdmMembershipStatus: "ready",
+    });
+
+    expect(
+      resolveViewport3DFdmRealizedRegionIds(presentation, binary),
+    ).toBeNull();
+  });
+
   it("applies an FDM display budget before any cell buffer allocation", () => {
     const domain = adaptFdmDomainMeta(fdmMeta(10_000), 1_000);
 

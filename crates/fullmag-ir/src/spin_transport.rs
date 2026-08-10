@@ -1,4 +1,4 @@
-use crate::{ExecutionDevice, ExecutionMode, ExecutionPrecision, RegionRefIR};
+use crate::{ExecutionDevice, ExecutionMode, ExecutionPrecision, MeshIR, RegionRefIR};
 use serde::{Deserialize, Serialize};
 
 fn is_zero_f64(value: &f64) -> bool {
@@ -38,6 +38,8 @@ pub struct ChargeTransportDefinitionIR {
     pub boundaries: Vec<ChargeBoundaryIR>,
     pub gauge: ChargePotentialGaugeIR,
     pub solver: ChargeSolverPolicyIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view: Option<ResolvedFemConservativeCurrentViewIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -328,6 +330,11 @@ pub struct ResolvedSpinTransportPlanIR {
 pub struct ResolvedFemSpinTransportIR {
     pub descriptor_schema: String,
     pub charge_definition: ChargeTransportDefinitionIR,
+    /// Authored charge-source envelope copied from the owning current module.
+    /// It is evaluated at every native stage; it is not a solver tolerance or
+    /// a post-hoc field scaling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
     pub charge_domain: ResolvedFemTransportDomainIR,
     pub spin_domain: ResolvedFemTransportDomainIR,
     pub charge_insulating_boundaries: Vec<ResolvedFemBoundaryMarkerSetIR>,
@@ -342,6 +349,12 @@ pub struct ResolvedFemSpinTransportIR {
     pub spin_dirichlet: Vec<(u32, [f64; 3])>,
     #[serde(rename = "sigma_s_Spm")]
     pub sigma_s_spm: f64,
+    /// Present only for the bounded reciprocal FEM M2 reference lane.  The
+    /// native FEM ABI currently accepts one uniform anisotropic charge tensor
+    /// over the conforming solve domain; elementwise `sigma_spm` remains in
+    /// `charge_conductivity_spm_per_element`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reciprocal_material: Option<ResolvedReciprocalMaterialIR>,
     pub polarization_p: f64,
     pub theta_sh: f64,
     pub lambda_sf_m: f64,
@@ -361,6 +374,113 @@ pub struct ResolvedFemSpinTransportIR {
     pub implementation_state: String,
     pub validation_state: String,
     pub validation_scope: String,
+    /// The named steady charge solution is consumed by a bounded FEM
+    /// midpoint-Biot--Savart Oersted realization.  This is deliberately a
+    /// descriptor bit rather than a copied current field: the runtime must
+    /// solve charge first and derive the magnetic field from that result.
+    #[serde(default)]
+    pub oersted_source_bound: bool,
+    /// Optional closure-aware solved-current request.  `None` is the legacy
+    /// H1/P1 nodal reference lane; it must never be interpreted as an RT0
+    /// view by the runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view: Option<ResolvedFemConservativeCurrentViewIR>,
+}
+
+/// Stable identity pinned to one accepted/stage charge solve.  These values
+/// are semantic inputs to the native RT0 adapter and are deliberately kept in
+/// the resolved plan rather than reconstructed by the runner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConservativeCurrentIdentityIR {
+    pub source_module_id: String,
+    pub source_state_revision: String,
+    pub source_field_digest: String,
+    pub conductivity_digest: String,
+    pub mesh_revision: String,
+    pub topology_revision: String,
+    pub geometry_digest: String,
+    pub envelope_revision: String,
+    pub envelope_digest: String,
+    pub evaluated_envelope_multiplier: f64,
+    pub evaluation_time_s: f64,
+    pub stage_identity: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConservativeCurrentPinsIR {
+    pub required_source_state_revision: String,
+    pub required_source_field_digest: String,
+    pub required_mesh_revision: String,
+    pub required_topology_revision: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConservativeCurrentBoundaryRoleIR {
+    InsulatingOuter,
+    SourceCut,
+    ClosureInterface,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConservativeCurrentBoundaryFaceIR {
+    pub face_vertex_ids: [u64; 3],
+    pub role: ConservativeCurrentBoundaryRoleIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circuit_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConservativeCurrentSourceCutFacePairIR {
+    pub minus_face_vertex_ids: [u64; 3],
+    pub plus_face_vertex_ids: [u64; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConservativeCurrentSourceCutIR {
+    pub id: String,
+    pub translation_m: [f64; 3],
+    pub potential_drop_v: f64,
+    pub face_pairs: Vec<ConservativeCurrentSourceCutFacePairIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConservativeCurrentClosureIR {
+    ClosedGeometry {
+        operator_version: String,
+        revision: String,
+        digest: String,
+        source_cuts: Vec<ConservativeCurrentSourceCutIR>,
+    },
+    ExternalLead {
+        operator_version: String,
+        revision: String,
+        digest: String,
+        drive_id: String,
+        outer_electrode_potential_drop_v: f64,
+        lead_mesh: MeshIR,
+        lead_conductivity_spm_per_element: Vec<f64>,
+        lead_stable_vertex_ids: Vec<u64>,
+        interface_pairs: Vec<([u64; 3], [u64; 3])>,
+        minus_outer_electrode_face_vertex_ids: Vec<[u64; 3]>,
+        plus_outer_electrode_face_vertex_ids: Vec<[u64; 3]>,
+        lead_conductivity_digest: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFemConservativeCurrentViewIR {
+    pub stable_vertex_ids: Vec<u64>,
+    pub boundary_faces: Vec<ConservativeCurrentBoundaryFaceIR>,
+    pub identity: ConservativeCurrentIdentityIR,
+    pub pins: ConservativeCurrentPinsIR,
+    pub closure: ConservativeCurrentClosureIR,
+    pub algebraic_relative_tolerance: f64,
+    pub physical_relative_gate: f64,
+    pub physical_absolute_gate_a: f64,
+    #[serde(default)]
+    pub reference_mpi_gather_broadcast: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -432,6 +552,18 @@ pub struct ResolvedChargeBoundaryFaceIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedSpecifiedCurrentFaceIR {
+    pub source_id: String,
+    pub axis: u8,
+    pub face_index: u64,
+    pub adjacent_cell: u64,
+    pub outward_normal_sign: i8,
+    pub area_m2: f64,
+    #[serde(rename = "outward_current_density_Apm2")]
+    pub outward_current_density_apm2: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolvedSpinBoundaryConditionIR {
     SpinInsulating,
@@ -491,13 +623,33 @@ pub struct ResolvedSpinReactionLengthsIR {
     pub dephasing_m: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FdmCpuTransportRealizationIR {
+    #[default]
+    RustReferenceV1,
+    NativeM1V1,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmSpinTransportIR {
     pub descriptor_schema: String,
+    #[serde(default)]
+    pub realization: FdmCpuTransportRealizationIR,
+    /// Global validation/execution profile enclosing this resolved module.
+    /// Missing legacy data defaults to `extended`, so strict native lanes fail closed.
+    #[serde(default = "default_transport_enclosing_execution_mode")]
+    pub enclosing_execution_mode: ExecutionMode,
+    /// Authored dimensionless charge-source multiplier evaluated at each FDM
+    /// transport stage.  `None` means the source is constant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
     pub charge_active_cells: Vec<bool>,
     #[serde(rename = "charge_conductivity_Spm")]
     pub charge_conductivity_spm: Vec<f64>,
     pub charge_boundaries: Vec<ResolvedChargeBoundaryFaceIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specified_current_faces: Vec<ResolvedSpecifiedCurrentFaceIR>,
     pub charge_gauge: ChargePotentialGaugeIR,
     pub charge_solver: ChargeSolverPolicyIR,
     pub spin_active_cells: Vec<bool>,
@@ -517,6 +669,10 @@ pub struct ResolvedFdmSpinTransportIR {
     pub spin_solver: SpinSolverPolicyIR,
     pub torque_formula_version: Option<String>,
     pub oersted_source_bound: bool,
+}
+
+fn default_transport_enclosing_execution_mode() -> ExecutionMode {
+    ExecutionMode::Extended
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -550,6 +706,12 @@ pub struct ResolvedReciprocalMaterialIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmCoupledSpinTransportIR {
     pub descriptor_schema: String,
+    /// Authored charge-source envelope evaluated at each coupled transport
+    /// stage.  It scales only prescribed charge drives; the reciprocal
+    /// constitutive solve still uses the stage magnetization to determine
+    /// `J_c(m_stage)` and the resulting spin torque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
     pub active_cells: Vec<bool>,
     pub reciprocal_materials: Vec<ResolvedReciprocalMaterialIR>,
     pub reactions: Vec<ResolvedSpinReactionLengthsIR>,

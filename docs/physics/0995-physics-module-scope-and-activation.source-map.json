@@ -1,0 +1,346 @@
+{
+  "document": {
+    "path": "docs/physics/0995-physics-module-scope-and-activation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "Graph semantics are backend-neutral; numerical qualification remains lane- and operator-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "No graph contract promotes an unqualified FEM GPU interaction."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "FDM mask resolution is defined, while cross-backend production parity remains open."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "Capability must be resolved by the planner and cannot be inferred from authored scope."
+    }
+  ],
+  "sources": [
+    {
+      "id": "scene-graph-normalizer",
+      "path": "crates/fullmag-authoring/src/physics_graph.rs",
+      "symbol": "normalize_physics_graph",
+      "responsibility": "Deterministically lower authored family records into modules, scopes and edges."
+    },
+    {
+      "id": "scene-graph-presentation",
+      "path": "crates/fullmag-authoring/src/physics_graph.rs",
+      "symbol": "torque_presentation",
+      "responsibility": "Publish thin canonical family and label metadata without duplicating constitutive payloads."
+    },
+    {
+      "id": "scene-torque-scope",
+      "path": "crates/fullmag-authoring/src/physics_graph.rs",
+      "symbol": "torque_scope_and_source",
+      "responsibility": "Preserve an exact object or region target for every known torque family, including Zhang-Li."
+    },
+    {
+      "id": "scene-current-legacy-scope",
+      "path": "crates/fullmag-authoring/src/physics_graph.rs",
+      "symbol": "current_solve_domain",
+      "responsibility": "Map an exact legacy solve_region object ID into the canonical current solve domain without treating it as global scope."
+    },
+    {
+      "id": "scene-document",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "default_scene_version",
+      "responsibility": "Scene-document schema defaults that carry explicit module presence."
+    },
+    {
+      "id": "problem-ir",
+      "path": "crates/fullmag-ir/src/lib.rs",
+      "symbol": "is_supported_ir_version_for_read",
+      "responsibility": "Versioned canonical IR read boundary consumed by planning."
+    },
+    {
+      "id": "oersted-stable-identity",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_oersted_energy_terms",
+      "responsibility": "Validate a present stable Oersted module identity while accepting historical ProblemIR records without an id."
+    },
+    {
+      "id": "python-scopes",
+      "path": "packages/fullmag-py/src/fullmag/model/physics_scope.py",
+      "symbol": "build_physics_graph",
+      "responsibility": "Public Python scope/activation vocabulary and round-trip."
+    },
+    {
+      "id": "planner-resolution",
+      "path": "crates/fullmag-plan/src/lib.rs",
+      "symbol": "plan",
+      "responsibility": "Resolve capability and lane-specific markers without changing graph semantics."
+    },
+    {
+      "id": "planner-graph-resolution",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "resolve_physics_modules",
+      "responsibility": "Resolve graph identity, activation, semantic FEM markers and FDM mask identities for the selected lane."
+    },
+    {
+      "id": "planner-graph-execution-filter",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "physics_module_execution_enabled",
+      "responsibility": "Permit family payload lowering only for graph modules with a matching stable identity and active or configured activation."
+    },
+    {
+      "id": "planner-graph-realization",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "physics_graph_realization_provenance",
+      "responsibility": "Resolve authored scopes onto concrete FEM element markers or FDM cell masks and distinguish resolved from observed execution."
+    },
+    {
+      "id": "planner-multilayer-mask-realization",
+      "path": "crates/fullmag-plan/src/physics_graph.rs",
+      "symbol": "multilayer_global_mask",
+      "responsibility": "Materialize a common-grid FDM multilayer mask only for aligned identity layers; keep push/pull or shifted topology semantic_only."
+    },
+    {
+      "id": "runtime-provenance",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "execute_native_fem_steady_transport_plans",
+      "responsibility": "Publish the bounded solved-current artifact and its numerical provenance; graph realization is added separately at the runner artifact boundary."
+    },
+    {
+      "id": "graph-execution-observation",
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "observe_physics_execution",
+      "responsibility": "Publish exact stable graph-module IDs for accepted workflow evaluations; direct minimizers use the narrower energy-evaluation owner hook."
+    },
+    {
+      "id": "graph-energy-execution-observation",
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "observe_energy_evaluation",
+      "responsibility": "Publish only energy-module IDs after an accepted FDM CPU, FDM CUDA, or FEM direct-minimizer evaluation, before scalar or field artifacts are enqueued."
+    },
+    {
+      "id": "graph-steady-transport-execution-observation",
+      "path": "crates/fullmag-runner/src/physics_graph_execution.rs",
+      "symbol": "observe_steady_transport",
+      "responsibility": "Transfer exact FEM steady-transport module IDs when invoked by the successful solve owner before and independently of the optional artifact writer."
+    },
+    {
+      "id": "graph-hysteresis-execution-merge",
+      "path": "crates/fullmag-runner/src/hysteresis.rs",
+      "symbol": "merge_hysteresis_execution_provenance",
+      "responsibility": "Union exact graph-module observations and transport records across preparation, sweep, angular, adaptive, and minor-loop subruns before final validation and artifact projection."
+    },
+    {
+      "id": "graph-execution-artifact-projection",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "observed_physics_graph_module_ids",
+      "responsibility": "Deduplicate already observed exact graph-module IDs without deriving execution from module kinds, plans, or authored payloads before writing the graph artifact."
+    },
+    {
+      "id": "graph-fdm-runtime-test",
+      "path": "crates/fullmag-runner/tests/physics_graph_runtime.rs",
+      "symbol": "fdm_runtime_artifact_contains_concrete_graph_realization",
+      "responsibility": "Exercise the public FDM runner and assert that the persisted artifact contains the concrete realization certificate."
+    },
+    {
+      "id": "graph-fem-runtime-test",
+      "path": "crates/fullmag-runner/tests/physics_graph_runtime.rs",
+      "symbol": "fem_runtime_artifact_contains_concrete_graph_realization",
+      "responsibility": "Exercise the managed native FEM CPU runner and assert concrete mesh-element marker provenance in the persisted artifact."
+    },
+    {
+      "id": "graph-realization-verifier",
+      "path": "scripts/verify_physics_scope_graph_runtime.py",
+      "symbol": "_validate_concrete_realization",
+      "responsibility": "Validate lane-specific concrete markers/masks, state transitions and executed-subset invariants in runtime fixtures."
+    },
+    {
+      "id": "oersted-view",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "ConservativeCurrentView::Build",
+      "responsibility": "Canonical immutable RT0/H(div) current source for FEM Oersted coupling."
+    },
+    {
+      "id": "explorer-graph",
+      "path": "apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts",
+      "symbol": "buildPhysicsGraphTree",
+      "responsibility": "Render only authored and semantically resolved modules."
+    },
+    {
+      "id": "explorer-graph-selection",
+      "path": "apps/control-room/src/modules/explorer/explorerSelection.ts",
+      "symbol": "selectionRefFromNode",
+      "responsibility": "Route known graph modules to existing family inspectors by stable module identity."
+    },
+    {
+      "id": "physics-graph-api",
+      "path": "crates/fullmag-api/src/router_v2/mod.rs",
+      "symbol": "build_v2_router",
+      "responsibility": "Expose a thin, revision-scoped normalized graph resource without meshes or field samples."
+    },
+    {
+      "id": "physics-graph-resource",
+      "path": "apps/control-room/src/kernel/resources/physicsGraphResources.ts",
+      "symbol": "usePhysicsGraphResource",
+      "responsibility": "Load and invalidate the typed physics-graph resource through the v2 resource layer."
+    },
+    {
+      "id": "physics-graph-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/PhysicsGraphModuleInspectorPanel.tsx",
+      "symbol": "PhysicsGraphModuleInspectorPanel",
+      "responsibility": "Present graph scope, activation, dependency and execution provenance as a read-only semantic inspector."
+    },
+    {
+      "id": "current-transport-selection-scope",
+      "path": "apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx",
+      "symbol": "PhysicsInteractionPanel",
+      "responsibility": "Route selected current, torque and Oersted authoring through their family Inspector panels while preserving the selection scope."
+    },
+    {
+      "id": "current-transport-scoped-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+      "symbol": "CurrentTransportInspectorPanel",
+      "responsibility": "Use the shared responsive physics Inspector template and expose exact object or region scope for new current authoring."
+    },
+    {
+      "id": "current-transport-scoped-draft",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "currentTransportDraft",
+      "responsibility": "Initialize a new current source with an exact object or region domain and use legacy solve_region only for an object-scoped prescribed density."
+    },
+    {
+      "id": "current-transport-model-scope-transition",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "currentTransportModelPatch",
+      "responsibility": "Preserve representable scope and remove legacy solve fields when switching from prescribed current to a Poisson transport model."
+    },
+    {
+      "id": "spin-transport-scoped-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx",
+      "symbol": "SpinTransportInspectorPanel",
+      "responsibility": "Open the typed Spin Transport and SHE authoring surface with an exact initial object or region scope."
+    },
+    {
+      "id": "spin-transport-scoped-draft",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "spinTransportDraft",
+      "responsibility": "Initialize an editable spin-transport domain from the exact selected object or region without broadening its physical scope."
+    },
+    {
+      "id": "spin-transport-ribbon-draft",
+      "path": "apps/control-room/src/modules/ribbon/ribbonCommands.ts",
+      "symbol": "createSpinTransportFromCommand",
+      "responsibility": "Open a typed Spin Transport or SHE draft without synthesizing an Explorer or physics-graph node."
+    },
+    {
+      "id": "spin-interface-ribbon-draft",
+      "path": "apps/control-room/src/modules/ribbon/ribbonCommands.ts",
+      "symbol": "createSpinInterfaceFromCommand",
+      "responsibility": "Open a fail-closed spin-interface draft without inventing an owning spin-transport identity."
+    },
+    {
+      "id": "spin-torque-scoped-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx",
+      "symbol": "SpinTorqueInspectorPanel",
+      "responsibility": "Initialize a new torque with the exact selected object or region target while preserving existing-resource identity and scope."
+    },
+    {
+      "id": "oersted-global-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx",
+      "symbol": "OerstedFieldInspectorPanel",
+      "responsibility": "Present Oersted as a global field module while keeping source locality in the current-transport dependency."
+    },
+    {
+      "id": "spin-authoring-scope-initialization",
+      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx",
+      "symbol": "SpinAuthoringInspector",
+      "responsibility": "Initialize a new torque target or solved-current Oersted binding from selection only when the mapping is exact and unambiguous."
+    },
+    {
+      "id": "spin-authoring-current-source-options",
+      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspectorModel.ts",
+      "symbol": "currentSourceOptions",
+      "responsibility": "Offer only existing current-transport module identities while preserving an unavailable authored dependency losslessly."
+    },
+    {
+      "id": "spin-authoring-current-binding",
+      "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspectorModel.ts",
+      "symbol": "torqueCurrentBindingPatch",
+      "responsibility": "Keep prescribed current density and solved current-source binding mutually exclusive in torque authoring."
+    },
+    {
+      "id": "field-drive-ribbon-draft",
+      "path": "apps/control-room/src/modules/ribbon/ribbonCommands.ts",
+      "symbol": "createFieldDriveFromCommand",
+      "responsibility": "Open an explicit global field-drive draft without materializing an Explorer or physics-graph node."
+    },
+    {
+      "id": "field-drive-create-draft",
+      "path": "apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanelModel.ts",
+      "symbol": "resolveRegionalFieldDrivePanelModel",
+      "responsibility": "Recognize an explicit create draft and build a canonical global field-drive payload with an identity unique in the current resource snapshot."
+    },
+    {
+      "id": "field-drive-create-commit",
+      "path": "apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanelModel.ts",
+      "symbol": "commitRegionalFieldDrive",
+      "responsibility": "Use POST for an explicit create draft and PUT only for an existing field-drive identity."
+    },
+    {
+      "id": "field-drive-create-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanel.tsx",
+      "symbol": "RegionalFieldDrivePanel",
+      "responsibility": "Author the responsive global draft, invalidate the typed resource and select the persisted stable identity after creation."
+    },
+    {
+      "id": "inspector-template",
+      "path": "apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx",
+      "symbol": "InspectorOverviewFrame",
+      "responsibility": "Shared responsive Visualization inspector composition."
+      }
+  ],
+  "equations": [
+    {
+      "id": "graph-stage-coupling",
+      "symbols": ["J_c", "H_oe"],
+      "sources": ["scene-graph-normalizer"]
+    }
+  ],
+  "symbols": [
+    {"id": "J_c", "latex": "j_c", "meaning": "konwencjonalna gęstość prądu", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "H_oe", "latex": "H_\\mathrm{oe}", "meaning": "pole Oersteda użyte w RHS LLG", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "B_ext", "latex": "B_\\mathrm{ext}", "meaning": "zadane pole indukcji", "si_unit": "\\mathrm T"},
+    {"id": "mu_s", "latex": "\\mu_s", "meaning": "potencjał spinowy", "si_unit": "\\mathrm V"},
+    {"id": "lambda_sf", "latex": "\\lambda_\\mathrm{sf}", "meaning": "długość relaksacji spinowej", "si_unit": "\\mathrm m"},
+    {"id": "sigma", "latex": "\\sigma", "meaning": "przewodność elektryczna", "si_unit": "\\mathrm{S\\,m^{-1}}"}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "PhysicsScope.kind",
+        "type": "Literal['global','object','region','interface','cross_object','unresolved']",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "one of the tagged scope variants; unknown values are unresolved",
+        "meaning": "fizyczny zakres modułu",
+        "backend_support": "FEM/FDM wspólna semantyka; realizacja lane-specific",
+        "problem_ir": "physics_graph.modules[].applies_to[].kind"
+      }
+    ]
+  },
+  "validation": [
+    {
+      "id": "fixture-contract",
+      "path": "scripts/test_physics_scope_graph_fixtures.py",
+      "symbol": "test_physics_scope_graph_fixture_manifest_is_complete",
+      "responsibility": "Ensure the six normative scenarios remain present and lossless."
+    }
+  ]
+}

@@ -9,6 +9,7 @@ default = []
 cuda = ["dep:fullmag-fdm-sys", "fullmag-fdm-sys/build-native"]
 fem-native = ["dep:fullmag-fem-sys", "fullmag-fem-sys/build-native"]
 fem-gpu = ["fem-native"]
+fdm-native-cpu = ["dep:fullmag-fdm-sys", "fullmag-fdm-sys/build-native-cpu"]
 stage-autosave-hdf5 = ["dep:hdf5"]
 
 [dependencies]

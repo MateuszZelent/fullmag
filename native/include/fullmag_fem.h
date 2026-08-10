@@ -14,7 +14,7 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
-#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 1u
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 2u
 
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
@@ -56,6 +56,11 @@ typedef enum {
     FULLMAG_FEM_STT_OPERATOR_NONE = 0,
     FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1 = 1,
 } fullmag_fem_stt_operator_version;
+
+typedef enum {
+    FULLMAG_FEM_SOT_FORMULA_NONE = 0,
+    FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1 = 1,
+} fullmag_fem_sot_formula_version;
 
 typedef struct {
     double atol;
@@ -122,6 +127,7 @@ typedef enum {
     FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM = 0,
     FULLMAG_FEM_SPATIAL_PROFILE_SINC = 1,
     FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK = 2,
+    FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE = 3,
 } fullmag_fem_spatial_profile_kind;
 
 typedef enum {
@@ -175,6 +181,31 @@ typedef struct {
     uint64_t point_count;
 } fullmag_fem_time_dependence_desc;
 
+/*
+ * Append-only prescribed-SOT envelope descriptor.  Unlike the regional-field
+ * waveform, this descriptor carries the dimensionless amplitude explicitly so
+ * all canonical TimeEnvelopeIR variants retain their SI multiplier semantics.
+ * The envelope is evaluated at the RK stage time; time_origin is retained for
+ * the ABI so direct C callers can request stage-local evaluation explicitly.
+ */
+#define FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t kind;
+    uint32_t time_origin;
+    double amplitude;
+    double frequency_hz;
+    double phase_rad;
+    double offset;
+    double t_on_s;
+    double t_off_s;
+    double center_s;
+    double bandwidth_hz;
+    const fullmag_fem_time_point *points;
+    uint64_t point_count;
+} fullmag_fem_sot_envelope_desc;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -213,6 +244,13 @@ typedef struct {
     double sinc_width_m;
     uint32_t sinc_window;
     const fullmag_fem_geometry_mask_desc *geometry_mask;
+    double gaussian_center_x_m;
+    double gaussian_center_y_m;
+    double gaussian_carrier_origin_x_m;
+    double gaussian_sigma_x_m;
+    double gaussian_sigma_y_m;
+    double gaussian_wavelength_m;
+    double gaussian_carrier_phase_rad;
 } fullmag_fem_spatial_profile_desc;
 
 typedef struct {
@@ -279,6 +317,89 @@ typedef enum {
 } fullmag_fem_relax_algorithm;
 
 typedef int (*fullmag_fem_interrupt_poll_fn)(void *user_data);
+
+/*
+ * Append-only native CPU RK hook for a magnetization-dependent Oersted
+ * source.  The callback is deliberately independent of the v1 plan and step
+ * ABI: it receives the exact stage magnetization and time, returns a complete
+ * nodal H_oe field in A/m, and may maintain a transactional solved-current
+ * cache through the optional attempt hooks.  GPU execution rejects this hook
+ * until a device-resident implementation is qualified.
+ */
+#define FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ABI_VERSION 1u
+#define FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ERROR_CAPACITY 256u
+
+typedef int (*fullmag_fem_stage_oersted_evaluate_fn)(
+    void *user_data,
+    const double *m_xyz,
+    uint64_t m_xyz_len,
+    double evaluation_time_s,
+    uint64_t stage_identity,
+    double *out_h_xyz_apm,
+    uint64_t out_h_xyz_len,
+    uint64_t *out_source_state_revision,
+    char *error_message,
+    uint64_t error_message_capacity);
+
+typedef int (*fullmag_fem_stage_oersted_attempt_fn)(
+    void *user_data,
+    uint64_t target_step,
+    uint64_t attempt_identity,
+    double time_start_s,
+    double dt_seconds,
+    char *error_message,
+    uint64_t error_message_capacity);
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    void *user_data;
+    fullmag_fem_stage_oersted_evaluate_fn evaluate;
+    fullmag_fem_stage_oersted_attempt_fn begin_attempt;
+    fullmag_fem_stage_oersted_attempt_fn commit_attempt;
+    fullmag_fem_stage_oersted_attempt_fn rollback_attempt;
+} fullmag_fem_stage_oersted_callback_v1;
+
+/* Append-only native CPU RK hook for a reciprocal charge--spin solve.  The
+ * callback receives the exact stage magnetization and returns a direct LLG
+ * torque in 1/s.  The torque is added to the native RHS after the standard
+ * LLG, STT and SOT terms; GPU execution rejects this hook until a
+ * device-resident implementation is qualified. */
+#define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION 1u
+#define FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY 256u
+
+typedef int (*fullmag_fem_stage_transport_evaluate_fn)(
+    void *user_data,
+    const double *m_xyz,
+    uint64_t m_xyz_len,
+    double evaluation_time_s,
+    uint64_t stage_identity,
+    double *out_torque_xyz_per_s,
+    uint64_t out_torque_xyz_len,
+    uint64_t *out_source_state_revision,
+    char *error_message,
+    uint64_t error_message_capacity);
+
+typedef int (*fullmag_fem_stage_transport_attempt_fn)(
+    void *user_data,
+    uint64_t target_step,
+    uint64_t attempt_identity,
+    double time_start_s,
+    double dt_seconds,
+    char *error_message,
+    uint64_t error_message_capacity);
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    void *user_data;
+    fullmag_fem_stage_transport_evaluate_fn evaluate;
+    fullmag_fem_stage_transport_attempt_fn begin_attempt;
+    fullmag_fem_stage_transport_attempt_fn commit_attempt;
+    fullmag_fem_stage_transport_attempt_fn rollback_attempt;
+} fullmag_fem_stage_transport_callback_v1;
 
 /* Canonical typed P1 mesh descriptor. Wire values are stable ABI, not Gmsh IDs. */
 #define FULLMAG_FEM_MESH_DESC_ABI_VERSION 2u
@@ -562,6 +683,20 @@ typedef struct {
     uint64_t                   stt_active_node_mask_len;
     const uint8_t             *stt_active_element_mask;
     uint64_t                   stt_active_element_mask_len;
+
+    /* Append-only prescribed spin-orbit torque extension. */
+    int                        has_prescribed_sot;
+    uint32_t                   sot_formula_version;
+    double                     sot_current_density_am2;
+    double                     sot_xi_dl;
+    double                     sot_xi_fl;
+    double                     sot_thickness;
+    double                     sot_envelope_value;
+    double                     sot_sigma[3];
+    const uint8_t             *sot_active_node_mask;
+    uint64_t                   sot_active_node_mask_len;
+    /* Append-only stage-time envelope extension. */
+    fullmag_fem_sot_envelope_desc sot_envelope;
 } fullmag_fem_plan_desc;
 
 /*
@@ -624,12 +759,272 @@ typedef struct {
     uint64_t spin_dirichlet_count;
 } fullmag_fem_steady_transport_request_v1;
 
+/*
+ * Bounded reciprocal M2 reference lane.  The v1 M1 request above is kept
+ * byte-for-byte stable; this wrapper is a separate symbol and carries the
+ * same mesh/BC/result contract plus the symmetric charge conductivities and
+ * anomalous-Hall coefficient required by the Onsager block.
+ */
+#define FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION 1u
+typedef struct {
+    fullmag_fem_steady_transport_request_v1 base;
+    double sigma_parallel_spm;
+    double sigma_perpendicular_spm;
+    double sigma_ahe_spm;
+} fullmag_fem_steady_transport_m2_request_v1;
+
+/*
+ * Append-only solved-current extension for the conservative FEM Oersted
+ * source.  The legacy M1/M2 request/result structs above are intentionally
+ * not extended: their nodal H1/P1 current remains a visualization/reference
+ * projection and can never be reinterpreted as an RT0/H(div) field.
+ */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION 1u
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_LAYOUT_FINGERPRINT \
+    "fullmag:fem-steady-transport-rt0:abi:v1:closure-identity-records"
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY 96u
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY 65u
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_EXTERNAL_LEAD = 2,
+} fullmag_fem_steady_transport_rt0_closure_kind;
+
+typedef enum {
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_INSULATING_OUTER = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_SOURCE_CUT = 2,
+    FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_CLOSURE_INTERFACE = 3,
+} fullmag_fem_steady_transport_rt0_boundary_role;
+
+typedef struct {
+    uint64_t minus_face_vertex_ids[3];
+    uint64_t plus_face_vertex_ids[3];
+} fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1;
+
+typedef struct {
+    const char *id;
+    double translation_m[3];
+    double potential_drop_v;
+    const fullmag_fem_steady_transport_rt0_source_cut_face_pair_v1 *face_pairs;
+    uint64_t face_pair_count;
+} fullmag_fem_steady_transport_rt0_source_cut_v1;
+
+typedef struct {
+    uint64_t face_vertex_ids[3];
+    uint32_t role;
+    const char *circuit_id;
+} fullmag_fem_steady_transport_rt0_boundary_face_v1;
+
+typedef struct {
+    const char *version;
+    const uint64_t *local_to_stable_vertex_ids;
+    uint64_t local_to_stable_vertex_ids_len;
+} fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1;
+
+typedef struct {
+    const char *source_module_id;
+    const char *source_state_revision;
+    const char *source_field_digest;
+    const char *conductivity_digest;
+    const char *mesh_revision;
+    const char *topology_revision;
+    const char *geometry_digest;
+    const char *envelope_revision;
+    const char *envelope_digest;
+    double evaluated_envelope_multiplier;
+    double evaluation_time_s;
+    uint64_t stage_identity;
+} fullmag_fem_steady_transport_rt0_identity_v1;
+
+typedef struct {
+    const char *operator_version;
+    const char *revision;
+    const char *digest;
+    const fullmag_fem_steady_transport_rt0_source_cut_v1 *source_cuts;
+    uint64_t source_cut_count;
+} fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1;
+
+typedef struct {
+    uint64_t transport_face_vertex_ids[3];
+    uint64_t lead_face_vertex_ids[3];
+} fullmag_fem_steady_transport_rt0_interface_pair_v1;
+
+typedef struct {
+    const char *operator_version;
+    const char *revision;
+    const char *digest;
+    const char *drive_id;
+    double outer_electrode_potential_drop_v;
+    fullmag_fem_mesh_desc lead_mesh;
+    const double *lead_conductivity_spm_per_element;
+    uint64_t lead_conductivity_spm_per_element_len;
+    fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1
+        lead_stable_vertex_identities;
+    const fullmag_fem_steady_transport_rt0_interface_pair_v1 *interface_pairs;
+    uint64_t interface_pair_count;
+    const uint64_t *minus_outer_electrode_face_vertex_ids;
+    uint64_t minus_outer_electrode_face_count;
+    const uint64_t *plus_outer_electrode_face_vertex_ids;
+    uint64_t plus_outer_electrode_face_count;
+    const char *lead_conductivity_digest;
+} fullmag_fem_steady_transport_rt0_external_lead_closure_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_request_v1 base;
+    uint32_t closure_kind;
+    uint32_t reserved_closure;
+    fullmag_fem_steady_transport_rt0_identity_v1 identity;
+    fullmag_fem_steady_transport_rt0_identity_v1 pins;
+    fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1
+        stable_vertex_identities;
+    const fullmag_fem_steady_transport_rt0_boundary_face_v1 *boundary_faces;
+    uint64_t boundary_face_count;
+    const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1
+        *closed_geometry;
+    const fullmag_fem_steady_transport_rt0_external_lead_closure_v1
+        *external_lead;
+    double algebraic_relative_tolerance;
+    double physical_relative_gate;
+    double physical_absolute_gate_a;
+    int reference_mpi_gather_broadcast;
+} fullmag_fem_steady_transport_rt0_request_v1;
+
+typedef struct {
+    uint64_t face_vertex_ids[3];
+    double flux_a;
+} fullmag_fem_steady_transport_rt0_face_flux_record_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    double *rt0_dof_values;
+    uint64_t rt0_dof_values_capacity;
+    uint64_t rt0_dof_values_len;
+    fullmag_fem_steady_transport_rt0_face_flux_record_v1 *canonical_face_records;
+    uint64_t canonical_face_records_capacity;
+    uint64_t canonical_face_records_len;
+    int converged;
+    double max_element_divergence_a;
+    double max_internal_face_jump_a;
+    double net_outer_flux_a;
+    double electrode_balance_relative;
+    double max_closure_interface_mismatch_a;
+    double scaled_kkt_residual;
+    double correction_norm_mw;
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char fe_space[32];
+    char flux_unit[16];
+    char canonical_face_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char balance_certificate_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_steady_transport_rt0_result_v1;
+
+/* Direct OE-F1 evaluation on the exact immutable RT0 view produced by the
+ * closure-aware transport extension.  This is a new symbol; the RT0 result
+ * above remains byte-for-byte stable. */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_request_v1 rt0;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    int32_t base_quadrature_order;
+    int32_t maximum_subdivision_depth;
+    double absolute_tolerance_apm;
+    double relative_tolerance;
+    uint64_t maximum_source_target_pairs;
+} fullmag_fem_steady_transport_rt0_oersted_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_result_v1 rt0;
+    double *h_xyz_apm;
+    uint64_t h_xyz_apm_capacity;
+    uint64_t h_xyz_apm_len;
+    uint64_t source_target_pairs;
+    uint64_t refined_pairs;
+    uint64_t unconverged_pair_count;
+    double maximum_pair_error_apm;
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char source_view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_steady_transport_rt0_oersted_result_v1;
+
+/* Mixed H(curl) x H1 OE-F2 evaluation on the exact immutable RT0 view.  This
+ * is an append-only wrapper: the nested RT0 request/result and all legacy
+ * transport layouts remain byte-for-byte stable. */
+#define FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_request_v1 rt0;
+    double mu0_si;
+    double relative_tolerance;
+    int32_t maximum_nd_dofs;
+    int32_t maximum_h1_dofs;
+    const char *boundary_gauge_variant;
+} fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_result_v1 rt0;
+    double *a_dofs_t_m;
+    uint64_t a_dofs_t_m_capacity;
+    uint64_t a_dofs_t_m_len;
+    double *gauge_dofs_apm;
+    uint64_t gauge_dofs_apm_capacity;
+    uint64_t gauge_dofs_apm_len;
+    double *compatible_b_dofs_t;
+    uint64_t compatible_b_dofs_t_capacity;
+    uint64_t compatible_b_dofs_t_len;
+    double *compatible_h_dofs_apm;
+    uint64_t compatible_h_dofs_apm_capacity;
+    uint64_t compatible_h_dofs_apm_len;
+    int converged;
+    int32_t harmonic_count;
+    int32_t essential_nd_dof_count;
+    int32_t essential_h1_dof_count;
+    double first_block_residual;
+    double constraint_residual;
+    double weak_ampere_residual;
+    double compatible_divergence_residual;
+    double source_pairing_norm;
+    char operator_version[FULLMAG_FEM_STEADY_TRANSPORT_RT0_STRING_CAPACITY];
+    char source_view_identity_digest[FULLMAG_FEM_STEADY_TRANSPORT_RT0_DIGEST_CAPACITY];
+    char boundary_gauge_variant[64];
+    char error_message[256];
+    char diagnostics_json[1024];
+    /* AoS-3 continuous H1 projection for the nodal LLG field. */
+    double *nodal_h_xyz_apm;
+    uint64_t nodal_h_xyz_apm_capacity;
+    uint64_t nodal_h_xyz_apm_len;
+} fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t reserved_flags;
     uint64_t struct_size;
     double *electric_potential_v;
     uint64_t electric_potential_v_len;
+    /*
+     * This is an H1/P1 nodal visualization/reference projection. It is not a conservative RT0/H(div) current view and must not be consumed by a
+     * production solved-current Oersted operator. The immutable
+     * ConservativeCurrentView requires a separate closure-aware ABI.
+     */
     double *charge_current_density_xyz_apm2;
     uint64_t charge_current_density_xyz_apm2_len;
     double *spin_potential_xyz_v;
@@ -2130,6 +2525,22 @@ int fullmag_fem_solve_steady_transport_v1(
     const fullmag_fem_steady_transport_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
 );
+int fullmag_fem_solve_steady_transport_m2_v1(
+    const fullmag_fem_steady_transport_m2_request_v1 *request,
+    fullmag_fem_steady_transport_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_rt0_v1(
+    const fullmag_fem_steady_transport_rt0_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_rt0_oersted_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_result_v1 *result
+);
+int fullmag_fem_solve_steady_transport_rt0_oersted_vector_potential_v1(
+    const fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1 *request,
+    fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1 *result
+);
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info);
 int fullmag_fem_get_frequency_domain_availability_info(
     const fullmag_fem_frequency_domain_availability_request *request,
@@ -2230,6 +2641,19 @@ int fullmag_fem_backend_reconfigure_regional_field_drives(
 );
 
 int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle);
+
+/* Install or clear the append-only CPU stage Oersted callback. Passing NULL
+ * clears the hook and invalidates FSAL. The callback is never used by the
+ * GPU RK path. */
+int fullmag_fem_backend_set_stage_oersted_callback_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_stage_oersted_callback_v1 *callback);
+
+/* Install or clear the append-only CPU reciprocal transport torque callback.
+ * Passing NULL clears the hook and invalidates FSAL. */
+int fullmag_fem_backend_set_stage_transport_callback_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_stage_transport_callback_v1 *callback);
 
 int fullmag_fem_backend_step(
     fullmag_fem_backend *handle,

@@ -233,6 +233,7 @@ struct RkStepTransaction::Impl {
           dmi(context.dmi),
           effective_field(context.effective_field),
           oersted(context.oersted),
+          stage_transport(context.stage_transport),
           thermal_brown(context.thermal_brown),
           transfer_audit(context.transfer_audit.audit),
           gpu_residency(context.gpu_state.device.residency),
@@ -300,6 +301,7 @@ struct RkStepTransaction::Impl {
         add(vector_payload_bytes(effective_field.h_visual_xyz));
         add(vector_payload_bytes(oersted.h_basis_per_ampere_xyz));
         add(vector_payload_bytes(oersted.h_xyz));
+        add(vector_payload_bytes(stage_transport.torque_xyz_per_s));
         add(vector_payload_bytes(thermal_brown.xi_xyz));
         add(vector_payload_bytes(thermal_brown.h_xyz));
         add(vector_payload_bytes(gpu_hybrid_stage_m));
@@ -335,6 +337,7 @@ struct RkStepTransaction::Impl {
         ctx.dmi.energy_joules = dmi.energy_joules;
         ctx.effective_field = effective_field;
         ctx.oersted = oersted;
+        ctx.stage_transport = stage_transport;
         ctx.thermal_brown = thermal_brown;
         ctx.transfer_audit.audit = transfer_audit;
         ctx.gpu_state.device.residency = gpu_residency;
@@ -380,6 +383,7 @@ struct RkStepTransaction::Impl {
     DmiRuntimeState dmi;
     EffectiveFieldRuntimeState effective_field;
     OerstedRuntimeState oersted;
+    TransportStageRuntimeState stage_transport;
     ThermalBrownRuntimeState thermal_brown;
     TransferAudit transfer_audit;
     FemGpuResidencyDeviceState gpu_residency;
@@ -549,6 +553,7 @@ struct RkAttemptCacheSnapshot::Impl {
           dmi(context.dmi),
           effective_field(context.effective_field),
           oersted(context.oersted),
+          stage_transport(context.stage_transport),
           gpu_hybrid_stage_m(context.gpu_state.device.demag_poisson.hybrid_stage_m_xyz),
           gpu_hybrid_demag(context.gpu_state.device.demag_poisson.hybrid_demag_xyz),
           gpu_hybrid_demag_energy(context.gpu_state.device.demag_poisson.hybrid_demag_energy_joules)
@@ -582,6 +587,7 @@ struct RkAttemptCacheSnapshot::Impl {
         ctx.dmi.energy_joules = dmi.energy_joules;
         ctx.effective_field = effective_field;
         ctx.oersted = oersted;
+        ctx.stage_transport = stage_transport;
         ctx.gpu_state.device.demag_poisson.hybrid_stage_m_xyz = gpu_hybrid_stage_m;
         ctx.gpu_state.device.demag_poisson.hybrid_demag_xyz = gpu_hybrid_demag;
         ctx.gpu_state.device.demag_poisson.hybrid_demag_energy_joules =
@@ -633,6 +639,7 @@ struct RkAttemptCacheSnapshot::Impl {
         add(vector_payload_bytes(effective_field.h_visual_xyz));
         add(vector_payload_bytes(oersted.h_basis_per_ampere_xyz));
         add(vector_payload_bytes(oersted.h_xyz));
+        add(vector_payload_bytes(stage_transport.torque_xyz_per_s));
         add(vector_payload_bytes(gpu_hybrid_stage_m));
         add(vector_payload_bytes(gpu_hybrid_demag));
 #if FULLMAG_HAS_MFEM_STACK
@@ -656,6 +663,7 @@ struct RkAttemptCacheSnapshot::Impl {
     DmiRuntimeState dmi;
     EffectiveFieldRuntimeState effective_field;
     OerstedRuntimeState oersted;
+    TransportStageRuntimeState stage_transport;
     std::vector<double> gpu_hybrid_stage_m;
     std::vector<double> gpu_hybrid_demag;
     double gpu_hybrid_demag_energy;

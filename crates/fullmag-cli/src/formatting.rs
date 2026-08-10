@@ -38,6 +38,7 @@ mod origin_tests {
                 notes: Vec::new(),
                 integrator_resolution: None,
                 fem_eigen_execution_resolution: None,
+                physics_graph: None,
             },
         };
 

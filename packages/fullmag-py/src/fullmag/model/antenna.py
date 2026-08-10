@@ -128,6 +128,55 @@ class SincFieldProfile:
         return payload
 
 
+@dataclass(frozen=True, slots=True)
+class GaussianPlaneWaveFieldProfile:
+    center_x_m: float
+    center_y_m: float
+    carrier_origin_x_m: float
+    sigma_x_m: float
+    sigma_y_m: float
+    wavelength_m: float
+    carrier_phase_rad: float = 0.0
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "center_x_m",
+            "center_y_m",
+            "carrier_origin_x_m",
+            "carrier_phase_rad",
+        ):
+            value = require_finite(getattr(self, field_name), f"spatial_profile.{field_name}")
+            object.__setattr__(self, field_name, value)
+        for field_name in ("sigma_x_m", "sigma_y_m", "wavelength_m"):
+            value = require_positive(getattr(self, field_name), f"spatial_profile.{field_name}")
+            object.__setattr__(self, field_name, value)
+
+    def value_at(self, point: Sequence[float]) -> float:
+        x, y, _ = as_vector3(point, "spatial_profile.point")
+        if not all(math.isfinite(value) for value in (x, y)):
+            raise ValueError("spatial_profile.point must be finite")
+        envelope = math.exp(
+            -0.5 * (
+                ((x - self.center_x_m) / self.sigma_x_m) ** 2
+                + ((y - self.center_y_m) / self.sigma_y_m) ** 2
+            )
+        )
+        carrier = 2.0 * math.pi * (x - self.carrier_origin_x_m) / self.wavelength_m
+        return envelope * math.cos(carrier + self.carrier_phase_rad)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "gaussian_plane_wave",
+            "center_x_m": self.center_x_m,
+            "center_y_m": self.center_y_m,
+            "carrier_origin_x_m": self.carrier_origin_x_m,
+            "sigma_x_m": self.sigma_x_m,
+            "sigma_y_m": self.sigma_y_m,
+            "wavelength_m": self.wavelength_m,
+            "carrier_phase_rad": self.carrier_phase_rad,
+        }
+
+
 FieldEnvelope = UniformFieldProfile | SincFieldProfile
 
 
@@ -153,7 +202,12 @@ class GeometryMaskFieldProfile:
         }
 
 
-FieldSpatialProfile = UniformFieldProfile | SincFieldProfile | GeometryMaskFieldProfile
+FieldSpatialProfile = (
+    UniformFieldProfile
+    | SincFieldProfile
+    | GaussianPlaneWaveFieldProfile
+    | GeometryMaskFieldProfile
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,7 +288,12 @@ class RegionalFieldDrive:
         object.__setattr__(self, "direction", _normalized_vector3(direction, "direction"))
         if not isinstance(
             spatial_profile,
-            (UniformFieldProfile, SincFieldProfile, GeometryMaskFieldProfile),
+            (
+                UniformFieldProfile,
+                SincFieldProfile,
+                GaussianPlaneWaveFieldProfile,
+                GeometryMaskFieldProfile,
+            ),
         ):
             raise TypeError("spatial_profile must be a typed Fullmag field profile")
         if not hasattr(waveform, "to_ir"):
@@ -273,6 +332,123 @@ class RegionalFieldDrive:
         if self.migration is not None:
             payload["migration"] = dict(self.migration)
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class GaussianPlaneWaveAntenna:
+    id: str
+    amplitude_B_T: float
+    frequency_hz: float
+    wavelength_m: float
+    sigma_x_m: float
+    fwhm_y_m: float
+    center_x_m: float = 0.0
+    center_y_m: float = 0.0
+    carrier_origin_x_m: float = 0.0
+    spatial_phase_rad: float = 0.0
+    phase_rad: float = 0.0
+    t0_s: float = 0.0
+    target: FieldTarget = FieldTarget.global_domain()
+    activation: DriveActivation = DriveActivation(kind="all_time_evolution")
+    time_origin: str = "stage_local"
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", require_non_empty(self.id, "antenna.id"))
+        object.__setattr__(
+            self,
+            "amplitude_B_T",
+            require_non_negative(self.amplitude_B_T, "antenna.amplitude_B_T"),
+        )
+        for field_name in (
+            "center_x_m",
+            "center_y_m",
+            "carrier_origin_x_m",
+            "spatial_phase_rad",
+            "phase_rad",
+        ):
+            value = require_finite(getattr(self, field_name), f"antenna.{field_name}")
+            object.__setattr__(self, field_name, value)
+        object.__setattr__(
+            self,
+            "frequency_hz",
+            require_positive(self.frequency_hz, "antenna.frequency_hz"),
+        )
+        object.__setattr__(
+            self,
+            "wavelength_m",
+            require_positive(self.wavelength_m, "antenna.wavelength_m"),
+        )
+        object.__setattr__(
+            self,
+            "sigma_x_m",
+            require_positive(self.sigma_x_m, "antenna.sigma_x_m"),
+        )
+        object.__setattr__(
+            self,
+            "fwhm_y_m",
+            require_positive(self.fwhm_y_m, "antenna.fwhm_y_m"),
+        )
+        object.__setattr__(self, "t0_s", require_non_negative(self.t0_s, "antenna.t0_s"))
+        if not isinstance(self.target, FieldTarget):
+            raise TypeError("antenna.target must be a FieldTarget")
+        if not isinstance(self.activation, DriveActivation):
+            raise TypeError("antenna.activation must be a DriveActivation")
+        normalized_origin = require_non_empty(self.time_origin, "antenna.time_origin").lower()
+        if normalized_origin not in FIELD_TIME_ORIGINS:
+            raise ValueError(f"antenna.time_origin must be one of {sorted(FIELD_TIME_ORIGINS)}")
+        object.__setattr__(self, "time_origin", normalized_origin)
+        object.__setattr__(self, "enabled", bool(self.enabled))
+
+    @property
+    def sigma_y_m(self) -> float:
+        return self.fwhm_y_m / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+
+    def to_drives(self) -> tuple[RegionalFieldDrive, RegionalFieldDrive]:
+        waveform = Sinusoidal(
+            frequency_hz=self.frequency_hz,
+            phase_rad=self.phase_rad - 2.0 * math.pi * self.frequency_hz * self.t0_s,
+        )
+        base_profile = dict(
+            center_x_m=self.center_x_m,
+            center_y_m=self.center_y_m,
+            carrier_origin_x_m=self.carrier_origin_x_m,
+            sigma_x_m=self.sigma_x_m,
+            sigma_y_m=self.sigma_y_m,
+            wavelength_m=self.wavelength_m,
+        )
+        x_profile = GaussianPlaneWaveFieldProfile(
+            **base_profile,
+            carrier_phase_rad=self.spatial_phase_rad,
+        )
+        z_profile = GaussianPlaneWaveFieldProfile(
+            **base_profile,
+            carrier_phase_rad=self.spatial_phase_rad - math.pi / 2.0,
+        )
+        common = {
+            "target": self.target,
+            "amplitude_B_T": self.amplitude_B_T,
+            "waveform": waveform,
+            "time_origin": self.time_origin,
+            "activation": self.activation,
+            "enabled": self.enabled,
+        }
+        return (
+            RegionalFieldDrive(
+                id=f"{self.id}_x",
+                name=f"{self.id} x quadrature",
+                direction=(1.0, 0.0, 0.0),
+                spatial_profile=x_profile,
+                **common,
+            ),
+            RegionalFieldDrive(
+                id=f"{self.id}_z",
+                name=f"{self.id} z quadrature",
+                direction=(0.0, 0.0, 1.0),
+                spatial_profile=z_profile,
+                **common,
+            ),
+        )
 
 
 def _drive_waveform_ir(

@@ -35,6 +35,7 @@ const requestedRegionId =
   process.env.CONTROL_ROOM_VISUALIZATION_DEBUG_REGION_ID?.trim() ?? "";
 const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
 const VIEWPORT_IDLE_SETTLE_MS = 2_000;
+const FDM_VIEWPORT_QUALIFICATION_CYCLES = 3;
 const FIELD_VECTOR_PATH_RE =
   /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/samples\/vector$/;
 const FIELD_META_PATH_RE =
@@ -129,6 +130,7 @@ async function main() {
   });
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const fieldRequests = [];
+  const browserRequests = [];
   const fieldMetaRequests = [];
   const fieldResponses = [];
   const errors = [];
@@ -146,6 +148,7 @@ async function main() {
       scans: 0,
       viewportFrameReasons: {},
       viewportFrames: 0,
+      resourceCounts: null,
     };
   }, browserApiBase);
 
@@ -165,6 +168,7 @@ async function main() {
     }
   });
   page.on("request", (request) => {
+    browserRequests.push({ method: request.method(), url: request.url() });
     if (
       request.isNavigationRequest() &&
       request.resourceType() === "document" &&
@@ -256,6 +260,12 @@ async function main() {
       page,
       regionScenario,
     });
+    const runtimeQualificationProof = await assertFdmViewportRuntimeQualification({
+      browserRequests,
+      objectPartId,
+      page,
+      sessionStatus,
+    });
     if (errors.length > 0) {
       throw new Error("Browser console errors:\n" + errors.join("\n"));
     }
@@ -270,6 +280,7 @@ async function main() {
         ...debugIdleProof,
         ...accountingProof,
         ...visualizationDebugProof,
+        runtimeQualificationProof,
         apiBase,
         browserApiBase,
         sessionId: resolveStatusSessionId(sessionStatus),
@@ -1469,6 +1480,149 @@ async function ensureViewport3DActive(page) {
     throw new Error(
       `3D viewport canvas is not renderable: context=${contextState.hasContext} drawingBuffer=${contextState.drawingBuffer.width}x${contextState.drawingBuffer.height}.`,
     );
+  }
+}
+
+async function assertFdmViewportRuntimeQualification({
+  browserRequests,
+  objectPartId,
+  page,
+  sessionStatus,
+}) {
+  const discretization = String(
+    sessionStatus?.domain?.discretization ??
+      sessionStatus?.capabilities?.active_lane?.discretization ??
+      "",
+  ).toLowerCase();
+  if (discretization !== "fdm") {
+    throw new Error(
+      `FDM viewport runtime qualification requires an explicit FDM session, got ${discretization || "unresolved"}.`,
+    );
+  }
+
+  await waitForViewportQualificationQuiet({ browserRequests, page });
+  const baseline = await readViewportQualificationSnapshot(page);
+  assertViewportQualificationSnapshot(baseline, "FDM qualification baseline");
+
+  const twoDimensionalTab = page.getByRole("tab", { name: "2D View" }).first();
+  const hasTwoDimensionalTab = (await twoDimensionalTab.count()) > 0;
+  const cycleSnapshots = [];
+  for (let cycle = 0; cycle < FDM_VIEWPORT_QUALIFICATION_CYCLES; cycle += 1) {
+    const objectScope = cycle % 2 === 0;
+    await patchJson("/v2/sessions/current/visualization/state", {
+      active_quantity_id: objectScope ? objectQuantityId : airboxQuantityId,
+      domains: {
+        active_scope_id: objectScope ? objectPartId : "airbox",
+        active_scope_kind: objectScope ? "part" : "airbox",
+      },
+      quantity: {
+        active_quantity_id: objectScope ? objectQuantityId : airboxQuantityId,
+      },
+    });
+    if (hasTwoDimensionalTab) {
+      await twoDimensionalTab.click({ timeout: timeoutMs });
+      await page.waitForTimeout(250);
+      if ((await page.locator(VIEWPORT_3D_CANVAS_SELECTOR).count()) !== 0) {
+        throw new Error("2D View kept the 3D WebGL canvas mounted.");
+      }
+    }
+    await ensureViewport3DActive(page);
+    await waitForViewportQualificationQuiet({ browserRequests, page });
+    const snapshot = await readViewportQualificationSnapshot(page);
+    assertViewportQualificationSnapshot(snapshot, `FDM qualification cycle ${cycle + 1}`);
+    cycleSnapshots.push(snapshot);
+  }
+
+  await waitForViewportQualificationQuiet({ browserRequests, page });
+  const idleBefore = await readViewportQualificationSnapshot(page);
+  const requestCountBefore = browserRequests.length;
+  await page.waitForTimeout(VIEWPORT_IDLE_SETTLE_MS);
+  const idleAfter = await readViewportQualificationSnapshot(page);
+  const idleDirtyFrameDelta = idleAfter.viewportFrames - idleBefore.viewportFrames;
+  const idleRequestDelta = browserRequests.length - requestCountBefore;
+  if (idleDirtyFrameDelta !== 0 || idleRequestDelta !== 0) {
+    throw new Error(
+      `Settled FDM viewport was not idle: ${JSON.stringify({ idleDirtyFrameDelta, idleRequestDelta })}.`,
+    );
+  }
+  assertViewportQualificationSnapshot(idleAfter, "FDM settled idle window");
+
+  const resourceGrowth = Object.fromEntries(
+    Object.keys(baseline.resourceCounts).map((key) => [
+      key,
+      idleAfter.resourceCounts[key] - baseline.resourceCounts[key],
+    ]),
+  );
+  const growingResources = Object.entries(resourceGrowth).filter(([, value]) => value > 0);
+  if (growingResources.length > 0) {
+    throw new Error(
+      `FDM viewport resources grew across qualification cycles: ${JSON.stringify(resourceGrowth)}.`,
+    );
+  }
+  return {
+    cycles: FDM_VIEWPORT_QUALIFICATION_CYCLES,
+    drawingBufferHeight: idleAfter.drawingBufferHeight,
+    drawingBufferWidth: idleAfter.drawingBufferWidth,
+    idleDirtyFrameDelta,
+    idleRequestDelta,
+    isContextLost: idleAfter.isContextLost,
+    resourceCounts: idleAfter.resourceCounts,
+    resourceGrowth,
+    twoDimensionalCycles: hasTwoDimensionalTab
+      ? FDM_VIEWPORT_QUALIFICATION_CYCLES
+      : 0,
+  };
+}
+
+async function waitForViewportQualificationQuiet({ browserRequests, page }) {
+  let previous = null;
+  let stableSince = Date.now();
+  await poll("FDM viewport qualification settle", async () => {
+    const snapshot = await readViewportQualificationSnapshot(page);
+    const current = JSON.stringify({
+      requests: browserRequests.length,
+      resourceCounts: snapshot.resourceCounts,
+      viewportFrames: snapshot.viewportFrames,
+    });
+    if (current !== previous) {
+      previous = current;
+      stableSince = Date.now();
+      return null;
+    }
+    return Date.now() - stableSince >= VIEWPORT_IDLE_SETTLE_MS ? snapshot : null;
+  });
+}
+
+async function readViewportQualificationSnapshot(page) {
+  return page.locator(VIEWPORT_3D_CANVAS_SELECTOR).evaluate((canvas) => {
+    const gl =
+      canvas.getContext("webgl2") ??
+      canvas.getContext("webgl") ??
+      canvas.getContext("experimental-webgl");
+    const counters = window.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__;
+    return {
+      drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+      drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+      isContextLost: gl?.isContextLost() ?? true,
+      resourceCounts: counters?.resourceCounts ?? null,
+      viewportFrames: counters?.viewportFrames ?? 0,
+    };
+  });
+}
+
+function assertViewportQualificationSnapshot(snapshot, label) {
+  if (
+    snapshot.isContextLost ||
+    snapshot.drawingBufferWidth <= 0 ||
+    snapshot.drawingBufferHeight <= 0 ||
+    !snapshot.resourceCounts
+  ) {
+    throw new Error(`${label} is incomplete: ${JSON.stringify(snapshot)}.`);
+  }
+  for (const [kind, count] of Object.entries(snapshot.resourceCounts)) {
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(`${label} has invalid ${kind} resource count: ${count}.`);
+    }
   }
 }
 

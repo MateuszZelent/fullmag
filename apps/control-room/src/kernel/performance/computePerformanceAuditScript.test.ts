@@ -127,9 +127,13 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkFdmVectorSegmentCache");
     expect(auditScript).toContain("fdmVectorSegmentCache");
     expect(auditScript).toContain("checkFdmCuboidSceneModelReuse");
-    expect(auditScript).toContain("fdmSurfaceInstanceModel");
-    expect(auditScript).toContain("fdmInstanceModel: fdmSurfaceInstanceModel");
-    expect(auditScript).toContain("instanceModel={fdmInstanceModel}");
+    expect(auditScript).toContain("fdmTargetViewsResult");
+    expect(auditScript).toContain("buildViewport3DFdmTargetViews");
+    expect(auditScript).toContain("fdmTargetViews: readonly Viewport3DFdmTargetRenderView[]");
+    expect(auditScript).toContain("view.instanceOrdinals");
+    expect(auditScript).toContain("view.surfaceInstanceOrdinals");
+    expect(auditScript).toContain("view.sourceModel");
+    expect(auditScript).toContain("fdmTargetViews.map((view)");
     expect(auditScript).toContain("cachedFdmVectorSegments");
     expect(auditScript).toContain("checkTopologyPositionConversionCache");
     expect(auditScript).toContain("topologyPositionCache");

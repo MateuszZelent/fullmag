@@ -20,7 +20,7 @@ ensure-python:
     "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7'
 
 build target="fullmag" cpu_only="0":
-    bash -euo pipefail -c 'target="{{target}}"; cpu_only="{{cpu_only}}"; case "$target" in target=*) target="${target#target=}" ;; --target=*) target="${target#--target=}" ;; esac; case "$cpu_only" in 1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;; 0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;; *) cpu_only="0" ;; esac; if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; elif [ "$target" = "fullmag-host" ]; then make install-cli; elif [ "$target" = "dev-image" ]; then docker compose build dev; elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; elif [ "$target" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; else echo "unknown build target: $target" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi'
+    bash -euo pipefail -c 'target="{{target}}"; cpu_only="{{cpu_only}}"; case "$target" in target=*) target="${target#target=}" ;; --target=*) target="${target#--target=}" ;; esac; case "$cpu_only" in cpu_only=*) cpu_only="${cpu_only#cpu_only=}" ;; esac; case "$cpu_only" in 1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;; 0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;; *) cpu_only="0" ;; esac; if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; elif [ "$target" = "fullmag-host" ]; then make install-cli; elif [ "$target" = "dev-image" ]; then docker compose build dev; elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; elif [ "$target" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; else echo "unknown build target: $target" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi'
 
 build-static-control-room:
     make web-build-static-if-needed
@@ -253,6 +253,159 @@ verify-fdm-transient-spin-m3-reference:
     TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
       python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
 
+# Managed CPU FDM graph-realization gate.  The fixture executes the public
+# ProblemIR -> planner -> runner path inside the managed FEM/CPU image and
+# checks that the emitted artifact contains a concrete cell-mask digest.  It
+# is a provenance/runtime gate, not a CUDA performance or physics-equivalence
+# qualification.
+verify-fdm-physics-graph-runtime:
+    docker compose build fem-cpu
+    docker compose run --rm --no-deps fem-cpu bash -lc 'cd /workspace && FULLMAG_FDM_EXECUTION=cpu CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-physics-graph-runtime CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_graph_runtime -- --nocapture'
+
+# E4/D1: FDM multilayer convolution contract and managed runtime gates.
+verify-fdm-multilayer-demag-contract:
+    just ensure-python
+    PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" "{{repo_python}}" -m pytest -q -p no:cacheprovider tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/test_verify.py tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/test_runtime.py
+    python3 tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/verify.py >/dev/null
+    docker compose --profile fem-gpu run --rm --no-deps -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-multilayer-contract && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target fullmag_fdm multilayer_abi_v2_contract multilayer_create_v2_contract batched_demag_fft_contract && ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "fdm_multilayer_abi_v2_contract|fdm_multilayer_create_v2_contract|fdm_batched_demag_fft_contract" && CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-multilayer-demag-contract CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-demag --tests -- --nocapture'
+
+verify-fdm-multilayer-demag-runtime lane="cpu-fp64":
+    bash -euo pipefail -c '\
+      lane="{{lane}}"; \
+      report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; \
+      mkdir -p "$report_parent"; \
+      run_root="$(mktemp -d "$report_parent/demag-${lane}.run.XXXXXXXX")"; \
+      status_file="$run_root/status.json"; \
+      write_status() { printf "{\"status\":\"not_qualified\",\"lane\":\"%s\",\"reason_code\":\"%s\"}\n" "$lane" "$1" > "$status_file"; }; \
+      finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; \
+      trap finish EXIT INT TERM; \
+      case "$lane" in \
+        cpu-fp64) ;; \
+        cuda-fp64|cuda-fp32) reason="cuda_managed_artifact_missing"; if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi -L >/dev/null 2>&1; then reason="cuda_device_unavailable"; elif [ -x "{{gpu_runtime_bin}}" ] && [ -f "{{gpu_runtime_manifest}}" ]; then reason="cuda_lane_artifact_not_qualified"; fi; write_status "$reason"; echo "not_qualified: $reason ($lane)" >&2; exit 3 ;; \
+        *) write_status "unsupported_lane"; echo "unsupported multilayer runtime lane: $lane" >&2; exit 2 ;; \
+      esac; \
+      ab_script="${FULLMAG_FDM_MULTILAYER_AB_SCENARIO:-tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario.py}"; \
+      a_only_script="${FULLMAG_FDM_MULTILAYER_A_ONLY_SCENARIO:-tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_a_only.py}"; b_only_script="${FULLMAG_FDM_MULTILAYER_B_ONLY_SCENARIO:-tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_b_only.py}"; \
+      if [ -z "$a_only_script" ] || [ -z "$b_only_script" ]; then write_status "control_scenarios_missing"; echo "not_qualified: control_scenarios_missing (set FULLMAG_FDM_MULTILAYER_A_ONLY_SCENARIO and FULLMAG_FDM_MULTILAYER_B_ONLY_SCENARIO)" >&2; exit 3; fi; \
+      for script in "$ab_script" "$a_only_script" "$b_only_script"; do if [ ! -f "$script" ]; then write_status "scenario_missing"; echo "not_qualified: scenario_missing:$script" >&2; exit 3; fi; done; \
+      if cmp -s "$ab_script" "$a_only_script" || cmp -s "$ab_script" "$b_only_script" || cmp -s "$a_only_script" "$b_only_script"; then write_status "control_scenarios_not_distinct"; echo "not_qualified: control_scenarios_not_distinct" >&2; exit 3; fi; \
+      just ensure-python; FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build target=fullmag cpu_only=1; test -x "{{local_bin}}/fullmag"; \
+      "{{repo_python}}" scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$run_root/source-snapshot.v1.json"; \
+      sha256sum "{{local_bin}}/fullmag" tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json > "$run_root/input-sha256.txt"; \
+      run_case() { case_id="$1"; script="$2"; output="$run_root/$case_id/artifacts"; mkdir -p "$output"; FULLMAG_API_PORT=0 FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION=cpu FULLMAG_DISABLE_PREVIEW_3D=1 FULLMAG_DISABLE_CHARTS=1 "{{local_bin}}/fullmag" "$script" --backend fdm --headless --json --output-dir "$output" 2>&1 | tee "$run_root/$case_id/runtime.log"; }; \
+      run_case ab "$ab_script" || { write_status "cpu_runtime_failed:ab"; exit 3; }; run_case a-only "$a_only_script" || { write_status "cpu_runtime_failed:a-only"; exit 3; }; run_case b-only "$b_only_script" || { write_status "cpu_runtime_failed:b-only"; exit 3; }; \
+      for case_id in ab a-only b-only; do if [ ! -f "$run_root/$case_id/artifacts/metadata.json" ]; then write_status "runtime_artifacts_missing"; echo "not_qualified: runtime_artifacts_missing:$case_id" >&2; exit 3; fi; done; \
+      measurement_script="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/measure_runtime.py"; verifier_script="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/runtime_verify.py"; \
+      PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" "{{repo_python}}" -m tests.standard_problems.mumag.sp4.fdm.multilayer_convolution.measure_runtime "$run_root/ab/artifacts" "$run_root/a-only/artifacts" "$run_root/b-only/artifacts" "$run_root/runtime.json"; \
+      PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" "{{repo_python}}" -m tests.standard_problems.mumag.sp4.fdm.multilayer_convolution.runtime_verify "$run_root/runtime.json" > "$run_root/runtime-verification.json"; \
+      printf "{\"status\":\"verified\",\"lane\":\"%s\",\"artifact\":\"%s\"}\n" "$lane" "$run_root/runtime.json" > "$status_file"; echo "validated real CPU FP64 FDM multilayer artifact: $run_root/runtime.json"'
+
+# E4: Dedicated managed-container CPU FP64 L=3 Appendix-A gate.  It is kept
+# separate from the L=2 A+B/A-only/B-only measurement recipe because that
+# measurement contract has exactly two physical layers.
+verify-fdm-multilayer-l3-runtime:
+    bash -euo pipefail -c '\
+      report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; \
+      mkdir -p "$report_parent"; \
+      run_root="$(mktemp -d "$report_parent/l3-cpu-fp64.run.XXXXXXXX")"; \
+      status_file="$run_root/status.json"; \
+      write_status() { printf "{\"status\":\"not_qualified\",\"lane\":\"cpu-fp64\",\"reason_code\":\"%s\"}\n" "$1" > "$status_file"; }; \
+      finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; \
+      trap finish EXIT INT TERM; \
+      regular_script="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_regular_small.py"; \
+      heterogeneous_script="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_heterogeneous_small.py"; \
+      for script in "$regular_script" "$heterogeneous_script"; do test -f "$script" || { write_status "scenario_missing"; echo "not_qualified: scenario_missing:$script" >&2; exit 3; }; done; \
+      just ensure-python; \
+      just ensure-managed-fem-runtime || { write_status "managed_runtime_unavailable"; exit 3; }; \
+      test -x "{{gpu_runtime_bin}}" && test -f "{{gpu_runtime_manifest}}" || { write_status "managed_runtime_missing"; exit 3; }; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$run_root/source-snapshot.v1.json"; \
+      cp "{{gpu_runtime_manifest}}" "$run_root/managed-runtime-manifest.json"; \
+      captured_source_snapshot="$(jq -er '"'"'.source_snapshot_sha256'"'"' "$run_root/source-snapshot.v1.json")" || { write_status "source_snapshot_invalid"; exit 3; }; \
+      runtime_source_snapshot="$(jq -er '"'"'.build_identity.source_snapshot_sha256'"'"' "$run_root/managed-runtime-manifest.json")" || { write_status "managed_runtime_source_snapshot_missing"; exit 3; }; \
+      if [ "$runtime_source_snapshot" != "$captured_source_snapshot" ]; then write_status "managed_runtime_source_snapshot_mismatch"; exit 3; fi; \
+      hash_file() { sha256sum "$1" | cut -d" " -f1; }; \
+      # Hash the snapshot path passed by the caller; keep JSON shape stable so pre/post cmp is meaningful. \
+      write_structural_hashes() { hashes_output="$1"; source_output="$2"; snapshot_path="$3"; runtime_sha="$(hash_file "{{gpu_runtime_bin}}")"; manifest_sha="$(hash_file "{{gpu_runtime_manifest}}")"; recipe_sha="$(hash_file justfile)"; thresholds_sha="$(hash_file tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json)"; regular_sha="$(hash_file "$regular_script")"; heterogeneous_sha="$(hash_file "$heterogeneous_script")"; oracle_sha="$(hash_file scripts/verify_fdm_multilayer_independent_oracle.py)"; transfer_sha="$(hash_file scripts/verify_fdm_multilayer_transfer_parity.py)"; snapshot_file_sha="$(hash_file "$snapshot_path")"; snapshot_sha="$(jq -er '"'"'.source_snapshot_sha256'"'"' "$snapshot_path")"; dirty_sha="$(jq -er '"'"'.dirty_content_sha256 // ""'"'"' "$snapshot_path")"; head_commit="$(jq -er '"'"'.head_commit_full'"'"' "$snapshot_path")"; printf '{"schema_version":"fdm_multilayer_l3_input_hashes.v1","inputs":{"runtime_binary":{"path":"fem-gpu-host/bin/fullmag-fem-gpu","sha256":"%s"},"runtime_manifest":{"path":"fem-gpu-host/manifest.json","sha256":"%s"},"recipe":{"path":"justfile","sha256":"%s"},"thresholds":{"path":"tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json","sha256":"%s"}}}\n' "$runtime_sha" "$manifest_sha" "$recipe_sha" "$thresholds_sha" > "$hashes_output"; printf '{"schema_version":"fdm_multilayer_l3_source_hashes.v1","source":{"regular_scenario":{"path":"tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_regular_small.py","sha256":"%s"},"heterogeneous_scenario":{"path":"tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_heterogeneous_small.py","sha256":"%s"},"independent_oracle":{"path":"scripts/verify_fdm_multilayer_independent_oracle.py","sha256":"%s"},"transfer_parity":{"path":"scripts/verify_fdm_multilayer_transfer_parity.py","sha256":"%s"},"snapshot_file":{"sha256":"%s"},"source_snapshot_sha256":"%s","dirty_content_sha256":"%s","head_commit_full":"%s"}}\n' "$regular_sha" "$heterogeneous_sha" "$oracle_sha" "$transfer_sha" "$snapshot_file_sha" "$snapshot_sha" "$dirty_sha" "$head_commit" > "$source_output"; }; \
+      write_structural_hashes "$run_root/input-hashes.v1.json" "$run_root/source-hashes.v1.json" "$run_root/source-snapshot.v1.json"; \
+      sha256sum "{{gpu_runtime_bin}}" "{{gpu_runtime_manifest}}" "$regular_script" "$heterogeneous_script" tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json scripts/verify_fdm_multilayer_independent_oracle.py scripts/verify_fdm_multilayer_transfer_parity.py > "$run_root/input-sha256.txt"; \
+      printf "%s\n" "just verify-fdm-multilayer-l3-runtime" > "$run_root/command.txt"; \
+      run_case() { case_id="$1"; script="$2"; output="$run_root/$case_id/artifacts"; mkdir -p "$output"; docker compose --profile fem-gpu run --rm --no-deps -e PYTHONPATH=/workspace/packages/fullmag-py/src -e FULLMAG_PYTHON=/usr/bin/python3 -e FULLMAG_FDM_EXECUTION=cpu -e FULLMAG_FEM_EXECUTION=cpu -e FULLMAG_DISABLE_PREVIEW_3D=1 -e FULLMAG_DISABLE_CHARTS=1 fem-gpu bash -lc "cd /workspace && FULLMAG_API_PORT=0 .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu $script --backend fdm --headless --json --output-dir /workspace/$output --workspace-root /workspace/$output/workspace-history" 2>&1 | tee "$run_root/$case_id/runtime.log"; }; \
+      run_case regular "$regular_script" || { write_status "cpu_runtime_failed:regular_l3"; exit 3; }; \
+      run_case heterogeneous "$heterogeneous_script" || { write_status "cpu_runtime_failed:heterogeneous_l3"; exit 3; }; \
+      for case_id in regular heterogeneous; do test -f "$run_root/$case_id/artifacts/metadata.json" || { write_status "runtime_artifacts_missing:$case_id"; exit 3; }; done; \
+      PYTHONPATH="{{repo_root}}/packages/fullmag-py/src:{{repo_root}}" "{{repo_python}}" scripts/verify_fdm_multilayer_independent_oracle.py --artifact "$run_root/regular/artifacts" --output "$run_root/l3-regular-oracle.json" || { write_status "regular_oracle_failed"; exit 3; }; \
+      PYTHONPATH="{{repo_root}}/packages/fullmag-py/src:{{repo_root}}" "{{repo_python}}" scripts/verify_fdm_multilayer_transfer_parity.py "$run_root/heterogeneous/artifacts" --max-target-cells 128 --max-energy-cells 4096 --json-output "$run_root/l3-heterogeneous-transfer.json" || { write_status "heterogeneous_transfer_failed"; exit 3; }; \
+      jq -e '"'"'.qualification_status == "qualified"'"'"' "$run_root/l3-regular-oracle.json" >/dev/null || { write_status "regular_oracle_not_qualified"; exit 3; }; \
+      jq -e '"'"'.qualification_status == "qualified"'"'"' "$run_root/l3-heterogeneous-transfer.json" >/dev/null || { write_status "heterogeneous_transfer_not_qualified"; exit 3; }; \
+      if ! python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$run_root/source-snapshot.v1.json" --output "$run_root/source-snapshot-post.v1.json"; then write_status "source_drift_after_runtime"; exit 3; fi; \
+      write_structural_hashes "$run_root/input-hashes-post.v1.json" "$run_root/source-hashes-post.v1.json" "$run_root/source-snapshot-post.v1.json"; \
+      if ! cmp -s "$run_root/input-hashes.v1.json" "$run_root/input-hashes-post.v1.json"; then write_status "input_hash_drift_after_runtime"; exit 3; fi; \
+      if ! cmp -s "$run_root/source-hashes.v1.json" "$run_root/source-hashes-post.v1.json"; then write_status "source_hash_drift_after_runtime"; exit 3; fi; \
+      jq -n --slurpfile source "$run_root/source-snapshot.v1.json" --slurpfile manifest "$run_root/managed-runtime-manifest.json" --slurpfile regular "$run_root/l3-regular-oracle.json" --slurpfile heterogeneous "$run_root/l3-heterogeneous-transfer.json" --slurpfile input_hashes "$run_root/input-hashes.v1.json" --slurpfile source_hashes "$run_root/source-hashes.v1.json" --slurpfile input_hashes_post "$run_root/input-hashes-post.v1.json" --slurpfile source_hashes_post "$run_root/source-hashes-post.v1.json" '"'"'{schema_version:"fdm_multilayer_l3_managed_runtime.v1",qualification_scope:"SP4-derived, not canonical SP4 qualification",lane:{backend:"fdm",device:"cpu",precision:"double",execution_mode:"strict"},managed_container:true,source_snapshot:$source[0],managed_runtime_manifest:$manifest[0],input_hashes:$input_hashes[0],source_hashes:$source_hashes[0],post_run_hashes:{inputs:$input_hashes_post[0],source:$source_hashes_post[0]},drift_checks:{source_identity_unchanged:true,input_hashes_unchanged:true,source_hashes_unchanged:true},regular_oracle:$regular[0],heterogeneous_transfer:$heterogeneous[0]}'"'"' > "$run_root/summary.json" || { write_status "summary_write_failed"; exit 3; }; \
+      printf "{\"status\":\"verified\",\"lane\":\"cpu-fp64\",\"artifact\":\"%s\",\"summary\":\"%s\"}\n" "$run_root" "$run_root/summary.json" > "$status_file"; \
+      echo "validated managed-container CPU FP64 FDM multilayer L=3 artifacts: $run_root/summary.json"'
+
+# D-07: managed native CUDA multilayer demag telemetry and parity gate. The
+# surrounding staged RK remains host-authoritative; only the v2 demag refresh
+# is qualified as device-resident by exact L/L/L^2 counters.
+verify-fdm-multilayer-cuda-runtime lane="cuda-fp64":
+    bash -euo pipefail -c '\
+      lane="{{lane}}"; report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; mkdir -p "$report_parent"; run_root="$(mktemp -d "$report_parent/$lane.run.XXXXXXXX")"; status_file="$run_root/status.json"; \
+      write_status() { printf "{\"status\":\"not_qualified\",\"lane\":\"%s\",\"reason_code\":\"%s\"}\n" "$lane" "$1" > "$status_file"; }; finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; trap finish EXIT INT TERM; \
+      case "$lane" in cuda-fp64|cuda-fp32) ;; *) write_status "unsupported_lane"; exit 2 ;; esac; \
+      scenario="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_cuda_v2_small.py"; thresholds="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json"; verifier="scripts/verify_fdm_multilayer_cuda_parity.py"; \
+      for required in "$scenario" "$thresholds" "$verifier"; do test -f "$required" || { write_status "input_missing"; exit 3; }; done; \
+      just ensure-managed-fem-runtime || { write_status "managed_runtime_unavailable"; exit 3; }; test -x "{{gpu_runtime_bin}}" && test -f "{{gpu_runtime_manifest}}" || { write_status "managed_runtime_missing"; exit 3; }; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$run_root/source-snapshot.v1.json"; cp "{{gpu_runtime_manifest}}" "$run_root/managed-runtime-manifest.json"; \
+      captured_source_snapshot="$(jq -er '"'"'"'.source_snapshot_sha256'"'"'"' "$run_root/source-snapshot.v1.json")" || { write_status "source_snapshot_invalid"; exit 3; }; \
+      runtime_source_snapshot="$(jq -er '"'"'"'.build_identity.source_snapshot_sha256'"'"'"' "$run_root/managed-runtime-manifest.json")" || { write_status "managed_runtime_source_snapshot_missing"; exit 3; }; \
+      if [ "$runtime_source_snapshot" != "$captured_source_snapshot" ]; then write_status "managed_runtime_source_snapshot_mismatch"; exit 3; fi; \
+      hash_runtime_inputs() { sha256sum "{{gpu_runtime_bin}}" "{{gpu_runtime_manifest}}" > "$1"; }; hash_source_inputs() { sha256sum "$scenario" "$thresholds" "$verifier" justfile > "$1"; }; \
+      hash_runtime_inputs "$run_root/input-hashes.v1.txt"; hash_source_inputs "$run_root/source-hashes.v1.txt"; cp "$run_root/input-hashes.v1.txt" "$run_root/input-sha256.txt"; \
+      printf "%s\n" "just verify-fdm-multilayer-cuda-runtime $lane" > "$run_root/command.txt"; printf "%s\n" "d07_telemetry_not_qualified" "cpu_cuda_parity_not_qualified" "managed_runtime_source_snapshot_mismatch" "source_drift_after_runtime" "input_hash_drift_after_runtime" "source_hash_drift_after_runtime" > "$run_root/failure-reason-codes.txt"; \
+      docker compose --profile fem-gpu run --rm --no-deps fem-gpu nvidia-smi -L 2>&1 | tee "$run_root/device.log" || { write_status "cuda_device_unavailable"; exit 3; }; \
+      run_case() { case_id="$1"; execution="$2"; precision="$3"; output="$run_root/$case_id/artifacts"; mkdir -p "$output"; docker compose --profile fem-gpu run --rm --no-deps -e PYTHONPATH=/workspace/packages/fullmag-py/src -e FULLMAG_PYTHON=/usr/bin/python3 -e FULLMAG_FDM_EXECUTION="$execution" -e FULLMAG_FEM_EXECUTION=cpu -e FULLMAG_FDM_MULTILAYER_SCENARIO_PRECISION="$precision" -e FULLMAG_DISABLE_PREVIEW_3D=1 -e FULLMAG_DISABLE_CHARTS=1 fem-gpu bash -lc "cd /workspace && FULLMAG_API_PORT=0 .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu $scenario --backend fdm --headless --json --output-dir /workspace/$output --workspace-root /workspace/$output/workspace-history" 2>&1 | tee "$run_root/$case_id/runtime.log"; }; \
+      if [ "$lane" = "cuda-fp64" ]; then run_case reference cpu double || { write_status "cpu_reference_runtime_failed"; exit 3; }; candidate_precision=double; else run_case reference cuda double || { write_status "cuda_fp64_reference_runtime_failed"; exit 3; }; candidate_precision=single; fi; \
+      run_case candidate cuda "$candidate_precision" || { write_status "cuda_runtime_failed"; exit 3; }; \
+      for case_id in reference candidate; do test -f "$run_root/$case_id/artifacts/metadata.json" || { write_status "runtime_artifacts_missing"; exit 3; }; done; \
+      PYTHONPATH="{{repo_root}}/packages/fullmag-py/src:{{repo_root}}" "{{repo_python}}" "$verifier" --reference "$run_root/reference/artifacts" --candidate "$run_root/candidate/artifacts" --thresholds "$thresholds" --lane "$lane" --output "$run_root/parity.json" || { write_status "d07_or_cpu_cuda_parity_not_qualified"; exit 3; }; \
+      if ! python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$run_root/source-snapshot.v1.json" --output "$run_root/source-snapshot-post.v1.json"; then write_status "source_drift_after_runtime"; exit 3; fi; \
+      hash_runtime_inputs "$run_root/input-hashes-post.v1.txt"; hash_source_inputs "$run_root/source-hashes-post.v1.txt"; \
+      if ! cmp -s "$run_root/input-hashes.v1.txt" "$run_root/input-hashes-post.v1.txt"; then write_status "input_hash_drift_after_runtime"; exit 3; fi; \
+      if ! cmp -s "$run_root/source-hashes.v1.txt" "$run_root/source-hashes-post.v1.txt"; then write_status "source_hash_drift_after_runtime"; exit 3; fi; \
+      if ! cmp -s "{{gpu_runtime_manifest}}" "$run_root/managed-runtime-manifest.json"; then write_status "managed_runtime_manifest_drift_after_runtime"; exit 3; fi; \
+      printf "{\"status\":\"verified\",\"lane\":\"%s\",\"artifact\":\"%s\"}\n" "$lane" "$run_root/parity.json" > "$status_file"; echo "validated managed CUDA D-07 artifact: $run_root/parity.json"'
+
+verify-fdm-multilayer-airbox-runtime lane="cpu-fp64":
+    bash -euo pipefail -c '\
+      lane="{{lane}}"; report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; mkdir -p "$report_parent"; run_root="$(mktemp -d "$report_parent/airbox-${lane}.run.XXXXXXXX")"; status_file="$run_root/status.json"; \
+      write_status() { printf "{\"status\":\"not_qualified\",\"lane\":\"%s\",\"reason_code\":\"%s\"}\n" "$lane" "$1" > "$status_file"; }; finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; trap finish EXIT INT TERM; \
+      case "$lane" in cpu-fp64) ;; cuda-fp64|cuda-fp32) reason="cuda_managed_artifact_missing"; if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi -L >/dev/null 2>&1; then reason="cuda_device_unavailable"; elif [ -x "{{gpu_runtime_bin}}" ] && [ -f "{{gpu_runtime_manifest}}" ]; then reason="cuda_lane_artifact_not_qualified"; fi; write_status "$reason"; echo "not_qualified: $reason ($lane)" >&2; exit 3 ;; *) write_status "unsupported_lane"; echo "unsupported multilayer Airbox lane: $lane" >&2; exit 2 ;; esac; \
+      demag_report="${FULLMAG_FDM_MULTILAYER_DEMAG_REPORT:-}"; carrier="${FULLMAG_FDM_MULTILAYER_AIRBOX_CARRIER:-}"; \
+      if [ -z "$demag_report" ]; then write_status "demag_report_missing"; echo "not_qualified: demag_report_missing" >&2; exit 3; fi; if [ -z "$carrier" ]; then write_status "airbox_carrier_missing"; echo "not_qualified: airbox_carrier_missing (set FULLMAG_FDM_MULTILAYER_AIRBOX_CARRIER)" >&2; exit 3; fi; \
+      runtime_json="$demag_report/runtime.json"; if [ ! -f "$runtime_json" ]; then write_status "runtime_artifacts_missing"; echo "not_qualified: runtime_artifacts_missing:$runtime_json" >&2; exit 3; fi; \
+      verifier_script="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/runtime_verify.py"; echo "required carrier scope_kind=airbox quantity=H_demag"; PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" "{{repo_python}}" -m tests.standard_problems.mumag.sp4.fdm.multilayer_convolution.runtime_verify "$runtime_json" > "$run_root/runtime-verification.json" || { write_status "runtime_verifier_failed"; exit 3; }; \
+      PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" python3 scripts/verify_fdm_multilayer_airbox_carrier.py "$carrier" --output "$run_root/airbox-carrier-verification.json" || { write_status "airbox_carrier_invalid"; exit 3; }; \
+      printf "{\"status\":\"verified\",\"lane\":\"%s\",\"scope_kind\":\"airbox\",\"quantity\":\"H_demag\",\"carrier\":\"%s\"}\n" "$lane" "$carrier" > "$status_file"; echo "validated runtime-origin Airbox H_demag carrier: $carrier"'
+
+verify-fdm-multilayer-demag-production:
+    bash -euo pipefail -c '\
+      report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; mkdir -p "$report_parent"; run_root="$(mktemp -d "$report_parent/production.run.XXXXXXXX")"; status_file="$run_root/status.json"; \
+      write_status() { printf "{\"status\":\"not_qualified\",\"reason_code\":\"%s\"}\n" "$1" > "$status_file"; }; finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; trap finish EXIT INT TERM; \
+      if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then write_status "cuda_managed_artifact_missing"; echo "not_qualified: cuda_managed_artifact_missing" >&2; exit 3; fi; if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi -L >/dev/null 2>&1; then write_status "cuda_device_unavailable"; echo "not_qualified: cuda_device_unavailable" >&2; exit 3; fi; \
+      just verify-fdm-multilayer-demag-runtime cpu-fp64; if [ -z "${FULLMAG_FDM_MULTILAYER_DEMAG_REPORT:-}" ] || [ -z "${FULLMAG_FDM_MULTILAYER_AIRBOX_CARRIER:-}" ]; then write_status "airbox_carrier_missing"; echo "not_qualified: airbox_carrier_missing" >&2; exit 3; fi; just verify-fdm-multilayer-airbox-runtime cpu-fp64; just verify-fdm-multilayer-demag-runtime cuda-fp64; just verify-fdm-multilayer-demag-runtime cuda-fp32; write_status "cuda_lane_not_qualified"; echo "not_qualified: cuda_lane_not_qualified" >&2; exit 3'
+
+# Managed FEM CPU graph-realization gate.  The native MFEM runtime is built in
+# the managed fem-gpu image, while the fixture requests the CPU FEM lane and
+# verifies concrete element-marker provenance in the public artifact.
+verify-fem-physics-graph-runtime:
+    docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:$${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-physics-graph-runtime CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features fem-gpu --test physics_graph_runtime -- --nocapture'
+
+# Cross-layer authoring parity only.  This gate intentionally does not promote
+# any FEM/FDM, GPU, or external-solver capability.
+verify-spin-transport-authoring-parameter-parity:
+    PYTHONPATH=packages/fullmag-py/src python3 scripts/verify_spin_transport_authoring_parameter_parity.py
+
 verify-fdm-prescribed-sot-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-prescribed-sot-build && cargo_target=/tmp/fullmag-fdm-prescribed-sot-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target prescribed_sot_contract prescribed_sot_cuda_runtime fullmag_fdm && "$build_dir/backends/fdm/prescribed_sot_contract" && LD_LIBRARY_PATH="$build_dir/backends/fdm:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fdm/prescribed_sot_cuda_runtime" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_prescribed_sot -- --nocapture'
@@ -299,6 +452,30 @@ verify-boris-fullmag-she-nf:
 verify-fdm-zhang-li-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-zhangli-build && cargo_target=/tmp/fullmag-fdm-zhangli-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm stt_pbc_contract && "$build_dir/backends/fdm/stt_pbc_contract" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_mumax3_zhang_li_matches_cpu_reference_for_one_masked_step_when_cuda_is_available -- --nocapture'
+
+# Artifact qualification is intentionally separate from the one-step operator
+# contract above. It fails unless both full CPU/CUDA parity and the external
+# MuMax3 mean-magnetization tolerance pass for the canonical 1 ns workload.
+verify-fdm-sp5-validator:
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+      scripts.test_validate_fdm_sp5_runtime \
+      scripts.test_compare_fdm_sp5_mumax_fields \
+      scripts.test_compare_fdm_sp5_mumax_effective_fields -v
+
+verify-fdm-sp5-artifacts cpu_run gpu_run output:
+    python3 scripts/validate_fdm_sp5_runtime.py \
+      --cpu "{{cpu_run}}" \
+      --gpu "{{gpu_run}}" \
+      --output "{{output}}"
+
+verify-fdm-sp5-converged-demag-artifacts cpu_run gpu_run reference_ovf output:
+    python3 scripts/validate_fdm_sp5_runtime.py \
+      --cpu "{{cpu_run}}" \
+      --gpu "{{gpu_run}}" \
+      --converged-reference-ovf "{{reference_ovf}}" \
+      --qualification-reference converged_demag \
+      --converged-reference-tolerance 1e-4 \
+      --output "{{output}}"
 
 verify-fdm-slonczewski-native-contract:
     docker compose --profile fem-gpu run --rm \
@@ -347,7 +524,7 @@ verify-fem-time-domain-native-contract:
     python3 scripts/check_llg_time_domain_contract_docs.py
     docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mesh_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_rk_transaction_fault_injection_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_slonczewski_contract fem_cuda_rk_guard_contract fem_gpu_pageable_scalar_readback_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_rk_transaction_fault_injection_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_slonczewski_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1 native/build/backends/fem/fem_gpu_pageable_scalar_readback_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target cargo test -p fullmag-fem-sys --lib'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_mesh_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_rk_transaction_fault_injection_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_slonczewski_contract fem_cuda_rk_guard_contract fem_gpu_pageable_scalar_readback_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_rk_transaction_fault_injection_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_slonczewski_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1 native/build/backends/fem/fem_gpu_pageable_scalar_readback_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target cargo test -p fullmag-fem-sys --lib'
 
 verify-fem-mesh-runner-abi-contract:
     docker compose --profile fem-gpu run --rm \
@@ -424,6 +601,51 @@ verify-fdm-time-domain-native-contract:
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build-fdm-cpu -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF && cmake --build native/build-fdm-cpu --target fullmag_fdm fdm_llg_time_policy_contract oersted_energy_contract partial_cell_energy_contract && LD_LIBRARY_PATH=/workspace/native/build-fdm-cpu/backends/fdm:${LD_LIBRARY_PATH:-} native/build-fdm-cpu/backends/fdm/fdm_llg_time_policy_contract && native/build-fdm-cpu/backends/fdm/oersted_energy_contract && native/build-fdm-cpu/backends/fdm/partial_cell_energy_contract && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fullmag_fdm fdm_llg_time_policy_contract oersted_energy_contract partial_cell_energy_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fdm:${LD_LIBRARY_PATH:-} native/build/backends/fdm/fdm_llg_time_policy_contract && native/build/backends/fdm/oersted_energy_contract && native/build/backends/fdm/partial_cell_energy_contract'
+
+verify-fdm-cpu-m1-charge-native-contract:
+    docker compose run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      fem-cpu bash -lc 'cd /workspace && build_dir=/mnt/fullmag-zfn2-native/fdm-cpu-m1-charge && cargo_home="$build_dir/cargo-home" && cargo_target="$build_dir/cargo-target" && rust_output="$build_dir/rust-charge-parity-v1.txt" && small_rust_output="$build_dir/rust-charge-parity-small-current-v1.txt" && mkdir -p "$cargo_home" "$cargo_target" && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target fdm_cpu_charge_transport_contract && ctest --test-dir "$build_dir/backends/fdm" --verbose -R "^fdm_cpu_charge_" && CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo run -p fullmag-engine --example fdm_charge_oracle_v1 -- backends/fdm/tests/fixtures/charge_parity_v1.txt "$rust_output" && "$build_dir/backends/fdm/fdm_cpu_charge_transport_contract" --compare-rust backends/fdm/tests/fixtures/charge_parity_v1.txt "$rust_output" && CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo run -p fullmag-engine --example fdm_charge_oracle_v1 -- backends/fdm/tests/fixtures/charge_parity_small_current_v1.txt "$small_rust_output" && "$build_dir/backends/fdm/fdm_cpu_charge_transport_contract" --compare-rust backends/fdm/tests/fixtures/charge_parity_small_current_v1.txt "$small_rust_output"'
+
+verify-fdm-cpu-m1-spin-native-contract:
+    docker compose run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      fem-cpu bash -lc 'cd /workspace && build_dir=/mnt/fullmag-zfn2-native/fdm-cpu-m1-spin && cargo_home="$build_dir/cargo-home" && cargo_target="$build_dir/cargo-target" && rust_output="$build_dir/rust-spin-parity-v1.txt" && mkdir -p "$cargo_home" "$cargo_target" && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target fdm_cpu_charge_transport_contract fdm_cpu_spin_transport_contract fdm_cpu_spin_transport_parity && ctest --test-dir "$build_dir/backends/fdm" --verbose -R "^fdm_cpu_(charge|spin)_transport_contract$" && CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo run -p fullmag-engine --example fdm_spin_oracle_v1 -- backends/fdm/tests/fixtures/spin_parity_v1.txt "$rust_output" && "$build_dir/backends/fdm/fdm_cpu_spin_transport_parity" backends/fdm/tests/fixtures/spin_parity_v1.txt "$rust_output"'
+
+verify-fdm-cpu-m1-transport-abi-contract:
+    docker compose run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      fem-cpu bash -lc 'cd /workspace && build_dir=/mnt/fullmag-zfn2-native/fdm-cpu-m1-binding && cargo_home="$build_dir/cargo-home" && cargo_target="$build_dir/cargo-target" && mkdir -p "$cargo_home" "$cargo_target" && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target fullmag_fdm fdm_cpu_transport_abi_v1_contract fdm_gpu_transport_cpu_only_symbol_graph fdm_gpu_transport_layout_abi_v1_c11_contract && ctest --test-dir "$build_dir/backends/fdm" --verbose -R "^(fdm_cpu_transport_abi_v1_contract|fdm_gpu_transport_cpu_only_symbol_graph|fdm_gpu_transport_layout_abi_v1_c11_contract)$" && nm -D "$build_dir/backends/fdm/libfullmag_fdm.so" | grep -E "fullmag_fdm_(cpu_(transport_is_available|charge_solve|steady_spin_solve|charge_result_destroy)|gpu_transport_(context_create|context_destroy|static_descriptor_upload))_v1" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys tests::cpu_transport_abi_layout_manifest_matches_every_rust_record_field -- --exact --nocapture && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys --doc fullmag_fdm_cpu_charge_result_v1 -- --nocapture && CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo test -p fullmag-plan native_m1_v1 -- --nocapture && CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo test -p fullmag-plan specified_current_density_resolves_exact_external_faces_with_area_and_sign -- --nocapture && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features fdm-native-cpu native_m1_v1 -- --nocapture'
+
+verify-fdm-gpu-m1-layout-abi-contract:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-layout; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; evidence="$build_dir/fdm-gpu-m1-layout-abi-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_contract fdm_gpu_transport_registry_fail_closed_v1_contract fdm_gpu_transport_checkpoint_semantic_v1_contract fdm_gpu_transport_layout_abi_v1_c11_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_(layout_abi_v1(_c11)?|registry_fail_closed_v1|checkpoint_semantic_v1)_contract$"; FULLMAG_FDM_GPU_M1_EVIDENCE_PATH="$evidence" "$build_dir/backends/fdm/fdm_gpu_transport_layout_abi_v1_contract"; test -s "$evidence"; python3 -m json.tool "$evidence"'
+
+verify-fdm-gpu-m1-charge-native-contract:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-charge; mkdir -p "$build_dir"; uniform="$build_dir/fdm-gpu-m1-charge-uniform-v1.json"; layered="$build_dir/fdm-gpu-m1-charge-layered-v1.json"; snapshot="$build_dir/fdm-gpu-m1-charge-snapshot-v1.json"; mutation="$build_dir/fdm-gpu-m1-charge-boundary-mutation-v1.json"; transfer="$build_dir/fdm-gpu-m1-charge-transfer-audit-v1.json"; rm -f "$uniform" "$uniform.tmp" "$layered" "$layered.tmp" "$snapshot" "$snapshot.tmp" "$mutation" "$mutation.tmp" "$transfer" "$transfer.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_charge_uniform_v1_contract fdm_gpu_m1_charge_layered_v1_contract fdm_gpu_m1_charge_snapshot_v1_contract fdm_gpu_m1_charge_boundary_mutation_v1_contract fdm_gpu_m1_charge_transfer_audit_v1_contract; FULLMAG_FDM_GPU_M1_CHARGE_EVIDENCE_PATH="$uniform.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_uniform_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_LAYERED_EVIDENCE_PATH="$layered.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_layered_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_SNAPSHOT_EVIDENCE_PATH="$snapshot.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_snapshot_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_MUTATION_EVIDENCE_PATH="$mutation.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_boundary_mutation_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_TRANSFER_AUDIT_EVIDENCE_PATH="$transfer.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_transfer_audit_v1_contract"; test -s "$uniform.tmp"; test -s "$layered.tmp"; test -s "$snapshot.tmp"; test -s "$mutation.tmp"; test -s "$transfer.tmp"; python3 -m json.tool "$uniform.tmp" >/dev/null; python3 -m json.tool "$layered.tmp" >/dev/null; python3 -m json.tool "$snapshot.tmp" >/dev/null; python3 -m json.tool "$mutation.tmp" >/dev/null; python3 -m json.tool "$transfer.tmp" >/dev/null; mv "$uniform.tmp" "$uniform"; mv "$layered.tmp" "$layered"; mv "$snapshot.tmp" "$snapshot"; mv "$mutation.tmp" "$mutation"; mv "$transfer.tmp" "$transfer"; python3 -m json.tool "$uniform"; python3 -m json.tool "$layered"; python3 -m json.tool "$snapshot"; python3 -m json.tool "$mutation"; python3 -m json.tool "$transfer"'
+
+verify-fdm-gpu-m1-spin-native-contract:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-spin; mkdir -p "$build_dir"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_spin_red_v1_contract; "$build_dir/backends/fdm/fdm_gpu_m1_spin_red_v1_contract"'
+
+verify-fdm-cpu-oersted-open-fft-native-contract:
+    docker compose run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      fem-cpu bash -lc 'cd /workspace && build_dir=/mnt/fullmag-zfn2-native/fdm-cpu-oersted-open-fft && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target fdm_cpu_oersted_fft_open_contract && ctest --test-dir "$build_dir/backends/fdm" --verbose -R "^fdm_cpu_oersted_fft_open_contract$"'
 
 verify-fem-regional-field-drive-contract:
     docker compose --profile fem-gpu run --rm \
@@ -514,6 +736,88 @@ verify-fem-steady-transport-cpu-only-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh steady-transport
 
+verify-fem-steady-transport-rt0-cpu-contract:
+    docker compose build fem-cpu
+    docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh steady-transport-rt0
+
+# Stage-consistency gate for the physically invariant one-way closed source.
+# The managed runner tests exercise exact-key reuse plus checkpoint/rollback
+# around a changed stage identity.  The native CPU RK callback transaction is
+# covered by verify-fem-time-domain-cpu-only-contract; magnetization-dependent
+# transport binding, M2, and external-lead coupling remain fail-closed.
+verify-fem-steady-transport-stage-cache-contract:
+    docker compose --profile fem-gpu run --rm \
+        fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-steady-transport-stage-cache CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::stage_cache::tests -- --nocapture'
+
+# Public Rust adapter -> append-only C ABI -> MFEM RT0 coupled volumetric
+# external-lead solve.  This is intentionally separate from the native-only
+# conservative-current-view contract so the public buffer/identity mapping is
+# exercised as part of the managed proof.
+verify-fem-steady-transport-external-lead-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit -- --exact --nocapture'
+
+# Stage callback proof for the same coupled volumetric external-lead fixture:
+# RT0 solve -> OE-F1 field reconstruction -> accepted callback observation.
+verify-fem-stage-oersted-external-lead-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::stage_oersted::tests::external_lead_stage_callback_solves_oersted_and_commits_observation -- --exact --nocapture'
+
+# Full native CPU step with the external-lead Oersted provider installed on
+# the backend: callback cadence is driven by the real RK integrator.
+verify-fem-llg-external-lead-oersted-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step -- --exact --nocapture'
+
+# Adaptive RK23 proof that a rejected native attempt rolls the external-lead
+# callback back before the accepted retry is committed.
+verify-fem-adaptive-retry-external-lead-oersted-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt -- --exact --nocapture'
+
+# Callback cadence coverage for every native explicit RK integrator supported
+# by the FEM plan: fixed Heun/RK4 and adaptive RK23/RK45.
+verify-fem-rk-family-external-lead-oersted-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators -- --exact --nocapture'
+
+# One reciprocal FEM M2 solve per exact native RK stage, shared by the direct
+# transport torque and solved-current Oersted callbacks.
+verify-fem-reciprocal-m2-oersted-shared-stage-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-reciprocal-m2-oersted && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted -- --exact --nocapture'
+
+# Adaptive RK23 rejection must roll back both ABI adapters before a shared M2
+# torque/Oersted retry is accepted.
+verify-fem-reciprocal-m2-oersted-adaptive-retry-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-reciprocal-m2-oersted && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry -- --exact --nocapture'
+
+# Three-step shared torque/Oersted trajectories for every explicit native FEM
+# RK integrator: fixed Heun/RK4 and adaptive RK23/RK45.
+verify-fem-reciprocal-m2-oersted-rk-family-cpu-contract:
+    docker compose --profile fem-gpu run --rm \
+        -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+        fem-gpu bash -lc 'cd /workspace && durable=/mnt/fullmag-zfn2-native/fem-reciprocal-m2-oersted && mkdir -p "$durable/cargo-home" "$durable/cargo-target" && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_HOME="$durable/cargo-home" CARGO_TARGET_DIR="$durable/cargo-target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators -- --exact --nocapture'
+
+# Full public Python -> managed FEM CPU -> artifact proof for the volumetric
+# external-lead Oersted fixture. Every run gets a durable unique root on /zfn2.
+verify-fem-external-lead-oersted-public-cpu-runtime:
+    run_parent=/zfn2/mateuszz/git/fullmag/reports/fem-external-lead-oersted-public; \
+      mkdir -p "$run_parent"; \
+      run_root="$(mktemp -d "$run_parent/run.XXXXXXXX")"; \
+      set -o pipefail; \
+      just fem-managed-headless cpu examples/fem_external_lead_oersted_public.py "$run_root/artifacts" | tee "$run_root/runtime.log"; \
+      python3 scripts/validate_fem_external_lead_oersted_runtime.py "$run_root/runtime.log" --output "$run_root/qualification.json"; \
+      echo "qualified external-lead runtime: $run_root"
+
 verify-fem-time-domain-cpu-only-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh time-domain
@@ -523,8 +827,8 @@ verify-fem-oersted-oet0-cpu-contract:
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0
 
 verify-fem-oersted-oet0-tsan-cpu-contract:
-    docker compose build fem-cpu
-    docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0-tsan
+    docker compose build fem-cpu-tsan
+    docker compose run --rm --no-deps fem-cpu-tsan ./scripts/run_fem_cpu_only_contract.sh oersted-oet0-tsan
 
 verify-fem-oersted-oef1-cpu-contract:
     docker compose build fem-cpu
@@ -536,9 +840,42 @@ verify-fem-oersted-oef2-cpu-contract:
 
 verify-fem-stt-native-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_stt_contract fem_cuda_slonczewski_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_stt_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_cuda_slonczewski_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-cargo cargo test -p fullmag-fem-sys versioned_stt_extension_is_append_only_after_legacy_plan_prefix && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::auto_fem_canonical_slonczewski_v2_remains_gpu_eligible -- --exact && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation -- --exact && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available -- --exact --nocapture'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_stt_contract fem_cuda_slonczewski_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_stt_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_cuda_slonczewski_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-cargo cargo test -p fullmag-fem-sys versioned_stt_extension_is_append_only_after_legacy_plan_prefix && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::auto_fem_canonical_slonczewski_v2_remains_gpu_eligible -- --exact && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::strict_fem_canonical_slonczewski_v2_reaches_native_runtime_validation -- --exact && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_slonczewski_step_matches_independent_si_reference_when_mfem_stack_is_available -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_canonical_slonczewski_has_bounded_current_scaling_when_mfem_stack_is_available -- --exact --nocapture'
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-stt-runner-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_slonczewski_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available -- --exact --nocapture'
+
+verify-fem-prescribed-sot-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem fem_stt_contract fem_cuda_sot_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_stt_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_cuda_sot_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-prescribed-sot-runner CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-prescribed-sot-runner CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-prescribed-sot-runner CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_cpu -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-prescribed-sot-runner CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_gpu -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-prescribed-sot-runner CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots -- --exact --nocapture && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-prescribed-sot-runner CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots_on_gpu -- --exact --nocapture'
+
+# Focused FEM CPU RK atomicity gate for a prescribed SOT pulse.  It is kept
+# separate from the broad source-inventory gate so unrelated dirty-worktree
+# changes cannot hide the rollback/event-knot result.
+verify-fem-rk-sot-rollback-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_rk_explicit_contract'
+
+# Focused one-cell FDM versus exchange-free multi-node FEM prescribed-SOT
+# common-limit gate.  It shares the exact signed descriptor and SI units.
+verify-fem-prescribed-sot-common-limit-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-sot-common-limit CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available -- --exact --nocapture'
+
+# Focused bounded eight-step FEM CPU versus CUDA prescribed-SOT trajectory gate.
+# CPU and GPU consume the same mesh, descriptor, mask, and fixed Heun dt.
+verify-fem-prescribed-sot-trajectory-parity-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-sot-trajectory CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_fixed_trajectory_cpu_gpu_parity_when_mfem_stack_is_available -- --exact --nocapture'
+
+# Focused bounded prescribed-SOT parity across every fixed-step FEM RK tableau.
+verify-fem-prescribed-sot-integrator-parity-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-sot-integrators CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::tests::native_fem_prescribed_sot_cpu_gpu_integrator_parity_when_mfem_stack_is_available -- --exact --nocapture'
 
 # M1.3 transparent-interface conforming-H1 FEM charge/spin CPU oracle.
 verify-fem-steady-transport-native-contract:
@@ -547,6 +884,40 @@ verify-fem-steady-transport-native-contract:
       fem-gpu bash -lc 'cd /workspace && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::steady_transport_component_schedule_is_rejected_before_execution -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-plan spin_transport::tests::fem_boundary_partitions_require_coverage_and_reject_conflicts -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-api router_v2::handlers::data::field_resolution::strict_json_tests::strict_flat_field_values_reject_non_numbers_nulls_and_nested_arrays -- --exact'
     POSTGRES_PASSWORD=contract-only MINIO_ROOT_USER=contract-only MINIO_ROOT_PASSWORD=contract-only docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_steady_transport_contract fem_steady_transport_abi_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_steady_transport_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_steady_transport_abi_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-fem-sys steady_transport_v1_request_and_result_are_self_describing_and_append_only && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-quantities catalog::tests::steady_transport_outputs_have_canonical_quantity_metadata -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-plan spin_transport::tests::resolves_canonical_fem_descriptor_without_hidden_defaults -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-plan spin_transport::tests::fem_v1_rejects_incompatible_charge_and_spin_linear_policies -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-plan spin_transport::tests::fem_v1_requires_strict_execution_mode -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-plan spin_transport::tests::fem_mapping_rejects_gpu_mixing_and_unimplemented_stage_coupling -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::canonical_descriptor_materializes_exact_solver_policy_and_provenance -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::contradictory_resolved_descriptor_fails_before_native_call -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::resolved_descriptor_mutations_fail_closed_by_contradiction_class -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::resolved_descriptor_mesh_masks_and_boundary_attributes_fail_closed -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::canonical_current_source_duplicates_and_mutations_fail_preflight -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::multiple_transport_modules_fail_before_native_execution -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::normalized_runtime_markers_reject_short_and_long_marker_vectors -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::preflight_rejects_short_and_long_element_marker_vectors_before_ffi -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::native_result_publishes_canonical_transport_quantity_fields -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu artifact_pipeline::tests::recorder_streams_transport_scalar_vector_and_tensor_fields -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::steady_transport_outputs_are_satisfied_by_the_steady_publisher -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu dispatch::tests::non_streaming_fem_dispatch_retains_scheduled_transport_fields -- --exact && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu tests::public_fem_dispatch_streams_transport_quantity_artifacts -- --exact && CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-api router_v2::tests::v2_field_data_plane_reads_transport_scalar_vector_and_tensor_snapshots -- --exact && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo check -p fullmag-runner --features fem-gpu && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles -- --exact --nocapture'
+
+# Bounded reference slice: solved FEM Ohmic current -> regularized tet4
+# midpoint Biot--Savart field.  This gate is intentionally separate from the
+# canonical OE-T0/OE-F1/OE-F2 promotion gates.
+verify-fem-solved-current-oersted-reference:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && CARGO_TARGET_DIR=/tmp/fullmag-fem-solved-current-oersted-cargo cargo test -p fullmag-plan oersted -- --nocapture && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-solved-current-oersted-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::solved_current_midpoint_biot_savart_is_finite_and_reverses_with_current -- --exact --nocapture && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-solved-current-oersted-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::solved_current_oersted_identity_digests_are_stable_and_source_bound -- --exact --nocapture'
+
+# Focused nontrivial reciprocal-M2 constitutive oracle.  The managed container
+# builds the native ABI contract and checks an affine cube fixture with known
+# charge and spin currents; it is intentionally separate from the broad M1
+# transport gate so a zero-gradient smoke cannot mask a sign/factor regression.
+verify-fem-steady-transport-m2-affine-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_steady_transport_abi_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_steady_transport_abi_contract'
+
+# Focused bounded reciprocal-M2 mesh-convergence oracle.  It uses three
+# conforming MFEM tetrahedral resolutions and finite spin-flip, so an affine
+# single-grid smoke cannot hide a spatial discretization error.
+verify-fem-steady-transport-m2-convergence-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_steady_transport_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_steady_transport_contract'
+
+verify-fem-steady-transport-m2-common-limit-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-fem-steady-transport-cargo cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles -- --exact --nocapture'
+
+verify-fem-steady-transport-m2-3d-common-limit-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fullmag_fem && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fem-m2-3d CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features fem-gpu native_fem::steady_transport::tests::reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles -- --exact --nocapture'
+
+verify-fdm-m2-heterogeneous-interface-contract:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'cd /workspace && CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-m2-interface CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance -- --nocapture && CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-m2-interface CARGO_INCREMENTAL=0 cargo test -p fullmag-engine --lib m2_mixing_interface_closes_nonzero_absorption_and_sml_with_torque_target -- --nocapture'
 
 verify-fem-steady-transport-critical-remediation:
     POSTGRES_PASSWORD=contract-only MINIO_ROOT_USER=contract-only MINIO_ROOT_PASSWORD=contract-only docker compose --profile fem-gpu run --rm \
@@ -665,8 +1036,13 @@ verify-fem-oersted-observable-runtime:
       root=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_obs_003_oersted_observable_v1; \
       mkdir -p "$root"; \
       for device in cpu gpu; do \
-        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_driven.log"; \
-        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_zero.log"; \
+        run_root="$(mktemp -d "$root/.${device}.run.XXXXXX")"; \
+        trap 'rm -rf -- "$run_root"' EXIT; \
+        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$run_root/driven.log"; \
+        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$run_root/zero.log"; \
+        mv "$run_root/driven.log" "$root/${device}_driven.log"; \
+        mv "$run_root/zero.log" "$root/${device}_zero.log"; \
+        trap - EXIT; rmdir "$run_root"; \
       done; \
       python3 scripts/validate_fem_oersted_observable_artifacts.py \
         --cpu-driven "$root/cpu_driven.log" --cpu-zero "$root/cpu_zero.log" \
@@ -3956,6 +4332,55 @@ run-interactive script:
     just build-static-control-room
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag -i {{script}}
 
+run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backend="fdm" device="cpu" web_port="3197" api_port="8197":
+    just ensure-python
+    just build fullmag
+    bash -euo pipefail -c '\
+      fixture="$(realpath "{{fixture}}")"; \
+      backend="{{backend}}"; device="{{device}}"; \
+      case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend" >&2; exit 2 ;; esac; \
+      case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device" >&2; exit 2 ;; esac; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      smoke_dir="$(TMPDIR=/tmp mktemp -d)"; \
+      smoke_script="$smoke_dir/$(basename "$fixture")"; \
+      token="$(python3 -c "import uuid; print(uuid.uuid4())")"; \
+      original_sha="$(sha256sum "$fixture" | cut -d " " -f1)"; \
+      cp "$fixture" "$smoke_script"; \
+      printf "%s\n" "$token" > "$smoke_dir/.fullmag-smoke-disposable"; \
+      sim_pid=""; \
+      cleanup() { \
+        status=$?; trap - EXIT INT TERM; \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; \
+        post_sha="$(sha256sum "$fixture" | cut -d " " -f1)"; \
+        rm -rf "$smoke_dir"; \
+        if [ "$post_sha" != "$original_sha" ]; then echo "original smoke fixture changed: $fixture before=$original_sha after=$post_sha" >&2; exit 1; fi; \
+        exit "$status"; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      PATH="{{local_bin}}:$PATH" \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_API_PORT="{{api_port}}" \
+      FULLMAG_FDM_EXECUTION="$device" \
+      FULLMAG_FEM_EXECUTION="$device" \
+      fullmag --dev --web-port "{{web_port}}" --backend "$backend" -i "$smoke_script" \
+        > "$smoke_dir/fullmag.log" 2>&1 & \
+      sim_pid=$!; \
+      api_url="http://localhost:{{api_port}}"; web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        if curl -fsS "$api_url/v2/sessions/current" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 120 "$smoke_dir/fullmag.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current" >/dev/null; \
+      TMPDIR=/tmp \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_SMOKE_DISPOSABLE_SCRIPT_PATH="$smoke_script" \
+      CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN="$token" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
+
 run-headless script:
     just ensure-python
     just build fullmag
@@ -3977,18 +4402,23 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
         key_lc="$(printf "%s" "$key" | tr "[:upper:]" "[:lower:]")"; value_lc="$(printf "%s" "$value" | tr "[:upper:]" "[:lower:]")"; \
         case "$key_lc" in \
-          build) build="$value_lc" ;; \
-          force) force="$value_lc" ;; \
-          frontend|ui) frontend="$value_lc" ;; \
-          backend|discretization|engine) backend="$value_lc" ;; \
-          device|execution) device="$value_lc" ;; \
-          mode|run_mode) run_mode="$value_lc" ;; \
-          script) script="$value" ;; \
-          web_port|web-port|port) web_port="$value" ;; \
-          static|dev) frontend="$key_lc" ;; \
-          fem|fdm|auto) backend="$key_lc" ;; \
-          gpu|cpu) device="$key_lc" ;; \
-          interactive|headless) run_mode="$key_lc" ;; \
+          --build|build) build="$value_lc" ;; \
+          --force|force) if [ "$key" = "$raw" ]; then force="true"; else force="$value_lc"; fi ;; \
+          --frontend|frontend|ui) frontend="$value_lc" ;; \
+          --backend|--discretization|--engine|backend|discretization|engine) backend="$value_lc" ;; \
+          --device|--execution|device|execution) device="$value_lc" ;; \
+          --mode|--run_mode|mode|run_mode) run_mode="$value_lc" ;; \
+          --script|script) script="$value" ;; \
+          --web_port|--web-port|--port|web_port|web-port|port) web_port="$value" ;; \
+          --static|static) frontend="static" ;; \
+          --dev|dev) frontend="dev" ;; \
+          --fem|fem) backend="fem" ;; \
+          --fdm|fdm) backend="fdm" ;; \
+          --auto|auto) backend="auto" ;; \
+          --gpu|gpu) device="gpu" ;; \
+          --cpu|cpu) device="cpu" ;; \
+          --interactive|-i|interactive) run_mode="interactive" ;; \
+          --headless|headless) run_mode="headless" ;; \
           true|false) build="$key_lc" ;; \
           *) script="$raw" ;; \
         esac; \
@@ -4013,8 +4443,10 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
       else \
-        if [ "$force" = "true" ]; then just build fullmag; \
-        elif [ "$build" = "true" ]; then just build fullmag; \
+        if [ "$force" = "true" ]; then \
+          if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
+        elif [ "$build" = "true" ]; then \
+          if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
         elif [ ! -x "{{local_bin}}/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
         bin="{{local_bin}}/fullmag"; path_prefix="{{local_bin}}:$PATH"; \
       fi; \

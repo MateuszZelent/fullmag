@@ -43,6 +43,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const draft = state.stageDrafts[selectedIndex] ?? null;
   const localValidation = draft
     ? validateStudyStageDraft(draft, {
+        activeLane: runtimeStatus?.capabilities.active_lane ?? null,
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
         demagEnabled: state.globalDraft.demagEnabled,
@@ -62,6 +63,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
   const allStageValidation = state.stageDrafts.flatMap((stageDraft, index) => [
     ...validateStudyStageDraft(stageDraft, {
+      activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
       backend: model.requested.backend,
       demagEnabled: state.globalDraft.demagEnabled,

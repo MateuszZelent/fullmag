@@ -16,9 +16,13 @@ mod plan;
 #[cfg(feature = "fem-gpu")]
 mod runtime_info;
 #[cfg(feature = "fem-gpu")]
+mod stage_coupled;
+#[cfg(feature = "fem-gpu")]
+mod stage_oersted;
+#[cfg(feature = "fem-gpu")]
+mod stage_transport;
+#[cfg(feature = "fem-gpu")]
 mod steady_transport;
-#[cfg(all(test, feature = "fem-gpu"))]
-pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
 pub(crate) use availability::{
     is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
@@ -60,13 +64,22 @@ pub(crate) use runtime_info::{
     strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
     NativeFemGpuStateInfo,
 };
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_coupled::StageM2CoupledProvider;
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_oersted::{plan_requests_stage_oersted_callback, StageOerstedProvider};
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_transport::{plan_requests_stage_transport_callback, StageTransportProvider};
+#[cfg(all(test, feature = "fem-gpu"))]
+pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
-    NativeFemSteadyTransportBundle, NativeFemSteadyTransportExecution,
-    NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
-    NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
+    solve_native_fem_steady_transport_rt0, NativeFemSteadyTransportBundle,
+    NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
+    NativeFemSteadyTransportInterface, NativeFemSteadyTransportRequest,
+    NativeFemSteadyTransportResult, NativeFemSteadyTransportRt0Result,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -133,15 +146,11 @@ fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> 
 }
 
 #[cfg(feature = "fem-gpu")]
-fn copy_demag_diagnostics(
-    step_stats: &mut StepStats,
-    ffi_stats: &ffi::fullmag_fem_step_stats,
-) {
+fn copy_demag_diagnostics(step_stats: &mut StepStats, ffi_stats: &ffi::fullmag_fem_step_stats) {
     step_stats.demag_potential_order = ffi_stats.demag_potential_order;
     step_stats.demag_potential_true_dof_count = ffi_stats.demag_potential_true_dof_count;
     step_stats.demag_variational_energy_joules = ffi_stats.demag_variational_energy_joules;
-    step_stats.demag_recovered_field_energy_joules =
-        ffi_stats.demag_recovered_field_energy_joules;
+    step_stats.demag_recovered_field_energy_joules = ffi_stats.demag_recovered_field_energy_joules;
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -701,6 +710,8 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
 #[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
+    stage_oersted_provider: Option<Box<StageOerstedProvider>>,
+    stage_transport_provider: Option<Box<StageTransportProvider>>,
     magnetic_node_mask: Arc<[bool]>,
     saturation_magnetisation_by_node: Arc<[f64]>,
     dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
@@ -843,6 +854,106 @@ fn flatten_native_geometry_mask(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn pack_native_sot_envelope(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<
+    (
+        ffi::fullmag_fem_sot_envelope_desc,
+        Vec<ffi::fullmag_fem_time_point>,
+    ),
+    RunError,
+> {
+    let mut descriptor = ffi::fullmag_fem_sot_envelope_desc {
+        abi_version: ffi::FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_sot_envelope_desc>() as u32,
+        kind: ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_CONSTANT as u32,
+        time_origin: ffi::fullmag_fem_time_origin::FULLMAG_FEM_TIME_ABSOLUTE as u32,
+        amplitude: 1.0,
+        frequency_hz: 0.0,
+        phase_rad: 0.0,
+        offset: 0.0,
+        t_on_s: 0.0,
+        t_off_s: 0.0,
+        center_s: 0.0,
+        bandwidth_hz: 0.0,
+        points: std::ptr::null(),
+        point_count: 0,
+    };
+    let mut points = Vec::new();
+    let Some(envelope) = plan
+        .spin_torque_contract
+        .as_ref()
+        .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1")
+        .and_then(|contract| contract.sot_envelope.as_ref())
+    else {
+        return Ok((descriptor, points));
+    };
+    match envelope {
+        fullmag_ir::TimeEnvelopeIR::Constant { value } => {
+            descriptor.amplitude = *value;
+        }
+        fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+            amplitude,
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            descriptor.kind =
+                ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINUSOIDAL as u32;
+            descriptor.amplitude = *amplitude;
+            descriptor.frequency_hz = *frequency_hz;
+            descriptor.phase_rad = *phase_rad;
+            descriptor.offset = *offset;
+        }
+        fullmag_ir::TimeEnvelopeIR::Pulse {
+            amplitude,
+            t_on_s,
+            t_off_s,
+        } => {
+            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PULSE as u32;
+            descriptor.amplitude = *amplitude;
+            descriptor.t_on_s = *t_on_s;
+            descriptor.t_off_s = *t_off_s;
+        }
+        fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points: source } => {
+            descriptor.kind =
+                ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PIECEWISE_LINEAR as u32;
+            points = source
+                .iter()
+                .map(|point| ffi::fullmag_fem_time_point {
+                    time_s: point.time_s,
+                    value: point.value,
+                })
+                .collect();
+            descriptor.points = optional_slice_ptr(&points);
+            descriptor.point_count = points.len() as u64;
+        }
+        fullmag_ir::TimeEnvelopeIR::Sinc {
+            amplitude,
+            center_s,
+            bandwidth_hz,
+            offset,
+        } => {
+            descriptor.kind =
+                ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINC_PULSE as u32;
+            descriptor.amplitude = *amplitude;
+            descriptor.center_s = *center_s;
+            descriptor.bandwidth_hz = *bandwidth_hz;
+            descriptor.offset = *offset;
+        }
+        fullmag_ir::TimeEnvelopeIR::Tabulated { artifact_ref, .. } => {
+            return Err(RunError {
+                message: format!(
+                    "native FEM prescribed SOT tabulated envelope requires materialized artifact '{}'; planner keeps this lane fail-closed",
+                    artifact_ref
+                ),
+            });
+        }
+    }
+    Ok((descriptor, points))
+}
+
+#[cfg(feature = "fem-gpu")]
 fn pack_native_regional_field_drives(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<
@@ -919,6 +1030,13 @@ fn pack_native_regional_field_drives(
                 sinc_width_m: 0.0,
                 sinc_window: 0,
                 geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: 0.0,
+                gaussian_center_y_m: 0.0,
+                gaussian_carrier_origin_x_m: 0.0,
+                gaussian_sigma_x_m: 0.0,
+                gaussian_sigma_y_m: 0.0,
+                gaussian_wavelength_m: 0.0,
+                gaussian_carrier_phase_rad: 0.0,
             },
             FieldSpatialProfileIR::Sinc {
                 axis,
@@ -936,6 +1054,13 @@ fn pack_native_regional_field_drives(
                 sinc_width_m: width_m.unwrap_or(0.0),
                 sinc_window: if window == "hann" { 1 } else { 0 },
                 geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: 0.0,
+                gaussian_center_y_m: 0.0,
+                gaussian_carrier_origin_x_m: 0.0,
+                gaussian_sigma_x_m: 0.0,
+                gaussian_sigma_y_m: 0.0,
+                gaussian_wavelength_m: 0.0,
+                gaussian_carrier_phase_rad: 0.0,
             },
             FieldSpatialProfileIR::GeometryMask { envelope, .. } => {
                 let (axis, period, center, width, window) = match envelope {
@@ -967,8 +1092,41 @@ fn pack_native_regional_field_drives(
                     geometry_mask: geometry_desc_storage[index]
                         .as_ref()
                         .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
+                    gaussian_center_x_m: 0.0,
+                    gaussian_center_y_m: 0.0,
+                    gaussian_carrier_origin_x_m: 0.0,
+                    gaussian_sigma_x_m: 0.0,
+                    gaussian_sigma_y_m: 0.0,
+                    gaussian_wavelength_m: 0.0,
+                    gaussian_carrier_phase_rad: 0.0,
                 }
             }
+            FieldSpatialProfileIR::GaussianPlaneWave {
+                center_x_m,
+                center_y_m,
+                carrier_origin_x_m,
+                sigma_x_m,
+                sigma_y_m,
+                wavelength_m,
+                carrier_phase_rad,
+            } => ffi::fullmag_fem_spatial_profile_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+                kind: 3,
+                sinc_axis: [0.0; 3],
+                sinc_period_m: 0.0,
+                sinc_center_m: 0.0,
+                sinc_width_m: 0.0,
+                sinc_window: 0,
+                geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: *center_x_m,
+                gaussian_center_y_m: *center_y_m,
+                gaussian_carrier_origin_x_m: *carrier_origin_x_m,
+                gaussian_sigma_x_m: *sigma_x_m,
+                gaussian_sigma_y_m: *sigma_y_m,
+                gaussian_wavelength_m: *wavelength_m,
+                gaussian_carrier_phase_rad: *carrier_phase_rad,
+            },
         };
         let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
             sinusoidal: ffi::fullmag_fem_sinusoidal_time_desc {
@@ -1679,6 +1837,48 @@ fn configure_managed_openmpi_environment() {
 
 #[cfg(feature = "fem-gpu")]
 impl NativeFemBackend {
+    pub(crate) fn install_stage_oersted_provider(
+        &mut self,
+        mut provider: Box<StageOerstedProvider>,
+    ) -> Result<(), RunError> {
+        let callback = provider.callback();
+        let status = unsafe {
+            ffi::fullmag_fem_backend_set_stage_oersted_callback_v1(self.handle, &callback)
+        };
+        if status != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("installing native FEM stage Oersted callback failed"));
+        }
+        self.stage_oersted_provider = Some(provider);
+        Ok(())
+    }
+
+    pub(crate) fn install_stage_transport_provider(
+        &mut self,
+        mut provider: Box<StageTransportProvider>,
+    ) -> Result<(), RunError> {
+        let callback = provider.callback();
+        let status = unsafe {
+            ffi::fullmag_fem_backend_set_stage_transport_callback_v1(self.handle, &callback)
+        };
+        if status != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("installing native FEM stage transport callback failed"));
+        }
+        self.stage_transport_provider = Some(provider);
+        Ok(())
+    }
+
+    pub(crate) fn stage_oersted_telemetry(&self) -> Option<serde_json::Value> {
+        self.stage_oersted_provider
+            .as_ref()
+            .map(|provider| provider.telemetry())
+    }
+
+    pub(crate) fn stage_transport_telemetry(&self) -> Option<serde_json::Value> {
+        self.stage_transport_provider
+            .as_ref()
+            .map(|provider| provider.telemetry())
+    }
+
     pub(crate) fn begin_stage(&mut self, stage_start_time_s: f64) -> Result<(), RunError> {
         if !stage_start_time_s.is_finite() || stage_start_time_s < 0.0 {
             return Err(RunError {
@@ -1793,6 +1993,7 @@ impl NativeFemBackend {
             _regional_geometry_node_storage,
             _regional_geometry_desc_storage,
         ) = pack_native_regional_field_drives(plan)?;
+        let (sot_envelope, _sot_envelope_points) = pack_native_sot_envelope(plan)?;
 
         let mesh = packed_mesh.descriptor(&plan.mesh);
 
@@ -1833,36 +2034,66 @@ impl NativeFemBackend {
                 ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE
             }
         };
-        let stt_contract = plan.spin_torque_contract.as_ref();
+        let stt_contract = plan.spin_torque_contract.as_ref().filter(|contract| {
+            contract.formula_version.starts_with("slonczewski.")
+                || contract.formula_version.starts_with("zhang_li.")
+        });
+        let sot_contract = plan
+            .spin_torque_contract
+            .as_ref()
+            .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1");
         let stt_active_node_mask = stt_contract
             .and_then(|contract| contract.active_node_mask.as_ref())
-            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .map(|mask| {
+                mask.iter()
+                    .map(|selected| u8::from(*selected))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let stt_active_element_mask = stt_contract
             .and_then(|contract| contract.active_element_mask.as_ref())
-            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .map(|mask| {
+                mask.iter()
+                    .map(|selected| u8::from(*selected))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        let stt_formula_version = match stt_contract.map(|contract| contract.formula_version.as_str()) {
+        let stt_formula_version = match stt_contract
+            .map(|contract| contract.formula_version.as_str())
+        {
             None | Some("slonczewski.legacy_fullmag.v0") | Some("zhang_li.legacy_fullmag.v0") => 0,
             Some("slonczewski.fullmag.v2") => 3,
             Some("zhang_li.fullmag.v1") => 2,
             Some(_) => u32::MAX,
         };
-        let stt_realization_version = match stt_contract
-            .and_then(|contract| contract.realization_version.as_deref())
-        {
-            None => 0,
-            Some("slonczewski_thin_layer_homogenized.v1") => 1,
-            Some("slonczewski_interface_flux.v1") => 2,
-            Some(_) => u32::MAX,
-        };
-        let stt_operator_version = match stt_contract
-            .and_then(|contract| contract.operator_version.as_deref())
-        {
-            None => 0,
-            Some("zl_central_reference_v1") => 1,
-            Some(_) => u32::MAX,
-        };
+        let stt_realization_version =
+            match stt_contract.and_then(|contract| contract.realization_version.as_deref()) {
+                None => 0,
+                Some("slonczewski_thin_layer_homogenized.v1") => 1,
+                Some("slonczewski_interface_flux.v1") => 2,
+                Some(_) => u32::MAX,
+            };
+        let stt_operator_version =
+            match stt_contract.and_then(|contract| contract.operator_version.as_deref()) {
+                None => 0,
+                Some("zl_central_reference_v1") => 1,
+                Some(_) => u32::MAX,
+            };
+        let sot_active_node_mask = sot_contract
+            .and_then(|contract| contract.active_node_mask.as_ref())
+            .map(|mask| {
+                mask.iter()
+                    .map(|selected| u8::from(*selected))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let sot_envelope_value = sot_contract
+            .and_then(|contract| contract.sot_envelope.as_ref())
+            .and_then(|envelope| match envelope {
+                fullmag_ir::TimeEnvelopeIR::Constant { value } => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(1.0);
 
         let mut plan_desc = ffi::fullmag_fem_plan_desc {
             mesh,
@@ -2222,11 +2453,38 @@ impl NativeFemBackend {
             stt_stack_normal: stt_contract
                 .and_then(|contract| contract.stack_normal)
                 .unwrap_or([0.0, 0.0, 1.0]),
-            stt_lande_g: stt_contract.and_then(|contract| contract.lande_g).unwrap_or(0.0),
+            stt_lande_g: stt_contract
+                .and_then(|contract| contract.lande_g)
+                .unwrap_or(0.0),
             stt_active_node_mask: optional_slice_ptr(&stt_active_node_mask),
             stt_active_node_mask_len: stt_active_node_mask.len() as u64,
             stt_active_element_mask: optional_slice_ptr(&stt_active_element_mask),
             stt_active_element_mask_len: stt_active_element_mask.len() as u64,
+            has_prescribed_sot: i32::from(sot_contract.is_some()),
+            sot_formula_version: if sot_contract.is_some() {
+                ffi::FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1
+            } else {
+                ffi::FULLMAG_FEM_SOT_FORMULA_NONE
+            },
+            sot_current_density_am2: sot_contract
+                .and_then(|contract| contract.sot_current_density)
+                .unwrap_or(0.0),
+            sot_xi_dl: sot_contract
+                .and_then(|contract| contract.sot_xi_dl)
+                .unwrap_or(0.0),
+            sot_xi_fl: sot_contract
+                .and_then(|contract| contract.sot_xi_fl)
+                .unwrap_or(0.0),
+            sot_thickness: sot_contract
+                .and_then(|contract| contract.sot_thickness)
+                .unwrap_or(0.0),
+            sot_envelope_value,
+            sot_sigma: sot_contract
+                .and_then(|contract| contract.sot_sigma)
+                .unwrap_or([0.0, 0.0, 1.0]),
+            sot_active_node_mask: optional_slice_ptr(&sot_active_node_mask),
+            sot_active_node_mask_len: sot_active_node_mask.len() as u64,
+            sot_envelope,
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -2386,6 +2644,8 @@ impl NativeFemBackend {
 
         let backend = Self {
             handle,
+            stage_oersted_provider: None,
+            stage_transport_provider: None,
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()])
                 .into(),
@@ -2729,18 +2989,24 @@ impl NativeFemBackend {
             demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
-            rk_transaction_capture_host_wall_time_ns: stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns: stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns: stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns: stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns: stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns: stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
@@ -3114,18 +3380,24 @@ impl NativeFemBackend {
             demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
-            rk_transaction_capture_host_wall_time_ns: stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns: stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns: stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns: stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns: stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns: stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
@@ -3447,18 +3719,24 @@ impl NativeFemBackend {
             demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
-            rk_transaction_capture_host_wall_time_ns: stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns: stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns: stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns: stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns: stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns: stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
@@ -4595,6 +4873,22 @@ fn relaxation_driver_subphase_wall_time_ns(stats: &ffi::fullmag_fem_step_stats) 
 impl Drop for NativeFemBackend {
     fn drop(&mut self) {
         if !self.handle.is_null() {
+            if self.stage_oersted_provider.is_some() {
+                unsafe {
+                    let _ = ffi::fullmag_fem_backend_set_stage_oersted_callback_v1(
+                        self.handle,
+                        std::ptr::null(),
+                    );
+                }
+            }
+            if self.stage_transport_provider.is_some() {
+                unsafe {
+                    let _ = ffi::fullmag_fem_backend_set_stage_transport_callback_v1(
+                        self.handle,
+                        std::ptr::null(),
+                    );
+                }
+            }
             unsafe { ffi::fullmag_fem_backend_destroy(self.handle) };
             self.handle = std::ptr::null_mut();
         }
@@ -4619,9 +4913,8 @@ mod tests {
 
     #[test]
     fn demag_diagnostics_mapping_preserves_each_ffi_field() {
-        let mut ffi_stats = unsafe {
-            std::mem::MaybeUninit::<ffi::fullmag_fem_step_stats>::zeroed().assume_init()
-        };
+        let mut ffi_stats =
+            unsafe { std::mem::MaybeUninit::<ffi::fullmag_fem_step_stats>::zeroed().assume_init() };
         ffi_stats.demag_potential_order = 3;
         ffi_stats.demag_potential_true_dof_count = 123_456;
         ffi_stats.demag_variational_energy_joules = -7.25;
@@ -6710,8 +7003,12 @@ mod tests {
                 bulk_dmi: None,
                 zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {
-                        formula: match stt_contract.map(|contract| contract.formula_version.as_str()) {
-                            Some("zhang_li.fullmag.v1") => fullmag_engine::ZhangLiFormula::FullmagV1,
+                        formula: match stt_contract
+                            .map(|contract| contract.formula_version.as_str())
+                        {
+                            Some("zhang_li.fullmag.v1") => {
+                                fullmag_engine::ZhangLiFormula::FullmagV1
+                            }
                             _ => fullmag_engine::ZhangLiFormula::LegacyFullmagV0,
                         },
                         current_density: plan.current_density.expect("current density"),
@@ -6786,7 +7083,22 @@ mod tests {
                 } else {
                     None
                 },
-                sot: None,
+                sot: plan
+                    .spin_torque_contract
+                    .as_ref()
+                    .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1")
+                    .map(|contract| fullmag_engine::SotConfig {
+                        formula: fullmag_engine::SotFormula::FullmagV1,
+                        current_density: contract
+                            .sot_current_density
+                            .expect("prescribed SOT current density"),
+                        xi_dl: contract.sot_xi_dl.expect("prescribed SOT xi_dl"),
+                        xi_fl: contract.sot_xi_fl.expect("prescribed SOT xi_fl"),
+                        sigma: contract.sot_sigma.expect("prescribed SOT sigma"),
+                        thickness: contract.sot_thickness.expect("prescribed SOT thickness"),
+                        active_mask: contract.active_node_mask.clone(),
+                        envelope: contract.sot_envelope.clone(),
+                    }),
                 oersted_cylinder: None,
             },
         );
@@ -6854,6 +7166,168 @@ mod tests {
             damping_like * m_cross_m_cross_p[1] + field_like * m_cross_p[1],
             damping_like * m_cross_m_cross_p[2] + field_like * m_cross_p[2],
         ]
+    }
+
+    fn canonical_prescribed_sot_rhs_reference_at_time(
+        plan: &FemPlanIR,
+        m: [f64; 3],
+        time_s: f64,
+    ) -> [f64; 3] {
+        let contract = plan
+            .spin_torque_contract
+            .as_ref()
+            .expect("prescribed SOT contract");
+        assert_eq!(
+            contract.formula_version, "prescribed_sot.fullmag.v1",
+            "SI oracle requires prescribed_sot.fullmag.v1"
+        );
+        let current_density = contract
+            .sot_current_density
+            .expect("prescribed SOT current density");
+        let xi_dl = contract.sot_xi_dl.expect("prescribed SOT xi_dl");
+        let xi_fl = contract.sot_xi_fl.expect("prescribed SOT xi_fl");
+        let sigma_raw = contract.sot_sigma.expect("prescribed SOT sigma");
+        let sigma_norm = (sigma_raw[0] * sigma_raw[0]
+            + sigma_raw[1] * sigma_raw[1]
+            + sigma_raw[2] * sigma_raw[2])
+            .sqrt();
+        let sigma = [
+            sigma_raw[0] / sigma_norm,
+            sigma_raw[1] / sigma_norm,
+            sigma_raw[2] / sigma_norm,
+        ];
+        let envelope = contract
+            .sot_envelope
+            .as_ref()
+            .map(|envelope| match envelope {
+                fullmag_ir::TimeEnvelopeIR::Constant { value } => *value,
+                fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+                    amplitude,
+                    frequency_hz,
+                    phase_rad,
+                    offset,
+                } => {
+                    offset
+                        + amplitude
+                            * (2.0 * std::f64::consts::PI * frequency_hz * time_s + phase_rad).sin()
+                }
+                fullmag_ir::TimeEnvelopeIR::Pulse {
+                    amplitude,
+                    t_on_s,
+                    t_off_s,
+                } => {
+                    if time_s >= *t_on_s && time_s < *t_off_s {
+                        *amplitude
+                    } else {
+                        0.0
+                    }
+                }
+                fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points } => {
+                    if points.is_empty() {
+                        0.0
+                    } else if time_s <= points[0].time_s {
+                        points[0].value
+                    } else if time_s >= points[points.len() - 1].time_s {
+                        points[points.len() - 1].value
+                    } else {
+                        let upper = points
+                            .iter()
+                            .position(|point| point.time_s > time_s)
+                            .expect("piecewise envelope upper point");
+                        let lower = upper - 1;
+                        let u = (time_s - points[lower].time_s)
+                            / (points[upper].time_s - points[lower].time_s);
+                        points[lower].value + u * (points[upper].value - points[lower].value)
+                    }
+                }
+                fullmag_ir::TimeEnvelopeIR::Sinc {
+                    amplitude,
+                    center_s,
+                    bandwidth_hz,
+                    offset,
+                } => {
+                    let x = bandwidth_hz * (time_s - center_s);
+                    let sinc = if x.abs() <= 1.0e-12 {
+                        1.0
+                    } else {
+                        (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x)
+                    };
+                    offset + amplitude * sinc
+                }
+                fullmag_ir::TimeEnvelopeIR::Tabulated { .. } => {
+                    panic!("tabulated prescribed SOT envelope is outside the SI oracle")
+                }
+            })
+            .unwrap_or(1.0);
+        let thickness = contract.sot_thickness.expect("prescribed SOT thickness");
+        let gamma_e = plan.gyromagnetic_ratio / 1.2566370614359173e-6;
+        let omega_base = gamma_e * 1.054571817e-34 * current_density * envelope
+            / (2.0 * 1.602176634e-19 * plan.material.saturation_magnetisation * thickness);
+        let omega_dl = omega_base * xi_dl;
+        let omega_fl = omega_base * xi_fl;
+        let alpha = plan.material.damping;
+        let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        let damping_like = (omega_dl - alpha * omega_fl) * inv_gilbert;
+        let field_like = (omega_fl + alpha * omega_dl) * inv_gilbert;
+        let m_cross_sigma = [
+            m[1] * sigma[2] - m[2] * sigma[1],
+            m[2] * sigma[0] - m[0] * sigma[2],
+            m[0] * sigma[1] - m[1] * sigma[0],
+        ];
+        let m_cross_m_cross_sigma = [
+            m[1] * m_cross_sigma[2] - m[2] * m_cross_sigma[1],
+            m[2] * m_cross_sigma[0] - m[0] * m_cross_sigma[2],
+            m[0] * m_cross_sigma[1] - m[1] * m_cross_sigma[0],
+        ];
+        [
+            -damping_like * m_cross_m_cross_sigma[0] + field_like * m_cross_sigma[0],
+            -damping_like * m_cross_m_cross_sigma[1] + field_like * m_cross_sigma[1],
+            -damping_like * m_cross_m_cross_sigma[2] + field_like * m_cross_sigma[2],
+        ]
+    }
+
+    fn canonical_prescribed_sot_heun_reference(plan: &FemPlanIR) -> (Vec<[f64; 3]>, f64) {
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let k1: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .copied()
+            .map(|m| canonical_prescribed_sot_rhs_reference_at_time(plan, m, 0.0))
+            .collect();
+        let stage: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .zip(k1.iter())
+            .map(|(m, k)| {
+                normalize_reference_m([m[0] + dt * k[0], m[1] + dt * k[1], m[2] + dt * k[2]])
+            })
+            .collect();
+        let k2: Vec<[f64; 3]> = stage
+            .iter()
+            .copied()
+            .map(|m| canonical_prescribed_sot_rhs_reference_at_time(plan, m, dt))
+            .collect();
+        let final_m: Vec<[f64; 3]> = plan
+            .initial_magnetization
+            .iter()
+            .zip(k1.iter().zip(k2.iter()))
+            .map(|(m, (k1, k2))| {
+                normalize_reference_m([
+                    m[0] + 0.5 * dt * (k1[0] + k2[0]),
+                    m[1] + 0.5 * dt * (k1[1] + k2[1]),
+                    m[2] + 0.5 * dt * (k1[2] + k2[2]),
+                ])
+            })
+            .collect();
+        let max_rhs = final_m
+            .iter()
+            .copied()
+            .map(|m| {
+                let rhs = canonical_prescribed_sot_rhs_reference_at_time(plan, m, dt);
+                (rhs[0] * rhs[0] + rhs[1] * rhs[1] + rhs[2] * rhs[2]).sqrt()
+            })
+            .fold(0.0, f64::max);
+        (final_m, max_rhs)
     }
 
     fn normalize_reference_m(v: [f64; 3]) -> [f64; 3] {
@@ -8549,6 +9023,328 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available(
+    ) {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM prescribed-SOT parity test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+            sot_drive: None,
+        });
+
+        let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(&plan);
+        let (reference_m, _, reference_h_eff, reference_report) = cpu_reference_single_step(&plan);
+        assert_vector_field_close(
+            "independent oracle versus FEM Rust reference m",
+            &reference_m,
+            &expected_m,
+            1e-12,
+            1e-14,
+        );
+        assert_scalar_close(
+            "independent oracle versus FEM Rust reference max_rhs",
+            reference_report.max_rhs_amplitude,
+            expected_max_rhs,
+            1e-12,
+            1e-9,
+        );
+
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("native FEM prescribed-SOT create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native prescribed-SOT FEM step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy SOT m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy SOT H_eff");
+
+        assert_vector_field_close("prescribed SOT m", &actual_m, &expected_m, 5e-8, 1e-10);
+        assert_vector_field_close(
+            "prescribed SOT H_eff",
+            &actual_h_eff,
+            &reference_h_eff,
+            5e-8,
+            1e-6,
+        );
+        assert_scalar_close(
+            "prescribed SOT max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_max_rhs,
+            5e-8,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available(
+    ) {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+            sot_drive: None,
+        });
+
+        let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(&plan);
+        let (_, _, reference_h_eff, _) = cpu_reference_single_step(&plan);
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("native FEM GPU prescribed-SOT create");
+        let device_name = backend.device_info().expect("GPU SOT device info").name;
+        assert!(
+            device_name.contains("cuda")
+                || device_name.contains("NVIDIA")
+                || device_name.contains("GeForce")
+                || device_name.contains("RTX"),
+            "prescribed-SOT GPU test resolved unexpected device: {device_name}"
+        );
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native prescribed-SOT GPU step");
+        let actual_m = backend
+            .copy_m(plan.mesh.nodes.len())
+            .expect("copy GPU SOT m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy GPU SOT H_eff");
+
+        assert_vector_field_close("prescribed SOT GPU m", &actual_m, &expected_m, 5e-7, 1e-10);
+        assert_vector_field_close(
+            "prescribed SOT GPU H_eff",
+            &actual_h_eff,
+            &reference_h_eff,
+            5e-7,
+            1e-6,
+        );
+        assert_scalar_close(
+            "prescribed SOT GPU max_rhs_amplitude",
+            stats.max_dm_dt,
+            expected_max_rhs,
+            5e-7,
+            1e-9,
+        );
+    }
+
+    fn make_stage_time_prescribed_sot_plan(device: &str) -> FemPlanIR {
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some(device.to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Sinusoidal {
+                amplitude: 0.5,
+                frequency_hz: 1.0e12,
+                phase_rad: 0.0,
+                offset: 1.0,
+            }),
+            sot_drive: None,
+        });
+        plan
+    }
+
+    fn assert_native_stage_time_prescribed_sot_step(plan: &FemPlanIR, label: &str) {
+        let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(plan);
+        let expected_h_eff = vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        let mut backend = NativeFemBackend::create(plan)
+            .unwrap_or_else(|error| panic!("{label} native FEM stage-time SOT create: {error}"));
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .unwrap_or_else(|error| panic!("{label} native FEM stage-time SOT step: {error}"));
+        let actual_m = backend
+            .copy_m(plan.mesh.nodes.len())
+            .expect("copy stage-time SOT m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy stage-time SOT H_eff");
+        assert_vector_field_close(
+            &format!("{label} stage-time SOT m"),
+            &actual_m,
+            &expected_m,
+            5e-7,
+            1e-10,
+        );
+        assert_vector_field_close(
+            &format!("{label} stage-time SOT H_eff"),
+            &actual_h_eff,
+            &expected_h_eff,
+            5e-7,
+            1e-6,
+        );
+        assert_scalar_close(
+            &format!("{label} stage-time SOT max_rhs_amplitude"),
+            stats.max_dm_dt,
+            expected_max_rhs,
+            5e-7,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_cpu() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM stage-time SOT CPU test: MFEM stack unavailable");
+            return;
+        }
+        let plan = make_stage_time_prescribed_sot_plan("cpu");
+        assert_native_stage_time_prescribed_sot_step(&plan, "CPU");
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_stage_time_envelope_matches_si_reference_on_gpu() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+        let plan = make_stage_time_prescribed_sot_plan("cuda");
+        assert_native_stage_time_prescribed_sot_step(&plan, "GPU");
+    }
+
+    fn make_pulse_prescribed_sot_plan(device: &str) -> FemPlanIR {
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.mfem_device_string = Some(device.to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Pulse {
+                amplitude: 1.0,
+                t_on_s: 1.0e-13,
+                t_off_s: 2.0e-13,
+            }),
+            sot_drive: None,
+        });
+        plan
+    }
+
+    fn assert_native_pulse_event_alignment(plan: &FemPlanIR, label: &str) {
+        let mut backend = NativeFemBackend::create(plan)
+            .unwrap_or_else(|error| panic!("{label} native FEM pulse SOT create: {error}"));
+        let first = backend
+            .step(2.5e-13)
+            .unwrap_or_else(|error| panic!("{label} first event-aligned FEM SOT step: {error}"));
+        assert!(
+            (first.dt - 1.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_on clipped dt: {}",
+            first.dt
+        );
+        assert!(
+            (first.time - 1.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_on clipped time: {}",
+            first.time
+        );
+
+        let second = backend
+            .step(2.5e-13)
+            .unwrap_or_else(|error| panic!("{label} second event-aligned FEM SOT step: {error}"));
+        assert!(
+            (second.dt - 1.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_off clipped dt: {}",
+            second.dt
+        );
+        assert!(
+            (second.time - 2.0e-13).abs() < 1.0e-25,
+            "{label} pulse t_off clipped time: {}",
+            second.time
+        );
+
+        let third = backend
+            .step(2.5e-13)
+            .unwrap_or_else(|error| panic!("{label} post-pulse FEM SOT step: {error}"));
+        assert!(
+            (third.dt - 2.5e-13).abs() < 1.0e-25,
+            "{label} post-pulse dt remains requested: {}",
+            third.dt
+        );
+        assert!(
+            (third.time - 4.5e-13).abs() < 1.0e-25,
+            "{label} post-pulse time advances: {}",
+            third.time
+        );
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM SOT event-alignment test: MFEM stack unavailable");
+            return;
+        }
+        let plan = make_pulse_prescribed_sot_plan("cpu");
+        assert_native_pulse_event_alignment(&plan, "CPU");
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_pulse_clips_steps_at_envelope_knots_on_gpu() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+        let plan = make_pulse_prescribed_sot_plan("cuda");
+        assert_native_pulse_event_alignment(&plan, "GPU");
+    }
+
+    #[test]
     fn managed_openmpi_defaults_use_isolated_single_rank_launch() {
         let source = include_str!("native_fem.rs");
 
@@ -8598,6 +9394,13 @@ mod tests {
             lande_g: None,
             active_node_mask: None,
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
         assert_eq!(
             plan.spin_torque_contract
@@ -8669,13 +9472,22 @@ mod tests {
             lande_g: None,
             active_node_mask: None,
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
         fem_plan.current_density = Some([0.0, 0.0, 1.4e11]);
         fem_plan.stt_degree = Some(0.62);
         fem_plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
         fem_plan.stt_lambda = Some(1.8);
         fem_plan.stt_epsilon_prime = Some(0.03);
-        let dt = fem_plan.fixed_timestep.expect("common-limit fixed timestep");
+        let dt = fem_plan
+            .fixed_timestep
+            .expect("common-limit fixed timestep");
 
         let mut fdm_plan = fullmag_ir::FdmPlanIR::default();
         fdm_plan.grid = fullmag_ir::GridDimensions { cells: [1, 1, 1] };
@@ -8725,14 +9537,9 @@ mod tests {
         fdm_plan.slonczewski_stack_normal = Some([0.0, 0.0, 1.0]);
         fdm_plan.slonczewski_active_mask = Some(vec![true]);
 
-        let fdm_run = crate::fdm::cpu::reference::execute_reference_fdm(
-            &fdm_plan,
-            dt,
-            &[],
-            None,
-            None,
-        )
-        .expect("FDM common-limit reference run");
+        let fdm_run =
+            crate::fdm::cpu::reference::execute_reference_fdm(&fdm_plan, dt, &[], None, None)
+                .expect("FDM common-limit reference run");
         assert_eq!(
             fdm_run.result.final_magnetization.len(),
             1,
@@ -8742,9 +9549,7 @@ mod tests {
 
         let mut fem_backend =
             NativeFemBackend::create(&fem_plan).expect("FEM common-limit native create");
-        fem_backend
-            .step(dt)
-            .expect("FEM common-limit native step");
+        fem_backend.step(dt).expect("FEM common-limit native step");
         let actual = fem_backend
             .copy_m(fem_plan.mesh.nodes.len())
             .expect("FEM common-limit magnetization");
@@ -8774,6 +9579,293 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available(
+    ) {
+        if !is_cpu_available() {
+            eprintln!("skipping FEM SOT↔FDM common-limit test: MFEM stack unavailable");
+            return;
+        }
+
+        let mut fem_plan = make_exchange_only_plan();
+        fem_plan.enable_exchange = false;
+        fem_plan.external_field = None;
+        fem_plan.mfem_device_string = Some("cpu".to_string());
+        fem_plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem_plan.mesh.nodes.len()];
+        fem_plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: None,
+            active_element_mask: None,
+            sot_current_density: Some(-4.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.03),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+            sot_drive: None,
+        });
+        let dt = fem_plan
+            .fixed_timestep
+            .expect("SOT common-limit fixed timestep");
+
+        let mut fdm_plan = fullmag_ir::FdmPlanIR::default();
+        fdm_plan.grid = fullmag_ir::GridDimensions { cells: [1, 1, 1] };
+        fdm_plan.cell_size = [1.0e-9, 1.0e-9, 1.0e-9];
+        fdm_plan.region_mask = vec![1];
+        fdm_plan.active_mask = Some(vec![true]);
+        fdm_plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                fdm_plan.origin_m,
+                fdm_plan.grid.cells,
+                fdm_plan.cell_size,
+                1,
+                fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                fdm_plan.active_mask.as_deref(),
+                &fdm_plan.region_mask,
+            )
+            .expect("FDM SOT common-limit grid certificate")
+            .with_region_legend(vec![fullmag_ir::FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "common-limit".to_string(),
+                region_id: "common-limit:core".to_string(),
+                priority: 0,
+            }]),
+        );
+        fdm_plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        fdm_plan.material = fullmag_ir::FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.1,
+            ..Default::default()
+        };
+        fdm_plan.enable_exchange = false;
+        fdm_plan.enable_demag = false;
+        fdm_plan.gyromagnetic_ratio = 2.211e5;
+        fdm_plan.precision = fullmag_ir::ExecutionPrecision::Double;
+        fdm_plan.exchange_bc = ExchangeBoundaryCondition::Neumann;
+        fdm_plan.integrator = Some(IntegratorChoice::Heun);
+        fdm_plan.fixed_timestep = Some(dt);
+        fdm_plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        fdm_plan.sot_current_density = Some(-4.0e11);
+        fdm_plan.sot_xi_dl = Some(0.12);
+        fdm_plan.sot_xi_fl = Some(-0.03);
+        fdm_plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        fdm_plan.sot_thickness = Some(1.5e-9);
+        fdm_plan.sot_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 });
+        fdm_plan.sot_target = Some(fullmag_ir::RegionRefIR {
+            object_id: "common-limit".to_string(),
+            region_id: None,
+        });
+        fdm_plan.sot_active_mask = Some(vec![true]);
+        fdm_plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+            current_density_apm2: -4.0e11,
+            sigma_hat: [0.0, 1.0, 0.0],
+            envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
+        });
+
+        let fdm_run =
+            crate::fdm::cpu::reference::execute_reference_fdm(&fdm_plan, dt, &[], None, None)
+                .expect("FDM SOT common-limit reference run");
+        assert_eq!(
+            fdm_run.result.final_magnetization.len(),
+            1,
+            "one-cell FDM SOT common-limit reference must produce one magnetization"
+        );
+        let expected = fdm_run.result.final_magnetization[0];
+
+        let mut fem_backend =
+            NativeFemBackend::create(&fem_plan).expect("FEM SOT common-limit native create");
+        fem_backend
+            .step(dt)
+            .expect("FEM SOT common-limit native step");
+        let actual = fem_backend
+            .copy_m(fem_plan.mesh.nodes.len())
+            .expect("FEM SOT common-limit magnetization");
+        for (node, value) in actual.iter().enumerate() {
+            assert_scalar_close(
+                &format!("FEM SOT↔FDM common-limit m[{node}][0]"),
+                value[0],
+                expected[0],
+                5e-8,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("FEM SOT↔FDM common-limit m[{node}][1]"),
+                value[1],
+                expected[1],
+                5e-8,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("FEM SOT↔FDM common-limit m[{node}][2]"),
+                value[2],
+                expected[2],
+                5e-8,
+                1e-10,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_fixed_trajectory_cpu_gpu_parity_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.external_field = None;
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "prescribed_sot.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: None,
+            target: None,
+            stack_normal: None,
+            lande_g: None,
+            active_node_mask: Some(vec![true, true, false, true, true]),
+            active_element_mask: None,
+            sot_current_density: Some(1.0e11),
+            sot_xi_dl: Some(0.12),
+            sot_xi_fl: Some(-0.02),
+            sot_sigma: Some([0.0, 1.0, 0.0]),
+            sot_thickness: Some(1.5e-9),
+            sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+            sot_drive: None,
+        });
+
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+        let dt = plan.fixed_timestep.expect("fixed SOT trajectory timestep");
+        let mut cpu = NativeFemBackend::create(&cpu_plan).expect("native FEM SOT CPU create");
+        let mut gpu = NativeFemBackend::create(&gpu_plan).expect("native FEM SOT GPU create");
+
+        for step in 1..=8 {
+            let cpu_stats = cpu.step(dt).expect("native FEM SOT CPU trajectory step");
+            let gpu_stats = gpu.step(dt).expect("native FEM SOT GPU trajectory step");
+            let cpu_m = cpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT CPU trajectory m");
+            let gpu_m = gpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT GPU trajectory m");
+            assert_vector_field_parity(
+                &format!("prescribed SOT FEM CPU/GPU trajectory step {step}"),
+                &cpu_m,
+                &gpu_m,
+                5e-7,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("prescribed SOT CPU/GPU time step {step}"),
+                cpu_stats.time,
+                gpu_stats.time,
+                5e-7,
+                1e-24,
+            );
+            assert_scalar_close(
+                &format!("prescribed SOT CPU/GPU max_rhs step {step}"),
+                cpu_stats.max_dm_dt,
+                gpu_stats.max_dm_dt,
+                5e-7,
+                1e-9,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_prescribed_sot_cpu_gpu_integrator_parity_when_mfem_stack_is_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        for integrator in [
+            IntegratorChoice::Heun,
+            IntegratorChoice::Rk4,
+            IntegratorChoice::Rk23,
+            IntegratorChoice::Rk45,
+        ] {
+            let mut plan = make_exchange_only_plan();
+            plan.external_field = None;
+            plan.fixed_timestep = Some(1.0e-15);
+            plan.integrator = Some(integrator);
+            plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+                formula_version: "prescribed_sot.fullmag.v1".to_string(),
+                operator_version: None,
+                realization_version: None,
+                target: None,
+                stack_normal: None,
+                lande_g: None,
+                active_node_mask: Some(vec![true, true, false, true, true]),
+                active_element_mask: None,
+                sot_current_density: Some(1.0e11),
+                sot_xi_dl: Some(0.12),
+                sot_xi_fl: Some(-0.02),
+                sot_sigma: Some([0.0, 1.0, 0.0]),
+                sot_thickness: Some(1.5e-9),
+                sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+                sot_drive: None,
+            });
+
+            let cpu_plan = native_plan_for_device(&plan, "cpu");
+            let gpu_plan = native_plan_for_device(&plan, "cuda");
+            assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+            let dt = plan.fixed_timestep.expect("fixed SOT integrator timestep");
+            let mut cpu = NativeFemBackend::create(&cpu_plan).unwrap_or_else(|error| {
+                panic!("native FEM SOT CPU {integrator:?} create: {error}")
+            });
+            let mut gpu = NativeFemBackend::create(&gpu_plan).unwrap_or_else(|error| {
+                panic!("native FEM SOT GPU {integrator:?} create: {error}")
+            });
+            let cpu_stats = cpu
+                .step(dt)
+                .unwrap_or_else(|error| panic!("native FEM SOT CPU {integrator:?} step: {error}"));
+            let gpu_stats = gpu
+                .step(dt)
+                .unwrap_or_else(|error| panic!("native FEM SOT GPU {integrator:?} step: {error}"));
+            let cpu_m = cpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT integrator CPU m");
+            let gpu_m = gpu
+                .copy_m(plan.mesh.nodes.len())
+                .expect("copy FEM SOT integrator GPU m");
+            assert_vector_field_parity(
+                &format!("prescribed SOT {integrator:?} CPU/GPU m"),
+                &cpu_m,
+                &gpu_m,
+                5e-7,
+                1e-10,
+            );
+            assert_scalar_close(
+                &format!("prescribed SOT {integrator:?} CPU/GPU max_rhs"),
+                cpu_stats.max_dm_dt,
+                gpu_stats.max_dm_dt,
+                5e-7,
+                1e-9,
+            );
+            if matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45) {
+                assert!(
+                    (cpu_stats.rhs_evals as i64 - gpu_stats.rhs_evals as i64).abs() <= 1,
+                    "prescribed SOT {integrator:?} CPU/GPU embedded RHS count mismatch: cpu={}, gpu={}",
+                    cpu_stats.rhs_evals,
+                    gpu_stats.rhs_evals
+                );
+            } else {
+                assert_eq!(
+                    cpu_stats.rhs_evals, gpu_stats.rhs_evals,
+                    "prescribed SOT {integrator:?} CPU/GPU RHS count mismatch"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn native_fem_canonical_slonczewski_fixed_trajectory_parity_when_mfem_stack_is_available() {
         if !native_cpu_gpu_parity_available(false) {
             return;
@@ -8798,6 +9890,13 @@ mod tests {
             lande_g: None,
             active_node_mask: Some(vec![true, true, false, true, true]),
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
 
         let cpu_plan = native_plan_for_device(&plan, "cpu");
@@ -8853,6 +9952,13 @@ mod tests {
             lande_g: None,
             active_node_mask: Some(vec![true, true, false, true, true]),
             active_element_mask: None,
+            sot_current_density: None,
+            sot_xi_dl: None,
+            sot_xi_fl: None,
+            sot_sigma: None,
+            sot_thickness: None,
+            sot_envelope: None,
+            sot_drive: None,
         });
 
         let dt = plan.fixed_timestep.expect("fixed timestep");
@@ -8878,7 +9984,12 @@ mod tests {
 
             for (node, (m0, (((zero, half), one), double))) in initial
                 .iter()
-                .zip(zero.iter().zip(half.iter()).zip(one.iter()).zip(double.iter()))
+                .zip(
+                    zero.iter()
+                        .zip(half.iter())
+                        .zip(one.iter())
+                        .zip(double.iter()),
+                )
                 .enumerate()
             {
                 let project_tangent = |state: &[f64; 3], reference: &[f64; 3]| {
@@ -8920,6 +10031,409 @@ mod tests {
                     "{device} Slonczewski tangential 2x response is not 4x 0.5x at node {node}: half={t_half:?} double={t_double:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step() {
+        let plan = steady_transport::test_external_lead_stage_plan();
+        let provider = StageOerstedProvider::from_plan(&plan)
+            .expect("external-lead stage provider preflight")
+            .expect("external-lead plan must request a stage provider");
+        let mut backend = NativeFemBackend::create(&plan)
+            .expect("native FEM external-lead callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(provider))
+            .expect("install external-lead Oersted callback");
+        backend.begin_stage(0.0).expect("begin native FEM stage");
+
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed timestep"))
+            .expect("external-lead Oersted callback must advance one LLG step");
+        assert!(stats.time.is_finite() && stats.time > 0.0);
+        assert!(stats.max_torque_T.is_finite());
+        let magnetization = backend
+            .copy_m(plan.mesh.nodes.len())
+            .expect("copy post-step magnetization");
+        assert!(magnetization
+            .iter()
+            .flatten()
+            .all(|component| component.is_finite()));
+
+        let telemetry = backend
+            .stage_oersted_telemetry()
+            .expect("installed callback telemetry");
+        assert_eq!(telemetry["policy"], "fem_stage_oersted_callback.v1");
+        assert!(telemetry["begin_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1));
+        assert!(telemetry["commit_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1));
+        assert!(telemetry["evaluate_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1));
+        assert!(telemetry["accepted_observation"]["field_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
+
+    #[test]
+    fn native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted() {
+        let plan = steady_transport::test_reciprocal_m2_oersted_stage_plan();
+        let coupled = StageM2CoupledProvider::from_plan(&plan)
+            .expect("combined FEM M2 provider preflight")
+            .expect("combined FEM M2 plan must request the shared provider");
+        let oersted = StageOerstedProvider::from_plan_with_coupled(&plan, Some(coupled.clone()))
+            .expect("combined Oersted provider preflight")
+            .expect("combined plan must request Oersted callback");
+        let transport = StageTransportProvider::from_plan_with_coupled(&plan, Some(coupled))
+            .expect("combined transport provider preflight")
+            .expect("combined plan must request transport callback");
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("combined FEM M2 callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(oersted))
+            .expect("install combined Oersted callback");
+        backend
+            .install_stage_transport_provider(Box::new(transport))
+            .expect("install combined transport callback");
+        backend
+            .begin_stage(0.0)
+            .expect("begin combined FEM M2 stage");
+
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed timestep"))
+            .expect("combined torque/Oersted callback must advance one LLG step");
+        assert!(stats.time.is_finite() && stats.time > 0.0);
+        assert!(stats.max_torque_T.is_finite());
+
+        let oersted = backend
+            .stage_oersted_telemetry()
+            .expect("combined Oersted telemetry");
+        let transport = backend
+            .stage_transport_telemetry()
+            .expect("combined transport telemetry");
+        assert_eq!(oersted["policy"], "fem_stage_transport_oersted_callback.v1");
+        assert_eq!(transport["policy"], oersted["policy"]);
+        assert_eq!(
+            transport["accepted_observation"]["source_state_revision"],
+            oersted["accepted_observation"]["source_state_revision"]
+        );
+        assert_eq!(
+            transport["accepted_observation"]["source_state_digest"],
+            oersted["accepted_observation"]["source_view_identity_digest"]
+        );
+        let solve_count = oersted["shared_evaluator"]["solve_count"]
+            .as_u64()
+            .expect("shared solve count");
+        let cache_hits = oersted["shared_evaluator"]["cache_hit_count"]
+            .as_u64()
+            .expect("shared cache-hit count");
+        let stage_evaluations = oersted["evaluate_count"]
+            .as_u64()
+            .expect("Oersted evaluate count");
+        assert!(solve_count >= 1);
+        assert_eq!(solve_count, stage_evaluations);
+        assert!(cache_hits >= stage_evaluations);
+        assert_eq!(transport["shared_evaluator"], oersted["shared_evaluator"]);
+        assert!(transport["accepted_observation"]["torque_l2_per_s"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0));
+        assert!(oersted["accepted_observation"]["field_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
+
+    #[test]
+    fn native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry() {
+        let mut plan = steady_transport::test_reciprocal_m2_oersted_stage_plan();
+        plan.integrator = Some(IntegratorChoice::Rk23);
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+            atol: 1.0e-10,
+            rtol: 1.0e-8,
+            dt_initial: Some(1.0e-8),
+            dt_min: 1.0e-16,
+            dt_max: Some(1.0e-8),
+            safety: 0.8,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: Some(1.0e-12),
+            norm_tolerance: Some(1.0e-8),
+        });
+        let coupled = StageM2CoupledProvider::from_plan(&plan)
+            .expect("adaptive combined FEM M2 provider preflight")
+            .expect("adaptive combined plan must request the shared provider");
+        let oersted = StageOerstedProvider::from_plan_with_coupled(&plan, Some(coupled.clone()))
+            .expect("adaptive combined Oersted provider preflight")
+            .expect("adaptive combined plan must request Oersted callback");
+        let transport = StageTransportProvider::from_plan_with_coupled(&plan, Some(coupled))
+            .expect("adaptive combined transport provider preflight")
+            .expect("adaptive combined plan must request transport callback");
+        let mut backend = NativeFemBackend::create(&plan)
+            .expect("adaptive combined FEM M2 callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(oersted))
+            .expect("install adaptive combined Oersted callback");
+        backend
+            .install_stage_transport_provider(Box::new(transport))
+            .expect("install adaptive combined transport callback");
+        backend
+            .begin_stage(0.0)
+            .expect("begin adaptive combined FEM M2 stage");
+
+        let stats = backend
+            .step(1.0e-8)
+            .expect("adaptive combined step must reject and then accept");
+        assert!(stats.rejected_attempts >= 1, "{stats:?}");
+        let oersted = backend
+            .stage_oersted_telemetry()
+            .expect("adaptive combined Oersted telemetry");
+        let transport = backend
+            .stage_transport_telemetry()
+            .expect("adaptive combined transport telemetry");
+        let rejected = u64::from(stats.rejected_attempts);
+        assert_eq!(oersted["rollback_count"], rejected);
+        assert_eq!(transport["rollback_count"], rejected);
+        assert_eq!(oersted["commit_count"], 1);
+        assert_eq!(transport["commit_count"], 1);
+        assert_eq!(oersted["begin_count"], rejected + 1);
+        assert_eq!(transport["begin_count"], rejected + 1);
+        assert_eq!(
+            transport["accepted_observation"]["source_state_revision"],
+            oersted["accepted_observation"]["source_state_revision"]
+        );
+        assert_eq!(
+            transport["accepted_observation"]["source_state_digest"],
+            oersted["accepted_observation"]["source_view_identity_digest"]
+        );
+        let solve_count = oersted["shared_evaluator"]["solve_count"]
+            .as_u64()
+            .expect("adaptive shared solve count");
+        let cache_hits = oersted["shared_evaluator"]["cache_hit_count"]
+            .as_u64()
+            .expect("adaptive shared cache-hit count");
+        let oersted_evaluations = oersted["evaluate_count"]
+            .as_u64()
+            .expect("adaptive Oersted evaluate count");
+        assert_eq!(solve_count, oersted_evaluations);
+        assert!(cache_hits >= oersted_evaluations);
+        assert_eq!(transport["shared_evaluator"], oersted["shared_evaluator"]);
+    }
+
+    #[test]
+    fn native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators() {
+        for (integrator, adaptive) in [
+            (IntegratorChoice::Heun, false),
+            (IntegratorChoice::Rk4, false),
+            (IntegratorChoice::Rk23, true),
+            (IntegratorChoice::Rk45, true),
+        ] {
+            let mut plan = steady_transport::test_reciprocal_m2_oersted_stage_plan();
+            plan.integrator = Some(integrator);
+            if adaptive {
+                plan.fixed_timestep = None;
+                plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+                    atol: 1.0e-8,
+                    rtol: 1.0e-5,
+                    dt_initial: Some(1.0e-13),
+                    dt_min: 1.0e-16,
+                    dt_max: Some(1.0e-12),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.5,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            let coupled = StageM2CoupledProvider::from_plan(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} shared preflight: {error:?}"))
+                .unwrap_or_else(|| panic!("{integrator:?} did not request shared provider"));
+            let oersted =
+                StageOerstedProvider::from_plan_with_coupled(&plan, Some(coupled.clone()))
+                    .unwrap_or_else(|error| panic!("{integrator:?} Oersted preflight: {error:?}"))
+                    .unwrap_or_else(|| panic!("{integrator:?} did not request Oersted callback"));
+            let transport = StageTransportProvider::from_plan_with_coupled(&plan, Some(coupled))
+                .unwrap_or_else(|error| panic!("{integrator:?} transport preflight: {error:?}"))
+                .unwrap_or_else(|| panic!("{integrator:?} did not request transport callback"));
+            let mut backend = NativeFemBackend::create(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} backend create: {error:?}"));
+            backend
+                .install_stage_oersted_provider(Box::new(oersted))
+                .unwrap_or_else(|error| panic!("{integrator:?} install Oersted: {error:?}"));
+            backend
+                .install_stage_transport_provider(Box::new(transport))
+                .unwrap_or_else(|error| panic!("{integrator:?} install transport: {error:?}"));
+            backend
+                .begin_stage(0.0)
+                .unwrap_or_else(|error| panic!("{integrator:?} begin stage: {error:?}"));
+
+            let mut previous_time = 0.0;
+            for step_index in 0..3 {
+                let stats = backend.step(1.0e-13).unwrap_or_else(|error| {
+                    panic!("{integrator:?} shared trajectory step {step_index}: {error:?}")
+                });
+                assert!(
+                    stats.time.is_finite() && stats.time > previous_time,
+                    "{integrator:?} step {step_index}: {stats:?}"
+                );
+                previous_time = stats.time;
+            }
+            let oersted = backend
+                .stage_oersted_telemetry()
+                .unwrap_or_else(|| panic!("{integrator:?} Oersted telemetry"));
+            let transport = backend
+                .stage_transport_telemetry()
+                .unwrap_or_else(|| panic!("{integrator:?} transport telemetry"));
+            assert_eq!(oersted["begin_count"], 3, "{integrator:?}");
+            assert_eq!(oersted["commit_count"], 3, "{integrator:?}");
+            assert_eq!(transport["begin_count"], 3, "{integrator:?}");
+            assert_eq!(transport["commit_count"], 3, "{integrator:?}");
+            assert_eq!(
+                transport["accepted_observation"]["source_state_revision"],
+                oersted["accepted_observation"]["source_state_revision"],
+                "{integrator:?}"
+            );
+            assert_eq!(
+                transport["accepted_observation"]["source_state_digest"],
+                oersted["accepted_observation"]["source_view_identity_digest"],
+                "{integrator:?}"
+            );
+            let solve_count = oersted["shared_evaluator"]["solve_count"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{integrator:?} solve count"));
+            let cache_hits = oersted["shared_evaluator"]["cache_hit_count"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{integrator:?} cache-hit count"));
+            let evaluations = oersted["evaluate_count"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{integrator:?} Oersted evaluate count"));
+            assert_eq!(solve_count, evaluations, "{integrator:?}");
+            assert!(cache_hits >= evaluations, "{integrator:?}");
+            assert_eq!(
+                transport["shared_evaluator"], oersted["shared_evaluator"],
+                "{integrator:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt() {
+        let mut plan = steady_transport::test_external_lead_stage_plan();
+        plan.integrator = Some(IntegratorChoice::Rk23);
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+            atol: 1.0e-10,
+            rtol: 1.0e-8,
+            dt_initial: Some(1.0e-8),
+            dt_min: 1.0e-16,
+            dt_max: Some(1.0e-8),
+            safety: 0.8,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: Some(1.0e-12),
+            norm_tolerance: Some(1.0e-8),
+        });
+        let provider = StageOerstedProvider::from_plan(&plan)
+            .expect("adaptive external-lead stage provider preflight")
+            .expect("adaptive external-lead plan must request a stage provider");
+        let mut backend = NativeFemBackend::create(&plan)
+            .expect("adaptive native FEM external-lead callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(provider))
+            .expect("install adaptive external-lead Oersted callback");
+        backend.begin_stage(0.0).expect("begin adaptive FEM stage");
+
+        let stats = backend
+            .step(1.0e-8)
+            .expect("adaptive external-lead step must reject and then accept");
+        assert!(stats.rejected_attempts >= 1, "{stats:?}");
+        let telemetry = backend
+            .stage_oersted_telemetry()
+            .expect("adaptive callback telemetry");
+        let rollbacks = telemetry["rollback_count"]
+            .as_u64()
+            .expect("rollback counter");
+        assert_eq!(rollbacks, u64::from(stats.rejected_attempts));
+        assert_eq!(telemetry["commit_count"], 1);
+        assert!(telemetry["evaluate_count"]
+            .as_u64()
+            .is_some_and(|count| count > rollbacks));
+        assert!(telemetry["accepted_observation"]["field_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
+
+    #[test]
+    fn native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators() {
+        for (integrator, adaptive) in [
+            (IntegratorChoice::Heun, false),
+            (IntegratorChoice::Rk4, false),
+            (IntegratorChoice::Rk23, true),
+            (IntegratorChoice::Rk45, true),
+        ] {
+            let mut plan = steady_transport::test_external_lead_stage_plan();
+            plan.integrator = Some(integrator);
+            if adaptive {
+                plan.fixed_timestep = None;
+                plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+                    atol: 1.0e-8,
+                    rtol: 1.0e-5,
+                    dt_initial: Some(1.0e-13),
+                    dt_min: 1.0e-16,
+                    dt_max: Some(1.0e-12),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.5,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            let provider = StageOerstedProvider::from_plan(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} provider preflight: {error:?}"))
+                .unwrap_or_else(|| panic!("{integrator:?} plan did not request a provider"));
+            let mut backend = NativeFemBackend::create(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} backend create: {error:?}"));
+            backend
+                .install_stage_oersted_provider(Box::new(provider))
+                .unwrap_or_else(|error| panic!("{integrator:?} callback install: {error:?}"));
+            backend
+                .begin_stage(0.0)
+                .unwrap_or_else(|error| panic!("{integrator:?} begin stage: {error:?}"));
+
+            let mut previous_time = 0.0;
+            for step_index in 0..3 {
+                let stats = backend.step(1.0e-13).unwrap_or_else(|error| {
+                    panic!("{integrator:?} trajectory step {step_index}: {error:?}")
+                });
+                assert!(
+                    stats.time.is_finite() && stats.time > previous_time,
+                    "{integrator:?} step {step_index}: {stats:?}"
+                );
+                previous_time = stats.time;
+            }
+            let telemetry = backend
+                .stage_oersted_telemetry()
+                .unwrap_or_else(|| panic!("{integrator:?} callback telemetry"));
+            assert_eq!(telemetry["begin_count"], 3, "{integrator:?}");
+            assert_eq!(telemetry["commit_count"], 3, "{integrator:?}");
+            assert!(
+                telemetry["evaluate_count"]
+                    .as_u64()
+                    .is_some_and(|count| count >= 6),
+                "{integrator:?}: {telemetry}"
+            );
+            assert!(
+                telemetry["accepted_observation"]["field_sha256"]
+                    .as_str()
+                    .is_some_and(|digest| digest.starts_with("sha256:")),
+                "{integrator:?}: {telemetry}"
+            );
         }
     }
 }

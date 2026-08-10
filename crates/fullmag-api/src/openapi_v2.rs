@@ -13,6 +13,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::realtime::ws_current_live,
         crate::router_v2::handlers::sessions::status::get_status,
         crate::router_v2::handlers::data::domain::get_domain_meta,
+        crate::router_v2::handlers::data::domain::get_fdm_multilayer_layout,
         crate::router_v2::handlers::data::domain::get_domain_topology,
         crate::router_v2::handlers::data::domain::get_domain_slice_mesh_overlay,
         crate::router_v2::handlers::data::material_fields::get_material_field_data_catalog,
@@ -106,6 +107,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::model::authoring::get_authoring_scene,
         crate::router_v2::handlers::model::authoring::replace_authoring_scene,
         crate::router_v2::handlers::model::authoring::patch_authoring_scene,
+        crate::router_v2::handlers::model::physics_graph::get_physics_graph,
         crate::router_v2::handlers::model::authoring::get_current_transports,
         crate::router_v2::handlers::model::authoring::get_current_transport,
         crate::router_v2::handlers::model::authoring::create_current_transport,
@@ -277,6 +279,10 @@ use utoipa::OpenApi;
         crate::schemas::domain::Bounds2,
         crate::schemas::domain::DomainCounts,
         crate::schemas::domain::StructuredGridDescriptor,
+        crate::schemas::domain::FdmMultilayerLayoutResource,
+        crate::schemas::domain::FdmCommonTransformLayoutResource,
+        crate::schemas::domain::FdmLayerLayoutResource,
+        crate::schemas::domain::FdmMultilayerAirboxResource,
         crate::schemas::domain::FemCpuRelaxationQualificationMetadata,
         crate::schemas::domain::FemCpuRelaxationDemagPolicyMetadata,
         crate::schemas::domain::FemCpuRelaxationDemagTimingsNs,
@@ -419,6 +425,8 @@ use utoipa::OpenApi;
         crate::schemas::mesh::MeshRegionMembershipListResource,
         crate::schemas::mesh::MeshRegionMembershipResource,
         crate::schemas::mesh::FdmRegionLegendEntryResource,
+        crate::schemas::mesh::FdmMagneticSupportSemanticRole,
+        crate::schemas::mesh::FdmMagneticSupportSummaryResource,
         crate::schemas::mesh::FdmRegionMembershipResource,
         crate::schemas::mesh::MeshSharedDomainManifestResource,
         crate::schemas::mesh::MeshObjectConfigResource,
@@ -450,6 +458,13 @@ use utoipa::OpenApi;
         crate::schemas::authoring::SceneObjectResource,
         crate::schemas::authoring::SceneMaterialResource,
         crate::schemas::authoring::ScenePatchRequest,
+        crate::schemas::authoring::PhysicsGraphResource,
+        crate::schemas::authoring::PhysicsGraphModuleResource,
+        crate::schemas::authoring::PhysicsGraphScopeResource,
+        crate::schemas::authoring::PhysicsGraphEdgeResource,
+        crate::schemas::authoring::PhysicsGraphActivationResource,
+        crate::schemas::authoring::PhysicsGraphPresentationResource,
+        crate::schemas::authoring::PhysicsGraphProvenanceResource,
         crate::schemas::authoring::CurrentTransportListResource,
         crate::schemas::authoring::SpinTransportListResource,
         crate::schemas::authoring::SpinTorqueListResource,
@@ -494,6 +509,8 @@ use utoipa::OpenApi;
         fullmag_authoring::SlonczewskiRealization,
         fullmag_authoring::SlonczewskiRealizationKind,
         fullmag_authoring::SlonczewskiRealizationVersion,
+        fullmag_authoring::ZhangLiFormulaVersion,
+        fullmag_authoring::ZhangLiOperatorVersion,
         fullmag_authoring::PrescribedSotSchemaVersion,
         fullmag_authoring::PrescribedSotFormulaVersion,
         fullmag_authoring::SceneTimeEnvelope,
@@ -900,6 +917,19 @@ mod tests {
         assert!(schemas["StageAutosaveLayoutResource"]
             .to_string()
             .contains("continuous"));
+    }
+
+    #[test]
+    fn openapi_current_transport_preserves_conservative_current_view_payload() {
+        let document = openapi_json();
+        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
+            ["properties"]["conservative_current_view"];
+
+        assert_eq!(
+            property["additionalProperties"],
+            serde_json::json!(true),
+            "the scene boundary must accept every validated RT0/H(div) descriptor field"
+        );
     }
 
     #[test]

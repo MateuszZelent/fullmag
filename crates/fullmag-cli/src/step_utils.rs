@@ -4397,6 +4397,7 @@ mod tests {
             name: "ring".to_string(),
             region: "ring".to_string(),
             material: "Py".to_string(),
+            absorbing_boundary: None,
             initial_magnetization: None,
         });
         problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
@@ -4456,6 +4457,7 @@ mod tests {
             name: "second".to_string(),
             region: "second".to_string(),
             material: "Py".to_string(),
+            absorbing_boundary: None,
             initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
                 value: [0.0, 1.0, 0.0],
             }),

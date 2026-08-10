@@ -1,11 +1,11 @@
 use crate::{
     validate_scene_document, MagnetizationAsset, SceneCurrentModulesState, SceneDocument,
-    SceneDocumentValidationError, SceneEditorState, SceneGeometry, SceneMaterialAsset,
-    SceneMeshInterface, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
-    ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
-    ScriptBuilderMeshInterfaceState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
-    StudyPipelineNode, Transform3D,
+    SceneDocumentValidationError, SceneEditorState, SceneFdmDiscretizationState, SceneGeometry,
+    SceneMaterialAsset, SceneMeshInterface, SceneMetadata, SceneObject, SceneOutputsState,
+    SceneStudyState, ScriptBuilderFdmState, ScriptBuilderGeometryEntry,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderMagnetizationState, ScriptBuilderMeshInterfaceState,
+    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, StudyPipelineNode, Transform3D,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -28,6 +28,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         .iter()
         .map(scene_object_from_geometry)
         .collect::<Vec<_>>();
+    let scene_fdm = scene_fdm_from_builder(builder.fdm.as_ref(), &objects);
     let materials = builder
         .geometries
         .iter()
@@ -98,6 +99,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
             demag_realization: builder.demag_realization.clone(),
+            fdm: scene_fdm,
             external_field: builder.external_field,
             solver: builder.solver.clone(),
             universe_mesh: builder.universe.clone(),
@@ -122,6 +124,7 @@ pub fn scene_document_to_script_builder(
 ) -> Result<ScriptBuilderState, SceneDocumentValidationError> {
     let mut normalized_scene = scene.clone();
     normalize_scene_document_study_pipeline_labels(&mut normalized_scene);
+    migrate_legacy_fdm_demag_realization(&mut normalized_scene);
     validate_scene_document(&normalized_scene)?;
     let materials = scene
         .materials
@@ -205,6 +208,7 @@ pub fn scene_document_to_script_builder(
                 object_regions: object.regions.clone(),
                 allocated_region_ids: object.allocated_region_ids.clone(),
                 material_parameter_fields: object.material_parameter_fields.clone(),
+                absorbing_boundary: object.absorbing_boundary.clone(),
             })
         })
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
@@ -218,6 +222,10 @@ pub fn scene_document_to_script_builder(
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
         demag_realization: normalized_scene.study.demag_realization.clone(),
+        fdm: builder_fdm_from_scene(
+            normalized_scene.study.fdm.as_ref(),
+            &normalized_scene.objects,
+        ),
         external_field: normalized_scene.study.external_field,
         solver: normalized_scene.study.solver.clone(),
         mesh: normalized_scene.study.shared_domain_mesh.clone(),
@@ -248,6 +256,44 @@ pub fn scene_document_to_script_builder(
     })
 }
 
+fn migrate_legacy_fdm_demag_realization(scene: &mut SceneDocument) {
+    let requested_backend = scene.study.requested_backend.trim().to_ascii_lowercase();
+    let backend = scene
+        .study
+        .backend
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if requested_backend != "fdm" && backend != "fdm" {
+        return;
+    }
+    if scene.study.fdm.is_some() {
+        return;
+    }
+    let Some(strategy) = scene.study.demag_realization.take() else {
+        return;
+    };
+    if !matches!(
+        strategy.as_str(),
+        "auto" | "single_grid" | "multilayer_convolution"
+    ) {
+        scene.study.demag_realization = Some(strategy);
+        return;
+    }
+    scene.study.fdm = Some(SceneFdmDiscretizationState {
+        default_cell: None,
+        per_object_grid: BTreeMap::new(),
+        demag: Some(crate::ScriptBuilderFdmDemagState {
+            strategy,
+            ..crate::ScriptBuilderFdmDemagState::default()
+        }),
+        boundary_correction: None,
+        boundary_phi_floor: None,
+        boundary_delta_min: None,
+    });
+}
+
 pub fn scene_document_to_script_builder_overrides(
     scene: &SceneDocument,
 ) -> Result<Value, SceneDocumentValidationError> {
@@ -269,6 +315,11 @@ pub fn scene_document_to_script_builder_overrides(
         "exchange_enabled": builder.exchange_enabled,
         "demag_enabled": builder.demag_enabled,
         "demag_realization": builder.demag_realization,
+        "fdm": builder
+            .fdm
+            .as_ref()
+            .map(|fdm| serde_json::to_value(fdm).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null),
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
             .unwrap_or(Value::Null),
@@ -418,7 +469,10 @@ fn spin_torque_override_value(torque: &crate::SceneSpinTorque) -> Value {
     let mut value = serde_json::to_value(torque).unwrap_or(Value::Null);
     let strip_id = matches!(
         torque,
-        crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::ZhangLi { .. })
+        crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::ZhangLi {
+            formula_version: crate::ZhangLiFormulaVersion::LegacyFullmagV0,
+            ..
+        })
     ) || matches!(
         torque,
         crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::Slonczewski {
@@ -435,11 +489,7 @@ fn spin_torque_override_value(torque: &crate::SceneSpinTorque) -> Value {
 }
 
 fn oersted_override_value(field: &crate::SceneOerstedField) -> Value {
-    let mut value = serde_json::to_value(field).unwrap_or(Value::Null);
-    if let Value::Object(entry) = &mut value {
-        entry.remove("id");
-    }
-    value
+    serde_json::to_value(field).unwrap_or(Value::Null)
 }
 
 fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
@@ -508,9 +558,7 @@ fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
     Value::Object(value)
 }
 
-fn adaptive_timestep_override_value(
-    adaptive: &crate::ScriptBuilderAdaptiveTimestepState,
-) -> Value {
+fn adaptive_timestep_override_value(adaptive: &crate::ScriptBuilderAdaptiveTimestepState) -> Value {
     serde_json::json!({
         "tolerance_mode": adaptive.tolerance_mode,
         "atol": parse_optional_text_f64(&adaptive.atol),
@@ -619,6 +667,10 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
             "alpha": geo.material.alpha,
             "Dind": geo.material.dind,
         }),
+    );
+    map.insert(
+        "absorbing_boundary".to_string(),
+        serde_json::to_value(&geo.absorbing_boundary).unwrap_or(Value::Null),
     );
     map.insert(
         "magnetization".to_string(),
@@ -1015,11 +1067,66 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         regions: geometry.object_regions.clone(),
         allocated_region_ids: geometry.allocated_region_ids.clone(),
         material_parameter_fields: geometry.material_parameter_fields.clone(),
+        absorbing_boundary: geometry.absorbing_boundary.clone(),
         notes: None,
         visible: true,
         locked: false,
         tags: Vec::new(),
     }
+}
+
+fn scene_fdm_from_builder(
+    fdm: Option<&ScriptBuilderFdmState>,
+    objects: &[SceneObject],
+) -> Option<SceneFdmDiscretizationState> {
+    let fdm = fdm?;
+    let per_object_grid = fdm
+        .per_magnet
+        .iter()
+        .map(|(magnet_name, grid)| {
+            let object_id = objects
+                .iter()
+                .find(|object| object.name == *magnet_name)
+                .map(|object| object.id.clone())
+                .unwrap_or_else(|| magnet_name.clone());
+            (object_id, grid.clone())
+        })
+        .collect();
+    Some(SceneFdmDiscretizationState {
+        default_cell: fdm.default_cell,
+        per_object_grid,
+        demag: fdm.demag.clone(),
+        boundary_correction: fdm.boundary_correction.clone(),
+        boundary_phi_floor: fdm.boundary_phi_floor,
+        boundary_delta_min: fdm.boundary_delta_min,
+    })
+}
+
+fn builder_fdm_from_scene(
+    fdm: Option<&SceneFdmDiscretizationState>,
+    objects: &[SceneObject],
+) -> Option<ScriptBuilderFdmState> {
+    let fdm = fdm?;
+    let per_magnet = fdm
+        .per_object_grid
+        .iter()
+        .map(|(object_id, grid)| {
+            let magnet_name = objects
+                .iter()
+                .find(|object| object.id == *object_id)
+                .map(builder_geometry_name_for_object)
+                .unwrap_or_else(|| object_id.clone());
+            (magnet_name, grid.clone())
+        })
+        .collect();
+    Some(ScriptBuilderFdmState {
+        default_cell: fdm.default_cell,
+        per_magnet,
+        demag: fdm.demag.clone(),
+        boundary_correction: fdm.boundary_correction.clone(),
+        boundary_phi_floor: fdm.boundary_phi_floor,
+        boundary_delta_min: fdm.boundary_delta_min,
+    })
 }
 
 const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 5] = [
@@ -2041,6 +2148,7 @@ mod tests {
             exchange_enabled: true,
             demag_enabled: true,
             demag_realization: Some("airbox_robin".to_string()),
+            fdm: None,
             external_field: Some([0.0, 0.0, 0.015]),
             solver: ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
@@ -2309,6 +2417,7 @@ mod tests {
                 }],
                 allocated_region_ids: vec!["flower:r1".to_string()],
                 material_parameter_fields: Vec::new(),
+                absorbing_boundary: None,
             }],
             mesh_interfaces: vec![ScriptBuilderMeshInterfaceState {
                 interface_id: "object:flower|air".to_string(),
@@ -3210,7 +3319,7 @@ mod tests {
         assert_eq!(overrides["spin_torques"][0]["kind"], "zhang_li");
         assert!(overrides["spin_torques"][0].get("id").is_none());
         assert_eq!(overrides["oersted_terms"][0]["kind"], "oersted_field");
-        assert!(overrides["oersted_terms"][0].get("id").is_none());
+        assert_eq!(overrides["oersted_terms"][0]["id"], "oe");
     }
 
     #[test]
@@ -3230,5 +3339,102 @@ mod tests {
         let scene = scene_document_from_script_builder(&builder);
         assert_eq!(scene.spin_torques[0].id(), "spin-torque:0");
         assert_eq!(scene.oersted_fields[0].id(), "oersted-field:0");
+    }
+
+    #[test]
+    fn canonical_zhang_li_script_override_keeps_physical_identity() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        let object_id = scene.objects[0].id.clone();
+        scene.spin_torques = serde_json::from_value(serde_json::json!([{
+            "id": "zl-canonical",
+            "kind": "zhang_li",
+            "schema_version": "zhang_li_torque.v1",
+            "formula_version": "zhang_li.fullmag.v1",
+            "operator_version": "zl_central_reference_v1",
+            "target": {"object_id": object_id},
+            "current_density": [1.0e11, 0.0, 0.0],
+            "degree": 0.4,
+            "beta": 0.02,
+            "lande_g": 2.1
+        }]))
+        .unwrap();
+
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        let torque = &overrides["spin_torques"][0];
+        assert_eq!(torque["id"], "zl-canonical");
+        assert_eq!(torque["target"]["object_id"], scene.objects[0].id);
+        assert_eq!(torque["operator_version"], "zl_central_reference_v1");
+        assert_eq!(torque["lande_g"], 2.1);
+    }
+
+    #[test]
+    fn fdm_authoring_policy_round_trips_through_scene_and_overrides() {
+        let mut builder = sample_builder();
+        builder.backend = Some("fdm".to_string());
+        builder.fem_demag_solver_policy = None;
+        builder.demag_realization = None;
+        builder.fdm = Some(crate::ScriptBuilderFdmState {
+            default_cell: Some([2e-9, 2e-9, 1e-9]),
+            per_magnet: BTreeMap::from([(
+                "flower".to_string(),
+                crate::ScriptBuilderFdmGridState {
+                    cell: [1e-9, 1e-9, 1e-9],
+                },
+            )]),
+            demag: Some(crate::ScriptBuilderFdmDemagState {
+                strategy: "multilayer_convolution".to_string(),
+                mode: "two_d_stack".to_string(),
+                common_cells: None,
+                common_cells_xy: Some([64, 32]),
+                explain: false,
+            }),
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: Some(0.1),
+            boundary_delta_min: Some(0.2e-9),
+        });
+
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.demag_realization, None);
+        let fdm = scene.study.fdm.as_ref().expect("FDM scene policy");
+        assert_eq!(fdm.per_object_grid["flower"].cell, [1e-9, 1e-9, 1e-9]);
+        assert_eq!(fdm.demag.as_ref().unwrap().common_cells_xy, Some([64, 32]));
+
+        let rebuilt = scene_document_to_script_builder(&scene).expect("builder round-trip");
+        assert_eq!(rebuilt.fdm, builder.fdm);
+        let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
+        assert_eq!(overrides["demag_realization"], Value::Null);
+        assert_eq!(
+            overrides["fdm"]["demag"]["strategy"],
+            "multilayer_convolution"
+        );
+        assert_eq!(
+            overrides["fdm"]["demag"]["common_cells_xy"],
+            serde_json::json!([64, 32])
+        );
+        assert_eq!(overrides["fdm"]["demag"]["explain"], false);
+    }
+
+    #[test]
+    fn legacy_fdm_demag_realization_migrates_into_nested_policy() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.backend = Some("fdm".to_string());
+        scene.study.requested_backend = "fdm".to_string();
+        scene.study.fem_demag_solver_policy = None;
+        scene.study.fdm = None;
+        scene.study.demag_realization = Some("multilayer_convolution".to_string());
+
+        let builder = scene_document_to_script_builder(&scene).expect("legacy migration");
+        assert_eq!(builder.demag_realization, None);
+        assert_eq!(
+            builder
+                .fdm
+                .as_ref()
+                .unwrap()
+                .demag
+                .as_ref()
+                .unwrap()
+                .strategy,
+            "multilayer_convolution"
+        );
     }
 }

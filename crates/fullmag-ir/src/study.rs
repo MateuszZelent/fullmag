@@ -111,6 +111,15 @@ pub enum FieldSpatialProfileIR {
         object_id: String,
         envelope: FieldEnvelopeIR,
     },
+    GaussianPlaneWave {
+        center_x_m: f64,
+        center_y_m: f64,
+        carrier_origin_x_m: f64,
+        sigma_x_m: f64,
+        sigma_y_m: f64,
+        wavelength_m: f64,
+        carrier_phase_rad: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -223,6 +232,12 @@ pub enum CurrentModuleIR {
         conductivity_s_per_m: Option<f64>,
         #[serde(default)]
         coupling: crate::TransportCouplingIR,
+        /// Dimensionless source multiplier evaluated at each accepted stage
+        /// time.  The base prescribed density or charge boundary values stay
+        /// in SI units; the runtime applies this multiplier to the source
+        /// before solving transport and deriving Oersted fields.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time_envelope: Option<crate::TimeEnvelopeIR>,
         /// Complete executable charge solve. Legacy records without this
         /// payload remain readable but fail closed for `ohmic_poisson`.
         #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
@@ -552,6 +567,10 @@ pub enum EnergyTermIR {
     /// for I = 1 A, then scaled by `current * time_dependence(t)` at each
     /// RHS evaluation.
     OerstedCylinder {
+        /// Stable authored module identity. Historical IR may omit it, but
+        /// every current authoring surface must publish it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         /// DC current amplitude [A].  Sign determines field chirality.
         current: f64,
         /// Cylinder radius [m].
@@ -568,6 +587,9 @@ pub enum EnergyTermIR {
         time_dependence: Option<TimeDependenceIR>,
     },
     OerstedField {
+        /// Stable authored module identity shared with PhysicsGraphIR.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         model: OerstedFieldModelIR,
         source: String,
     },
@@ -875,6 +897,7 @@ impl Default for ThermalSeedConfig {
 pub enum OerstedRealization {
     InfiniteCylinder,
     BiotSavartMidpoint,
+    FemVectorPotential,
 }
 
 impl Default for OerstedRealization {

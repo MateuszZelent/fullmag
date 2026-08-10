@@ -153,6 +153,34 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         errors = self.errors(manifest)
         self.assertTrue(any("declaration not found" in error for error in errors))
 
+    def test_planned_source_may_resolve_to_a_unique_document_anchor(self) -> None:
+        anchor = "planned-fdm-gpu-transport-owner"
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + f"\n({anchor})=\n### Planned FDM GPU transport owner\n"
+            + f"\n| planned owner | public_docs/site/physics/exchange.md | DOC-ANCHOR:{anchor} |\n",
+            encoding="utf-8",
+        )
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"].append(
+            {
+                "id": "planned-fdm-gpu-owner",
+                "path": "public_docs/site/physics/exchange.md",
+                "symbol": f"DOC-ANCHOR:{anchor}",
+                "responsibility": "Freeze a planned owner without claiming implemented code.",
+                "evidence_status": "planned_contract",
+            }
+        )
+        self.assertEqual([], self.errors(manifest))
+
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + f"\n({anchor})=\n### Duplicate anchor\n",
+            encoding="utf-8",
+        )
+        errors = self.errors(manifest)
+        self.assertTrue(any("DOC-ANCHOR is not unique" in error for error in errors))
+
     def test_requires_parseable_cell_examples_and_exhaustive_api_to_ir_mapping(self) -> None:
         self.page_path.write_text(self.page_path.read_text().replace("# %%", "#"), encoding="utf-8")
         self.assertTrue(any("# %%" in error for error in self.errors()))

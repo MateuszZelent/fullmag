@@ -57,6 +57,7 @@ function renderNode(
         <DropdownMenuItem
           key={node.id}
           disabled={node.disabled}
+          title={node.tooltip}
           onSelect={() => {
             onCommand?.(node.commandId ?? node.id, node.commandInput);
           }}

@@ -308,6 +308,7 @@ struct HysteresisSaturationProbeRun {
     steps: Vec<StepStats>,
     trace: Vec<HysteresisSettleTraceEntry>,
     status: RunStatus,
+    execution_provenance: crate::types::ExecutionProvenance,
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +322,7 @@ struct HysteresisMinorLoopRun {
     loops: Vec<HysteresisMinorLoop>,
     steps: Vec<StepStats>,
     status: RunStatus,
+    execution_provenance: crate::types::ExecutionProvenance,
 }
 
 #[derive(Debug)]
@@ -331,6 +333,7 @@ struct HysteresisAngularFamilyVariantRun {
     settle_trace_path: String,
     status: RunStatus,
     steps: Vec<StepStats>,
+    execution_provenance: crate::types::ExecutionProvenance,
 }
 
 #[derive(Debug)]
@@ -338,6 +341,7 @@ struct HysteresisAdaptiveRefinementRun {
     artifact: HysteresisAdaptiveRefinementArtifact,
     steps: Vec<StepStats>,
     status: RunStatus,
+    execution_provenance: crate::types::ExecutionProvenance,
 }
 
 #[derive(Debug, Clone)]
@@ -609,6 +613,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         )?;
         current_m = probe_run.final_magnetization;
         final_status = probe_run.status;
+        merge_hysteresis_execution_provenance(
+            &mut final_execution_provenance,
+            &probe_run.execution_provenance,
+        );
         preparation_field_mT = probe_run.result.preparation_field_mT;
         append_stage_steps(&mut steps_stats, &mut global_step_count, probe_run.steps);
         settle_trace.extend(probe_run.trace);
@@ -644,7 +652,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             on_step,
         )?;
         final_status = solve_res.executed_run.result.status;
-        final_execution_provenance = solve_res.executed_run.provenance.clone();
+        merge_hysteresis_execution_provenance(
+            &mut final_execution_provenance,
+            &solve_res.executed_run.provenance,
+        );
         append_stage_steps(
             &mut steps_stats,
             &mut global_step_count,
@@ -685,7 +696,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
 
             current_m = point_run.executed_run.result.final_magnetization.clone();
             final_status = point_run.executed_run.result.status;
-            final_execution_provenance = point_run.executed_run.provenance.clone();
+            merge_hysteresis_execution_provenance(
+                &mut final_execution_provenance,
+                &point_run.executed_run.provenance,
+            );
             let point_non_converged = point_run
                 .trace
                 .iter()
@@ -875,12 +889,6 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         adaptive_refinement.as_ref(),
         stage_id,
     )?;
-    write_hysteresis_json_artifact(
-        output_dir,
-        "hysteresis_execution_provenance.json",
-        &final_execution_provenance,
-    )?;
-
     let mut angular_family_variant_runs: Vec<(String, HysteresisAngularFamilyVariantRun)> =
         Vec::new();
     if !stop_after_saturation_probe {
@@ -913,6 +921,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     on_step,
                 )?;
                 final_status = combine_run_status(final_status, variant_run.status);
+                merge_hysteresis_execution_provenance(
+                    &mut final_execution_provenance,
+                    &variant_run.execution_provenance,
+                );
                 append_stage_steps(
                     &mut steps_stats,
                     &mut global_step_count,
@@ -947,6 +959,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 on_step,
             )?;
             final_status = combine_run_status(final_status, adaptive_run.status);
+            merge_hysteresis_execution_provenance(
+                &mut final_execution_provenance,
+                &adaptive_run.execution_provenance,
+            );
             if policy.include_in_metrics {
                 let metric_points = hysteresis_points_with_adaptive_refinement(
                     &hysteresis_points,
@@ -997,6 +1013,10 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     on_step,
                 )?;
                 final_status = combine_run_status(final_status, minor_run.status);
+                merge_hysteresis_execution_provenance(
+                    &mut final_execution_provenance,
+                    &minor_run.execution_provenance,
+                );
                 append_stage_steps(&mut steps_stats, &mut global_step_count, minor_run.steps);
                 minor_run.loops
             } else {
@@ -1023,6 +1043,13 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         );
         write_hysteresis_json_artifact(output_dir, "hysteresis_angular_family.json", &artifact)?;
     }
+
+    finalize_hysteresis_execution_provenance(problem, &mut final_execution_provenance)?;
+    write_hysteresis_json_artifact(
+        output_dir,
+        "hysteresis_execution_provenance.json",
+        &final_execution_provenance,
+    )?;
 
     Ok(RunResult {
         status: final_status,
@@ -1173,6 +1200,39 @@ fn write_hysteresis_json_artifact<T: Serialize + ?Sized>(
     })
 }
 
+fn finalize_hysteresis_execution_provenance(
+    problem: &ProblemIR,
+    provenance: &mut crate::types::ExecutionProvenance,
+) -> Result<(), RunError> {
+    crate::physics_graph_execution::validate_executed_module_ids(problem, provenance)
+}
+
+fn merge_hysteresis_execution_provenance(
+    accumulated: &mut crate::types::ExecutionProvenance,
+    next: &crate::types::ExecutionProvenance,
+) {
+    let previous_module_ids = std::mem::take(&mut accumulated.executed_physics_module_ids);
+    let previous_kinds = std::mem::take(&mut accumulated.executed_physics_kinds);
+    let previous_transport = std::mem::take(&mut accumulated.transport_modules);
+    *accumulated = next.clone();
+
+    accumulated
+        .executed_physics_module_ids
+        .extend(previous_module_ids);
+    accumulated.executed_physics_module_ids.sort();
+    accumulated.executed_physics_module_ids.dedup();
+
+    accumulated.executed_physics_kinds.extend(previous_kinds);
+    accumulated.executed_physics_kinds.sort();
+    accumulated.executed_physics_kinds.dedup();
+
+    for observation in previous_transport {
+        if !accumulated.transport_modules.contains(&observation) {
+            accumulated.transport_modules.push(observation);
+        }
+    }
+}
+
 fn should_store_hysteresis_snapshot(
     storage: Option<&fullmag_ir::HysteresisStorageIR>,
     context: HysteresisSnapshotDecisionContext,
@@ -1223,6 +1283,7 @@ fn run_hysteresis_saturation_probe(
     let mut trace = Vec::new();
     let mut probe_points = Vec::new();
     let mut status = RunStatus::Completed;
+    let mut execution_provenance = crate::types::ExecutionProvenance::default();
 
     for (probe_index, field_value_mT) in materialize_saturation_probe_fields_mT(probe, sign)
         .into_iter()
@@ -1250,6 +1311,10 @@ fn run_hysteresis_saturation_probe(
             on_step,
         )?;
         status = solve_res.executed_run.result.status;
+        merge_hysteresis_execution_provenance(
+            &mut execution_provenance,
+            &solve_res.executed_run.provenance,
+        );
         current_m = solve_res.executed_run.result.final_magnetization.clone();
         let averaging = hysteresis_averaging_context(backend_plan);
         let m_avg = average_hysteresis_magnetization(&current_m, &averaging);
@@ -1299,6 +1364,7 @@ fn run_hysteresis_saturation_probe(
         steps: all_steps,
         trace,
         status,
+        execution_provenance,
     })
 }
 
@@ -2252,7 +2318,7 @@ fn run_settle_at_field(
                 resolved_settle_timestep(backend_plan, &step, retry_timestep_override);
             let timestep_override =
                 retry_timestep_override.or_else(|| settle_step_timestep_s(&step));
-            let executed_run = execute_settle_step_at_field(
+            let mut executed_run = execute_settle_step_at_field(
                 backend_plan,
                 fem_mesh_generation_id,
                 problem,
@@ -2270,6 +2336,23 @@ fn run_settle_at_field(
                     .map(|progress| (progress.point_idx, progress.field_m_t, settle_idx, &step)),
                 on_step,
             )?;
+            if executed_run
+                .result
+                .steps
+                .iter()
+                .any(|stats| stats.step > 0 || stats.rhs_evals > 0)
+            {
+                let context = crate::physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_backend_plan(
+                    problem,
+                    backend_plan,
+                )?;
+                if relaxation_algorithm_is_direct_minimizer(control.algorithm) {
+                    context.observe_energy_evaluation(&mut executed_run.provenance);
+                } else {
+                    context.observe_workflow(&mut executed_run.provenance);
+                }
+            }
+            merge_hysteresis_execution_provenance(&mut final_provenance, &executed_run.provenance);
             let settle_status = settle_status_for_step(&step, &executed_run.result);
             if let Some(progress) = hysteresis_progress.as_ref() {
                 trace.push(settle_trace_entry(
@@ -2300,6 +2383,10 @@ fn run_settle_at_field(
 
         current_magnetization = executed_run.result.final_magnetization.clone();
         terminal_completion = executed_run.result.completion.clone();
+        accumulated_steps.extend(executed_run.result.steps.clone());
+        final_status = executed_run.result.status;
+        let settle_status = settle_status_for_step(&step, &executed_run.result);
+        previous_non_converged = settle_status == "non_converged";
         if let Some(progress) = hysteresis_progress.as_ref() {
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
@@ -2323,11 +2410,6 @@ fn run_settle_at_field(
                 }
             }
         }
-        accumulated_steps.extend(executed_run.result.steps.clone());
-        final_status = executed_run.result.status;
-        let settle_status = settle_status_for_step(&step, &executed_run.result);
-        previous_non_converged = settle_status == "non_converged";
-        final_provenance = executed_run.provenance;
 
         if previous_non_converged {
             match settle_step_on_non_convergence(&step) {
@@ -2611,6 +2693,11 @@ fn execute_settle_step_at_field(
                 &mutated_fem,
                 field_every_n != u64::MAX,
             )?;
+            let physics_execution_context =
+                crate::physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_backend_plan(
+                    problem,
+                    backend_plan,
+                )?;
             let mut live_on_step = |update: StepUpdate| {
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
@@ -2632,6 +2719,7 @@ fn execute_settle_step_at_field(
                 &[],
                 Some(live),
                 None,
+                Some(&physics_execution_context),
             )?;
             crate::attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
             crate::attach_fem_crossover_decision_to_executed_run(
@@ -4274,6 +4362,7 @@ fn run_hysteresis_angular_family_variant(
     let mut steps = Vec::new();
     let mut global_step_count = 0;
     let mut status = RunStatus::Completed;
+    let mut execution_provenance = crate::types::ExecutionProvenance::default();
 
     for (point_idx, H_mT) in sweep_values_mT.iter().copied().enumerate() {
         let H_Apm = field_mT_to_h_apm(H_mT);
@@ -4302,6 +4391,10 @@ fn run_hysteresis_angular_family_variant(
         )?;
         current_m = point_run.executed_run.result.final_magnetization.clone();
         status = combine_run_status(status, point_run.executed_run.result.status);
+        merge_hysteresis_execution_provenance(
+            &mut execution_provenance,
+            &point_run.executed_run.provenance,
+        );
         let point_non_converged = point_run
             .trace
             .iter()
@@ -4430,6 +4523,7 @@ fn run_hysteresis_angular_family_variant(
         ),
         status,
         steps,
+        execution_provenance,
     })
 }
 
@@ -4508,12 +4602,14 @@ fn run_hysteresis_adaptive_refinement(
         .expect("adaptive refinement policy should produce an artifact");
     let mut all_steps = Vec::new();
     let mut status = RunStatus::Completed;
+    let mut execution_provenance = crate::types::ExecutionProvenance::default();
 
     if !policy.enabled {
         return Ok(HysteresisAdaptiveRefinementRun {
             artifact,
             steps: all_steps,
             status,
+            execution_provenance,
         });
     }
 
@@ -4574,6 +4670,10 @@ fn run_hysteresis_adaptive_refinement(
                 on_step,
             )?;
             status = combine_run_status(status, solve_res.executed_run.result.status);
+            merge_hysteresis_execution_provenance(
+                &mut execution_provenance,
+                &solve_res.executed_run.provenance,
+            );
 
             let magnetization = solve_res.executed_run.result.final_magnetization.clone();
             let point_quality =
@@ -4690,6 +4790,7 @@ fn run_hysteresis_adaptive_refinement(
         artifact,
         steps: all_steps,
         status,
+        execution_provenance,
     })
 }
 
@@ -4715,6 +4816,7 @@ fn run_hysteresis_minor_loops(
     let mut loops = Vec::new();
     let mut all_steps = Vec::new();
     let mut status = RunStatus::Completed;
+    let mut execution_provenance = crate::types::ExecutionProvenance::default();
     let mut working_states = major_states.to_vec();
 
     for (idx, configured) in configured_loops.iter().enumerate() {
@@ -4761,6 +4863,10 @@ fn run_hysteresis_minor_loops(
                     on_step,
                 )?;
                 status = combine_run_status(status, reversal_res.executed_run.result.status);
+                merge_hysteresis_execution_provenance(
+                    &mut execution_provenance,
+                    &reversal_res.executed_run.provenance,
+                );
 
                 let magnetization = reversal_res.executed_run.result.final_magnetization.clone();
                 let point_quality = hysteresis_point_quality(
@@ -4887,6 +4993,10 @@ fn run_hysteresis_minor_loops(
                 on_step,
             )?;
             status = combine_run_status(status, solve_res.executed_run.result.status);
+            merge_hysteresis_execution_provenance(
+                &mut execution_provenance,
+                &solve_res.executed_run.provenance,
+            );
 
             let magnetization = solve_res.executed_run.result.final_magnetization.clone();
             let point_quality =
@@ -5029,6 +5139,7 @@ fn run_hysteresis_minor_loops(
         loops,
         steps: all_steps,
         status,
+        execution_provenance,
     })
 }
 
@@ -5763,6 +5874,7 @@ mod tests {
             name: "cell".to_string(),
             region: "cell".to_string(),
             material: "Py".to_string(),
+            absorbing_boundary: None,
             initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
                 value: [1.0, 0.0, 0.0],
             }),
@@ -5834,6 +5946,118 @@ mod tests {
                 }],
             },
         };
+        problem
+    }
+
+    fn exact_torque_hysteresis_problem() -> ProblemIR {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        problem.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+            schema_version: Some("zhang_li_torque.v1".to_string()),
+            id: Some("torque:cell".to_string()),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "cell".to_string(),
+                region_id: None,
+            }),
+            formula_version: "zhang_li.mumax3.v1".to_string(),
+            operator_version: Some("zl_mumax3_central_v1".to_string()),
+            current_density: Some([1.0e12, 0.0, 0.0]),
+            current_source: None,
+            degree: 1.0,
+            beta: 0.05,
+            lande_g: Some(2.0),
+        }];
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 49,
+            "modules": [{
+                "id": "torque:cell",
+                "kind": "spin_torque",
+                "applies_to": [{"kind": "object", "object_id": "cell"}],
+                "solve_domain": [{"object_id": "cell"}],
+                "depends_on": [],
+                "activation": "active",
+                "authored_state": "authored",
+                "capability": "reference_executable",
+                "source_path": "/spin_torque_modules/0",
+                "family_payload": {"kind": "zhang_li"}
+            }],
+            "edges": []
+        }));
+        problem
+    }
+
+    fn exact_energy_and_torque_direct_relax_hysteresis_problem() -> ProblemIR {
+        let mut problem = exact_torque_hysteresis_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "study_pipeline".to_string(),
+            serde_json::json!({
+                "version": "study_pipeline.v1",
+                "nodes": [{"id": "flat_hysteresis", "enabled": true}]
+            }),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "active_stage_id".to_string(),
+            serde_json::json!("flat_hysteresis"),
+        );
+        problem.field_drives = vec![fullmag_ir::RegionalFieldDriveIR {
+            id: "drive:global".to_string(),
+            name: "Global transverse field".to_string(),
+            kind: fullmag_ir::FieldDriveKindIR::Regional,
+            enabled: true,
+            target: fullmag_ir::FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: fullmag_ir::FieldSpatialProfileIR::Uniform {},
+            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+            activation: fullmag_ir::DriveActivationIR::StageIds {
+                stage_ids: vec!["flat_hysteresis".to_string()],
+            },
+            migration: None,
+        }];
+        if let StudyIR::Hysteresis {
+            settle_pipeline: Some(SettlePipelineIR::Sequence { steps }),
+            ..
+        } = &mut problem.study
+        {
+            let SettleStepIR::Relax { method, .. } = &mut steps[0] else {
+                panic!("exact hysteresis fixture must use Relax")
+            };
+            *method = "projected_gradient_bb".to_string();
+        } else {
+            panic!("exact hysteresis fixture must have a settle sequence")
+        }
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 51,
+            "modules": [
+                {
+                    "id": "torque:cell",
+                    "kind": "spin_torque",
+                    "applies_to": [{"kind": "object", "object_id": "cell"}],
+                    "solve_domain": [{"object_id": "cell"}],
+                    "depends_on": [],
+                    "activation": "active",
+                    "authored_state": "authored",
+                    "capability": "reference_executable",
+                    "source_path": "/spin_torque_modules/0",
+                    "family_payload": {"kind": "zhang_li"}
+                },
+                {
+                    "id": "drive:global",
+                    "kind": "regional_field_drive",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [{"kind": "global"}],
+                    "depends_on": [],
+                    "activation": "active",
+                    "authored_state": "authored",
+                    "capability": "reference_executable",
+                    "source_path": "/field_drives/0",
+                    "family_payload": {"kind": "regional"}
+                }
+            ],
+            "edges": []
+        }));
         problem
     }
 
@@ -6581,6 +6805,208 @@ mod tests {
 
         std::fs::remove_dir_all(&output_dir)
             .expect("temporary hysteresis artifact directory should be removable");
+    }
+
+    #[test]
+    fn hysteresis_provenance_records_exact_id_after_settle_evaluation() {
+        let problem = exact_torque_hysteresis_problem();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-exact-observation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("hysteresis settle should evaluate the exact torque module");
+
+        let provenance: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_execution_provenance.json"))
+                .expect("hysteresis provenance artifact should be readable"),
+        )
+        .expect("hysteresis provenance artifact should parse");
+        assert_eq!(
+            provenance["executed_physics_module_ids"],
+            serde_json::json!(["torque:cell"])
+        );
+
+        std::fs::remove_dir_all(&output_dir)
+            .expect("temporary hysteresis artifact directory should be removable");
+    }
+
+    #[test]
+    fn hysteresis_relax_direct_minimizer_records_only_energy_module_id() {
+        let problem = exact_energy_and_torque_direct_relax_hysteresis_problem();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-direct-relax-energy-only-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("Relax(projected_gradient_bb) hysteresis should execute");
+
+        let provenance: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_execution_provenance.json"))
+                .expect("hysteresis provenance artifact should be readable"),
+        )
+        .expect("hysteresis provenance artifact should parse");
+        assert_eq!(
+            provenance["executed_physics_module_ids"],
+            serde_json::json!(["drive:global"])
+        );
+
+        std::fs::remove_dir_all(&output_dir)
+            .expect("temporary hysteresis artifact directory should be removable");
+    }
+
+    #[test]
+    fn hysteresis_stop_after_evaluation_preserves_exact_observation() {
+        let problem = exact_torque_hysteresis_problem();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-stop-after-observation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let result = crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |update| {
+            if update.stats.step > 0 {
+                StepAction::Stop
+            } else {
+                StepAction::Continue
+            }
+        })
+        .expect("hysteresis should retain an observation made before Stop");
+        assert_eq!(result.status, RunStatus::Cancelled);
+
+        let provenance: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_execution_provenance.json"))
+                .expect("hysteresis provenance artifact should be readable"),
+        )
+        .expect("hysteresis provenance artifact should parse");
+        assert_eq!(
+            provenance["executed_physics_module_ids"],
+            serde_json::json!(["torque:cell"])
+        );
+
+        std::fs::remove_dir_all(&output_dir)
+            .expect("temporary hysteresis artifact directory should be removable");
+    }
+
+    #[test]
+    fn hysteresis_provenance_merge_unions_exact_evidence() {
+        let mut accumulated = crate::types::ExecutionProvenance {
+            executed_physics_module_ids: vec!["drive:first".to_string()],
+            ..Default::default()
+        };
+        let next = crate::types::ExecutionProvenance {
+            executed_physics_module_ids: vec!["transport:second".to_string()],
+            ..Default::default()
+        };
+
+        merge_hysteresis_execution_provenance(&mut accumulated, &next);
+
+        assert_eq!(
+            accumulated.executed_physics_module_ids,
+            vec!["drive:first", "transport:second"]
+        );
+    }
+
+    #[test]
+    fn hysteresis_retry_merges_each_attempt_before_retry_decision() {
+        let source = include_str!("hysteresis.rs");
+        let retry_loop = source
+            .split("let executed_run = loop {")
+            .nth(1)
+            .and_then(|tail| tail.split("retry_attempt += 1;").next())
+            .expect("hysteresis retry loop");
+        let merge = retry_loop
+            .find("merge_hysteresis_execution_provenance")
+            .expect("every completed retry attempt must merge provenance");
+        let retry_decision = retry_loop
+            .find("if settle_status != \"non_converged\"")
+            .expect("hysteresis retry decision");
+        assert!(
+            merge < retry_decision,
+            "attempt provenance must be merged before deciding to start another retry"
+        );
+
+        let evaluated_non_converged = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 1,
+                    rhs_evals: 1,
+                    ..Default::default()
+                }],
+                final_magnetization: Vec::new(),
+                completion: Some(StageCompletionIR {
+                    status: "completed".to_string(),
+                    converged: false,
+                    reason: Some(StageStopReason::MaxSteps),
+                    metric: Some(fullmag_ir::StageMetricKind::Steps),
+                    metric_name: Some("steps".to_string()),
+                    metric_value: Some(1.0),
+                    threshold: Some(1.0),
+                }),
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: crate::types::ExecutionProvenance {
+                executed_physics_module_ids: vec!["drive:first-attempt".to_string()],
+                ..Default::default()
+            },
+        };
+        let cancelled_before_evaluation = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Cancelled,
+                steps: Vec::new(),
+                final_magnetization: Vec::new(),
+                completion: None,
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: crate::types::ExecutionProvenance::default(),
+        };
+
+        assert_eq!(
+            settle_status(&evaluated_non_converged.result),
+            "non_converged"
+        );
+        assert_eq!(
+            cancelled_before_evaluation.result.status,
+            RunStatus::Cancelled
+        );
+        assert!(cancelled_before_evaluation.result.steps.is_empty());
+
+        let mut accumulated = crate::types::ExecutionProvenance::default();
+        merge_hysteresis_execution_provenance(
+            &mut accumulated,
+            &evaluated_non_converged.provenance,
+        );
+        merge_hysteresis_execution_provenance(
+            &mut accumulated,
+            &cancelled_before_evaluation.provenance,
+        );
+        assert_eq!(
+            accumulated.executed_physics_module_ids,
+            vec!["drive:first-attempt"]
+        );
     }
 
     #[test]

@@ -40,6 +40,7 @@ import {
   buildVisualizationPanelSections,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
+  fieldCatalogQuantityAvailable,
   formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
   resolveSurfaceColorSourceItems,
@@ -108,7 +109,7 @@ export function VisualizationDisplayPassesSection({
   pending,
   renderWarning,
   settings,
-  targetKind,
+  target,
   primitiveDisplayToggleVisible,
 }: {
   displaySettings: VisualizationTargetSettings;
@@ -117,10 +118,10 @@ export function VisualizationDisplayPassesSection({
   pending: boolean;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
-  targetKind: VisualizationTargetKind;
+  target: VisualizationTargetRef;
   primitiveDisplayToggleVisible: boolean;
 }) {
-  const capabilities = visualizationTargetCapabilities(targetKind);
+  const capabilities = visualizationTargetCapabilities(target);
   return (
     <div className="grid min-w-0 gap-0" data-slot="visualization-display-passes">
       {renderWarning ? (
@@ -186,6 +187,7 @@ export function VisualizationDisplayPassesSection({
           </button>
         ) : null}
 
+        {capabilities.supportsVectors ? (
         <button
           aria-label="Toggle vector field arrows"
           aria-pressed={displaySettings.vectorsVisible && displaySettings.visible}
@@ -203,6 +205,7 @@ export function VisualizationDisplayPassesSection({
           <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />
           Vectors
         </button>
+        ) : null}
       </div>
 
       {capabilities.showBoundsControl && settings.boundsVisible ? (
@@ -253,15 +256,15 @@ export function VisualizationRenderModeSection({
   passControlsDisabled,
   pending,
   patch,
-  targetKind,
+  target,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   pending: boolean;
   patch: PatchVisualizationTarget;
-  targetKind: VisualizationTargetKind;
+  target: VisualizationTargetRef;
 }) {
-  const capabilities = visualizationTargetCapabilities(targetKind);
+  const capabilities = visualizationTargetCapabilities(target);
   const currentMode = resolveVisualizationDisplayMode(displaySettings);
   const renderModeOptions = RENDER_MODE_OPTIONS.filter(
     (option) =>
@@ -296,7 +299,13 @@ export function VisualizationRenderModeSection({
               disabled={passControlsDisabled || pending}
               role="radio"
               type="button"
-              onClick={() => void patch(renderModeDisplayPatch(option.value))}
+              onClick={() =>
+                void patch(
+                  target.id === "fdm-universe-outside-support"
+                    ? { renderMode: option.value }
+                    : renderModeDisplayPatch(option.value),
+                )
+              }
             >
               <span className="fm-viz-render-mode-tile__icon" aria-hidden="true">
                 {option.value === "surface" && (
@@ -362,6 +371,8 @@ export function VisualizationSurfaceColoringSection({
   pending,
   sectionDisabled,
   fieldCatalog,
+  fieldCatalogLoading,
+  fieldMetaTarget,
   onFieldCatalogRequest,
   regionCarrier,
   settings,
@@ -375,6 +386,8 @@ export function VisualizationSurfaceColoringSection({
   pending: boolean;
   sectionDisabled: SectionDisabled;
   fieldCatalog: { data: FieldCatalogResource | null; status: string };
+  fieldCatalogLoading: boolean;
+  fieldMetaTarget: VisualizationTargetRef;
   onFieldCatalogRequest: () => void;
   regionCarrier?: RegionVisualizationCarrier | null;
   settings: VisualizationTargetSettings;
@@ -388,8 +401,11 @@ export function VisualizationSurfaceColoringSection({
     settings.surfaceColorSource,
     settings.activeQuantityId,
   );
+  const fieldMetaQuantityAvailable =
+    !fieldCatalogLoading &&
+    fieldCatalogQuantityAvailable(fieldCatalog.data, settings.activeQuantityId);
   const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(
-    target,
+    fieldMetaTarget,
     regionCarrier,
   );
   const regionFieldWarning =
@@ -397,6 +413,10 @@ export function VisualizationSurfaceColoringSection({
   const regionFieldMetaUnavailable =
     target.kind === "region" &&
     !regionVisualizationCarrierSupportsFieldMeta(regionCarrier);
+  const showFieldMeta =
+    showColorbar &&
+    !regionFieldMetaUnavailable &&
+    fieldMetaQuantityAvailable;
   const colorbarRangeIdentity = [
     settings.activeQuantityId,
     colorbarComponent ?? "none",
@@ -411,7 +431,7 @@ export function VisualizationSurfaceColoringSection({
   });
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
-    enabled: showColorbar && !regionFieldMetaUnavailable,
+    enabled: showFieldMeta,
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
@@ -471,7 +491,7 @@ export function VisualizationSurfaceColoringSection({
           </option>
         ))}
       </FormField>
-      {showColorbar && !regionFieldMetaUnavailable ? (
+      {showFieldMeta ? (
         <ScalarColorbarControl
           disabled={pending || sectionDisabled("surface-coloring")}
           fieldMeta={fieldMeta}
@@ -482,7 +502,7 @@ export function VisualizationSurfaceColoringSection({
           renderedRange={renderedRange}
         />
       ) : null}
-      {showColorbar && !regionFieldMetaUnavailable ? (
+      {showFieldMeta ? (
         <InspectorPropertyRow label="Viewport colorbar">
           <Switch
             aria-label="Add colorbar to viewport"
@@ -700,12 +720,16 @@ function viewportRenderedRangeScopeKind(
 }
 
 export function VisualizationQuantitySection({
+  fieldCatalog,
+  fieldCatalogLoading,
   onFieldCatalogRequest,
   patch,
   pending,
   settings,
   targetKind,
 }: {
+  fieldCatalog: FieldCatalogResource | null;
+  fieldCatalogLoading: boolean;
   onFieldCatalogRequest: () => void;
   patch: PatchVisualizationTarget;
   pending: boolean;
@@ -714,7 +738,7 @@ export function VisualizationQuantitySection({
 }) {
   return (
     <FormField
-      disabled={pending || !settings.visible}
+      disabled={pending || !settings.visible || fieldCatalogLoading}
       inline
       label="Quantity Source"
       type="select"
@@ -729,7 +753,11 @@ export function VisualizationQuantitySection({
         void patch(patchValue);
       }}
     >
-      {visualizationQuantityItems(settings.activeQuantityId, targetKind).map((quantity) => (
+      {visualizationQuantityItems(
+        settings.activeQuantityId,
+        targetKind,
+        fieldCatalog,
+      ).map((quantity) => (
         <option key={quantity.value} value={quantity.value}>
           {quantity.label}
         </option>
@@ -795,6 +823,9 @@ export function VisualizationWireframeSection({
 }
 
 export function VisualizationVectorsSection({
+  fieldCatalog,
+  fieldCatalogLoading,
+  fieldMetaTarget,
   meshParts,
   onTogglePartVectors,
   patch,
@@ -809,6 +840,9 @@ export function VisualizationVectorsSection({
   vectorBudgetRange,
   vectorTopologyHash,
 }: {
+  fieldCatalog: { data: FieldCatalogResource | null; status: string };
+  fieldCatalogLoading: boolean;
+  fieldMetaTarget: VisualizationTargetRef;
   meshParts?: ReadonlyArray<{
     actionTargetLabel: string;
     id: string;
@@ -844,8 +878,11 @@ export function VisualizationVectorsSection({
     settings.vectorColorMode,
     settings.activeQuantityId,
   );
+  const fieldMetaQuantityAvailable =
+    !fieldCatalogLoading &&
+    fieldCatalogQuantityAvailable(fieldCatalog.data, settings.activeQuantityId);
   const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(
-    target,
+    fieldMetaTarget,
     regionCarrier,
   );
   const regionFieldWarning =
@@ -853,9 +890,13 @@ export function VisualizationVectorsSection({
   const regionFieldMetaUnavailable =
     target.kind === "region" &&
     !regionVisualizationCarrierSupportsFieldMeta(regionCarrier);
+  const showFieldMeta =
+    showColorbar &&
+    !regionFieldMetaUnavailable &&
+    fieldMetaQuantityAvailable;
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
-    enabled: showColorbar && !regionFieldMetaUnavailable,
+    enabled: showFieldMeta,
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
@@ -908,7 +949,7 @@ export function VisualizationVectorsSection({
       {regionFieldWarning && showColorbar ? (
         <FeedbackBanner kind="warning" message={regionFieldWarning} />
       ) : null}
-      {showColorbar && !regionFieldMetaUnavailable ? (
+      {showFieldMeta ? (
         <ScalarColorbarControl
           disabled={vectorsDisabled}
           fieldMeta={fieldMeta}
@@ -919,7 +960,7 @@ export function VisualizationVectorsSection({
           renderedRange={renderedRange}
         />
       ) : null}
-      {showColorbar && !regionFieldMetaUnavailable ? (
+      {showFieldMeta ? (
         <InspectorPropertyRow label="Viewport colorbar">
           <Switch
             aria-label="Add vector colorbar to viewport"

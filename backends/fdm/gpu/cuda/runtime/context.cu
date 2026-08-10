@@ -328,8 +328,37 @@ static void free_multilayer_fft_workspace(DeviceMultilayerFftWorkspace &workspac
     workspace.components_share_allocation = false;
 }
 
+static void free_multilayer_batch_fft_buffers(Context &ctx) {
+    if (ctx.multilayer_batch_components_share_allocation) {
+        if (ctx.multilayer_batch_source_fft_x) {
+            cudaFree(ctx.multilayer_batch_source_fft_x);
+        }
+        if (ctx.multilayer_batch_destination_fft_x) {
+            cudaFree(ctx.multilayer_batch_destination_fft_x);
+        }
+    } else {
+        if (ctx.multilayer_batch_source_fft_x) cudaFree(ctx.multilayer_batch_source_fft_x);
+        if (ctx.multilayer_batch_source_fft_y) cudaFree(ctx.multilayer_batch_source_fft_y);
+        if (ctx.multilayer_batch_source_fft_z) cudaFree(ctx.multilayer_batch_source_fft_z);
+        if (ctx.multilayer_batch_destination_fft_x) cudaFree(ctx.multilayer_batch_destination_fft_x);
+        if (ctx.multilayer_batch_destination_fft_y) cudaFree(ctx.multilayer_batch_destination_fft_y);
+        if (ctx.multilayer_batch_destination_fft_z) cudaFree(ctx.multilayer_batch_destination_fft_z);
+    }
+    ctx.multilayer_batch_source_fft_x = nullptr;
+    ctx.multilayer_batch_source_fft_y = nullptr;
+    ctx.multilayer_batch_source_fft_z = nullptr;
+    ctx.multilayer_batch_destination_fft_x = nullptr;
+    ctx.multilayer_batch_destination_fft_y = nullptr;
+    ctx.multilayer_batch_destination_fft_z = nullptr;
+    ctx.multilayer_batch_component_stride = 0;
+    ctx.multilayer_batch_layer_stride = 0;
+    ctx.multilayer_batch_layer_count = 0;
+    ctx.multilayer_batch_components_share_allocation = false;
+}
+
 static void free_multilayer_fft_workspaces(Context &ctx) {
     unbind_multilayer_fft_workspace(ctx);
+    free_multilayer_batch_fft_buffers(ctx);
     for (DeviceMultilayerFftWorkspace &workspace : ctx.multilayer_fft_workspaces) {
         free_multilayer_fft_workspace(workspace);
     }
@@ -1857,7 +1886,163 @@ bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {
     }
 
     const DeviceMultilayerTensorKernel &first = ctx.multilayer_kernels.front();
-    return context_prepare_multilayer_fft_workspace_for_kernel(ctx, first);
+    if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, first)) {
+        return false;
+    }
+    return context_prepare_multilayer_batch_fft_workspace_v2(ctx);
+}
+
+static bool multilayer_grid_shape_matches(
+    const fullmag_fdm_grid_desc &lhs,
+    const fullmag_fdm_grid_desc &rhs)
+{
+    return lhs.nx == rhs.nx && lhs.ny == rhs.ny && lhs.nz == rhs.nz &&
+        lhs.dx == rhs.dx && lhs.dy == rhs.dy && lhs.dz == rhs.dz;
+}
+
+static bool multilayer_grid_fits_fft(
+    const fullmag_fdm_grid_desc &layer_grid,
+    const fullmag_fdm_grid_desc &fft_grid)
+{
+    return layer_grid.nx <= fft_grid.nx &&
+        layer_grid.ny <= fft_grid.ny &&
+        layer_grid.nz <= fft_grid.nz &&
+        layer_grid.dx == fft_grid.dx &&
+        layer_grid.dy == fft_grid.dy &&
+        layer_grid.dz == fft_grid.dz;
+}
+
+bool context_prepare_multilayer_batch_fft_workspace_v2(Context &ctx) {
+    if (!ctx.has_multilayer_plan_v2 || !ctx.enable_demag) {
+        return true;
+    }
+    if (ctx.multilayer_layers.empty() || ctx.multilayer_kernels.empty()) {
+        ctx.last_error =
+            "D-07 batched multilayer workspace requires layers and tensor kernels";
+        return false;
+    }
+
+    // push_pull is intentionally retained for the host-authoritative assisted
+    // lane.  It needs per-layer transfer maps and is not a device-resident D-07
+    // refresh, so it must not allocate or masquerade as this workspace.
+    for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_IDENTITY) {
+            return true;
+        }
+    }
+
+    const uint64_t layer_count = ctx.multilayer_layers.size();
+    if (layer_count > std::numeric_limits<uint32_t>::max()) {
+        ctx.last_error = "D-07 batched multilayer layer count exceeds uint32";
+        return false;
+    }
+    const uint64_t expected_kernel_count = layer_count * layer_count;
+    if (ctx.multilayer_kernels.size() != expected_kernel_count) {
+        ctx.last_error =
+            "D-07 batched multilayer workspace requires exactly L^2 tensor kernels";
+        return false;
+    }
+
+    const DeviceMultilayerLayer &first_layer = ctx.multilayer_layers.front();
+    if (!multilayer_grid_shape_matches(
+            first_layer.native_grid, first_layer.convolution_grid))
+    {
+        ctx.last_error =
+            "D-07 batched multilayer workspace requires identity native/convolution grids";
+        return false;
+    }
+    for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_IDENTITY ||
+            !multilayer_grid_shape_matches(layer.native_grid, first_layer.native_grid) ||
+            !multilayer_grid_shape_matches(layer.convolution_grid, first_layer.convolution_grid))
+        {
+            ctx.last_error =
+                "D-07 batched multilayer workspace requires one common identity layer grid";
+            return false;
+        }
+    }
+
+    const fullmag_fdm_grid_desc &fft_grid = ctx.multilayer_kernels.front().fft_grid;
+    const uint64_t fft_cell_count = grid_cell_count(fft_grid);
+    if (fft_cell_count == 0 || !multilayer_grid_fits_fft(first_layer.native_grid, fft_grid)) {
+        ctx.last_error =
+            "D-07 batched multilayer workspace requires a common padded FFT grid";
+        return false;
+    }
+    for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+        if (kernel.kernel_len != fft_cell_count ||
+            !multilayer_grid_shape_matches(kernel.fft_grid, fft_grid) ||
+            kernel.src_layer >= layer_count || kernel.dst_layer >= layer_count)
+        {
+            ctx.last_error =
+                "D-07 batched multilayer workspace requires one common FFT grid and valid layer pairs";
+            return false;
+        }
+    }
+
+    if (ctx.multilayer_batch_layer_count == layer_count &&
+        ctx.multilayer_batch_component_stride == fft_cell_count &&
+        ctx.multilayer_batch_layer_stride == fft_cell_count * 3u &&
+        ctx.multilayer_batch_source_fft_x != nullptr &&
+        ctx.multilayer_batch_source_fft_y != nullptr &&
+        ctx.multilayer_batch_source_fft_z != nullptr &&
+        ctx.multilayer_batch_destination_fft_x != nullptr &&
+        ctx.multilayer_batch_destination_fft_y != nullptr &&
+        ctx.multilayer_batch_destination_fft_z != nullptr)
+    {
+        return true;
+    }
+
+    free_multilayer_batch_fft_buffers(ctx);
+    if (fft_cell_count > std::numeric_limits<uint64_t>::max() / 3u) {
+        ctx.last_error = "D-07 batched multilayer layer stride overflows uint64";
+        return false;
+    }
+    const uint64_t component_stride = fft_cell_count;
+    const uint64_t layer_stride = component_stride * 3u;
+    if (layer_count > std::numeric_limits<uint64_t>::max() / layer_stride) {
+        ctx.last_error = "D-07 batched multilayer spectrum size overflows uint64";
+        return false;
+    }
+    const uint64_t allocation_element_count = layer_count * layer_stride;
+    const size_t element_bytes = complex_size(ctx.precision);
+    if (allocation_element_count > std::numeric_limits<size_t>::max() / element_bytes)
+    {
+        ctx.last_error = "D-07 batched multilayer spectrum allocation size overflows size_t";
+        return false;
+    }
+    const size_t component_bytes = static_cast<size_t>(component_stride) * element_bytes;
+    const size_t allocation_bytes = static_cast<size_t>(allocation_element_count) * element_bytes;
+
+    void *source_allocation = nullptr;
+    void *destination_allocation = nullptr;
+    cudaError_t err = cudaMalloc(&source_allocation, allocation_bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(multilayer_batch_source_fft)", err);
+        return false;
+    }
+    err = cudaMalloc(&destination_allocation, allocation_bytes);
+    if (err != cudaSuccess) {
+        cudaFree(source_allocation);
+        set_cuda_error(ctx, "cudaMalloc(multilayer_batch_destination_fft)", err);
+        return false;
+    }
+
+    auto component = [component_bytes](void *base, unsigned index) -> void * {
+        return static_cast<void *>(
+            static_cast<unsigned char *>(base) + component_bytes * index);
+    };
+    ctx.multilayer_batch_source_fft_x = source_allocation;
+    ctx.multilayer_batch_source_fft_y = component(source_allocation, 1);
+    ctx.multilayer_batch_source_fft_z = component(source_allocation, 2);
+    ctx.multilayer_batch_destination_fft_x = destination_allocation;
+    ctx.multilayer_batch_destination_fft_y = component(destination_allocation, 1);
+    ctx.multilayer_batch_destination_fft_z = component(destination_allocation, 2);
+    ctx.multilayer_batch_component_stride = component_stride;
+    ctx.multilayer_batch_layer_stride = layer_stride;
+    ctx.multilayer_batch_layer_count = static_cast<uint32_t>(layer_count);
+    ctx.multilayer_batch_components_share_allocation = true;
+    return true;
 }
 
 bool context_prepare_multilayer_fft_workspace_for_kernel(

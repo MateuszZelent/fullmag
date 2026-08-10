@@ -93,7 +93,15 @@ describe("viewport3dManifest", () => {
     expect(registry.isActive("viewport-3d.rotation-camera", { source: "test" }))
       .toBe(true);
 
-    await registry.execute("viewport-3d.fdm-topography-toggle", { source: "test" });
+    await registry.execute("viewport-3d.fdm-topography-toggle", {
+      resourceData: {
+        "session:status": {
+          capabilities: { explicit_topology: false, structured_grid: true },
+          domain: { discretization: "fdm" },
+        },
+      },
+      source: "test",
+    });
     expect(viewport3dStore.getSnapshot().widgets.fdmTopographyEnabled).toBe(true);
 
     expect(
@@ -107,11 +115,49 @@ describe("viewport3dManifest", () => {
 
     await registry.execute(
       "viewport-3d.fdm-topography-component-magnitude",
-      { source: "test" },
+      {
+        resourceData: {
+          "session:status": {
+            capabilities: { explicit_topology: false, structured_grid: true },
+            domain: { discretization: "fdm" },
+          },
+        },
+        source: "test",
+      },
     );
     expect(viewport3dStore.getSnapshot().widgets.fdmTopographyComponent).toBe(
       "magnitude",
     );
+  });
+
+  it("limits FDM topography commands to structured-grid sessions with a reason", () => {
+    const registry = registerViewportCommands();
+    const commandId = "viewport-3d.fdm-topography-toggle";
+    const femContext = {
+      resourceData: {
+        "session:status": {
+          capabilities: { explicit_topology: true, structured_grid: false },
+          domain: { discretization: "fem" },
+        },
+      },
+      source: "test" as const,
+    };
+    const fdmContext = {
+      resourceData: {
+        "session:status": {
+          capabilities: { explicit_topology: false, structured_grid: true },
+          domain: { discretization: "fdm" },
+        },
+      },
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled(commandId, femContext)).toBe(false);
+    expect(registry.get(commandId)?.disabledReason?.(femContext)).toContain(
+      "not applicable to a FEM explicit-topology session",
+    );
+    expect(registry.isEnabled(commandId, fdmContext)).toBe(true);
+    expect(registry.get(commandId)?.disabledReason?.(fdmContext)).toBeNull();
   });
 
   it("contributes dimension frame commands for the ribbon and palette", async () => {

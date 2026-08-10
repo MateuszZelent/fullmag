@@ -42,6 +42,7 @@ import {
 } from "../api/apiPaths";
 import type { LiveStatusResource } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
+import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
@@ -207,6 +208,7 @@ function statusWith({
 > {
   return {
     capabilities: {
+      active_lane: activeLaneCapabilityFixture(),
       algorithms_available: [],
       binary_fields: true,
       cell_fields: true,
@@ -300,6 +302,16 @@ describe("study runtime command resource bundles", () => {
       }),
     ).toBe(
       `${expectedPath}?component=x&scope_id=permalloy_layer&scope_kind=object`,
+    );
+    expect(
+      resolveFieldMetaResourceKey("m", {
+        component: "magnitude",
+        owner_object_id: "body-b",
+        scope_id: "shared",
+        scope_kind: "region",
+      }),
+    ).toBe(
+      `${expectedPath}?component=magnitude&owner_object_id=body-b&scope_id=shared&scope_kind=region`,
     );
   });
 

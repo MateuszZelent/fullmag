@@ -381,7 +381,7 @@ describe("ResourceRuntimeStore", () => {
     expect(visualizationSignals[0]?.aborted).toBe(false);
   });
 
-  it("pauses new matching loads until the matching pause is released", async () => {
+  it("resumes a matching load automatically when the matching pause is released", async () => {
     const store = new ResourceRuntimeStore<string>();
     const load = vi.fn(async () => "field");
     const release = store.beginPauseMatching((resourceKey) =>
@@ -398,14 +398,35 @@ describe("ResourceRuntimeStore", () => {
     expect(load).not.toHaveBeenCalled();
 
     release();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(store.getSnapshot(magnetizationVectorResourceKey)).toMatchObject({
+        data: "field",
+        revision: 1,
+        status: "ready",
+      }),
+    );
+  });
+
+  it("keeps identical overlapping pause registrations independent", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const load = vi.fn(async () => "field");
+    const predicate = (resourceKey: string) => resourceKey.includes("/data/fields/");
+    const releaseFirst = store.beginPauseMatching(predicate);
+    const releaseSecond = store.beginPauseMatching(predicate);
+
     await store.ensureLoad({
       externalRevision: 1,
       load,
       resourceKey: magnetizationVectorResourceKey,
       resolveRevision: () => 1,
     });
+    releaseFirst();
+    await Promise.resolve();
+    expect(load).not.toHaveBeenCalled();
 
-    expect(load).toHaveBeenCalledTimes(1);
+    releaseSecond();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
   });
 
   it("delays heavy refetches until the minimum interval elapses", async () => {
@@ -512,6 +533,7 @@ describe("ResourceRuntimeStore", () => {
       status: "loading",
     });
     expect(store.stats()).toEqual({
+      activePauseCount: 0,
       entryCount: 0,
       inflightCount: 0,
       listenerCount: 0,
@@ -544,6 +566,7 @@ describe("ResourceRuntimeStore", () => {
 
     expect(signals[0]?.aborted).toBe(true);
     expect(store.stats()).toEqual({
+      activePauseCount: 0,
       entryCount: 0,
       inflightCount: 0,
       listenerCount: 0,

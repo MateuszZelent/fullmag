@@ -1,9 +1,12 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
+from .absorbing_boundary import AbsorbingBoundaryLayer
 from .antenna import (
     AntennaFieldSource,
     CPWAntenna,
     DriveActivation,
     FieldTarget,
+    GaussianPlaneWaveAntenna,
+    GaussianPlaneWaveFieldProfile,
     GeometryMaskFieldProfile,
     MicrostripAntenna,
     RegionalFieldDrive,
@@ -13,12 +16,22 @@ from .antenna import (
     UniformFieldProfile,
 )
 from .current_transport import (
+    CONSERVATIVE_CURRENT_BOUNDARY_ROLES,
     ChargeInsulating,
     ChargePotentialGauge,
     ChargeSolverPolicy,
     ChargeTransportMaterial,
     ChargeTransportMaterialAssignment,
     CurrentTransport,
+    ConservativeCurrentBoundaryFace,
+    ConservativeCurrentClosedGeometry,
+    ConservativeCurrentExternalLead,
+    ConservativeCurrentIdentity,
+    ConservativeCurrentLeadInterfacePair,
+    ConservativeCurrentPins,
+    ConservativeCurrentSourceCut,
+    ConservativeCurrentSourceCutFacePair,
+    ConservativeCurrentView,
     NormalCurrentElectrode,
     VoltageElectrode,
 )
@@ -95,6 +108,14 @@ from .problem import (
     RuntimeSelection,
     backend,
 )
+from .physics_scope import (
+    PhysicsActivation,
+    PhysicsEdge,
+    PhysicsGraph,
+    PhysicsModule,
+    PhysicsScope,
+    build_physics_graph,
+)
 from .spin_torque import (
     ConstantEnvelope,
     InterfaceCppSTT,
@@ -156,6 +177,7 @@ from .eigen import (
 )
 
 __all__ = [
+    "AbsorbingBoundaryLayer",
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",
@@ -169,16 +191,28 @@ __all__ = [
     "DriveActivation",
     "FieldTarget",
     "GeometryMaskFieldProfile",
+    "GaussianPlaneWaveAntenna",
+    "GaussianPlaneWaveFieldProfile",
     "ArchWaveguide",
     "Box",
     "BulkDMI",
     "CPWAntenna",
     "CurrentTransport",
+    "CONSERVATIVE_CURRENT_BOUNDARY_ROLES",
     "ChargeInsulating",
     "ChargePotentialGauge",
     "ChargeSolverPolicy",
     "ChargeTransportMaterial",
     "ChargeTransportMaterialAssignment",
+    "ConservativeCurrentBoundaryFace",
+    "ConservativeCurrentClosedGeometry",
+    "ConservativeCurrentExternalLead",
+    "ConservativeCurrentIdentity",
+    "ConservativeCurrentLeadInterfacePair",
+    "ConservativeCurrentPins",
+    "ConservativeCurrentSourceCut",
+    "ConservativeCurrentSourceCutFacePair",
+    "ConservativeCurrentView",
     "NormalCurrentElectrode",
     "VoltageElectrode",
     "DriftDiffusionSpinTorque",

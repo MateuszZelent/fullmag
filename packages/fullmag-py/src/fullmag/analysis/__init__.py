@@ -15,7 +15,9 @@ from fullmag.analysis.fitting import (
 from fullmag.analysis.fem_cartesian_restriction import (
     CartesianRestriction,
     build_prism6_cartesian_restriction,
+    build_tet4_cartesian_restriction,
     restrict_fem_magnetization,
+    sample_fem_tet4_cartesian_centers,
 )
 from fullmag.analysis.magnetization_comparison import (
     CartesianGrid,
@@ -66,6 +68,7 @@ __all__ = [
     "OrbitMetrics",
     "StructuredMagnetization",
     "build_prism6_cartesian_restriction",
+    "build_tet4_cartesian_restriction",
     "compare_magnetization_textures",
     "compare_relaxed_states",
     "compute_orbit_metrics",
@@ -86,6 +89,7 @@ __all__ = [
     "load_fullmag_fem_magnetization",
     "load_mumax_magnetization",
     "restrict_fem_magnetization",
+    "sample_fem_tet4_cartesian_centers",
     "track_vortex_core",
     "track_vortex_core_subpixel",
     "write_stno_report",

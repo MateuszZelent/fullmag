@@ -1,5 +1,6 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -126,6 +127,46 @@ describe("ObjectMeshPolicyPanel mounted interaction", () => {
 
     await act(async () => root.unmount());
     dom.restore();
+  });
+});
+
+describe("ObjectMeshPolicyPanel FDM lane", () => {
+  it("renders structured-grid semantics and never exposes FEM transactions for explicit FDM", () => {
+    const source = readFileSync(
+      new URL("./ObjectMeshPolicyPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("useSessionStatusSelector(");
+    expect(source).toContain('const explicitFdm = meshLane === "fdm";');
+    expect(source).toContain('const femResourcesEnabled = meshLane === "fem";');
+    expect(source).toContain(
+      "useObjectMeshPolicyResource(objectId, { enabled: femResourcesEnabled })",
+    );
+    expect(source).toContain(
+      "useObjectMeshReportResource(objectId, { enabled: femResourcesEnabled })",
+    );
+    expect(source).toContain(
+      "useObjectMeshQualityResource(objectId, { enabled: femResourcesEnabled })",
+    );
+    expect(source).toContain(
+      "useObjectMeshSizeFieldResource(objectId, { enabled: femResourcesEnabled })",
+    );
+    expect(source).toContain(
+      "useObjectTopologyResource(objectId, { enabled: femResourcesEnabled })",
+    );
+    expect(source).toContain(
+      "useMeshCapabilitiesResource({ enabled: femResourcesEnabled })",
+    );
+    expect(source).toContain("<FdmObjectMeshPolicySection");
+    expect(source).not.toContain("FEM Mesh Controls");
+    expect(source).toContain('InspectorGroup title="Object Mesh" badge="structured-grid"');
+    expect(source).toContain('label="Mesh policy" value="execution-plan owned (read-only)"');
+    expect(source).toContain('label="Mesh scope" value="selected object / magnetic support"');
+    expect(source).toContain('label="Mesh realization" value="structured-grid cells"');
+    expect(source).toContain("if (explicitFdm)");
+    expect(source).toContain('if (meshLane !== "fem")');
+    expect(source).toContain("Mesh policy lane is unresolved");
+    expect(source).toContain('commands.execute("mesh.build-selected"');
   });
 });
 

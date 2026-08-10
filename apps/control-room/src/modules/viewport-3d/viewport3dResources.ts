@@ -46,7 +46,6 @@ import {
   buildViewport3DFieldResourceRequestId,
   type Viewport3DFieldResourceRequest,
 } from "./model/viewport3DFieldDataPlan";
-import { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
 
 const topologyCache = new ResourceCache<DecodedTopology>({
   maxBytes: 96 * 1024 * 1024,
@@ -57,6 +56,28 @@ const fieldVectorCache = new ResourceCache<
 >({
   maxBytes: 128 * 1024 * 1024,
 });
+
+interface CachedFieldVectorEnvelope {
+  data: DecodedFieldVector;
+  etag: string | null;
+  responseMetadata: FieldVectorResponseMetadata | null;
+  resourceKey: string;
+}
+
+export function resolveCachedFieldVectorEnvelope(
+  cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
+  resourceKey: string,
+  data: DecodedFieldVector,
+): CachedFieldVectorEnvelope | null {
+  const entry = cache.peek(resourceKey);
+  if (!entry || entry.data !== data) return null;
+  return {
+    data: entry.data,
+    etag: entry.etag ?? null,
+    responseMetadata: entry.metadata ?? null,
+    resourceKey,
+  };
+}
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
@@ -325,7 +346,6 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
     signal?: AbortSignal,
   ) => Promise<BinaryResourceResult<TData, TMetadata>>,
   options: {
-    pauseRequest?: () => boolean;
     preferCached?: boolean;
     signal?: AbortSignal;
   } = {},
@@ -334,10 +354,6 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   if (cached && options.preferCached) {
     return cached.data;
   }
-  if (options.pauseRequest?.()) {
-    return cached?.data ?? null;
-  }
-
   const inflight = getInflightBinaryResource(cache, key);
   if (inflight) {
     retainInflightBinaryResource(inflight, options.signal);
@@ -793,7 +809,6 @@ export function useViewport3DFieldVectorRequest(
             signal: requestSignal,
           }),
         {
-          pauseRequest: viewport3DFieldUpdateHoldActive,
           preferCached: cachedBinaryResourceMatchesRevision(
             fieldVectorCache,
             requestKey,
@@ -809,7 +824,9 @@ export function useViewport3DFieldVectorRequest(
           fieldVectorCache.peek(requestKey)?.etag ?? null,
         );
       }
-      return data;
+      return data === null
+        ? null
+        : resolveCachedFieldVectorEnvelope(fieldVectorCache, requestKey, data);
     },
     [api, quantityId, query, requestKey, resources],
   );
@@ -829,7 +846,9 @@ export function useViewport3DFieldVectorRequest(
   });
   return {
     ...resource,
-    payloadRevision: resolveRevision(),
+    data: resource.data?.data ?? null,
+    payloadRevision: resource.data?.etag ?? resolveRevision(),
+    responseMetadata: resource.data?.responseMetadata ?? null,
   };
 }
 
@@ -887,7 +906,6 @@ export function useViewport3DAirboxFieldVectors(
                   signal: requestSignal,
                 }),
               {
-                pauseRequest: viewport3DFieldUpdateHoldActive,
                 preferCached: cachedBinaryResourceMatchesRevision(
                   fieldVectorCache,
                   request.key,
@@ -1020,7 +1038,6 @@ export function useViewport3DQuantityFieldVectors(
                 { etag, signal: requestSignal },
               ),
             {
-              pauseRequest: viewport3DFieldUpdateHoldActive,
               preferCached: cachedBinaryResourceMatchesRevision(
                 fieldVectorCache,
                 request.key,
@@ -1036,13 +1053,22 @@ export function useViewport3DQuantityFieldVectors(
               fieldVectorCache.peek(request.key)?.etag ?? null,
             );
           }
-          return [requestId, data] as const;
+          return [
+            requestId,
+            data === null
+              ? null
+              : resolveCachedFieldVectorEnvelope(
+                  fieldVectorCache,
+                  request.key,
+                  data,
+                ),
+          ] as const;
         }),
       );
 
       return new Map(
         entries.filter(
-          (entry): entry is readonly [string, DecodedFieldVector] =>
+          (entry): entry is readonly [string, CachedFieldVectorEnvelope] =>
             entry[1] !== null,
         ),
       );
@@ -1065,9 +1091,44 @@ export function useViewport3DQuantityFieldVectors(
     resolveRevision,
     resourceKey,
   });
+  const fieldVectorEnvelopes = resource.data;
+  const data = useMemo(
+    () =>
+      fieldVectorEnvelopes
+        ? new Map(
+            Array.from(fieldVectorEnvelopes, ([requestId, envelope]) => [
+              requestId,
+              envelope.data,
+            ]),
+          )
+        : null,
+    [fieldVectorEnvelopes],
+  );
+  const responseMetadataByRequestId = useMemo(
+    () =>
+      new Map(
+        Array.from(fieldVectorEnvelopes ?? [], ([requestId, envelope]) => [
+          requestId,
+          envelope.responseMetadata,
+        ]),
+      ),
+    [fieldVectorEnvelopes],
+  );
+  const payloadRevision = useMemo(
+    () =>
+      fieldVectorEnvelopes && fieldVectorEnvelopes.size > 0
+        ? Array.from(
+            fieldVectorEnvelopes.values(),
+            (envelope) => envelope.etag ?? "missing",
+          ).join("|")
+        : null,
+    [fieldVectorEnvelopes],
+  );
   return {
     ...resource,
-    payloadRevision: resolveRevision(),
+    data,
+    payloadRevision,
+    responseMetadataByRequestId,
   };
 }
 
@@ -1104,7 +1165,6 @@ export function useViewport3DPartFieldVectors(
                 { etag, signal: requestSignal },
               ),
             {
-              pauseRequest: viewport3DFieldUpdateHoldActive,
               preferCached: cachedBinaryResourceMatchesRevision(
                 fieldVectorCache,
                 request.key,

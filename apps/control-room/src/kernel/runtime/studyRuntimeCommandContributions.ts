@@ -62,6 +62,10 @@ import {
   exportControlRoomUiState,
 } from "../persistence/controlRoomUiState";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  resolveActiveLaneOperation,
+  type ActiveLaneOperationId,
+} from "../resources/useActiveLaneCapabilities";
 
 import {
   buildStudyRuntimeCommand,
@@ -1675,6 +1679,7 @@ function addStageCommand(
   title: string,
   stage: JsonObject,
   successMessage: string,
+  capabilityDisabledReason?: (context: CommandContext) => string | null,
 ): CommandContribution {
   return {
     id,
@@ -1682,8 +1687,11 @@ function addStageCommand(
     category: "Study",
     group: "study-authoring",
     scope: "workspace",
-    isEnabled: isApiAvailable,
-    disabledReason: disabledWithoutApi,
+    isEnabled: (context) =>
+      isApiAvailable(context) &&
+      (capabilityDisabledReason?.(context) ?? null) === null,
+    disabledReason: (context) =>
+      disabledWithoutApi(context) ?? capabilityDisabledReason?.(context) ?? null,
     run: async (context) => {
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
@@ -1710,6 +1718,22 @@ function addStageCommand(
 
       return { message: successMessage, status: "completed" };
     },
+  };
+}
+
+function stageOperationDisabledReason(
+  operationId: ActiveLaneOperationId,
+): (context: CommandContext) => string | null {
+  return (context) => {
+    const status = resourceData<LiveStatusResource>(
+      context,
+      SESSION_STATUS_RESOURCE_KEY,
+    );
+    const operation = resolveActiveLaneOperation(
+      status?.capabilities.active_lane ?? null,
+      operationId,
+    );
+    return operation.enabled ? null : operation.reason;
   };
 }
 
@@ -1939,6 +1963,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     "Add Relax Stage",
     DEFAULT_RELAX_STAGE,
     "Relax stage added.",
+    stageOperationDisabledReason("study.relaxation"),
   ),
   addStageCommand(
     "study.add-field-drive-stage",
@@ -1963,12 +1988,14 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     "Add FFT Response Stage",
     DEFAULT_FFT_RESPONSE_STAGE,
     "FFT-response instruction added.",
+    stageOperationDisabledReason("study.fft"),
   ),
   addStageCommand(
     "study.add-run-stage",
     "Add Run Stage",
     DEFAULT_RUN_STAGE,
     "Run stage added.",
+    stageOperationDisabledReason("study.time_integration"),
   ),
   addStageCommand(
     "study.add-hysteresis-stage",
@@ -1981,12 +2008,14 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     "Add Eigenmodes Stage",
     DEFAULT_EIGENMODES_STAGE,
     "Eigenmodes stage added.",
+    stageOperationDisabledReason("study.eigenmodes"),
   ),
   addStageCommand(
     "study.add-frequency-response-stage",
     "Add Frequency Response Stage",
     DEFAULT_FREQUENCY_RESPONSE_STAGE,
     "Frequency response stage added.",
+    stageOperationDisabledReason("study.frequency_response"),
   ),
   addStageCommand(
     "study.add-save-state-stage",

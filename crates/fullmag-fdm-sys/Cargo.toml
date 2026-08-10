@@ -9,5 +9,6 @@ links = "fullmag_fdm"
 [features]
 default = []
 build-native = []
+build-native-cpu = []
 
 [build-dependencies]

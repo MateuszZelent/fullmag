@@ -8,9 +8,10 @@ use crate::{
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
     IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RegionalFieldDriveIR, RelaxStopIR,
-    RelaxationAlgorithmIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
+    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedPeriodicImagesIR,
+    ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
+    TimeDependenceIR, TimeEnvelopeIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -812,6 +813,23 @@ pub struct FemSpinTorquePlanIR {
     pub active_node_mask: Option<Vec<bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_element_mask: Option<Vec<bool>>,
+    /// Prescribed-SOT signed source current density [A/m²]. These fields are
+    /// populated when `formula_version` is `prescribed_sot.fullmag.v1`; STT
+    /// contracts leave them empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_current_density: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_xi_dl: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_xi_fl: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_sigma: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_thickness: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_envelope: Option<TimeEnvelopeIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_drive: Option<PrescribedSotV1DriveIR>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1618,6 +1636,104 @@ pub struct IntegratorResolutionProvenanceIR {
     pub resolved_integrator: Option<IntegratorChoice>,
 }
 
+/// Versioned, typed provenance for the normalized physics graph carried by a
+/// resolved execution plan.  This is intentionally separate from backend
+/// solver telemetry: it records authored graph identity and lane resolution
+/// before a runner realizes operators on a concrete mesh/grid.
+pub const PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA: &str = "physics_graph.runtime.v1";
+
+/// Versioned certificate for the transition from semantic graph scope to the
+/// concrete topology consumed by one backend lane.  A runtime plan may carry
+/// semantic marker/mask identities even when this certificate is absent; that
+/// distinction is deliberate and prevents a planner identity from being
+/// mistaken for an element/cell realization.
+pub const PHYSICS_GRAPH_REALIZATION_SCHEMA: &str = "physics_graph.realization.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhysicsGraphRealizationStateIR {
+    /// The authored scope could not be mapped unambiguously to the resolved
+    /// mesh/grid.  The semantic module remains visible, but no backend mask is
+    /// legal to consume.
+    SemanticOnly,
+    /// The authored scope was mapped to concrete marker/cell identities in the
+    /// resolved plan.  This is a resolution proof, not an execution proof.
+    Resolved,
+    /// The backend emitted an execution record for the module in this run.
+    /// This state is written only after the solver returns a matching runtime
+    /// observation; it is never inferred from planning alone.
+    Executed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphModuleRealizationIR {
+    pub module_id: String,
+    pub state: PhysicsGraphRealizationStateIR,
+    /// Fingerprint of the exact mesh/grid used for this resolution.
+    pub topology_fingerprint: String,
+    /// Concrete FEM element markers selected by the module scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realized_fem_marker_ids: Vec<u32>,
+    /// Digest of the concrete FDM cell mask selected by the module scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realized_fdm_mask_digest: Option<String>,
+    /// Number of active cells/elements selected by the concrete scope.
+    pub realized_cell_count: u64,
+    /// Numeric FDM region IDs consumed by the selected mask, when applicable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realized_fdm_region_ids: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphRealizationProvenanceIR {
+    pub schema_version: String,
+    pub topology_fingerprint: String,
+    pub resolved_module_ids: Vec<String>,
+    /// Empty during planning.  The runner replaces this with an observed set
+    /// only after the corresponding backend execution record is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executed_module_ids: Vec<String>,
+    pub modules: Vec<PhysicsGraphModuleRealizationIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphRuntimeProvenanceIR {
+    pub schema_version: String,
+    pub graph_sha256: String,
+    pub scene_revision: u64,
+    pub mesh_revision: u64,
+    pub requested_lane: BackendTarget,
+    pub resolved_lane: BackendTarget,
+    pub modules: Vec<PhysicsGraphModuleProvenanceIR>,
+    /// Concrete mesh/grid realization.  This is optional for compatibility
+    /// with pre-certificate plan artifacts and becomes required by the runner
+    /// for newly planned graph-bearing executions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization: Option<PhysicsGraphRealizationProvenanceIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhysicsGraphModuleProvenanceIR {
+    pub module_id: String,
+    pub kind: String,
+    /// Canonical, order-independent scope identity (for example
+    /// `object:free-layer` or `cross_object:fixed,free`).
+    pub scope: String,
+    pub status: String,
+    pub depends_on: Vec<String>,
+    pub requested_lane: BackendTarget,
+    pub resolved_lane: BackendTarget,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fem_marker_ids: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cell_mask_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub source_path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ProvenancePlanIR {
     pub notes: Vec<String>,
@@ -1626,6 +1742,8 @@ pub struct ProvenancePlanIR {
     /// Present only for the bounded K0 periodic-airbox FEM eigen planner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_eigen_execution_resolution: Option<FemEigenExecutionResolutionIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics_graph: Option<PhysicsGraphRuntimeProvenanceIR>,
 }
 
 #[cfg(test)]

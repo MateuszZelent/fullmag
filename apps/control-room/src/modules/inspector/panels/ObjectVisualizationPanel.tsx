@@ -13,11 +13,13 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
+  isFdmUniverseOutsideSupportTarget,
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
   resolveTargetVisualization,
   resetAirboxVisualizationState,
   resolveVisualizationTargetFromSelection,
+  visualizationTargetCapabilities,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
@@ -41,8 +43,11 @@ import {
 } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   useMeshSharedDomainManifestResource,
-  useMeshRegionMembershipsResource,
+  useMeshRegionMembershipResource,
   useSceneResource,
+  useDomainMetaResource,
+  useFdmRegionMembershipResource,
+  useFdmRegionMembershipBinaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   isVisualizationAirboxIdentity,
@@ -55,6 +60,7 @@ import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildVisualizationPanelSections,
@@ -65,6 +71,12 @@ import {
   removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
+  restoreVisualizationAppliedBaseline,
+  fdmGridCellCount,
+  fdmVisualizationResourceNotice,
+  resolveObjectVisualizationLane,
+  resolveObjectVisualizationResourceGates,
+  resolveObjectVisualizationTargetForLane,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
   surfaceSolidColorPatch,
@@ -117,26 +129,50 @@ import {
 function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
 ) {
-  const target = resolveVisualizationTargetFromSelection(selection);
+  const selectionTarget = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
-  const visualizationState = useVisualizationStateResource();
   const manifestStatus = useSessionStatusSelector(
     selectObjectVisualizationManifestStatus,
     {
-      enabled: Boolean(target),
+      enabled: Boolean(selectionTarget),
       isEqual: objectVisualizationManifestStatusEquals,
     },
   );
+  const lane = resolveObjectVisualizationLane(manifestStatus?.domain.discretization);
+  const target = resolveObjectVisualizationTargetForLane({
+    lane,
+    selection,
+    selectionTarget,
+  });
+  const { fdm: fdmResourcesEnabled, fem: femResourcesEnabled } =
+    resolveObjectVisualizationResourceGates({ lane, target });
+  const fdmTarget = fdmResourcesEnabled && target !== null;
+  const visualizationState = useVisualizationStateResource({
+    enabled: femResourcesEnabled,
+  });
   const [feedback, setFeedback] = useState<string | null>(null);
   const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
   const pending = false;
-  const scene = useSceneResource({ enabled: Boolean(target) });
+  const scene = useSceneResource({ enabled: femResourcesEnabled });
+  const fdmDomain = useDomainMetaResource({ enabled: fdmResourcesEnabled });
+  const fdmMembership = useFdmRegionMembershipResource({
+    enabled: fdmResourcesEnabled,
+  });
+  const fdmMembershipRevision = fdmMembership.data
+    ? `${fdmMembership.data.mesh_revision}:${fdmMembership.data.region_membership_revision}`
+    : null;
+  const fdmMembershipBinary = useFdmRegionMembershipBinaryResource(null, {
+    enabled: fdmResourcesEnabled,
+    revision: fdmMembershipRevision,
+  });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
+    enabled:
+      femResourcesEnabled &&
+      shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
   });
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
@@ -172,14 +208,18 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
-  const regionId = useMemo(() => {
+  const regionTarget = useMemo(() => {
     if (resolvedTarget?.kind !== "region") return null;
-    const parsed = parseRegionVisualizationTargetId(resolvedTarget.id);
-    return parsed?.regionId ?? null;
+    return parseRegionVisualizationTargetId(resolvedTarget.id);
   }, [resolvedTarget]);
-  const regionMemberships = useMeshRegionMembershipsResource(
-    regionId ? [regionId] : [],
-    { enabled: Boolean(regionId) }
+  const regionMembership = useMeshRegionMembershipResource(
+    regionTarget?.objectId,
+    regionTarget?.regionId,
+    { enabled: femResourcesEnabled && Boolean(regionTarget) },
+  );
+  const regionMemberships = useMemo(
+    () => (regionMembership.data ? [regionMembership.data] : null),
+    [regionMembership.data],
   );
   const childRegionTargets = useMemo(
     () =>
@@ -300,17 +340,23 @@ function useObjectVisualizationPanelState(
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
-    enabled: shouldLoadObjectVisualizationFieldCatalog({
-      requested: fieldCatalogRequested,
-      surfaceColorSource: settings?.surfaceColorSource,
-      targetActive: Boolean(resolvedTarget),
-      vectorsVisible: Boolean(settings?.vectorsVisible),
-    }),
+    enabled:
+      fdmTarget ||
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: fieldCatalogRequested,
+        surfaceColorSource: settings?.surfaceColorSource,
+        targetActive: Boolean(resolvedTarget),
+        vectorsVisible: Boolean(settings?.vectorsVisible),
+      }),
   });
   const topologyFreshness = resolvedTarget
     ? resolveObjectVisualizationPanelTopologyFreshness({
         manifest: manifest.data,
         scene: scene.data,
+        targetObjectId:
+          resolvedTarget.kind === "object"
+            ? resolvedTarget.id
+            : selection.objectId,
         targetKind: resolvedTarget.kind,
       })
     : null;
@@ -325,6 +371,7 @@ function useObjectVisualizationPanelState(
     ? buildVisualizationPanelSections({
         effectiveSettings: renderResolution?.finalSettings ?? effectiveSettings,
         settings,
+        target: resolvedTarget ?? undefined,
       })
     : [];
   const passControlsDisabled =
@@ -342,6 +389,18 @@ function useObjectVisualizationPanelState(
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!resolvedTarget) return;
+    if (fdmTarget) {
+      const viewportPatch = viewportRenderingPreferencesPatch(patchValue);
+      if (Object.keys(viewportPatch).length > 0) {
+        visualization.patchViewportPreferences(resolvedTarget, viewportPatch);
+      }
+      const localPatch = persistentVisualizationTargetPatch(patchValue);
+      if (Object.keys(localPatch).length > 0) {
+        visualization.patchTarget(resolvedTarget, localPatch);
+      }
+      setFeedback(null);
+      return;
+    }
     const patchTargets =
       resolvedTarget.kind === "object" && patchChildRegions && childRegionTargets.length > 0
         ? [resolvedTarget, ...childRegionTargets]
@@ -422,6 +481,11 @@ function useObjectVisualizationPanelState(
 
   async function resetTarget(): Promise<void> {
     if (!resolvedTarget) return;
+    if (fdmTarget) {
+      visualization.clearTarget(resolvedTarget);
+      setFeedback(null);
+      return;
+    }
     if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
         resetAirboxVisualizationState(visualizationState.data ?? { overrides: [] }),
@@ -469,22 +533,13 @@ function useObjectVisualizationPanelState(
   async function restoreAppliedBaseline(
     baseline: ObjectVisualizationAppliedBaseline,
   ): Promise<void> {
-    const baselineTargets = baseline.targets.map((entry) => entry.target);
-    const retainedOverrides = (visualizationState.data?.overrides ?? []).filter(
-      (entry) =>
-        !baselineTargets.some((baselineTarget) =>
-          visualizationStateOverrideMatchesTarget(entry, baselineTarget),
-        ),
-    );
-    visualizationSync.queuePatch({
-      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+    restoreVisualizationAppliedBaseline({
+      baseline,
+      currentOverrides: visualizationState.data?.overrides ?? [],
+      fdm: fdmTarget,
+      queuePatch: (statePatch) => visualizationSync.queuePatch(statePatch),
+      visualization,
     });
-    for (const { preferences, target: baselineTarget } of baseline.targets) {
-      visualization.clearTarget(baselineTarget);
-      if (preferences) {
-        visualization.patchViewportPreferences(baselineTarget, preferences);
-      }
-    }
     setFeedback(null);
   }
 
@@ -568,23 +623,41 @@ function useObjectVisualizationPanelState(
   const displaySettings =
     renderResolution?.finalSettings ?? effectiveSettings ?? panelSettings;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
+  const fdmCellCount = fdmTarget ? fdmGridCellCount(fdmDomain.data) : null;
+  const fdmNotice = fdmTarget
+    ? fdmVisualizationResourceNotice({
+        domain: fdmDomain.data,
+        domainError: fdmDomain.error,
+        domainStatus: fdmDomain.status,
+        membership: fdmMembership.data,
+        membershipError: fdmMembership.error,
+        membershipStatus: fdmMembership.status,
+        membershipBinaryReason:
+          "reason" in fdmMembershipBinary.availability
+            ? fdmMembershipBinary.availability.reason
+            : null,
+        membershipBinaryStatus: fdmMembershipBinary.availability.status,
+      })
+    : null;
   const regionCarrier = resolveRegionVisualizationCarrier({
-    manifestRegions: manifest.data?.regions,
-    memberships: regionMemberships.data,
-    target: resolvedTarget,
+    manifestRegions: fdmTarget ? null : manifest.data?.regions,
+    memberships: fdmTarget ? null : regionMemberships,
+    target: fdmTarget ? null : resolvedTarget,
   });
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
+      fdmCellCount,
       geometryScope: "full",
       manifestRegions: manifest.data?.regions,
-      memberships: regionMemberships.data,
+      memberships: regionMemberships,
       meshParts: manifest.data?.mesh_parts,
       target: resolvedTarget,
     }),
     surface: resolveVisualizationVectorBudgetRange({
+      fdmCellCount,
       geometryScope: "surface",
       manifestRegions: manifest.data?.regions,
-      memberships: regionMemberships.data,
+      memberships: regionMemberships,
       meshParts: manifest.data?.mesh_parts,
       target: resolvedTarget,
     }),
@@ -610,6 +683,7 @@ function useObjectVisualizationPanelState(
     displaySettings,
     effectiveSettings,
     feedback,
+    fdmTarget,
     fieldCatalog,
     childRegionOverrideCount,
     childRegionTargets,
@@ -637,7 +711,10 @@ function useObjectVisualizationPanelState(
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
-    vectorTopologyHash: manifest.data?.topology_fingerprint ?? null,
+    vectorTopologyHash: fdmTarget
+      ? fdmMembership.data?.grid_fingerprint ?? null
+      : manifest.data?.topology_fingerprint ?? null,
+    fdmNotice,
   } as const;
 }
 
@@ -703,6 +780,8 @@ function ObjectVisualizationPanelView({
     childRegionOverrideCount,
     childRegionTargets,
     feedback,
+    fdmNotice,
+    fdmTarget,
     fieldCatalog,
     hasTargetOverride,
     onFieldCatalogRequest,
@@ -756,14 +835,26 @@ function ObjectVisualizationPanelView({
     displaySettings.vectorsVisible,
     displaySettings.pointsVisible,
   ].filter(Boolean).length;
+  const capabilities = visualizationTargetCapabilities(target);
+  const fieldCatalogLoading = fdmTarget && fieldCatalog.status !== "ready";
+  const fieldMetaTarget =
+    fdmTarget &&
+    target.kind !== "airbox" &&
+    target.kind !== "fdm-native-layer" &&
+    !isFdmUniverseOutsideSupportTarget(target)
+      ? { ...target, kind: "fdm-domain" as const }
+      : target;
   const meshState = renderResolution?.degradedReasons.length
     ? "Degraded"
     : "Ready";
   const requiresFieldData =
-    displaySettings.vectorsVisible ||
-    (displaySettings.shaderVisible && settings.surfaceColorSource !== "solid");
+    capabilities.supportsFieldData &&
+    (displaySettings.vectorsVisible ||
+      (displaySettings.shaderVisible && settings.surfaceColorSource !== "solid"));
   const dataState =
-    !requiresFieldData
+    !capabilities.supportsFieldData
+      ? "Not available"
+      : !requiresFieldData
       ? "Not required"
       : fieldCatalog.status === "ready"
         ? "Live"
@@ -778,6 +869,12 @@ function ObjectVisualizationPanelView({
         <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
         <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
         <FieldRow label="Kind" value={target.kind} />
+        {target.kind === "fdm-domain" ? (
+          <FieldRow label="Geometry" value="Structured grid cells" />
+        ) : null}
+        {target.kind === "fdm-native-layer" ? (
+          <FieldRow label="Geometry" value="Native layer grid cells" />
+        ) : null}
         <FieldRow
           label="Override"
           value={visualizationOverrideStateLabel({
@@ -810,6 +907,7 @@ function ObjectVisualizationPanelView({
               : settings.renderMode)
           }
         />
+        {fdmNotice ? <FeedbackBanner kind="warning" message={fdmNotice} /> : null}
       </InspectorGroup>
 
       <ObjectVisualizationOverview
@@ -838,7 +936,7 @@ function ObjectVisualizationPanelView({
               pending={pending}
               renderWarning={renderWarning}
               settings={settings}
-              targetKind={target.kind}
+              target={target}
               primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
                 />
                 <VisualizationRenderModeSection
@@ -846,37 +944,57 @@ function ObjectVisualizationPanelView({
               passControlsDisabled={passControlsDisabled}
               pending={pending}
               patch={patch}
-              targetKind={target.kind}
+              target={target}
                 />
-                {settings.shaderVisible || settings.vectorsVisible ? (
+                {capabilities.supportsFieldData &&
+                (settings.shaderVisible ||
+                  settings.vectorsVisible ||
+                  target.kind === "airbox" ||
+                  isFdmUniverseOutsideSupportTarget(target)) ? (
                   <VisualizationQuantitySection
-              onFieldCatalogRequest={onFieldCatalogRequest}
-              patch={patch}
-              pending={pending}
-              settings={settings}
-              targetKind={target.kind}
+                    fieldCatalog={fieldCatalog.data}
+                    fieldCatalogLoading={fieldCatalogLoading}
+                    onFieldCatalogRequest={onFieldCatalogRequest}
+                    patch={patch}
+                    pending={pending}
+                    settings={settings}
+                    targetKind={
+                      target.kind === "airbox" ||
+                      isFdmUniverseOutsideSupportTarget(target)
+                        ? "airbox"
+                        : target.kind
+                    }
                   />
                 ) : null}
               </>
             }
             enabledPassCount={enabledPassCount}
             meshState={meshState}
-            quantitySource={settings.activeQuantityId || "H_eff"}
-            surfaceColoring={target.kind === "airbox" ? null : (
+            quantitySource={
+              capabilities.supportsFieldData
+                ? settings.activeQuantityId || "H_eff"
+                : "Not available"
+            }
+            surfaceColoring={!capabilities.supportsFieldData || target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? null : (
               <VisualizationSurfaceColoringSection
               patch={patch}
               patchColor={patchColor}
               pending={pending}
               sectionDisabled={sectionDisabled}
               fieldCatalog={fieldCatalog}
+              fieldCatalogLoading={fieldCatalogLoading}
+              fieldMetaTarget={fieldMetaTarget}
               onFieldCatalogRequest={onFieldCatalogRequest}
               regionCarrier={regionCarrier}
               settings={settings}
               target={target}
               />
             )}
-            vectors={
+            vectors={capabilities.supportsVectors ? (
               <VisualizationVectorsSection
+              fieldCatalog={fieldCatalog}
+              fieldCatalogLoading={fieldCatalogLoading}
+              fieldMetaTarget={fieldMetaTarget}
               meshParts={vectorMeshParts}
               onTogglePartVectors={onTogglePartVectors}
               patch={patch}
@@ -891,10 +1009,10 @@ function ObjectVisualizationPanelView({
               vectorBudgetRange={vectorBudgetRange}
               vectorTopologyHash={vectorTopologyHash}
               />
-            }
+            ) : null}
       />
 
-      {settings.pointsVisible ? (
+      {capabilities.supportsPoints && settings.pointsVisible ? (
         <VisualizationPointsSection
             patch={patch}
             patchColor={patchColor}
@@ -912,14 +1030,14 @@ function ObjectVisualizationPanelView({
             settings={settings}
         />
       ) : null}
-      <VisualizationGeometryScopeSection
+      {capabilities.showGeometryScopeControl ? <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
         pending={pending}
         patch={patch}
         settings={settings}
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
-      />
+      /> : null}
       {renderWarning ? (
         <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
       ) : null}

@@ -1029,6 +1029,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
             problem_name: "Local Live Workspace".to_string(),
             requested_backend: "auto".to_string(),
             explicit_selection: false,
+            authored_requested_device: "auto".to_string(),
             requested_device: "auto".to_string(),
             requested_precision: "double".to_string(),
             requested_mode: "strict".to_string(),
@@ -1116,6 +1117,25 @@ struct CurrentLiveApplyFlags {
 pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
     current.metadata = Some(metadata);
     if let Some(metadata) = current.metadata.as_ref() {
+        // A session can be reused while switching execution lanes.  The FEM
+        // mesh is solver-domain state, not scene authoring geometry; retain it
+        // only for a FEM execution plan so a stale FEM topology cannot make a
+        // new FDM domain look like FEM to domain/field endpoints.
+        let backend_is_fdm = metadata
+            .get("execution_plan")
+            .and_then(|plan| plan.get("backend_plan"))
+            .and_then(|plan| plan.get("kind"))
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("fdm"))
+            || metadata
+                .get("artifact_layout")
+                .and_then(|layout| layout.get("backend"))
+                .and_then(Value::as_str)
+                .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"));
+        if backend_is_fdm {
+            current.fem_mesh = None;
+        }
+
         current.solver_profile.timestep_qualification = metadata
             .get("timestep_qualification")
             .map(|value| serde_json::from_value(value.clone()).unwrap_or_default());
@@ -1441,9 +1461,24 @@ fn finalize_current_live_apply(
         .as_ref()
         .map(|state| state.latest_step.finished)
         .unwrap_or(false);
-    if finished || (current.artifacts.is_empty() && flags.has_run) {
-        let artifact_dir = current_artifact_dir(current);
+    let artifact_dir = current_artifact_dir(current);
+    let membership_was_published =
+        artifact_entries_include_complete_fdm_membership(&current.artifacts);
+    let membership_appeared_on_disk = !membership_was_published
+        && artifact_dir
+            .as_deref()
+            .is_some_and(artifact_dir_has_complete_fdm_membership);
+    if finished || (current.artifacts.is_empty() && flags.has_run) || membership_appeared_on_disk {
         let mut artifacts = read_artifacts_from_dir(artifact_dir.as_deref())?;
+        let membership_is_published = artifact_entries_include_complete_fdm_membership(&artifacts);
+        if !membership_was_published && membership_is_published {
+            current.region_realization_revisions = current.region_realization_revisions.advance(
+                fullmag_authoring::RegionRealizationImpact {
+                    membership: true,
+                    ..fullmag_authoring::RegionRealizationImpact::default()
+                },
+            );
+        }
         if let Some(provenance) = region_owned_artifact_provenance(current) {
             for artifact in &mut artifacts {
                 if artifact.region_owned_provenance.is_none() {
@@ -1455,6 +1490,18 @@ fn finalize_current_live_apply(
     }
 
     Ok(())
+}
+
+fn artifact_entries_include_complete_fdm_membership(artifacts: &[ArtifactEntry]) -> bool {
+    let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
+    (has("mesh/fdm_region_membership.v2.json") && has("mesh/fdm_region_membership.v2.bin"))
+        || (has("mesh/fdm_region_membership.v1.json") && has("mesh/fdm_region_membership.v1.bin"))
+}
+
+fn artifact_dir_has_complete_fdm_membership(artifact_dir: &Path) -> bool {
+    let has = |path: &str| artifact_dir.join(path).is_file();
+    (has("mesh/fdm_region_membership.v2.json") && has("mesh/fdm_region_membership.v2.bin"))
+        || (has("mesh/fdm_region_membership.v1.json") && has("mesh/fdm_region_membership.v1.bin"))
 }
 
 fn annotate_solver_profile_api_visibility(
@@ -1476,8 +1523,8 @@ fn annotate_solver_profile_api_visibility(
     trace.segments.insert(
         "api_revision_visibility_ns".to_string(),
         crate::schemas::diagnostics::SolverTraceSegmentResource {
-            kind: crate::schemas::diagnostics::SolverTraceSegmentKindResource::
-                ApiRevisionVisibility,
+            kind:
+                crate::schemas::diagnostics::SolverTraceSegmentKindResource::ApiRevisionVisibility,
             duration_ns,
             clock_domain:
                 crate::schemas::diagnostics::SolverTraceClockDomainResource::ServerMonotonic,
@@ -1488,8 +1535,7 @@ fn annotate_solver_profile_api_visibility(
         trace.completeness,
         crate::schemas::diagnostics::SolverTraceCompletenessResource::ServerOnly
     ) {
-        trace.completeness =
-            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
+        trace.completeness = crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
     }
 }
 
@@ -1521,8 +1567,7 @@ fn annotate_solver_profile_publisher_apply(
         trace.completeness,
         crate::schemas::diagnostics::SolverTraceCompletenessResource::ServerOnly
     ) {
-        trace.completeness =
-            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
+        trace.completeness = crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
     }
 }
 
@@ -1663,7 +1708,10 @@ pub(crate) fn apply_current_live_snapshot(
         current.solver_profile = solver_profile;
         annotate_solver_profile_api_visibility(
             &mut current.solver_profile,
-            profile_visibility_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            profile_visibility_start
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
         );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
@@ -1795,7 +1843,10 @@ pub(crate) fn apply_current_live_runtime_frame(
         current.solver_profile = solver_profile;
         annotate_solver_profile_api_visibility(
             &mut current.solver_profile,
-            profile_visibility_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            profile_visibility_start
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
         );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
@@ -1991,20 +2042,18 @@ mod tests {
 
     #[test]
     fn api_visibility_annotation_binds_trace_to_profile_revision() {
-        let mut runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
-            &fullmag_runner::StepStats {
+        let mut runner_sample =
+            fullmag_runner::SolverProfileStepSample::from_step_stats(&fullmag_runner::StepStats {
                 step: 4,
                 ..fullmag_runner::StepStats::default()
-            },
-        );
+            });
         runner_sample.trace = Some(fullmag_runner::SolverTrace::server_only(
             fullmag_runner::SolverTraceId::new("run-1", 0, 4, 0).unwrap(),
         ));
         let mut profile = crate::schemas::diagnostics::SolverProfileResource::default();
         profile.revision = 17;
-        profile.latest_samples = vec![
-            serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap(),
-        ];
+        profile.latest_samples =
+            vec![serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap()];
 
         annotate_solver_profile_api_visibility(&mut profile, 23);
 
@@ -2013,7 +2062,10 @@ mod tests {
             .as_ref()
             .expect("trace should be present");
         assert_eq!(trace.api_revision, Some(17));
-        assert_eq!(trace.completeness, crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial);
+        assert_eq!(
+            trace.completeness,
+            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial
+        );
         assert_eq!(
             trace
                 .segments
@@ -2299,6 +2351,7 @@ mod tests {
             fem_mesh: None,
         });
 
+        current.fem_mesh = Some(domain_fem_mesh("stale-fem-domain"));
         apply_current_live_metadata(
             &mut current,
             json!({
@@ -2318,6 +2371,7 @@ mod tests {
             }),
         );
 
+        assert!(current.fem_mesh.is_none());
         assert!(current.latest_fields.get("mat_ms").is_some());
         assert!(current.latest_fields.get("mat_aex").is_some());
         assert!(current.latest_fields.get("mat_alpha").is_some());
@@ -3444,6 +3498,57 @@ mod tests {
             solver_profile: None,
             fem_mesh: None,
         })
+    }
+
+    #[test]
+    fn publishing_fdm_membership_artifact_bumps_membership_revision_once() {
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-membership-publication-{}-{}",
+            std::process::id(),
+            unix_time_millis_now(),
+        ));
+        std::fs::create_dir_all(&artifact_dir).expect("artifact fixture directory should exist");
+        std::fs::write(artifact_dir.join("run.json"), b"{}")
+            .expect("pre-membership artifact should be written");
+
+        let mut current = test_current_snapshot();
+        current.session.artifact_dir = artifact_dir.display().to_string();
+        finalize_current_live_apply(
+            &mut current,
+            CurrentLiveApplyFlags {
+                has_run: true,
+                ..CurrentLiveApplyFlags::default()
+            },
+        )
+        .expect("initial artifact catalog should load");
+        let initial_revision = current.region_realization_revisions.membership;
+
+        let mesh_dir = artifact_dir.join("mesh");
+        std::fs::create_dir_all(&mesh_dir).expect("mesh artifact directory should exist");
+        std::fs::write(mesh_dir.join("fdm_region_membership.v2.json"), b"{}")
+            .expect("FMRM descriptor should be published");
+        std::fs::write(mesh_dir.join("fdm_region_membership.v2.bin"), b"FMRM")
+            .expect("FMRM binary should be published");
+
+        finalize_current_live_apply(&mut current, CurrentLiveApplyFlags::default())
+            .expect("new FMRM artifact should refresh the catalog");
+        assert_eq!(
+            current.region_realization_revisions.membership,
+            initial_revision + 1
+        );
+        assert!(current
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "mesh/fdm_region_membership.v2.json"));
+
+        finalize_current_live_apply(&mut current, CurrentLiveApplyFlags::default())
+            .expect("unchanged FMRM artifact should remain stable");
+        assert_eq!(
+            current.region_realization_revisions.membership,
+            initial_revision + 1
+        );
+
+        std::fs::remove_dir_all(&artifact_dir).expect("artifact fixture should be removed");
     }
 
     #[test]

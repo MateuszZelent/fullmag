@@ -10,7 +10,7 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::schemas::commands::{
     CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, SolverPolicyRequest,
-    StructuredCommandRequest,
+    StructuredCommandRequest, FDM_GRID_REFRESH_DEFERRED_REASON,
 };
 use crate::session::effective_runtime_status_code;
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
@@ -69,8 +69,23 @@ pub(crate) async fn submit_structured_command_impl(
         .unwrap_or(0);
     let command_id = format!("fm-{}", uuid::Uuid::new_v4());
     let command = command_from_structured(req, command_id, now);
+    if command.kind == "fdm_grid_refresh" {
+        let reason = fdm_grid_refresh_rejection_reason(&state).await?;
+        return reject_session_command_impl(state, headers, command, reason).await;
+    }
     validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+async fn fdm_grid_refresh_rejection_reason(state: &Arc<AppState>) -> Result<String, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if !crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot(snapshot) {
+        return Ok("FDM grid refresh is only applicable to an FDM structured-grid session.".into());
+    }
+    Ok(FDM_GRID_REFRESH_DEFERRED_REASON.into())
 }
 
 fn request_has_adaptive_solver_policy(req: &StructuredCommandRequest) -> bool {
@@ -799,6 +814,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             dbulk_field: None,
         });
         magnets.push(MagnetIR {
+            absorbing_boundary: None,
             initial_magnetization: Some(initial_magnetization_for_object(scene, object)),
             material: material_name,
             name: object.id.clone(),
@@ -1216,6 +1232,78 @@ pub(crate) async fn enqueue_session_command_impl(
     Ok(response)
 }
 
+async fn reject_session_command_impl(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    mut command: SessionCommand,
+    error: String,
+) -> Result<CommandResponse, ApiError> {
+    if state.current_live_state.read().await.is_none() {
+        return Err(ApiError::not_found("no active local live workspace"));
+    }
+
+    if let Some(idempotency_key) = command_request_key(headers) {
+        let responses = state.current_command_responses.lock().await;
+        if let Some(response) = responses
+            .iter()
+            .find(|(key, _)| key == &idempotency_key)
+            .map(|(_, response)| response.clone())
+        {
+            return Ok(response);
+        }
+    }
+
+    let seq = {
+        let mut next_seq = state.current_control_next_seq.lock().await;
+        *next_seq = next_seq.saturating_add(1);
+        *next_seq
+    };
+    command.seq = seq;
+    let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
+    let completed_at_unix_ms = command.created_at_unix_ms;
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        ledger.push_back(TrackedCommandRecord {
+            command,
+            request_id: request_id.clone(),
+            status: CommandLifecycleState::Rejected,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: Some(completed_at_unix_ms),
+            completion_status: Some(crate::types::CommandCompletionState::Rejected),
+            error: Some(error.clone()),
+        });
+        while ledger.len() > 256 {
+            ledger.pop_front();
+        }
+    }
+
+    let response = CommandResponse {
+        accepted: false,
+        command_id,
+        request_id,
+        error: Some(error),
+    };
+    if let Some(idempotency_key) = command_request_key(headers) {
+        let mut responses = state.current_command_responses.lock().await;
+        responses.push_back((idempotency_key, response.clone()));
+        while responses.len() > 128 {
+            responses.pop_front();
+        }
+    }
+
+    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        let display_revision = state.current_display_selection.read().await.revision;
+        let realtime_state =
+            crate::current_live_realtime_state_from_snapshot(&state, &snapshot, display_revision)
+                .await;
+        crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+            .await?;
+    }
+
+    Ok(response)
+}
+
 fn command_request_key(headers: &HeaderMap) -> Option<String> {
     headers
         .get("idempotency-key")
@@ -1412,6 +1500,12 @@ fn command_from_structured(
             command.mesh_options = mesh_options;
             command.mesh_target = mesh_target;
             command.mesh_reason = mesh_reason;
+            command
+        }
+        StructuredCommandRequest::FdmGridRefresh { intent } => {
+            let mut command =
+                new_session_command(command_id, "fdm_grid_refresh", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
             command
         }
         StructuredCommandRequest::SetSolverProfile { intent, profile } => {

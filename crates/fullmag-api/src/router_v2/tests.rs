@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
+use sha2::{Digest, Sha256};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
@@ -57,6 +58,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         exchange_enabled: true,
         demag_enabled: true,
         demag_realization: None,
+        fdm: None,
         external_field: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
             integrator: "rk45".to_string(),
@@ -146,6 +148,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             object_regions: Vec::new(),
             allocated_region_ids: Vec::new(),
             material_parameter_fields: Vec::new(),
+            absorbing_boundary: None,
         }],
         mesh_interfaces: Vec::new(),
         field_drives: Vec::new(),
@@ -675,6 +678,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         problem_name: "contract-test".into(),
         requested_backend: "cpu-fdm".into(),
         explicit_selection: false,
+        authored_requested_device: "auto".into(),
         requested_device: "auto".into(),
         requested_precision: "double".into(),
         requested_mode: "strict".into(),
@@ -914,6 +918,7 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
             physical_residual_version: "charge_balance_integrated_l2.v1".into(),
             operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
         },
+        conservative_current_view: None,
     };
     problem.current_modules = vec![CurrentModuleIR::CurrentTransport {
         name: "charge".into(),
@@ -922,6 +927,7 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: Some(charge_definition),
     }];
     problem.spin_transport_modules = vec![SpinTransportModuleIR {
@@ -1126,6 +1132,105 @@ async fn test_router_with_scene_document() -> axum::Router {
         snapshot.session.script_path.clear();
     }
     build_v2_router().with_state(state)
+}
+
+#[tokio::test]
+async fn physics_graph_resource_exposes_thin_normalized_graph_for_supported_scenes() {
+    const FIXTURES: &[(&str, &str)] = &[
+        (
+            "empty",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/empty.json"),
+        ),
+        (
+            "no_current",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/no_current.json"),
+        ),
+        (
+            "object_local_current_chain",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/object_local_current_chain.json"),
+        ),
+        (
+            "global_field_drive",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/global_field_drive.json"),
+        ),
+        (
+            "cross_object_interface",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/cross_object_interface.json"),
+        ),
+        (
+            "unresolved_legacy",
+            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/unresolved_legacy.json"),
+        ),
+    ];
+
+    for (fixture_id, fixture_source) in FIXTURES {
+        let fixture: serde_json::Value =
+            serde_json::from_str(fixture_source).expect("physics graph fixture must be JSON");
+        let scene: fullmag_authoring::SceneDocument =
+            serde_json::from_value(fixture["scene"].clone())
+                .expect("physics graph fixture scene must deserialize");
+        let expected_scene_revision = scene.revision;
+        let state = test_app_state_with_live_session().await;
+        state
+            .current_live_state
+            .write()
+            .await
+            .as_mut()
+            .expect("test live session")
+            .scene_document = Some(scene);
+
+        let response = build_v2_router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/model/physics-graph")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("physics graph request should complete");
+        assert_eq!(response.status(), StatusCode::OK, "fixture {fixture_id}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("physics graph response body");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("physics graph response must be JSON");
+        assert_eq!(payload["schema_version"], "physics_graph.v1");
+        assert_eq!(payload["scene_revision"], expected_scene_revision);
+        assert!(payload.get("topology").is_none());
+        assert!(payload.get("fields").is_none());
+        assert!(payload.get("field_samples").is_none());
+        assert!(payload["modules"].is_array());
+        assert!(payload["edges"].is_array());
+        assert_eq!(payload["provenance"]["normalizer"], "physics_graph.v1");
+        for expected in fixture["expected_modules"]
+            .as_array()
+            .expect("fixture expected_modules must be an array")
+        {
+            let id = expected["id"].as_str().expect("expected module id");
+            let module = payload["modules"]
+                .as_array()
+                .expect("modules array")
+                .iter()
+                .find(|candidate| candidate["id"].as_str() == Some(id))
+                .unwrap_or_else(|| panic!("missing normalized module {id} for {fixture_id}"));
+            assert_eq!(module["kind"], expected["kind"], "module {id}");
+            assert_eq!(module["activation"], expected["activation"], "module {id}");
+            assert!(module["presentation"]["family"].is_string(), "module {id}");
+            assert!(module["presentation"]["label"].is_string(), "module {id}");
+            assert!(module.get("family_payload").is_none(), "module {id}");
+            assert!(
+                module["source_path"]
+                    .as_str()
+                    .is_some_and(|source_path| source_path.starts_with('/')),
+                "module {id} must preserve an absolute source path"
+            );
+            assert!(
+                module.get("family_payload").is_none(),
+                "module {id} must not turn the graph resource into a family payload dump"
+            );
+        }
+    }
 }
 
 async fn test_router_with_scene_document_and_script_file() -> (axum::Router, PathBuf) {
@@ -1535,6 +1640,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         problem_name: "contract-test".into(),
         requested_backend: "cpu-fdm".into(),
         explicit_selection: false,
+        authored_requested_device: "auto".into(),
         requested_device: "auto".into(),
         requested_precision: "double".into(),
         requested_mode: "strict".into(),
@@ -1664,6 +1770,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         problem_name: "contract-test".into(),
         requested_backend: "cpu-fdm".into(),
         explicit_selection: false,
+        authored_requested_device: "auto".into(),
         requested_device: "auto".into(),
         requested_precision: "double".into(),
         requested_mode: "strict".into(),
@@ -1815,7 +1922,13 @@ fn decode_fmvp_node_indices(bytes: &[u8]) -> Vec<u32> {
     let node_index_count = u32::from_le_bytes(bytes[108..112].try_into().unwrap()) as usize;
     let scope_kind_len = u16::from_le_bytes(bytes[112..114].try_into().unwrap()) as usize;
     let scope_id_len = u16::from_le_bytes(bytes[114..116].try_into().unwrap()) as usize;
-    let node_indices_start = 116 + scope_kind_len + scope_id_len;
+    let metadata_version = u16::from_le_bytes(bytes[52..54].try_into().unwrap());
+    let generation_len = if metadata_version >= 2 {
+        u16::from_le_bytes(bytes[56..58].try_into().unwrap()) as usize
+    } else {
+        0
+    };
+    let node_indices_start = 116 + scope_kind_len + scope_id_len + generation_len;
     assert!(node_indices_start + node_index_count * 4 <= metadata_end);
     (0..node_index_count)
         .map(|index| {
@@ -1823,6 +1936,25 @@ fn decode_fmvp_node_indices(bytes: &[u8]) -> Vec<u32> {
             u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap())
         })
         .collect()
+}
+
+fn decode_fmvp_metadata_scope(bytes: &[u8]) -> (String, String) {
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3, "scope provenance requires FMVP v3 metadata");
+    assert_eq!(&bytes[48..52], b"FMMI");
+    let scope_kind_len = u16::from_le_bytes(bytes[112..114].try_into().unwrap()) as usize;
+    let scope_id_len = u16::from_le_bytes(bytes[114..116].try_into().unwrap()) as usize;
+    let scope_start = 116;
+    let scope_kind_end = scope_start + scope_kind_len;
+    let scope_id_end = scope_kind_end + scope_id_len;
+    (
+        std::str::from_utf8(&bytes[scope_start..scope_kind_end])
+            .expect("FMVP metadata scope kind must be UTF-8")
+            .to_string(),
+        std::str::from_utf8(&bytes[scope_kind_end..scope_id_end])
+            .expect("FMVP metadata scope id must be UTF-8")
+            .to_string(),
+    )
 }
 
 /// Read and parse the response body as JSON.
@@ -1862,6 +1994,7 @@ fn is_iso_calendar_date(value: &str) -> bool {
 async fn health_endpoint_returns_200() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1921,6 +2054,7 @@ async fn health_reports_active_session_when_present() {
 async fn capabilities_endpoint_returns_200() {
     let app = test_router();
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/capabilities")
@@ -2287,6 +2421,256 @@ async fn status_exposes_fem_auto_device_crossover_decision() {
 }
 
 #[tokio::test]
+async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_backend = "fdm".into();
+        snapshot.session.authored_requested_device = "cpu".into();
+        snapshot.session.requested_device = "gpu".into();
+        snapshot.session.requested_precision = "double".into();
+        snapshot.session.requested_mode = "strict".into();
+        snapshot.session.resolved_backend = Some("fdm".into());
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.resolved_precision = Some("double".into());
+        snapshot.session.resolved_mode = Some("strict".into());
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fdm_cpu_reference",
+                "capability_profile_version": "test-profile",
+                "supported_terms": ["exchange", "demag_tensor_fft_newell", "thermal", "stt"],
+                "supported_demag_realizations": ["tensor_fft_newell"],
+                "preview_quantities": ["m", "H_eff"],
+                "snapshot_quantities": ["m", "H_eff"],
+                "scalar_outputs": ["E_total"],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("valid planner capability fixture"),
+        );
+        snapshot.session.resolved_fallback = Some(fullmag_runner::ResolvedFallback {
+            occurred: true,
+            original_engine: "fdm_cuda".into(),
+            fallback_engine: "fdm_cpu_reference".into(),
+            reason: "fdm_cuda_unavailable".into(),
+            message: "FDM GPU was requested but unavailable; resolved to CPU FDM".into(),
+        });
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let active_lane = &json["capabilities"]["active_lane"];
+    assert_eq!(active_lane["schema_version"], "active-lane-capabilities.v2");
+    assert_eq!(active_lane["authored"]["device"], "cpu");
+    assert_eq!(active_lane["requested"]["discretization"], "fdm");
+    assert_eq!(active_lane["requested"]["device"], "gpu");
+    assert_eq!(active_lane["resolved"]["discretization"], "fdm");
+    assert_eq!(active_lane["resolved"]["device"], "cpu");
+    assert_eq!(active_lane["fallback"]["occurred"], true);
+    assert_eq!(active_lane["fallback"]["original_engine"], "fdm_cuda");
+    assert_eq!(
+        active_lane["fallback"]["fallback_engine"],
+        "fdm_cpu_reference"
+    );
+    assert_eq!(active_lane["fallback"]["reason"], "fdm_cuda_unavailable");
+    assert_eq!(active_lane["source"]["kind"], "planner");
+    assert_eq!(
+        active_lane["source"]["authored_intent"],
+        "problem_ir.runtime_selection"
+    );
+    assert_eq!(
+        active_lane["source"]["effective_request"],
+        "session.runtime_resolution"
+    );
+    assert!(active_lane["source"]["capability_profile_version"].is_string());
+    assert_eq!(active_lane["qualification"]["status"], "not_asserted");
+    assert_eq!(active_lane["operations"]["grid_build"]["state"], "deferred");
+    assert_eq!(
+        active_lane["operations"]["grid_build"]["reason_code"],
+        "capability_deferred"
+    );
+    assert_eq!(
+        active_lane["operations"]["shared_mesh_build"]["state"],
+        "unsupported"
+    );
+    assert_eq!(
+        active_lane["operations"]["shared_mesh_build"]["reason_code"],
+        "capability_unsupported"
+    );
+    assert_eq!(
+        active_lane["operations"]["interaction.exchange"]["state"],
+        "supported"
+    );
+    assert_eq!(
+        active_lane["operations"]["interaction.exchange"]["reason_code"],
+        "capability_supported"
+    );
+    assert_eq!(
+        active_lane["operations"]["study.frequency_response"]["state"],
+        "semantic_only"
+    );
+    assert_eq!(
+        active_lane["operations"]["study.frequency_response"]["reason_code"],
+        "capability_semantic_only"
+    );
+    assert_eq!(
+        active_lane["operations"]["air_void_overlay"]["state"],
+        "semantic_only"
+    );
+    assert_eq!(
+        active_lane["operations"]["region_membership"]["state"],
+        "semantic_only"
+    );
+    assert_eq!(
+        active_lane["operations"]
+            .as_object()
+            .expect("operation capability map")
+            .len(),
+        29
+    );
+    assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
+    assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
+}
+
+#[tokio::test]
+async fn status_active_lane_fails_closed_when_planner_capabilities_are_missing() {
+    let state = test_app_state_with_live_session().await;
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let active_lane = &json["capabilities"]["active_lane"];
+    assert_eq!(active_lane["source"]["kind"], "unavailable");
+    for operation_id in [
+        "grid_build",
+        "field_quantity",
+        "vectors",
+        "surface_coloring",
+        "region_membership",
+        "interaction.demag",
+        "study.relaxation",
+        "study.fft",
+    ] {
+        assert_eq!(
+            active_lane["operations"][operation_id]["state"], "stale",
+            "{operation_id} must fail closed without a planner capability snapshot"
+        );
+        assert_eq!(
+            active_lane["operations"][operation_id]["reason_code"], "capability_stale",
+            "{operation_id} must expose a stable stale reason code"
+        );
+    }
+}
+
+#[tokio::test]
+async fn status_active_lane_does_not_invent_resolved_values_for_an_unresolved_auto_request() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_backend = "auto".into();
+        snapshot.session.requested_device = "auto".into();
+        snapshot.session.resolved_backend = None;
+        snapshot.session.resolved_device = None;
+        snapshot.session.resolved_precision = None;
+        snapshot.session.resolved_mode = None;
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fdm_cpu_reference",
+                "capability_profile_version": "test-profile",
+                "supported_terms": ["exchange"],
+                "supported_demag_realizations": [],
+                "preview_quantities": ["m"],
+                "snapshot_quantities": ["m"],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("valid planner capability fixture"),
+        );
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(
+        json["capabilities"]["active_lane"]["requested"]["discretization"],
+        "auto"
+    );
+    assert!(json["capabilities"]["active_lane"]["resolved"].is_null());
+    for (operation_id, capability) in json["capabilities"]["active_lane"]["operations"]
+        .as_object()
+        .expect("operation capability map")
+    {
+        assert_eq!(
+            capability["state"], "stale",
+            "{operation_id} must fail closed until the full lane identity is resolved"
+        );
+    }
+}
+
+#[test]
+fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
+    for operation_id in [
+        "interaction.exchange",
+        "interaction.demag",
+        "interaction.zeeman",
+        "interaction.current_transport",
+        "interaction.spin_torque",
+        "interaction.stt",
+        "interaction.sot",
+        "interaction.interfacial_dmi",
+        "interaction.bulk_dmi",
+        "interaction.uniaxial_anisotropy",
+        "interaction.cubic_anisotropy",
+        "interaction.oersted_field",
+        "interaction.magnetoelastic",
+        "interaction.thermal",
+    ] {
+        assert!(
+            crate::router_v2::handlers::sessions::status::ACTIVE_LANE_OPERATION_IDS
+                .contains(&operation_id),
+            "missing active-lane capability for {operation_id}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn status_exposes_typed_relaxation_algorithm_from_canonical_metadata() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -2502,6 +2886,99 @@ async fn domain_meta_uses_fdm_artifact_layout_before_first_live_step() {
 }
 
 #[tokio::test]
+async fn fdm_multilayer_layout_is_fail_closed_without_published_layout() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["available"], false);
+    assert_eq!(json["unavailable_reason"], "not_fdm_multilayer");
+    assert_eq!(json["layers"], serde_json::json!([]));
+    assert_eq!(json["airbox"]["h_demag_available"], false);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "mesh": {
+                "transfer_provenance": [{
+                    "magnet_name": "bottom",
+                    "source_grid_fingerprint": "sha256:native-bottom"
+                }]
+            },
+            "execution_plan": {
+                "backend_plan": {
+                    "layers": [{
+                        "layer_id": "layer:bottom",
+                        "object_id": "object:bottom",
+                        "magnet_name": "bottom",
+                        "native_grid": [4, 3, 1],
+                        "native_cell_size": [1.0e-9, 1.0e-9, 2.0e-9],
+                        "native_origin": [-2.0e-9, -1.5e-9, -1.0e-9],
+                        "convolution_grid": [4, 3, 2],
+                        "convolution_cell_size": [1.0e-9, 1.0e-9, 2.0e-9],
+                        "transfer_kind": "volume_weighted",
+                        "native_active_mask": [true, true, false, true, true, true, true, true, true, true, true, true]
+                    }],
+                    "common_cells": [4, 3, 2],
+                    "planner_summary": {
+                        "selected_strategy": "per_magnet",
+                        "requested_mode": "two_d_stack",
+                        "resolved_mode": "two_d_stack"
+                    },
+                    "grid_certificate": {
+                        "cell_m": [1.0e-9, 1.0e-9, 2.0e-9],
+                        "origin_m": [-2.0e-9, -1.5e-9, -1.0e-9]
+                    }
+                }
+            }
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["available"], true);
+    assert_eq!(json["strategy"], "per_magnet");
+    assert_eq!(json["common_transform_layout"]["is_physical_mesh"], false);
+    assert_eq!(
+        json["common_transform_layout"]["shape"],
+        serde_json::json!([4, 3, 2])
+    );
+    assert_eq!(json["layers"][0]["layer_id"], "layer:bottom");
+    assert_eq!(json["layers"][0]["object_id"], "object:bottom");
+    assert_eq!(json["layers"][0]["active_mask_present"], true);
+    assert_eq!(json["layers"][0]["active_cell_count"], 11);
+    assert_eq!(
+        json["layers"][0]["native_grid_fingerprint"],
+        "sha256:native-bottom"
+    );
+    assert_eq!(json["airbox"]["h_demag_available"], true);
+    assert_eq!(json["airbox"]["h_eff_available"], false);
+}
+
+#[tokio::test]
 async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -2549,6 +3026,112 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
 }
 
 #[tokio::test]
+async fn fem_string_generation_identity_is_preserved_across_domain_status_catalog_and_fmvp() {
+    let generation_id = "8e9e9d5c64bd7954ac3a5f925221bef37eb0b2c70bd68db32b687fa3f941570d";
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.generation_id = Some(generation_id.to_string());
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0]
+                ],
+                "layout": { "grid_cells": [4, 1, 1] }
+            }
+        }))
+        .expect("FEM field fixture should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (path, pointer) in [
+        ("/v2/sessions/current/data/domain/meta", "/generation_id"),
+        ("/v2/sessions/current/status", "/domain/generation_id"),
+        ("/v2/sessions/current/data/fields", "/domain_generation_id"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let json = body_json(response).await;
+        assert_eq!(
+            json.pointer(pointer).and_then(serde_json::Value::as_str),
+            Some(generation_id)
+        );
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-domain-generation-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(generation_id)
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3);
+    assert_eq!(u16::from_le_bytes(bytes[52..54].try_into().unwrap()), 2);
+    let generation_len = u16::from_le_bytes(bytes[56..58].try_into().unwrap()) as usize;
+    let scope_kind_len = u16::from_le_bytes(bytes[112..114].try_into().unwrap()) as usize;
+    let scope_id_len = u16::from_le_bytes(bytes[114..116].try_into().unwrap()) as usize;
+    let generation_start = 116 + scope_kind_len + scope_id_len;
+    assert_eq!(
+        std::str::from_utf8(&bytes[generation_start..generation_start + generation_len]).unwrap(),
+        generation_id
+    );
+}
+
+#[tokio::test]
+async fn domain_meta_reports_mixed_fem_cell_types_without_calling_them_tetrahedra() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Tet4,
+                fullmag_ir::FemCellTypeIR::Prism6,
+            ],
+            offsets: vec![0, 4, 10],
+            nodes: vec![0, 1, 2, 3, 0, 1, 4, 3, 5, 2],
+            global_ordinals: vec![0, 1],
+            mesh_parts: Vec::new(),
+        };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["element_type"], "mixed");
+}
+
+#[tokio::test]
 async fn realtime_state_uses_fdm_artifact_layout_domain_revision() {
     let state = test_app_state_with_live_session().await;
     let snapshot = {
@@ -2569,11 +3152,8 @@ async fn realtime_state_uses_fdm_artifact_layout_domain_revision() {
     let realtime_state =
         crate::current_live_realtime_state_from_snapshot(&state, &snapshot, 0).await;
 
-    assert_ne!(realtime_state.revisions.domain_generation_id, 0);
-    assert_eq!(
-        realtime_state.revisions.topology_revision,
-        realtime_state.revisions.domain_generation_id
-    );
+    assert!(!realtime_state.revisions.domain_generation_id.is_empty());
+    assert_ne!(realtime_state.revisions.topology_revision, 0);
 }
 
 #[tokio::test]
@@ -2654,6 +3234,198 @@ async fn domain_topology_returns_204_for_fdm() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn fdm_domain_endpoints_ignore_reused_fem_topology() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } },
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 1, 1]
+            }
+        }));
+        snapshot.live_state = None;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let topology = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(topology.status(), StatusCode::NO_CONTENT);
+
+    let overlay = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/slice/mesh-overlay?plane=xy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_domain_endpoints_ignore_reused_fem_topology() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm_multilayer",
+                    "common_cells": [4, 2, 1],
+                    "grid_certificate": {
+                        "origin_m": [-2.0e-9, -1.0e-9, 0.0],
+                        "counts": [4, 2, 1],
+                        "cell_m": [1.0e-9, 2.0e-9, 3.0e-9]
+                    }
+                }
+            },
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [4, 2, 1],
+                "layers": []
+            }
+        }));
+        snapshot.live_state = None;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let topology = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(topology.status(), StatusCode::NO_CONTENT);
+    let status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_json = body_json(status).await;
+    assert_eq!(status_json["domain"]["discretization"], "fdm");
+    assert_eq!(status_json["domain"]["cell_count"], serde_json::json!(8));
+
+    let meta = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let json = body_json(meta).await;
+    assert_eq!(json["discretization"], "fdm");
+    assert_eq!(json["grid"]["shape"], serde_json::json!([4, 2, 1]));
+    assert_eq!(json["counts"]["cells"], serde_json::json!(8));
+    assert_eq!(
+        json["grid"]["origin"],
+        serde_json::json!([-2.0e-9, -1.0e-9, 0.0])
+    );
+    assert_eq!(
+        json["grid"]["spacing"],
+        serde_json::json!([1.0e-9, 2.0e-9, 3.0e-9])
+    );
+    let bounds = &json["bounds"];
+    for (axis, expected) in [
+        ("min", [-2.0e-9, -1.0e-9, 0.0]),
+        ("max", [2.0e-9, 3.0e-9, 3.0e-9]),
+    ] {
+        let values = bounds[axis].as_array().expect("bounds axis array");
+        for (index, expected) in expected.iter().enumerate() {
+            assert!(
+                (values[index].as_f64().unwrap() - expected).abs() < 1e-24,
+                "bounds.{axis}[{index}]"
+            );
+        }
+    }
+    assert!(json["element_type"].is_null());
+}
+
+#[tokio::test]
+async fn fdm_multilayer_field_slice_uses_common_grid_geometry() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm_multilayer",
+                    "common_cells": [4, 2, 1],
+                    "grid_certificate": {
+                        "origin_m": [-2.0e-9, -1.0e-9, 0.0],
+                        "counts": [4, 2, 1],
+                        "cell_m": [1.0e-9, 2.0e-9, 3.0e-9]
+                    }
+                }
+            },
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [4, 2, 1],
+                "layers": []
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]
+                ]
+            }
+        }))
+        .expect("multilayer field payload should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/meta?plane=xy&cut_world=1.5e-9&x_size=4&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["sampling_method"], "planar_sampling_fdm_cell_constant");
+    for (name, expected) in [
+        ("u_min", -2.0e-9),
+        ("u_max", 2.0e-9),
+        ("v_min", -1.0e-9),
+        ("v_max", 3.0e-9),
+    ] {
+        assert!(
+            (json["bounds"][name].as_f64().unwrap() - expected).abs() < 1e-24,
+            "bounds.{name}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -7039,6 +7811,100 @@ async fn mesh_active_build_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn fdm_grid_refresh_command_is_deferred_without_queueing_a_fake_runtime_mutation() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid": { "cells": [2, 2, 1] }
+                }
+            }
+        }));
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "fdm_grid_refresh",
+                        "reason": "user_requested"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["accepted"], false);
+    assert_eq!(
+        json["error"],
+        "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists."
+    );
+    assert_eq!(state.current_control_queue.lock().await.len(), 0);
+
+    let ledger = state.current_command_ledger.lock().await;
+    let record = ledger.back().expect("deferred command should be recorded");
+    assert_eq!(record.command.kind, "fdm_grid_refresh");
+    assert_eq!(record.status, CommandLifecycleState::Rejected);
+    assert_eq!(
+        record.completion_status,
+        Some(CommandCompletionState::Rejected)
+    );
+    assert_eq!(
+        record.error.as_deref(),
+        Some("FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.")
+    );
+}
+
+#[tokio::test]
+async fn fdm_grid_refresh_command_rejects_non_fdm_sessions_without_queueing() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fem" } }
+        }));
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["accepted"], false);
+    assert_eq!(
+        json["error"],
+        "FDM grid refresh is only applicable to an FDM structured-grid session."
+    );
+    assert_eq!(state.current_control_queue.lock().await.len(), 0);
+    let ledger = state.current_command_ledger.lock().await;
+    assert_eq!(
+        ledger.back().map(|record| record.status),
+        Some(CommandLifecycleState::Rejected)
+    );
+}
+
+#[tokio::test]
 async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -9767,6 +10633,7 @@ async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
     let json = body_json(response).await;
     assert_eq!(json["mesh_id"], "test-mesh:1");
     assert_eq!(json["mesh_revision"], 41);
+    assert_eq!(json["owner_object_id"], "body");
     assert_eq!(json["region_id"], "body:core");
     assert_eq!(json["source"], "mesh_parts");
     assert_eq!(json["mesh_part_ids"][0], "part:body:core");
@@ -10306,6 +11173,7 @@ async fn mesh_region_memberships_lists_available_authored_region_memberships() {
     assert_eq!(json["mesh_id"], "test-mesh:1");
     assert_eq!(json["mesh_revision"], 47);
     assert_eq!(json["memberships"][0]["region_id"], "body:core");
+    assert_eq!(json["memberships"][0]["owner_object_id"], "body");
     assert_eq!(json["memberships"][0]["source"], "mesh_parts");
     assert_eq!(json["memberships"][0]["mesh_part_ids"][0], "part:body:core");
     assert_eq!(json["memberships"][1]["region_id"], "body:projected-core");
@@ -10319,8 +11187,122 @@ async fn mesh_region_memberships_lists_available_authored_region_memberships() {
         serde_json::json!([0])
     );
     assert_eq!(
-        json["unresolved_region_ids"],
-        serde_json::json!(["body:unsupported"])
+        json["unresolved_regions"],
+        serde_json::json!([{
+            "owner_object_id": "body",
+            "region_id": "body:unsupported"
+        }])
+    );
+    assert!(json.get("unresolved_region_ids").is_none());
+}
+
+#[tokio::test]
+async fn mesh_region_membership_is_qualified_by_owner_when_region_ids_repeat() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.mesh_parts.clear();
+        let first_part = FemMeshPartPayload {
+            id: "part:body:shared".to_string(),
+            label: "Shared A".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("shared_geom".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            facet_global_ordinals: vec![0],
+            bounds_min: None,
+            bounds_max: None,
+        };
+        let mut second_part = first_part.clone();
+        second_part.id = "part:body-b:shared".to_string();
+        second_part.label = "Shared B".to_string();
+        second_part.object_id = Some("body-b".to_string());
+        mesh.mesh_parts = vec![first_part, second_part];
+
+        let mut scene = sample_scene_document();
+        let first_region = fullmag_authoring::SceneObjectRegion {
+            region_id: "shared".to_string(),
+            owner_object: "body".to_string(),
+            name: "Shared".to_string(),
+            shape: fullmag_authoring::SceneRegionShape::Sphere {
+                center: [0.5, 0.5, 0.5],
+                radius: 0.25,
+            },
+            frame: fullmag_authoring::SceneRegionFrame::Object,
+            enabled: true,
+            priority: 10,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            material_transition: None,
+            realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+        };
+        scene.objects[0].regions.push(first_region.clone());
+        let mut second_object = scene.objects[0].clone();
+        second_object.id = "body-b".to_string();
+        second_object.regions.clear();
+        let mut second_region = first_region;
+        second_region.owner_object = "body-b".to_string();
+        second_object.regions.push(second_region);
+        scene.objects.push(second_object);
+
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list = body_json(list).await;
+    assert_eq!(list["memberships"].as_array().map(Vec::len), Some(2));
+    assert_eq!(list["memberships"][0]["owner_object_id"], "body");
+    assert_eq!(list["memberships"][1]["owner_object_id"], "body-b");
+
+    let ambiguous = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/shared")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), StatusCode::CONFLICT);
+
+    let qualified = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/shared?owner_object_id=body-b")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(qualified.status(), StatusCode::OK);
+    let qualified = body_json(qualified).await;
+    assert_eq!(qualified["owner_object_id"], "body-b");
+    assert_eq!(qualified["region_id"], "shared");
+    assert_eq!(
+        qualified["mesh_part_ids"],
+        serde_json::json!(["part:body-b:shared"])
     );
 }
 
@@ -10577,6 +11559,69 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(universe.airbox_growth_rate, Some(1.4));
     assert_eq!(universe.airbox_grading.as_deref(), Some("linear"));
     assert_eq!(committed.universe.as_ref(), Some(universe));
+}
+
+#[tokio::test]
+async fn fdm_universe_config_put_preserves_shared_airbox_authoring_contract() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } },
+            "artifact_layout": { "backend": "fdm", "grid_cells": [128, 32, 30] }
+        }));
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v2/sessions/current/meshing/policies/universe")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "config": {
+                            "mode": "manual",
+                            "size": [8.0e-7, 3.25e-7, 9.0e-8],
+                            "center": [0.0, 0.0, 0.0],
+                            "padding": [0.0, 0.0, 0.0],
+                            "airbox_hmax": 6.25e-9,
+                            "airbox_hmin": 3.0e-9,
+                            "airbox_growth_rate": 1.25,
+                            "airbox_grading": "geometric"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["config"]["mode"], "manual");
+    assert_eq!(
+        json["config"]["size"],
+        serde_json::json!([8.0e-7, 3.25e-7, 9.0e-8])
+    );
+    assert_eq!(json["config"]["airbox_hmax"], 6.25e-9);
+    assert_eq!(json["config"]["airbox_hmin"], 3.0e-9);
+
+    let status = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_json = body_json(status).await;
+    assert_eq!(status_json["domain"]["discretization"], "fdm");
 }
 
 #[tokio::test]
@@ -11870,6 +12915,14 @@ async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geome
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "mat_ms": {
                 "values": [4.0, 9.0],
@@ -19985,10 +21038,7 @@ fn append_coupled_m3_checkpoint_module(checkpoint: &mut serde_json::Value, modul
 }
 
 fn refresh_coupled_m3_checkpoint_aggregates(checkpoint: &mut serde_json::Value) {
-    let module_count = checkpoint["accepted"]["modules"]
-        .as_array()
-        .unwrap()
-        .len() as f64;
+    let module_count = checkpoint["accepted"]["modules"].as_array().unwrap().len() as f64;
     let vector_count = checkpoint["magnetization"].as_array().unwrap().len();
     checkpoint["accepted"]["combined_transport_torque_per_s"] =
         serde_json::json!(vec![[0.0, module_count, 0.0]; vector_count]);
@@ -20296,9 +21346,15 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
         ("resolved_device", serde_json::json!("gpu")),
         ("resolved_precision", serde_json::json!("single")),
         ("resolved_execution_mode", serde_json::json!("extended")),
-        ("charge_cache_identity", serde_json::json!("charge-cache:other")),
+        (
+            "charge_cache_identity",
+            serde_json::json!("charge-cache:other"),
+        ),
         ("spin_cache_identity", serde_json::json!("spin-cache:other")),
-        ("oersted_cache_identity", serde_json::json!("oersted-cache:other")),
+        (
+            "oersted_cache_identity",
+            serde_json::json!("oersted-cache:other"),
+        ),
         ("source_identity", serde_json::json!("source:other")),
     ] {
         let mut candidate = expected.clone();
@@ -20397,16 +21453,32 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
     revision_overflow["refresh_count"] = serde_json::json!(u64::MAX);
     invalid.push(("revision overflow", revision_overflow));
     for (label, path, value) in [
-        ("accepted revision", vec!["accepted", "revision"], serde_json::json!(3)),
+        (
+            "accepted revision",
+            vec!["accepted", "revision"],
+            serde_json::json!(3),
+        ),
         ("next revision", vec!["next_revision"], serde_json::json!(6)),
         (
             "accepted refresh",
             vec!["accepted", "refresh_count"],
             serde_json::json!(99),
         ),
-        ("accepted steps", vec!["accepted_steps"], serde_json::json!(0)),
-        ("telemetry cursor", vec!["telemetry_cursor"], serde_json::json!(0)),
-        ("thermal counter", vec!["thermal_counter"], serde_json::json!(99)),
+        (
+            "accepted steps",
+            vec!["accepted_steps"],
+            serde_json::json!(0),
+        ),
+        (
+            "telemetry cursor",
+            vec!["telemetry_cursor"],
+            serde_json::json!(0),
+        ),
+        (
+            "thermal counter",
+            vec!["thermal_counter"],
+            serde_json::json!(99),
+        ),
         (
             "controller timestep",
             vec!["error_controller", "next_dt_s"],
@@ -20510,7 +21582,9 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
                     .method("POST")
                     .uri("/v2/sessions/current/persistence/checkpoints")
                     .header("content-type", "application/json")
-                    .body(Body::from(serde_json::json!({"profile": "resume"}).to_string()))
+                    .body(Body::from(
+                        serde_json::json!({"profile": "resume"}).to_string(),
+                    ))
                     .unwrap(),
             )
             .await
@@ -20555,7 +21629,11 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().unwrap();
         let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
-        assert_eq!(snapshot.coupled_checkpoint.as_ref(), Some(&expected), "{label}");
+        assert_eq!(
+            snapshot.coupled_checkpoint.as_ref(),
+            Some(&expected),
+            "{label}"
+        );
         assert_eq!(latest.magnetization, before_m, "{label}");
         assert_eq!(latest.step, before_step, "{label}");
         assert_eq!(latest.time, before_time, "{label}");
@@ -21632,6 +22710,1495 @@ async fn absent_fdm_region_membership_descriptor_is_not_applicable() {
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 
+fn fdm_v2_membership_binary(counts: [u32; 3], memberships: &[u32]) -> Vec<u8> {
+    let mut binary = vec![0u8; 64 + memberships.len() * 4];
+    binary[..4].copy_from_slice(b"FMRM");
+    binary[4] = 2;
+    binary[5] = 2;
+    binary[8..12].copy_from_slice(&counts[0].to_le_bytes());
+    binary[12..16].copy_from_slice(&counts[1].to_le_bytes());
+    binary[16..20].copy_from_slice(&counts[2].to_le_bytes());
+    binary[20..24].copy_from_slice(&(memberships.len() as u32).to_le_bytes());
+    for (index, membership) in memberships.iter().enumerate() {
+        let offset = 64 + index * 4;
+        binary[offset..offset + 4].copy_from_slice(&membership.to_le_bytes());
+    }
+    binary
+}
+
+fn write_test_fdm_membership_artifact(artifact_dir: &std::path::Path, counts: [u32; 3]) {
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    let cell_count = counts.into_iter().map(u64::from).product::<u64>();
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": counts,
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": cell_count,
+            "object_ids": ["body"],
+            "region_legend": [],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary(counts, &vec![0; cell_count as usize]),
+    )
+    .expect("failed to write FDM membership binary");
+}
+
+fn write_test_fdm_multilayer_airbox_carrier(artifact_dir: &std::path::Path) -> PathBuf {
+    let carrier_dir = artifact_dir.join("fields/H_demag/airbox");
+    fs::create_dir_all(&carrier_dir).expect("failed to create multilayer Airbox carrier dir");
+    let field_payload = serde_json::json!({
+        "schema_version": "fdm_multilayer_observation_field.v1",
+        "scope_kind": "airbox",
+        "quantity_id": "H_demag",
+        "observable": "H_demag",
+        "unit": "A/m",
+        "grid": {
+            "cells": [2, 2, 1],
+            "origin_m": [10.0, 20.0, 30.0],
+            "cell_size_m": [0.5, 0.25, 2.0]
+        },
+        "values": [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0], [4.0, 5.0, 6.0]]
+    });
+    let field_bytes = serde_json::to_vec_pretty(&field_payload)
+        .expect("test Airbox field payload should serialize");
+    let field_hash = format!("{:x}", Sha256::digest(&field_bytes));
+    fs::write(carrier_dir.join("H_demag.samples.v1.json"), field_bytes)
+        .expect("failed to write multilayer Airbox field payload");
+    let mut manifest = serde_json::json!({
+            "schema_version": "fdm_multilayer_observation.v1",
+            "scope_kind": "airbox",
+            "quantity_id": "H_demag",
+            "unit": "A/m",
+            "source_policy": "target_only",
+            "target_only": true,
+            "grid": {
+                "cells": [2, 2, 1],
+                "origin_m": [10.0, 20.0, 30.0],
+                "cell_size_m": [0.5, 0.25, 2.0]
+            },
+            "carrier_fingerprint": "pending",
+            "source_grid_fingerprints": ["b".repeat(64)],
+            "source_common_grid": {
+                "cells": [4, 1, 1],
+                "cell_size_m": [0.5, 0.25, 2.0],
+                "origin_m": [10.0, 20.0, 30.0]
+            },
+            "source_runtime_identity": {
+                "execution_engine": "fdm_cpu_reference",
+                "precision": "double",
+                "demag_operator_kind": "multilayer",
+                "fft_backend": "rustfft",
+                "problem_source_hash": "test-problem-source-hash",
+                "run_status": "completed"
+            },
+            "field_artifact": "H_demag.samples.v1.json",
+            "field_artifact_sha256": field_hash,
+            "sample_count": 4,
+            "published_quantities": ["H_demag"],
+            "unavailable_quantities": {
+                "H_eff": "fdm_multilayer_airbox_h_eff_unavailable.v1"
+            }
+        });
+    let fingerprint_seed = serde_json::json!({
+        "schema_version": manifest["schema_version"],
+        "scope_kind": manifest["scope_kind"],
+        "quantity_id": manifest["quantity_id"],
+        "source_policy": manifest["source_policy"],
+        "grid": manifest["grid"],
+        "source_grid_fingerprints": manifest["source_grid_fingerprints"],
+        "source_common_grid": manifest["source_common_grid"],
+        "source_runtime_identity": manifest["source_runtime_identity"],
+        "field_artifact_sha256": manifest["field_artifact_sha256"],
+    });
+    manifest["carrier_fingerprint"] = serde_json::json!(format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&fingerprint_seed)
+                .expect("test Airbox fingerprint seed should serialize")
+        )
+    ));
+    fs::write(
+        carrier_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("test Airbox manifest should serialize"),
+    )
+    .expect("failed to write multilayer Airbox manifest");
+    carrier_dir
+}
+
+fn test_fdm_multilayer_airbox_fingerprint(carrier_dir: &Path) -> String {
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(carrier_dir.join("manifest.json")).expect("test manifest should exist"),
+    )
+    .expect("test manifest should parse");
+    manifest["carrier_fingerprint"]
+        .as_str()
+        .expect("test manifest should contain a fingerprint")
+        .to_string()
+}
+
+async fn set_test_fdm_multilayer_layout(state: &Arc<AppState>, common_cells: [u32; 3]) {
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test session should exist");
+    snapshot.metadata = Some(serde_json::json!({
+        "artifact_layout": {
+            "backend": "fdm_multilayer",
+            "common_cells": common_cells,
+            "layers": [{
+                "layer_id": "layer:magnet",
+                "object_id": "object:magnet",
+                "magnet_name": "magnet",
+                "native_grid": [1, 1, 1],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "native_origin": [0.0, 0.0, 0.0],
+                "value_offset": 0,
+                "value_count": 1
+            }]
+        }
+    }));
+    snapshot.live_state = None;
+}
+
+#[tokio::test]
+async fn fdm_multilayer_airbox_layout_uses_validated_runtime_target_carrier() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    let fingerprint = test_fdm_multilayer_airbox_fingerprint(&carrier_dir);
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["airbox"]["carrier_available"], true);
+    assert_eq!(json["airbox"]["h_demag_available"], true);
+    assert_eq!(json["airbox"]["h_eff_available"], false);
+    assert_eq!(json["airbox"]["cells"], serde_json::json!([2, 2, 1]));
+    assert_eq!(json["airbox"]["origin_m"], serde_json::json!([10.0, 20.0, 30.0]));
+    assert_eq!(json["airbox"]["cell_size_m"], serde_json::json!([0.5, 0.25, 2.0]));
+    assert_eq!(json["airbox"]["carrier_fingerprint"], format!("sha256:{fingerprint}"));
+    assert_eq!(json["airbox"]["sample_count"], 4);
+    assert_eq!(json["airbox"]["value_count"], 12);
+    assert_eq!(json["common_transform_layout"]["shape"], serde_json::json!([4, 1, 1]));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    let fingerprint = test_fdm_multilayer_airbox_fingerprint(&carrier_dir);
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+
+    let catalog = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog_json = body_json(catalog).await;
+    assert!(catalog_json["quantities"]
+        .as_array()
+        .is_some_and(|entries| entries.iter().any(|entry| entry["quantity_id"] == "H_demag")));
+
+    let meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta?scope_kind=airbox&scope_id=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let meta_status = meta.status();
+    let meta_json = body_json(meta).await;
+    assert_eq!(meta_status, StatusCode::OK, "{meta_json}");
+    assert_eq!(meta_json["stats"]["max"], 6.0);
+
+    let vector = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&max_samples=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector.status(), StatusCode::OK);
+    assert_eq!(vector.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(vector.headers()["x-fullmag-scope-kind"], "airbox");
+    assert_eq!(vector.headers()["x-fullmag-scope-id"], "airbox");
+    assert_eq!(vector.headers()["x-fullmag-mesh-topology-hash"], format!("sha256:{fingerprint}"));
+    assert_eq!(vector.headers()["x-fullmag-field-indexing"], "explicit_node_indices");
+    assert_eq!(vector.headers()["x-fullmag-point-count"], "4");
+    let bytes = body_bytes(vector).await;
+    assert_eq!(
+        [
+            u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
+            u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+        ],
+        [2, 2, 1]
+    );
+    assert_eq!(decode_fmvp_metadata_scope(&bytes), ("airbox".into(), "airbox".into()));
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let h_eff = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_eff/samples/vector?scope_kind=airbox&scope_id=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(h_eff.status(), StatusCode::NOT_FOUND);
+    let h_eff_error = body_json(h_eff).await;
+    assert!(h_eff_error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("fdm_multilayer_airbox_h_eff_unavailable.v1")));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_airbox_layout_rejects_fingerprint_and_seed_mismatches() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    let layout_uri = "/v2/sessions/current/data/domain/fdm-multilayer-layout";
+
+    let mut manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(carrier_dir.join("manifest.json")).expect("test manifest should exist"),
+    )
+    .expect("test manifest should parse");
+    manifest["carrier_fingerprint"] = serde_json::json!("a".repeat(64));
+    fs::write(
+        carrier_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let fingerprint_mismatch = app
+        .clone()
+        .oneshot(Request::builder().uri(layout_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(fingerprint_mismatch.status(), StatusCode::OK);
+    let fingerprint_mismatch_json = body_json(fingerprint_mismatch).await;
+    assert_eq!(fingerprint_mismatch_json["airbox"]["carrier_available"], false);
+    assert_eq!(fingerprint_mismatch_json["airbox"]["h_demag_available"], false);
+    assert!(fingerprint_mismatch_json["airbox"]["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("carrier_fingerprint")));
+
+    write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    manifest = serde_json::from_slice(
+        &fs::read(carrier_dir.join("manifest.json")).expect("test manifest should exist"),
+    )
+    .expect("test manifest should parse");
+    manifest["source_grid_fingerprints"][0] = serde_json::json!("c".repeat(64));
+    fs::write(
+        carrier_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let seed_mismatch = app
+        .oneshot(Request::builder().uri(layout_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(seed_mismatch.status(), StatusCode::OK);
+    let seed_mismatch_json = body_json(seed_mismatch).await;
+    assert_eq!(seed_mismatch_json["airbox"]["carrier_available"], false);
+    assert_eq!(seed_mismatch_json["airbox"]["h_demag_available"], false);
+    assert!(seed_mismatch_json["airbox"]["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("carrier_fingerprint")));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    let vector_uri = "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox";
+
+    let absent_layout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(absent_layout.status(), StatusCode::OK);
+    let absent_layout_json = body_json(absent_layout).await;
+    assert_eq!(absent_layout_json["airbox"]["carrier_available"], false);
+    assert_eq!(absent_layout_json["airbox"]["h_demag_available"], false);
+    assert_eq!(
+        absent_layout_json["airbox"]["unavailable_reason"],
+        "airbox_carrier_missing"
+    );
+
+    let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+
+    fs::remove_file(carrier_dir.join("H_demag.samples.v1.json"))
+        .expect("test carrier field must exist before removal");
+    let missing = app
+        .clone()
+        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let missing_layout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_layout.status(), StatusCode::OK);
+    let missing_layout_json = body_json(missing_layout).await;
+    assert_eq!(missing_layout_json["airbox"]["carrier_available"], false);
+    assert_eq!(missing_layout_json["airbox"]["h_demag_available"], false);
+    assert!(missing_layout_json["airbox"]["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("airbox_carrier_invalid") || reason.contains("airbox_carrier_missing")));
+
+    write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    let mut manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(carrier_dir.join("manifest.json")).expect("test manifest should exist"),
+    )
+    .expect("test manifest should parse");
+    manifest["field_artifact_sha256"] = serde_json::json!("0".repeat(64));
+    fs::write(
+        carrier_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let bad_hash = app
+        .clone()
+        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(bad_hash.status(), StatusCode::NOT_FOUND);
+    let bad_hash_layout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_hash_layout.status(), StatusCode::OK);
+    let bad_hash_layout_json = body_json(bad_hash_layout).await;
+    assert_eq!(bad_hash_layout_json["airbox"]["carrier_available"], false);
+    assert_eq!(bad_hash_layout_json["airbox"]["h_demag_available"], false);
+    assert!(bad_hash_layout_json["airbox"]["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("airbox_carrier_invalid")));
+
+    write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    manifest = serde_json::from_slice(
+        &fs::read(carrier_dir.join("manifest.json")).expect("test manifest should exist"),
+    )
+    .expect("test manifest should parse");
+    manifest["sample_count"] = serde_json::json!(3);
+    fs::write(
+        carrier_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let bad_count = app
+        .clone()
+        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(bad_count.status(), StatusCode::NOT_FOUND);
+    let bad_count_layout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_count_layout.status(), StatusCode::OK);
+    let bad_count_layout_json = body_json(bad_count_layout).await;
+    assert_eq!(bad_count_layout_json["airbox"]["carrier_available"], false);
+    assert_eq!(bad_count_layout_json["airbox"]["h_demag_available"], false);
+    assert!(bad_count_layout_json["airbox"]["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("airbox_carrier_invalid")));
+
+    fs::write(carrier_dir.join("manifest.json"), b"{")
+        .expect("test manifest should be overwritable");
+    let malformed = app.clone()
+        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), StatusCode::NOT_FOUND);
+    let malformed_layout = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(malformed_layout.status(), StatusCode::OK);
+    let malformed_layout_json = body_json(malformed_layout).await;
+    assert_eq!(malformed_layout_json["airbox"]["carrier_available"], false);
+    assert_eq!(malformed_layout_json["airbox"]["h_demag_available"], false);
+    assert!(malformed_layout_json["airbox"]["unavailable_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("airbox_carrier_invalid")));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+async fn set_test_fdm_domain_geometry(
+    state: &Arc<AppState>,
+    counts: [u32; 3],
+    origin_m: [f64; 3],
+    cell_m: [f64; 3],
+) {
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test session should exist");
+    snapshot.metadata = Some(serde_json::json!({
+        "artifact_layout": {
+            "backend": "fdm",
+            "grid_cells": counts,
+            "origin_m": origin_m,
+            "cell_size": cell_m
+        }
+    }));
+    snapshot.live_state = None;
+}
+
+#[tokio::test]
+async fn fdm_region_membership_is_not_current_for_a_fem_snapshot() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 1]);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fem" } },
+            "artifact_layout": { "backend": "fem" }
+        }));
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_region_membership_is_available_from_execution_plan_before_artifact_publish() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mut problem_value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json"
+    ))
+    .expect("bootstrap FDM ProblemIR fixture should parse");
+    fullmag_ir::migrate_problem_ir_json_value(&mut problem_value)
+        .expect("bootstrap FDM ProblemIR should migrate");
+    let problem: fullmag_ir::ProblemIR = serde_json::from_value(problem_value)
+        .expect("migrated bootstrap FDM ProblemIR should deserialize");
+    let plan = fullmag_plan::plan(&problem).expect("bootstrap FDM problem should plan");
+    let plan_value = serde_json::to_value(&plan).expect("execution plan should serialize");
+    let expected_counts: [u32; 3] =
+        serde_json::from_value(plan_value["backend_plan"]["grid_certificate"]["counts"].clone())
+            .expect("planned FDM grid certificate should expose counts");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({ "execution_plan": plan_value }));
+        snapshot.live_state = None;
+    }
+    assert!(
+        !artifact_dir
+            .join("mesh/fdm_region_membership.v2.json")
+            .exists(),
+        "regression requires a plan-only session without membership artifacts"
+    );
+
+    let descriptor_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(descriptor_response.status(), StatusCode::OK);
+    let descriptor = body_json(descriptor_response).await;
+    assert_eq!(descriptor["schema_version"], "fdm_region_membership.v2");
+    assert_eq!(descriptor["counts"], serde_json::json!(expected_counts));
+
+    let binary_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(binary_response.status(), StatusCode::OK);
+    let binary = body_bytes(binary_response).await;
+    assert_eq!(&binary[..4], b"FMRM");
+    assert_eq!(&binary[4..6], &[2, 2]);
+    assert_eq!(
+        [
+            u32::from_le_bytes(binary[8..12].try_into().unwrap()),
+            u32::from_le_bytes(binary[12..16].try_into().unwrap()),
+            u32::from_le_bytes(binary[16..20].try_into().unwrap()),
+        ],
+        expected_counts
+    );
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_region_membership_rejects_a_descriptor_for_an_old_grid() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 1]);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } },
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.live_state = None;
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error = body_json(response).await;
+    assert_eq!(error["code"], "conflict");
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("current FDM domain"));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_field_vector_object_scope_uses_membership_cell_ordinals() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 2,
+            "object_ids": ["body"],
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body",
+                "region_id": "body:core",
+                "priority": 0
+            }],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([2, 1, 1], &[1, u32::MAX]),
+    )
+    .expect("failed to write FDM membership binary");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("FDM field fixture should deserialize");
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+            .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = body_bytes(response).await;
+        panic!(
+            "expected scoped FDM field response, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    assert_eq!(response.headers()["x-fullmag-scope-kind"], "object");
+    assert_eq!(response.headers()["x-fullmag-point-count"], "1");
+    let bytes = body_bytes(response).await;
+    assert_eq!(bytes[4], 3, "scoped FDM requires explicit cell ordinals");
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0]);
+
+    let region = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=region&scope_id=body%3Acore")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(region.status(), StatusCode::OK);
+    assert_eq!(region.headers()["x-fullmag-scope-kind"], "region");
+    let bytes = body_bytes(region).await;
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0]);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_field_vector_airbox_surface_and_max_samples_use_cell_ordinals() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [3, 3, 3],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 27,
+            "object_ids": ["body"],
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body",
+                "region_id": "body:core",
+                "priority": 0
+            }],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    let mut memberships = vec![1_u32; 27];
+    memberships[0] = u32::MAX;
+    memberships[13] = u32::MAX;
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([3, 3, 3], &memberships),
+    )
+    .expect("failed to write FDM membership binary");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [3, 3, 3],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        let values = (0..27)
+            .map(|index| [index as f64, 0.0, 0.0])
+            .collect::<Vec<_>>();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": values,
+                "layout": { "grid_cells": [3, 3, 3] }
+            }
+        }))
+        .expect("FDM field fixture should deserialize");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&geometry_scope=surface&max_samples=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-point-count"], "1");
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "sampled_node_indices"
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![0.0, 0.0, 0.0]);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_field_vector_region_scope_requires_owner_for_duplicate_region_ids() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 2,
+            "object_ids": ["body-a", "body-b"],
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body-a",
+                "region_id": "shared",
+                "priority": 0
+            }, {
+                "numeric_id": 2,
+                "object_id": "body-b",
+                "region_id": "shared",
+                "priority": 0
+            }],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([2, 1, 1], &[1, 2]),
+    )
+    .expect("failed to write FDM membership binary");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("FDM field fixture should deserialize");
+    }
+
+    let ambiguous = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=region&scope_id=shared")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), StatusCode::CONFLICT);
+    let error = body_json(ambiguous).await;
+    assert_eq!(error["code"], "conflict");
+    assert!(error["message"]
+        .as_str()
+        .expect("conflict should include a message")
+        .contains("provide owner_object_id"));
+
+    let qualified_a = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=region&scope_id=shared&owner_object_id=body-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(qualified_a.status(), StatusCode::OK);
+    assert_eq!(
+        qualified_a.headers()["x-fullmag-scope-id"],
+        "region:body-a:shared"
+    );
+    let qualified_a_etag = qualified_a.headers()["etag"]
+        .to_str()
+        .expect("qualified field response should carry an ETag")
+        .to_string();
+    let qualified_a_bytes = body_bytes(qualified_a).await;
+    assert_eq!(decode_fmvp_node_indices(&qualified_a_bytes), vec![0]);
+    assert_eq!(
+        decode_fmvp_metadata_scope(&qualified_a_bytes),
+        ("region".into(), "region:body-a:shared".into())
+    );
+
+    let qualified = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=region&scope_id=shared&owner_object_id=body-b")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(qualified.status(), StatusCode::OK);
+    assert_eq!(qualified.headers()["x-fullmag-scope-kind"], "region");
+    assert_eq!(
+        qualified.headers()["x-fullmag-scope-id"],
+        "region:body-b:shared"
+    );
+    assert_ne!(qualified.headers()["etag"], qualified_a_etag);
+    assert_eq!(qualified.headers()["x-fullmag-point-count"], "1");
+    let bytes = body_bytes(qualified).await;
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![1]);
+    assert_eq!(
+        decode_fmvp_metadata_scope(&bytes),
+        ("region".into(), "region:body-b:shared".into())
+    );
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![0.0, 1.0, 0.0]);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_region_membership_binary_requires_owner_for_duplicate_region_ids() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 2,
+            "object_ids": ["body-a", "body-b"],
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body-a",
+                "region_id": "shared",
+                "priority": 0
+            }, {
+                "numeric_id": 2,
+                "object_id": "body-b",
+                "region_id": "shared",
+                "priority": 0
+            }],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([2, 1, 1], &[1, 2]),
+    )
+    .expect("failed to write FDM membership binary");
+    set_test_fdm_domain_geometry(&state, [2, 1, 1], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]).await;
+
+    let ambiguous = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-membership/shared")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), StatusCode::CONFLICT);
+    let error = body_json(ambiguous).await;
+    assert!(error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("provide owner_object_id")));
+
+    let qualified = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/sessions/current/data/fdm-region-membership/shared?owner_object_id=body-b",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(qualified.status(), StatusCode::OK);
+    let bytes = body_bytes(qualified).await;
+    assert_eq!(
+        u32::from_le_bytes(bytes[64..68].try_into().unwrap()),
+        u32::MAX
+    );
+    assert_eq!(u32::from_le_bytes(bytes[68..72].try_into().unwrap()), 2);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm_multilayer",
+                    "common_cells": [4, 1, 1]
+                }
+            },
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [4, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:top",
+                    "object_id": "top",
+                    "magnet_name": "layer-a",
+                    "native_grid": [2, 1, 1],
+                    "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "value_offset": 0,
+                    "value_count": 2
+                }, {
+                    "layer_id": "layer:bottom",
+                    "object_id": "bottom",
+                    "magnet_name": "layer-b",
+                    "native_grid": [1, 1, 1],
+                    "native_cell_size": [2.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 2.0],
+                    "value_offset": 2,
+                    "value_count": 1
+                }]
+            }
+        }));
+        snapshot.live_state = None;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0]
+                ]
+            }
+        }))
+        .expect("multilayer field fixture should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=layer&scope_id=layer%3Abottom")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-scope-kind"], "layer");
+    assert_eq!(response.headers()["x-fullmag-scope-id"], "layer-b");
+    assert_eq!(response.headers()["x-fullmag-point-count"], "1");
+    let expected_carrier_hash = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new([0.0, 0.0, 2.0], [1, 1, 1], [2.0, 1.0, 1.0], 1, 1,)
+            .expect("native layer grid must form a certificate")
+            .grid_fingerprint
+    );
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-mesh-topology-hash"],
+        expected_carrier_hash
+    );
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "explicit_node_indices"
+    );
+    assert_eq!(response.headers()["x-fullmag-node-index-count"], "1");
+    let bytes = body_bytes(response).await;
+    assert_eq!(
+        decode_fmvp_metadata_scope(&bytes),
+        ("layer".into(), "layer-b".into())
+    );
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![0.0, 1.0, 0.0]);
+    assert_eq!(
+        [
+            u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
+            u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+        ],
+        [1, 1, 1]
+    );
+}
+
+#[tokio::test]
+async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [4, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:top",
+                    "object_id": "object:top",
+                    "magnet_name": "object-a",
+                    "native_grid": [2, 1, 1],
+                    "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "value_offset": 0,
+                    "value_count": 2
+                }, {
+                    "layer_id": "layer:bottom",
+                    "object_id": "object:bottom",
+                    "magnet_name": "object-b",
+                    "native_grid": [1, 1, 1],
+                    "native_cell_size": [2.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 2.0],
+                    "value_offset": 2,
+                    "value_count": 1
+                }]
+            }
+        }));
+        snapshot.live_state = None;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0]
+                ]
+            }
+        }))
+        .expect("multilayer field fixture should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=object%3Abottom")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-scope-kind"], "object");
+    assert_eq!(response.headers()["x-fullmag-scope-id"], "object:bottom");
+    let expected_carrier_hash = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new([0.0, 0.0, 2.0], [1, 1, 1], [2.0, 1.0, 1.0], 1, 1,)
+            .expect("native object grid must form a certificate")
+            .grid_fingerprint
+    );
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-mesh-topology-hash"],
+        expected_carrier_hash
+    );
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "explicit_node_indices"
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(
+        decode_fmvp_metadata_scope(&bytes),
+        ("object".into(), "object:bottom".into())
+    );
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![0.0, 1.0, 0.0]);
+
+    // Keep the historical magnet_name alias working while the canonical
+    // object_id path remains the identity used by Explorer/viewport targets.
+    let alias = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=object-b")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(alias.status(), StatusCode::OK);
+    assert_eq!(alias.headers()["x-fullmag-scope-id"], "object:bottom");
+    let alias_bytes = body_bytes(alias).await;
+    assert_eq!(decode_fmvp_metadata_scope(&alias_bytes),
+        ("object".into(), "object:bottom".into()));
+    assert_eq!(decode_fmvp_node_indices(&alias_bytes), vec![0]);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_field_vector_scope_rejects_ambiguous_identity_aliases() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [3, 1, 1],
+                "layers": [{
+                    "layer_id": "shared-layer",
+                    "object_id": "shared-object",
+                    "magnet_name": "layer-a",
+                    "native_grid": [1, 1, 1],
+                    "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "value_offset": 0,
+                    "value_count": 1
+                }, {
+                    "layer_id": "layer-b",
+                    "object_id": "object-b",
+                    "magnet_name": "shared-layer",
+                    "native_grid": [1, 1, 1],
+                    "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 1.0],
+                    "value_offset": 1,
+                    "value_count": 1
+                }, {
+                    "layer_id": "layer-c",
+                    "object_id": "object-c",
+                    "magnet_name": "shared-object",
+                    "native_grid": [1, 1, 1],
+                    "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 2.0],
+                    "value_offset": 2,
+                    "value_count": 1
+                }]
+            }
+        }));
+        snapshot.live_state = None;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0]
+                ]
+            }
+        }))
+        .expect("multilayer field fixture should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let layer_alias_collision = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=layer&scope_id=shared-layer")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(layer_alias_collision.status(), StatusCode::CONFLICT);
+    let layer_error = body_json(layer_alias_collision).await;
+    assert_eq!(layer_error["code"], "conflict");
+    assert!(layer_error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("layer is ambiguous")));
+
+    let object_alias_collision = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=shared-object")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(object_alias_collision.status(), StatusCode::CONFLICT);
+    let object_error = body_json(object_alias_collision).await;
+    assert_eq!(object_error["code"], "conflict");
+    assert!(object_error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("object is ambiguous")));
+}
+
+#[tokio::test]
+async fn fdm_multilayer_field_vector_region_scope_fails_closed_without_single_grid_membership() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [2, 1, 1],
+                "layers": [{
+                    "magnet_name": "object-a",
+                    "native_grid": [2, 1, 1],
+                    "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "value_offset": 0,
+                    "value_count": 2
+                }]
+            }
+        }));
+        snapshot.live_state = None;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": { "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] }
+        }))
+        .expect("multilayer field fixture should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=region&scope_id=object-a:core")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(response).await;
+    assert!(body["message"]
+        .as_str()
+        .is_some_and(|detail| detail.contains("no single FMRM membership carrier")));
+}
+
+#[tokio::test]
+async fn fdm_region_membership_descriptor_exposes_exact_magnetic_support_summary() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [4, 2, 1],
+            "cell_m": [1e-9, 2e-9, 5e-9],
+            "cell_count": 8,
+            "region_legend": [],
+            "encoding": "FMRM:u32_membership_le",
+            "magnetic_support": {
+                "semantic_role": "magnetic-support",
+                "grid_fingerprint": "00".repeat(32),
+                "bounds_min_m": [0.0, 0.0, 0.0],
+                "bounds_max_m": [4e-9, 4e-9, 5e-9],
+                "active_cell_count": 7,
+                "inactive_cell_count": 1,
+                "active_unassigned_cell_count": 1
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([4, 2, 1], &[0, 1, 1, 1, 1, 1, 1, u32::MAX]),
+    )
+    .expect("failed to write FDM membership binary");
+    set_test_fdm_domain_geometry(&state, [4, 2, 1], [0.0, 0.0, 0.0], [1e-9, 2e-9, 5e-9]).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(
+        body["magnetic_support"]["semantic_role"],
+        "magnetic-support"
+    );
+    assert_eq!(body["magnetic_support"]["active_cell_count"], 7);
+    assert_eq!(body["magnetic_support"]["inactive_cell_count"], 1);
+    assert_eq!(body["magnetic_support"]["active_unassigned_cell_count"], 1);
+    assert_eq!(
+        body["magnetic_support"]["bounds_max_m"],
+        serde_json::json!([4e-9, 4e-9, 5e-9])
+    );
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_region_membership_descriptor_rejects_summary_without_binary() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1e-9, 1e-9, 1e-9],
+            "cell_count": 2,
+            "region_legend": [],
+            "encoding": "FMRM:u32_membership_le",
+            "magnetic_support": {
+                "semantic_role": "magnetic-support",
+                "grid_fingerprint": "00".repeat(32),
+                "bounds_min_m": [0.0, 0.0, 0.0],
+                "bounds_max_m": [1e-9, 1e-9, 1e-9],
+                "active_cell_count": 1,
+                "inactive_cell_count": 1,
+                "active_unassigned_cell_count": 1
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    set_test_fdm_domain_geometry(&state, [2, 1, 1], [0.0, 0.0, 0.0], [1e-9, 1e-9, 1e-9]).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_region_membership_descriptor_rejects_summary_mismatched_with_binary() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1e-9, 1e-9, 1e-9],
+            "cell_count": 2,
+            "region_legend": [],
+            "encoding": "FMRM:u32_membership_le",
+            "magnetic_support": {
+                "semantic_role": "magnetic-support",
+                "grid_fingerprint": "00".repeat(32),
+                "bounds_min_m": [0.0, 0.0, 0.0],
+                "bounds_max_m": [1e-9, 1e-9, 1e-9],
+                "active_cell_count": 1,
+                "inactive_cell_count": 1,
+                "active_unassigned_cell_count": 1
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([2, 1, 1], &[0, 1]),
+    )
+    .expect("failed to write mismatched FDM membership binary");
+    set_test_fdm_domain_geometry(&state, [2, 1, 1], [0.0, 0.0, 0.0], [1e-9, 1e-9, 1e-9]).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let error = body_json(response).await;
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("FMRM binary mask"));
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
 #[tokio::test]
 async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
@@ -21684,6 +24251,7 @@ async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.region_realization_revisions.membership = 7;
     }
+    set_test_fdm_domain_geometry(&state, [2, 1, 1], [0.0, 0.0, 0.0], [1e-9, 1e-9, 1e-9]).await;
 
     let descriptor_response = app
         .clone()
@@ -21702,6 +24270,10 @@ async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
     let descriptor = body_json(descriptor_response).await;
     assert_eq!(descriptor["freshness"], "current");
     assert_eq!(descriptor["region_membership_revision"], 7);
+    assert!(
+        descriptor.get("magnetic_support").is_none(),
+        "legacy artifacts must remain readable without inventing support summary data"
+    );
 
     let first = app
         .clone()
@@ -21798,13 +24370,14 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
         command_completion_revision: 1,
         fields_revision: 1,
         scalars_revision: 1,
-        domain_generation_id: 1,
+        domain_generation_id: "1".to_string(),
         artifacts_revision: 1,
         engine_log_revision: 1,
         solver_profile_revision: 1,
         display_revision: 1,
         workspace_revision: 1,
         mesh_revision: 1,
+        region_membership_revision: 1,
         mesh_build_revision: 1,
         commands_revision: 1,
         stages_revision: 1,
@@ -21961,7 +24534,7 @@ async fn coalesced_field_sample_batches_are_delayed_before_sequence_assignment()
             resource_id: Some("samples".to_string()),
             quantity_ids: vec!["m".to_string()],
             broad: false,
-            domain_generation_id: Some(1),
+            domain_generation_id: Some("1".to_string()),
             recommended_fetch: None,
         }],
         true,
@@ -26605,6 +29178,141 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
 }
 
 #[tokio::test]
+async fn v2_fdm_vector_ignores_max_samples_when_preview_would_be_downscaled() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 26;
+        // A reused session may still carry the previous FEM solver mesh.  The
+        // requested FDM lane must not inherit its topology metadata.
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } }
+        }));
+        // The solver domain is a 4-cell FDM grid.  Both the legacy materialized
+        // field and the preview cache below only carry a 2-cell display preview.
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [9.0, 9.0, 9.0],
+                    [8.0, 8.0, 8.0]
+                ],
+                "source_step": 7,
+                "source_revision": 7,
+                "layout": {
+                    "grid_cells": [2, 1, 1],
+                    "original_grid_cells": [4, 1, 1]
+                }
+            }
+        }))
+        .expect("downscaled latest preview should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 8,
+            source_step: 8,
+            source_revision: 8,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "m".to_string(),
+            unit: "1".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [4, 1, 1],
+            vector_field_values: vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: true,
+            auto_downscale_message: Some("preview only".to_string()),
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 8,
+                time: 3.0e-9,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [4, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+                ]),
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin&scope_kind=full&max_samples=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-encoding")
+            .and_then(|value| value.to_str().ok()),
+        Some("FMVP;version=2"),
+        "FDM vectors must not inherit stale FEM topology metadata"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("4"),
+        "full FDM requests must not return preview-grid cardinality"
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-fullmag-mesh-topology-hash")
+            .is_none(),
+        "FDM vectors must not advertise stale FEM topology"
+    );
+    assert!(
+        response.headers().get("x-fullmag-field-indexing").is_none(),
+        "legacy full FDM FMVP v2 must not claim FEM indexing metadata"
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(
+        values,
+        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,],
+        "full FDM m must fall back to the solver-domain magnetization"
+    );
+}
+
+#[tokio::test]
 async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -30042,6 +32750,7 @@ fn openapi_relaxation_contract_is_typed() {
     assert!(command_schema.contains("max_relaxation_time_s"));
     assert!(command_schema.contains("energy_tolerance_j"));
     assert!(command_schema.contains("RelaxationAlgorithm"));
+    assert!(command_schema.contains("fdm_grid_refresh"));
 
     let stage_schema = schemas
         .get("StageExecutionRecordResource")

@@ -13,6 +13,7 @@ import type {
 } from "../ObjectRegionsPanelModel";
 import { resolveRegionInlineDiagnostics } from "./regionDiagnosticPresentation";
 import type { RegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
+import type { MeshInspectorLane } from "../fdmMeshInspectorModel";
 
 export interface RegionSubPanelProps {
   model: ObjectRegionPanelModel;
@@ -20,8 +21,10 @@ export interface RegionSubPanelProps {
   pending: boolean;
   draftDirty: boolean;
   buildRegion: () => Promise<void>;
-  regionMeshLifecycle: RegionMeshLifecycle;
+  regionMeshLifecycle: RegionMeshLifecycle | null;
   canWriteRegion: boolean;
+  canWriteMeshRegion?: boolean;
+  meshLane?: MeshInspectorLane;
   updateDraft: (patch: Partial<ObjectRegionDraft>) => void;
   updateShape: (patch: Partial<RegionShapeDraft>) => void;
   updateShapeVector: (key: "axis" | "center" | "size", index: 0 | 1 | 2, value: number) => void;
@@ -67,7 +70,13 @@ export function ObjectRegionInlineDiagnostics({
   );
 }
 
-export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPanelModel }) {
+export function ObjectRegionMetadataSection({
+  model,
+  meshLane = "unknown",
+}: {
+  model: ObjectRegionPanelModel;
+  meshLane?: MeshInspectorLane;
+}) {
   return (
     <InspectorGroup title="Authored Subregion" collapsible defaultOpen>
       <FieldRow label="Owner object ID" value={model.objectId} />
@@ -83,7 +92,13 @@ export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPane
       />
       <FieldRow
         label="Realization"
-        value={model.realizationStatus ?? model.realizationPolicy ?? "inherits object"}
+        value={
+          meshLane === "fem"
+            ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
+            : meshLane === "fdm"
+              ? "structured-grid membership"
+              : "Withheld until the session discretization is explicit"
+        }
       />
     </InspectorGroup>
   );
@@ -94,7 +109,9 @@ export function ObjectRegionActionsSection({
   draftDirty,
   buildRegion,
   regionMeshLifecycle,
+  meshLane = "unknown",
   canWriteRegion,
+  canWriteMeshRegion,
   applyRegion,
   revert,
   duplicateRegion,
@@ -105,8 +122,10 @@ export function ObjectRegionActionsSection({
   pending: boolean;
   draftDirty: boolean;
   buildRegion: () => Promise<void>;
-  regionMeshLifecycle: RegionMeshLifecycle;
+  regionMeshLifecycle: RegionMeshLifecycle | null;
+  meshLane?: MeshInspectorLane;
   canWriteRegion: boolean;
+  canWriteMeshRegion?: boolean;
   applyRegion: () => Promise<boolean>;
   revert: () => void;
   duplicateRegion: () => Promise<void>;
@@ -114,6 +133,8 @@ export function ObjectRegionActionsSection({
   feedback: { kind: "error" | "success"; message: string } | null;
   couplingDependencies: RegionCouplingDependency[];
 }) {
+  const femMeshLifecycle = meshLane === "fem" ? regionMeshLifecycle : null;
+  const meshWritesAllowed = meshLane === "fem" && (canWriteMeshRegion ?? canWriteRegion);
   const hasActiveCouplings = couplingDependencies.length > 0;
   const couplingSummary =
     couplingDependencies.length === 0
@@ -126,16 +147,47 @@ export function ObjectRegionActionsSection({
           .join("; ");
   return (
     <InspectorGroup title="Actions">
-      <FieldRow label="Mesh realization" value={regionMeshLifecycle.status} />
-      <FieldRow label="Mesh status" value={regionMeshLifecycle.reason} />
-      <FieldRow
-        label="Mesh generation"
-        value={regionMeshLifecycle.generationId ?? "not realized"}
-      />
-      <FieldRow
-        label="Topology fingerprint"
-        value={regionMeshLifecycle.topologyFingerprint ?? "not certified"}
-      />
+      {femMeshLifecycle ? (
+        <>
+          <FieldRow label="Mesh realization" value={femMeshLifecycle.status} />
+          <FieldRow label="Mesh status" value={femMeshLifecycle.reason} />
+          <FieldRow
+            label="Mesh generation"
+            value={femMeshLifecycle.generationId ?? "not realized"}
+          />
+          <FieldRow
+            label="Topology fingerprint"
+            value={femMeshLifecycle.topologyFingerprint ?? "not certified"}
+          />
+        </>
+      ) : (
+        <>
+          <FieldRow
+            label="Mesh realization"
+            value={
+              meshLane === "fdm"
+                ? "structured-grid cell participation"
+                : "unresolved; FEM realization withheld"
+            }
+          />
+          <FieldRow
+            label="Unstructured topology"
+            value={
+              meshLane === "fdm"
+                ? "Not applicable for FDM structured-grid regions"
+                : "Not available until the session discretization is explicit"
+            }
+          />
+          <FieldRow
+            label="Mesh write actions"
+            value={
+              meshLane === "fdm"
+                ? "FDM structured-grid membership is read-only; runtime-derived"
+                : "withheld until FEM is resolved"
+            }
+          />
+        </>
+      )}
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending || !canWriteRegion}
@@ -147,20 +199,18 @@ export function ObjectRegionActionsSection({
         >
           Apply Region
         </Button>
-        <Button
-          disabled={
-            pending ||
-            !canWriteRegion ||
-            regionMeshLifecycle.status === "unsupported"
-          }
-          size="sm"
-          type="button"
-          variant="primary"
-          title={regionMeshLifecycle.reason}
-          onClick={() => void buildRegion()}
-        >
-          {draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
-        </Button>
+        {meshLane === "fem" ? (
+          <Button
+            disabled={pending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
+            size="sm"
+            type="button"
+            variant="primary"
+            title={meshWritesAllowed ? femMeshLifecycle?.reason : "FEM mesh realization is unavailable"}
+            onClick={() => void buildRegion()}
+          >
+            {draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
+          </Button>
+        ) : null}
         <Button
           size="sm"
           type="button"

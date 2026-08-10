@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
@@ -30,6 +31,9 @@ import {
 } from "./visualizationDebugPresentation";
 import { VisualizationDebugPanelModelAdapter } from "./useVisualizationDebugPanelModel";
 import {
+  resolveVisualizationDebugLane,
+} from "./VisualizationDebugPanelModel";
+import {
   buildVisualizationDebugExport,
   createBrowserVisualizationDebugEvidenceEnvironment,
   createVisualizationDebugEvidenceActions,
@@ -49,6 +53,22 @@ export function VisualizationDebugPanel({
   createActions?: VisualizationDebugEvidenceActionsFactory;
   selection: Selection;
 }) {
+  const lane = useSessionStatusSelector(
+    (status) =>
+      resolveVisualizationDebugLane(status.data?.domain?.discretization),
+  );
+  if (lane !== "fem") {
+    return (
+      <div
+        className="fm-visualization-debug-panel"
+        data-state={lane === "fdm" ? "unsupported-target" : "unresolved-lane"}
+      >
+        {lane === "fdm"
+          ? "Visualization debug is not applicable for the FDM structured-grid lane."
+          : "Visualization debug is unavailable until the session discretization is explicit."}
+      </div>
+    );
+  }
   return (
     <VisualizationDebugPanelModelAdapter selection={selection.ref}>
       {(model) => (

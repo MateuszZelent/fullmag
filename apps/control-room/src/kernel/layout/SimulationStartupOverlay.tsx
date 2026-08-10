@@ -474,20 +474,9 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
 
   useEffect(() => {
     if (!shouldTick) return;
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const tick = () => {
-      timeoutId = setTimeout(() => {
-        if (cancelled) return;
-        setDisplayNow(Date.now());
-        tick();
-      }, 1_000);
-    };
-    tick();
-    return () => {
-      cancelled = true;
-      if (timeoutId !== null) clearTimeout(timeoutId);
-    };
+    return scheduleRepeatingTimeout(() => {
+      setDisplayNow(Date.now());
+    }, 1_000);
   }, [shouldTick]);
 
   const state = resolveSimulationPreparationViewModel(
@@ -504,22 +493,38 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
 
   useEffect(() => {
     if (!shouldRefresh) return;
-
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const tick = () => {
-      if (cancelled) return;
-      startupRefetch();
-      timeoutId = setTimeout(tick, statusRefreshIntervalMs());
-    };
-    timeoutId = setTimeout(tick, statusRefreshIntervalMs());
-    return () => {
-      cancelled = true;
-      if (timeoutId !== null) clearTimeout(timeoutId);
-    };
+    return scheduleRepeatingTimeout(
+      startupRefetch,
+      statusRefreshIntervalMs(),
+    );
   }, [startupRefetch, shouldRefresh]);
 
   return visibleState;
+}
+
+function scheduleRepeatingTimeout(
+  callback: () => void,
+  delayMs: number,
+): () => void {
+  let cancelled = false;
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+  const schedule = () => {
+    timeoutId = globalThis.setTimeout(() => {
+      if (cancelled) return;
+      callback();
+      schedule();
+    }, delayMs);
+  };
+
+  schedule();
+
+  return () => {
+    cancelled = true;
+    if (timeoutId !== null) {
+      globalThis.clearTimeout(timeoutId);
+    }
+  };
 }
 
 function preparationDuringRealtimeDisruption(

@@ -48,6 +48,21 @@ describe("resolveVisualizationTopologyFreshness", () => {
     ).toBe("stale");
   });
 
+  it("accepts the API scene_revision alias", () => {
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { scene_revision: 12, objects: [{ id: "film", visible: true }] },
+        { source_scene_revision: 12, mesh_parts: [{ object_id: "film" }] },
+      ),
+    ).toBe("current");
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { scene_revision: 12, objects: [{ id: "film", visible: true }] },
+        { source_scene_revision: 11, mesh_parts: [{ object_id: "film" }] },
+      ),
+    ).toBe("stale");
+  });
+
   it("treats primitive-only scenes without manifest coverage as unknown topology", () => {
     expect(
       resolveVisualizationTopologyFreshness(
@@ -75,6 +90,27 @@ describe("resolveVisualizationTopologyFreshness", () => {
           mesh_parts: [{ id: "part-1", object_id: "film" }],
         },
       ),
+    ).toBe("current");
+  });
+
+  it("can scope coverage to the selected object when another object is still primitive-only", () => {
+    const scene = {
+      revision: 3,
+      objects: [
+        { id: "film", visible: true },
+        { id: "antenna", visible: true },
+      ],
+    };
+    const manifest = {
+      revision: 1,
+      mesh_parts: [{ id: "part-film", object_id: "film" }],
+    };
+
+    expect(resolveVisualizationTopologyFreshness(scene, manifest)).toBe("unknown");
+    expect(
+      resolveVisualizationTopologyFreshness(scene, manifest, {
+        targetObjectId: "object:film",
+      }),
     ).toBe("current");
   });
 

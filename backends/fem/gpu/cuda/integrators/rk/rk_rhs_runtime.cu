@@ -198,7 +198,7 @@ bool gpu_rk_compute_rhs_for_magnetization(
     if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)) {
         return false;
     }
-    if (!gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, reason)) {
+    if (!gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, evaluation_time_s, reason)) {
         return false;
     }
     if (!rhs_timer.finish(reason)) {

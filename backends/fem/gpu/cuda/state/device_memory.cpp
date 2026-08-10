@@ -1,10 +1,10 @@
 /*
  * GPU CUDA device-memory helper source contract.
  *
- * Owns low-level device allocation, byte accounting, overflow checks, and
- * device pointer cleanup for the native FEM CUDA state layer. It does not own
- * FemGpuState lifecycle policy, runtime uploads, transfer auditing, or RK
- * execution.
+ * Owns low-level device allocation, byte accounting, overflow checks, zero
+ * fill, and device pointer cleanup for the native FEM CUDA state layer. It
+ * does not own FemGpuState lifecycle policy, runtime uploads, transfer
+ * auditing, or RK execution.
  */
 
 #include "gpu/cuda/state/device_memory.hpp"
@@ -113,6 +113,37 @@ bool gpu_device_allocate_component(
     return gpu_device_allocate_double(field.x, node_count, device_bytes, error) &&
            gpu_device_allocate_double(field.y, node_count, device_bytes, error) &&
            gpu_device_allocate_double(field.z, node_count, device_bytes, error);
+}
+
+bool gpu_device_zero_component(
+    FemGpuComponentField &field,
+    uint64_t node_count,
+    std::string &error)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME
+    size_t component_bytes = 0;
+    if (!gpu_device_checked_node_bytes(node_count, component_bytes, error)) {
+        return false;
+    }
+    if (node_count == 0) {
+        return true;
+    }
+    if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
+        error = "GPU component zero fill received an unallocated device component";
+        return false;
+    }
+    if (!cuda_ok(cudaMemset(field.x, 0, component_bytes), "cudaMemset component x", error) ||
+        !cuda_ok(cudaMemset(field.y, 0, component_bytes), "cudaMemset component y", error) ||
+        !cuda_ok(cudaMemset(field.z, 0, component_bytes), "cudaMemset component z", error)) {
+        return false;
+    }
+    return true;
+#else
+    (void)field;
+    (void)node_count;
+    error = "GPU component zero fill requires CUDA runtime support";
+    return false;
+#endif
 }
 
 void gpu_device_free_double(double *&ptr)

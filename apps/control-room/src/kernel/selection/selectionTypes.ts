@@ -212,6 +212,40 @@ export function visualizationObjectIdForMeshPartLike(part: {
 }
 
 export type MeshElementFamily = "hex8" | "prism6" | "pyramid5" | "tet4";
+export type FdmCellMaskState = "inactive" | "active-unassigned" | "region";
+export type FdmDomainSelectionKind =
+  | "mesh.grid"
+  | "mesh.grid.descriptor"
+  | "mesh.grid.common"
+  | "mesh.grid.layers"
+  | "mesh.grid.layer"
+  | "mesh.grid.layer.native-grid"
+  | "mesh.grid.layer.mask"
+  | "mesh.grid.layer.transfer"
+  | "mesh.grid.layer.provenance"
+  | "mesh.grid.magnetic-support"
+  | "mesh.grid.active-unassigned"
+  | "mesh.grid.mask"
+  | "mesh.grid.provenance"
+  | "mesh.grid.region"
+  | "mesh.grid.universe-outside-support";
+
+export type FdmDomainSelectionScope =
+  | "domain"
+  | "descriptor"
+  | "common"
+  | "layers"
+  | "layer"
+  | "layer-native-grid"
+  | "layer-mask"
+  | "layer-transfer"
+  | "layer-provenance"
+  | "magnetic-support"
+  | "active-unassigned"
+  | "mask"
+  | "provenance"
+  | "region"
+  | "universe-outside-support";
 
 export type SelectionRef =
   | LiveChartSelectionRef
@@ -222,6 +256,40 @@ export type SelectionRef =
       nodeId: string;
       type: "planar-monitor";
       visualizationTargetId: `planar-monitor:${string}`;
+    }
+  | {
+      kind: FdmDomainSelectionKind;
+      nodeId: string;
+      /**
+       * Optional owner identity for region-scoped FDM mesh selections.
+       *
+       * Region identifiers are scoped by ferromagnetic object in the
+       * membership legend. Keep this optional for legacy nodes that only
+       * published a region id; new nodes must carry it when available.
+       */
+      objectId?: string;
+      layerId?: string;
+      regionId?: string;
+      scope: FdmDomainSelectionScope;
+      type: "fdm-domain";
+      visualizationTargetId:
+        | "fdm-domain"
+        | `fdm-native-layer:${string}`
+        | "fdm-universe-outside-support"
+        | RegionVisualizationTargetId;
+    }
+  | {
+      cellOrdinal: string;
+      gridFingerprint: string;
+      ijk: readonly [number, number, number];
+      kind: "fdm.cell";
+      maskState: FdmCellMaskState;
+      membershipRevision: string;
+      nodeId: "model:mesh:grid";
+      numericRegionId: number | null;
+      regionId: string | null;
+      type: "fdm-cell";
+      visualizationTargetId: "fdm-domain";
     }
   | {
       boundaryFaceIndex?: number | null;
@@ -250,10 +318,11 @@ export type SelectionRef =
         | "airbox.mesh.topology"
         | "airbox.mesh.build"
         | "airbox.visualization"
-        | "airbox.visualization.debug";
+        | "airbox.visualization.debug"
+        | "airbox.multilayer.target";
       nodeId: string;
       type: "airbox";
-      visualizationTargetId: "airbox";
+      visualizationTargetId: "airbox" | "fdm-universe-outside-support";
     }
   | {
       boundaryFaceIndex?: number | null;
@@ -312,19 +381,22 @@ export type SelectionRef =
   | {
       currentTransportId?: string;
       currentTransportIndex?: number;
-      kind: "physics.current-transports" | "physics.current-transport";
+      kind: "physics.current-transport";
       nodeId: string;
       type: "current-transport";
     }
   | {
-      kind: "physics.spin-transports" | "physics.spin-transport";
+      draft?: boolean;
+      kind: "physics.spin-transport";
       nodeId: string;
+      regionId?: string;
       spinTransportId?: string;
       spinTransportIndex?: number;
       type: "spin-transport";
     }
   | {
-      kind: "physics.spin-interfaces" | "physics.spin-interface";
+      draft?: boolean;
+      kind: "physics.spin-interface";
       nodeId: string;
       spinInterfaceId?: string;
       spinInterfaceIndex?: number;
@@ -332,21 +404,33 @@ export type SelectionRef =
       type: "spin-interface";
     }
   | {
-      kind: "physics.spin-torques" | "physics.spin-torque";
+      kind: "physics.spin-torque";
       nodeId: string;
       spinTorqueId?: string;
       spinTorqueIndex?: number;
       type: "spin-torque";
     }
   | {
-      kind: "physics.oersted-fields" | "physics.oersted-field";
+      kind: "physics.oersted-field";
       nodeId: string;
       oerstedFieldId?: string;
       oerstedFieldIndex?: number;
       type: "oersted-field";
     }
   | {
-      fieldDriveId: string;
+      kind: "physics.module";
+      nodeId: string;
+      physicsActivation?: string;
+      physicsModuleId: string;
+      physicsModuleKind: string;
+      physicsScopeKind: string;
+      physicsScopeObjectIds?: readonly string[];
+      regionId?: string;
+      type: "physics-module";
+    }
+  | {
+      draft?: boolean;
+      fieldDriveId?: string;
       kind: "physics.field-drives" | "physics.field-drive";
       nodeId: string;
       type: "physics-field-drive";
@@ -531,6 +615,15 @@ function nullableStringEquals(
   return (left ?? null) === (right ?? null);
 }
 
+function arrayEquals(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 function centroidEquals(
   left: readonly [number, number, number] | null | undefined,
   right: readonly [number, number, number] | null | undefined,
@@ -582,6 +675,33 @@ export function selectionRefEquals(
         left.monitorId === right.monitorId &&
         left.nodeId === right.nodeId &&
         left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "fdm-domain":
+      return (
+        right.type === "fdm-domain" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        nullableStringEquals(left.objectId, right.objectId) &&
+        nullableStringEquals(left.layerId, right.layerId) &&
+        nullableStringEquals(left.regionId, right.regionId) &&
+        left.scope === right.scope &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "fdm-cell":
+      return (
+        right.type === "fdm-cell" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId &&
+        left.cellOrdinal === right.cellOrdinal &&
+        left.ijk[0] === right.ijk[0] &&
+        left.ijk[1] === right.ijk[1] &&
+        left.ijk[2] === right.ijk[2] &&
+        left.maskState === right.maskState &&
+        left.numericRegionId === right.numericRegionId &&
+        left.regionId === right.regionId &&
+        left.gridFingerprint === right.gridFingerprint &&
+        left.membershipRevision === right.membershipRevision
       );
     case "scene-object":
       return (
@@ -678,8 +798,10 @@ export function selectionRefEquals(
     case "spin-transport":
       return (
         right.type === "spin-transport" &&
+        left.draft === right.draft &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        left.regionId === right.regionId &&
         left.spinTransportId === right.spinTransportId &&
         left.spinTransportIndex === right.spinTransportIndex
       );
@@ -694,6 +816,7 @@ export function selectionRefEquals(
     case "spin-interface":
       return (
         right.type === "spin-interface" &&
+        left.draft === right.draft &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.spinInterfaceId === right.spinInterfaceId &&
@@ -715,6 +838,18 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.oerstedFieldId === right.oerstedFieldId &&
         left.oerstedFieldIndex === right.oerstedFieldIndex
+      );
+    case "physics-module":
+      return (
+        right.type === "physics-module" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.physicsModuleId === right.physicsModuleId &&
+        left.physicsModuleKind === right.physicsModuleKind &&
+        left.physicsScopeKind === right.physicsScopeKind &&
+        left.physicsActivation === right.physicsActivation &&
+        left.regionId === right.regionId &&
+        arrayEquals(left.physicsScopeObjectIds, right.physicsScopeObjectIds)
       );
     case "physics-field-drive":
       return (

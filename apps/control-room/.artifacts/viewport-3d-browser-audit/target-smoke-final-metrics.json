@@ -1,0 +1,52 @@
+{
+  "audit_date": "2026-08-05",
+  "qualification": "blocked_after_partial_current-snapshot-proof",
+  "production_snapshot": {
+    "build": "passed",
+    "dist_dir": ".next-audit-browser-final2-20260805",
+    "isolated_port": 3119,
+    "server_stopped_after_audit": true
+  },
+  "fdm": {
+    "current_snapshot_rerun": "blocked by Chromium execution usage limit",
+    "evidence_snapshot": ".next-audit-browser-final-20260805",
+    "canvas_health": "passed",
+    "explorer_inspector_targets": "passed",
+    "render_mode_cycle": [
+      "wireframe",
+      "points",
+      "off",
+      "shaded"
+    ],
+    "render_mode_cycle_status": "passed",
+    "airbox_vector_only_contract": "passed",
+    "success_screenshot": "target-smoke-fdm-success.png",
+    "success_screenshot_sha256": "39ba09588a4875b3f90a7962c333bf80e5246273de4c26a98dccebe7298cc0eb"
+  },
+  "fdm_failure_recovery": {
+    "status": "failed",
+    "error": "page.waitForFunction: Timeout 120000ms exceeded",
+    "location": "requestFdmField line 733 called by verifyFdmFieldFailureRecovery line 145"
+  },
+  "fem": {
+    "canvas_health": "passed",
+    "mesh_backed_owned_target_controls": "passed on final2 snapshot",
+    "mesh_backed_render_mode_cycle": "passed on final2 snapshot",
+    "primitive_fallback_node_selection": "passed on final2 snapshot after virtualizer helper repair",
+    "primitive_fallback_target": "fixture lacked a primitive geometry carrier; corrected after the run",
+    "post_fixture_correction_rerun": "blocked by Chromium execution usage limit",
+    "success_screenshot": null,
+    "earlier_failure_screenshot": "target-smoke-fem-owned-target-controls-failure.png",
+    "earlier_failure_screenshot_sha256": "f9a6344d46ec26f0e44834037a4f8c91e25e057db55c75fd37ec3a9942fb33cf"
+  },
+  "fixture_repairs": [
+    "dense stride-1 canvas sampling for sparse Points transitions",
+    "exact FEM topology Range responses with visible Content-Range and ETag",
+    "semantic FEM mesh-part metadata",
+    "scoped FEM FMVP v3/FMMI payload",
+    "primitive box carrier for the FEM fallback object",
+    "virtualized Explorer parent/child reveal before selection"
+  ],
+  "execution_blocker": "Automatic approval review rejected the final Chromium rerun because the account usage limit was reached; the tool instructed the agent not to retry or circumvent the restriction.",
+  "source_boundary": "No apps/control-room/src production files were edited by the browser-smoke agent."
+}

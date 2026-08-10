@@ -14,6 +14,7 @@ const ELEMENTARY_CHARGE_C = 1.602176634e-19;
 export interface CurrentTransportDraft {
   boundaries: string;
   conductivity: string;
+  conservativeCurrentView: string;
   coupling: "one_way" | "bidirectional";
   currentDensity: string;
   domain: string;
@@ -28,6 +29,12 @@ export interface CurrentTransportDraft {
   solverOperatorVersion: string;
   solverPhysicalResidualVersion: string;
   solverRelativeTolerance: string;
+  timeEnvelope: string;
+}
+
+export interface TransportAuthoringInitialScope {
+  objectId: string;
+  regionId?: string | null;
 }
 
 export interface SpinTransportDraft {
@@ -53,6 +60,54 @@ export interface SpinTransportDraft {
   solverRelativeTolerance: string;
   reciprocalNonlinear: string;
 }
+
+/**
+ * The parity gate consumes this inventory; it is deliberately derived from
+ * the existing draft keys rather than introducing a second UI schema.
+ */
+export const TRANSPORT_AUTHORING_DRAFT_INVENTORY = {
+  current_transport: {
+    typed: [
+      "name",
+      "model",
+      "currentDensity",
+      "timeEnvelope",
+      "conservativeCurrentView",
+      "solveRegion",
+      "coupling",
+      "gauge",
+      "conductivity",
+      "solverEngine",
+      "solverRelativeTolerance",
+      "solverAbsoluteTolerance",
+      "solverMaxIterations",
+      "solverOperatorVersion",
+      "solverPhysicalResidualVersion",
+    ],
+    opaque: ["domain", "materials", "boundaries"],
+  },
+  spin_transport: {
+    typed: [
+      "id",
+      "currentSourceId",
+      "mode",
+      "schemaVersion",
+      "constitutiveVersion",
+      "executionDevice",
+      "executionDiscretization",
+      "executionMode",
+      "executionPrecision",
+      "solverEngine",
+      "solverRelativeTolerance",
+      "solverAbsoluteTolerance",
+      "solverMaxIterations",
+      "solverOperatorVersion",
+      "solverPhysicalResidualVersion",
+      "solverDefaultExternalBoundary",
+    ],
+    opaque: ["domain", "materials", "interfaces", "boundaries", "reciprocalNonlinear"],
+  },
+} as const;
 
 export function transportSelectionKey(
   family: TransportFamily,
@@ -112,33 +167,92 @@ export {
   type TransportFamily,
 } from "@/shared/domain/physics/transportRecognition";
 
-export function currentTransportDraft(value?: KnownSceneCurrentTransport | null): CurrentTransportDraft {
+export function currentTransportDraft(
+  value?: KnownSceneCurrentTransport | null,
+  initialScope?: TransportAuthoringInitialScope | null,
+): CurrentTransportDraft {
+  const initialDomain = initialScope
+    ? [{
+        object_id: initialScope.objectId,
+        ...(initialScope.regionId ? { region_id: initialScope.regionId } : {}),
+      }]
+    : [];
+  const scopedRegionSolve = initialScope?.regionId ? null : initialScope?.objectId;
   return {
     boundaries: pretty(value?.boundaries ?? []),
     conductivity: value?.conductivity_s_per_m?.toString() ?? "",
+    conservativeCurrentView: pretty(value?.conservative_current_view ?? {}),
     coupling: value?.coupling ?? "one_way",
     currentDensity: pretty(value?.current_density ?? [0, 0, 0]),
-    domain: pretty(value?.domain ?? []),
+    domain: pretty(value?.domain ?? initialDomain),
     gauge: value?.gauge ?? "dirichlet_reference",
     materials: pretty(value?.materials ?? []),
-    model: value?.model ?? "prescribed_density",
+    model: value?.model ?? (initialScope?.regionId ? "ohmic_poisson" : "prescribed_density"),
     name: value?.name ?? "current",
-    solveRegion: value?.solve_region ?? "",
+    solveRegion: value?.solve_region ?? scopedRegionSolve ?? "",
     solverAbsoluteTolerance: value?.solver?.linear.absolute_tolerance.toString() ?? "1e-14",
     solverEngine: value?.solver?.engine ?? "cg",
     solverMaxIterations: value?.solver?.linear.max_iterations.toString() ?? "1000",
     solverOperatorVersion: value?.solver?.operator_version ?? "fv_charge_harmonic_v1",
     solverPhysicalResidualVersion: value?.solver?.physical_residual_version ?? "charge_balance_integrated_l2.v1",
     solverRelativeTolerance: value?.solver?.linear.relative_tolerance.toString() ?? "1e-10",
+    timeEnvelope: pretty(value?.time_envelope ?? {}),
   };
 }
 
-export function spinTransportDraft(value?: KnownSceneSpinTransport | null): SpinTransportDraft {
+export function currentTransportSupportsPrescribedDensity(
+  draft: CurrentTransportDraft,
+): boolean {
+  try {
+    const domain = JSON.parse(draft.domain) as unknown;
+    if (!Array.isArray(domain) || domain.length === 0) return true;
+    return domain.length === 1
+      && typeof domain[0] === "object"
+      && domain[0] !== null
+      && typeof (domain[0] as { object_id?: unknown }).object_id === "string"
+      && !(domain[0] as { region_id?: unknown }).region_id;
+  } catch {
+    return false;
+  }
+}
+
+export function currentTransportModelPatch(
+  draft: CurrentTransportDraft,
+  model: CurrentTransportDraft["model"],
+): Pick<CurrentTransportDraft, "conductivity" | "model" | "solveRegion"> {
+  if (model !== "prescribed_density") {
+    return { conductivity: "", model, solveRegion: "" };
+  }
+  if (!currentTransportSupportsPrescribedDensity(draft)) {
+    return {
+      conductivity: draft.conductivity,
+      model: draft.model,
+      solveRegion: draft.solveRegion,
+    };
+  }
+  const domain = JSON.parse(draft.domain) as Array<{ object_id?: string }>;
+  return {
+    conductivity: "",
+    model,
+    solveRegion: domain[0]?.object_id ?? "",
+  };
+}
+
+export function spinTransportDraft(
+  value?: KnownSceneSpinTransport | null,
+  initialScope?: TransportAuthoringInitialScope | null,
+): SpinTransportDraft {
+  const initialDomain = initialScope
+    ? [{
+        object_id: initialScope.objectId,
+        ...(initialScope.regionId ? { region_id: initialScope.regionId } : {}),
+      }]
+    : [];
   return {
     boundaries: pretty(value?.boundaries ?? []),
     constitutiveVersion: value?.constitutive_version ?? "transport_constitutive.one_way.fullmag.v1",
     currentSourceId: value?.current_source_id ?? "current",
-    domain: pretty(value?.domain ?? []),
+    domain: pretty(value?.domain ?? initialDomain),
     executionDevice: value?.requested_execution.device ?? "auto",
     executionDiscretization: value?.requested_execution.discretization ?? "auto",
     executionMode: value?.requested_execution.execution_mode ?? "strict",
@@ -176,6 +290,15 @@ function json<T>(value: string, label: string): T {
   catch { throw new Error(`${label} must be valid JSON.`); }
 }
 
+function optionalJsonObject(value: string, label: string): Record<string, unknown> | undefined {
+  if (!value.trim() || value.trim() === "{}") return undefined;
+  const parsed = json<unknown>(value, label);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurrentTransport {
   if (!draft.name.trim()) throw new Error("Name is required.");
   const model = draft.coupling === "bidirectional"
@@ -189,7 +312,14 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
   };
   if (model === "prescribed_density") {
     resource.current_density = json<number[]>(draft.currentDensity, "Current density");
+    const timeEnvelope = optionalJsonObject(draft.timeEnvelope, "Time envelope");
+    if (timeEnvelope) resource.time_envelope = timeEnvelope as NonNullable<KnownSceneCurrentTransport["time_envelope"]>;
     if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
+    const conservativeCurrentView = optionalJsonObject(
+      draft.conservativeCurrentView,
+      "Conservative current view",
+    );
+    if (conservativeCurrentView) resource.conservative_current_view = conservativeCurrentView;
     return resource;
   }
   resource.domain = json(draft.domain, "Charge domain");
@@ -215,6 +345,8 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
     });
   }
   resource.boundaries = json(draft.boundaries, "Charge boundaries");
+  const timeEnvelope = optionalJsonObject(draft.timeEnvelope, "Time envelope");
+  if (timeEnvelope) resource.time_envelope = timeEnvelope as NonNullable<KnownSceneCurrentTransport["time_envelope"]>;
   resource.gauge = draft.gauge;
   resource.solver = {
     engine: draft.solverEngine.trim(),
@@ -228,6 +360,11 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
   };
   if (draft.conductivity.trim()) resource.conductivity_s_per_m = finite(draft.conductivity, "Conductivity");
   if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
+  const conservativeCurrentView = optionalJsonObject(
+    draft.conservativeCurrentView,
+    "Conservative current view",
+  );
+  if (conservativeCurrentView) resource.conservative_current_view = conservativeCurrentView;
   return resource;
 }
 

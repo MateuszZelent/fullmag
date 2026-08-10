@@ -1218,14 +1218,29 @@ def _apply_study_universe_to_fdm_asset(
     translation: tuple[float, float, float],
     study_universe: Mapping[str, object] | None,
 ) -> VoxelMaskData:
+    # ``voxelize_geometry`` operates in the base object's frame after the
+    # outer ``Translate`` chain has been peeled off.  The returned asset,
+    # however, is consumed in the Cartesian/domain frame.  Keep the
+    # translation in the origin before expanding into a manually declared
+    # airbox; shifting the airbox origin by the opposite amount would leave
+    # the active mask at the un-translated location.
+    translation_vec = np.asarray(translation, dtype=np.float64)
+    translated = VoxelMaskData(
+        mask=tight.mask,
+        cell_size=tight.cell_size,
+        origin=tuple(
+            float(tight.origin[axis] + translation_vec[axis])
+            for axis in range(3)
+        ),
+    )
     if not study_universe:
-        return tight
+        return translated
 
     mode = study_universe.get("mode")
     resolved_mode = str(mode) if isinstance(mode, str) else "auto"
     padding = _optional_vec3(study_universe.get("padding")) or (0.0, 0.0, 0.0)
-    cell = tight.cell_size
-    tight_cells = (tight.shape[2], tight.shape[1], tight.shape[0])
+    cell = translated.cell_size
+    tight_cells = (translated.shape[2], translated.shape[1], translated.shape[0])
     tight_size = tuple(float(tight_cells[axis] * cell[axis]) for axis in range(3))
 
     if resolved_mode == "manual":
@@ -1236,18 +1251,18 @@ def _apply_study_universe_to_fdm_asset(
         domain_cells = _cells_from_size(declared_size, cell)
         realized_size = tuple(float(domain_cells[axis] * cell[axis]) for axis in range(3))
         domain_origin = tuple(
-            float(center[axis] - realized_size[axis] * 0.5 - translation[axis])
+            float(center[axis] - realized_size[axis] * 0.5)
             for axis in range(3)
         )
         return _expand_mask_to_domain(
-            tight,
+            translated,
             domain_origin=domain_origin,
             domain_cells=domain_cells,
         )
 
     if any(component > 0.0 for component in padding):
         tight_center = tuple(
-            float(tight.origin[axis] + tight_size[axis] * 0.5)
+            float(translated.origin[axis] + tight_size[axis] * 0.5)
             for axis in range(3)
         )
         padded_size = tuple(
@@ -1261,12 +1276,12 @@ def _apply_study_universe_to_fdm_asset(
             for axis in range(3)
         )
         return _expand_mask_to_domain(
-            tight,
+            translated,
             domain_origin=domain_origin,
             domain_cells=domain_cells,
         )
 
-    return tight
+    return translated
 
 
 def _validate_explicit_airbox_contains_geometry_bounds(

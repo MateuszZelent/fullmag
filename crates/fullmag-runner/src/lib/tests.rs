@@ -843,6 +843,7 @@ fn run_problem_writes_prescribed_current_transport_artifact() {
             solve_region: None,
             conductivity_s_per_m: None,
             coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            time_envelope: None,
             definition: None,
         });
     let unique_suffix = SystemTime::now()

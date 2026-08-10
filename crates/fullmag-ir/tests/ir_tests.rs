@@ -852,6 +852,8 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
             ], "potential_V": 0.1}
         ],
         "gauge": "dirichlet_reference",
+        "time_envelope": {"kind": "sinusoidal", "amplitude": 0.25,
+            "frequency_hz": 2.0e9, "phase_rad": 0.3, "offset": 0.75},
         "solver": {"engine": "cg", "linear": {"relative_tolerance": 1.0e-10,
             "absolute_tolerance": 0.0, "max_iterations": 1000},
             "physical_residual_version": "charge_balance_integrated_l2.v1",
@@ -901,6 +903,13 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     decoded.validate().expect("typed M1 IR should validate");
     assert_eq!(decoded.spin_transport_modules.len(), 1);
     let encoded = serde_json::to_value(decoded).expect("typed M1 IR should encode");
+    assert_eq!(
+        encoded["current_modules"][0]["time_envelope"],
+        serde_json::json!({
+            "kind": "sinusoidal", "amplitude": 0.25,
+            "frequency_hz": 2.0e9, "phase_rad": 0.3, "offset": 0.75
+        })
+    );
     assert_eq!(
         encoded["current_modules"][0]["gauge"],
         "dirichlet_reference"
@@ -1001,6 +1010,37 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
         .unwrap_err()
         .iter()
         .any(|error| error.contains("capacitance_formula_version requires spin capacitance")));
+}
+
+#[test]
+fn checked_in_spin_transport_authoring_fixture_round_trips_problem_ir() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../scripts/fixtures/spin_transport_authoring_parity.json"
+    ))
+    .expect("spin transport authoring fixture must be valid JSON");
+    let mut value = problem_ir_value_with_version(CURRENT_IR_VERSION);
+    for key in [
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+    ] {
+        value[key] = fixture[key].clone();
+    }
+
+    let decoded: ProblemIR =
+        serde_json::from_value(value).expect("fixture must decode as ProblemIR");
+    decoded
+        .validate()
+        .expect("fixture must pass ProblemIR validation");
+    let encoded = serde_json::to_value(decoded).expect("fixture must encode as ProblemIR");
+
+    for key in [
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+    ] {
+        assert_eq!(encoded[key], fixture[key], "ProblemIR drift in {key}");
+    }
 }
 
 #[test]
@@ -1564,6 +1604,7 @@ fn prescribed_sot_v1_accepts_nonunit_vector_source_axes_and_rejects_near_paralle
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     }];
     let module = |drive_direction, interface_normal| SpinTorqueModuleIR::PrescribedSot {
@@ -1847,6 +1888,85 @@ fn fdm_demag_hints_reject_removed_single_grid_fallback_switch() {
 }
 
 #[test]
+fn fdm_demag_hints_reject_unknown_strategy_and_mode_on_deserialize() {
+    for (field, value) in [("strategy", "mystery"), ("mode", "mystery")] {
+        let mut payload = serde_json::json!({
+            "strategy": "auto",
+            "mode": "auto",
+        });
+        payload[field] = serde_json::json!(value);
+        let error = serde_json::from_value::<FdmDemagHintsIR>(payload)
+            .expect_err("unknown FDM demag wire values must fail closed");
+        assert!(error.to_string().contains(field), "{field}: {error}");
+    }
+}
+
+#[test]
+fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
+    let cases = [
+        (
+            FdmDemagHintsIR {
+                strategy: "auto".to_string(),
+                mode: "two_d_stack".to_string(),
+                common_cells: Some([4, 4, 1]),
+                common_cells_xy: None,
+            },
+            "common_cells",
+        ),
+        (
+            FdmDemagHintsIR {
+                strategy: "auto".to_string(),
+                mode: "three_d".to_string(),
+                common_cells: None,
+                common_cells_xy: Some([4, 4]),
+            },
+            "common_cells_xy",
+        ),
+        (
+            FdmDemagHintsIR {
+                strategy: "auto".to_string(),
+                mode: "auto".to_string(),
+                common_cells: Some([4, 4, 1]),
+                common_cells_xy: Some([4, 4]),
+            },
+            "mutually exclusive",
+        ),
+    ];
+
+    for (hints, expected) in cases {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("bootstrap example must provide FDM hints")
+            .demag = Some(hints);
+        let error = ir
+            .validate()
+            .expect_err("incompatible common grid hints must fail closed");
+        assert!(
+            error.iter().any(|reason| reason.contains(expected)),
+            "expected {expected:?} in {error:?}"
+        );
+    }
+}
+
+#[test]
+fn fdm_demag_hints_round_trip_preserves_known_wire_values() {
+    let hints = FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "two_d_stack".to_string(),
+        common_cells: None,
+        common_cells_xy: Some([16, 8]),
+    };
+    let encoded = serde_json::to_value(&hints).expect("serialize FDM demag hints");
+    let decoded: FdmDemagHintsIR =
+        serde_json::from_value(encoded.clone()).expect("deserialize known FDM demag hints");
+    assert_eq!(decoded, hints);
+    assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
+}
+
+#[test]
 fn material_only_anisotropy_round_trips_and_validates() {
     let mut problem = ProblemIR::bootstrap_example();
     problem.energy_terms.clear();
@@ -1884,6 +2004,75 @@ fn regional_field_drive_exact_wire_round_trips() {
     assert_eq!(decoded.field_drives[0].id, "drive-pulse");
     let encoded = serde_json::to_value(decoded).unwrap();
     assert_eq!(encoded["field_drives"], value["field_drives"]);
+}
+
+#[test]
+fn regional_field_drive_gaussian_plane_wave_profile_round_trips() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "antenna_x",
+        "name": "Antenna x quadrature",
+        "kind": "regional",
+        "enabled": true,
+        "target": {"kind": "global"},
+        "amplitude_B_T": 0.003,
+        "direction": [1.0, 0.0, 0.0],
+        "spatial_profile": {
+            "kind": "gaussian_plane_wave",
+            "center_x_m": -1.0e-6,
+            "center_y_m": 0.0,
+            "carrier_origin_x_m": 0.0,
+            "sigma_x_m": 196.0e-9,
+            "sigma_y_m": 186.8507960633642e-9,
+            "wavelength_m": 196.0e-9,
+            "carrier_phase_rad": 0.0
+        },
+        "waveform": {
+            "kind": "sinusoidal",
+            "frequency_hz": 4.5e9,
+            "phase_rad": -56.548667764616276,
+            "offset": 0.0
+        },
+        "time_origin": "stage_local",
+        "activation": {"kind": "all_time_evolution"}
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value.clone()).unwrap();
+    decoded.validate().expect("Gaussian profile is valid");
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap()["field_drives"],
+        value["field_drives"]
+    );
+}
+
+#[test]
+fn regional_field_drive_gaussian_plane_wave_profile_rejects_unknown_fields() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "antenna_x",
+        "name": "Antenna x quadrature",
+        "kind": "regional",
+        "enabled": true,
+        "target": {"kind": "global"},
+        "amplitude_B_T": 0.003,
+        "direction": [1.0, 0.0, 0.0],
+        "spatial_profile": {
+            "kind": "gaussian_plane_wave",
+            "center_x_m": 0.0,
+            "center_y_m": 0.0,
+            "carrier_origin_x_m": 0.0,
+            "sigma_x_m": 1.0e-9,
+            "sigma_y_m": 1.0e-9,
+            "wavelength_m": 1.0e-9,
+            "carrier_phase_rad": 0.0,
+            "unexpected": 1
+        },
+        "waveform": {"kind": "constant"},
+        "time_origin": "stage_local",
+        "activation": {"kind": "all_time_evolution"}
+    }]);
+
+    assert!(serde_json::from_value::<ProblemIR>(value).is_err());
 }
 
 #[test]
@@ -4693,6 +4882,7 @@ fn execution_plan_ir_serializes() {
             notes: vec!["planner stub".to_string()],
             integrator_resolution: None,
             fem_eigen_execution_resolution: None,
+            physics_graph: None,
         },
     };
 
@@ -6207,6 +6397,7 @@ fn excitation_analysis_source_must_reference_antenna_module() {
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     });
     ir.excitation_analysis = Some(ExcitationAnalysisIR {
@@ -6285,6 +6476,7 @@ fn prescribed_zeeman_mask_requires_field_and_object() {
 fn oersted_field_source_must_reference_current_transport() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms.push(EnergyTermIR::OerstedField {
+        id: None,
         model: OerstedFieldModelIR::FromCurrentSolution,
         source: "drive".to_string(),
     });
@@ -6298,6 +6490,48 @@ fn oersted_field_source_must_reference_current_transport() {
 }
 
 #[test]
+fn oersted_stable_identity_round_trips_and_rejects_empty_present_id() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.current_modules.push(CurrentModuleIR::CurrentTransport {
+        name: "drive".to_string(),
+        model: CurrentTransportModelIR::PrescribedDensity,
+        current_density: Some([0.0, 0.0, 5e10]),
+        solve_region: Some("box".to_string()),
+        conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
+        definition: None,
+    });
+    ir.energy_terms.push(EnergyTermIR::OerstedField {
+        id: Some("oe:drive".to_string()),
+        model: OerstedFieldModelIR::FromCurrentSolution,
+        source: "drive".to_string(),
+    });
+
+    let encoded = serde_json::to_value(&ir).expect("serialize stable Oersted id");
+    assert_eq!(
+        encoded["energy_terms"]
+            .as_array()
+            .and_then(|terms| terms.last())
+            .and_then(|term| term.get("id")),
+        Some(&serde_json::json!("oe:drive"))
+    );
+    let decoded: ProblemIR =
+        serde_json::from_value(encoded).expect("deserialize stable Oersted id");
+    assert!(decoded.validate().is_ok());
+
+    let mut invalid = decoded;
+    if let Some(EnergyTermIR::OerstedField { id, .. }) = invalid.energy_terms.last_mut() {
+        *id = Some("  ".to_string());
+    }
+    assert!(invalid
+        .validate()
+        .expect_err("empty present Oersted id must fail")
+        .iter()
+        .any(|error| error.contains("oersted_field id must not be empty")));
+}
+
+#[test]
 fn validation_rejects_multiple_oersted_terms() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.current_modules.push(CurrentModuleIR::CurrentTransport {
@@ -6307,10 +6541,12 @@ fn validation_rejects_multiple_oersted_terms() {
         solve_region: Some("box".to_string()),
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
         definition: None,
     });
     ir.energy_terms = vec![
         EnergyTermIR::OerstedCylinder {
+            id: None,
             current: 1.0,
             radius: 10e-9,
             center: [0.0, 0.0, 0.0],
@@ -6318,6 +6554,7 @@ fn validation_rejects_multiple_oersted_terms() {
             time_dependence: None,
         },
         EnergyTermIR::OerstedField {
+            id: None,
             model: OerstedFieldModelIR::FromCurrentSolution,
             source: "drive".to_string(),
         },

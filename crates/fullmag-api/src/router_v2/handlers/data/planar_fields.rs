@@ -47,7 +47,7 @@ struct BuiltPlanarField {
     component: String,
     field_revision: u64,
     mesh_revision: u64,
-    generation_id: u64,
+    generation_id: String,
     field_source: String,
     source_entity_kind: &'static str,
     scope_kind: String,
