@@ -6,9 +6,9 @@ import type {
 } from "@/kernel/selection/selectionTypes";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
+import { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
-import { targetForFdmNativeLayer } from "@/modules/viewport-3d/model/viewport3DTargets";
 
 import type { ExplorerNode } from "./explorerTypes";
 
