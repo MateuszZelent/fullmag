@@ -32,7 +32,11 @@ from .current_transport import (
     ConservativeCurrentSourceCut,
     ConservativeCurrentSourceCutFacePair,
     ConservativeCurrentView,
+    ImpressedPotentialJump,
     NormalCurrentElectrode,
+    StructuredCurrentClosure,
+    StructuredCurrentSourceCut,
+    StructuredCutPlane,
     VoltageElectrode,
 )
 from .couplings import Coupling, CouplingEndpoint, CouplingRegistry
@@ -212,7 +216,11 @@ __all__ = [
     "ConservativeCurrentSourceCut",
     "ConservativeCurrentSourceCutFacePair",
     "ConservativeCurrentView",
+    "ImpressedPotentialJump",
     "NormalCurrentElectrode",
+    "StructuredCurrentClosure",
+    "StructuredCurrentSourceCut",
+    "StructuredCutPlane",
     "VoltageElectrode",
     "DriftDiffusionSpinTorque",
     "MixingConductanceSpinInterface",

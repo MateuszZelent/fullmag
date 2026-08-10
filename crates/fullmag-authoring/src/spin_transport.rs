@@ -70,6 +70,65 @@ pub struct KnownSceneCurrentTransport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub conservative_current_view: Option<BTreeMap<String, serde_json::Value>>,
+    /// Authored FDM closed-current intent. Grid face indices and runtime
+    /// certificate state are resolved later and never enter the scene model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_current_closure: Option<SceneStructuredCurrentClosure>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneStructuredCutAxis {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneStructuredCutNormal {
+    PositiveAxis,
+    NegativeAxis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneStructuredCutPlane {
+    pub axis: SceneStructuredCutAxis,
+    pub offset_m: f64,
+    pub normal: SceneStructuredCutNormal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneImpressedPotentialJump {
+    pub schema_version: String,
+    pub drive_id: String,
+    #[serde(rename = "potential_jump_V")]
+    pub potential_jump_v: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneStructuredCurrentDrive {
+    ImpressedPotentialJump(SceneImpressedPotentialJump),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneStructuredCurrentSourceCut {
+    pub source_cut_id: String,
+    pub circuit_id: String,
+    pub region: SceneRegionRef,
+    pub plane: SceneStructuredCutPlane,
+    pub drive: SceneStructuredCurrentDrive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneStructuredCurrentClosure {
+    ClosedGeometry {
+        schema_version: String,
+        closure_id: String,
+        source_cuts: Vec<SceneStructuredCurrentSourceCut>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]

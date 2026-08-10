@@ -2285,6 +2285,36 @@ round-trip, and browser author/run/inspect smoke. Continuum studies use at least
 three spatial resolutions and three time steps; observed temporal order must be
 at least nominal minus `0.25` in the asymptotic range.
 
+### 5.4 Publiczne powiązanie FDM CPU/FP64 M1
+
+Append-only granica native dla istniejącego ownera CPU używa symbolu
+`fullmag_fdm_cpu_oersted_solve_v1` oraz rekordów
+`fullmag_fdm_cpu_oersted_request_v1` i
+`fullmag_fdm_cpu_oersted_result_v1`. Request przenosi union grid, rozłączne
+maski conductor/target, **accepted raw face-current** `(Jx, Jy, Jz)` z
+zaakceptowanego snapshotu charge, pełną identity źródła i certyfikat
+`global_closed_current_certificate.v1`. Result publikuje `H_oe [A/m]`,
+diagnostykę i dokładne identyfikatory
+`fdm_oersted_cell_integrated_open.v1`, `oersted_fdm_fft_open.v1` oraz
+`fdm_oersted_fft_open_v1`. Adapter nie ma własnej numeryki i wywołuje wyłącznie
+`fullmag::fdm::cpu::oersted::v1::Solver`. Stateless ABI utrzymuje własny trwały,
+immutable `Problem` tylko dla bitowo identycznego kompletnego snapshotu; każda
+zmiana danych lub metadanych tworzy nowy `Solver` i wymusza pełny preflight
+przed cache hit. Pełny manifest `offsetof` pokrywa każde pole rekordów ABI, a
+`source_identity` jest odrzucane, jeśli nie mieści się bez utraty w result
+provenance (maksymalnie 95 bajtów plus NUL).
+
+To powiązanie nie zmienia publicznej semantyki authoringu. FDM closure
+descriptor is not yet present in the public ProblemIR: istniejący bool
+`oersted_source_bound` wiąże jedynie nazwane źródło, a FEM-only
+`ConservativeCurrentView` nie opisuje ścian structured-grid. Dlatego publiczny
+runner NativeM1 musi wywołać nową granicę i zakończyć się fail-closed dla braku
+pełnego certyfikatu; nie wolno mu fabrykować closure z residualu charge ani
+wracać do Rustowego midpoint. Dodatni niezerowy publiczny run pozostaje
+zablokowany do osobnego docs-first, pełnego round-trip Python/UI/ProblemIR/
+planner FDM closure descriptor. Sam ABI można kwalifikować bezpośrednim
+closed-loop fixture. CPU i GPU pozostają `semantic_only`.
+
 ## 6. Completeness checklist
 
 - [x] Bounded FEM steady one-way solved-current midpoint reference slice (not OE-T0/F1/F2)
@@ -2301,8 +2331,9 @@ at least nominal minus `0.25` in the asymptotic range.
   `semantic_only`)
 - [ ] Conservative FDM charge and face-to-cell publication
 - [x] FDM standalone CPU/double direct oracle and cell-integrated open FFT
-  owner with managed contract gate; no public runtime binding or capability
-  promotion is implied
+  owner with append-only C ABI/Rust FFI contract; public NativeM1 is
+  fail-closed until a complete FDM closure descriptor is available and no
+  capability promotion is implied
 - [ ] FDM CUDA/cuFFT realization and public planner/runner binding
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
@@ -2345,7 +2376,12 @@ evidence that the approximation is accurate.
 | Path | Symbol | Responsibility |
 |---|---|---|
 | `scripts/test_dynamic_current_oersted_contract_docs.py` | `test_fdm_oersted_open_v1_is_fully_frozen_and_semantic_only` | documentation-only regression for the frozen FDM open-boundary operator; not runtime evidence |
-| `backends/fdm/include/fullmag/fdm/cpu/oersted_fft_open_v1.hpp` | `class Solver` | standalone versioned CPU/FP64 owner contract; no public runtime binding |
+| `backends/fdm/include/fullmag/fdm/cpu/oersted_fft_open_v1.hpp` | `class Solver` | versioned CPU/FP64 numerical owner behind the append-only public adapter |
+| `native/include/fullmag_fdm.h` | `fullmag_fdm_cpu_oersted_solve_v1` | append-only CPU/FP64 request/result ABI carrying exact face current, closed-current certificate and provenance |
+| `backends/fdm/api/cpu_oersted_fft_v1.cpp` | `fullmag_fdm_cpu_oersted_solve_v1` | validation/copy adapter to the sole numerical owner; no alternate midpoint implementation |
+| `backends/fdm/tests/cpu_oersted_fft_public_abi_contract.cpp` | `main` | nonzero public ABI, bit-exact owner parity, immutable cache lifetime, identity boundary and fail-closed regressions |
+| `crates/fullmag-fdm-sys/src/lib.rs` | `cpu_oersted_append_only_layout_matches_native_manifest` | exact Rust FFI mirror and every-field C `offsetof` comparison |
+| `crates/fullmag-runner/src/fdm/cpu/native_transport.rs` | `solve_native_m1_snapshot` | accepted raw face-current binding; missing public FDM closure descriptor fails closed without midpoint fallback |
 | `backends/fdm/cpu/interactions/oersted/cell_integrated_kernel_v1.cpp` | `cell_integrated_kernel_m` | exact source-cell integral at the target centre, SI sign and exact real-space zeros |
 | `backends/fdm/cpu/interactions/oersted/fft_open_v1.cpp` | `class Solver::Impl` | closure-aware exact-2N open convolution, accepted/candidate/failure state, trusted fast cache, full-field diagnostics and provenance |
 | `backends/fdm/tests/oersted_direct_oracle_v1.cpp` | `OracleKernelResult integrate_source_cell_at_target_center` | independent `long double` surface-potential oracle |

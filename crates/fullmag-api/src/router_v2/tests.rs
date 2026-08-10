@@ -919,6 +919,7 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
             operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
         },
         conservative_current_view: None,
+        structured_current_closure: None,
     };
     problem.current_modules = vec![CurrentModuleIR::CurrentTransport {
         name: "charge".into(),

@@ -210,7 +210,7 @@ int main() {
     constexpr double h = 1.0e-9;
     constexpr double sigma = 5.0e6;
     constexpr double imposed_j = 1.0;
-    constexpr uint64_t mutation_count = 14;
+    constexpr uint64_t mutation_count = 16;
 
     int device = -1;
     require(cudaGetDevice(&device) == cudaSuccess,
@@ -328,7 +328,8 @@ int main() {
                 absent_context.context_handle) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "module-absence context teardown failed");
     fullmag_fdm_gpu_transport_context_create_request_v1 create{};
-    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
     create.device_ordinal = device;
     create.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     create.strict_residency = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;
@@ -485,6 +486,8 @@ int main() {
         case 11: ++faces[0].canonical_face_index; break;
         case 12: faces[2].value = 1.0; break;
         case 13: faces.pop_back(); break;
+        case 14: faces.erase(faces.begin()); break;
+        case 15: faces.erase(faces.begin() + faces.size() / 2); break;
         default: require(false, "unknown test mutation");
         }
         fullmag_fdm_gpu_transport_context_create_result_v1 created{};
@@ -605,11 +608,21 @@ int main() {
                 created.context_handle, baseline_generation, baseline_sequence) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "runtime counter reset failed");
+    solve.relative_tolerance = 1.0e-15;
+    solve.max_iterations = 1;
+    init_record(solved);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(&solve, &solved) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_NONCONVERGED,
+            "one-iteration cold solve must exercise transactional cache rollback");
+    solve.relative_tolerance = 1.0e-12;
+    solve.max_iterations = 128;
     init_record(solved);
     require(fullmag_fdm_gpu_transport_solve_charge_v1(&solve, &solved) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 solved.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
             "valid mixed-boundary device solve failed");
+    require(solved.hierarchy_build_count == 1 && solved.hierarchy_cache_hit_count == 0,
+            "retry after rejected cold solve must rebuild provisional hierarchy");
     fullmag_fdm_gpu_charge_snapshot_info_v1 snapshot{};
     init_record(snapshot);
     require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(

@@ -15,6 +15,7 @@ from fullmag.model.current_transport import (
     ConservativeCurrentSourceCut,
     ConservativeCurrentSourceCutFacePair,
     ConservativeCurrentView,
+    ImpressedPotentialJump,
     ChargeInsulating,
     ChargePotentialGauge,
     ChargeSolverPolicy,
@@ -22,6 +23,9 @@ from fullmag.model.current_transport import (
     ChargeTransportMaterialAssignment,
     CurrentTransport,
     NormalCurrentElectrode,
+    StructuredCurrentClosure,
+    StructuredCurrentSourceCut,
+    StructuredCutPlane,
     VoltageElectrode,
 )
 from fullmag.model.energy import (
@@ -303,6 +307,7 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             ),
         )
     conservative_view_value = entry.get("conservative_current_view")
+    structured_closure_value = entry.get("structured_current_closure")
     return CurrentTransport(
         name=_nonempty_string(entry.get("name"), "current_transport.name"),
         model=_nonempty_string(entry.get("model", "prescribed_density"), "current_transport.model"),
@@ -344,6 +349,76 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             _decode_conservative_current_view(conservative_view_value)
             if conservative_view_value is not None
             else None
+        ),
+        structured_current_closure=(
+            _decode_structured_current_closure(structured_closure_value)
+            if structured_closure_value is not None
+            else None
+        ),
+    )
+
+
+def _decode_structured_current_closure(value: object) -> StructuredCurrentClosure:
+    entry = _mapping(value, "current_transport.structured_current_closure")
+    cuts_value = entry.get("source_cuts")
+    if not isinstance(cuts_value, list):
+        raise ValueError(
+            "current_transport.structured_current_closure.source_cuts must be a list"
+        )
+    cuts: list[StructuredCurrentSourceCut] = []
+    for index, raw_cut in enumerate(cuts_value):
+        context = f"current_transport.structured_current_closure.source_cuts[{index}]"
+        cut = _mapping(raw_cut, context)
+        plane = _mapping(cut.get("plane"), f"{context}.plane")
+        drive = _mapping(cut.get("drive"), f"{context}.drive")
+        if drive.get("kind") != "impressed_potential_jump":
+            raise ValueError(f"{context}.drive.kind must be 'impressed_potential_jump'")
+        cuts.append(
+            StructuredCurrentSourceCut(
+                source_cut_id=_nonempty_string(
+                    cut.get("source_cut_id"), f"{context}.source_cut_id"
+                ),
+                circuit_id=_nonempty_string(
+                    cut.get("circuit_id"), f"{context}.circuit_id"
+                ),
+                region=_region_ref(cut.get("region"), f"{context}.region"),
+                plane=StructuredCutPlane(
+                    axis=_nonempty_string(plane.get("axis"), f"{context}.plane.axis"),
+                    offset_m=_finite_number(
+                        plane.get("offset_m"), f"{context}.plane.offset_m"
+                    ),
+                    normal=_nonempty_string(
+                        plane.get("normal"), f"{context}.plane.normal"
+                    ),
+                ),
+                drive=ImpressedPotentialJump(
+                    drive_id=_nonempty_string(
+                        drive.get("drive_id"), f"{context}.drive.drive_id"
+                    ),
+                    potential_jump_V=_finite_number(
+                        drive.get("potential_jump_V"),
+                        f"{context}.drive.potential_jump_V",
+                    ),
+                    schema_version=_nonempty_string(
+                        drive.get("schema_version"),
+                        f"{context}.drive.schema_version",
+                    ),
+                ),
+            )
+        )
+    return StructuredCurrentClosure(
+        closure_id=_nonempty_string(
+            entry.get("closure_id"),
+            "current_transport.structured_current_closure.closure_id",
+        ),
+        source_cuts=cuts,
+        schema_version=_nonempty_string(
+            entry.get("schema_version"),
+            "current_transport.structured_current_closure.schema_version",
+        ),
+        kind=_nonempty_string(
+            entry.get("kind"),
+            "current_transport.structured_current_closure.kind",
         ),
     )
 

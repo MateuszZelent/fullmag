@@ -35,6 +35,11 @@ CONSERVATIVE_CURRENT_BOUNDARY_ROLES = {
     "source_cut",
     "closure_interface",
 }
+STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION = "structured_current_closure.v1"
+IMPRESSED_POTENTIAL_JUMP_SCHEMA_VERSION = "impressed_potential_jump.v1"
+FDM_STRUCTURED_CURRENT_OPERATOR_VERSION = "fv_charge_harmonic_source_cut_v1"
+STRUCTURED_CUT_AXES = {"x", "y", "z"}
+STRUCTURED_CUT_NORMALS = {"positive_axis", "negative_axis"}
 
 _FEM_CHARGE_OPERATOR_VERSION = "fem_charge_conforming_h1_p1.transparent.v1"
 _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
@@ -83,6 +88,134 @@ def _stable_vertex_id_list(value: Sequence[int], field_name: str) -> tuple[int, 
     if len(set(ids)) != len(ids):
         raise ValueError(f"{field_name} must contain unique vertex IDs")
     return ids
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredCutPlane:
+    axis: str
+    offset_m: float
+    normal: str = "positive_axis"
+
+    def __post_init__(self) -> None:
+        if self.axis not in STRUCTURED_CUT_AXES:
+            raise ValueError("axis must be one of 'x', 'y', or 'z'")
+        if self.normal not in STRUCTURED_CUT_NORMALS:
+            raise ValueError("normal must be 'positive_axis' or 'negative_axis'")
+        object.__setattr__(self, "offset_m", require_finite(self.offset_m, "offset_m"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "axis": self.axis,
+            "offset_m": self.offset_m,
+            "normal": self.normal,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ImpressedPotentialJump:
+    drive_id: str
+    potential_jump_V: float
+    schema_version: str = IMPRESSED_POTENTIAL_JUMP_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "drive_id", require_non_empty(self.drive_id, "drive_id"))
+        if self.schema_version != IMPRESSED_POTENTIAL_JUMP_SCHEMA_VERSION:
+            raise ValueError(
+                "schema_version must be 'impressed_potential_jump.v1'"
+            )
+        jump = require_finite(self.potential_jump_V, "potential_jump_V")
+        if jump == 0.0:
+            raise ValueError("potential_jump_V must be non-zero")
+        object.__setattr__(self, "potential_jump_V", jump)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "kind": "impressed_potential_jump",
+            "drive_id": self.drive_id,
+            "potential_jump_V": self.potential_jump_V,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredCurrentSourceCut:
+    source_cut_id: str
+    circuit_id: str
+    region: RegionRef
+    plane: StructuredCutPlane
+    drive: ImpressedPotentialJump
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "source_cut_id",
+            require_non_empty(self.source_cut_id, "source_cut_id"),
+        )
+        object.__setattr__(
+            self,
+            "circuit_id",
+            require_non_empty(self.circuit_id, "circuit_id"),
+        )
+        if not isinstance(self.region, RegionRef):
+            raise TypeError("region must be RegionRef")
+        if not isinstance(self.plane, StructuredCutPlane):
+            raise TypeError("plane must be StructuredCutPlane")
+        if not isinstance(self.drive, ImpressedPotentialJump):
+            raise TypeError("drive must be ImpressedPotentialJump")
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "source_cut_id": self.source_cut_id,
+            "circuit_id": self.circuit_id,
+            "region": self.region.to_ir(),
+            "plane": self.plane.to_ir(),
+            "drive": self.drive.to_ir(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredCurrentClosure:
+    closure_id: str
+    source_cuts: tuple[StructuredCurrentSourceCut, ...]
+    schema_version: str = STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION
+    kind: str = "closed_geometry"
+
+    def __init__(
+        self,
+        closure_id: str,
+        source_cuts: Sequence[StructuredCurrentSourceCut],
+        *,
+        schema_version: str = STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION,
+        kind: str = "closed_geometry",
+    ) -> None:
+        object.__setattr__(self, "closure_id", require_non_empty(closure_id, "closure_id"))
+        if schema_version != STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION:
+            raise ValueError("schema_version must be 'structured_current_closure.v1'")
+        if kind != "closed_geometry":
+            raise ValueError("kind must be 'closed_geometry'")
+        cuts = tuple(source_cuts)
+        if not cuts or not all(isinstance(cut, StructuredCurrentSourceCut) for cut in cuts):
+            raise ValueError(
+                "source_cuts must contain at least one StructuredCurrentSourceCut"
+            )
+        for field_name, values in (
+            ("source_cut_id", [cut.source_cut_id for cut in cuts]),
+            ("circuit_id", [cut.circuit_id for cut in cuts]),
+            ("drive_id", [cut.drive.drive_id for cut in cuts]),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"source_cuts must contain unique {field_name} values")
+        object.__setattr__(self, "source_cuts", cuts)
+        object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "kind", kind)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "closure_id": self.closure_id,
+            "kind": self.kind,
+            "source_cuts": [cut.to_ir() for cut in self.source_cuts],
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +394,7 @@ class ChargeSolverPolicy:
         if engine == "cg":
             allowed_operators = {
                 "fv_charge_harmonic_v1",
+                FDM_STRUCTURED_CURRENT_OPERATOR_VERSION,
                 _FEM_CHARGE_OPERATOR_VERSION,
             }
         else:
@@ -279,7 +413,12 @@ class ChargeSolverPolicy:
         object.__setattr__(self, "max_iterations", require_positive_int(self.max_iterations, "max_iterations"))
         expected_residual = (
             "charge_balance_integrated_l2.v1"
-            if self.operator_version in {"fv_charge_harmonic_v1", _FEM_CHARGE_OPERATOR_VERSION}
+            if self.operator_version
+            in {
+                "fv_charge_harmonic_v1",
+                FDM_STRUCTURED_CURRENT_OPERATOR_VERSION,
+                _FEM_CHARGE_OPERATOR_VERSION,
+            }
             else "transport_balance_integrated_l2.v1"
         )
         physical_residual = self.physical_residual_version
@@ -824,6 +963,7 @@ class CurrentTransport:
     solver: ChargeSolverPolicy | None = None
     time_envelope: TimeEnvelope | None = None
     conservative_current_view: ConservativeCurrentView | None = None
+    structured_current_closure: StructuredCurrentClosure | None = None
 
     def __init__(
         self,
@@ -841,6 +981,7 @@ class CurrentTransport:
         solver: ChargeSolverPolicy | None = None,
         time_envelope: TimeEnvelope | None = None,
         conservative_current_view: ConservativeCurrentView | None = None,
+        structured_current_closure: StructuredCurrentClosure | None = None,
     ) -> None:
         raw_model = require_non_empty(model, "model").lower()
         resolved_magnetoresistive_model = raw_model == "magnetoresistive_poisson"
@@ -877,10 +1018,18 @@ class CurrentTransport:
                 "time_envelope must be one of the canonical TimeEnvelope values"
             )
         object.__setattr__(self, "time_envelope", time_envelope)
+        if conservative_current_view is not None and structured_current_closure is not None:
+            raise ValueError(
+                "conservative_current_view and structured_current_closure are mutually exclusive"
+            )
         if conservative_current_view is not None and not isinstance(
             conservative_current_view, ConservativeCurrentView
         ):
             raise TypeError("conservative_current_view must be ConservativeCurrentView")
+        if structured_current_closure is not None and not isinstance(
+            structured_current_closure, StructuredCurrentClosure
+        ):
+            raise TypeError("structured_current_closure must be StructuredCurrentClosure")
         normalized_coupling = require_non_empty(coupling, "coupling").lower()
         if normalized_coupling not in CURRENT_TRANSPORT_COUPLINGS:
             raise ValueError(f"coupling must be one of {sorted(CURRENT_TRANSPORT_COUPLINGS)}")
@@ -899,6 +1048,29 @@ class CurrentTransport:
             raise ValueError(
                 "conservative_current_view currently requires model='ohmic_poisson' and coupling='one_way'"
             )
+        if structured_current_closure is not None and (
+            normalized_model != "ohmic_poisson" or normalized_coupling != "one_way"
+        ):
+            raise ValueError(
+                "structured_current_closure requires model='ohmic_poisson' and coupling='one_way'"
+            )
+        if structured_current_closure is not None and (
+            solver is None
+            or solver.operator_version != FDM_STRUCTURED_CURRENT_OPERATOR_VERSION
+        ):
+            raise ValueError(
+                "structured_current_closure requires "
+                f"operator_version='{FDM_STRUCTURED_CURRENT_OPERATOR_VERSION}'"
+            )
+        if (
+            structured_current_closure is None
+            and solver is not None
+            and solver.operator_version == FDM_STRUCTURED_CURRENT_OPERATOR_VERSION
+        ):
+            raise ValueError(
+                f"operator_version='{FDM_STRUCTURED_CURRENT_OPERATOR_VERSION}' requires "
+                "structured_current_closure"
+            )
         object.__setattr__(
             self,
             "solve_region",
@@ -912,6 +1084,7 @@ class CurrentTransport:
             float(conductivity_s_per_m) if conductivity_s_per_m is not None else None,
         )
         object.__setattr__(self, "conservative_current_view", conservative_current_view)
+        object.__setattr__(self, "structured_current_closure", structured_current_closure)
 
         if normalized_model == "prescribed_density":
             if current_density is None:
@@ -994,6 +1167,8 @@ class CurrentTransport:
             ir["time_envelope"] = self.time_envelope.to_ir()
         if self.conservative_current_view is not None:
             ir["conservative_current_view"] = self.conservative_current_view.to_ir()
+        if self.structured_current_closure is not None:
+            ir["structured_current_closure"] = self.structured_current_closure.to_ir()
         return ir
 
 
@@ -1001,6 +1176,9 @@ __all__ = [
     "CURRENT_TRANSPORT_COUPLINGS",
     "CURRENT_TRANSPORT_MODELS",
     "CONSERVATIVE_CURRENT_BOUNDARY_ROLES",
+    "IMPRESSED_POTENTIAL_JUMP_SCHEMA_VERSION",
+    "FDM_STRUCTURED_CURRENT_OPERATOR_VERSION",
+    "STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION",
     "ChargeInsulating",
     "ChargePotentialGauge",
     "ChargeSolverPolicy",
@@ -1016,6 +1194,10 @@ __all__ = [
     "ConservativeCurrentSourceCut",
     "ConservativeCurrentSourceCutFacePair",
     "ConservativeCurrentView",
+    "ImpressedPotentialJump",
     "NormalCurrentElectrode",
+    "StructuredCurrentClosure",
+    "StructuredCurrentSourceCut",
+    "StructuredCutPlane",
     "VoltageElectrode",
 ]

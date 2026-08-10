@@ -12,6 +12,8 @@ namespace fullmag::fdm::cpu::transport::v1 {
 
 inline constexpr std::string_view api_version = "fullmag.fdm.cpu.charge.v1";
 inline constexpr std::string_view operator_version = "fv_charge_harmonic_v1";
+inline constexpr std::string_view source_cut_operator_version =
+    "fv_charge_harmonic_source_cut_v1";
 inline constexpr std::string_view mixing_operator_version =
     "fv_charge_mixing_series_trace.v1";
 inline constexpr std::string_view solver_version = "fdm_charge_cg_matrix_free_v1";
@@ -98,6 +100,13 @@ struct SpecifiedOutwardCurrentDensityFace {
     double outward_current_density_a_per_m2 = 0.0;
 };
 
+struct ImpressedPotentialJumpFace {
+    std::size_t source_cut_index = 0;
+    StructuredFace face;
+    std::int32_t normal_sign = 0;
+    double potential_jump_v = 0.0;
+};
+
 struct Problem {
     Grid grid;
     std::vector<double> conductivity_s_per_m;
@@ -107,6 +116,7 @@ struct Problem {
     std::vector<OrientedMixingInterface> interfaces;
     std::vector<SpecifiedOutwardCurrentDensityFace>
         specified_outward_current_density_faces;
+    std::vector<ImpressedPotentialJumpFace> impressed_potential_jump_faces;
 };
 
 struct SolverOptions {
@@ -159,6 +169,10 @@ class AcceptedChargeSnapshot {
     const std::vector<OrientedMixingInterface> &interfaces() const noexcept {
         return interfaces_;
     }
+    const std::vector<ImpressedPotentialJumpFace> &impressed_potential_jump_faces()
+        const noexcept {
+        return impressed_potential_jump_faces_;
+    }
     const std::vector<ChargeInterfaceFluxObservation> &interface_fluxes() const noexcept {
         return interface_fluxes_;
     }
@@ -171,6 +185,8 @@ class AcceptedChargeSnapshot {
                            std::vector<double> potential_v,
                            FaceCurrentDensity face_current_density_a_per_m2,
                            std::vector<OrientedMixingInterface> interfaces,
+                           std::vector<ImpressedPotentialJumpFace>
+                               impressed_potential_jump_faces,
                            std::vector<ChargeInterfaceFluxObservation> interface_fluxes);
 
     std::uint64_t identity_ = 0;
@@ -180,6 +196,7 @@ class AcceptedChargeSnapshot {
     std::vector<double> potential_v_;
     FaceCurrentDensity face_current_density_a_per_m2_;
     std::vector<OrientedMixingInterface> interfaces_;
+    std::vector<ImpressedPotentialJumpFace> impressed_potential_jump_faces_;
     std::vector<ChargeInterfaceFluxObservation> interface_fluxes_;
 
     friend SolveResult solve(const Problem &, const SolverOptions &);

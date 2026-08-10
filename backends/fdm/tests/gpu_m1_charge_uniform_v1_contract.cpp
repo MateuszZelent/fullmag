@@ -91,7 +91,8 @@ int main() {
             "actual CUDA device properties are required");
 
     fullmag_fdm_gpu_transport_context_create_request_v1 create{};
-    init_record(create);
+    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
     create.device_ordinal = device;
     create.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     create.strict_residency = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;
@@ -152,8 +153,12 @@ int main() {
     descriptor.charge_faces_view_ptr = reinterpret_cast<uint64_t>(&views[3]);
     descriptor.spin_faces_view_ptr = reinterpret_cast<uint64_t>(&views[4]);
     descriptor.formula_ids_view_ptr = reinterpret_cast<uint64_t>(&views[5]);
-    require(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(created.context_handle, &descriptor) ==
-                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+    const uint32_t descriptor_status =
+        fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+            created.context_handle, &descriptor);
+    if (descriptor_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK)
+        std::fprintf(stderr, "uniform descriptor status=%u\n", descriptor_status);
+    require(descriptor_status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "uniform charge descriptor upload failed");
 
     fullmag_fdm_gpu_charge_solve_request_v1 solve{};

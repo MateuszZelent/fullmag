@@ -9549,6 +9549,17 @@
               }
             ]
           },
+          "structured_current_closure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneStructuredCurrentClosure",
+                "description": "Authored FDM closed-current intent. Grid face indices and runtime\ncertificate state are resolved later and never enter the scene model."
+              }
+            ]
+          },
           "time_envelope": {
             "oneOf": [
               {
@@ -18380,6 +18391,26 @@
         ],
         "type": "string"
       },
+      "SceneImpressedPotentialJump": {
+        "properties": {
+          "drive_id": {
+            "type": "string"
+          },
+          "potential_jump_V": {
+            "format": "double",
+            "type": "number"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "drive_id",
+          "potential_jump_V"
+        ],
+        "type": "object"
+      },
       "SceneInitialMagnetization": {
         "oneOf": [
           {
@@ -20230,6 +20261,126 @@
           "transient"
         ],
         "type": "string"
+      },
+      "SceneStructuredCurrentClosure": {
+        "oneOf": [
+          {
+            "properties": {
+              "closure_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "closed_geometry"
+                ],
+                "type": "string"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "source_cuts": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneStructuredCurrentSourceCut"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "schema_version",
+              "closure_id",
+              "source_cuts",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneStructuredCurrentDrive": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SceneImpressedPotentialJump"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "impressed_potential_jump"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ]
+      },
+      "SceneStructuredCurrentSourceCut": {
+        "properties": {
+          "circuit_id": {
+            "type": "string"
+          },
+          "drive": {
+            "$ref": "#/components/schemas/SceneStructuredCurrentDrive"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/SceneStructuredCutPlane"
+          },
+          "region": {
+            "$ref": "#/components/schemas/SceneRegionRef"
+          },
+          "source_cut_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_cut_id",
+          "circuit_id",
+          "region",
+          "plane",
+          "drive"
+        ],
+        "type": "object"
+      },
+      "SceneStructuredCutAxis": {
+        "enum": [
+          "x",
+          "y",
+          "z"
+        ],
+        "type": "string"
+      },
+      "SceneStructuredCutNormal": {
+        "enum": [
+          "positive_axis",
+          "negative_axis"
+        ],
+        "type": "string"
+      },
+      "SceneStructuredCutPlane": {
+        "properties": {
+          "axis": {
+            "$ref": "#/components/schemas/SceneStructuredCutAxis"
+          },
+          "normal": {
+            "$ref": "#/components/schemas/SceneStructuredCutNormal"
+          },
+          "offset_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "axis",
+          "offset_m",
+          "normal"
+        ],
+        "type": "object"
       },
       "SceneSurfaceRef": {
         "properties": {

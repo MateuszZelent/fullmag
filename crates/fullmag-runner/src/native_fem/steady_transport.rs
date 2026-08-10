@@ -1822,6 +1822,7 @@ mod tests {
             gauge: ChargePotentialGaugeIR::DirichletReference,
             solver: charge_solver.clone(),
             conservative_current_view: None,
+            structured_current_closure: None,
         };
         ResolvedSpinTransportPlanIR {
             module_id: "spin".into(),
@@ -1985,6 +1986,7 @@ mod tests {
                 },
             ],
             specified_current_faces: Vec::new(),
+            structured_current_closure: None,
             charge_gauge: ChargePotentialGaugeIR::DirichletReference,
             charge_solver: ChargeSolverPolicyIR {
                 engine: "cg".into(),

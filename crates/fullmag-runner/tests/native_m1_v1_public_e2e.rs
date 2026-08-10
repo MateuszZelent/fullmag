@@ -129,6 +129,7 @@ fn public_transport_problem(transparent: bool, native: bool) -> ProblemIR {
                 operator_version: "fv_charge_harmonic_v1".into(),
             },
             conservative_current_view: None,
+            structured_current_closure: None,
         }),
     }];
     problem.spin_transport_modules = vec![SpinTransportModuleIR {
@@ -255,6 +256,136 @@ fn public_transport_problem(transparent: bool, native: bool) -> ProblemIR {
     problem
 }
 
+fn public_closed_loop_oersted_problem() -> ProblemIR {
+    let mut problem = public_transport_problem(true, true);
+    problem.problem_meta.name = "fdm_closed_loop_oersted".into();
+    problem.geometry.entries = vec![GeometryEntryIR::Difference {
+        name: "strip".into(),
+        base: Box::new(GeometryEntryIR::Box {
+            name: "loop_outer".into(),
+            size: [3.0e-9, 3.0e-9, 1.0e-9],
+        }),
+        tool: Box::new(GeometryEntryIR::Box {
+            name: "loop_hole".into(),
+            size: [1.0e-9, 1.0e-9, 1.0e-9],
+        }),
+    }];
+    problem.object_regions = vec![ObjectRegionIR {
+        region_id: "source_arm".into(),
+        owner_object: "strip".into(),
+        name: "Source arm".into(),
+        shape: RegionShapeIR::Box {
+            size: [1.0e-9, 3.0e-9, 1.0e-9],
+            center: [-1.0e-9, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::default(),
+        enabled: true,
+        priority: 1,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::default(),
+        material_transition: None,
+    }];
+    problem
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .expect("bootstrap discretization hints")
+        .fdm
+        .as_mut()
+        .expect("bootstrap FDM hints")
+        .cell = [1.0e-9; 3];
+    let whole_loop = RegionRefIR {
+        object_id: "strip".into(),
+        region_id: None,
+    };
+    let source_arm = RegionRefIR {
+        object_id: "strip".into(),
+        region_id: Some("source_arm".into()),
+    };
+    let CurrentModuleIR::CurrentTransport {
+        definition: Some(definition),
+        ..
+    } = &mut problem.current_modules[0]
+    else {
+        panic!("charge definition fixture")
+    };
+    definition.domain = vec![whole_loop.clone()];
+    definition.materials = vec![ChargeTransportMaterialAssignmentIR {
+        region: whole_loop.clone(),
+        material: ChargeTransportMaterialIR {
+            sigma_spm: 4.0e6,
+            sigma_parallel_spm: None,
+            sigma_perpendicular_spm: None,
+            sigma_ahe_spm: None,
+        },
+    }];
+    for boundary in &mut definition.boundaries {
+        let id = boundary.id().to_string();
+        let surfaces = boundary.surfaces().to_vec();
+        *boundary = ChargeBoundaryIR::Insulating { id, surfaces };
+    }
+    definition.gauge = ChargePotentialGaugeIR::ZeroMean;
+    definition.solver.linear.absolute_tolerance = 1.0e-6;
+    definition.solver.operator_version = "fv_charge_harmonic_source_cut_v1".into();
+    definition.structured_current_closure = Some(StructuredCurrentClosureIR::ClosedGeometry {
+        schema_version: "structured_current_closure.v1".into(),
+        closure_id: "loop-closure".into(),
+        source_cuts: vec![StructuredCurrentSourceCutIR {
+            source_cut_id: "source-cut".into(),
+            circuit_id: "loop-circuit".into(),
+            region: source_arm,
+            plane: StructuredCutPlaneIR {
+                axis: StructuredCutAxisIR::Y,
+                offset_m: -0.5e-9,
+                normal: StructuredCutNormalIR::PositiveAxis,
+            },
+            drive: StructuredCurrentDriveIR::ImpressedPotentialJump(
+                ImpressedPotentialJumpIR {
+                    schema_version: "impressed_potential_jump.v1".into(),
+                    drive_id: "loop-drive".into(),
+                    potential_jump_v: 1.0e-3,
+                },
+            ),
+        }],
+    });
+    problem.spin_transport_modules[0].domain = vec![whole_loop.clone()];
+    problem.spin_transport_modules[0].materials = vec![SpinTransportMaterialAssignmentIR {
+        region: whole_loop.clone(),
+        material: problem.spin_transport_modules[0].materials[0]
+            .material
+            .clone(),
+    }];
+    problem.spin_transport_modules[0].interfaces = vec![SpinInterfaceIR::Transparent {
+        id: "source-arm-plus-x".into(),
+        side_a: RegionRefIR {
+            object_id: "strip".into(),
+            region_id: Some("source_arm".into()),
+        },
+        side_b: whole_loop.clone(),
+        normal_a_to_b: [1.0, 0.0, 0.0],
+    }];
+    problem.spin_transport_modules[0].boundaries.clear();
+    problem.spin_torque_modules = vec![SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+        schema_version: "drift_diffusion_spin_torque.v1".into(),
+        id: "transport_torque".into(),
+        solve_id: "spin".into(),
+        target: whole_loop,
+        formula_version: "transport_torque_angular_momentum.fullmag.v1".into(),
+    }];
+    problem.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::OerstedField {
+            id: Some("oersted".into()),
+            model: OerstedFieldModelIR::FromCurrentSolution,
+            source: "charge".into(),
+        },
+    ];
+    problem.physics_graph = None;
+    problem
+}
+
 fn output_dir(label: &str) -> std::path::PathBuf {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -326,6 +457,84 @@ fn vector_field_values(label: &str, value: &serde_json::Value) -> Vec<f64> {
                 })
         })
         .collect()
+}
+
+#[test]
+fn public_closed_loop_source_cut_publishes_nonzero_oersted_artifact() {
+    let problem = public_closed_loop_oersted_problem();
+    let plan = fullmag_plan::plan(&problem).expect("closed-loop ProblemIR must plan");
+    let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+        panic!("closed-loop fixture must resolve FDM")
+    };
+    let descriptor = fdm.spin_transport_plans[0]
+        .fdm_cpu_double
+        .as_ref()
+        .expect("native FDM descriptor");
+    let closure = descriptor
+        .structured_current_closure
+        .as_ref()
+        .expect("resolved structured closure");
+    assert_eq!(closure.source_cuts.len(), 1);
+    assert_eq!(closure.source_cuts[0].faces.len(), 1);
+
+    let directory = output_dir("closed-loop-oersted");
+    let result = fullmag_runner::run_planned_problem(&problem, &plan, 1.0e-13, &directory)
+        .expect("public planned runner must execute the closed loop");
+    assert_eq!(result.status, fullmag_runner::RunStatus::Completed);
+    let artifact: serde_json::Value = serde_json::from_slice(
+        &fs::read(directory.join("transport/spin_transport_accepted.json"))
+            .expect("persistent accepted transport artifact"),
+    )
+    .expect("accepted transport JSON");
+    let module = &artifact["evaluation"]["modules"][0];
+    assert_eq!(
+        module["charge_operator_version"],
+        "fv_charge_harmonic_source_cut_v1"
+    );
+    let current = vector_field_values("closed-loop current", &module["current_density_apm2"]);
+    assert!(current.iter().any(|value| value.abs() > 0.0));
+    let field = vector_field_values("closed-loop Oersted", &module["oersted_field_apm"]);
+    assert!(field.iter().all(|value| value.is_finite()));
+    assert!(field.iter().any(|value| value.abs() > 0.0));
+    let provenance = &module["oersted_closure_provenance"];
+    assert_eq!(provenance["closure_kind"], "closed_geometry");
+    assert_eq!(
+        provenance["certificate_version"],
+        "global_closed_current_certificate.v1"
+    );
+    assert_eq!(
+        provenance["operator_version"],
+        "fdm_oersted_cell_integrated_open.v1"
+    );
+    for digest in [
+        "geometry_digest",
+        "conductor_mask_digest",
+        "target_mask_digest",
+        "face_current_digest",
+        "certificate_digest",
+        "envelope_digest",
+        "trusted_snapshot_digest",
+    ] {
+        assert!(
+            provenance[digest]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:")),
+            "missing canonical {digest}"
+        );
+    }
+    assert_eq!(provenance["source_cuts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        provenance["source_cuts"][0]["drive_kind"],
+        "impressed_potential_jump.v1"
+    );
+    assert_eq!(
+        provenance["source_cuts"][0]["ordered_internal_face_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    fs::remove_dir_all(directory).expect("remove closed-loop fixture");
 }
 
 #[test]

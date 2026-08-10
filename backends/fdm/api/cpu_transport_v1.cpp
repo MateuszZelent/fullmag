@@ -67,6 +67,17 @@ bool result_field_available(const Result *result,
            width <= static_cast<std::size_t>(header.struct_size) - offset;
 }
 
+template <typename Request>
+bool request_field_available(const Request *request,
+                             std::size_t offset,
+                             std::size_t width) noexcept {
+    if (request == nullptr || request->abi_version != FULLMAG_FDM_CPU_TRANSPORT_ABI_V1) {
+        return false;
+    }
+    return request->struct_size >= offset &&
+           width <= static_cast<std::size_t>(request->struct_size) - offset;
+}
+
 template <typename Result>
 int fail(Result *result, int status, std::string_view message) noexcept {
     if (result_field_available(result,
@@ -403,6 +414,14 @@ const fullmag_fdm_cpu_transport_abi_layout_field_v1 specified_face_layout_fields
     FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_specified_current_face_v1, area_m2),
     FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_specified_current_face_v1, outward_current_density_a_per_m2),
 };
+const fullmag_fdm_cpu_transport_abi_layout_field_v1 potential_jump_face_layout_fields[] = {
+    FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_impressed_potential_jump_face_v1, source_cut_index),
+    FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_impressed_potential_jump_face_v1, axis),
+    FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_impressed_potential_jump_face_v1, normal_sign),
+    FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_impressed_potential_jump_face_v1, negative_cell),
+    FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_impressed_potential_jump_face_v1, positive_cell),
+    FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_impressed_potential_jump_face_v1, potential_jump_v),
+};
 const fullmag_fdm_cpu_transport_abi_layout_field_v1 interface_layout_fields[] = {
     FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_transport_interface_v1, interface_id),
     FULLMAG_LAYOUT_FIELD(fullmag_fdm_cpu_transport_interface_v1, axis),
@@ -494,7 +513,9 @@ const fullmag_fdm_cpu_transport_abi_layout_field_v1 layout_manifest_layout_field
     FULLMAG_LAYOUT_FIELD(type, reserved0), FULLMAG_LAYOUT_FIELD(type, relative_tolerance), \
     FULLMAG_LAYOUT_FIELD(type, absolute_tolerance_a_per_m3), FULLMAG_LAYOUT_FIELD(type, max_iterations), \
     FULLMAG_LAYOUT_FIELD(type, api_version), FULLMAG_LAYOUT_FIELD(type, operator_version), \
-    FULLMAG_LAYOUT_FIELD(type, solver_version), FULLMAG_LAYOUT_FIELD(type, residual_version)
+    FULLMAG_LAYOUT_FIELD(type, solver_version), FULLMAG_LAYOUT_FIELD(type, residual_version), \
+    FULLMAG_LAYOUT_FIELD(type, impressed_potential_jump_faces), \
+    FULLMAG_LAYOUT_FIELD(type, impressed_potential_jump_face_count)
 const fullmag_fdm_cpu_transport_abi_layout_field_v1 charge_request_layout_fields[] = {
     FULLMAG_CHARGE_REQUEST_FIELDS(fullmag_fdm_cpu_charge_request_v1),
 };
@@ -599,6 +620,7 @@ const fullmag_fdm_cpu_transport_abi_layout_record_v1 transport_layout_records[] 
     FULLMAG_LAYOUT_RECORD("fullmag_fdm_cpu_transport_abi_layout_field_v1", fullmag_fdm_cpu_transport_abi_layout_field_v1, layout_field_layout_fields),
     FULLMAG_LAYOUT_RECORD("fullmag_fdm_cpu_transport_abi_layout_record_v1", fullmag_fdm_cpu_transport_abi_layout_record_v1, layout_record_layout_fields),
     FULLMAG_LAYOUT_RECORD("fullmag_fdm_cpu_transport_abi_layout_manifest_v1", fullmag_fdm_cpu_transport_abi_layout_manifest_v1, layout_manifest_layout_fields),
+    FULLMAG_LAYOUT_RECORD("fullmag_fdm_cpu_impressed_potential_jump_face_v1", fullmag_fdm_cpu_impressed_potential_jump_face_v1, potential_jump_face_layout_fields),
 };
 const fullmag_fdm_cpu_transport_abi_layout_manifest_v1 transport_layout_manifest = {
     FULLMAG_FDM_CPU_TRANSPORT_ABI_V1,
@@ -641,8 +663,18 @@ extern "C" int fullmag_fdm_cpu_charge_solve_v1(
         return fail(result, FULLMAG_FDM_CPU_TRANSPORT_ERR_NULL,
                     "charge request pointer is null");
     }
+    constexpr std::size_t legacy_charge_request_size =
+        offsetof(fullmag_fdm_cpu_charge_request_v1, impressed_potential_jump_faces);
+    const bool source_cut_fields_available = request_field_available(
+        request,
+        offsetof(fullmag_fdm_cpu_charge_request_v1,
+                 impressed_potential_jump_face_count),
+        sizeof(request->impressed_potential_jump_face_count));
     if (request->abi_version != FULLMAG_FDM_CPU_TRANSPORT_ABI_V1 ||
-        request->struct_size < sizeof(*request) || request->reserved_flags != 0) {
+        request->struct_size < legacy_charge_request_size ||
+        (request->struct_size > legacy_charge_request_size &&
+         !source_cut_fields_available) ||
+        request->reserved_flags != 0) {
         return fail(result, FULLMAG_FDM_CPU_TRANSPORT_ERR_ABI,
                     "invalid charge request ABI header or reserved flags");
     }
@@ -656,8 +688,15 @@ extern "C" int fullmag_fdm_cpu_charge_solve_v1(
             return fail(result, FULLMAG_FDM_CPU_TRANSPORT_ERR_UNSUPPORTED,
                         "native M1 v1 supports only CPU and f64");
         }
+        const uint64_t potential_jump_face_count_u64 =
+            source_cut_fields_available
+                ? request->impressed_potential_jump_face_count
+                : 0;
+        const auto expected_operator = potential_jump_face_count_u64 == 0
+                                           ? charge::operator_version
+                                           : charge::source_cut_operator_version;
         if (!exact_text(request->api_version, charge::api_version) ||
-            !exact_text(request->operator_version, charge::operator_version) ||
+            !exact_text(request->operator_version, expected_operator) ||
             !exact_text(request->solver_version, charge::solver_version) ||
             !exact_text(request->residual_version, charge::residual_version)) {
             return fail(result, FULLMAG_FDM_CPU_TRANSPORT_ERR_UNSUPPORTED,
@@ -755,6 +794,37 @@ extern "C" int fullmag_fdm_cpu_charge_solve_v1(
                 charge_face(source), from, to, source.g_up_s_per_m2,
                 source.g_down_s_per_m2));
             mixing_interfaces.push_back(source);
+        }
+        std::size_t potential_jump_face_count = 0;
+        const auto *potential_jump_faces =
+            source_cut_fields_available
+                ? request->impressed_potential_jump_faces
+                : nullptr;
+        if (!input_records(potential_jump_faces,
+                           potential_jump_face_count_u64,
+                           potential_jump_face_count)) {
+            return fail(result, FULLMAG_FDM_CPU_TRANSPORT_ERR_INVALID,
+                        "impressed potential jump face array is invalid");
+        }
+        problem.impressed_potential_jump_faces.reserve(potential_jump_face_count);
+        for (std::size_t index = 0; index < potential_jump_face_count; ++index) {
+            const auto &source = potential_jump_faces[index];
+            std::size_t source_cut_index = 0;
+            std::size_t axis = 0;
+            std::size_t negative_cell = 0;
+            std::size_t positive_cell = 0;
+            if (!checked_size(source.source_cut_index, source_cut_index) ||
+                !checked_size(source.axis, axis) ||
+                !checked_size(source.negative_cell, negative_cell) ||
+                !checked_size(source.positive_cell, positive_cell)) {
+                return fail(result, FULLMAG_FDM_CPU_TRANSPORT_ERR_INVALID,
+                            "impressed potential jump face index exceeds native size_t");
+            }
+            problem.impressed_potential_jump_faces.push_back(
+                {source_cut_index,
+                 {axis, negative_cell, positive_cell},
+                 source.normal_sign,
+                 source.potential_jump_v});
         }
         uint64_t mixing_interface_count_u64 = 0;
         if (!checked_u64(mixing_interfaces.size(), mixing_interface_count_u64)) {

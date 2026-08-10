@@ -1382,6 +1382,25 @@ precision:
 | M2 coupled | FDM GPU/double | `fdm_charge_spin_block_gmres_cuda_v1` | device FGMRES + device charge/spin AMG field split | `50` / `1500` | FP64 |
 | M2 coupled | FEM CPU/double | `fem_charge_spin_block_gmres_v1` | hypre FGMRES + BoomerAMG field split/interface Jacobi | `50` / `1500` | FP64 |
 | M2 coupled | FEM GPU/double | `fem_charge_spin_block_gmres_device_v1` | device hypre FGMRES + device AMG field split/interface Jacobi | `50` / `1500` | FP64 |
+
+Realizacja FDM GPU/FP64 M1 charge używa deterministycznej agregacji geometrycznej
+`2 x 2 x 2`. Przypisanie agregatów, budowa dokładnego operatora Galerkina
+`A_c = R A P`, walidacja unikalności kanonicznych ścian oraz restrykcja mają
+koszt liniowy względem liczby komórek lub ścian. Operator coarse ma
+ustrukturyzowany stencil i stały koszt dostępu do sąsiadów; zabronione są
+skany wszystkich komórek per aggregate, liniowe wyszukiwanie duplikatów
+krawędzi coarse oraz skany wcześniejszych ścian per boundary face. Hierarchia,
+jej digest, cache identity, telemetry i checkpoint pozostają deterministyczne,
+device-resident i FP64.
+
+Dedykowany managed gate
+`just verify-fdm-gpu-m1-charge-scalability-contract` wykonuje publiczny solve
+`1024 x 128 x 8 = 1 048 576` komórek na rzeczywistym GPU. Pomiar referencyjny
+z 2026-08-10 na RTX 4080 SUPER wyniósł `0.078187 s` dla uploadu/walidacji oraz
+`16.456555 s` dla solve przy `254` iteracjach, `131072` coarse DOF i zerowym
+host fallback. Jest to zarejestrowana baza regresyjna, a nie arbitralny limit
+promocji: wiążący limit czasowy zostanie dodany dopiero po zebraniu wyników na
+reprezentatywnej macierzy urządzeń i obciążeń.
 | M3 IMEX | FDM CPU/double | `coupled_imex_ark2.v1` + `fdm_charge_spin_block_gmres_v1` | M2 CPU implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
 | M3 IMEX | FDM GPU/double | `coupled_imex_ark2.v1` + `fdm_charge_spin_block_gmres_cuda_v1` | M2 device implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
 | M3 IMEX | FEM CPU/double | `coupled_imex_ark2.v1` + `fem_charge_spin_block_gmres_v1` | M2 CPU implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
@@ -1915,6 +1934,23 @@ that order. Every size is derived with checked integer arithmetic. Misaligned,
 undersized, overlapping where forbidden, wrong-device, or wrong-space views
 return `invalid_descriptor`.
 
+`transport_observations` (artifact field 7) is the sole typed observation
+stream and does not extend the closed artifact-field registry. It is a
+range-bounded array of 288-byte `spin_observation_record_v1` values with
+`raw_bytes/scalar` destination metadata. Its closed kind registry is
+`0 invalid`, `1 reaction`, `2 torque`, `3 interface`. Reaction records carry
+`R_sf/R_J/R_phi` in lanes 0--2 with units `A/m^3`; torque records carry
+volume/surface/total torque in lanes 0--2 with units `1/s`; interface records
+carry incoming, backflow, absorbed, negative one-sided, positive one-sided and
+SML flux in lanes 0--5 with units `A/m^2`. Every lane is ordered `xyz`; unused
+lanes and metadata are exact zero. Stream order is increasing-cell reaction,
+increasing-cell torque, then interfaces sorted lexicographically by
+`(source_id,topology_id,axis,canonical_face_index,negative_cell,positive_cell,
+from_cell,to_cell)`. Unknown kinds and non-canonical destination metadata fail
+closed. Artifact field 5 remains the final total-torque SoA.
+Interface records also carry the accepted oriented charge `from`, `to`, and
+`delta` traces used by the M1 law; those fields are exact zero for cell records.
+
 #### Frozen v1 records
 
 ##### Typed steady-spin payload records outside the manifest
@@ -1930,6 +1966,7 @@ record IDs. A steady-spin descriptor uses these exact 8-byte-aligned layouts:
 | `spin_boundary_face_v1` | 104 | `kind:u32`, `axis:u32`, `side:i32`, `outward_sign:i32`, `adjacent_cell:u64`, `canonical_face_index:u64`, `area:f64`, `potential_xyz:f64[3]`, `source_id:u64` | `0x08` |
 | `spin_interface_v1` | 176 | `kind:u32`, `axis:u32`, `orientation:i32`, `reserved1:u32`, `negative_cell:u64`, `positive_cell:u64`, `from_cell:u64`, `to_cell:u64`, `canonical_face_index:u64`, `area:f64`, `G_up/G_down/G_r/G_i:f64`, `magnetization_xyz:f64[3]`, `source_id:u64`, `topology_id:u64`, `charge_edge_enabled:u32`, `reserved2:u32` | `0x1c` |
 | `formula_ids_v1` | 144 | charge formula fields through byte 63, then nine spin IDs at offsets 64--99, `reserved2:u32`, `spin_operator_revision:u64`, `preconditioner_revision:u64`, `gamma_e:f64`, `gmres_restart:u64`, `reserved3:u64` | `0x1c` |
+| `spin_observation_record_v1` | 288 | `kind:u32`, `axis:u32`, `orientation:i32`, `reserved1:u32`, `cell_index:u64`, `source_id:u64`, `topology_id:u64`, `canonical_face_index:u64`, `negative_cell:u64`, `positive_cell:u64`, `from_cell:u64`, `to_cell:u64`, `region_id:u32`, `reserved2:u32`, `charge_from_trace_v:f64`, `charge_to_trace_v:f64`, `charge_delta_trace_v:f64`, `lane0_xyz` through `lane5_xyz:f64[3]` | exactly `0x48` |
 
 The exact offsets and C names are normative in the physics note under
 `DOC-ANCHOR:fdm-gpu-m1-fp64-contract`. View order remains cells/materials/
@@ -1943,6 +1980,19 @@ values are `0 invalid`, `1 transparent`, `2 mixing_conductance_v2`,
 nonzero reserved field, invalid feature mask, malformed extent, duplicate
 identity, inactive endpoint, wrong face area/sign/index, nonunit magnetization,
 or nonfinite physical value is rejected before static publication.
+
+For `M1_CHARGE|STEADY_SPIN`, every view is `host_read_only/raw_bytes/scalar`,
+all nonempty addresses and record strides are 8-byte aligned, and nonempty byte
+ranges are pairwise disjoint. Exact `(count,stride,required_features)` is:
+cells `(nx*ny*nz,72,0x04)`; materials `(unique referenced IDs,112,0x04)`;
+interfaces `(authored count,176,0x04 transparent or 0x14 mixing)`; charge faces
+`(all external structured faces,88,0x04)`; spin faces
+`(all external structured faces,104,0x08)`; formula IDs `(1,144,0x04)`.
+Only interfaces may be empty, with address and byte length zero but stride 176.
+Every byte length equals checked `count*stride`. Charge-prefix records keep
+exact required mask `0x04`; spin tail presence is enforced by descriptor feature
+mask plus exact stride/minimum size. This is what makes the extension readable
+by the existing charge-prefix parser without weakening steady-spin validation.
 
 The future ABI records have these complete semantic responsibilities:
 
@@ -2113,6 +2163,18 @@ request/result that carries it.
 | `record_id` | `checkpoint_import_request_v1` | `16` | closed value |
 | `record_id` | `checkpoint_restore_result_v1` | `17` | closed value |
 | `record_id` | `transport_error_v1` | `18` | closed value |
+
+Pole `charge_interface_trace` (`6`) zwraca tablicę rekordów
+`fullmag_fdm_gpu_transport_charge_interface_trace_v1` w niezmiennej kolejności
+deskryptora statycznego. Rekord ma 136 bajtów, wyrównanie 8 bajtów i zawiera:
+`axis`, `orientation`, `source_id`, `topology_id`, `canonical_face_index`,
+`negative_cell`, `positive_cell`, `from_cell`, `to_cell`, `from_trace_v`,
+`to_trace_v`, `delta_trace_v` oraz `oriented_current_density`. Widok docelowy
+musi być `HOST_WRITE_ONLY`, `RAW_BYTES`, `SCALAR`, z krokiem dokładnie 136
+bajtów. Odczyt jest dozwolonym transferem D2H tylko na jawne żądanie artefaktu;
+telemetria raportuje cztery rzeczywiste transfery FP64 na rekord i jedno
+synchronizowanie strumienia. Import checkpointu odtwarza te same cztery tablice
+na urządzeniu bez ponownego rozwiązania równania ładunku.
 
 Bitmask fields use these exact bits:
 
@@ -2361,10 +2423,10 @@ and its position in the list is its `field_id`:
 | 7 `exact_density_faces` | `cell_linear:u64[]`, `axis:u32[]`, `side:i32[]`, `area:f64[]`, `density:f64[]`, `source_ids:utf8_list` |
 | 8 `charge_interface_traces` | `interface_ids:utf8_list`, `face_linear:u64[]`, `orientation:i32[]`, `V_N:f64[]`, `V_F:f64[]`, `J_N:f64[]`, `J_F:f64[]` |
 | 9 `charge_observations` | `electrode_ids:utf8_list`, `electrode_current:f64[]`, `component_balance:f64[]`, `physical_residual:f64[]` |
-| 10 `spin_meta` | `formula_id:utf8`, `operator_id:utf8`, `engine_id:utf8`, `residual_id:utf8`, `source_revision:u64`, `operator_revision:u64`, `convergence_reason:u32`, `iterations:u64`, `work_budget:u64`, `deterministic_compute_digest:sha256` |
+| 10 `spin_meta` | `formula_id:utf8`, `operator_id:utf8`, `electric_reconstruction_id:utf8`, `interface_formula_id:utf8`, `torque_operator_id:utf8`, `engine_id:utf8`, `preconditioner_id:utf8`, `residual_id:utf8`, `local_residual_id:utf8`, `source_revision:u64`, `operator_revision:u64`, `preconditioner_revision:u64`, `convergence_reason:u32`, `iterations:u64`, `work_budget:u64`, `local_balance:f64`, `global_balance:f64`, `interface_balance:f64`, `torque_balance:f64`, `deterministic_compute_digest:sha256` |
 | 15 `spin_reactions` | `R_sf_x:f64[]`, `R_sf_y:f64[]`, `R_sf_z:f64[]`, `R_J_x:f64[]`, `R_J_y:f64[]`, `R_J_z:f64[]`, `R_phi_x:f64[]`, `R_phi_y:f64[]`, `R_phi_z:f64[]` |
-| 16 `spin_interface_observations` | `interface_ids:utf8_list`, `face_linear:u64[]`, `orientation:i32[]`, `incoming_x:f64[]`, `incoming_y:f64[]`, `incoming_z:f64[]`, `backflow_x:f64[]`, `backflow_y:f64[]`, `backflow_z:f64[]`, `absorbed_x:f64[]`, `absorbed_y:f64[]`, `absorbed_z:f64[]` |
-| 17 `torque` | `volume_x:f64[]`, `volume_y:f64[]`, `volume_z:f64[]`, `surface_x:f64[]`, `surface_y:f64[]`, `surface_z:f64[]`, `balance:f64[]` |
+| 16 `spin_interface_observations` | `source_ids:u64[]`, `topology_ids:u64[]`, `axis:u32[]`, `face_linear:u64[]`, `negative_cell:u64[]`, `positive_cell:u64[]`, `from_cell:u64[]`, `to_cell:u64[]`, `orientation:i32[]`, `incoming_x:f64[]`, `incoming_y:f64[]`, `incoming_z:f64[]`, `backflow_x:f64[]`, `backflow_y:f64[]`, `backflow_z:f64[]`, `absorbed_x:f64[]`, `absorbed_y:f64[]`, `absorbed_z:f64[]`, `negative_flux_x:f64[]`, `negative_flux_y:f64[]`, `negative_flux_z:f64[]`, `positive_flux_x:f64[]`, `positive_flux_y:f64[]`, `positive_flux_z:f64[]`, `sml_x:f64[]`, `sml_y:f64[]`, `sml_z:f64[]` |
+| 17 `torque` | `volume_x:f64[]`, `volume_y:f64[]`, `volume_z:f64[]`, `surface_x:f64[]`, `surface_y:f64[]`, `surface_z:f64[]`, `final_x:f64[]`, `final_y:f64[]`, `final_z:f64[]`, `balance:f64[]` |
 | 18 `charge_warm_start` | `engine_id:utf8`, `preconditioner_revision:u64`, `restart_position:u64`, `basis_count:u64`, `iterate:f64[]`, `basis:f64[]`, `deterministic_reduction_state:u8[]` |
 | 19 `spin_warm_start` | same seven fields and types as section 18, for the spin engine |
 | 20 `solver_continuation_meta` | `accepted_sequence:u64`, `attempt_id:u64`, `stage_id:u64`, `telemetry_cursor:u64`, `charge_work_budget:u64`, `spin_work_budget:u64`, `scientific_continuation_digest:sha256` |
@@ -2381,6 +2443,30 @@ volume, surface and final torque plus closure; section 19 stores the restarted
 GMRES iterate, component-AMG/block-Jacobi revision, restart position, basis and
 fixed-tree reduction continuation. Spin checkpoint size is dynamic and must
 never reuse the charge-only 4352-byte oracle as an expected size.
+
+The four published scientific digest byte domains are exact:
+
+```text
+snapshot_content_digest = SHA256(section[1] || ... || section[17])
+spin_digest = SHA256(section[10] || ... || section[17])
+warm_start_digest = SHA256(section[18] || section[19])
+scientific_continuation_digest = SHA256(
+    header.snapshot_content_digest[32] ||
+    section[18] || section[19] ||
+    section[20] with only field 7 data bytes replaced by zero)
+```
+
+Each `section[id]` means exactly its canonical `byte_length` data bytes and
+excludes section descriptors and inter-section padding; concatenation is in
+strict ascending numeric ID. For a charge-only accepted state,
+`snapshot_content_digest=SHA256(section[1]||...||section[9])`,
+`spin_digest` is 32 zero bytes, `warm_start_digest=SHA256(section[18])`, and the
+continuation domain omits absent section 19 while retaining the same field-7
+zeroing rule. No other header field, file padding, export/import event or audit
+digest enters these domains. The header and frozen result/restore records carry
+the resulting bytes verbatim. The operation-audit chain remains a separate
+domain over canonical telemetry events and is never folded into any of these
+four digests.
 
 Parallel arrays within one subrecord have equal element counts unless a field
 is explicitly scalar; vector component arrays have the corresponding cell or

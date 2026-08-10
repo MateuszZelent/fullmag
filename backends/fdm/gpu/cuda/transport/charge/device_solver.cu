@@ -46,6 +46,9 @@ struct DeviceSolveMetrics {
 struct DeviceHierarchyInfo {
     uint64_t coarse_cells;
     uint64_t edge_count;
+    uint64_t coarse_nx;
+    uint64_t coarse_ny;
+    uint64_t coarse_nz;
     uint8_t digest[32];
 };
 
@@ -135,7 +138,7 @@ __device__ void sha_finish(DeviceSha256 *sha, uint8_t digest[32]) {
 
 __global__ void content_digest_kernel(
     Buffers buffers, const void *charge_faces, uint64_t charge_face_count,
-    uint64_t charge_face_stride,
+    uint64_t charge_face_stride, const void *interfaces, uint64_t interface_stride,
     ContentDigestIdentity identity, uint8_t *digest) {
     if(blockIdx.x!=0||threadIdx.x!=0)return;
     DeviceSha256 sha{};sha_init(&sha);
@@ -170,6 +173,34 @@ __global__ void content_digest_kernel(
         const uint64_t source_id=load_charge_source_id(charge_faces,charge_face_stride,i);
         sha_update(&sha,&value,sizeof(value));sha_update(&sha,&source_id,sizeof(source_id));
     }
+    sha_segment(&sha,14,&buffers.interface_count,sizeof(buffers.interface_count));
+    const double *trace_arrays[4]={buffers.interface_from_trace_v,buffers.interface_to_trace_v,
+        buffers.interface_delta_trace_v,buffers.interface_charge_current_density};
+    for(uint32_t lane=0;lane<4;++lane){
+        const uint32_t tag=15+lane;
+        const uint64_t bytes=buffers.interface_count*sizeof(double);
+        sha_update(&sha,&tag,sizeof(tag));sha_update(&sha,&bytes,sizeof(bytes));
+        for(uint64_t rank=0;rank<buffers.interface_count;++rank){
+            uint64_t selected=UINT64_MAX;
+            for(uint64_t candidate=0;candidate<buffers.interface_count;++candidate){
+                const auto *c=reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
+                    static_cast<const uint8_t *>(interfaces)+candidate*interface_stride);
+                uint64_t lower=0;
+                for(uint64_t other=0;other<buffers.interface_count;++other){
+                    const auto *o=reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
+                        static_cast<const uint8_t *>(interfaces)+other*interface_stride);
+                    const bool smaller=o->source_id<c->source_id ||
+                        (o->source_id==c->source_id && (o->topology_id<c->topology_id ||
+                        (o->topology_id==c->topology_id && (o->axis<c->axis ||
+                        (o->axis==c->axis && o->canonical_face_index<c->canonical_face_index)))));
+                    if(smaller)++lower;
+                }
+                if(lower==rank){selected=candidate;break;}
+            }
+            if(selected==UINT64_MAX)return;
+            sha_update(&sha,trace_arrays[lane]+selected,sizeof(double));
+        }
+    }
     sha_finish(&sha,digest);
 }
 
@@ -179,7 +210,46 @@ __device__ uint64_t cell_index(uint64_t x, uint64_t y, uint64_t z,
 }
 
 __device__ double harmonic(double a, double b) {
-    return 2.0 * a * b / (a + b);
+    return 2.0 / (1.0 / a + 1.0 / b);
+}
+
+__device__ uint64_t boundary_ordinal(uint32_t axis, int32_t side,
+    uint64_t x, uint64_t y, uint64_t z, uint64_t nx, uint64_t ny, uint64_t nz) {
+    const uint64_t x_faces = 2 * ny * nz;
+    const uint64_t y_faces = 2 * nx * nz;
+    if (axis == 0) return (side > 0 ? ny * nz : 0) + y + ny * z;
+    if (axis == 1) return x_faces + (side > 0 ? nx * nz : 0) + x + nx * z;
+    return x_faces + y_faces + (side > 0 ? nx * ny : 0) + x + nx * y;
+}
+
+__device__ double internal_face_conductance(
+    uint32_t axis, uint64_t canonical_face, uint64_t a, uint64_t b,
+    double h, double area, const double *sigma, const void *interface_payload,
+    uint64_t interface_count, uint64_t interface_stride) {
+    uint64_t begin = 0, end = interface_count;
+    while (begin < end) {
+        const uint64_t middle = begin + (end - begin) / 2;
+        const auto *candidate = reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
+            reinterpret_cast<const uint8_t *>(interface_payload) + middle * interface_stride);
+        if (candidate->axis < axis ||
+            (candidate->axis == axis && candidate->canonical_face_index < canonical_face))
+            begin = middle + 1;
+        else
+            end = middle;
+    }
+    if (begin < interface_count) {
+        const auto *record = reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
+            reinterpret_cast<const uint8_t *>(interface_payload) + begin * interface_stride);
+        if (record->axis == axis && record->canonical_face_index == canonical_face) {
+        if (record->kind == FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_TRANSPARENT)
+            return harmonic(sigma[a], sigma[b]) * area / h;
+        const double total = record->G_up + record->G_down;
+        if (total == 0.0) return 0.0;
+        return record->area /
+            (0.5 * h / sigma[a] + 1.0 / total + 0.5 * h / sigma[b]);
+        }
+    }
+    return harmonic(sigma[a], sigma[b]) * area / h;
 }
 
 __global__ void normalize_charge_payload_kernel(
@@ -260,22 +330,25 @@ __global__ void validate_static_payload_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, double hx, double hy, double hz,
     const void *mask_payload, uint64_t mask_stride, uint32_t mask_type,
     const void *face_payload, uint64_t face_count, uint64_t face_stride,
-    uint32_t *invalid) {
+    uint32_t *seen_faces, uint32_t *invalid) {
     const uint64_t cells = nx * ny * nz;
-    if (threadIdx.x == 0) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
         const uint64_t expected_faces = 2 * (ny * nz + nx * nz + nx * ny);
-        if (face_count != expected_faces) atomicExch(invalid, 1u);
+        if (face_count != expected_faces) atomicCAS(invalid, 0u, 1u);
     }
-    for (uint64_t f = threadIdx.x; f < face_count; f += blockDim.x) {
+    for (uint64_t f = blockIdx.x * blockDim.x + threadIdx.x; f < face_count;
+         f += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
         uint32_t kind = 0, axis = 0; int32_t side = 0; uint64_t adjacent = 0;
         double area = 0.0, value = 0.0;
         load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
                          &adjacent, &area, &value);
+        uint32_t invalid_code = 0;
         bool bad = kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INVALID ||
             kind > FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING || axis > 2 ||
             (side != -1 && side != 1) || adjacent >= cells || !isfinite(area) ||
             area <= 0.0 || !isfinite(value) ||
             (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING && value != 0.0);
+        if (bad) invalid_code = 2;
         if (!bad) {
             const uint64_t x = adjacent % nx;
             const uint64_t yz = adjacent / nx;
@@ -288,6 +361,7 @@ __global__ void validate_static_payload_kernel(
                   (side == 1 && coordinate + 1 != extent) ||
                   fabs(area - expected_area) > 1.0e-12 * expected_area ||
                   !load_active_cell(mask_payload, mask_stride, mask_type, adjacent);
+            if (bad) invalid_code = 3;
         }
         if (!bad && face_stride >= sizeof(fullmag_fdm_gpu_transport_charge_face_v1)) {
             const auto *face = reinterpret_cast<const fullmag_fdm_gpu_transport_charge_face_v1 *>(
@@ -303,22 +377,33 @@ __global__ void validate_static_payload_kernel(
                     : x + nx * (y + ny * (side < 0 ? 0 : nz));
             bad = face->outward_sign != side || face->canonical_face_index != expected_index ||
                   face->source_id == 0;
+            if (bad) invalid_code = 4;
         }
-        for (uint64_t prior = 0; !bad && prior < f; ++prior) {
-            uint32_t prior_kind = 0, prior_axis = 0; int32_t prior_side = 0;
-            uint64_t prior_adjacent = 0; double prior_area = 0.0, prior_value = 0.0;
-            load_charge_face(face_payload, face_stride, prior, &prior_kind, &prior_axis,
-                             &prior_side, &prior_adjacent, &prior_area, &prior_value);
-            bad = prior_axis == axis && prior_side == side && prior_adjacent == adjacent;
+        if (!bad) {
+            const uint64_t x = adjacent % nx;
+            const uint64_t yz = adjacent / nx;
+            const uint64_t y = yz % ny;
+            const uint64_t z = yz / ny;
+            const uint64_t x_faces = 2 * ny * nz;
+            const uint64_t y_faces = 2 * nx * nz;
+            const uint64_t side_offset = side > 0 ? 1 : 0;
+            const uint64_t boundary_ordinal = axis == 0
+                ? side_offset * ny * nz + y + ny * z
+                : axis == 1
+                    ? x_faces + side_offset * nx * nz + x + nx * z
+                    : x_faces + y_faces + side_offset * nx * ny + x + nx * y;
+            bad = atomicCAS(seen_faces + boundary_ordinal, 0u, 1u) != 0u;
+            if (bad) invalid_code = 5;
         }
-        if (bad) atomicExch(invalid, 1u);
+        if (bad) atomicCAS(invalid, 0u, invalid_code);
     }
 }
 
 __global__ void assemble_charge_fv_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, double hx, double hy, double hz,
     const uint8_t *active, const double *sigma, const void *face_payload,
-    uint64_t face_count, uint64_t face_stride, double *diag, double *rhs,
+    uint64_t face_count, uint64_t face_stride, const void *interface_payload,
+    uint64_t interface_count, uint64_t interface_stride, double *diag, double *rhs,
     double *gx, double *gy, double *gz) {
     const uint64_t cells = nx * ny * nz;
     for (uint64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < cells;
@@ -336,19 +421,31 @@ __global__ void assemble_charge_fv_kernel(
         const double ax = hy * hz;
         const double ay = hx * hz;
         const double az = hx * hy;
+        const uint64_t x_face = x + 1 + (nx + 1) * (y + ny * z);
+        const uint64_t y_face = x + nx * ((y + 1) + (ny + 1) * z);
+        const uint64_t z_face = x + nx * (y + ny * (z + 1));
         gx[i] = x + 1 < nx && active[i + 1]
-                    ? harmonic(sigma[i], sigma[i + 1]) * ax / hx : 0.0;
+                    ? internal_face_conductance(0, x_face, i, i + 1, hx, ax, sigma,
+                        interface_payload, interface_count, interface_stride) : 0.0;
         gy[i] = y + 1 < ny && active[i + nx]
-                    ? harmonic(sigma[i], sigma[i + nx]) * ay / hy : 0.0;
+                    ? internal_face_conductance(1, y_face, i, i + nx, hy, ay, sigma,
+                        interface_payload, interface_count, interface_stride) : 0.0;
         gz[i] = z + 1 < nz && active[i + nx * ny]
-                    ? harmonic(sigma[i], sigma[i + nx * ny]) * az / hz : 0.0;
+                    ? internal_face_conductance(2, z_face, i, i + nx * ny, hz, az, sigma,
+                        interface_payload, interface_count, interface_stride) : 0.0;
         double diagonal = gx[i] + gy[i] + gz[i];
         if (x > 0 && active[i - 1])
-            diagonal += harmonic(sigma[i], sigma[i - 1]) * ax / hx;
+            diagonal += internal_face_conductance(
+                0, x + (nx + 1) * (y + ny * z), i - 1, i, hx, ax, sigma,
+                interface_payload, interface_count, interface_stride);
         if (y > 0 && active[i - nx])
-            diagonal += harmonic(sigma[i], sigma[i - nx]) * ay / hy;
+            diagonal += internal_face_conductance(
+                1, x + nx * (y + (ny + 1) * z), i - nx, i, hy, ay, sigma,
+                interface_payload, interface_count, interface_stride);
         if (z > 0 && active[i - nx * ny])
-            diagonal += harmonic(sigma[i], sigma[i - nx * ny]) * az / hz;
+            diagonal += internal_face_conductance(
+                2, x + nx * (y + ny * z), i - nx * ny, i, hz, az, sigma,
+                interface_payload, interface_count, interface_stride);
         double source = 0.0;
         for (uint64_t f = 0; f < face_count; ++f) {
             uint32_t kind = 0, axis = 0;
@@ -406,104 +503,102 @@ __device__ double fixed_tree_dot(const double *a, const double *b, uint64_t coun
     return fixed_tree_sum(local, tree);
 }
 
-__device__ double fine_edge_weight(
-    uint64_t a, uint64_t b, const double *gx, const double *gy, const double *gz,
-    uint64_t nx, uint64_t ny) {
-    if (b == a + 1) return gx[a];
-    if (a == b + 1) return gx[b];
-    if (b == a + nx) return gy[a];
-    if (a == b + nx) return gy[b];
-    const uint64_t plane = nx * ny;
-    if (b == a + plane) return gz[a];
-    if (a == b + plane) return gz[b];
-    return 0.0;
+__global__ void assign_geometric_aggregates_kernel(
+    uint64_t nx, uint64_t ny, uint64_t nz, uint64_t coarse_nx,
+    uint64_t coarse_ny, uint64_t *aggregate) {
+    const uint64_t cells = nx * ny * nz;
+    for (uint64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < cells;
+         i += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
+        const uint64_t x = i % nx;
+        const uint64_t yz = i / nx;
+        const uint64_t y = yz % ny;
+        const uint64_t z = yz / ny;
+        aggregate[i] = x / 2 + coarse_nx * (y / 2 + coarse_ny * (z / 2));
+    }
 }
 
-__global__ void build_strength_amg_hierarchy_kernel(
+__global__ void build_geometric_rap_kernel(
     const uint8_t *active, const double *diag, const double *gx, const double *gy,
     const double *gz, uint64_t nx, uint64_t ny, uint64_t nz,
     uint64_t *aggregate, double *coarse_diag, uint64_t *coarse_edge_a,
     uint64_t *coarse_edge_b, double *coarse_edge_weight,
     DeviceHierarchyInfo *info) {
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    const uint64_t cells = nx * ny * nz;
+    const uint64_t coarse_nx = (nx + 1) / 2;
+    const uint64_t coarse_ny = (ny + 1) / 2;
+    const uint64_t coarse_nz = (nz + 1) / 2;
+    const uint64_t coarse_cells = coarse_nx * coarse_ny * coarse_nz;
     const uint64_t plane = nx * ny;
-    for (uint64_t i = 0; i < cells; ++i) aggregate[i] = UINT64_MAX;
-    uint64_t coarse_cells = 0;
-    for (uint64_t seed = 0; seed < cells; ++seed) {
-        if (aggregate[seed] != UINT64_MAX) continue;
-        const uint64_t coarse = coarse_cells++;
-        aggregate[seed] = coarse;
-        if (!active[seed]) continue;
-        for (uint32_t member_count = 1; member_count < 8; ++member_count) {
-            uint64_t best = UINT64_MAX;
-            double best_weight = -1.0;
-            for (uint64_t i = 0; i < cells; ++i) {
-                if (aggregate[i] != coarse) continue;
-                const uint64_t x = i % nx;
-                const uint64_t yz = i / nx;
-                const uint64_t y = yz % ny;
-                const uint64_t z = yz / ny;
-                uint64_t neighbors[6];
-                uint32_t neighbor_count = 0;
-                if (x > 0) neighbors[neighbor_count++] = i - 1;
-                if (x + 1 < nx) neighbors[neighbor_count++] = i + 1;
-                if (y > 0) neighbors[neighbor_count++] = i - nx;
-                if (y + 1 < ny) neighbors[neighbor_count++] = i + nx;
-                if (z > 0) neighbors[neighbor_count++] = i - plane;
-                if (z + 1 < nz) neighbors[neighbor_count++] = i + plane;
-                double row_strength = 0.0;
-                for (uint32_t n = 0; n < neighbor_count; ++n)
-                    row_strength = fmax(row_strength, fine_edge_weight(
-                        i, neighbors[n], gx, gy, gz, nx, ny));
-                for (uint32_t n = 0; n < neighbor_count; ++n) {
-                    const uint64_t candidate = neighbors[n];
-                    const double weight = fine_edge_weight(i, candidate, gx, gy, gz, nx, ny);
-                    if (aggregate[candidate] != UINT64_MAX || !active[candidate] ||
-                        weight <= 0.0 || weight < 0.25 * row_strength) continue;
-                    if (weight > best_weight || (weight == best_weight && candidate < best)) {
-                        best = candidate;
-                        best_weight = weight;
+    const uint64_t x_edges = coarse_nx > 1 ? (coarse_nx - 1) * coarse_ny * coarse_nz : 0;
+    const uint64_t y_edges = coarse_ny > 1 ? coarse_nx * (coarse_ny - 1) * coarse_nz : 0;
+    for (uint64_t coarse = blockIdx.x * blockDim.x + threadIdx.x;
+         coarse < coarse_cells;
+         coarse += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
+        const uint64_t cx = coarse % coarse_nx;
+        const uint64_t cyz = coarse / coarse_nx;
+        const uint64_t cy = cyz % coarse_ny;
+        const uint64_t cz = cyz / coarse_ny;
+        double diagonal = 0.0;
+        double wx = 0.0, wy = 0.0, wz = 0.0;
+        for (uint64_t dz = 0; dz < 2; ++dz) {
+            const uint64_t z = 2 * cz + dz;
+            if (z >= nz) continue;
+            for (uint64_t dy = 0; dy < 2; ++dy) {
+                const uint64_t y = 2 * cy + dy;
+                if (y >= ny) continue;
+                for (uint64_t dx = 0; dx < 2; ++dx) {
+                    const uint64_t x = 2 * cx + dx;
+                    if (x >= nx) continue;
+                    const uint64_t i = x + nx * (y + ny * z);
+                    if (!active[i]) continue;
+                    diagonal += diag[i];
+                    if (x + 1 < nx && gx[i] > 0.0) {
+                        if (aggregate[i + 1] == coarse) diagonal -= 2.0 * gx[i];
+                        else if (cx + 1 < coarse_nx) wx += gx[i];
+                    }
+                    if (y + 1 < ny && gy[i] > 0.0) {
+                        if (aggregate[i + nx] == coarse) diagonal -= 2.0 * gy[i];
+                        else if (cy + 1 < coarse_ny) wy += gy[i];
+                    }
+                    if (z + 1 < nz && gz[i] > 0.0) {
+                        if (aggregate[i + plane] == coarse) diagonal -= 2.0 * gz[i];
+                        else if (cz + 1 < coarse_nz) wz += gz[i];
                     }
                 }
             }
-            if (best == UINT64_MAX) break;
-            aggregate[best] = coarse;
+        }
+        coarse_diag[coarse] = diagonal;
+        if (cx + 1 < coarse_nx) {
+            const uint64_t edge = cx + (coarse_nx - 1) * (cy + coarse_ny * cz);
+            coarse_edge_a[edge] = coarse;
+            coarse_edge_b[edge] = coarse + 1;
+            coarse_edge_weight[edge] = wx;
+        }
+        if (cy + 1 < coarse_ny) {
+            const uint64_t edge = x_edges + cx + coarse_nx * (cy + (coarse_ny - 1) * cz);
+            coarse_edge_a[edge] = coarse;
+            coarse_edge_b[edge] = coarse + coarse_nx;
+            coarse_edge_weight[edge] = wy;
+        }
+        if (cz + 1 < coarse_nz) {
+            const uint64_t edge = x_edges + y_edges + cx + coarse_nx * (cy + coarse_ny * cz);
+            coarse_edge_a[edge] = coarse;
+            coarse_edge_b[edge] = coarse + coarse_nx * coarse_ny;
+            coarse_edge_weight[edge] = wz;
         }
     }
-    for (uint64_t coarse = 0; coarse < coarse_cells; ++coarse) {
-        coarse_diag[coarse] = 0.0;
-    }
-    for (uint64_t i = 0; i < cells; ++i)
-        coarse_diag[aggregate[i]] += diag[i];
-    uint64_t edge_count = 0;
-    for (uint64_t i = 0; i < cells; ++i) {
-        const uint64_t x = i % nx;
-        const uint64_t yz = i / nx;
-        const uint64_t y = yz % ny;
-        const uint64_t z = yz / ny;
-        const uint64_t coarse = aggregate[i];
-#define FULLMAG_ACCUMULATE_COARSE_EDGE(neighbor_, weight_) do { \
-    const uint64_t other = aggregate[(neighbor_)]; \
-    if (other == coarse) { coarse_diag[coarse] -= 2.0 * (weight_); } \
-    else { \
-        const uint64_t a = coarse < other ? coarse : other; \
-        const uint64_t b = coarse < other ? other : coarse; \
-        uint64_t edge = 0; \
-        while (edge < edge_count && \
-               (coarse_edge_a[edge] != a || coarse_edge_b[edge] != b)) ++edge; \
-        if (edge == edge_count) { \
-            coarse_edge_a[edge] = a; coarse_edge_b[edge] = b; \
-            coarse_edge_weight[edge] = 0.0; ++edge_count; \
-        } \
-        coarse_edge_weight[edge] += (weight_); \
-    } \
-} while (0)
-        if (x + 1 < nx && gx[i] > 0.0) FULLMAG_ACCUMULATE_COARSE_EDGE(i + 1, gx[i]);
-        if (y + 1 < ny && gy[i] > 0.0) FULLMAG_ACCUMULATE_COARSE_EDGE(i + nx, gy[i]);
-        if (z + 1 < nz && gz[i] > 0.0) FULLMAG_ACCUMULATE_COARSE_EDGE(i + plane, gz[i]);
-#undef FULLMAG_ACCUMULATE_COARSE_EDGE
-    }
+}
+
+__global__ void finalize_geometric_rap_kernel(
+    const uint64_t *aggregate, uint64_t cells, const uint64_t *coarse_edge_a,
+    const uint64_t *coarse_edge_b, const double *coarse_edge_weight,
+    uint64_t coarse_nx, uint64_t coarse_ny, uint64_t coarse_nz,
+    DeviceHierarchyInfo *info) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    const uint64_t coarse_cells = coarse_nx * coarse_ny * coarse_nz;
+    const uint64_t edge_count =
+        (coarse_nx > 1 ? (coarse_nx - 1) * coarse_ny * coarse_nz : 0) +
+        (coarse_ny > 1 ? coarse_nx * (coarse_ny - 1) * coarse_nz : 0) +
+        (coarse_nz > 1 ? coarse_nx * coarse_ny * (coarse_nz - 1) : 0);
     uint64_t state[4] = {
         UINT64_C(0xcbf29ce484222325), UINT64_C(0x9e3779b97f4a7c15),
         UINT64_C(0x6a09e667f3bcc909), UINT64_C(0xbb67ae8584caa73b)};
@@ -522,6 +617,9 @@ __global__ void build_strength_amg_hierarchy_kernel(
     }
     info->coarse_cells = coarse_cells;
     info->edge_count = edge_count;
+    info->coarse_nx = coarse_nx;
+    info->coarse_ny = coarse_ny;
+    info->coarse_nz = coarse_nz;
     for (uint32_t lane = 0; lane < 4; ++lane)
         for (uint32_t byte = 0; byte < 8; ++byte)
             info->digest[8 * lane + byte] = static_cast<uint8_t>(state[lane] >> (8 * byte));
@@ -529,12 +627,22 @@ __global__ void build_strength_amg_hierarchy_kernel(
 
 __device__ double apply_coarse_row(
     uint64_t i, const double *v, const double *diag, const uint64_t *edge_a,
-    const uint64_t *edge_b, const double *edge_weight, uint64_t edge_count) {
+    const uint64_t *edge_b, const double *edge_weight, uint64_t edge_count,
+    uint64_t coarse_nx, uint64_t coarse_ny, uint64_t coarse_nz) {
+    (void)edge_a; (void)edge_b; (void)edge_count;
+    const uint64_t x = i % coarse_nx;
+    const uint64_t yz = i / coarse_nx;
+    const uint64_t y = yz % coarse_ny;
+    const uint64_t z = yz / coarse_ny;
+    const uint64_t x_edges = coarse_nx > 1 ? (coarse_nx - 1) * coarse_ny * coarse_nz : 0;
+    const uint64_t y_edges = coarse_ny > 1 ? coarse_nx * (coarse_ny - 1) * coarse_nz : 0;
     double value = diag[i] * v[i];
-    for (uint64_t edge = 0; edge < edge_count; ++edge) {
-        if (edge_a[edge] == i) value -= edge_weight[edge] * v[edge_b[edge]];
-        else if (edge_b[edge] == i) value -= edge_weight[edge] * v[edge_a[edge]];
-    }
+    if (x > 0) value -= edge_weight[(x - 1) + (coarse_nx - 1) * (y + coarse_ny * z)] * v[i - 1];
+    if (x + 1 < coarse_nx) value -= edge_weight[x + (coarse_nx - 1) * (y + coarse_ny * z)] * v[i + 1];
+    if (y > 0) value -= edge_weight[x_edges + x + coarse_nx * ((y - 1) + (coarse_ny - 1) * z)] * v[i - coarse_nx];
+    if (y + 1 < coarse_ny) value -= edge_weight[x_edges + x + coarse_nx * (y + (coarse_ny - 1) * z)] * v[i + coarse_nx];
+    if (z > 0) value -= edge_weight[x_edges + y_edges + x + coarse_nx * (y + coarse_ny * (z - 1))] * v[i - coarse_nx * coarse_ny];
+    if (z + 1 < coarse_nz) value -= edge_weight[x_edges + y_edges + x + coarse_nx * (y + coarse_ny * z)] * v[i + coarse_nx * coarse_ny];
     return value;
 }
 
@@ -561,10 +669,27 @@ __device__ void device_galerkin_amg_vcycle(
     for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
         fine_tmp[i] = residual[i] - apply_row(i, correction, diag, gx, gy, gz, nx, ny, nz);
     __syncthreads();
+    const uint64_t coarse_nx = (nx + 1) / 2;
+    const uint64_t coarse_ny = (ny + 1) / 2;
+    const uint64_t coarse_nz = (nz + 1) / 2;
     for (uint64_t coarse = threadIdx.x; coarse < coarse_cells; coarse += blockDim.x) {
+        const uint64_t cx = coarse % coarse_nx;
+        const uint64_t cyz = coarse / coarse_nx;
+        const uint64_t cy = cyz % coarse_ny;
+        const uint64_t cz = cyz / coarse_ny;
         double sum = 0.0;
-        for (uint64_t i = 0; i < cells; ++i)
-            if (aggregate[i] == coarse) sum += fine_tmp[i];
+        for (uint64_t dz = 0; dz < 2; ++dz) {
+            const uint64_t z = 2 * cz + dz;
+            if (z >= nz) continue;
+            for (uint64_t dy = 0; dy < 2; ++dy) {
+                const uint64_t y = 2 * cy + dy;
+                if (y >= ny) continue;
+                for (uint64_t dx = 0; dx < 2; ++dx) {
+                    const uint64_t x = 2 * cx + dx;
+                    if (x < nx) sum += fine_tmp[x + nx * (y + ny * z)];
+                }
+            }
+        }
         coarse_rhs[coarse] = sum;
         coarse_x[coarse] = 0.0;
     }
@@ -574,7 +699,7 @@ __device__ void device_galerkin_amg_vcycle(
         for (uint64_t coarse = threadIdx.x; coarse < coarse_cells; coarse += blockDim.x) {
             const double row_value = apply_coarse_row(
                 coarse, coarse_x, coarse_diag, coarse_edge_a, coarse_edge_b,
-                coarse_edge_weight, edge_count);
+                coarse_edge_weight, edge_count, coarse_nx, coarse_ny, coarse_nz);
             coarse_tmp[coarse] = coarse_x[coarse] + omega *
                 (coarse_rhs[coarse] - row_value) / coarse_diag[coarse];
         }
@@ -700,7 +825,8 @@ __global__ void reconstruct_charge_flux_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, double hx, double hy, double hz,
     const uint8_t *active, const double *sigma, const double *potential,
     const void *face_payload, uint64_t face_count, uint64_t face_stride,
-    double *jx, double *jy, double *jz) {
+    const void *interface_payload, uint64_t interface_count,
+    uint64_t interface_stride, double *jx, double *jy, double *jz) {
     const uint64_t jx_count = (nx + 1) * ny * nz;
     const uint64_t jy_count = nx * (ny + 1) * nz;
     const uint64_t jz_count = nx * ny * (nz + 1);
@@ -714,8 +840,9 @@ __global__ void reconstruct_charge_flux_kernel(
             const uint64_t left = cell_index(x - 1, y, z, nx, ny);
             const uint64_t right = left + 1;
             if (active[left] && active[right])
-                value = -harmonic(sigma[left], sigma[right]) *
-                        (potential[right] - potential[left]) / hx;
+                value = -internal_face_conductance(0, face, left, right, hx, hy * hz,
+                    sigma, interface_payload, interface_count, interface_stride) *
+                    (potential[right] - potential[left]) / (hy * hz);
         } else {
             const uint64_t adjacent = cell_index(x == 0 ? 0 : nx - 1, y, z, nx, ny);
             for (uint64_t f = 0; f < face_count; ++f) {
@@ -743,8 +870,9 @@ __global__ void reconstruct_charge_flux_kernel(
             const uint64_t lower = cell_index(x, y - 1, z, nx, ny);
             const uint64_t upper = lower + nx;
             if (active[lower] && active[upper])
-                value = -harmonic(sigma[lower], sigma[upper]) *
-                        (potential[upper] - potential[lower]) / hy;
+                value = -internal_face_conductance(1, face, lower, upper, hy, hx * hz,
+                    sigma, interface_payload, interface_count, interface_stride) *
+                    (potential[upper] - potential[lower]) / (hx * hz);
         } else {
             const uint64_t adjacent = cell_index(x, y == 0 ? 0 : ny - 1, z, nx, ny);
             for (uint64_t f = 0; f < face_count; ++f) {
@@ -772,8 +900,9 @@ __global__ void reconstruct_charge_flux_kernel(
             const uint64_t back = cell_index(x, y, z - 1, nx, ny);
             const uint64_t front = back + nx * ny;
             if (active[back] && active[front])
-                value = -harmonic(sigma[back], sigma[front]) *
-                        (potential[front] - potential[back]) / hz;
+                value = -internal_face_conductance(2, face, back, front, hz, hx * hy,
+                    sigma, interface_payload, interface_count, interface_stride) *
+                    (potential[front] - potential[back]) / (hx * hy);
         } else {
             const uint64_t adjacent = cell_index(x, y, z == 0 ? 0 : nz - 1, nx, ny);
             for (uint64_t f = 0; f < face_count; ++f) {
@@ -793,9 +922,42 @@ __global__ void reconstruct_charge_flux_kernel(
     }
 }
 
+__global__ void materialize_interface_traces_kernel(
+    const fullmag_fdm_gpu_transport_spin_interface_v1 *interfaces,
+    uint64_t interface_count, uint64_t interface_stride,
+    double hx, double hy, double hz, const double *sigma, const double *potential,
+    const double *jx, const double *jy, const double *jz,
+    double *from_trace, double *to_trace, double *delta_trace,
+    double *oriented_current_density) {
+    for (uint64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < interface_count;
+         i += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
+        const auto *record = reinterpret_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(
+            reinterpret_cast<const uint8_t *>(interfaces) + i * interface_stride);
+        const double global_current = record->axis == 0 ? jx[record->canonical_face_index]
+            : record->axis == 1 ? jy[record->canonical_face_index]
+                                : jz[record->canonical_face_index];
+        const bool charge_insulating =
+            record->kind == FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2 &&
+            record->G_up + record->G_down == 0.0;
+        const double oriented_current = charge_insulating ? 0.0
+            : record->orientation * global_current;
+        const uint64_t from = record->from_cell, to = record->to_cell;
+        const double half_h = 0.5 * (record->axis == 0 ? hx : record->axis == 1 ? hy : hz);
+        const double vf = charge_insulating ? potential[from]
+            : potential[from] - oriented_current * half_h / sigma[from];
+        const double vt = charge_insulating ? potential[to]
+            : potential[to] + oriented_current * half_h / sigma[to];
+        from_trace[i] = vf;
+        to_trace[i] = vt;
+        delta_trace[i] = vf - vt;
+        oriented_current_density[i] = oriented_current;
+    }
+}
+
 __global__ void label_reference_components_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, const uint8_t *active,
     const void *face_payload, uint64_t face_count, uint64_t face_stride,
+    const double *gx, const double *gy, const double *gz,
     uint64_t *labels, uint32_t *invalid) {
     if (blockIdx.x != 0 || threadIdx.x != 0) return;
     const uint64_t cells = nx * ny * nz;
@@ -815,12 +977,12 @@ __global__ void label_reference_components_kernel(
                 const uint64_t y = yz % ny;
                 const uint64_t z = yz / ny;
                 const bool linked =
-                    (x > 0 && labels[i - 1] == component) ||
-                    (x + 1 < nx && labels[i + 1] == component) ||
-                    (y > 0 && labels[i - nx] == component) ||
-                    (y + 1 < ny && labels[i + nx] == component) ||
-                    (z > 0 && labels[i - plane] == component) ||
-                    (z + 1 < nz && labels[i + plane] == component);
+                    (x > 0 && gx[i - 1] > 0.0 && labels[i - 1] == component) ||
+                    (x + 1 < nx && gx[i] > 0.0 && labels[i + 1] == component) ||
+                    (y > 0 && gy[i - nx] > 0.0 && labels[i - nx] == component) ||
+                    (y + 1 < ny && gy[i] > 0.0 && labels[i + nx] == component) ||
+                    (z > 0 && gz[i - plane] > 0.0 && labels[i - plane] == component) ||
+                    (z + 1 < nz && gz[i] > 0.0 && labels[i + plane] == component);
                 if (linked) { labels[i] = component; changed = true; }
             }
         }
@@ -953,6 +1115,11 @@ void release(Buffers &buffers) noexcept {
     if (buffers.jx) (void)cudaFree(buffers.jx);
     if (buffers.jy) (void)cudaFree(buffers.jy);
     if (buffers.jz) (void)cudaFree(buffers.jz);
+    if (buffers.interface_from_trace_v) (void)cudaFree(buffers.interface_from_trace_v);
+    if (buffers.interface_to_trace_v) (void)cudaFree(buffers.interface_to_trace_v);
+    if (buffers.interface_delta_trace_v) (void)cudaFree(buffers.interface_delta_trace_v);
+    if (buffers.interface_charge_current_density)
+        (void)cudaFree(buffers.interface_charge_current_density);
     buffers = {};
 }
 
@@ -1007,23 +1174,37 @@ uint32_t validate_static_payload_device(
     const SolveInput &input, uint32_t copy_boundary,
     uint32_t sync_boundary) noexcept {
     uint32_t *device_invalid = nullptr;
+    uint32_t *device_seen_faces = nullptr;
+    const uint64_t face_count = input.views[3].element_count;
     if (cudaMalloc(reinterpret_cast<void **>(&device_invalid), sizeof(uint32_t)) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+    if (cudaMalloc(reinterpret_cast<void **>(&device_seen_faces),
+                   face_count * sizeof(uint32_t)) != cudaSuccess) {
+        (void)cudaFree(device_invalid);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
+    }
     uint32_t invalid = 0;
-    if (cudaMemsetAsync(device_invalid, 0, sizeof(uint32_t), input.stream) != cudaSuccess) {
+    if (cudaMemsetAsync(device_invalid, 0, sizeof(uint32_t), input.stream) != cudaSuccess ||
+        cudaMemsetAsync(device_seen_faces, 0, face_count * sizeof(uint32_t),
+                        input.stream) != cudaSuccess) {
+        (void)cudaFree(device_seen_faces);
         (void)cudaFree(device_invalid);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     const auto &mask = input.views[0];
     const auto &faces = input.views[3];
-    validate_static_payload_kernel<<<1, 1, 0, input.stream>>>(
+    constexpr uint32_t threads = 256;
+    const uint32_t blocks = static_cast<uint32_t>(std::min<uint64_t>(
+        (face_count + threads - 1) / threads, 65535));
+    validate_static_payload_kernel<<<blocks, threads, 0, input.stream>>>(
         input.grid[0], input.grid[1], input.grid[2], input.cell_size[0], input.cell_size[1],
         input.cell_size[2], input.payloads[0], mask.byte_stride, mask.element_type,
-        input.payloads[3], faces.element_count, faces.byte_stride, device_invalid);
+        input.payloads[3], faces.element_count, faces.byte_stride, device_seen_faces,
+        device_invalid);
     const cudaError_t launch = cudaGetLastError();
     if (launch == cudaSuccess && inject_cuda_failure(
             input.failure_policy, copy_boundary)) {
-        (void)cudaFree(device_invalid);
+        (void)cudaFree(device_seen_faces); (void)cudaFree(device_invalid);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     const cudaError_t copy = launch == cudaSuccess
@@ -1031,13 +1212,16 @@ uint32_t validate_static_payload_device(
         : launch;
     if (copy == cudaSuccess && inject_cuda_failure(
             input.failure_policy, sync_boundary)) {
-        (void)cudaFree(device_invalid);
+        (void)cudaFree(device_seen_faces); (void)cudaFree(device_invalid);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     const cudaError_t sync = copy == cudaSuccess ? cudaStreamSynchronize(input.stream) : copy;
+    (void)cudaFree(device_seen_faces);
     (void)cudaFree(device_invalid);
     if (launch != cudaSuccess || copy != cudaSuccess || sync != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (invalid != 0)
+        std::fprintf(stderr, "charge static validation failed: code=%u\n", invalid);
     return invalid == 0 ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK
                         : FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
 }
@@ -1055,6 +1239,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     candidate.jx_count = jx_count;
     candidate.jy_count = jy_count;
     candidate.jz_count = jz_count;
+    candidate.interface_count = input.views[2].element_count;
     HierarchyCache &cache = *input.hierarchy_cache;
     const bool cache_hit = cache.valid;
     if (cache_hit && cache.cells != cells)
@@ -1093,7 +1278,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         return true;
     };
     uint64_t workspace_bytes = 0, cache_bytes = 0, candidate_bytes = 0;
-    uint64_t edge_bytes = 0, face_values = 0, face_bytes = 0, total_peak_bytes = 0;
+    uint64_t edge_bytes = 0, face_values = 0, face_bytes = 0, interface_bytes = 0,
+             total_peak_bytes = 0;
     const bool sizes_valid =
         checked_scaled(fine_bytes, 9, &workspace_bytes) &&
         checked_add(workspace_bytes, sizeof(DeviceSolveMetrics) + sizeof(uint32_t),
@@ -1106,9 +1292,11 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         checked_add(jx_count, jy_count, &face_values) &&
         checked_add(face_values, jz_count, &face_values) &&
         checked_scaled(face_values, sizeof(double), &face_bytes) &&
+        checked_scaled(candidate.interface_count, 4 * sizeof(double), &interface_bytes) &&
         checked_scaled(fine_bytes, 2, &candidate_bytes) &&
         checked_add(candidate_bytes, cells, &candidate_bytes) &&
         checked_add(candidate_bytes, face_bytes, &candidate_bytes) &&
+        checked_add(candidate_bytes, interface_bytes, &candidate_bytes) &&
         checked_add(input.static_owned_bytes, cache_bytes, &total_peak_bytes) &&
         checked_add(total_peak_bytes, candidate_bytes, &total_peak_bytes) &&
         checked_add(total_peak_bytes, workspace_bytes, &total_peak_bytes);
@@ -1145,6 +1333,15 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         alloc(reinterpret_cast<void **>(&candidate.jz), jz_count * sizeof(double)) &&
         alloc(reinterpret_cast<void **>(&candidate.active), cells) &&
         alloc(reinterpret_cast<void **>(&candidate.conductivity), fine_bytes) &&
+        (candidate.interface_count == 0 ||
+         (alloc(reinterpret_cast<void **>(&candidate.interface_from_trace_v),
+                candidate.interface_count * sizeof(double)) &&
+          alloc(reinterpret_cast<void **>(&candidate.interface_to_trace_v),
+                candidate.interface_count * sizeof(double)) &&
+          alloc(reinterpret_cast<void **>(&candidate.interface_delta_trace_v),
+                candidate.interface_count * sizeof(double)) &&
+          alloc(reinterpret_cast<void **>(&candidate.interface_charge_current_density),
+                candidate.interface_count * sizeof(double)))) &&
         alloc(reinterpret_cast<void **>(&r), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&z), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&p), fine_bytes) &&
@@ -1182,16 +1379,31 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         assemble_charge_fv_kernel<<<blocks, threads, 0, input.stream>>>(
             nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
             cache.active, cache.conductivity, input.payloads[3], face_view.element_count,
-            face_view.byte_stride, cache.diag, cache.rhs, cache.gx, cache.gy, cache.gz);
-        build_strength_amg_hierarchy_kernel<<<1, 1, 0, input.stream>>>(
+            face_view.byte_stride, input.payloads[2], input.views[2].element_count,
+            input.views[2].byte_stride, cache.diag, cache.rhs, cache.gx, cache.gy,
+            cache.gz);
+        const uint64_t coarse_nx = (nx + 1) / 2;
+        const uint64_t coarse_ny = (ny + 1) / 2;
+        const uint64_t coarse_nz = (nz + 1) / 2;
+        const uint64_t coarse_cells = coarse_nx * coarse_ny * coarse_nz;
+        const uint32_t coarse_blocks = static_cast<uint32_t>(std::min<uint64_t>(
+            (coarse_cells + threads - 1) / threads, 65535));
+        assign_geometric_aggregates_kernel<<<blocks, threads, 0, input.stream>>>(
+            nx, ny, nz, coarse_nx, coarse_ny, cache.aggregate);
+        build_geometric_rap_kernel<<<coarse_blocks, threads, 0, input.stream>>>(
             cache.active, cache.diag, cache.gx, cache.gy, cache.gz, nx, ny, nz,
             cache.aggregate, cache.coarse_diag, cache.coarse_edge_a, cache.coarse_edge_b,
             cache.coarse_edge_weight,
             reinterpret_cast<DeviceHierarchyInfo *>(cache.hierarchy_info));
+        finalize_geometric_rap_kernel<<<1, 1, 0, input.stream>>>(
+            cache.aggregate, cells, cache.coarse_edge_a, cache.coarse_edge_b,
+            cache.coarse_edge_weight, coarse_nx, coarse_ny, coarse_nz,
+            reinterpret_cast<DeviceHierarchyInfo *>(cache.hierarchy_info));
     }
     label_reference_components_kernel<<<1, 1, 0, input.stream>>>(
         nx, ny, nz, cache.active, input.payloads[3], face_view.element_count,
-        face_view.byte_stride, component_labels, device_gauge_invalid);
+        face_view.byte_stride, cache.gx, cache.gy, cache.gz, component_labels,
+        device_gauge_invalid);
     uint32_t gauge_invalid = 0;
     const cudaError_t gauge_launch = cudaGetLastError();
     if (gauge_launch == cudaSuccess && inject_cuda_failure(
@@ -1243,7 +1455,20 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     reconstruct_charge_flux_kernel<<<face_blocks, threads, 0, input.stream>>>(
         nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
         candidate.active, candidate.conductivity, candidate.potential, input.payloads[3], face_view.element_count,
-        face_view.byte_stride, candidate.jx, candidate.jy, candidate.jz);
+        face_view.byte_stride, input.payloads[2], input.views[2].element_count,
+        input.views[2].byte_stride, candidate.jx, candidate.jy, candidate.jz);
+    if (candidate.interface_count != 0) {
+        const uint32_t interface_blocks = static_cast<uint32_t>(std::min<uint64_t>(
+            (candidate.interface_count + threads - 1) / threads, 65535));
+        materialize_interface_traces_kernel<<<interface_blocks, threads, 0, input.stream>>>(
+            static_cast<const fullmag_fdm_gpu_transport_spin_interface_v1 *>(input.payloads[2]),
+            candidate.interface_count, input.views[2].byte_stride, input.cell_size[0],
+            input.cell_size[1], input.cell_size[2],
+            candidate.conductivity, candidate.potential, candidate.jx, candidate.jy,
+            candidate.jz, candidate.interface_from_trace_v, candidate.interface_to_trace_v,
+            candidate.interface_delta_trace_v,
+            candidate.interface_charge_current_density);
+    }
     charge_balance_kernel<<<1, threads, 0, input.stream>>>(
         nx, ny, nz, input.cell_size[0], input.cell_size[1], input.cell_size[2],
         candidate.active, component_labels, candidate.jx, candidate.jy, candidate.jz,
@@ -1273,8 +1498,6 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
-    cache.valid = true;
-    cache.coarse_cells = metrics.coarse_unknown_count;
     output->iterations = metrics.iterations;
     output->amg_apply_count = metrics.amg_apply_count;
     output->reason = metrics.reason;
@@ -1300,33 +1523,49 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
                      static_cast<unsigned long long>(metrics.amg_apply_count),
                      metrics.hierarchy_levels, metrics.debug_rho, metrics.debug_denominator);
         release(candidate);
+        if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_NONCONVERGED;
     }
     if (metrics.physical_residual > 1.0e-10 || metrics.component_balance > 1.0e-10 ||
         metrics.electrode_balance > 1.0e-10) {
+        std::fprintf(stderr,
+                     "charge balance failed: physical=%.17g component=%.17g electrode=%.17g iterations=%llu\n",
+                     metrics.physical_residual, metrics.component_balance,
+                     metrics.electrode_balance,
+                     static_cast<unsigned long long>(metrics.iterations));
         release(candidate);
+        if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_BALANCE_FAILURE;
     }
+    cache.valid = true;
+    cache.coarse_cells = metrics.coarse_unknown_count;
     output->buffers = candidate;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
 uint32_t content_digest_device(
     const Buffers &buffers, const void *charge_faces, uint64_t charge_face_count,
-    uint64_t charge_face_stride,
+    uint64_t charge_face_stride, const void *interfaces, uint64_t interface_stride,
     const ContentDigestIdentity &identity, cudaStream_t stream,
     uint8_t digest[32], CudaFailurePolicy *failure_policy,
     uint32_t copy_boundary, uint32_t sync_boundary) noexcept {
     if (digest == nullptr || stream == nullptr || buffers.active == nullptr ||
         buffers.conductivity == nullptr || buffers.potential == nullptr ||
         buffers.jx == nullptr || buffers.jy == nullptr || buffers.jz == nullptr ||
-        (charge_face_count != 0 && (charge_faces == nullptr || charge_face_stride == 0)))
+        (buffers.interface_count != 0 &&
+         (buffers.interface_from_trace_v == nullptr ||
+          buffers.interface_to_trace_v == nullptr ||
+          buffers.interface_delta_trace_v == nullptr ||
+          buffers.interface_charge_current_density == nullptr)) ||
+        (charge_face_count != 0 && (charge_faces == nullptr || charge_face_stride == 0)) ||
+        (buffers.interface_count != 0 && (interfaces == nullptr || interface_stride == 0)))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
     uint8_t *device_digest = nullptr;
     if (cudaMalloc(reinterpret_cast<void **>(&device_digest), 32) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     content_digest_kernel<<<1, 1, 0, stream>>>(
-        buffers, charge_faces, charge_face_count, charge_face_stride, identity, device_digest);
+        buffers, charge_faces, charge_face_count, charge_face_stride,
+        interfaces, interface_stride, identity, device_digest);
     const cudaError_t launch_status = cudaGetLastError();
     if (launch_status == cudaSuccess && inject_cuda_failure(
             failure_policy, copy_boundary)) {

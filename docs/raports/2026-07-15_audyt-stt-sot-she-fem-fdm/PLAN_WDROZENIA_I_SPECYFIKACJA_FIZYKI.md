@@ -12554,3 +12554,24 @@ Ten wpis jest wyłącznie kontraktem implementacyjnym. Capability pozostaje
 i `validated_workloads=[]` aż do kodu CUDA, actual-device workloadów, parity,
 strict residency, restart, public path, convergence/performance i niezależnego
 review.
+
+## 32.169. Actual-device closure ograniczonego FDM GPU/FP64 M1 spin (2026-08-10)
+
+Kontrakt z §32.168 ma teraz wykonywalnego natywnego ownera CUDA: równoległy
+montaż FV, sparse restarted GMRES, component AMG, direct SHE, typed artifacts,
+trwały cache i rollback. Pełne rekordy observation ABI są rekonstruowane z
+kompaktowego SoA w bounded readback, dzięki czemu grid 1024 x 128 x 8 zachowuje
+ostrzejszy frozen external envelope 483 034 008 B <= 512 MiB oraz całkowity
+peak 1 894 959 256 B <= 2 GiB.
+
+Managed actual-device bramy na RTX 4080 SUPER przeszły dla niezależnego oracle
+dyfuzji/SHE, pełnego operatora CPU--GPU, publicznego dispatchu, cache hit,
+component-sensitive digest invalidation, NaN rollback i deterministycznego
+restore. Trwały performance JSON raportuje peak 1 921 754 456 B, setup
+0.045560008 s, medianę 0.001397699 s, p95 1.318532684 s oraz zero
+niedozwolonych transferów. Pełny zapis dowodów i granic kwalifikacji znajduje
+się w `FDM_GPU_M1_SPIN_CLOSURE_2026-08-10.md`.
+
+Stan agregatu pozostaje `partial`/`semantic_only`: natywny owner nie jest
+jeszcze publiczną kwalifikacją ProblemIR--planner--runner, a pełny restart
+accepted spin przez docelowy runner pozostaje bramą promocji.

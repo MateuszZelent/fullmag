@@ -539,6 +539,26 @@ pub const FULLMAG_FDM_CPU_SPIN_BC_PERIODIC: u32 = 5;
 pub const FULLMAG_FDM_CPU_SPIN_INTERFACE_TRANSPARENT: u32 = 0;
 pub const FULLMAG_FDM_CPU_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2: u32 = 1;
 pub const FULLMAG_FDM_CPU_SPIN_INTERFACE_SML_RESERVOIR_V2: u32 = 2;
+pub const FULLMAG_FDM_CPU_OERSTED_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY: usize = 96;
+pub const FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY: usize = 80;
+pub const FULLMAG_FDM_CPU_OERSTED_ERROR_CAPACITY: usize = 512;
+pub const FULLMAG_FDM_CPU_OERSTED_OK: i32 = 0;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_NULL: i32 = -200;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_ABI: i32 = -201;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_INVALID: i32 = -202;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_BUFFER: i32 = -203;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_PERIODIC: i32 = -204;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_MISSING_CERTIFICATE: i32 = -205;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_STALE_CERTIFICATE: i32 = -206;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_OPEN_CIRCUIT: i32 = -207;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_CLOSURE: i32 = -208;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_NUMERICAL: i32 = -209;
+pub const FULLMAG_FDM_CPU_OERSTED_ERR_INTERNAL: i32 = -210;
+pub const FULLMAG_FDM_CPU_OERSTED_BOUNDARY_OPEN: u32 = 0;
+pub const FULLMAG_FDM_CPU_OERSTED_BOUNDARY_PERIODIC: u32 = 1;
+pub const FULLMAG_FDM_CPU_OERSTED_CLOSURE_CLOSED_GEOMETRY: u32 = 0;
+pub const FULLMAG_FDM_CPU_OERSTED_CLOSURE_CERTIFIED_IMPORT: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -584,6 +604,17 @@ pub struct fullmag_fdm_cpu_specified_current_face_v1 {
     pub adjacent_cell: u64,
     pub area_m2: f64,
     pub outward_current_density_a_per_m2: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_impressed_potential_jump_face_v1 {
+    pub source_cut_index: u64,
+    pub axis: u32,
+    pub normal_sign: i32,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+    pub potential_jump_v: f64,
 }
 
 #[repr(C)]
@@ -724,6 +755,9 @@ pub struct fullmag_fdm_cpu_charge_request_v1 {
     pub operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
     pub solver_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
     pub residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub impressed_potential_jump_faces:
+        *const fullmag_fdm_cpu_impressed_potential_jump_face_v1,
+    pub impressed_potential_jump_face_count: u64,
 }
 
 #[repr(C)]
@@ -871,6 +905,170 @@ pub struct fullmag_fdm_cpu_steady_spin_result_v1 {
     pub runtime_owner: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
     pub convergence_reason: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
     pub error_message: [c_char; FULLMAG_FDM_CPU_TRANSPORT_ERROR_CAPACITY],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_const_f64_buffer_v1 {
+    pub data: *const f64,
+    pub length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_const_u64_buffer_v1 {
+    pub data: *const u64,
+    pub length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_const_i8_buffer_v1 {
+    pub data: *const i8,
+    pub length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_source_cut_v1 {
+    pub stable_id: *const c_char,
+    pub component_label: u64,
+    pub ordered_internal_face_ids: fullmag_fdm_cpu_oersted_const_u64_buffer_v1,
+    pub ordered_normals: fullmag_fdm_cpu_oersted_const_i8_buffer_v1,
+    pub drive_id: *const c_char,
+    pub drive_kind: *const c_char,
+    pub drive_value: f64,
+    pub drive_si_unit: *const c_char,
+    pub revision: u64,
+    pub digest: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_certificate_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub closure_kind: u32,
+    pub global_continuity_passed: u32,
+    pub exterior_flux_passed: u32,
+    pub component_flux_passed: u32,
+    pub return_path_complete: u32,
+    pub reserved0: u32,
+    pub revision: u64,
+    pub version: *const c_char,
+    pub digest: *const c_char,
+    pub geometry_digest: *const c_char,
+    pub conductor_mask_revision: u64,
+    pub conductor_mask_digest: *const c_char,
+    pub face_current_revision: u64,
+    pub face_current_digest: *const c_char,
+    pub component_labels: fullmag_fdm_cpu_oersted_const_u64_buffer_v1,
+    pub component_count: u64,
+    pub divergence_tolerance_a_per_m3: f64,
+    pub exterior_current_tolerance_a: f64,
+    pub measured_max_abs_divergence_a_per_m3: f64,
+    pub measured_component_exterior_current_a: fullmag_fdm_cpu_oersted_const_f64_buffer_v1,
+    pub source_cuts: *const fullmag_fdm_cpu_oersted_source_cut_v1,
+    pub source_cut_count: u64,
+    pub imported_certification_method: *const c_char,
+    pub imported_field_digest: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_request_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub grid: fullmag_fdm_cpu_transport_grid_v1,
+    pub origin_m: [f64; 3],
+    pub boundaries: [u32; 3],
+    pub reserved0: u32,
+    pub conductor_mask: *const u8,
+    pub conductor_mask_len: u64,
+    pub target_mask: *const u8,
+    pub target_mask_len: u64,
+    pub jc_x_a_per_m2: fullmag_fdm_cpu_oersted_const_f64_buffer_v1,
+    pub jc_y_a_per_m2: fullmag_fdm_cpu_oersted_const_f64_buffer_v1,
+    pub jc_z_a_per_m2: fullmag_fdm_cpu_oersted_const_f64_buffer_v1,
+    pub geometry_revision: u64,
+    pub geometry_digest: *const c_char,
+    pub conductor_mask_revision: u64,
+    pub conductor_mask_digest: *const c_char,
+    pub target_mask_revision: u64,
+    pub target_mask_digest: *const c_char,
+    pub face_current_revision: u64,
+    pub face_current_digest: *const c_char,
+    pub source_identity: *const c_char,
+    pub envelope_revision: u64,
+    pub envelope_digest: *const c_char,
+    pub stage_identity: u64,
+    pub evaluation_time_s: f64,
+    pub evaluated_envelope_multiplier: f64,
+    pub trusted_snapshot_revision: u64,
+    pub trusted_snapshot_digest: *const c_char,
+    pub certificate: *const fullmag_fdm_cpu_oersted_certificate_v1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_result_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub status: i32,
+    pub reserved0: u32,
+    pub field_xyz_a_per_m: fullmag_fdm_cpu_f64_buffer_v1,
+    pub face_current_revision: u64,
+    pub certificate_revision: u64,
+    pub trusted_snapshot_revision: u64,
+    pub envelope_revision: u64,
+    pub stage_identity: u64,
+    pub evaluation_time_s: f64,
+    pub evaluated_envelope_multiplier: f64,
+    pub plan_build_count: u64,
+    pub kernel_build_count: u64,
+    pub numerical_buffer_allocation_count: u64,
+    pub resolved_field_hit_count: u64,
+    pub resolved_field_miss_count: u64,
+    pub resolved_field_invalidation_count: u64,
+    pub trusted_fast_path_hit_count: u64,
+    pub resolved_field_reused: u32,
+    pub diagnostics_available: u32,
+    pub divergence_current_rms_a_per_m3: f64,
+    pub divergence_field_rms_a_per_m2: f64,
+    pub curl_h_minus_j_rms_a_per_m2: f64,
+    pub api_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub formula_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub reconstruction_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub operator_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub realization_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub engine_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub certificate_version: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub face_current_digest: [c_char; FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY],
+    pub certificate_digest: [c_char; FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY],
+    pub trusted_snapshot_digest: [c_char; FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY],
+    pub resolved_field_cache_key_digest: [c_char; FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY],
+    pub kernel_plan_cache_key_digest: [c_char; FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY],
+    pub source_identity: [c_char; FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY],
+    pub error_message: [c_char; FULLMAG_FDM_CPU_OERSTED_ERROR_CAPACITY],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_oersted_abi_layout_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub source_cut_size: u64,
+    pub source_cut_alignment: u64,
+    pub certificate_size: u64,
+    pub certificate_alignment: u64,
+    pub request_size: u64,
+    pub request_alignment: u64,
+    pub result_size: u64,
+    pub result_alignment: u64,
 }
 
 // ── Functions ──
@@ -1049,6 +1247,14 @@ extern "C" {
         result: *mut fullmag_fdm_cpu_steady_spin_result_v1,
     ) -> i32;
     pub fn fullmag_fdm_cpu_charge_result_destroy_v1(result: *mut fullmag_fdm_cpu_charge_result_v1);
+    pub fn fullmag_fdm_cpu_oersted_abi_layout_get_v1(
+    ) -> *const fullmag_fdm_cpu_oersted_abi_layout_v1;
+    pub fn fullmag_fdm_cpu_oersted_abi_layout_manifest_get_v1(
+    ) -> *const fullmag_fdm_cpu_transport_abi_layout_manifest_v1;
+    pub fn fullmag_fdm_cpu_oersted_solve_v1(
+        request: *const fullmag_fdm_cpu_oersted_request_v1,
+        result: *mut fullmag_fdm_cpu_oersted_result_v1,
+    ) -> i32;
 }
 
 #[cfg(test)]
@@ -1104,7 +1310,7 @@ mod tests {
         assert_eq!(manifest.reserved_flags, 0);
         let records =
             unsafe { std::slice::from_raw_parts(manifest.records, manifest.record_count as usize) };
-        assert_eq!(records.len(), 18);
+        assert_eq!(records.len(), 19);
 
         assert_layout_record!(
             records,
@@ -1262,7 +1468,9 @@ mod tests {
                 api_version,
                 operator_version,
                 solver_version,
-                residual_version
+                residual_version,
+                impressed_potential_jump_faces,
+                impressed_potential_jump_face_count
             ]
         );
         assert_layout_record!(
@@ -1425,6 +1633,20 @@ mod tests {
                 records
             ]
         );
+        assert_layout_record!(
+            records,
+            18,
+            "fullmag_fdm_cpu_impressed_potential_jump_face_v1",
+            fullmag_fdm_cpu_impressed_potential_jump_face_v1,
+            [
+                source_cut_index,
+                axis,
+                normal_sign,
+                negative_cell,
+                positive_cell,
+                potential_jump_v
+            ]
+        );
     }
 
     #[test]
@@ -1464,5 +1686,236 @@ mod tests {
         assert_eq!(stats.multilayer_forward_fft_count, 3);
         assert_eq!(stats.multilayer_inverse_fft_count, 3);
         assert_eq!(stats.multilayer_pair_accumulation_count, 9);
+    }
+
+    #[test]
+    fn cpu_oersted_append_only_layout_matches_native_manifest() {
+        let layout = unsafe { fullmag_fdm_cpu_oersted_abi_layout_get_v1() };
+        assert!(!layout.is_null());
+        let layout = unsafe { &*layout };
+        assert_eq!(layout.abi_version, FULLMAG_FDM_CPU_OERSTED_ABI_V1);
+        assert_eq!(
+            layout.struct_size as usize,
+            size_of::<fullmag_fdm_cpu_oersted_abi_layout_v1>()
+        );
+        assert_eq!(layout.reserved_flags, 0);
+        assert_eq!(
+            (layout.source_cut_size, layout.source_cut_alignment),
+            (
+                size_of::<fullmag_fdm_cpu_oersted_source_cut_v1>() as u64,
+                align_of::<fullmag_fdm_cpu_oersted_source_cut_v1>() as u64
+            )
+        );
+        assert_eq!(
+            (layout.certificate_size, layout.certificate_alignment),
+            (
+                size_of::<fullmag_fdm_cpu_oersted_certificate_v1>() as u64,
+                align_of::<fullmag_fdm_cpu_oersted_certificate_v1>() as u64
+            )
+        );
+        assert_eq!(
+            (layout.request_size, layout.request_alignment),
+            (
+                size_of::<fullmag_fdm_cpu_oersted_request_v1>() as u64,
+                align_of::<fullmag_fdm_cpu_oersted_request_v1>() as u64
+            )
+        );
+        assert_eq!(
+            (layout.result_size, layout.result_alignment),
+            (
+                size_of::<fullmag_fdm_cpu_oersted_result_v1>() as u64,
+                align_of::<fullmag_fdm_cpu_oersted_result_v1>() as u64
+            )
+        );
+
+        let manifest =
+            unsafe { fullmag_fdm_cpu_oersted_abi_layout_manifest_get_v1() };
+        assert!(!manifest.is_null());
+        let manifest = unsafe { &*manifest };
+        assert_eq!(manifest.abi_version, FULLMAG_FDM_CPU_OERSTED_ABI_V1);
+        assert_eq!(manifest.reserved_flags, 0);
+        let records = unsafe {
+            std::slice::from_raw_parts(manifest.records, manifest.record_count as usize)
+        };
+        assert_eq!(records.len(), 8);
+        assert_layout_record!(
+            records,
+            0,
+            "fullmag_fdm_cpu_oersted_const_f64_buffer_v1",
+            fullmag_fdm_cpu_oersted_const_f64_buffer_v1,
+            [data, length]
+        );
+        assert_layout_record!(
+            records,
+            1,
+            "fullmag_fdm_cpu_oersted_const_u64_buffer_v1",
+            fullmag_fdm_cpu_oersted_const_u64_buffer_v1,
+            [data, length]
+        );
+        assert_layout_record!(
+            records,
+            2,
+            "fullmag_fdm_cpu_oersted_const_i8_buffer_v1",
+            fullmag_fdm_cpu_oersted_const_i8_buffer_v1,
+            [data, length]
+        );
+        assert_layout_record!(
+            records,
+            3,
+            "fullmag_fdm_cpu_oersted_source_cut_v1",
+            fullmag_fdm_cpu_oersted_source_cut_v1,
+            [
+                stable_id,
+                component_label,
+                ordered_internal_face_ids,
+                ordered_normals,
+                drive_id,
+                drive_kind,
+                drive_value,
+                drive_si_unit,
+                revision,
+                digest
+            ]
+        );
+        assert_layout_record!(
+            records,
+            4,
+            "fullmag_fdm_cpu_oersted_certificate_v1",
+            fullmag_fdm_cpu_oersted_certificate_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                closure_kind,
+                global_continuity_passed,
+                exterior_flux_passed,
+                component_flux_passed,
+                return_path_complete,
+                reserved0,
+                revision,
+                version,
+                digest,
+                geometry_digest,
+                conductor_mask_revision,
+                conductor_mask_digest,
+                face_current_revision,
+                face_current_digest,
+                component_labels,
+                component_count,
+                divergence_tolerance_a_per_m3,
+                exterior_current_tolerance_a,
+                measured_max_abs_divergence_a_per_m3,
+                measured_component_exterior_current_a,
+                source_cuts,
+                source_cut_count,
+                imported_certification_method,
+                imported_field_digest
+            ]
+        );
+        assert_layout_record!(
+            records,
+            5,
+            "fullmag_fdm_cpu_oersted_request_v1",
+            fullmag_fdm_cpu_oersted_request_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                grid,
+                origin_m,
+                boundaries,
+                reserved0,
+                conductor_mask,
+                conductor_mask_len,
+                target_mask,
+                target_mask_len,
+                jc_x_a_per_m2,
+                jc_y_a_per_m2,
+                jc_z_a_per_m2,
+                geometry_revision,
+                geometry_digest,
+                conductor_mask_revision,
+                conductor_mask_digest,
+                target_mask_revision,
+                target_mask_digest,
+                face_current_revision,
+                face_current_digest,
+                source_identity,
+                envelope_revision,
+                envelope_digest,
+                stage_identity,
+                evaluation_time_s,
+                evaluated_envelope_multiplier,
+                trusted_snapshot_revision,
+                trusted_snapshot_digest,
+                certificate
+            ]
+        );
+        assert_layout_record!(
+            records,
+            6,
+            "fullmag_fdm_cpu_oersted_result_v1",
+            fullmag_fdm_cpu_oersted_result_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                status,
+                reserved0,
+                field_xyz_a_per_m,
+                face_current_revision,
+                certificate_revision,
+                trusted_snapshot_revision,
+                envelope_revision,
+                stage_identity,
+                evaluation_time_s,
+                evaluated_envelope_multiplier,
+                plan_build_count,
+                kernel_build_count,
+                numerical_buffer_allocation_count,
+                resolved_field_hit_count,
+                resolved_field_miss_count,
+                resolved_field_invalidation_count,
+                trusted_fast_path_hit_count,
+                resolved_field_reused,
+                diagnostics_available,
+                divergence_current_rms_a_per_m3,
+                divergence_field_rms_a_per_m2,
+                curl_h_minus_j_rms_a_per_m2,
+                api_version,
+                formula_version,
+                reconstruction_version,
+                operator_version,
+                realization_version,
+                engine_version,
+                certificate_version,
+                face_current_digest,
+                certificate_digest,
+                trusted_snapshot_digest,
+                resolved_field_cache_key_digest,
+                kernel_plan_cache_key_digest,
+                source_identity,
+                error_message
+            ]
+        );
+        assert_layout_record!(
+            records,
+            7,
+            "fullmag_fdm_cpu_oersted_abi_layout_v1",
+            fullmag_fdm_cpu_oersted_abi_layout_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                source_cut_size,
+                source_cut_alignment,
+                certificate_size,
+                certificate_alignment,
+                request_size,
+                request_alignment,
+                result_size,
+                result_alignment
+            ]
+        );
     }
 }

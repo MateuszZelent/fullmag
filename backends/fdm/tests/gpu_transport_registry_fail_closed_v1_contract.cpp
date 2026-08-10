@@ -119,8 +119,8 @@ void phase1_stubs_validate_closed_request_registries_before_unsupported() {
     spin.solver_policy =
         FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_BLOCK_JACOBI_PROTOTYPE_V1;
     check(fullmag_fdm_gpu_transport_solve_steady_spin_v1(&spin, &spin_result) ==
-              FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED,
-          "known prototype spin policy must report exact unsupported status");
+              FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR,
+          "non-production prototype spin policy must fail the closed registry");
 
     fullmag_fdm_gpu_transport_artifact_request_v1 artifact{};
     init_record(artifact);

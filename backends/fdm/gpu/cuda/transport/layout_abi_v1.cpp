@@ -9,6 +9,11 @@ static_assert(sizeof(fullmag_fdm_gpu_transport_charge_cell_v1) == 48);
 static_assert(sizeof(fullmag_fdm_gpu_transport_charge_material_v1) == 56);
 static_assert(sizeof(fullmag_fdm_gpu_transport_charge_face_v1) == 88);
 static_assert(sizeof(fullmag_fdm_gpu_transport_charge_formula_ids_v1) == 64);
+static_assert(sizeof(fullmag_fdm_gpu_transport_spin_cell_v1) == 72);
+static_assert(sizeof(fullmag_fdm_gpu_transport_spin_material_v1) == 112);
+static_assert(sizeof(fullmag_fdm_gpu_transport_spin_boundary_face_v1) == 104);
+static_assert(sizeof(fullmag_fdm_gpu_transport_spin_interface_v1) == 176);
+static_assert(sizeof(fullmag_fdm_gpu_transport_formula_ids_v1) == 144);
 static_assert(sizeof(fullmag_fdm_gpu_transport_context_create_request_v1) == 104);
 static_assert(sizeof(fullmag_fdm_gpu_transport_context_create_result_v1) == 136);
 static_assert(sizeof(fullmag_fdm_gpu_transport_static_descriptor_v1) == 184);
@@ -61,15 +66,4 @@ uint32_t validate_record(const T *record, uint64_t known_features) {
 extern "C" const fullmag_fdm_gpu_transport_layout_manifest_v1 *
 fullmag_fdm_gpu_transport_layout_manifest_get_v1(void) {
     return &kManifest;
-}
-
-extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
-    const fullmag_fdm_gpu_steady_spin_solve_request_v1 *request,
-    fullmag_fdm_gpu_steady_spin_solve_result_v1 *) {
-    const uint32_t status = validate_record(request, UINT64_C(0x1f));
-    if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) return status;
-    if (request->solver_policy == FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_INVALID ||
-        request->solver_policy > FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_BLOCK_JACOBI_PROTOTYPE_V1)
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
-    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED;
 }

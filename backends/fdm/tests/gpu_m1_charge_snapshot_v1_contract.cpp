@@ -26,6 +26,8 @@ namespace {
 constexpr uint32_t kChargeFaceVoltage = 1;
 constexpr uint32_t kChargeFaceExactDensity = 2;
 constexpr uint32_t kChargeFaceInsulating = 3;
+constexpr uint64_t kCharge = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE;
+constexpr uint64_t kSpin = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN;
 
 struct ChargeFaceV1 {
     uint32_t kind;
@@ -115,7 +117,6 @@ int main() {
     constexpr double sigma = 5.0e6;
     constexpr double left_v = 64.0e-3;
     constexpr double right_v = 0.0;
-    constexpr double expected_jx = 5.0e12;
 
     auto restore_golden = frozen_hex("FMGPUTR1_RESTORE_GOLDEN_HEX_BEGIN",
                                      "FMGPUTR1_RESTORE_GOLDEN_HEX_END");
@@ -143,7 +144,11 @@ int main() {
             "actual CUDA device properties are required");
 
     fullmag_fdm_gpu_transport_context_create_request_v1 create{};
-    init_record(create);
+    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2 |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1 |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
     create.device_ordinal = device;
     create.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     create.strict_residency = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;
@@ -157,38 +162,108 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "FP64 strict CUDA context creation failed");
 
-    std::vector<uint8_t> mask(cells, 1);
-    std::vector<double> conductivity(cells, sigma);
-    std::vector<ChargeFaceV1> faces;
+    std::vector<fullmag_fdm_gpu_transport_spin_cell_v1> mask(cells);
+    for (uint64_t i = 0; i < cells; ++i) {
+        init_record(mask[i], kCharge);
+        mask[i].active = mask[i].conductor = mask[i].spin_active = mask[i].torque_target = 1;
+        mask[i].material_index = 7;
+        mask[i].region_id = 1;
+        mask[i].saturation_magnetization = 8.0e5;
+    }
+    std::array<fullmag_fdm_gpu_transport_spin_material_v1,4> materials{};
+    const std::array<double,4> conductivities{{sigma,2.0e6,8.0e6,3.0e6}};
+    for(size_t i=0;i<materials.size();++i){
+        init_record(materials[i],kCharge);materials[i].material_index=7+i;
+        materials[i].conductivity=conductivities[i];materials[i].material_revision=1;
+        materials[i].spin_conductivity=conductivities[i];materials[i].spin_flip_length=8.0e-9;
+        materials[i].spin_revision=1;
+    }
+    mask[1].material_index=8;mask[1+nx].material_index=9;mask[0].material_index=10;
+    std::vector<fullmag_fdm_gpu_transport_charge_face_v1> faces;
     faces.reserve(2 * ny * nz);
+    auto append_face = [&](uint32_t kind, uint32_t axis, int32_t side,
+                           uint64_t adjacent, uint64_t canonical, double area,
+                           double value, uint64_t source_id) {
+        fullmag_fdm_gpu_transport_charge_face_v1 face{};
+        init_record(face, kCharge); face.kind = kind; face.axis = axis; face.side = side;
+        face.outward_sign = side; face.adjacent_cell = adjacent;
+        face.canonical_face_index = canonical; face.area = area;
+        face.value = value; face.source_id = source_id; faces.push_back(face);
+    };
+    uint64_t source_id = 100;
     for (uint64_t z = 0; z < nz; ++z) {
         for (uint64_t y = 0; y < ny; ++y) {
-            faces.push_back({kChargeFaceVoltage, 0, -1, 0, nx * (y + ny * z), h * h, left_v});
-            faces.push_back({kChargeFaceVoltage, 0, +1, 0, nx - 1 + nx * (y + ny * z), h * h, right_v});
+            append_face(kChargeFaceVoltage,0,-1,nx*(y+ny*z),(nx+1)*(y+ny*z),h*h,left_v,source_id++);
+            append_face(kChargeFaceVoltage,0,+1,nx-1+nx*(y+ny*z),nx+(nx+1)*(y+ny*z),h*h,right_v,source_id++);
         }
     }
     for (uint64_t z = 0; z < nz; ++z) for (uint64_t x = 0; x < nx; ++x) {
-        faces.push_back({kChargeFaceInsulating, 1, -1, 0, x + nx * ny * z, h * h, 0.0});
-        faces.push_back({kChargeFaceInsulating, 1, +1, 0,
-                         x + nx * (ny - 1 + ny * z), h * h, 0.0});
+        append_face(kChargeFaceVoltage,1,-1,x+nx*ny*z,x+nx*((ny+1)*z),h*h,20.0e-3,source_id++);
+        append_face(kChargeFaceVoltage,1,+1,x+nx*(ny-1+ny*z),x+nx*(ny+(ny+1)*z),h*h,0.0,source_id++);
     }
     for (uint64_t y = 0; y < ny; ++y) for (uint64_t x = 0; x < nx; ++x) {
-        faces.push_back({kChargeFaceInsulating, 2, -1, 0, x + nx * y, h * h, 0.0});
-        faces.push_back({kChargeFaceInsulating, 2, +1, 0,
-                         x + nx * (y + ny * (nz - 1)), h * h, 0.0});
+        append_face(kChargeFaceVoltage,2,-1,x+nx*y,x+nx*y,h*h,10.0e-3,source_id++);
+        append_face(kChargeFaceVoltage,2,+1,x+nx*(y+ny*(nz-1)),x+nx*(y+ny*nz),h*h,0.0,source_id++);
     }
+    std::vector<fullmag_fdm_gpu_transport_spin_boundary_face_v1> spin_faces;
+    spin_faces.reserve(faces.size());
+    for (const auto &charge_face : faces) {
+        fullmag_fdm_gpu_transport_spin_boundary_face_v1 face{};
+        init_record(face, kSpin); face.kind = FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INSULATING;
+        face.axis = charge_face.axis; face.side = charge_face.side; face.outward_sign = charge_face.side;
+        face.adjacent_cell = charge_face.adjacent_cell;
+        face.canonical_face_index = charge_face.canonical_face_index;
+        face.area = charge_face.area; face.source_id = charge_face.source_id; spin_faces.push_back(face);
+    }
+    std::vector<fullmag_fdm_gpu_transport_spin_interface_v1> interfaces(3);
+    auto set_interface = [&](size_t i, uint32_t axis, uint64_t negative_cell,
+                             uint64_t positive_cell, uint64_t from_cell, uint64_t to_cell,
+                             uint64_t face, uint64_t source, uint64_t topology) {
+        auto &record = interfaces[i]; init_record(record, kCharge|FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2);
+        record.kind = FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2;
+        record.axis = axis; record.orientation = from_cell == negative_cell ? 1 : -1;
+        record.negative_cell = negative_cell; record.positive_cell = positive_cell;
+        record.from_cell = from_cell; record.to_cell = to_cell;
+        record.canonical_face_index = face; record.area = h*h;
+        record.source_id = source; record.topology_id = topology;
+        record.magnetization_xyz[2] = 1.0;
+    };
+    set_interface(0,2,0,nx*ny,nx*ny,0,nx*ny,420,4200);
+    set_interface(1,1,1,1+nx,1,1+nx,1+nx,410,4100);
+    set_interface(2,1,2,2+nx,2+nx,2,2+nx,430,4300);
+    interfaces[0].G_up=1.0e15;interfaces[0].G_down=2.0e15;interfaces[0].charge_edge_enabled=1;
+    interfaces[1].G_up=2.0e15;interfaces[1].G_down=3.0e15;interfaces[1].charge_edge_enabled=1;
+    interfaces[2].G_up=interfaces[2].G_down=0.0;interfaces[2].charge_edge_enabled=0;
+    fullmag_fdm_gpu_transport_formula_ids_v1 formula{};
+    init_record(formula,kCharge); formula.formula_id=FULLMAG_FDM_GPU_TRANSPORT_CHARGE_FORMULA_OHMIC_FV_V1;
+    formula.operator_id=FULLMAG_FDM_GPU_TRANSPORT_CHARGE_OPERATOR_CONSERVATIVE_FV_V1;
+    formula.engine_id=FULLMAG_FDM_GPU_TRANSPORT_CHARGE_ENGINE_CG_DEVICE_AMG_V1;
+    formula.residual_id=FULLMAG_FDM_GPU_TRANSPORT_CHARGE_RESIDUAL_FIXED_TREE_FP64_V1;
+    formula.operator_revision=1; formula.spin_formula_id=FULLMAG_FDM_GPU_TRANSPORT_SPIN_FORMULA_ONE_WAY_FULLMAG_V1;
+    formula.spin_operator_id=FULLMAG_FDM_GPU_TRANSPORT_SPIN_OPERATOR_FV_UPWIND_V1;
+    formula.electric_reconstruction_id=FULLMAG_FDM_GPU_TRANSPORT_ELECTRIC_RECONSTRUCTION_EXACT_FACE_CURRENT_V1;
+    formula.interface_formula_id=FULLMAG_FDM_GPU_TRANSPORT_INTERFACE_FORMULA_MAGNETOELECTRONIC_FULLMAG_V2;
+    formula.torque_operator_id=FULLMAG_FDM_GPU_TRANSPORT_TORQUE_OPERATOR_CELL_SURFACE_BALANCE_V1;
+    formula.spin_engine_id=FULLMAG_FDM_GPU_TRANSPORT_SPIN_ENGINE_BLOCK_GMRES_CUDA_V1;
+    formula.preconditioner_id=FULLMAG_FDM_GPU_TRANSPORT_SPIN_PRECONDITIONER_COMPONENT_AMG_BLOCK_JACOBI_V1;
+    formula.spin_residual_id=FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INTEGRATED_L2_V1;
+    formula.local_residual_id=FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_FV_V1;
+    formula.spin_operator_revision=1; formula.preconditioner_revision=1;
+    formula.gamma_e=1.76085963023e11; formula.gmres_restart=50;
     std::array<uint32_t, 4> formula_ids{{1, 1, 1, 1}};
     std::array<uint8_t, 1> empty{{0}};
     std::array<fullmag_fdm_gpu_transport_buffer_view_v1, 6> views{{
-        view(mask.data(), mask.size(), sizeof(mask[0]), FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_U8),
-        view(conductivity.data(), conductivity.size(), sizeof(conductivity[0]), FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64),
-        view(empty.data(), 0, sizeof(empty[0]), FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
-        view(faces.data(), faces.size(), sizeof(ChargeFaceV1), FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
-        view(empty.data(), 0, sizeof(empty[0]), FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
-        view(formula_ids.data(), formula_ids.size(), sizeof(formula_ids[0]), FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_U32),
+        view(mask.data(),mask.size(),sizeof(mask[0]),FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
+        view(materials.data(),materials.size(),sizeof(materials[0]),FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
+        view(interfaces.data(),interfaces.size(),sizeof(interfaces[0]),FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
+        view(faces.data(),faces.size(),sizeof(faces[0]),FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
+        view(spin_faces.data(),spin_faces.size(),sizeof(spin_faces[0]),FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
+        view(&formula,1,sizeof(formula),FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES),
     }};
     fullmag_fdm_gpu_transport_static_descriptor_v1 descriptor{};
-    init_record(descriptor, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+    init_record(descriptor, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2);
     descriptor.grid[0] = nx;
     descriptor.grid[1] = ny;
     descriptor.grid[2] = nz;
@@ -202,9 +277,13 @@ int main() {
     descriptor.charge_faces_view_ptr = reinterpret_cast<uint64_t>(&views[3]);
     descriptor.spin_faces_view_ptr = reinterpret_cast<uint64_t>(&views[4]);
     descriptor.formula_ids_view_ptr = reinterpret_cast<uint64_t>(&views[5]);
-    require(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(created.context_handle, &descriptor) ==
-                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
-            "uniform charge descriptor upload failed");
+    const uint32_t descriptor_status =
+        fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+            created.context_handle, &descriptor);
+    if (descriptor_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK)
+        std::fprintf(stderr, "snapshot descriptor status=%u\n", descriptor_status);
+    require(descriptor_status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "snapshot typed charge descriptor upload failed");
 
     auto frozen_source = view(restore_golden.data(), restore_golden.size(), 1,
                               FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
@@ -301,6 +380,25 @@ int main() {
     };
     readback(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V, potential);
     readback(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C, current);
+    auto readback_interface_traces=[&](fullmag_fdm_gpu_transport_context_handle_v1 context,
+        fullmag_fdm_gpu_charge_snapshot_handle_v1 snapshot_handle,uint64_t sequence) {
+        std::vector<fullmag_fdm_gpu_transport_charge_interface_trace_v1> records(interfaces.size());
+        auto destination=view(records.data(),records.size(),sizeof(records[0]),
+            FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+        destination.pointer_space=FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY;
+        fullmag_fdm_gpu_transport_artifact_request_v1 request{};
+        init_record(request,kCharge|FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
+        request.context_handle=context;request.snapshot_handle=snapshot_handle;
+        request.field_id=FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_CHARGE_INTERFACE_TRACE;
+        request.cadence=FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_EXPLICIT_REQUEST;
+        request.range_count=records.size();request.destination_view_ptr=reinterpret_cast<uint64_t>(&destination);
+        request.expected_bytes=records.size()*sizeof(records[0]);request.accepted_sequence=sequence;
+        require(fullmag_fdm_gpu_transport_readback_artifact_v1(&request)==FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "accepted charge interface trace readback failed");
+        return records;
+    };
+    const auto accepted_interface_traces=readback_interface_traces(
+        created.context_handle,snapshot.snapshot_handle,snapshot.accepted_sequence);
 
     fullmag_fdm_gpu_transport_checkpoint_size_request_v1 checkpoint_size{};
     init_record(checkpoint_size, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
@@ -349,8 +447,13 @@ int main() {
     fullmag_fdm_gpu_transport_checkpoint_export_result_v1 exported{};
     init_record(exported, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
                               FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1);
-    require(fullmag_fdm_gpu_transport_checkpoint_export_v1(&checkpoint_export, &exported) ==
-                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+    const uint32_t checkpoint_export_status =
+        fullmag_fdm_gpu_transport_checkpoint_export_v1(&checkpoint_export, &exported);
+    if (checkpoint_export_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK)
+        std::fprintf(stderr, "checkpoint export status=%u expected_size=%zu committed=%llu\n",
+                     checkpoint_export_status, checkpoint.size(),
+                     static_cast<unsigned long long>(exported.committed_bytes));
+    require(checkpoint_export_status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 exported.committed_bytes == checkpoint.size(),
             "canonical charge checkpoint export failed");
     require(std::memcmp(exported.snapshot_digest, accepted_digest.data(),
@@ -362,6 +465,66 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 checkpoint_kind == FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_CHARGE,
             "exported checkpoint failed the independent Phase1 semantic codec");
+    fullmag::fdm::gpu::transport::charge::CheckpointData interface_checkpoint{};
+    require(fullmag::fdm::gpu::transport::charge::parse_checkpoint(
+                checkpoint.data(), checkpoint.size(), &interface_checkpoint) &&
+                interface_checkpoint.interface_source_ids == std::vector<uint64_t>({410,420,430}) &&
+                interface_checkpoint.interface_topology_ids == std::vector<uint64_t>({4100,4200,4300}) &&
+                interface_checkpoint.interface_axes == std::vector<uint32_t>({1,2,1}) &&
+                interface_checkpoint.interface_negative_cells == std::vector<uint64_t>({1,0,2}) &&
+                interface_checkpoint.interface_positive_cells == std::vector<uint64_t>({1+nx,nx*ny,2+nx}) &&
+                interface_checkpoint.interface_from_cells == std::vector<uint64_t>({1,nx*ny,2+nx}) &&
+                interface_checkpoint.interface_to_cells == std::vector<uint64_t>({1+nx,0,2}),
+            "reversed authored Y/Z multicell identities did not round-trip canonically");
+    require(interface_checkpoint.interface_from_trace_v.size() == 3 &&
+                interface_checkpoint.interface_to_trace_v.size() == 3 &&
+                interface_checkpoint.interface_delta_trace_v.size() == 3 &&
+                interface_checkpoint.interface_charge_current_density.size() == 3 &&
+                interface_checkpoint.interface_from_trace_v[0] -
+                        interface_checkpoint.interface_to_trace_v[0] ==
+                    interface_checkpoint.interface_delta_trace_v[0] &&
+                interface_checkpoint.interface_from_trace_v[1] -
+                        interface_checkpoint.interface_to_trace_v[1] ==
+                    interface_checkpoint.interface_delta_trace_v[1] &&
+                interface_checkpoint.interface_from_trace_v[2] -
+                        interface_checkpoint.interface_to_trace_v[2] ==
+                    interface_checkpoint.interface_delta_trace_v[2],
+            "accepted Y/Z interface trace arrays did not round-trip bitwise");
+    for(size_t i=0;i<accepted_interface_traces.size();++i) {
+        const auto &record=accepted_interface_traces[i];
+        require(record.source_id==interfaces[i].source_id&&record.topology_id==interfaces[i].topology_id&&
+                    record.axis==interfaces[i].axis&&record.orientation==interfaces[i].orientation&&
+                    record.canonical_face_index==interfaces[i].canonical_face_index&&
+                    record.negative_cell==interfaces[i].negative_cell&&record.positive_cell==interfaces[i].positive_cell&&
+                    record.from_cell==interfaces[i].from_cell&&record.to_cell==interfaces[i].to_cell,
+                "public interface trace metadata drifted from immutable descriptor order");
+    }
+    auto sigma_at=[&](uint64_t cell){return conductivities[mask[cell].material_index-7];};
+    for(size_t i=0;i<interfaces.size();++i){
+        const auto &spec=interfaces[i];const auto &trace=accepted_interface_traces[i];
+        const double gsum=spec.G_up+spec.G_down;
+        if(gsum==0.0){
+            require(trace.oriented_current_density==0.0&&
+                    trace.from_trace_v==potential[spec.from_cell]&&
+                    trace.to_trace_v==potential[spec.to_cell]&&
+                    trace.delta_trace_v==potential[spec.from_cell]-potential[spec.to_cell],
+                "Gsum=0 interface did not remain exactly insulating with cell-centred traces");
+            continue;
+        }
+        const double rf=h/(2.0*sigma_at(spec.negative_cell))+1.0/gsum+
+                        h/(2.0*sigma_at(spec.positive_cell));
+        const double global_j=(potential[spec.negative_cell]-potential[spec.positive_cell])/rf;
+        const double oriented_j=spec.orientation*global_j;
+        const double expected_from=potential[spec.from_cell]-
+            oriented_j*h/(2.0*sigma_at(spec.from_cell));
+        const double expected_to=potential[spec.to_cell]+
+            oriented_j*h/(2.0*sigma_at(spec.to_cell));
+        require(std::abs(global_j)>1.0&&close(trace.oriented_current_density,oriented_j,2.0e-11)&&
+                close(trace.from_trace_v,expected_from,2.0e-11,1.0e-15)&&
+                close(trace.to_trace_v,expected_to,2.0e-11,1.0e-15)&&
+                close(trace.delta_trace_v,expected_from-expected_to,2.0e-11,1.0e-15),
+            "independent finite-G Y/Z series-resistance oracle mismatch");
+    }
 
     std::vector<double> retained_potential(cells);
     readback(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V, retained_potential);
@@ -450,25 +613,23 @@ int main() {
     require(std::memcmp(restored_potential.data(), potential.data(), cells * sizeof(double)) == 0 &&
                 std::memcmp(restored_current.data(), current.data(), current.size() * sizeof(double)) == 0,
             "checkpoint restore changed V/J bytes or performed a re-solve");
+    const auto restored_interface_traces=readback_interface_traces(
+        restored_context.context_handle,restored.snapshot_handle,restored.accepted_sequence);
+    require(std::memcmp(restored_interface_traces.data(),accepted_interface_traces.data(),
+                        accepted_interface_traces.size()*sizeof(accepted_interface_traces[0]))==0,
+            "checkpoint restore changed immutable interface trace records or re-solved charge");
     require(readback_restored(created.context_handle,
                               FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V,
                               restored_potential) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_STALE_SNAPSHOT,
             "wrong-context restored snapshot use did not fail closed");
 
-    for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y)
-        for (uint64_t x = 0; x < nx; ++x) {
-            const uint64_t i = x + nx * (y + ny * z);
-            const double expected = left_v - (static_cast<double>(x) + 0.5) * 1.0e-3;
-            require(close(potential[i], expected, 1.0e-12), "uniform analytic V profile mismatch");
-        }
-    for (uint64_t i = 0; i < jx_count; ++i)
-        require(close(current[i], expected_jx, 1.0e-12), "uniform oriented Jx mismatch");
+    for(double value:potential) require(std::isfinite(value),"finite-G potential is non-finite");
+    for(double value:current) require(std::isfinite(value),"finite-G current is non-finite");
     double max_transverse = 0.0;
     for (uint64_t i = jx_count; i < current.size(); ++i)
         max_transverse = std::max(max_transverse, std::abs(current[i]));
-    require(max_transverse / expected_jx <= 1.0e-12,
-            "uniform transverse face current exceeded the frozen Jc relative tolerance");
+    require(max_transverse > 1.0,"finite-G Y/Z oracle did not exercise nonzero transverse current");
 
     uint64_t hierarchy_build_count = 0, hierarchy_cache_hit_count = 0;
     uint64_t amg_apply_count = 0, host_fallback_count = UINT64_MAX;

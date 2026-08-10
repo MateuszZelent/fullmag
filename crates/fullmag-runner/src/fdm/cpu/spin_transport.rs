@@ -144,6 +144,50 @@ pub(crate) struct FdmSpinReactionChannelsSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmStructuredCurrentSourceCutSnapshot {
+    pub source_cut_id: String,
+    pub component_label: u64,
+    pub ordered_internal_face_ids: Vec<u64>,
+    pub ordered_normals: Vec<i8>,
+    pub drive_id: String,
+    pub drive_kind: String,
+    #[serde(rename = "drive_value_V")]
+    pub drive_value_v: f64,
+    pub revision: u64,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmOerstedClosureProvenanceSnapshot {
+    pub api_version: String,
+    pub formula_version: String,
+    pub reconstruction_version: String,
+    pub operator_version: String,
+    pub realization_version: String,
+    pub engine_version: String,
+    pub certificate_version: String,
+    pub closure_kind: String,
+    pub source_identity: String,
+    pub revision: u64,
+    pub geometry_digest: String,
+    pub conductor_mask_digest: String,
+    pub target_mask_digest: String,
+    pub face_current_digest: String,
+    pub certificate_digest: String,
+    pub envelope_digest: String,
+    pub trusted_snapshot_digest: String,
+    #[serde(rename = "divergence_tolerance_Apm3")]
+    pub divergence_tolerance_apm3: f64,
+    #[serde(rename = "measured_max_abs_divergence_Apm3")]
+    pub measured_max_abs_divergence_apm3: f64,
+    #[serde(rename = "exterior_current_tolerance_A")]
+    pub exterior_current_tolerance_a: f64,
+    #[serde(rename = "measured_component_exterior_current_A")]
+    pub measured_component_exterior_current_a: Vec<f64>,
+    pub source_cuts: Vec<FdmStructuredCurrentSourceCutSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub module_id: String,
     pub current_source_id: String,
@@ -166,6 +210,8 @@ pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub interface_fluxes: Vec<FdmSpinInterfaceFluxSnapshot>,
     pub transport_torque_per_s: Vec<[f64; 3]>,
     pub oersted_field_apm: Option<Vec<[f64; 3]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_closure_provenance: Option<FdmOerstedClosureProvenanceSnapshot>,
     pub telemetry: FdmSpinTransportTelemetry,
     pub constitutive_version: String,
     pub charge_operator_version: String,
@@ -1900,6 +1946,7 @@ fn solve_coupled_module(
         interface_fluxes,
         transport_torque_per_s: solution.transport_gilbert_torque_per_s,
         oersted_field_apm,
+        oersted_closure_provenance: None,
         telemetry: FdmSpinTransportTelemetry {
             charge_iterations: 0,
             charge_residual_l2: solution.telemetry.scaled_charge_residual,
@@ -2443,6 +2490,7 @@ fn solve_module(
                 magnetization,
                 evaluated_envelope_multiplier,
                 state_revision(magnetization),
+                stage_time_s,
             );
         }
         #[cfg(not(feature = "fdm-native-cpu"))]
@@ -2658,6 +2706,7 @@ fn solve_transient_module(
         interface_fluxes,
         transport_torque_per_s: observation.transport_gilbert_torque_per_s,
         oersted_field_apm,
+        oersted_closure_provenance: None,
         telemetry: FdmSpinTransportTelemetry {
             charge_iterations: charge_solution.iterations,
             charge_residual_l2: charge_solution.residual_l2,
@@ -2946,6 +2995,7 @@ fn solve_one_way_snapshot(
         interface_fluxes,
         transport_torque_per_s: spin_solution.transport_gilbert_torque_per_s,
         oersted_field_apm,
+        oersted_closure_provenance: None,
         telemetry: FdmSpinTransportTelemetry {
             charge_iterations: charge_solution.iterations,
             charge_residual_l2: charge_solution.residual_l2,
@@ -3144,6 +3194,7 @@ mod tests {
                 ),
             ],
             specified_current_faces: Vec::new(),
+            structured_current_closure: None,
             charge_gauge: ChargePotentialGaugeIR::DirichletReference,
             charge_solver: ChargeSolverPolicyIR {
                 engine: "cg".into(),
@@ -4129,6 +4180,37 @@ mod tests {
         assert!(artifact_module["charge_face_current"].is_object());
         assert!(artifact_module["spin_face_current"].is_object());
         assert!(artifact_module["spin_reaction_channels"].is_object());
+    }
+
+    #[cfg(feature = "fdm-native-cpu")]
+    #[test]
+    fn native_m1_oersted_uses_public_abi_and_fails_closed_without_fdm_certificate() {
+        let mut plan = plan();
+        let descriptor = plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor");
+        descriptor.realization = fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
+        descriptor.spin_solver.engine = "native_m1_v1".into();
+        descriptor.oersted_source_bound = true;
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("native workflow construction")
+            .expect("native spin workflow");
+        let error = workflow
+            .evaluate_stage(&plan.initial_magnetization, 2.5e-12)
+            .expect_err("missing FDM closure descriptor must fail closed");
+        assert!(error
+            .message
+            .contains("global_closed_current_certificate.v1"));
+        assert!(error
+            .message
+            .contains("public FDM ProblemIR has no closure/source-cut descriptor"));
+        assert!(error
+            .message
+            .contains("fdm_oersted_cell_integrated_open.v1"));
+        assert!(error.message.contains("oersted_fdm_fft_open.v1"));
+        assert!(error.message.contains("fdm_oersted_fft_open_v1"));
+        assert!(!error.message.contains("midpoint"));
     }
 
     #[cfg(feature = "fdm-native-cpu")]

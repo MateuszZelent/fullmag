@@ -1340,6 +1340,7 @@ pub(crate) fn plan_fdm(
     let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
         owner_names: &owner_names,
         grid_cells,
+        origin_m: native_origin,
         cell_size_m: cell_size,
         active_mask: active_mask.as_deref(),
         region_mask: &region_mask,
