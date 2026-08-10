@@ -2768,6 +2768,39 @@ def _render_current_transport_payload(payload: object, *, surface: str) -> str:
             "conservative_current_view="
             + _render_conservative_current_view_payload(conservative_view)
         )
+    structured_closure = entry.get("structured_current_closure")
+    if isinstance(structured_closure, Mapping):
+        cuts = structured_closure.get("source_cuts")
+        if (
+            structured_closure.get("kind") != "closed_geometry"
+            or not isinstance(cuts, list)
+            or not cuts
+        ):
+            raise ValueError("structured current closure must be closed_geometry with source cuts")
+        cut_exprs: list[str] = []
+        for raw_cut in cuts:
+            cut = _normalize_mapping(raw_cut)
+            plane = _normalize_mapping(cut.get("plane"))
+            drive = _normalize_mapping(cut.get("drive"))
+            cut_exprs.append(
+                "fm.StructuredCurrentSourceCut("
+                f"source_cut_id={_py_repr(str(cut.get('source_cut_id') or ''))}, "
+                f"circuit_id={_py_repr(str(cut.get('circuit_id') or ''))}, "
+                f"region={_render_region_ref_payload(cut.get('region'))}, "
+                "plane=fm.StructuredCutPlane("
+                f"axis={_py_repr(str(plane.get('axis') or ''))}, "
+                f"offset_m={_py_number(_number_or_none(plane.get('offset_m')) or 0.0)}, "
+                f"normal={_py_repr(str(plane.get('normal') or ''))}), "
+                "drive=fm.ImpressedPotentialJump("
+                f"drive_id={_py_repr(str(drive.get('drive_id') or ''))}, "
+                "potential_jump_V="
+                f"{_py_number(_number_or_none(drive.get('potential_jump_V')) or 0.0)}))"
+            )
+        kwargs.append(
+            "structured_current_closure=fm.StructuredCurrentClosure("
+            f"closure_id={_py_repr(str(structured_closure.get('closure_id') or ''))}, "
+            f"source_cuts=[{', '.join(cut_exprs)}])"
+        )
     return f"{_surface_call(surface, 'current_transport')}({', '.join(kwargs)})"
 
 

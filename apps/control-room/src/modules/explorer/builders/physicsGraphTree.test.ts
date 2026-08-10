@@ -146,4 +146,55 @@ describe("buildPhysicsGraphTree", () => {
     const second = flatten(buildPhysicsGraphTree({ graph: reversed }));
     expect(second.map((node) => node.id)).toEqual(first.map((node) => node.id));
   });
+
+  it("adds typed closed-geometry closure and source-cut children to the current module", () => {
+    const nodes = flatten(buildPhysicsGraphTree({
+      currentTransports: {
+        items: [{
+          boundaries: [],
+          coupling: "one_way",
+          domain: [{ object_id: "ring" }],
+          gauge: "zero_mean",
+          kind: "current_transport",
+          materials: [],
+          model: "ohmic_poisson",
+          name: "current:film",
+          solver: {
+            engine: "cg",
+            linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+            operator_version: "fv_charge_harmonic_source_cut_v1",
+            physical_residual_version: "charge_balance_integrated_l2.v1",
+          },
+          structured_current_closure: {
+            closure_id: "ring-closure",
+            kind: "closed_geometry",
+            schema_version: "structured_current_closure.v1",
+            source_cuts: [{
+              circuit_id: "ring-circuit",
+              drive: { drive_id: "ring-drive", kind: "impressed_potential_jump", potential_jump_V: 0.125, schema_version: "impressed_potential_jump.v1" },
+              plane: { axis: "y", normal: "positive_axis", offset_m: 2e-9 },
+              region: { object_id: "ring", region_id: "source-arm" },
+              source_cut_id: "ring-cut",
+            }],
+          },
+        }],
+        scene_revision: 7,
+      },
+      graph,
+      objects: [{ id: "film", label: "Film" }],
+    }));
+
+    expect(nodes.find((node) => node.kind === "physics.structured-current-closure")).toMatchObject({
+      currentTransportId: "current:film",
+      label: "ring-closure",
+      status: "unavailable",
+      structuredCurrentClosureId: "ring-closure",
+    });
+    expect(nodes.find((node) => node.kind === "physics.structured-current-source-cut")).toMatchObject({
+      badge: "Y · 2 nm · 0.125 V",
+      currentTransportId: "current:film",
+      label: "ring-cut",
+      structuredCurrentSourceCutId: "ring-cut",
+    });
+  });
 });

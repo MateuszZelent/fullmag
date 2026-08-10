@@ -936,6 +936,15 @@ typedef struct {
 } fullmag_fdm_cpu_specified_current_face_v1;
 
 typedef struct {
+    uint64_t source_cut_index;
+    uint32_t axis;
+    int32_t normal_sign;
+    uint64_t negative_cell;
+    uint64_t positive_cell;
+    double potential_jump_v;
+} fullmag_fdm_cpu_impressed_potential_jump_face_v1;
+
+typedef struct {
     uint64_t interface_id;
     uint32_t axis;
     uint32_t kind;
@@ -1030,6 +1039,9 @@ typedef struct {
     char operator_version[FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY];
     char solver_version[FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY];
     char residual_version[FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY];
+    const fullmag_fdm_cpu_impressed_potential_jump_face_v1
+        *impressed_potential_jump_faces;
+    uint64_t impressed_potential_jump_face_count;
 } fullmag_fdm_cpu_charge_request_v1;
 
 /*
@@ -1194,6 +1206,194 @@ int fullmag_fdm_cpu_steady_spin_solve_v1(
 /* See fullmag_fdm_cpu_charge_result_v1 ownership rules above. */
 void fullmag_fdm_cpu_charge_result_destroy_v1(
     fullmag_fdm_cpu_charge_result_v1 *result);
+
+/* ── FDM CPU/FP64 solved-current open-boundary Oersted ABI v1 ── */
+
+#define FULLMAG_FDM_CPU_OERSTED_ABI_V1 1u
+#define FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY 96u
+#define FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY 80u
+#define FULLMAG_FDM_CPU_OERSTED_ERROR_CAPACITY 512u
+
+typedef enum {
+    FULLMAG_FDM_CPU_OERSTED_OK = 0,
+    FULLMAG_FDM_CPU_OERSTED_ERR_NULL = -200,
+    FULLMAG_FDM_CPU_OERSTED_ERR_ABI = -201,
+    FULLMAG_FDM_CPU_OERSTED_ERR_INVALID = -202,
+    FULLMAG_FDM_CPU_OERSTED_ERR_BUFFER = -203,
+    FULLMAG_FDM_CPU_OERSTED_ERR_PERIODIC = -204,
+    FULLMAG_FDM_CPU_OERSTED_ERR_MISSING_CERTIFICATE = -205,
+    FULLMAG_FDM_CPU_OERSTED_ERR_STALE_CERTIFICATE = -206,
+    FULLMAG_FDM_CPU_OERSTED_ERR_OPEN_CIRCUIT = -207,
+    FULLMAG_FDM_CPU_OERSTED_ERR_CLOSURE = -208,
+    FULLMAG_FDM_CPU_OERSTED_ERR_NUMERICAL = -209,
+    FULLMAG_FDM_CPU_OERSTED_ERR_INTERNAL = -210,
+} fullmag_fdm_cpu_oersted_status_v1;
+
+typedef enum {
+    FULLMAG_FDM_CPU_OERSTED_BOUNDARY_OPEN = 0,
+    FULLMAG_FDM_CPU_OERSTED_BOUNDARY_PERIODIC = 1,
+} fullmag_fdm_cpu_oersted_boundary_v1;
+
+typedef enum {
+    FULLMAG_FDM_CPU_OERSTED_CLOSURE_CLOSED_GEOMETRY = 0,
+    FULLMAG_FDM_CPU_OERSTED_CLOSURE_CERTIFIED_IMPORT = 1,
+} fullmag_fdm_cpu_oersted_closure_kind_v1;
+
+typedef struct {
+    const double *data;
+    uint64_t length;
+} fullmag_fdm_cpu_oersted_const_f64_buffer_v1;
+
+typedef struct {
+    const uint64_t *data;
+    uint64_t length;
+} fullmag_fdm_cpu_oersted_const_u64_buffer_v1;
+
+typedef struct {
+    const int8_t *data;
+    uint64_t length;
+} fullmag_fdm_cpu_oersted_const_i8_buffer_v1;
+
+typedef struct {
+    const char *stable_id;
+    uint64_t component_label;
+    fullmag_fdm_cpu_oersted_const_u64_buffer_v1 ordered_internal_face_ids;
+    fullmag_fdm_cpu_oersted_const_i8_buffer_v1 ordered_normals;
+    const char *drive_id;
+    const char *drive_kind;
+    double drive_value;
+    const char *drive_si_unit;
+    uint64_t revision;
+    const char *digest;
+} fullmag_fdm_cpu_oersted_source_cut_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t reserved_flags;
+    uint32_t closure_kind;
+    uint32_t global_continuity_passed;
+    uint32_t exterior_flux_passed;
+    uint32_t component_flux_passed;
+    uint32_t return_path_complete;
+    uint32_t reserved0;
+    uint64_t revision;
+    const char *version;
+    const char *digest;
+    const char *geometry_digest;
+    uint64_t conductor_mask_revision;
+    const char *conductor_mask_digest;
+    uint64_t face_current_revision;
+    const char *face_current_digest;
+    fullmag_fdm_cpu_oersted_const_u64_buffer_v1 component_labels;
+    uint64_t component_count;
+    double divergence_tolerance_a_per_m3;
+    double exterior_current_tolerance_a;
+    double measured_max_abs_divergence_a_per_m3;
+    fullmag_fdm_cpu_oersted_const_f64_buffer_v1 measured_component_exterior_current_a;
+    const fullmag_fdm_cpu_oersted_source_cut_v1 *source_cuts;
+    uint64_t source_cut_count;
+    const char *imported_certification_method;
+    const char *imported_field_digest;
+} fullmag_fdm_cpu_oersted_certificate_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t reserved_flags;
+    fullmag_fdm_cpu_transport_grid_v1 grid;
+    double origin_m[3];
+    uint32_t boundaries[3];
+    uint32_t reserved0;
+    const uint8_t *conductor_mask;
+    uint64_t conductor_mask_len;
+    const uint8_t *target_mask;
+    uint64_t target_mask_len;
+    fullmag_fdm_cpu_oersted_const_f64_buffer_v1 jc_x_a_per_m2;
+    fullmag_fdm_cpu_oersted_const_f64_buffer_v1 jc_y_a_per_m2;
+    fullmag_fdm_cpu_oersted_const_f64_buffer_v1 jc_z_a_per_m2;
+    uint64_t geometry_revision;
+    const char *geometry_digest;
+    uint64_t conductor_mask_revision;
+    const char *conductor_mask_digest;
+    uint64_t target_mask_revision;
+    const char *target_mask_digest;
+    uint64_t face_current_revision;
+    const char *face_current_digest;
+    const char *source_identity;
+    uint64_t envelope_revision;
+    const char *envelope_digest;
+    uint64_t stage_identity;
+    double evaluation_time_s;
+    double evaluated_envelope_multiplier;
+    uint64_t trusted_snapshot_revision;
+    const char *trusted_snapshot_digest;
+    const fullmag_fdm_cpu_oersted_certificate_v1 *certificate;
+} fullmag_fdm_cpu_oersted_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t reserved_flags;
+    int32_t status;
+    uint32_t reserved0;
+    fullmag_fdm_cpu_f64_buffer_v1 field_xyz_a_per_m;
+    uint64_t face_current_revision;
+    uint64_t certificate_revision;
+    uint64_t trusted_snapshot_revision;
+    uint64_t envelope_revision;
+    uint64_t stage_identity;
+    double evaluation_time_s;
+    double evaluated_envelope_multiplier;
+    uint64_t plan_build_count;
+    uint64_t kernel_build_count;
+    uint64_t numerical_buffer_allocation_count;
+    uint64_t resolved_field_hit_count;
+    uint64_t resolved_field_miss_count;
+    uint64_t resolved_field_invalidation_count;
+    uint64_t trusted_fast_path_hit_count;
+    uint32_t resolved_field_reused;
+    uint32_t diagnostics_available;
+    double divergence_current_rms_a_per_m3;
+    double divergence_field_rms_a_per_m2;
+    double curl_h_minus_j_rms_a_per_m2;
+    char api_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char formula_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char reconstruction_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char operator_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char realization_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char engine_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char certificate_version[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char face_current_digest[FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY];
+    char certificate_digest[FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY];
+    char trusted_snapshot_digest[FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY];
+    char resolved_field_cache_key_digest[FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY];
+    char kernel_plan_cache_key_digest[FULLMAG_FDM_CPU_OERSTED_DIGEST_CAPACITY];
+    char source_identity[FULLMAG_FDM_CPU_OERSTED_TEXT_CAPACITY];
+    char error_message[FULLMAG_FDM_CPU_OERSTED_ERROR_CAPACITY];
+} fullmag_fdm_cpu_oersted_result_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t reserved_flags;
+    uint64_t source_cut_size;
+    uint64_t source_cut_alignment;
+    uint64_t certificate_size;
+    uint64_t certificate_alignment;
+    uint64_t request_size;
+    uint64_t request_alignment;
+    uint64_t result_size;
+    uint64_t result_alignment;
+} fullmag_fdm_cpu_oersted_abi_layout_v1;
+
+const fullmag_fdm_cpu_oersted_abi_layout_v1 *
+fullmag_fdm_cpu_oersted_abi_layout_get_v1(void);
+const fullmag_fdm_cpu_transport_abi_layout_manifest_v1 *
+fullmag_fdm_cpu_oersted_abi_layout_manifest_get_v1(void);
+int fullmag_fdm_cpu_oersted_solve_v1(
+    const fullmag_fdm_cpu_oersted_request_v1 *request,
+    fullmag_fdm_cpu_oersted_result_v1 *result);
 
 #ifdef __cplusplus
 }

@@ -1076,6 +1076,35 @@ fn validate_charge_transport_definition(
     errors: &mut Vec<String>,
 ) {
     let prefix = format!("current_modules[{index}] current_transport");
+    if definition.conservative_current_view.is_some()
+        && definition.structured_current_closure.is_some()
+    {
+        errors.push(format!(
+            "{prefix} conservative_current_view and structured_current_closure are mutually exclusive"
+        ));
+    }
+    if let Some(closure) = &definition.structured_current_closure {
+        errors.extend(closure.validation_errors(&prefix));
+        if reciprocal {
+            errors.push(format!(
+                "{prefix}.structured_current_closure supports one-way ohmic transport only"
+            ));
+        }
+        if requested_backend == crate::BackendTarget::Fem {
+            errors.push(format!(
+                "{prefix}.structured_current_closure requires FDM discretization"
+            ));
+        }
+        if definition.solver.operator_version != "fv_charge_harmonic_source_cut_v1" {
+            errors.push(format!(
+                "{prefix}.structured_current_closure requires solver.operator_version='fv_charge_harmonic_source_cut_v1'"
+            ));
+        }
+    } else if definition.solver.operator_version == "fv_charge_harmonic_source_cut_v1" {
+        errors.push(format!(
+            "{prefix}.solver.operator_version='fv_charge_harmonic_source_cut_v1' requires structured_current_closure"
+        ));
+    }
     if definition.domain.is_empty() || definition.materials.is_empty() {
         errors.push(format!(
             "{prefix} complete charge contract requires non-empty domain and materials"
@@ -1208,13 +1237,18 @@ fn validate_charge_transport_definition(
             && solver.physical_residual_version == "transport_balance_integrated_l2.v1"
     } else {
         let supported_operator = match requested_backend {
-            crate::BackendTarget::Fdm => solver.operator_version == "fv_charge_harmonic_v1",
+            crate::BackendTarget::Fdm => matches!(
+                solver.operator_version.as_str(),
+                "fv_charge_harmonic_v1" | "fv_charge_harmonic_source_cut_v1"
+            ),
             crate::BackendTarget::Fem => {
                 solver.operator_version == "fem_charge_conforming_h1_p1.transparent.v1"
             }
             crate::BackendTarget::Auto => matches!(
                 solver.operator_version.as_str(),
-                "fv_charge_harmonic_v1" | "fem_charge_conforming_h1_p1.transparent.v1"
+                "fv_charge_harmonic_v1"
+                    | "fv_charge_harmonic_source_cut_v1"
+                    | "fem_charge_conforming_h1_p1.transparent.v1"
             ),
             crate::BackendTarget::Hybrid => false,
         };

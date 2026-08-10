@@ -322,6 +322,64 @@ void pure_neumann_requires_explicit_gauge_and_balanced_current() {
           "unbalanced pure-Neumann current must fail closed");
 }
 
+void internal_potential_jump_drives_one_closed_conservative_loop() {
+    charge::Problem problem;
+    problem.grid = {3, 3, 1, 1.0, 1.0, 1.0};
+    problem.conductivity_s_per_m.assign(9, 1.0);
+    problem.active_cells.assign(9, 1);
+    problem.conductivity_s_per_m[4] = 0.0;
+    problem.active_cells[4] = 0;
+    set_all_insulating(problem);
+    problem.gauge = charge::Gauge::zero_mean;
+    problem.impressed_potential_jump_faces = {
+        {0, {1, 0, 3}, +1, 0.8},
+    };
+
+    const auto result = charge::solve(problem);
+    check(result.ok(), result.message.c_str());
+    const std::size_t source_face = 0 + problem.grid.nx * 1;
+    check_close(result.solution.face_current_density_a_per_m2.y[source_face],
+                0.1,
+                1.0e-12,
+                "closed-loop source-cut current");
+    check_close(result.solution.diagnostics.net_boundary_current_a,
+                0.0,
+                0.0,
+                "closed-loop source cut must not inject exterior current");
+    check(result.solution.provenance.operator_version ==
+              charge::source_cut_operator_version,
+          "source-cut solve must publish the affine jump operator version");
+    const auto snapshot = result.solution.accepted_snapshot();
+    check(snapshot != nullptr && snapshot->impressed_potential_jump_faces().size() == 1,
+          "accepted charge snapshot must retain the exact source-cut face");
+}
+
+void internal_potential_jump_faces_fail_closed_when_malformed() {
+    auto problem = uniform_bar(2, 0.0, 1.0);
+    problem.impressed_potential_jump_faces = {{0, {0, 0, 1}, +1, 0.1}};
+    problem.interfaces = {charge::OrientedMixingInterface::one_way(
+        {0, 0, 1}, 0, 1, 1.0, 1.0)};
+    check(charge::solve(problem).status == charge::Status::invalid_argument,
+          "source cut may not overlap a mixing interface");
+
+    problem.interfaces.clear();
+    problem.impressed_potential_jump_faces.push_back(
+        problem.impressed_potential_jump_faces.front());
+    check(charge::solve(problem).status == charge::Status::invalid_argument,
+          "duplicate source-cut faces must fail closed");
+
+    problem.impressed_potential_jump_faces.resize(1);
+    problem.impressed_potential_jump_faces[0].normal_sign = 0;
+    check(charge::solve(problem).status == charge::Status::invalid_argument,
+          "source-cut normal must be signed and axis-oriented");
+
+    problem.impressed_potential_jump_faces[0].normal_sign = 1;
+    problem.impressed_potential_jump_faces[0].potential_jump_v =
+        std::numeric_limits<double>::quiet_NaN();
+    check(charge::solve(problem).status == charge::Status::invalid_argument,
+          "source-cut jump must be finite");
+}
+
 charge::Problem disconnected_component_current_problem(double component_a_return_current_a) {
     charge::Problem problem;
     problem.grid = {3, 3, 1, 1.0, 1.0, 1.0};
@@ -809,6 +867,8 @@ int main(int argc, char **argv) {
     sigma_zero_and_inactive_barriers_do_not_leak();
     conservation_reports_boundary_current_and_cell_divergence_independently();
     pure_neumann_requires_explicit_gauge_and_balanced_current();
+    internal_potential_jump_drives_one_closed_conservative_loop();
+    internal_potential_jump_faces_fail_closed_when_malformed();
     disconnected_component_current_compatibility_is_local_and_dimensionally_scaled();
     swapping_voltage_electrodes_reverses_the_current_sign();
     analytic_problem_converges_over_three_resolutions();

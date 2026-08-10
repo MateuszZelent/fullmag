@@ -3,8 +3,12 @@
 #include "fullmag/fdm/transport/gpu_abi_v1.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <numeric>
+#include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 
 extern "C" void fullmag_fdm_gpu_transport_checkpoint_sha256_internal_v1(
@@ -151,6 +155,19 @@ bool checkpoint_content_digest_v2(const CheckpointData &data, uint8_t digest[32]
        data.charge_axes.size()!=faces || data.charge_sides.size()!=faces ||
        data.charge_areas.size()!=faces || data.charge_values.size()!=faces ||
        data.charge_source_ids.size()!=faces) return false;
+    const size_t interfaces = data.interface_source_ids.size();
+    if (data.interface_topology_ids.size() != interfaces ||
+        data.interface_axes.size() != interfaces ||
+        data.interface_face_linear.size() != interfaces ||
+        data.interface_negative_cells.size() != interfaces ||
+        data.interface_positive_cells.size() != interfaces ||
+        data.interface_from_cells.size() != interfaces ||
+        data.interface_to_cells.size() != interfaces ||
+        data.interface_orientations.size() != interfaces ||
+        data.interface_from_trace_v.size() != interfaces ||
+        data.interface_to_trace_v.size() != interfaces ||
+        data.interface_delta_trace_v.size() != interfaces ||
+        data.interface_charge_current_density.size() != interfaces) return false;
     std::vector<uint8_t> canonical;
     const auto append=[&](const void *source,size_t bytes){
         if(bytes==0)return;
@@ -184,6 +201,29 @@ bool checkpoint_content_digest_v2(const CheckpointData &data, uint8_t digest[32]
         }
         append(&source_id,8);
     }
+    std::vector<size_t> order(interfaces);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return std::tie(data.interface_axes[a], data.interface_face_linear[a],
+                        data.interface_source_ids[a], data.interface_topology_ids[a]) <
+               std::tie(data.interface_axes[b], data.interface_face_linear[b],
+                        data.interface_source_ids[b], data.interface_topology_ids[b]);
+    });
+    const uint64_t interface_count = interfaces;
+    segment(14, &interface_count, sizeof(interface_count));
+    std::vector<double> canonical_from, canonical_to, canonical_delta, canonical_current;
+    canonical_from.reserve(interfaces); canonical_to.reserve(interfaces);
+    canonical_delta.reserve(interfaces); canonical_current.reserve(interfaces);
+    for (size_t i : order) {
+        canonical_from.push_back(data.interface_from_trace_v[i]);
+        canonical_to.push_back(data.interface_to_trace_v[i]);
+        canonical_delta.push_back(data.interface_delta_trace_v[i]);
+        canonical_current.push_back(data.interface_charge_current_density[i]);
+    }
+    segment(15, canonical_from.data(), canonical_from.size() * sizeof(double));
+    segment(16, canonical_to.data(), canonical_to.size() * sizeof(double));
+    segment(17, canonical_delta.data(), canonical_delta.size() * sizeof(double));
+    segment(18, canonical_current.data(), canonical_current.size() * sizeof(double));
     checkpoint_sha256(canonical.data(),canonical.size(),digest);
     return true;
 }
@@ -231,13 +271,74 @@ bool build_checkpoint(CheckpointData *data, std::vector<uint8_t> *payload) {
         data->charge_areas.size() != charge_face_count ||
         data->charge_values.size() != charge_face_count ||
         data->charge_source_ids.size() != charge_face_count) return false;
+    const size_t interface_count = data->interface_source_ids.size();
+    if (data->interface_topology_ids.size() != interface_count ||
+        data->interface_axes.size() != interface_count ||
+        data->interface_face_linear.size() != interface_count ||
+        data->interface_negative_cells.size() != interface_count ||
+        data->interface_positive_cells.size() != interface_count ||
+        data->interface_from_cells.size() != interface_count ||
+        data->interface_to_cells.size() != interface_count ||
+        data->interface_orientations.size() != interface_count ||
+        data->interface_from_trace_v.size() != interface_count ||
+        data->interface_to_trace_v.size() != interface_count ||
+        data->interface_delta_trace_v.size() != interface_count ||
+        data->interface_charge_current_density.size() != interface_count) return false;
+    for (size_t i = 0; i < interface_count; ++i) {
+        if (data->interface_source_ids[i] == 0 || data->interface_topology_ids[i] == 0 ||
+            data->interface_axes[i] > 2 ||
+            (data->interface_orientations[i] != -1 && data->interface_orientations[i] != 1) ||
+            !std::isfinite(data->interface_from_trace_v[i]) ||
+            !std::isfinite(data->interface_to_trace_v[i]) ||
+            !std::isfinite(data->interface_delta_trace_v[i]) ||
+            !std::isfinite(data->interface_charge_current_density[i]) ||
+            data->interface_delta_trace_v[i] != data->interface_from_trace_v[i] -
+                                                  data->interface_to_trace_v[i]) return false;
+    }
     std::vector<Field> density_fields = {
         f_u64(data->charge_adjacent_cells), f_u32(data->charge_axes),
         f_i32(data->charge_sides), f_f64(data->charge_areas),
         f_f64(data->charge_values), f_text_list(data->charge_source_ids)
     };
+    std::vector<size_t> interface_order(interface_count);
+    std::iota(interface_order.begin(), interface_order.end(), 0);
+    std::sort(interface_order.begin(), interface_order.end(), [&](size_t a, size_t b) {
+        return std::tie(data->interface_source_ids[a], data->interface_topology_ids[a],
+                        data->interface_axes[a], data->interface_face_linear[a]) <
+               std::tie(data->interface_source_ids[b], data->interface_topology_ids[b],
+                        data->interface_axes[b], data->interface_face_linear[b]);
+    });
+    std::vector<std::string> interface_ids;
+    std::vector<uint64_t> interface_faces;
+    std::vector<int32_t> interface_orientations;
+    std::vector<double> interface_vn, interface_vf, interface_jn, interface_jf;
+    for (size_t i : interface_order) {
+        interface_ids.push_back(
+            "v2:" + std::to_string(data->interface_source_ids[i]) + ":" +
+            std::to_string(data->interface_topology_ids[i]) + ":" +
+            std::to_string(data->interface_axes[i]) + ":" +
+            std::to_string(data->interface_face_linear[i]) + ":" +
+            std::to_string(data->interface_negative_cells[i]) + ":" +
+            std::to_string(data->interface_positive_cells[i]) + ":" +
+            std::to_string(data->interface_from_cells[i]) + ":" +
+            std::to_string(data->interface_to_cells[i]) + ":" +
+            std::to_string(data->interface_orientations[i]));
+        interface_faces.push_back(data->interface_face_linear[i]);
+        interface_orientations.push_back(data->interface_orientations[i]);
+        const bool from_is_negative = data->interface_from_cells[i] ==
+                                      data->interface_negative_cells[i];
+        interface_vn.push_back(from_is_negative ? data->interface_from_trace_v[i]
+                                                : data->interface_to_trace_v[i]);
+        interface_vf.push_back(from_is_negative ? data->interface_to_trace_v[i]
+                                                : data->interface_from_trace_v[i]);
+        const double global_current = data->interface_orientations[i] *
+                                      data->interface_charge_current_density[i];
+        interface_jn.push_back(global_current);
+        interface_jf.push_back(global_current);
+    }
     std::vector<Field> interface_fields = {
-        f_text_list({}), f_u64({}), f_i32({}), f_f64({}), f_f64({}), f_f64({}), f_f64({})
+        f_text_list(interface_ids), f_u64(interface_faces), f_i32(interface_orientations),
+        f_f64(interface_vn), f_f64(interface_vf), f_f64(interface_jn), f_f64(interface_jf)
     };
     std::vector<Field> observation_fields = {
         f_text_list({"ground"}), f_f64({0.0}), f_f64({data->component_balance}),
@@ -292,10 +393,10 @@ bool build_checkpoint(CheckpointData *data, std::vector<uint8_t> *payload) {
     put_u32(header + 20, 96); put_u32(header + 24, sections.size());
     put_u64(header + 32, total); put_u64(header + 40, 320); put_u64(header + 48, first_payload);
     put_u64(header + 64, UINT64_C(0x33)); put_u64(header + 72, data->accepted_sequence);
-    std::memcpy(header + 80, data->device_uuid.data(), 16);
-    std::memcpy(header + 96, data->build_digest.data(), 32);
-    std::memcpy(header + 128, data->static_digest.data(), 32);
-    std::memcpy(header + 160, data->lineage.data(), 16);
+    std::memcpy(header + 80, data->lineage.data(), 16);
+    std::memcpy(header + 96, data->device_uuid.data(), 16);
+    std::memcpy(header + 112, data->build_digest.data(), 32);
+    std::memcpy(header + 144, data->static_digest.data(), 32);
     std::memcpy(header + 176, data->snapshot_digest.data(), 32);
     std::vector<uint8_t> ordered;
     for (size_t i = 0; i < sections.size(); ++i) {
@@ -324,11 +425,12 @@ bool parse_checkpoint(const uint8_t *payload, uint64_t payload_size, CheckpointD
     uint32_t kind = 0;
     if (fullmag_fdm_gpu_transport_checkpoint_validate_v1(payload, payload_size, &kind) !=
             FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK ||
-        kind != FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_CHARGE) return false;
-    std::memcpy(data->device_uuid.data(), payload + 80, 16);
-    std::memcpy(data->build_digest.data(), payload + 96, 32);
-    std::memcpy(data->static_digest.data(), payload + 128, 32);
-    std::memcpy(data->lineage.data(), payload + 160, 16);
+        (kind != FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_CHARGE &&
+         kind != FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_SPIN)) return false;
+    std::memcpy(data->lineage.data(), payload + 80, 16);
+    std::memcpy(data->device_uuid.data(), payload + 96, 16);
+    std::memcpy(data->build_digest.data(), payload + 112, 32);
+    std::memcpy(data->static_digest.data(), payload + 144, 32);
     std::memcpy(data->snapshot_digest.data(), payload + 176, 32);
     data->accepted_sequence = get_u64(payload + 72);
     uint64_t meta_length = 0;
@@ -377,6 +479,92 @@ bool parse_checkpoint(const uint8_t *payload, uint64_t payload_size, CheckpointD
         data->charge_source_ids.emplace_back(
             reinterpret_cast<const char *>(kind_data + offset + 4), length);
         offset += 4 + length;
+    }
+    uint64_t interface_length = 0;
+    const uint8_t *interfaces = section_data(payload, 8, &interface_length);
+    if (interfaces == nullptr) return false;
+    uint64_t id_count = 0, id_bytes = 0;
+    const uint8_t *ids = field_data(interfaces, 1, &id_count, &id_bytes);
+    data->interface_source_ids.clear(); data->interface_topology_ids.clear();
+    data->interface_axes.clear(); data->interface_face_linear.clear();
+    data->interface_negative_cells.clear(); data->interface_positive_cells.clear();
+    data->interface_from_cells.clear(); data->interface_to_cells.clear();
+    data->interface_orientations.clear();
+    for (uint64_t i = 0, offset = 0; i < id_count; ++i) {
+        if (offset + 4 > id_bytes) return false;
+        const uint32_t length = get_u32(ids + offset);
+        if (offset + 4 + length > id_bytes) return false;
+        const std::string identity(reinterpret_cast<const char *>(ids + offset + 4), length);
+        std::vector<std::string> parts;
+        for (size_t begin = 0;;) {
+            const size_t separator = identity.find(':', begin);
+            parts.push_back(identity.substr(begin, separator - begin));
+            if (separator == std::string::npos) break;
+            begin = separator + 1;
+        }
+        // Legacy source:topology identities cannot reconstruct axis/cell ownership
+        // unambiguously, so restart must fail closed rather than guess topology.
+        if (parts.size() != 10 || parts[0] != "v2") return false;
+        try {
+            auto u64 = [&](size_t part) {
+                size_t used = 0;
+                const uint64_t value = std::stoull(parts[part], &used);
+                if (used != parts[part].size()) throw std::invalid_argument("identity");
+                return value;
+            };
+            const uint64_t source = u64(1), topology = u64(2), axis = u64(3);
+            const int orientation = std::stoi(parts[9]);
+            if (source == 0 || topology == 0 || axis > 2 ||
+                (orientation != -1 && orientation != 1)) return false;
+            data->interface_source_ids.push_back(source); data->interface_topology_ids.push_back(topology);
+            data->interface_axes.push_back(static_cast<uint32_t>(axis));
+            data->interface_face_linear.push_back(u64(4));
+            data->interface_negative_cells.push_back(u64(5));
+            data->interface_positive_cells.push_back(u64(6));
+            data->interface_from_cells.push_back(u64(7)); data->interface_to_cells.push_back(u64(8));
+            data->interface_orientations.push_back(orientation);
+        } catch (...) { return false; }
+        offset += 4 + length;
+    }
+    std::vector<double> vn, vf, jn, jf;
+    auto load_interface_fixed = [&](uint16_t field, auto *values) {
+        uint64_t field_count = 0, field_bytes = 0;
+        const uint8_t *source = field_data(interfaces, field, &field_count, &field_bytes);
+        values->resize(field_count);
+        if (field_bytes) std::memcpy(values->data(), source, field_bytes);
+    };
+    std::vector<uint64_t> encoded_faces;
+    std::vector<int32_t> encoded_orientations;
+    load_interface_fixed(2, &encoded_faces);
+    load_interface_fixed(3, &encoded_orientations);
+    load_interface_fixed(4, &vn); load_interface_fixed(5, &vf);
+    load_interface_fixed(6, &jn); load_interface_fixed(7, &jf);
+    if (encoded_faces.size() != id_count || encoded_orientations.size() != id_count ||
+        data->interface_face_linear.size() != id_count ||
+        data->interface_orientations.size() != id_count || vn.size() != id_count ||
+        vf.size() != id_count || jn.size() != id_count || jf.size() != id_count) return false;
+    for (uint64_t i = 0; i < id_count; ++i)
+        if (encoded_faces[i] != data->interface_face_linear[i] ||
+            encoded_orientations[i] != data->interface_orientations[i]) return false;
+    data->interface_from_trace_v.resize(id_count);
+    data->interface_to_trace_v.resize(id_count);
+    data->interface_delta_trace_v.resize(id_count);
+    data->interface_charge_current_density.resize(id_count);
+    for (uint64_t i = 0; i < id_count; ++i) {
+        const bool from_is_negative = data->interface_from_cells[i] ==
+                                      data->interface_negative_cells[i];
+        if ((!from_is_negative && data->interface_from_cells[i] !=
+                                  data->interface_positive_cells[i]) ||
+            data->interface_to_cells[i] != (from_is_negative
+                ? data->interface_positive_cells[i]
+                : data->interface_negative_cells[i])) return false;
+        data->interface_from_trace_v[i] = from_is_negative ? vn[i] : vf[i];
+        data->interface_to_trace_v[i] = from_is_negative ? vf[i] : vn[i];
+        data->interface_delta_trace_v[i] = data->interface_from_trace_v[i] -
+                                           data->interface_to_trace_v[i];
+        data->interface_charge_current_density[i] =
+            data->interface_orientations[i] * jn[i];
+        if (jn[i] != jf[i]) return false;
     }
     uint64_t observation_length = 0;
     const uint8_t *observations = section_data(payload, 9, &observation_length);

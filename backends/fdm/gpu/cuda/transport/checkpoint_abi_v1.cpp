@@ -1,11 +1,15 @@
 #include "fullmag/fdm/transport/gpu_abi_v1.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <numeric>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -69,9 +73,9 @@ bool equal(const std::array<uint8_t,32> &a, const uint8_t *b) { return std::memc
 uint64_t align8(uint64_t v) { return (v + 7) & ~UINT64_C(7); }
 
 struct SubrecordInfo {
-    std::array<uint64_t, 20> counts{};
-    std::array<const uint8_t *, 20> data{};
-    std::array<uint64_t, 20> bytes{};
+    std::array<uint64_t, 27> counts{};
+    std::array<const uint8_t *, 27> data{};
+    std::array<uint64_t, 27> bytes{};
     size_t field_count = 0;
 };
 
@@ -153,19 +157,19 @@ bool validate_subrecord(const uint8_t *section, uint64_t length,
     static constexpr uint16_t s7[] = {3,2,4,5,5,9};
     static constexpr uint16_t s8[] = {9,3,4,5,5,5,5};
     static constexpr uint16_t s9[] = {9,5,5,5};
-    static constexpr uint16_t s10[] = {8,8,8,8,3,3,2,3,3,7};
+    static constexpr uint16_t s10[] = {8,8,8,8,8,8,8,8,8,3,3,3,2,3,3,5,5,5,5,7};
     static constexpr uint16_t s15[] = {5,5,5,5,5,5,5,5,5};
-    static constexpr uint16_t s16[] = {9,3,4,5,5,5,5,5,5,5,5,5};
-    static constexpr uint16_t s17[] = {5,5,5,5,5,5,5};
+    static constexpr uint16_t s16[] = {3,3,2,3,3,3,3,3,4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5};
+    static constexpr uint16_t s17[] = {5,5,5,5,5,5,5,5,5,5};
     static constexpr uint16_t s18[] = {8,3,3,3,5,5,1};
     static constexpr uint16_t s20[] = {3,3,3,3,3,3,7};
     const uint16_t *types=nullptr; size_t expected=0;
     switch(section_id) {
     case 1: types=s1; expected=20; break; case 6: types=s6; expected=5; break;
     case 7: types=s7; expected=6; break; case 8: types=s8; expected=7; break;
-    case 9: types=s9; expected=4; break; case 10: types=s10; expected=10; break;
-    case 15: types=s15; expected=9; break; case 16: types=s16; expected=12; break;
-    case 17: types=s17; expected=7; break; case 18: case 19: types=s18; expected=7; break;
+    case 9: types=s9; expected=4; break; case 10: types=s10; expected=20; break;
+    case 15: types=s15; expected=9; break; case 16: types=s16; expected=27; break;
+    case 17: types=s17; expected=10; break; case 18: case 19: types=s18; expected=7; break;
     case 20: types=s20; expected=7; break; default: return true;
     }
     if(length<16) return false;
@@ -229,11 +233,12 @@ bool validate_subrecord(const uint8_t *section, uint64_t length,
         break;
     case 16:
         if(!same_count(*info,1,expected) ||
-           !i32_values_are_sides(info->data[2],info->counts[2])) return false;
+           !u32_values_at_most(info->data[2],info->counts[2],2) ||
+           !i32_values_are_sides(info->data[8],info->counts[8])) return false;
         break;
     case 10:
         for(size_t field=1;field<=expected;++field) if(!scalar(*info,field)) return false;
-        if(u32(info->data[6])>FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CANCELLED) return false;
+        if(u32(info->data[12])>FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CANCELLED) return false;
         break;
     case 18: case 19:
         if(!scalar(*info,1) || !scalar(*info,2) || !scalar(*info,3) || !scalar(*info,4))
@@ -333,6 +338,8 @@ uint32_t checkpoint_validate_impl(
     if((!codec_only && (!charge_complete || known_count!=expected_count)) ||
        (any_spin && !spin_complete))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+    if (spin_complete && u64(p + 64) != UINT64_C(0x3f))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
 
     const uint64_t nx=u64(subrecords[1].data[9]), ny=u64(subrecords[1].data[9]+8),
         nz=u64(subrecords[1].data[9]+16);
@@ -363,9 +370,59 @@ uint32_t checkpoint_validate_impl(
         subrecords[6].counts[0]!=cells)))
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
 
+    if (spin_complete) {
+        const auto times_three = [](uint64_t value, uint64_t *out) {
+            if (value > UINT64_MAX / 3) return false;
+            *out = value * 3;
+            return true;
+        };
+        uint64_t spin_cells = 0, spin_x_faces = 0, spin_y_faces = 0,
+                 spin_z_faces = 0;
+        if (!times_three(cells, &spin_cells) ||
+            !times_three(x_faces, &spin_x_faces) ||
+            !times_three(y_faces, &spin_y_faces) ||
+            !times_three(z_faces, &spin_z_faces) ||
+            section_elements(11) != spin_cells ||
+            section_elements(12) != spin_x_faces ||
+            section_elements(13) != spin_y_faces ||
+            section_elements(14) != spin_z_faces ||
+            subrecords[15].counts[0] != cells ||
+            subrecords[17].counts[0] != cells) {
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+        }
+        const uint64_t interface_count = subrecords[16].counts[0];
+        if (interface_count > x_faces + y_faces + z_faces) {
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+        }
+        for (uint64_t i = 0; i < interface_count; ++i) {
+            const uint32_t axis = u32(subrecords[16].data[2] + 4 * i);
+            const uint64_t face_linear = u64(subrecords[16].data[3] + 8 * i);
+            const uint64_t face_limit = axis == 0 ? x_faces : axis == 1 ? y_faces : z_faces;
+            if (face_linear >= face_limit ||
+                u64(subrecords[16].data[4] + 8 * i) >= cells ||
+                u64(subrecords[16].data[5] + 8 * i) >= cells ||
+                u64(subrecords[16].data[6] + 8 * i) >= cells ||
+                u64(subrecords[16].data[7] + 8 * i) >= cells) {
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+            }
+        }
+        if (u64(subrecords[10].data[9]) != u64(subrecords[1].data[12]) ||
+            u64(subrecords[10].data[10]) == 0 ||
+            u64(subrecords[10].data[11]) == 0 ||
+            subrecords[19].bytes[0] != subrecords[10].bytes[5] ||
+            std::memcmp(subrecords[19].data[0], subrecords[10].data[5],
+                        size_t(subrecords[10].bytes[5])) != 0 ||
+            u64(subrecords[19].data[1]) != u64(subrecords[10].data[11]) ||
+            u64(subrecords[20].data[4]) != u64(subrecords[1].data[19]) ||
+            u64(subrecords[20].data[5]) != u64(subrecords[10].data[14])) {
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+        }
+    }
+
     if(charge_complete) {
         std::vector<uint8_t> snapshot_bytes;
-        for(uint32_t id=1;id<=9;++id)
+        const uint32_t snapshot_last = spin_complete ? 17 : 9;
+        for(uint32_t id=1;id<=snapshot_last;++id)
             snapshot_bytes.insert(snapshot_bytes.end(),section_data[id],section_data[id]+section_lengths[id]);
         bool content_derived_domain=true;
         for(size_t i=0;i<32;++i)
@@ -378,7 +435,8 @@ uint32_t checkpoint_validate_impl(
         std::array<uint8_t,32> expected_snapshot{};
         if(!content_derived_domain) {
             expected_snapshot=sha256(snapshot_bytes.data(),snapshot_bytes.size());
-        } else {
+        }
+        {
             std::vector<uint8_t> canonical;
             const auto append=[&](const void *source,size_t bytes){
                 const auto *begin=static_cast<const uint8_t *>(source);
@@ -387,7 +445,7 @@ uint32_t checkpoint_validate_impl(
             const auto segment=[&](uint32_t tag,const void *source,uint64_t bytes){
                 append(&tag,sizeof(tag));append(&bytes,sizeof(bytes));append(source,size_t(bytes));
             };
-            segment(1,p+128,32); segment(2,p+160,16); segment(3,p+72,8);
+            segment(1,p+144,32); segment(2,p+80,16); segment(3,p+72,8);
             segment(4,subrecords[1].data[9],24); segment(5,subrecords[1].data[10],24);
             segment(6,subrecords[1].data[11],8); segment(7,subrecords[1].data[12],8);
             segment(8,subrecords[6].data[0],subrecords[6].bytes[0]);
@@ -415,7 +473,129 @@ uint32_t checkpoint_validate_impl(
                 append(&source_id,sizeof(source_id));
                 source_offset+=4+source_length;
             }
-            expected_snapshot=sha256(canonical.data(),canonical.size());
+            const uint64_t interface_count=subrecords[8].counts[0];
+            segment(14,&interface_count,sizeof(interface_count));
+            std::vector<double> interface_from_trace,interface_to_trace,
+                interface_delta_trace,interface_current_density;
+            std::vector<std::array<uint64_t,2>> interface_identities;
+            std::vector<uint32_t> interface_axes;
+            std::vector<uint64_t> interface_faces;
+            interface_from_trace.reserve(interface_count); interface_to_trace.reserve(interface_count);
+            interface_delta_trace.reserve(interface_count); interface_current_density.reserve(interface_count);
+            uint64_t identity_offset=0;
+            for(uint64_t i=0;i<interface_count;++i){
+                if(identity_offset+4>subrecords[8].bytes[0])
+                    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                const uint32_t identity_length=u32(subrecords[8].data[0]+identity_offset);
+                if(identity_offset+4+identity_length>subrecords[8].bytes[0])
+                    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                const uint8_t *identity=subrecords[8].data[0]+identity_offset+4;
+                std::array<uint64_t,8> values{};
+                int32_t orientation=0;
+                size_t cursor=0;
+                const auto literal=[&](const char *value)->bool {
+                    for(size_t j=0;value[j]!='\0';++j)
+                        if(cursor>=identity_length||identity[cursor++]!=uint8_t(value[j])) return false;
+                    return true;
+                };
+                const auto decimal=[&](uint64_t *value)->bool {
+                    if(cursor>=identity_length||identity[cursor]<'0'||identity[cursor]>'9') return false;
+                    uint64_t parsed=0;
+                    while(cursor<identity_length&&identity[cursor]>='0'&&identity[cursor]<='9') {
+                        const uint64_t digit=uint64_t(identity[cursor++]-'0');
+                        if(parsed>(UINT64_MAX-digit)/10) return false;
+                        parsed=parsed*10+digit;
+                    }
+                    *value=parsed; return true;
+                };
+                if(!literal("v2:")) return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                for(size_t field=0;field<8;++field) {
+                    if(!decimal(&values[field])||cursor>=identity_length||identity[cursor++]!=':')
+                        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                }
+                bool negative=false;
+                if(cursor<identity_length&&identity[cursor]=='-') { negative=true; ++cursor; }
+                uint64_t orientation_magnitude=0;
+                if(!decimal(&orientation_magnitude)||cursor!=identity_length||orientation_magnitude!=1)
+                    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                orientation=negative?-1:1;
+                const uint64_t source_id=values[0], topology_id=values[1], axis=values[2];
+                const uint64_t face=values[3], negative_cell=values[4], positive_cell=values[5];
+                const uint64_t from_cell=values[6], to_cell=values[7];
+                const uint64_t face_limit=axis==0?x_faces:axis==1?y_faces:z_faces;
+                const uint64_t nxny=nx*ny;
+                const uint64_t negative_x=negative_cell%nx;
+                const uint64_t negative_y=(negative_cell/nx)%ny;
+                const uint64_t negative_z=negative_cell/nxny;
+                const uint64_t expected_positive=axis==0?negative_cell+1:
+                    axis==1?negative_cell+nx:negative_cell+nxny;
+                const bool negative_has_neighbor=axis==0?negative_x+1<nx:
+                    axis==1?negative_y+1<ny:negative_z+1<nz;
+                const uint64_t expected_face=axis==0?
+                    negative_x+1+(nx+1)*(negative_y+ny*negative_z):axis==1?
+                    negative_x+nx*(negative_y+1+(ny+1)*negative_z):
+                    negative_x+nx*(negative_y+ny*(negative_z+1));
+                const int32_t expected_orientation=from_cell==negative_cell?1:-1;
+                bool duplicate_identity=false;
+                for(const auto &prior:interface_identities)
+                    duplicate_identity=duplicate_identity||
+                        (prior[0]==source_id&&prior[1]==topology_id);
+                if(source_id==0||topology_id==0||axis>2||face>=face_limit||
+                   face!=u64(subrecords[8].data[1]+8*i)||
+                   uint32_t(orientation)!=u32(subrecords[8].data[2]+4*i)||
+                   negative_cell>=cells||positive_cell>=cells||from_cell>=cells||to_cell>=cells||
+                   !negative_has_neighbor||positive_cell!=expected_positive||face!=expected_face||
+                   !((from_cell==negative_cell&&to_cell==positive_cell)||
+                     (from_cell==positive_cell&&to_cell==negative_cell))||
+                   orientation!=expected_orientation||duplicate_identity)
+                    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                double vn=0.0,vf=0.0,jn=0.0,jf=0.0;
+                std::memcpy(&vn,subrecords[8].data[3]+8*i,8);
+                std::memcpy(&vf,subrecords[8].data[4]+8*i,8);
+                std::memcpy(&jn,subrecords[8].data[5]+8*i,8);
+                std::memcpy(&jf,subrecords[8].data[6]+8*i,8);
+                if(!std::isfinite(vn)||!std::isfinite(vf)||!std::isfinite(jn)||
+                   !std::isfinite(jf)||jn!=jf)
+                    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+                interface_identities.push_back({source_id,topology_id});
+                interface_axes.push_back(static_cast<uint32_t>(axis));
+                interface_faces.push_back(face);
+                const bool from_is_negative=from_cell==negative_cell;
+                const double from_trace=from_is_negative?vn:vf;
+                const double to_trace=from_is_negative?vf:vn;
+                const double delta_trace=from_trace-to_trace;
+                const double current_density=double(orientation)*jn;
+                interface_from_trace.push_back(from_trace);
+                interface_to_trace.push_back(to_trace);
+                interface_delta_trace.push_back(delta_trace);
+                interface_current_density.push_back(current_density);
+                identity_offset+=4+identity_length;
+            }
+            if(identity_offset!=subrecords[8].bytes[0])
+                return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
+            std::vector<size_t> interface_order(interface_count);
+            std::iota(interface_order.begin(),interface_order.end(),0);
+            std::sort(interface_order.begin(),interface_order.end(),[&](size_t a,size_t b){
+                return std::tie(interface_axes[a],interface_faces[a],interface_identities[a][0],
+                                interface_identities[a][1]) <
+                       std::tie(interface_axes[b],interface_faces[b],interface_identities[b][0],
+                                interface_identities[b][1]);
+            });
+            const auto canonical_trace=[&](const std::vector<double>& values){
+                std::vector<double> ordered; ordered.reserve(interface_count);
+                for(size_t index:interface_order) ordered.push_back(values[index]);
+                return ordered;
+            };
+            const auto canonical_from=canonical_trace(interface_from_trace);
+            const auto canonical_to=canonical_trace(interface_to_trace);
+            const auto canonical_delta=canonical_trace(interface_delta_trace);
+            const auto canonical_current=canonical_trace(interface_current_density);
+            segment(15,canonical_from.data(),interface_count*sizeof(double));
+            segment(16,canonical_to.data(),interface_count*sizeof(double));
+            segment(17,canonical_delta.data(),interface_count*sizeof(double));
+            segment(18,canonical_current.data(),interface_count*sizeof(double));
+            if(content_derived_domain)
+                expected_snapshot=sha256(canonical.data(),canonical.size());
         }
         if(!equal(expected_snapshot,p+176) || u64(subrecords[20].data[0])!=u64(p+72))
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
@@ -423,6 +603,10 @@ uint32_t checkpoint_validate_impl(
         std::vector<uint8_t> continuation;
         continuation.insert(continuation.end(),p+176,p+208);
         continuation.insert(continuation.end(),section_data[18],section_data[18]+section_lengths[18]);
+        if (spin_complete) {
+            continuation.insert(continuation.end(),section_data[19],
+                                section_data[19]+section_lengths[19]);
+        }
         std::vector<uint8_t> continuation_meta(section_data[20],section_data[20]+section_lengths[20]);
         const size_t digest_offset=size_t(subrecords[20].data[6]-section_data[20]);
         std::memset(continuation_meta.data()+digest_offset,0,32);
@@ -431,8 +615,10 @@ uint32_t checkpoint_validate_impl(
             return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CHECKPOINT_INCOMPATIBLE;
     }
     const bool restore = charge_complete;
-    *validation_kind = restore ? FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_CHARGE
-                               : FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_CODEC_VALID;
+    *validation_kind = restore
+        ? (spin_complete ? FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_SPIN
+                         : FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_CHARGE)
+        : FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_CODEC_VALID;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 

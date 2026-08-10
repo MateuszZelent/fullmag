@@ -5,9 +5,9 @@
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
 **Aktualny kodowy baseline audytu (historyczny):** `master@883ce5650`; implementacja grafu zakresu, typed runtime provenance, artefaktów i paneli Inspector jest scalona lokalnie; promocja fizyki do produkcji pozostaje ograniczona bramami z §32.92–§32.93.  \
 **Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`; bounded callback stage tego etapu zapisano w §32.109, a wcześniejszy baseline pozostaje historycznym punktem odniesienia.  \
-**Merge-base:** bieżący checkout jest już zintegrowany na `master`; wcześniejsze rozjazdy gałęzi pozostają historią audytu, nie aktualnym stanem integracji  \
+**Merge-base:** implementacja została zmergowana fast-forward do lokalnego i zdalnego `master`; commit implementacji to `4ba47841773d82cf285aa280e9866f00615e0102`, a plan został zsynchronizowany po merge  \
 **Data pierwotna:** 2026-07-15  \
-**Ostatnia aktualizacja:** 2026-08-09  \
+**Ostatnia aktualizacja:** 2026-08-10  \
 **Raport źródłowy:** [README.md](./README.md)
 
 **Bieżący stan wykonawczy (snapshot 2026-08-05):** kodowy baseline `master@70ee4cafc`. Brama
@@ -12420,7 +12420,10 @@ Zamknięty zakres:
    checkpoint import/export.
 3. `charge/device_solver.cu` realizuje konserwatywny harmoniczny FV, raw
    face-current reconstruction, deterministic fixed-tree FP64 CG oraz prawdziwy
-   dwupoziomowy strength-graph AMG z jawnym $A_c=RAP$, cache i invalidation.
+   dwupoziomową deterministyczną agregację geometryczną `2 x 2 x 2` dla
+   ortogonalnej siatki FDM, z jawnym $A_c=P^TAP$, cache i invalidation. Nie jest
+   to strength-graph AMG; kwalifikacja wymaga niezależnego oracle macierzowego
+   oraz przypadków odd-dimension, inactive, finite-$G$ i material-jump.
 4. Walidacja host/device odrzuca internal, inactive, duplicate, nonfinite,
    wrong-area, wrong-outward-sign i malformed typed records przed publikacją.
 5. Managed actual-device gate obejmuje uniform, layered, snapshot i 13 boundary
@@ -12554,3 +12557,83 @@ Ten wpis jest wyłącznie kontraktem implementacyjnym. Capability pozostaje
 i `validated_workloads=[]` aż do kodu CUDA, actual-device workloadów, parity,
 strict residency, restart, public path, convergence/performance i niezależnego
 review.
+
+## 32.169. Actual-device closure ograniczonego FDM GPU/FP64 M1 spin (2026-08-10)
+
+Kontrakt z §32.168 ma teraz wykonywalnego natywnego ownera CUDA: równoległy
+montaż FV, sparse restarted GMRES, component AMG, direct SHE, typed artifacts,
+trwały cache i rollback. Pełne rekordy observation ABI są rekonstruowane z
+kompaktowego SoA w bounded readback. Limity 512 MiB external envelope i 2 GiB
+warm transactional peak są wyłącznie zamrożonym kontraktem workloadu
+kwalifikacyjnego 1024 x 128 x 8; nie są globalnym limitem runtime ani
+publicznego API.
+
+Produkcja używa domyślnie `memory_policy=auto`. Po utworzeniu statycznego stanu
+runtime pobiera `cudaMemGetInfo`, odejmuje jawny safety reserve i przed pierwszą
+alokacją solve wykonuje fail-closed preflight osobno dla
+`first_required_bytes` i `warm_required_bytes`. Warm estimate obejmuje stary
+accepted state, candidate oraz każdą współżyjącą fazę hierarchy/workspace.
+Ponieważ identity cache zależy także od digestu zmontowanego `m_stage`, warm
+pre-allocation gate używa konserwatywnego cold upper bound; exact warm required
+jest publikowane dopiero jako post-cache-hit audit i nie jest przedstawiane
+jako wcześniejszy preflight.
+Cold `first_required_bytes` dla AMG jest konserwatywną górną granicą sprzed
+alokacji, jeżeli redukcja hierarchii zależy od operatora poznawanego dopiero na
+GPU; nie wolno przedstawiać jej jako zmierzonego peak. Warm requirement wynika
+z faktycznie rezydentnej hierarchii. Provenance utrwala resolved policy, device
+total/free, static baseline, reserve, usable, rodzaj estymaty, first/warm
+required bytes oraz osobny zmierzony high-water. Niedobór pamięci nie uruchamia CPU
+fallbacku. `memory_policy=fixed` pozostaje trybem testowym i kwalifikacyjnym.
+
+Managed actual-device bramy na RTX 4080 SUPER przeszły dla niezależnego oracle
+dyfuzji/SHE, pełnego operatora CPU--GPU, publicznego dispatchu, cache hit,
+component-sensitive digest invalidation, NaN rollback i deterministycznego
+restore. Wstępny trwały sparse-core performance JSON raportuje peak
+1 921 754 456 B, setup
+0.045560008 s, medianę 0.001397699 s, p95 1.318532684 s oraz zero
+niedozwolonych transferów; nie zastępuje jeszcze public-path JSON z rozwiązaną
+polityką pamięci. Pełny zapis dowodów i granic kwalifikacji znajduje
+się w `FDM_GPU_M1_SPIN_CLOSURE_2026-08-10.md`.
+
+Stan agregatu pozostaje `partial`/`semantic_only`: natywny owner nie jest
+jeszcze publiczną kwalifikacją ProblemIR--planner--runner, a pełny restart
+accepted spin przez docelowy runner pozostaje bramą promocji.
+
+## 32.170. Bieżący freeze audytowy po implementacji shared worktree (2026-08-10)
+
+Ten wpis jest aktualnym stanem tego checkoutu i ma pierwszeństwo przed
+historycznymi snapshotami z wcześniejszych sekcji. Implementacja została
+zacommitowana jako `4ba47841773d82cf285aa280e9866f00615e0102`, wypchnięta na
+gałąź implementacyjną i zmergowana fast-forward do lokalnego oraz zdalnego
+`master`. Dirty submodule `external_solvers/3` jest niepowiązaną zmianą
+roboczą i nie należy do tego merge.
+
+### Potwierdzone w tej iteracji
+
+| Zakres | Dowód | Uczciwy status |
+|---|---|---|
+| FDM GPU/FP64 M1 spin | CUDA owner, checkpoint/rollback, direct SHE, GMRES/AMG, auto memory policy, cold upper-bound preflight, warm post-cache exact audit, host planner contract | `implementation_state=partial`; brak świeżej managed bramy RTX po ostatniej zmianie |
+| Polityka pamięci | `memory_policy=auto` korzysta z `cudaMemGetInfo`, reserve `max(256 MiB,total/20)`, checked arithmetic i fail-closed; `fixed` jest wyłącznie trybem testowym/kwalifikacyjnym | brak globalnego twardego limitu; 512 MiB/2 GiB pozostają tylko envelope workloadu |
+| FDM GPU/FP64 M1 charge | zamknięte failed-CUDA-boundary i overflow counters; sentinel branch bez dereferencji payloadu | niezależny re-review ma jeszcze 1 finding Important: przejścia M1↔brak modułu oraz audyt H2D/sync absent path |
+| FDM `StructuredCurrentClosure` | Python 6/6, IR 4/4, planner 32/32, authoring/API, Control Room 229/229, typecheck/ESLint, docs/source-map; publiczny positive path ma typed source-cut i Oersted provenance | publiczny FDM CPU capability nadal `semantic_only`; świeży managed positive E2E odrzucony limitem, istniejący bundle kończy się mismatch ABI/operator `-104` |
+| Dokumentacja i kontrakty | testy docs 20/20 w tej iteracji, Python round-trip 6/6, `git diff --check` | dowód źródłowy, nie dowód urządzenia ani continuum |
+
+### Blokady kwalifikacji
+
+1. Właściciel charge musi zamknąć transition identity dla deskryptora
+   `required_features` i objąć absent path pełnym operation audit/fault
+   injection; potem wymagany jest świeży source-only re-review `APPROVE`.
+2. Po odblokowaniu wykonania trzeba uruchomić świeże managed gates dla spin,
+   charge I5, dynamicznej polityki pamięci oraz publicznego FDM Oersted na
+   dokładnym SHA. Dotychczasowe zielone runy sprzed ostatnich zmian są
+   historyczne.
+3. Nadal otwarte są publiczny GPU ProblemIR--planner--runner bez fallbacku,
+   FEM RT0/H(div)/airbox i FEM--FDM convergence, pełny reciprocal SHE/iSHE,
+   cross-backend parity, browser visual smoke oraz standard problem 5.
+
+Nie wolno podnosić żadnej z tych ścieżek do statusu produkcyjnego ani
+statusu zwalidowanego na podstawie samego kodu, testów hostowych, starego bundle albo
+source-only review. Merge jest zakończony, ale aktualny honest status celu pozostaje
+`implementation_state=partial`, `validation_state=unvalidated`;
+managed GPU/FEM, browser smoke i pozostałe bramy produkcyjne nadal wymagają
+osobnego wykonania i nie zostały promowane przez ten merge.

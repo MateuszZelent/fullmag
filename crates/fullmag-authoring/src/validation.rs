@@ -4,8 +4,9 @@ use crate::{
     SceneChargePotentialGauge, SceneDocument, SceneFdmDiscretizationState, SceneOerstedField,
     SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef,
     SceneSpinBoundary, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
-    SceneSpinTransportMode, SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling,
-    SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
+    SceneSpinTransportMode, SceneStructuredCurrentClosure, SceneStructuredCurrentDrive,
+    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling, SlonczewskiFormulaVersion,
+    StudyPipelineDocument, StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
@@ -1416,6 +1417,85 @@ fn validate_current_transport(
         }
         validate_scene_conservative_current_view(index, view)?;
     }
+    if transport.conservative_current_view.is_some()
+        && transport.structured_current_closure.is_some()
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "current_transports[{index}] conservative_current_view and structured_current_closure are mutually exclusive"
+        )));
+    }
+    if let Some(closure) = transport.structured_current_closure.as_ref() {
+        if transport.model != CurrentTransportModel::OhmicPoisson
+            || transport.coupling != SceneTransportCoupling::OneWay
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "current_transports[{index}].structured_current_closure requires model=ohmic_poisson and coupling=one_way"
+            )));
+        }
+        validate_scene_structured_current_closure(index, closure, object_ids)?;
+    }
+    Ok(())
+}
+
+fn validate_scene_structured_current_closure(
+    index: usize,
+    closure: &SceneStructuredCurrentClosure,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let prefix = format!("current_transports[{index}].structured_current_closure");
+    let SceneStructuredCurrentClosure::ClosedGeometry {
+        schema_version,
+        closure_id,
+        source_cuts,
+    } = closure;
+    if schema_version != "structured_current_closure.v1" {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.schema_version must be structured_current_closure.v1"
+        )));
+    }
+    if closure_id.trim().is_empty() || source_cuts.is_empty() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix} requires a non-empty closure_id and source_cuts"
+        )));
+    }
+    let mut cut_ids = BTreeSet::new();
+    let mut circuit_ids = BTreeSet::new();
+    let mut drive_ids = BTreeSet::new();
+    for (cut_index, cut) in source_cuts.iter().enumerate() {
+        let cut_path = format!("{prefix}.source_cuts[{cut_index}]");
+        if cut.source_cut_id.trim().is_empty() || !cut_ids.insert(cut.source_cut_id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{cut_path}.source_cut_id must be non-empty and unique"
+            )));
+        }
+        if cut.circuit_id.trim().is_empty() || !circuit_ids.insert(cut.circuit_id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{cut_path}.circuit_id must identify exactly one source cut"
+            )));
+        }
+        validate_spin_region_ref(&cut.region, object_ids, &format!("{cut_path}.region"))?;
+        if !cut.plane.offset_m.is_finite() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{cut_path}.plane.offset_m must be finite"
+            )));
+        }
+        let SceneStructuredCurrentDrive::ImpressedPotentialJump(drive) = &cut.drive;
+        if drive.schema_version != "impressed_potential_jump.v1" {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{cut_path}.drive.schema_version must be impressed_potential_jump.v1"
+            )));
+        }
+        if drive.drive_id.trim().is_empty() || !drive_ids.insert(drive.drive_id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{cut_path}.drive.drive_id must be non-empty and unique"
+            )));
+        }
+        if !drive.potential_jump_v.is_finite() || drive.potential_jump_v == 0.0 {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{cut_path}.drive.potential_jump_V must be finite and non-zero"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -2128,6 +2208,8 @@ fn validate_scene_charge_contract(
     let expected_engine = if reciprocal { "block_gmres" } else { "cg" };
     let expected_operator = if reciprocal {
         "fdm_coupled_charge_spin_fv_block_gmres.v1"
+    } else if transport.structured_current_closure.is_some() {
+        "fv_charge_harmonic_source_cut_v1"
     } else {
         "fv_charge_harmonic_v1"
     };
@@ -3929,6 +4011,57 @@ mod tests {
 
         let error = validate_scene_document(&scene).expect_err("zero axis must be rejected");
         assert!(error.message.contains("axis") && error.message.contains("nonzero"));
+    }
+
+    #[test]
+    fn scene_document_round_trips_typed_structured_current_closure() {
+        let descriptor = serde_json::json!({
+            "schema_version": "structured_current_closure.v1",
+            "closure_id": "loop-1",
+            "kind": "closed_geometry",
+            "source_cuts": [{
+                "source_cut_id": "cut-1",
+                "circuit_id": "circuit-1",
+                "region": {"object_id": "body"},
+                "plane": {"axis": "x", "offset_m": 0.0, "normal": "positive_axis"},
+                "drive": {
+                    "schema_version": "impressed_potential_jump.v1",
+                    "kind": "impressed_potential_jump",
+                    "drive_id": "drive-1",
+                    "potential_jump_V": 0.05
+                }
+            }]
+        });
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "insulating",
+                "id": "outer",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}]
+            }],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_source_cut_v1"
+            },
+            "structured_current_closure": descriptor
+        }]))
+        .unwrap();
+
+        validate_scene_document(&scene).expect("typed structured closure must validate");
+        let serialized = serde_json::to_value(&scene.current_transports).unwrap();
+        assert_eq!(serialized[0]["structured_current_closure"], descriptor);
     }
 }
 

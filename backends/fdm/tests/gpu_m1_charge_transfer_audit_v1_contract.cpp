@@ -282,7 +282,9 @@ int main() {
             "actual CUDA device properties are required");
 
     fullmag_fdm_gpu_transport_context_create_request_v1 create{};
-    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1 |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
     create.device_ordinal = device;
     create.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     create.strict_residency = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;

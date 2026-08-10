@@ -613,13 +613,12 @@ drive type/unit, or a missing/duplicate driven component fails closure.
 
 The cut represents an impressed potential jump or electromotive circulation;
 it does not inject charge. The accepted face current is single-valued across
-the paired cut traces and their oriented fluxes cancel exactly. A certified
-import may instead name its external certification method and immutable field
-digest, but it must pass the same global divergence, exterior-flux, component,
-and return-path gates. Unknown closure enum values are rejected even for an
-otherwise zero-current snapshot. An open two-terminal strip, a locally small
-residual, or forcing the spectral DC value to zero cannot manufacture this
-certificate.
+the paired cut traces and their oriented fluxes cancel exactly. Public v1
+accepts only `closed_geometry`; `certified_import`, external leads and every
+unknown closure enum are deferred and rejected during typed deserialization or
+validation, even for an otherwise zero-current snapshot. An open two-terminal
+strip, a locally small residual, or forcing the spectral DC value to zero
+cannot manufacture this certificate.
 
 Any missing/stale digest, open terminal, incomplete return, failed component
 gate, or unsupported periodic axis must fail closed before allocation or FFT
@@ -762,10 +761,10 @@ on a hit.
 
 Accepted provenance records every cache constituent, including geometry,
 conductor/target masks, face current, certificate, trusted snapshot,
-source/envelope, stage/time/multiplier, closure kind, every complete source-cut
-record, and certified-import method/field digest when applicable. A cache-key
-hash without these human-inspectable constituents is not sufficient
-provenance.
+source/envelope, stage/time/multiplier, closure kind and every complete
+source-cut record. V1 nie publikuje pól `certified_import`, ponieważ ten wariant
+nie należy do publicznego kontraktu. A cache-key hash without these
+human-inspectable constituents is not sufficient provenance.
 
 The primary independent oracle is
 `oersted_direct_surface_potential_long_double.v1`. It is not allowed to call
@@ -1632,6 +1631,58 @@ ten sam payload bez zmiany identyfikatorów, więc ścieżka Python → UI → P
 nie tworzy drugiej semantyki transportu. Rejestracja jest authoringiem; planner
 nadal odrzuca niekwalifikowane urządzenia i sprzężenia.
 
+FDM `closed_geometry` ma osobny, typowany descriptor. Poniższy fragment jest
+celowo obiektowym `to_ir()`, a nie deklaracją kwalifikacji pełnego study:
+publiczny positive E2E jest testem runnera CPU/FP64, natomiast kompletne
+named-continuum i production gates nadal pozostają otwarte.
+
+```python
+# %%
+import fullmag as fm
+
+source_cut = fm.StructuredCurrentSourceCut(
+    source_cut_id="ring-cut",
+    circuit_id="ring-circuit",
+    region=fm.RegionRef("ring", "source-arm"),
+    plane=fm.StructuredCutPlane(
+        axis="y",
+        offset_m=2.0e-9,
+        normal="positive_axis",
+    ),
+    drive=fm.ImpressedPotentialJump(
+        drive_id="ring-drive",
+        potential_jump_V=0.125,
+    ),
+)
+closure = fm.StructuredCurrentClosure(
+    closure_id="ring-closure",
+    source_cuts=[source_cut],
+)
+
+# %%
+ring_region = fm.RegionRef("ring", "conductor")
+drive = fm.CurrentTransport(
+    name="closed-loop",
+    model="ohmic_poisson",
+    coupling="one_way",
+    domain=[ring_region],
+    materials=[fm.ChargeTransportMaterialAssignment(
+        ring_region,
+        fm.ChargeTransportMaterial(5.8e7),
+    )],
+    boundaries=[fm.ChargeInsulating(
+        "outer",
+        [fm.SurfaceRef("ring", "outer", (1.0, 0.0, 0.0))],
+    )],
+    gauge=fm.ChargePotentialGauge("zero_mean"),
+    solver=fm.ChargeSolverPolicy(
+        operator_version="fv_charge_harmonic_source_cut_v1",
+    ),
+    structured_current_closure=closure,
+)
+assert drive.to_ir()["structured_current_closure"] == closure.to_ir()
+```
+
 ```python
 # %%
 from fullmag import CurrentTransport, OerstedField, SinusoidalEnvelope
@@ -1685,6 +1736,11 @@ drive = CurrentTransport(
 | `OerstedCylinder.id`, `OerstedField.id` | `str`, `str \| None` | `oersted:cylinder`, `oersted:{source}` | `1` | `Bieżący authoring wymaga niepustej, stabilnej tożsamości; brak pola jest akceptowany wyłącznie przy odczycie historycznego IR.` | `stable module identity independent of energy-term ordering` | `Python/ProblemIR/SceneDocument/script/planner; numerical execution remains capability-scoped` | `energy_terms[].id` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
+| `CurrentTransport.structured_current_closure` | `StructuredCurrentClosure \| None` | `None` | `1` | `One-way ohmic_poisson only; mutually exclusive with conservative_current_view; requires solver.operator_version=fv_charge_harmonic_source_cut_v1. That operator without the descriptor is also rejected.` | `Explicit closed structured-grid current topology and impressed source cuts for solved-current Oersted.` | `FDM CPU/FP64 public positive E2E; FDM GPU, FEM, PBC, external leads and certified import are rejected; capability remains semantic_only.` | `current_modules[].structured_current_closure` |
+| `StructuredCurrentClosure(schema_version, closure_id, source_cuts)` | `str, str, Sequence[StructuredCurrentSourceCut]` | `schema_version=structured_current_closure.v1; closure_id and source_cuts required` | `1` | `The kind is closed_geometry; schema version and closure id are non-empty and exact; source_cuts is non-empty with unique source-cut, circuit and drive identities. certified_import is not a v1 variant.` | `Closed conductor components and their explicit impressed-potential cuts.` | `Python/SceneDocument/ProblemIR/planner/OpenAPI/Control Room and FDM CPU/FP64 runtime; other lanes fail closed.` | `current_modules[].structured_current_closure` |
+| `StructuredCurrentSourceCut(source_cut_id, circuit_id, region, plane, drive)` | `str, str, RegionRef, StructuredCutPlane, ImpressedPotentialJump` | `required` | `ids: 1; plane offset: m; drive: V` | `IDs are non-empty and unique in the closure; region has a non-empty object id; the planner requires an axis-aligned grid plane, active connected cross-section and one cut per driven component with a return path after cut removal.` | `Regional internal cut that introduces circulation without injecting charge.` | `FDM CPU/FP64 closed_geometry only.` | `current_modules[].structured_current_closure.source_cuts[]` |
+| `StructuredCutPlane(axis, offset_m, normal)` | `Literal['x','y','z'], float, Literal['positive_axis','negative_axis']` | `required` | `axis/normal: 1; offset_m: m` | `Offset is finite and must align exactly with a structured-grid face plane inside the selected region.` | `Oriented Cartesian plane defining the structured source cut.` | `FDM CPU/FP64 closed_geometry only.` | `current_modules[].structured_current_closure.source_cuts[].plane` |
+| `ImpressedPotentialJump(drive_id, potential_jump_V, schema_version)` | `str, float, str` | `schema_version=impressed_potential_jump.v1; drive_id and potential_jump_V required` | `drive_id/schema_version: 1; potential_jump_V: V` | `Drive id is non-empty and unique; schema version is exact; potential jump is finite and nonzero.` | `Impressed potential circulation across a paired internal cut; it is not a charge terminal.` | `FDM CPU/FP64 closed_geometry only.` | `current_modules[].structured_current_closure.source_cuts[].drive` |
 | `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closure and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry or explicitly complete external_lead; planner and stage callback reject incomplete descriptors; managed public-adapter external-lead solve is contract-tested, while full Python-to-LLG qualification remains open` | `current_modules[].conservative_current_view` (flattened charge definition) |
 | `ConservativeCurrentExternalLead` | `typed closure descriptor` | `required when closure.kind=external_lead` | `mesh coordinates: m; conductivity: S/m; potential drop: V; IDs: 1` | `Exact fem_closed_current_extension.v1 operator; tet4 lead mesh with tri3 boundary; positive per-element conductivity; unique device/lead IDs; complete unique interface pairs; non-empty disjoint minus/plus outer electrodes; non-zero finite potential drop.` | `volumetric external lead joined to the device by conservative interface flux continuity` | `Python/SceneDocument/script/planner preflight, one-way CPU stage callback and managed Rust-adapter -> C ABI -> MFEM coupled volumetric solve; convergence, Python fixture -> LLG and production qualification remain open` | `current_modules[].conservative_current_view.closure` |
 | `ConservativeCurrentLeadInterfacePair` | `tuple[face_vertex_ids, face_vertex_ids]` | `required per interface` | `1` | `Exactly two canonical Tri3 faces with strictly positive, distinct, ascending stable IDs; each device face has closure_interface role and each lead face is a lead boundary face.` | `oriented device/lead trace pairing used for conservative current transfer` | `Python/SceneDocument/script/planner preflight` | `current_modules[].conservative_current_view.closure.interface_pairs` |
@@ -2285,6 +2341,55 @@ round-trip, and browser author/run/inspect smoke. Continuum studies use at least
 three spatial resolutions and three time steps; observed temporal order must be
 at least nominal minus `0.25` in the asymptotic range.
 
+### 5.4 Publiczne powiązanie FDM CPU/FP64 M1
+
+Append-only granica native dla istniejącego ownera CPU używa symbolu
+`fullmag_fdm_cpu_oersted_solve_v1` oraz rekordów
+`fullmag_fdm_cpu_oersted_request_v1` i
+`fullmag_fdm_cpu_oersted_result_v1`. Request przenosi union grid, rozłączne
+maski conductor/target, **accepted raw face-current** `(Jx, Jy, Jz)` z
+zaakceptowanego snapshotu charge, pełną identity źródła i certyfikat
+`global_closed_current_certificate.v1`. Result publikuje `H_oe [A/m]`,
+diagnostykę i dokładne identyfikatory
+`fdm_oersted_cell_integrated_open.v1`, `oersted_fdm_fft_open.v1` oraz
+`fdm_oersted_fft_open_v1`. Adapter nie ma własnej numeryki i wywołuje wyłącznie
+`fullmag::fdm::cpu::oersted::v1::Solver`. Stateless ABI utrzymuje własny trwały,
+immutable `Problem` tylko dla bitowo identycznego kompletnego snapshotu; każda
+zmiana danych lub metadanych tworzy nowy `Solver` i wymusza pełny preflight
+przed cache hit. Pełny manifest `offsetof` pokrywa każde pole rekordów ABI, a
+`source_identity` jest odrzucane, jeśli nie mieści się bez utraty w result
+provenance (maksymalnie 95 bajtów plus NUL).
+
+Publiczny descriptor `StructuredCurrentClosure` jest częścią Python DSL,
+SceneDocument, `ProblemIR`, OpenAPI i typowanego authoringu Control Room. Wersja
+`structured_current_closure.v1` przyjmuje wyłącznie `closed_geometry` z co
+najmniej jednym regionalnym `StructuredCurrentSourceCut`, osiowo wyrównaną
+płaszczyzną i napędem `impressed_potential_jump.v1`. Planner wymaga dokładnej
+zgodności płaszczyzny z structured grid, osobnego cutu dla każdego napędzanego
+komponentu oraz zachowanego return path po usunięciu cutu. Operator charge musi
+mieć tożsamość `fv_charge_harmonic_source_cut_v1`; ten operator bez descriptoru
+oraz descriptor ze starym operatorem są odrzucane.
+
+Publiczny runner NativeM1 rozwiązuje potential-jump charge, przekazuje
+zaakceptowane surowe tablice face-current `(Jx, Jy, Jz)` do natywnego ABI i
+publikuje niezerowe `H_oe` wraz z typowanym
+`FdmOerstedClosureProvenanceSnapshot`. Runtime ponownie wyznacza etykiety
+komponentów i divergence z zaakceptowanych face-current i porównuje wszystkie
+digests z kanonicznym certyfikatem; nie fabrykuje closure z residualu charge i
+nie wraca do Rustowego midpoint. Dodatni publiczny test E2E obejmuje zamkniętą
+geometrię box-minus-hole, source-cut, niezerowy current, niezerowe `H_oe` oraz
+pełny trace provenance.
+
+To rozdziela spełniony prerequisite natywnego ABI od kwalifikacji produktu.
+FDM CPU pozostaje `semantic_only`: brakuje nazwanych badań continuum,
+managed production qualification i dowodu zakresu wydajności/pamięci dla
+reprezentatywnych siatek. FDM GPU, PBC, external leads i `certified_import`
+pozostają odrzucone. Publiczny kontrakt nie wprowadza globalnego sztywnego
+budżetu 512 MiB; aktualny owner wykonuje overflow/shape preflight przed
+alokacją, a ewentualna przyszła polityka budżetu musi użyć trybu `auto` z
+dynamicznym preflight i zapisem resolved bytes. Tryb `fixed` może należeć tylko
+do jawnej managed qualification.
+
 ## 6. Completeness checklist
 
 - [x] Bounded FEM steady one-way solved-current midpoint reference slice (not OE-T0/F1/F2)
@@ -2294,15 +2399,18 @@ at least nominal minus `0.25` in the asymptotic range.
   executable public Python fixture lowering and planner preflight
   (`fem_closed_current_extension.v1`; managed execution of that public fixture
   remains an open runtime gate)
-- [ ] ProblemIR, planner, migration, and scoped capabilities
+- [x] Typed Python/SceneDocument/ProblemIR/OpenAPI/UI round-trip and planner
+  preflight for FDM `StructuredCurrentClosure(closed_geometry)`; capability
+  remains `semantic_only`
 - [x] Frozen documentation contract for `fdm_oersted_cell_integrated_open.v1`
   (source-cell integral at target centre, closure/source-cut, exact 2N R2C
   layout, cache/provenance and direct-oracle gates; both FDM lanes remain
   `semantic_only`)
-- [ ] Conservative FDM charge and face-to-cell publication
+- [x] Conservative FDM CPU/FP64 potential-jump charge, accepted face-current,
+  face-to-cell reconstruction and typed closure provenance publication
 - [x] FDM standalone CPU/double direct oracle and cell-integrated open FFT
-  owner with managed contract gate; no public runtime binding or capability
-  promotion is implied
+  owner with append-only C ABI/Rust FFI plus positive public NativeM1
+  closed-loop/source-cut E2E; no capability promotion is implied
 - [ ] FDM CUDA/cuFFT realization and public planner/runner binding
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
@@ -2345,7 +2453,20 @@ evidence that the approximation is accurate.
 | Path | Symbol | Responsibility |
 |---|---|---|
 | `scripts/test_dynamic_current_oersted_contract_docs.py` | `test_fdm_oersted_open_v1_is_fully_frozen_and_semantic_only` | documentation-only regression for the frozen FDM open-boundary operator; not runtime evidence |
-| `backends/fdm/include/fullmag/fdm/cpu/oersted_fft_open_v1.hpp` | `class Solver` | standalone versioned CPU/FP64 owner contract; no public runtime binding |
+| `backends/fdm/include/fullmag/fdm/cpu/oersted_fft_open_v1.hpp` | `class Solver` | versioned CPU/FP64 numerical owner behind the append-only public adapter |
+| `native/include/fullmag_fdm.h` | `fullmag_fdm_cpu_oersted_solve_v1` | append-only CPU/FP64 request/result ABI carrying exact face current, closed-current certificate and provenance |
+| `backends/fdm/api/cpu_oersted_fft_v1.cpp` | `fullmag_fdm_cpu_oersted_solve_v1` | validation/copy adapter to the sole numerical owner; no alternate midpoint implementation |
+| `backends/fdm/tests/cpu_oersted_fft_public_abi_contract.cpp` | `main` | nonzero public ABI, bit-exact owner parity, immutable cache lifetime, identity boundary and fail-closed regressions |
+| `crates/fullmag-fdm-sys/src/lib.rs` | `cpu_oersted_append_only_layout_matches_native_manifest` | exact Rust FFI mirror and every-field C `offsetof` comparison |
+| `crates/fullmag-runner/src/fdm/cpu/native_transport.rs` | `solve_native_m1_snapshot` | resolved closed_geometry certificate, accepted raw face-current binding and fail-closed identity checks without midpoint fallback |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class StructuredCurrentClosure` | public closed_geometry-only source-cut contract and canonical lowering |
+| `crates/fullmag-ir/src/spin_transport.rs` | `validation_errors` | typed closure/source-cut identity, plane and drive validation in ProblemIR |
+| `crates/fullmag-plan/src/spin_transport.rs` | `materialize_structured_current_closure` | exact structured-grid plane, component coverage and return-path preflight |
+| `crates/fullmag-authoring/src/validation.rs` | `validate_scene_structured_current_closure` | SceneDocument closure validation and paired source-cut operator contract |
+| `crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs` | `public_closed_loop_source_cut_publishes_nonzero_oersted_artifact` | positive public nonzero current, H_oe and closure-provenance E2E |
+| `crates/fullmag-runner/src/fdm/cpu/native_transport.rs` | `solve_public_oersted` | runtime certificate reconstruction and typed FdmOerstedClosureProvenanceSnapshot publication |
+| `apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts` | `buildStructuredCurrentClosureNode` | stable semantic closure/source-cut Explorer nodes and Inspector selections |
+| `crates/fullmag-api/src/openapi_v2.rs` | `openapi_current_transport_exposes_typed_structured_current_closure` | typed OpenAPI v2 closure/drive schemas and certified_import exclusion |
 | `backends/fdm/cpu/interactions/oersted/cell_integrated_kernel_v1.cpp` | `cell_integrated_kernel_m` | exact source-cell integral at the target centre, SI sign and exact real-space zeros |
 | `backends/fdm/cpu/interactions/oersted/fft_open_v1.cpp` | `class Solver::Impl` | closure-aware exact-2N open convolution, accepted/candidate/failure state, trusted fast cache, full-field diagnostics and provenance |
 | `backends/fdm/tests/oersted_direct_oracle_v1.cpp` | `OracleKernelResult integrate_source_cell_at_target_center` | independent `long double` surface-potential oracle |

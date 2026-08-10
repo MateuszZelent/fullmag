@@ -21,10 +21,15 @@ struct Buffers {
     double *jx = nullptr;
     double *jy = nullptr;
     double *jz = nullptr;
+    double *interface_from_trace_v = nullptr;
+    double *interface_to_trace_v = nullptr;
+    double *interface_delta_trace_v = nullptr;
+    double *interface_charge_current_density = nullptr;
     uint64_t cells = 0;
     uint64_t jx_count = 0;
     uint64_t jy_count = 0;
     uint64_t jz_count = 0;
+    uint64_t interface_count = 0;
 };
 
 struct HierarchyCache {
@@ -110,7 +115,7 @@ uint32_t validate_static_payload_device(
     uint32_t sync_boundary = 0) noexcept;
 uint32_t content_digest_device(
     const Buffers &buffers, const void *charge_faces, uint64_t charge_face_count,
-    uint64_t charge_face_stride,
+    uint64_t charge_face_stride, const void *interfaces, uint64_t interface_stride,
     const ContentDigestIdentity &identity, cudaStream_t stream,
     uint8_t digest[32], CudaFailurePolicy *failure_policy = nullptr,
     uint32_t copy_boundary = 0, uint32_t sync_boundary = 0) noexcept;

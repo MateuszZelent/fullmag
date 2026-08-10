@@ -19,7 +19,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "semantic_only",
-      "reason": "The normative fdm_oersted_cell_integrated_open.v1 contract has a standalone native CPU/FP64 owner, independent long-double surface-potential oracle, adaptive surface spot checks and a managed contract gate. Public C ABI/planner/runner binding, named continuum workloads and production qualification remain absent, so the lane stays semantic_only."
+      "reason": "The normative fdm_oersted_cell_integrated_open.v1 contract has a native CPU/FP64 owner, independent long-double surface-potential oracle, adaptive surface spot checks and an append-only C ABI/Rust FFI boundary. StructuredCurrentClosure(closed_geometry) now round-trips through Python, SceneDocument, ProblemIR, planner, OpenAPI and typed Control Room authoring; public NativeM1 has a positive nonzero source-cut current/H_oe/provenance E2E. Named continuum workloads, representative-grid memory/performance evidence and managed production qualification remain absent, so the lane stays semantic_only."
     },
     {
       "solver": "FDM",
@@ -307,7 +307,7 @@
       "id": "fdm-oersted-native-cpu-owner",
       "path": "backends/fdm/cpu/interactions/oersted/fft_open_v1.cpp",
       "symbol": "class Solver::Impl",
-      "responsibility": "Standalone native CPU/FP64 closure-aware exact-2N open convolution owner with typed per-component source cuts, accepted/candidate/failure result separation, allocation-free trusted immutable-snapshot reuse, full-field pre-crop diagnostics and complete provenance; it has no public runtime binding."
+      "responsibility": "Native CPU/FP64 closure-aware exact-2N open convolution owner with typed per-component source cuts, accepted/candidate/failure result separation, allocation-free trusted immutable-snapshot reuse, full-field pre-crop diagnostics and complete provenance; the append-only public adapter delegates all numerics to this owner."
     },
     {
       "id": "fdm-oersted-native-cell-kernel",
@@ -332,6 +332,90 @@
       "path": "backends/fdm/tests/cpu_oersted_fft_open_contract.cpp",
       "symbol": "main",
       "responsibility": "Managed standalone CPU physics, numerics, zero-allocation trusted cache, typed source-cut, complete provenance, full-field diagnostic, oriented Ampere-contour and fail-closed contract."
+    },
+    {
+      "id": "fdm-oersted-public-c-abi",
+      "path": "native/include/fullmag_fdm.h",
+      "symbol": "fullmag_fdm_cpu_oersted_solve_v1",
+      "responsibility": "Append-only CPU/FP64 ABI request and result records carrying exact oriented face current, global closed-current certificate, H_oe in A/m, diagnostic values and immutable provenance identities."
+    },
+    {
+      "id": "fdm-oersted-public-native-adapter",
+      "path": "backends/fdm/api/cpu_oersted_fft_v1.cpp",
+      "symbol": "fullmag_fdm_cpu_oersted_solve_v1",
+      "responsibility": "Validate ABI records, retain a durable immutable Problem only for a bit-identical snapshot, force a new Solver and full preflight for every change, and delegate without alternate numerical formulas or fallback."
+    },
+    {
+      "id": "fdm-oersted-public-abi-contract-test",
+      "path": "backends/fdm/tests/cpu_oersted_fft_public_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Managed nonzero four-cell closed-loop/source-cut public ABI fixture plus bit-exact all-component owner parity, same-callsite immutable-cache lifetime, identity boundary, layout and fail-closed evidence."
+    },
+    {
+      "id": "fdm-oersted-public-rust-ffi",
+      "path": "crates/fullmag-fdm-sys/src/lib.rs",
+      "symbol": "cpu_oersted_append_only_layout_matches_native_manifest",
+      "responsibility": "Exact repr(C) Rust mirror, exported symbol declarations and native size, alignment and every-field offsetof manifest regression for all append-only records."
+    },
+    {
+      "id": "fdm-oersted-public-runner-binding",
+      "path": "crates/fullmag-runner/src/fdm/cpu/native_transport.rs",
+      "symbol": "solve_native_m1_snapshot",
+      "responsibility": "Materialize the resolved closed_geometry certificate, pass accepted native charge x/y/z face arrays to the Oersted ABI, revalidate runtime component/divergence identity and publish typed closure provenance; missing or stale descriptors fail closed and the canonical NativeM1 path never invokes the Rust midpoint operator."
+    },
+    {
+      "id": "python-structured-current-closure",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class StructuredCurrentClosure",
+      "responsibility": "Expose the closed_geometry-only source-cut contract, version identities and canonical Python-to-IR lowering; certified_import, external leads and empty source-cut sets are rejected."
+    },
+    {
+      "id": "ir-structured-current-closure",
+      "path": "crates/fullmag-ir/src/spin_transport.rs",
+      "symbol": "validation_errors",
+      "responsibility": "Own typed closed_geometry validation, unique source/circuit/drive identities, finite cut planes and nonzero impressed-potential jumps in ProblemIR."
+    },
+    {
+      "id": "planner-structured-current-closure",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "materialize_structured_current_closure",
+      "responsibility": "Resolve regional axis-aligned structured-grid cuts, connected-component coverage, one-cut-per-driven-component and return-path preservation into deterministic certificate inputs."
+    },
+    {
+      "id": "scene-authoring-structured-current-closure",
+      "path": "crates/fullmag-authoring/src/validation.rs",
+      "symbol": "validate_scene_structured_current_closure",
+      "responsibility": "Validate SceneDocument closed_geometry identities and source-cut records and require the paired fv_charge_harmonic_source_cut_v1 charge operator."
+    },
+    {
+      "id": "fdm-oersted-public-positive-e2e",
+      "path": "crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs",
+      "symbol": "public_closed_loop_source_cut_publishes_nonzero_oersted_artifact",
+      "responsibility": "Execute the public CPU/FP64 box-minus-hole closed-loop source-cut path and require nonzero accepted current, nonzero H_oe and complete closure provenance digests and trace."
+    },
+    {
+      "id": "fdm-oersted-closure-provenance",
+      "path": "crates/fullmag-runner/src/fdm/cpu/native_transport.rs",
+      "symbol": "solve_public_oersted",
+      "responsibility": "Publish the typed closed_geometry schema/operator/source identity, revision, geometry/mask/current/certificate digests, tolerances, measured closure diagnostics and complete source-cut trace."
+    },
+    {
+      "id": "control-room-structured-current-closure",
+      "path": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+      "symbol": "buildCurrentTransport",
+      "responsibility": "Round-trip and validate typed closed_geometry/source-cut drafts, select the paired source-cut operator and keep the mutually exclusive conservative RT0 descriptor out of the payload."
+    },
+    {
+      "id": "control-room-structured-current-explorer",
+      "path": "apps/control-room/src/modules/explorer/builders/physicsGraphTree.ts",
+      "symbol": "buildStructuredCurrentClosureNode",
+      "responsibility": "Expose each typed closure and source cut as a stable semantic Explorer node with its own Inspector selection while retaining the server resource as source of truth."
+    },
+    {
+      "id": "openapi-structured-current-closure",
+      "path": "crates/fullmag-api/src/openapi_v2.rs",
+      "symbol": "openapi_current_transport_exposes_typed_structured_current_closure",
+      "responsibility": "Expose closed_geometry, impressed_potential_jump and required regional source-cut schemas while proving certified_import is absent from OpenAPI v2."
     },
     {
       "id": "fem-solved-current-marker",
@@ -825,6 +909,56 @@
         "meaning": "bind Oersted to the named solved current",
         "backend_support": "FEM/FDM according to capability matrix",
         "problem_ir": "energy_terms[].model"
+      },
+      {
+        "python": "CurrentTransport.structured_current_closure",
+        "type": "StructuredCurrentClosure | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "One-way ohmic_poisson only; mutually exclusive with conservative_current_view; requires solver.operator_version=fv_charge_harmonic_source_cut_v1. That operator without the descriptor is also rejected.",
+        "meaning": "Explicit closed structured-grid current topology and impressed source cuts for solved-current Oersted.",
+        "backend_support": "FDM CPU/FP64 public positive E2E; FDM GPU, FEM, PBC, external leads and certified import are rejected; capability remains semantic_only.",
+        "problem_ir": "current_modules[].structured_current_closure"
+      },
+      {
+        "python": "StructuredCurrentClosure(schema_version, closure_id, source_cuts)",
+        "type": "str, str, Sequence[StructuredCurrentSourceCut]",
+        "default": "schema_version=structured_current_closure.v1; closure_id and source_cuts required",
+        "si_unit": "1",
+        "validation": "The kind is closed_geometry; schema version and closure id are non-empty and exact; source_cuts is non-empty with unique source-cut, circuit and drive identities. certified_import is not a v1 variant.",
+        "meaning": "Closed conductor components and their explicit impressed-potential cuts.",
+        "backend_support": "Python/SceneDocument/ProblemIR/planner/OpenAPI/Control Room and FDM CPU/FP64 runtime; other lanes fail closed.",
+        "problem_ir": "current_modules[].structured_current_closure"
+      },
+      {
+        "python": "StructuredCurrentSourceCut(source_cut_id, circuit_id, region, plane, drive)",
+        "type": "str, str, RegionRef, StructuredCutPlane, ImpressedPotentialJump",
+        "default": "required",
+        "si_unit": "ids: 1; plane offset: m; drive: V",
+        "validation": "IDs are non-empty and unique in the closure; region has a non-empty object id; the planner requires an axis-aligned grid plane, active connected cross-section and one cut per driven component with a return path after cut removal.",
+        "meaning": "Regional internal cut that introduces circulation without injecting charge.",
+        "backend_support": "FDM CPU/FP64 closed_geometry only.",
+        "problem_ir": "current_modules[].structured_current_closure.source_cuts[]"
+      },
+      {
+        "python": "StructuredCutPlane(axis, offset_m, normal)",
+        "type": "Literal['x','y','z'], float, Literal['positive_axis','negative_axis']",
+        "default": "required",
+        "si_unit": "axis/normal: 1; offset_m: m",
+        "validation": "Offset is finite and must align exactly with a structured-grid face plane inside the selected region.",
+        "meaning": "Oriented Cartesian plane defining the structured source cut.",
+        "backend_support": "FDM CPU/FP64 closed_geometry only.",
+        "problem_ir": "current_modules[].structured_current_closure.source_cuts[].plane"
+      },
+      {
+        "python": "ImpressedPotentialJump(drive_id, potential_jump_V, schema_version)",
+        "type": "str, float, str",
+        "default": "schema_version=impressed_potential_jump.v1; drive_id and potential_jump_V required",
+        "si_unit": "drive_id/schema_version: 1; potential_jump_V: V",
+        "validation": "Drive id is non-empty and unique; schema version is exact; potential jump is finite and nonzero.",
+        "meaning": "Impressed potential circulation across a paired internal cut; it is not a charge terminal.",
+        "backend_support": "FDM CPU/FP64 closed_geometry only.",
+        "problem_ir": "current_modules[].structured_current_closure.source_cuts[].drive"
       },
       {
         "python": "CurrentTransport.conservative_current_view",

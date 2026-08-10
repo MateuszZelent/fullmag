@@ -91,4 +91,35 @@ describe("generated OpenAPI v2 transport", () => {
       openApiV2PathLiterals.filter((path) => !promotedPaths.has(path)),
     ).toEqual([]);
   });
+
+  it("keeps structured-current closure authoring closed, typed, and region-scoped", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const schemas = document.components.schemas;
+    const knownTransport = JSON.stringify(
+      schemas.KnownSceneCurrentTransport.properties.structured_current_closure,
+    );
+    const closure = schemas.SceneStructuredCurrentClosure.oneOf[0];
+    const sourceCut = schemas.SceneStructuredCurrentSourceCut;
+    const drive = schemas.SceneStructuredCurrentDrive;
+
+    expect(knownTransport).toContain("#/components/schemas/SceneStructuredCurrentClosure");
+    expect(closure.properties.kind.enum).toEqual(["closed_geometry"]);
+    expect(closure.required).toEqual(expect.arrayContaining([
+      "closure_id",
+      "kind",
+      "schema_version",
+      "source_cuts",
+    ]));
+    expect(JSON.stringify(schemas.SceneStructuredCurrentClosure)).not.toContain("certified_import");
+    expect(sourceCut.required).toEqual(expect.arrayContaining([
+      "circuit_id",
+      "drive",
+      "plane",
+      "region",
+      "source_cut_id",
+    ]));
+    expect(JSON.stringify(drive)).toContain("impressed_potential_jump");
+  });
 });

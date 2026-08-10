@@ -1,5 +1,6 @@
 use crate::{ExecutionDevice, ExecutionMode, ExecutionPrecision, MeshIR, RegionRefIR};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 fn is_zero_f64(value: &f64) -> bool {
     *value == 0.0
@@ -40,6 +41,154 @@ pub struct ChargeTransportDefinitionIR {
     pub solver: ChargeSolverPolicyIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conservative_current_view: Option<ResolvedFemConservativeCurrentViewIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_current_closure: Option<StructuredCurrentClosureIR>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredCutAxisIR {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredCutNormalIR {
+    PositiveAxis,
+    NegativeAxis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StructuredCutPlaneIR {
+    pub axis: StructuredCutAxisIR,
+    pub offset_m: f64,
+    pub normal: StructuredCutNormalIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImpressedPotentialJumpIR {
+    pub schema_version: String,
+    pub drive_id: String,
+    #[serde(rename = "potential_jump_V")]
+    pub potential_jump_v: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StructuredCurrentDriveIR {
+    ImpressedPotentialJump(ImpressedPotentialJumpIR),
+}
+
+impl StructuredCurrentDriveIR {
+    pub fn impressed_potential_jump(&self) -> &ImpressedPotentialJumpIR {
+        match self {
+            Self::ImpressedPotentialJump(drive) => drive,
+        }
+    }
+
+    pub fn impressed_potential_jump_mut(&mut self) -> &mut ImpressedPotentialJumpIR {
+        match self {
+            Self::ImpressedPotentialJump(drive) => drive,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StructuredCurrentSourceCutIR {
+    pub source_cut_id: String,
+    pub circuit_id: String,
+    pub region: RegionRefIR,
+    pub plane: StructuredCutPlaneIR,
+    pub drive: StructuredCurrentDriveIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StructuredCurrentClosureIR {
+    ClosedGeometry {
+        schema_version: String,
+        closure_id: String,
+        source_cuts: Vec<StructuredCurrentSourceCutIR>,
+    },
+}
+
+impl StructuredCurrentClosureIR {
+    pub fn validation_errors(&self, path: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        let Self::ClosedGeometry {
+            schema_version,
+            closure_id,
+            source_cuts,
+        } = self;
+        if schema_version != "structured_current_closure.v1" {
+            errors.push(format!(
+                "{path}.structured_current_closure.schema_version must be 'structured_current_closure.v1'"
+            ));
+        }
+        if closure_id.trim().is_empty() {
+            errors.push(format!(
+                "{path}.structured_current_closure.closure_id must not be empty"
+            ));
+        }
+        if source_cuts.is_empty() {
+            errors.push(format!(
+                "{path}.structured_current_closure.source_cuts must not be empty"
+            ));
+        }
+        let mut cut_ids = BTreeSet::new();
+        let mut circuit_ids = BTreeSet::new();
+        let mut drive_ids = BTreeSet::new();
+        for (index, cut) in source_cuts.iter().enumerate() {
+            let cut_path = format!(
+                "{path}.structured_current_closure.source_cuts[{index}]"
+            );
+            if cut.source_cut_id.trim().is_empty() {
+                errors.push(format!("{cut_path}.source_cut_id must not be empty"));
+            } else if !cut_ids.insert(cut.source_cut_id.as_str()) {
+                errors.push(format!("{cut_path}.source_cut_id must be unique"));
+            }
+            if cut.circuit_id.trim().is_empty() {
+                errors.push(format!("{cut_path}.circuit_id must not be empty"));
+            } else if !circuit_ids.insert(cut.circuit_id.as_str()) {
+                errors.push(format!(
+                    "{cut_path}.circuit_id must identify exactly one source cut"
+                ));
+            }
+            if cut.region.object_id.trim().is_empty() {
+                errors.push(format!("{cut_path}.region.object_id must not be empty"));
+            }
+            if cut
+                .region
+                .region_id
+                .as_ref()
+                .is_some_and(|region_id| region_id.trim().is_empty())
+            {
+                errors.push(format!("{cut_path}.region.region_id must not be empty"));
+            }
+            if !cut.plane.offset_m.is_finite() {
+                errors.push(format!("{cut_path}.plane.offset_m must be finite"));
+            }
+            let drive = cut.drive.impressed_potential_jump();
+            if drive.schema_version != "impressed_potential_jump.v1" {
+                errors.push(format!(
+                    "{cut_path}.drive.schema_version must be 'impressed_potential_jump.v1'"
+                ));
+            }
+            if drive.drive_id.trim().is_empty() {
+                errors.push(format!("{cut_path}.drive.drive_id must not be empty"));
+            } else if !drive_ids.insert(drive.drive_id.as_str()) {
+                errors.push(format!("{cut_path}.drive.drive_id must be unique"));
+            }
+            if !drive.potential_jump_v.is_finite() || drive.potential_jump_v == 0.0 {
+                errors.push(format!(
+                    "{cut_path}.drive.potential_jump_V must be finite and non-zero"
+                ));
+            }
+        }
+        errors
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -564,6 +713,35 @@ pub struct ResolvedSpecifiedCurrentFaceIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmStructuredCurrentSourceCutIR {
+    pub source_cut_id: String,
+    pub circuit_id: String,
+    pub drive_id: String,
+    pub region: RegionRefIR,
+    pub axis: u8,
+    pub plane_face_index: u32,
+    pub normal_sign: i8,
+    pub component_label: u32,
+    #[serde(rename = "potential_jump_V")]
+    pub potential_jump_v: f64,
+    pub faces: Vec<StructuredInternalFaceIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmStructuredCurrentClosureIR {
+    pub schema_version: String,
+    pub closure_id: String,
+    pub descriptor_sha256: String,
+    pub grid_shape: [u32; 3],
+    pub origin_m: [f64; 3],
+    pub cell_size_m: [f64; 3],
+    pub active_mask_sha256: String,
+    pub topology_sha256: String,
+    pub component_labels: Vec<u32>,
+    pub source_cuts: Vec<ResolvedFdmStructuredCurrentSourceCutIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolvedSpinBoundaryConditionIR {
     SpinInsulating,
@@ -650,6 +828,8 @@ pub struct ResolvedFdmSpinTransportIR {
     pub charge_boundaries: Vec<ResolvedChargeBoundaryFaceIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub specified_current_faces: Vec<ResolvedSpecifiedCurrentFaceIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_current_closure: Option<ResolvedFdmStructuredCurrentClosureIR>,
     pub charge_gauge: ChargePotentialGaugeIR,
     pub charge_solver: ChargeSolverPolicyIR,
     pub spin_active_cells: Vec<bool>,

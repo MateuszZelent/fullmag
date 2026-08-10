@@ -5,12 +5,14 @@ use fullmag_ir::{
     FdmCpuTransportRealizationIR, FemMeshPartIR, FemObjectSegmentIR, MeshIR, ProblemIR,
     ReactionLengthIR, RegionRefIR, ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
     ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
+    ResolvedFdmStructuredCurrentClosureIR, ResolvedFdmStructuredCurrentSourceCutIR,
     ResolvedFdmTransientSpinTransportIR, ResolvedFemSpinTransportIR, ResolvedReciprocalMaterialIR,
     ResolvedSpecifiedCurrentFaceIR, ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR,
     ResolvedSpinInterfaceFaceIR, ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR,
     ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR,
     StructuredBoundaryFaceIR, StructuredInternalFaceIR,
 };
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 
@@ -56,6 +58,7 @@ fn resolve_fem_stage_coupling_for_stage(
 pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub owner_names: &'a [&'a str],
     pub grid_cells: [u32; 3],
+    pub origin_m: [f64; 3],
     pub cell_size_m: [f64; 3],
     pub active_mask: Option<&'a [bool]>,
     pub region_mask: &'a [u32],
@@ -2012,6 +2015,12 @@ fn materialize_fdm_descriptor(
         context.grid_cells,
         context.cell_size_m,
     )?;
+    let structured_current_closure = materialize_structured_current_closure(
+        problem,
+        charge,
+        &charge_active_cells,
+        context,
+    )?;
     let (spin_boundaries, inserted_default_spin_boundaries) =
         resolve_spin_boundaries(&module.boundaries, context)?;
     let interfaces = resolve_interfaces(module, context)?;
@@ -2084,6 +2093,7 @@ fn materialize_fdm_descriptor(
         charge_conductivity_spm,
         charge_boundaries,
         specified_current_faces,
+        structured_current_closure,
         charge_gauge: charge.gauge,
         charge_solver: charge.solver.clone(),
         spin_active_cells,
@@ -2101,6 +2111,292 @@ fn materialize_fdm_descriptor(
         torque_formula_version,
         oersted_source_bound,
     })
+}
+
+fn materialize_structured_current_closure(
+    problem: &ProblemIR,
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    charge_active_cells: &[bool],
+    context: &FdmSpinTransportResolutionContext<'_>,
+) -> Result<Option<ResolvedFdmStructuredCurrentClosureIR>, Vec<String>> {
+    let Some(closure) = charge.structured_current_closure.as_ref() else {
+        return Ok(None);
+    };
+    if problem.pbc.as_ref().is_some_and(|pbc| pbc.has_any_periodic()) {
+        return Err(vec![
+            "structured current closure v1 requires open boundary conditions on every FDM axis"
+                .to_string(),
+        ]);
+    }
+    let fullmag_ir::StructuredCurrentClosureIR::ClosedGeometry {
+        schema_version,
+        closure_id,
+        source_cuts,
+    } = closure;
+    let component_labels = connected_component_labels(
+        charge_active_cells,
+        context.grid_cells,
+        &BTreeSet::new(),
+    );
+    let mut resolved = Vec::with_capacity(source_cuts.len());
+    let mut cuts_per_component = BTreeMap::<u32, usize>::new();
+    let mut all_cut_faces = BTreeSet::new();
+
+    for cut in source_cuts {
+        let axis = match cut.plane.axis {
+            fullmag_ir::StructuredCutAxisIR::X => 0,
+            fullmag_ir::StructuredCutAxisIR::Y => 1,
+            fullmag_ir::StructuredCutAxisIR::Z => 2,
+        };
+        let face_index = resolve_plane_face_index(
+            cut.plane.offset_m,
+            context.origin_m[axis],
+            context.cell_size_m[axis],
+            context.grid_cells[axis],
+            &cut.source_cut_id,
+        )?;
+        let region_cells = resolve_region_mask(&cut.region, context, "structured source cut")?;
+        let faces = internal_faces(context.grid_cells, axis as u8)
+            .into_iter()
+            .filter(|face| internal_face_plane_index(*face, context.grid_cells) == face_index)
+            .filter(|face| {
+                let negative = face.negative_cell as usize;
+                let positive = face.positive_cell as usize;
+                charge_active_cells[negative]
+                    && charge_active_cells[positive]
+                    && region_cells[negative]
+                    && region_cells[positive]
+            })
+            .collect::<Vec<_>>();
+        if faces.is_empty() {
+            return Err(vec![format!(
+                "structured source cut '{}' plane ∩ region selects zero internal active charge faces",
+                cut.source_cut_id
+            )]);
+        }
+        if structured_face_component_count(&faces, context.grid_cells) != 1 {
+            return Err(vec![format!(
+                "structured source cut '{}' plane ∩ region contains multiple disconnected cross-sections",
+                cut.source_cut_id
+            )]);
+        }
+        let component = component_labels[faces[0].negative_cell as usize];
+        if component == u32::MAX
+            || faces.iter().any(|face| {
+                component_labels[face.negative_cell as usize] != component
+                    || component_labels[face.positive_cell as usize] != component
+            })
+        {
+            return Err(vec![format!(
+                "structured source cut '{}' does not belong to exactly one active charge component",
+                cut.source_cut_id
+            )]);
+        }
+        *cuts_per_component.entry(component).or_default() += 1;
+        all_cut_faces.extend(faces.iter().copied());
+        let drive = cut.drive.impressed_potential_jump();
+        resolved.push(ResolvedFdmStructuredCurrentSourceCutIR {
+            source_cut_id: cut.source_cut_id.clone(),
+            circuit_id: cut.circuit_id.clone(),
+            drive_id: drive.drive_id.clone(),
+            region: cut.region.clone(),
+            axis: axis as u8,
+            plane_face_index: face_index,
+            normal_sign: match cut.plane.normal {
+                fullmag_ir::StructuredCutNormalIR::PositiveAxis => 1,
+                fullmag_ir::StructuredCutNormalIR::NegativeAxis => -1,
+            },
+            component_label: component,
+            potential_jump_v: drive.potential_jump_v,
+            faces,
+        });
+    }
+    if let Some((component, count)) = cuts_per_component.iter().find(|(_, count)| **count != 1) {
+        return Err(vec![format!(
+            "active charge component {component} has {count} structured source cuts; v1 requires exactly one cut per driven component"
+        )]);
+    }
+
+    let return_labels = connected_component_labels(
+        charge_active_cells,
+        context.grid_cells,
+        &all_cut_faces,
+    );
+    for cut in &resolved {
+        if cut.faces.iter().any(|face| {
+            let negative = return_labels[face.negative_cell as usize];
+            negative == u32::MAX || negative != return_labels[face.positive_cell as usize]
+        }) {
+            return Err(vec![format!(
+                "structured source cut '{}' has no complete connected return path after removing the cut faces",
+                cut.source_cut_id
+            )]);
+        }
+    }
+
+    let descriptor_sha256 = sha256_json(closure);
+    let active_mask_sha256 = sha256_json(&charge_active_cells);
+    let topology_sha256 = sha256_json(&(
+        context.grid_cells,
+        context.origin_m,
+        context.cell_size_m,
+        charge_active_cells,
+        context.region_mask,
+        &resolved,
+    ));
+    Ok(Some(ResolvedFdmStructuredCurrentClosureIR {
+        schema_version: schema_version.clone(),
+        closure_id: closure_id.clone(),
+        descriptor_sha256,
+        grid_shape: context.grid_cells,
+        origin_m: context.origin_m,
+        cell_size_m: context.cell_size_m,
+        active_mask_sha256,
+        topology_sha256,
+        component_labels,
+        source_cuts: resolved,
+    }))
+}
+
+fn sha256_json(value: &impl serde::Serialize) -> String {
+    let bytes = serde_json::to_vec(value).expect("structured current descriptor is serializable");
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn resolve_plane_face_index(
+    offset_m: f64,
+    origin_m: f64,
+    spacing_m: f64,
+    cell_count: u32,
+    source_cut_id: &str,
+) -> Result<u32, Vec<String>> {
+    let coordinate = (offset_m - origin_m) / spacing_m;
+    let rounded = coordinate.round();
+    let tolerance = 64.0 * f64::EPSILON * coordinate.abs().max(1.0);
+    if !coordinate.is_finite() || (coordinate - rounded).abs() > tolerance {
+        return Err(vec![format!(
+            "structured source cut '{source_cut_id}' offset_m={offset_m} is not aligned with the resolved FDM grid"
+        )]);
+    }
+    if rounded < 1.0 || rounded >= f64::from(cell_count) {
+        return Err(vec![format!(
+            "structured source cut '{source_cut_id}' must resolve to an internal FDM face plane"
+        )]);
+    }
+    Ok(rounded as u32)
+}
+
+fn internal_face_plane_index(face: StructuredInternalFaceIR, grid: [u32; 3]) -> u32 {
+    let [x, y, z] = cell_coordinates(face.positive_cell as usize, grid);
+    [x, y, z][face.axis as usize]
+}
+
+fn cell_coordinates(cell: usize, grid: [u32; 3]) -> [u32; 3] {
+    let nx = grid[0] as usize;
+    let ny = grid[1] as usize;
+    let x = cell % nx;
+    let yz = cell / nx;
+    let y = yz % ny;
+    let z = yz / ny;
+    [x as u32, y as u32, z as u32]
+}
+
+fn connected_component_labels(
+    active: &[bool],
+    grid: [u32; 3],
+    removed_faces: &BTreeSet<StructuredInternalFaceIR>,
+) -> Vec<u32> {
+    let mut labels = vec![u32::MAX; active.len()];
+    let mut next_label = 0_u32;
+    for seed in 0..active.len() {
+        if !active[seed] || labels[seed] != u32::MAX {
+            continue;
+        }
+        labels[seed] = next_label;
+        let mut stack = vec![seed];
+        while let Some(cell) = stack.pop() {
+            for (neighbor, face) in cell_neighbors(cell, grid) {
+                if active[neighbor]
+                    && labels[neighbor] == u32::MAX
+                    && !removed_faces.contains(&face)
+                {
+                    labels[neighbor] = next_label;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        next_label += 1;
+    }
+    labels
+}
+
+fn cell_neighbors(
+    cell: usize,
+    grid: [u32; 3],
+) -> Vec<(usize, StructuredInternalFaceIR)> {
+    let coordinates = cell_coordinates(cell, grid);
+    let strides = [1_usize, grid[0] as usize, (grid[0] * grid[1]) as usize];
+    let mut neighbors = Vec::with_capacity(6);
+    for axis in 0..3 {
+        if coordinates[axis] > 0 {
+            let neighbor = cell - strides[axis];
+            neighbors.push((neighbor, StructuredInternalFaceIR {
+                axis: axis as u8,
+                negative_cell: neighbor as u64,
+                positive_cell: cell as u64,
+            }));
+        }
+        if coordinates[axis] + 1 < grid[axis] {
+            let neighbor = cell + strides[axis];
+            neighbors.push((neighbor, StructuredInternalFaceIR {
+                axis: axis as u8,
+                negative_cell: cell as u64,
+                positive_cell: neighbor as u64,
+            }));
+        }
+    }
+    neighbors
+}
+
+fn structured_face_component_count(
+    faces: &[StructuredInternalFaceIR],
+    grid: [u32; 3],
+) -> usize {
+    let face_set = faces.iter().copied().collect::<BTreeSet<_>>();
+    let mut remaining = face_set.clone();
+    let mut components = 0;
+    while let Some(seed) = remaining.pop_first() {
+        components += 1;
+        let mut stack = vec![seed];
+        while let Some(face) = stack.pop() {
+            let coordinates = cell_coordinates(face.negative_cell as usize, grid);
+            for transverse_axis in (0..3).filter(|axis| *axis != face.axis as usize) {
+                for direction in [-1_i32, 1_i32] {
+                    let coordinate = coordinates[transverse_axis] as i32 + direction;
+                    if coordinate < 0 || coordinate >= grid[transverse_axis] as i32 {
+                        continue;
+                    }
+                    let mut neighbor_coordinates = coordinates;
+                    neighbor_coordinates[transverse_axis] = coordinate as u32;
+                    let neighbor_cell = neighbor_coordinates[0] as usize
+                        + grid[0] as usize
+                            * (neighbor_coordinates[1] as usize
+                                + grid[1] as usize * neighbor_coordinates[2] as usize);
+                    let neighbor = StructuredInternalFaceIR {
+                        axis: face.axis,
+                        negative_cell: neighbor_cell as u64,
+                        positive_cell: (neighbor_cell
+                            + [1_usize, grid[0] as usize, (grid[0] * grid[1]) as usize]
+                                [face.axis as usize]) as u64,
+                    };
+                    if face_set.contains(&neighbor) && remaining.remove(&neighbor) {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+        }
+    }
+    components
 }
 
 fn reaction_value(value: &ReactionLengthIR) -> Option<f64> {
@@ -2724,6 +3020,7 @@ mod tests {
                     operator_version: "fv_charge_harmonic_v1".into(),
                 },
                 conservative_current_view: None,
+                structured_current_closure: None,
             }),
         }];
         problem.spin_transport_modules = vec![SpinTransportModuleIR {
@@ -2831,6 +3128,7 @@ mod tests {
         FdmSpinTransportResolutionContext {
             owner_names,
             grid_cells: [1, 1, 1],
+            origin_m: [0.0, 0.0, 0.0],
             cell_size_m: [1.0, 1.0, 1.0],
             active_mask: None,
             region_mask,
@@ -2839,6 +3137,214 @@ mod tests {
             saturation_magnetization_apm: ms,
             gamma0_m_per_a_s: 2.211e5,
         }
+    }
+
+    fn structured_closure(
+        region_id: &str,
+        axis: StructuredCutAxisIR,
+        offset_m: f64,
+    ) -> StructuredCurrentClosureIR {
+        StructuredCurrentClosureIR::ClosedGeometry {
+            schema_version: "structured_current_closure.v1".into(),
+            closure_id: "loop-1".into(),
+            source_cuts: vec![StructuredCurrentSourceCutIR {
+                source_cut_id: "cut-1".into(),
+                circuit_id: "circuit-1".into(),
+                region: RegionRefIR {
+                    object_id: "strip".into(),
+                    region_id: Some(region_id.into()),
+                },
+                plane: StructuredCutPlaneIR {
+                    axis,
+                    offset_m,
+                    normal: StructuredCutNormalIR::PositiveAxis,
+                },
+                drive: StructuredCurrentDriveIR::ImpressedPotentialJump(
+                    ImpressedPotentialJumpIR {
+                        schema_version: "impressed_potential_jump.v1".into(),
+                        drive_id: "drive-1".into(),
+                        potential_jump_v: 0.05,
+                    },
+                ),
+            }],
+        }
+    }
+
+    fn set_structured_closure(problem: &mut ProblemIR, closure: StructuredCurrentClosureIR) {
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            panic!("charge definition fixture");
+        };
+        definition.structured_current_closure = Some(closure);
+        definition.solver.operator_version = "fv_charge_harmonic_source_cut_v1".into();
+    }
+
+    fn charge_definition(problem: &ProblemIR) -> &ChargeTransportDefinitionIR {
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } = &problem.current_modules[0]
+        else {
+            panic!("charge definition fixture");
+        };
+        definition
+    }
+
+    #[test]
+    fn materializes_region_limited_cut_and_proves_closed_return() {
+        let mut problem = problem(ExecutionDevice::Cpu);
+        set_structured_closure(
+            &mut problem,
+            structured_closure("source_arm", StructuredCutAxisIR::Y, 1.0),
+        );
+        let owners = ["strip"];
+        let active = [true, true, true, true, false, true, true, true, true];
+        let region_mask = [1, 2, 2, 1, 0, 2, 1, 2, 2];
+        let magnetization = [[0.0, 0.0, 1.0]; 9];
+        let ms = [8.0e5; 9];
+        let region_ids = BTreeMap::from([("source_arm".into(), 1)]);
+        let context = FdmSpinTransportResolutionContext {
+            owner_names: &owners,
+            grid_cells: [3, 3, 1],
+            origin_m: [0.0; 3],
+            cell_size_m: [1.0; 3],
+            active_mask: Some(&active),
+            region_mask: &region_mask,
+            region_index_by_id: &region_ids,
+            initial_magnetization: &magnetization,
+            saturation_magnetization_apm: &ms,
+            gamma0_m_per_a_s: 2.211e5,
+        };
+
+        let resolved = materialize_structured_current_closure(
+            &problem,
+            charge_definition(&problem),
+            &active,
+            &context,
+        )
+        .expect("closed loop must materialize")
+        .expect("closure descriptor");
+
+        assert_eq!(resolved.source_cuts[0].plane_face_index, 1);
+        assert_eq!(resolved.source_cuts[0].component_label, 0);
+        assert_eq!(resolved.source_cuts[0].faces.len(), 1);
+        assert_eq!(resolved.source_cuts[0].faces[0].negative_cell, 0);
+        assert_eq!(resolved.source_cuts[0].faces[0].positive_cell, 3);
+        assert!(resolved.descriptor_sha256.starts_with("sha256:"));
+        assert!(resolved.topology_sha256.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn rejects_unknown_and_zero_face_source_cut_regions() {
+        let owners = ["strip"];
+        let active = [true, true, true, true, false, true, true, true, true];
+        let region_mask = [3, 2, 2, 1, 0, 2, 1, 2, 2];
+        let magnetization = [[0.0, 0.0, 1.0]; 9];
+        let ms = [8.0e5; 9];
+
+        for (region_id, ids, expected) in [
+            ("unknown", BTreeMap::new(), "was not materialized"),
+            (
+                "zero_faces",
+                BTreeMap::from([("zero_faces".into(), 3)]),
+                "selects zero internal active charge faces",
+            ),
+        ] {
+            let mut problem = problem(ExecutionDevice::Cpu);
+            set_structured_closure(
+                &mut problem,
+                structured_closure(region_id, StructuredCutAxisIR::Y, 1.0),
+            );
+            let context = FdmSpinTransportResolutionContext {
+                owner_names: &owners,
+                grid_cells: [3, 3, 1],
+                origin_m: [0.0; 3],
+                cell_size_m: [1.0; 3],
+                active_mask: Some(&active),
+                region_mask: &region_mask,
+                region_index_by_id: &ids,
+                initial_magnetization: &magnetization,
+                saturation_magnetization_apm: &ms,
+                gamma0_m_per_a_s: 2.211e5,
+            };
+            let errors = materialize_structured_current_closure(
+                &problem,
+                charge_definition(&problem),
+                &active,
+                &context,
+            )
+            .expect_err("invalid source region must fail");
+            assert!(errors.iter().any(|error| error.contains(expected)), "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_multi_arm_cross_section_and_open_return() {
+        let owners = ["strip"];
+        let region_ids = BTreeMap::from([("source_arm".into(), 1)]);
+
+        let mut multi_arm_problem = problem(ExecutionDevice::Cpu);
+        set_structured_closure(
+            &mut multi_arm_problem,
+            structured_closure("source_arm", StructuredCutAxisIR::Y, 1.0),
+        );
+        let multi_arm_active = [true; 9];
+        let multi_arm_regions = [1, 2, 1, 1, 2, 1, 1, 2, 1];
+        let multi_arm_m = [[0.0, 0.0, 1.0]; 9];
+        let multi_arm_ms = [8.0e5; 9];
+        let multi_arm_context = FdmSpinTransportResolutionContext {
+            owner_names: &owners,
+            grid_cells: [3, 3, 1],
+            origin_m: [0.0; 3],
+            cell_size_m: [1.0; 3],
+            active_mask: Some(&multi_arm_active),
+            region_mask: &multi_arm_regions,
+            region_index_by_id: &region_ids,
+            initial_magnetization: &multi_arm_m,
+            saturation_magnetization_apm: &multi_arm_ms,
+            gamma0_m_per_a_s: 2.211e5,
+        };
+        let errors = materialize_structured_current_closure(
+            &multi_arm_problem,
+            charge_definition(&multi_arm_problem),
+            &multi_arm_active,
+            &multi_arm_context,
+        )
+        .expect_err("disconnected arms on one plane must fail");
+        assert!(errors.iter().any(|error| error.contains("multiple disconnected")));
+
+        let mut open_problem = problem(ExecutionDevice::Cpu);
+        set_structured_closure(
+            &mut open_problem,
+            structured_closure("source_arm", StructuredCutAxisIR::X, 1.0),
+        );
+        let open_active = [true; 3];
+        let open_regions = [1; 3];
+        let open_m = [[0.0, 0.0, 1.0]; 3];
+        let open_ms = [8.0e5; 3];
+        let open_context = FdmSpinTransportResolutionContext {
+            owner_names: &owners,
+            grid_cells: [3, 1, 1],
+            origin_m: [0.0; 3],
+            cell_size_m: [1.0; 3],
+            active_mask: Some(&open_active),
+            region_mask: &open_regions,
+            region_index_by_id: &region_ids,
+            initial_magnetization: &open_m,
+            saturation_magnetization_apm: &open_ms,
+            gamma0_m_per_a_s: 2.211e5,
+        };
+        let errors = materialize_structured_current_closure(
+            &open_problem,
+            charge_definition(&open_problem),
+            &open_active,
+            &open_context,
+        )
+        .expect_err("open conductor must have no return path");
+        assert!(errors.iter().any(|error| error.contains("return path")));
     }
 
     #[test]

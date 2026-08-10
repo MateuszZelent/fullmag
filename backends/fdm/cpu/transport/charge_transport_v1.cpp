@@ -53,6 +53,7 @@ AcceptedChargeSnapshot::AcceptedChargeSnapshot(
     std::vector<double> potential_v,
     FaceCurrentDensity face_current_density_a_per_m2,
     std::vector<OrientedMixingInterface> interfaces,
+    std::vector<ImpressedPotentialJumpFace> impressed_potential_jump_faces,
     std::vector<ChargeInterfaceFluxObservation> interface_fluxes)
     : identity_(identity),
       grid_(grid),
@@ -61,6 +62,7 @@ AcceptedChargeSnapshot::AcceptedChargeSnapshot(
       potential_v_(std::move(potential_v)),
       face_current_density_a_per_m2_(std::move(face_current_density_a_per_m2)),
       interfaces_(std::move(interfaces)),
+      impressed_potential_jump_faces_(std::move(impressed_potential_jump_faces)),
       interface_fluxes_(std::move(interface_fluxes)) {}
 
 namespace {
@@ -76,6 +78,8 @@ struct DomainAnalysis {
     std::array<BoundaryCondition, 6> boundary;
     std::array<std::size_t, 3> face_counts{};
     std::array<std::vector<const OrientedMixingInterface *>, 3> interface_by_face;
+    std::array<std::vector<const ImpressedPotentialJumpFace *>, 3>
+        potential_jump_by_face;
     std::array<std::vector<const SpecifiedOutwardCurrentDensityFace *>, 3>
         outward_density_by_face;
     std::array<std::size_t, 6> outward_density_count_by_boundary{};
@@ -358,6 +362,7 @@ SolveResult analyze_problem(const Problem &problem,
     }
     for (std::size_t axis = 0; axis < 3; ++axis) {
         analysis.interface_by_face[axis].assign(analysis.face_counts[axis], nullptr);
+        analysis.potential_jump_by_face[axis].assign(analysis.face_counts[axis], nullptr);
         analysis.outward_density_by_face[axis].assign(analysis.face_counts[axis], nullptr);
     }
     if (problem.conductivity_s_per_m.size() != count ||
@@ -420,6 +425,44 @@ SolveResult analyze_problem(const Problem &problem,
                            "a charge face may have only one oriented mixing-interface owner");
         }
         owner = &interface;
+    }
+
+    std::size_t source_cut_count = 0;
+    for (const auto &jump : problem.impressed_potential_jump_faces) {
+        std::size_t face = 0;
+        if (!structured_face_index(grid, jump.face, face) ||
+            (jump.normal_sign != -1 && jump.normal_sign != 1) ||
+            !std::isfinite(jump.potential_jump_v)) {
+            return failure(Status::invalid_argument,
+                           "impressed potential jump requires one exact internal face, an axis-oriented signed normal, and a finite voltage");
+        }
+        if (!analysis.conducting[jump.face.negative_cell] ||
+            !analysis.conducting[jump.face.positive_cell]) {
+            return failure(Status::invalid_argument,
+                           "impressed potential jump requires two active conducting cells");
+        }
+        if (analysis.interface_by_face[jump.face.axis][face] != nullptr) {
+            return failure(Status::invalid_argument,
+                           "an impressed potential jump may not overlap a mixing interface");
+        }
+        auto &owner = analysis.potential_jump_by_face[jump.face.axis][face];
+        if (owner != nullptr) {
+            return failure(Status::invalid_argument,
+                           "an internal charge face may belong to only one impressed potential jump");
+        }
+        owner = &jump;
+        source_cut_count = std::max(source_cut_count, jump.source_cut_index + 1);
+    }
+    if (source_cut_count != 0) {
+        std::vector<std::uint8_t> cut_seen(source_cut_count, 0);
+        for (const auto &jump : problem.impressed_potential_jump_faces) {
+            cut_seen[jump.source_cut_index] = 1;
+        }
+        if (std::any_of(cut_seen.begin(), cut_seen.end(),
+                        [](std::uint8_t seen) { return seen == 0; })) {
+            return failure(Status::invalid_argument,
+                           "impressed potential jump source_cut_index values must be dense from zero");
+        }
     }
 
     const bool any_unset = std::any_of(problem.boundary.values.begin(),
@@ -508,6 +551,79 @@ SolveResult analyze_problem(const Problem &problem,
         }
     }
     analysis.component_anchored.assign(analysis.component_cells.size(), 0);
+
+    if (source_cut_count != 0) {
+        std::vector<std::size_t> cut_component(source_cut_count, no_component);
+        std::vector<std::size_t> component_cut(analysis.component_cells.size(), no_component);
+        for (const auto &jump : problem.impressed_potential_jump_faces) {
+            const std::size_t component =
+                analysis.component_of_cell[jump.face.negative_cell];
+            if (component != analysis.component_of_cell[jump.face.positive_cell]) {
+                return failure(Status::invalid_argument,
+                               "one impressed potential jump face spans disconnected conductor components");
+            }
+            auto &owned_component = cut_component[jump.source_cut_index];
+            if (owned_component == no_component) {
+                owned_component = component;
+            } else if (owned_component != component) {
+                return failure(Status::invalid_argument,
+                               "one impressed potential jump source cut spans multiple conductor components");
+            }
+            auto &owned_cut = component_cut[component];
+            if (owned_cut == no_component) {
+                owned_cut = jump.source_cut_index;
+            } else if (owned_cut != jump.source_cut_index) {
+                return failure(Status::invalid_argument,
+                               "one driven conductor component may contain exactly one impressed potential jump source cut");
+            }
+        }
+        for (const auto &jump : problem.impressed_potential_jump_faces) {
+            std::vector<std::uint8_t> visited(count, 0);
+            std::queue<std::size_t> queue;
+            queue.push(jump.face.negative_cell);
+            visited[jump.face.negative_cell] = 1;
+            while (!queue.empty()) {
+                const std::size_t cell = queue.front();
+                queue.pop();
+                for (std::size_t neighbor : neighboring_cells(grid, cell)) {
+                    const auto coordinates = [&grid](std::size_t index) {
+                        const std::size_t x = index % grid.nx;
+                        const std::size_t yz = index / grid.nx;
+                        return std::array<std::size_t, 3>{x, yz % grid.ny,
+                                                          yz / grid.ny};
+                    };
+                    const auto left = coordinates(cell);
+                    const auto right = coordinates(neighbor);
+                    std::size_t axis = 0;
+                    while (axis < 3 && left[axis] == right[axis]) {
+                        ++axis;
+                    }
+                    const std::size_t negative =
+                        left[axis] < right[axis] ? cell : neighbor;
+                    const std::size_t positive = negative == cell ? neighbor : cell;
+                    std::size_t face = 0;
+                    const bool valid_face = structured_face_index(
+                        grid, {axis, negative, positive}, face);
+                    if (!valid_face ||
+                        analysis.potential_jump_by_face[axis][face] != nullptr ||
+                        !analysis.conducting[neighbor] || visited[neighbor]) {
+                        continue;
+                    }
+                    const auto *interface = analysis.interface_by_face[axis][face];
+                    if (interface != nullptr &&
+                        interface->g_up_s_per_m2 + interface->g_down_s_per_m2 == 0.0) {
+                        continue;
+                    }
+                    visited[neighbor] = 1;
+                    queue.push(neighbor);
+                }
+            }
+            if (!visited[jump.face.positive_cell]) {
+                return failure(Status::invalid_argument,
+                               "impressed potential jump source cut has no connected return path");
+            }
+        }
+    }
     populate_boundary_cells(problem, analysis);
 
     std::vector<double> component_prescribed_current_a(analysis.component_cells.size(), 0.0);
@@ -649,6 +765,12 @@ double internal_flux(const Problem &problem,
     if (!analysis.conducting[lower] || !analysis.conducting[upper]) {
         return 0.0;
     }
+    const auto *potential_jump = analysis.potential_jump_by_face[axis][face];
+    const double positive_axis_jump_v =
+        potential_jump == nullptr
+            ? 0.0
+            : static_cast<double>(potential_jump->normal_sign) *
+                  potential_jump->potential_jump_v;
     if (const auto *interface = analysis.interface_by_face[axis][face];
         interface != nullptr) {
         const double interface_conductance =
@@ -660,11 +782,13 @@ double internal_flux(const Problem &problem,
             0.5 * spacing / problem.conductivity_s_per_m[lower] +
             1.0 / interface_conductance +
             0.5 * spacing / problem.conductivity_s_per_m[upper];
-        return -(potential[upper] - potential[lower]) / resistance;
+        return -(potential[upper] - potential[lower] - positive_axis_jump_v) /
+               resistance;
     }
     const double conductivity = harmonic_mean(problem.conductivity_s_per_m[lower],
                                               problem.conductivity_s_per_m[upper]);
-    return -conductivity * (potential[upper] - potential[lower]) / spacing;
+    return -conductivity *
+           (potential[upper] - potential[lower] - positive_axis_jump_v) / spacing;
 }
 
 void compute_face_fluxes(const Problem &problem,
@@ -1045,21 +1169,50 @@ Diagnostics diagnostics(const Problem &problem,
                         result.boundary_outward_current_a.end(),
                         0.0,
                         [](double sum, double value) { return sum + std::abs(value); });
+    std::vector<double> component_source_cut_current_l1_a(
+        analysis.component_cells.size(), 0.0);
+    double source_cut_current_l1_a = 0.0;
+    const std::array<double, 3> internal_face_area_m2{
+        problem.grid.dy_m * problem.grid.dz_m,
+        problem.grid.dx_m * problem.grid.dz_m,
+        problem.grid.dx_m * problem.grid.dy_m,
+    };
+    for (const auto &jump : problem.impressed_potential_jump_faces) {
+        std::size_t face_index = 0;
+        if (!structured_face_index(problem.grid, jump.face, face_index)) {
+            continue;
+        }
+        const auto &axis_flux = jump.face.axis == 0
+                                    ? fluxes.x
+                                    : (jump.face.axis == 1 ? fluxes.y : fluxes.z);
+        const double current_a =
+            std::abs(axis_flux[face_index]) * internal_face_area_m2[jump.face.axis];
+        source_cut_current_l1_a += current_a;
+        component_source_cut_current_l1_a[
+            analysis.component_of_cell[jump.face.negative_cell]] += current_a;
+    }
     result.physical_balance_integrated_l2_a = std::sqrt(integrated_sum_squares_a2);
     for (double &component_l2_a : result.component_balance_integrated_l2_a) {
         component_l2_a = std::sqrt(component_l2_a);
     }
+    const double balance_reference_current_l1_a =
+        result.boundary_current_l1_a + source_cut_current_l1_a;
     const double relative_balance_tolerance =
-        1.0e-10 * result.boundary_current_l1_a;
+        1.0e-10 * balance_reference_current_l1_a;
     const double roundoff_balance_tolerance =
-        64.0 * std::numeric_limits<double>::epsilon() * result.boundary_current_l1_a;
+        64.0 * std::numeric_limits<double>::epsilon() *
+        balance_reference_current_l1_a;
     result.physical_balance_tolerance_l2_a =
         relative_balance_tolerance + roundoff_balance_tolerance;
     result.max_cell_current_imbalance_tolerance_a =
         relative_balance_tolerance + roundoff_balance_tolerance;
     result.component_net_current_tolerance_a.reserve(
         result.component_boundary_current_l1_a.size());
-    for (double local_l1_a : result.component_boundary_current_l1_a) {
+    for (std::size_t component = 0;
+         component < result.component_boundary_current_l1_a.size(); ++component) {
+        const double local_l1_a =
+            result.component_boundary_current_l1_a[component] +
+            component_source_cut_current_l1_a[component];
         result.component_net_current_tolerance_a.push_back(
             1.0e-10 * local_l1_a +
             64.0 * std::numeric_limits<double>::epsilon() * local_l1_a);
@@ -1313,9 +1466,12 @@ SolveResult solve(const Problem &problem, const SolverOptions &options) {
                                    solution.potential_v,
                                    solution.face_current_density_a_per_m2,
                                    problem.interfaces,
+                                   problem.impressed_potential_jump_faces,
                                    observations));
     solution.provenance = {api_version,
-                           operator_version,
+                           problem.impressed_potential_jump_faces.empty()
+                               ? operator_version
+                               : source_cut_operator_version,
                            problem.interfaces.empty() ? std::string_view{}
                                                       : mixing_operator_version,
                            solver_version,

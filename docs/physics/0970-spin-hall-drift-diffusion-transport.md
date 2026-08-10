@@ -719,8 +719,16 @@ capability ani kwalifikacją produkcyjną.
 Właściciel `backends/fdm/gpu/cuda/transport/charge/**` realizuje rzeczywisty
 FP64 charge solve na urządzeniu: konserwatywny operator FV z harmoniczną
 przewodnością ścian, device CG, fixed-tree redukcje oraz dwupoziomowy device AMG.
-Agregaty AMG powstają deterministycznie z grafu siły operatora, mają ograniczony
-rozmiar i jawny coarse operator $A_c=RAP$; nie jest to Jacobi nazwane AMG.
+Agregaty AMG są geometrycznymi blokami `2 x 2 x 2` kanonicznej ortogonalnej
+siatki FDM, z deterministycznym przypisaniem i jawnym coarse operatorem
+$A_c=P^TAP$. Ten wybór wykorzystuje regularną topologię tej realizacji,
+zapewnia co najwyżej osiem fine cells na agregat i stabilną tożsamość cache;
+nie jest adaptacyjnym strength-graph AMG. Puste agregaty wynikające z legalnej
+maski nieaktywnej mają zerową korektę coarse i nie wykonują dzielenia przez
+zero. Skuteczność tej dwupoziomowej preconditioner realization musi być
+kwalifikowana osobno dla skoków materiałowych, finite-$G$, nieparzystych
+wymiarów, masek nieaktywnych i rozłącznych komponentów; sama liczba coarse DOF
+nie dowodzi poprawności $P^TAP$ ani skalowalności solve.
 Typed cell/material/face/formula payloads są walidowane fail-closed przed
 publikacją. Voltage, exact-density i insulating external faces mają jeden
 globalnie zorientowany prąd ścianowy, a odrzucony descriptor lub solve nie
@@ -847,6 +855,7 @@ before pointer access.
 | `fullmag_fdm_gpu_transport_spin_boundary_face_v1` | 104 | `32:kind:u32;36:axis:u32;40:side:i32;44:outward_sign:i32;48:adjacent_cell:u64;56:canonical_face_index:u64;64:area:f64;72:potential_xyz:f64[3];96:source_id:u64` | `0x08` |
 | `fullmag_fdm_gpu_transport_spin_interface_v1` | 176 | `32:kind:u32;36:axis:u32;40:orientation:i32;44:reserved1:u32;48:negative_cell:u64;56:positive_cell:u64;64:from_cell:u64;72:to_cell:u64;80:canonical_face_index:u64;88:area:f64;96:G_up:f64;104:G_down:f64;112:G_r:f64;120:G_i:f64;128:magnetization_xyz:f64[3];152:source_id:u64;160:topology_id:u64;168:charge_edge_enabled:u32;172:reserved2:u32` | `0x1c` |
 | `fullmag_fdm_gpu_transport_formula_ids_v1` | 144 | existing charge formula fields through offset 63, then `64:spin_formula_id:u32;68:spin_operator_id:u32;72:electric_reconstruction_id:u32;76:interface_formula_id:u32;80:torque_operator_id:u32;84:spin_engine_id:u32;88:preconditioner_id:u32;92:spin_residual_id:u32;96:local_residual_id:u32;100:reserved2:u32;104:spin_operator_revision:u64;112:preconditioner_revision:u64;120:gamma_e:f64;128:gmres_restart:u64;136:reserved3:u64` | `0x1c` |
+| `fullmag_fdm_gpu_transport_spin_observation_record_v1` | 288 | `32:kind:u32;36:axis:u32;40:orientation:i32;44:reserved1:u32;48:cell_index:u64;56:source_id:u64;64:topology_id:u64;72:canonical_face_index:u64;80:negative_cell:u64;88:positive_cell:u64;96:from_cell:u64;104:to_cell:u64;112:region_id:u32;116:reserved2:u32;120:charge_from_trace_v:f64;128:charge_to_trace_v:f64;136:charge_delta_trace_v:f64;144:lane0_xyz:f64[3];168:lane1_xyz:f64[3];192:lane2_xyz:f64[3];216:lane3_xyz:f64[3];240:lane4_xyz:f64[3];264:lane5_xyz:f64[3]` | exactly `0x48` |
 
 The six views retain their frozen meanings and order: cells, materials,
 interfaces, charge faces, spin boundary faces, and formula IDs. Spin-aware cell,
@@ -887,6 +896,29 @@ The closed spin ID registries are: formula
 production policy requires `gmres_restart=50`; policy 2 uses a separately named
 prototype engine and cannot publish these production IDs.
 
+For a descriptor with `M1_CHARGE|STEADY_SPIN`, all six views are
+`host_read_only`, `element_type=raw_bytes`, `component_order=scalar` and have
+8-byte-aligned non-overlapping ranges. The exact contracts are:
+
+| View | Count | Byte stride | Empty rule | Payload `required_features` |
+|---|---:|---:|---|---:|
+| cells | `nx*ny*nz` | 72 | forbidden | exactly `0x04` |
+| materials | number of unique referenced material IDs, at least one | 112 | forbidden | exactly `0x04` |
+| interfaces | number of authored internal interfaces | 176 | allowed only with address/length zero | transparent exactly `0x04`; mixing exactly `0x14` |
+| charge faces | exactly all external structured faces | 88 | forbidden | exactly `0x04` |
+| spin boundary faces | exactly all external structured faces | 104 | forbidden | exactly `0x08` |
+| formula IDs | 1 | 144 | forbidden | exactly `0x04` |
+
+`byte_length` is exactly `element_count*byte_stride` under checked arithmetic;
+an empty interface view still carries stride 176. The three spin-aware records
+with a charge prefix deliberately retain `required_features=0x04`, so an old
+charge parser accepts the prefix and larger stride. The descriptor feature graph
+(`required_features` contains `0x0c`, or `0x1c` when mixing is authored), the
+exact spin stride and each tail field then make the spin extension mandatory;
+the payload prefix is not overloaded to advertise its optional tail. All six
+nonempty byte ranges are pairwise disjoint, and no device/unified pointer is
+legal during static upload.
+
 After a successful solve, the accepted snapshot token also owns immutable
 device-resident $\mu_s$, complete oriented $Q_x/Q_y/Q_z$, separate
 $R_{sf}/R_J/R_\phi$ channels, order-independent interface observations
@@ -896,6 +928,32 @@ all four physical balances, the deterministic compute digest, and the
 scientific continuation digest. Artifact record 11 remains frozen with feature
 mask `0x44`; legality of `mu_s`, `Q_ia`, torque and observations is determined
 from the accepted spin state and `field_id`, not by changing that record mask.
+
+Artifact field 7 is the only transport-observation stream; the closed artifact
+field registry remains 0--7. Its destination is a range-bounded array of
+`fullmag_fdm_gpu_transport_spin_observation_record_v1` records with
+`raw_bytes/scalar`, 288-byte stride, exact record feature mask `0x48`, and the
+closed kind registry `0 invalid`, `1 reaction`, `2 torque`, `3 interface`.
+Unknown kinds, nonzero reserved fields, a different stride/component order, or
+any smaller record are invalid. The stream order is independent of authored
+interface order: reaction records for cells in increasing linear-cell order,
+then torque records in that order, then interface records sorted
+lexicographically by `(source_id, topology_id, axis, canonical_face_index,
+negative_cell, positive_cell, from_cell, to_cell)`.
+
+Every lane is an `xyz` vector. Reaction records use lanes 0--2 for
+$(R_{sf},R_J,R_\phi)$ in $\mathrm{A\,m^{-3}}$; torque records use lanes 0--2
+for `(volume,surface,total)` in $\mathrm{s^{-1}}$; interface records use lanes
+0--5 for `(incoming,backflow,absorbed,negative-positive-axis-flux,
+positive-positive-axis-flux,SML)` in $\mathrm{A\,m^{-2}}$. Unused metadata and
+lanes are exact zero. `cell_index` and `region_id` are populated only for cell
+records; the complete source/topology/orientation/face/from/to identity is
+populated only for interface records. The bounded M1 lane emits an exact-zero
+SML vector because `sml_reservoir_v2` remains unsupported. Artifact field 5
+continues to expose the final total torque SoA and is not reinterpreted.
+Interface records additionally preserve the accepted oriented charge traces
+`charge_from_trace_v`, `charge_to_trace_v`, and their exact difference used by
+the M1 mixing law; cell records keep those three fields exact zero.
 
 #### Discrete operator invariants
 
@@ -957,6 +1015,32 @@ reductions. A Jacobi-only charge prototype must publish a distinct prototype
 engine identity; it cannot claim the production AMG engine. Likewise, a local
 $3\times3$ reaction inverse may be a named prototype preconditioner but cannot
 silently replace the frozen component AMG/block-Jacobi policy.
+
+Production GPU memory resolution uses `memory_policy=auto`. After static state
+has been materialized on the selected CUDA context, the runtime reads
+`cudaMemGetInfo`, freezes a safety reserve, and computes `usable_bytes` from the
+actual free memory. Before any solve-owned allocation it must estimate and
+publish separate `first_required_bytes` and `warm_required_bytes`; the latter
+includes the immutable accepted state, the candidate state and every live
+hierarchy/workspace phase. For cold AMG construction, where device-side
+coarsening may reduce storage only after inspection of the operator,
+`first_required_bytes` is a conservative pre-allocation upper bound rather
+than a measured peak; provenance must identify estimate kind and the later
+measured high-water value separately. Warm-cache requirements are computed
+from the resolved resident hierarchy and must not be labelled as cold bounds.
+An insufficient budget fails closed before the
+first allocation and never enables CPU fallback. Because cache identity also
+depends on the assembled `m_stage` digest, a warm attempt uses the same cold
+upper bound for its pre-allocation gate; its exact retained-hierarchy
+requirement is published only as a post-cache-hit audit, never misreported as
+the earlier preflight. Provenance records the
+resolved policy, device total/free memory, static baseline, safety reserve,
+usable bytes, estimate kind, first/warm required bytes and measured high-water
+bytes. `memory_policy=fixed`
+is reserved for reproducible tests and qualification workloads. In particular,
+512 MiB is the frozen external envelope of `performance_v1`, and 2 GiB is its
+warm transactional high-water envelope; neither value is a global production
+cap.
 
 The first executable slice is intentionally bounded to one structured
 single-grid domain on one CUDA device, FP64-only, explicit static materials,
@@ -1048,7 +1132,7 @@ evidence.
 | `determinism_restart_v1` | `fdm_gpu_m1_determinism_restart_v1`: two uninterrupted repeats and one actual-runtime export/destroy/new-context/import continuation of a 4352-byte sequence-7 checkpoint; the separate frozen oracle A supplies codec mutations for truncation, corruption, unknown required ID, nonzero or surplus-zero padding, wrong ID-1 tuple, subrecord `record_bytes`, field type, extra inter-section block and missing required section | `oracle.checkpoint_bitwise_continuation_v1`: runtime payload B preserves exact device/build/static identity, lineage/sequence/content, and next field/balance/iteration/`deterministic_compute_digest`/`scientific_continuation_digest`; frozen payload A retains exact SHA-256 `ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5` solely as codec oracle and must reject across actual identity; `operation_audit_digest` independently proves export/import or failed-import events | scientific/compute digests exact; full telemetry stream is not compared; 100% semantic decoder/import mutation rejection and every actual transfer remains in the audit chain | non-skipped same-GPU UUID managed triplet with `fdm-gpu-m1-determinism-restart-v1.json`, audit records and complete runtime checkpoint payload |
 | `public_path_v1` | `fdm_gpu_m1_public_path_v1`: normalized ProblemIR for $8\times4\times2$, double/strict GPU, $\sigma=5\times10^6\,\mathrm{S/m}$, $\theta_{SH}=0.1$, x-min density $10^{11}\,\mathrm{A/m^2}$, x-max $V=0$, insulating spin BC and one torque target | `oracle.public_artifact_manifest_v1`: exact requested/resolved tuple plus required artifacts `V,J_c,mu_s,Q_ia,torque_stt`, charge/spin/interface balances, transfer audit and checkpoint identity with frozen SI units/components | normalized ProblemIR, requested/resolved identity and artifact key set 100% exact; numeric fields meet their gate tolerances | non-skipped managed ProblemIR-planner-runner-ABI-CUDA run with GPU UUID and `fdm-gpu-m1-public-path-v1.json` plus artifact manifest |
 | `convergence_v1` | `fdm_gpu_m1_convergence_v1`: uniform/layered charge and 1-D spin on 32/64/128 cells; transverse-only N/F interface with $y\in[0,1]\,\mathrm{m}$, unit depth, $m=(0,0,1)$, $G_\uparrow=G_\downarrow=G_i=0$, $G_r=2\,\mathrm{S/m^2}$, $\Delta\mu_s=(y^2,0,0)\,\mathrm{V}$, and mixing grids 2x16x1, 2x32x1, and 2x64x1 | `oracle.richardson_orders_v1`: analytic charge/spin solutions and mixing $q_{abs}=(2y^2,0,0)\,\mathrm{A/m^2}$ with exact integral $2/3\,\mathrm{A/m}$; composite midpoint error $e_n=1/(6n^2)\,\mathrm{A/m}$ | charge/spin order `>=1.8`, ratio `>=3.5`; mixing order `>=1.99`, successive ratio `[3.99,4.01]`, pointwise `rtol<=1e-13`; all balances `<=1e-10` | non-skipped managed mesh sweep with GPU UUID and `fdm-gpu-m1-convergence-v1.json` containing raw norms, exact errors, ratios and fitted orders |
-| `performance_v1` | `fdm_gpu_m1_performance_v1`: $1024\times128\times8=1,048,576$ cell racetrack, fixed solver tolerances, output/checkpoint disabled, one setup then five warm solves on one recorded GPU UUID/runtime/build | `oracle.absolute_fdm_gpu_m1_budget_v1`: no future or relative baseline; each run is checked directly against the frozen limits | `peak device bytes <=2147483648`; setup <=5 s; median total solve <=30 s; p95 total solve <=36 s; forbidden transfer bytes exact zero | five non-skipped managed runs with GPU UUID and `fdm-gpu-m1-performance-v1.json` containing raw setup/apply/solve/reduction times and memory high-water marks |
+| `performance_v1` | `fdm_gpu_m1_performance_v1`: $1024\times128\times8=1,048,576$ cell racetrack, fixed solver tolerances, output/checkpoint disabled, `memory_policy=fixed`, one first solve then five warm transactional solves on one recorded GPU UUID/runtime/build | `oracle.absolute_fdm_gpu_m1_budget_v1`: workload-specific fixed qualification envelope, not a global runtime cap | first-solve external envelope `<=536870912` bytes; warm transactional peak `<=2147483648` bytes; setup <=5 s; median total solve <=30 s; p95 total solve <=36 s; forbidden transfer bytes exact zero | five non-skipped managed runs with GPU UUID and `fdm-gpu-m1-performance-v1.json` containing raw setup/apply/solve/reduction times, first/warm required bytes, total/free/baseline/reserve/usable memory, resolved policy and high-water marks |
 
 These gates define qualification. The bounded charge rows named in the status
 section have actual-device contract evidence, while every other row remains a
@@ -1705,14 +1789,20 @@ a qualified workload without the validation gates above.
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |
-| FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with strength-graph device AMG | uniform/layered actual-device gates |
+| FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with linear-cost geometric `2 x 2 x 2` aggregation and exact device RAP | uniform/layered/scalability actual-device gates |
 | FDM GPU M1 checkpoint codec | backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp | build_checkpoint; parse_checkpoint | encode and decode canonical charge-only FMGPUTR1 sections 1--9/18/20 | frozen codec oracle plus runtime identity A/B gate |
 | FDM GPU M1 Rust ABI mirror | crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs | fullmag_fdm_gpu_transport_solve_charge_v1 | mirror append-only C layouts and symbols without adding a public runner | Rust layout tests |
 | FDM GPU M1 uniform regression | backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp | main | check analytic FP64 field/current, AMG/cache audit, transfer bounds and zero fallback on a physical GPU | `just verify-fdm-gpu-m1-charge-native-contract` |
+| FDM GPU M1 scalability regression | backends/fdm/tests/gpu_m1_charge_scalability_v1_contract.cpp | main | execute the public FP64 charge path for 1,048,576 cells, record upload/solve timings, verify exact geometric coarse size, and reject host fallback | `just verify-fdm-gpu-m1-charge-scalability-contract` |
 | FDM GPU M1 layered regression | backends/fdm/tests/gpu_m1_charge_layered_v1_contract.cpp | main | compare harmonic layered conduction with analytic and independent CPU FP64 oracles | `just verify-fdm-gpu-m1-charge-native-contract` |
 | FDM GPU M1 snapshot regression | backends/fdm/tests/gpu_m1_charge_snapshot_v1_contract.cpp | main | separate the frozen synthetic codec oracle from identity-dependent runtime export/import and prove bitwise no-resolve readback | `just verify-fdm-gpu-m1-charge-native-contract` |
 | FDM GPU M1 boundary mutation regression | backends/fdm/tests/gpu_m1_charge_boundary_mutation_v1_contract.cpp | main | reject malformed typed records without state publication and exercise voltage/density/insulating faces | `just verify-fdm-gpu-m1-charge-native-contract` |
 | FDM GPU M1 runtime ABI contract | docs/specs/spin-transport-runtime-contract-v1.md | DOC-ANCHOR:fdm-gpu-m1-abi-v1 | specify append-only layout, state machine, exact checkpoint grammar and fail-closed errors | normative contract with partial implementation |
+| FDM GPU M1 spin-observation ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_steady_spin_v1 | declare the steady-spin entry point and append-only typed immutable observation readback | C11 and Rust layout contracts |
+| FDM GPU M1 spin operator and compact observations | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device; materialize_observation_range | solve FP64 steady spin, retain per-cell reaction/torque in compact SoA, retain immutable interface identity, and reconstruct complete 288-byte records only during bounded readback | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS, capability remains semantic-only |
+| FDM GPU M1 spin-observation parity | backends/fdm/tests/gpu_m1_spin_operator_parity_v1_contract.cpp | main | compare reconstructed typed observations with the CPU owner, including reversed orientation and exact accepted charge traces | managed actual-device CPU--GPU parity PASS |
+| FDM GPU M1 sparse public dispatch | backends/fdm/tests/gpu_m1_spin_sparse_dispatch_v1_contract.cpp | main | prove 1,048,576-cell public dispatch, 512 MiB external envelope, 2 GiB total peak, persistent cache, component-sensitive digest invalidation, NaN rollback and deterministic restore | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS |
+| FDM GPU M1 sparse performance | backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu | main | enforce the frozen absolute setup, warm-solve, transfer and whole-context memory budgets on one identified GPU | `just verify-fdm-gpu-m1-spin-sparse-performance-contract`; durable actual-device JSON PASS |
 
 (scientific-bibliography)=
 ## 9. References

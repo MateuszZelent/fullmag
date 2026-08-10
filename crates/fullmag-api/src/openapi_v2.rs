@@ -482,6 +482,13 @@ use utoipa::OpenApi;
         fullmag_authoring::CurrentTransportKind,
         fullmag_authoring::CurrentTransportModel,
         fullmag_authoring::SceneTransportCoupling,
+        fullmag_authoring::SceneStructuredCutAxis,
+        fullmag_authoring::SceneStructuredCutNormal,
+        fullmag_authoring::SceneStructuredCutPlane,
+        fullmag_authoring::SceneImpressedPotentialJump,
+        fullmag_authoring::SceneStructuredCurrentDrive,
+        fullmag_authoring::SceneStructuredCurrentSourceCut,
+        fullmag_authoring::SceneStructuredCurrentClosure,
         fullmag_authoring::SceneChargeTransportMaterial,
         fullmag_authoring::SceneChargeTransportMaterialAssignment,
         fullmag_authoring::SceneChargeBoundary,
@@ -930,6 +937,27 @@ mod tests {
             serde_json::json!(true),
             "the scene boundary must accept every validated RT0/H(div) descriptor field"
         );
+    }
+
+    #[test]
+    fn openapi_current_transport_exposes_typed_structured_current_closure() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let property = &schemas["KnownSceneCurrentTransport"]["properties"]
+            ["structured_current_closure"];
+
+        assert!(property
+            .to_string()
+            .contains("#/components/schemas/SceneStructuredCurrentClosure"));
+        assert!(schemas["SceneStructuredCurrentClosure"]
+            .to_string()
+            .contains("closed_geometry"));
+        assert!(!schemas["SceneStructuredCurrentClosure"]
+            .to_string()
+            .contains("certified_import"));
+        assert!(schemas["SceneStructuredCurrentDrive"]
+            .to_string()
+            .contains("impressed_potential_jump"));
     }
 
     #[test]

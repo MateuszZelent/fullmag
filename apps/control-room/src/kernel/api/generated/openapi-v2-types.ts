@@ -6011,6 +6011,7 @@ export interface components {
             name: string;
             solve_region?: string | null;
             solver?: null | components["schemas"]["SceneChargeSolverPolicy"];
+            structured_current_closure?: null | components["schemas"]["SceneStructuredCurrentClosure"];
             time_envelope?: null | components["schemas"]["SceneTimeEnvelope"];
         };
         KnownSceneOerstedField: {
@@ -8166,6 +8167,12 @@ export interface components {
         SceneEnvelopeInterpolation: "linear" | "previous";
         /** @enum {string} */
         SceneExchangeCouplingMode: "harmonic_mean" | "explicit" | "disabled";
+        SceneImpressedPotentialJump: {
+            drive_id: string;
+            /** Format: double */
+            potential_jump_V: number;
+            schema_version: string;
+        };
         SceneInitialMagnetization: {
             /** @enum {string} */
             kind: "uniform";
@@ -8606,6 +8613,34 @@ export interface components {
         };
         /** @enum {string} */
         SceneSpinTransportMode: "steady" | "transient";
+        SceneStructuredCurrentClosure: {
+            closure_id: string;
+            /** @enum {string} */
+            kind: "closed_geometry";
+            schema_version: string;
+            source_cuts: components["schemas"]["SceneStructuredCurrentSourceCut"][];
+        };
+        SceneStructuredCurrentDrive: components["schemas"]["SceneImpressedPotentialJump"] & {
+            /** @enum {string} */
+            kind: "impressed_potential_jump";
+        };
+        SceneStructuredCurrentSourceCut: {
+            circuit_id: string;
+            drive: components["schemas"]["SceneStructuredCurrentDrive"];
+            plane: components["schemas"]["SceneStructuredCutPlane"];
+            region: components["schemas"]["SceneRegionRef"];
+            source_cut_id: string;
+        };
+        /** @enum {string} */
+        SceneStructuredCutAxis: "x" | "y" | "z";
+        /** @enum {string} */
+        SceneStructuredCutNormal: "positive_axis" | "negative_axis";
+        SceneStructuredCutPlane: {
+            axis: components["schemas"]["SceneStructuredCutAxis"];
+            normal: components["schemas"]["SceneStructuredCutNormal"];
+            /** Format: double */
+            offset_m: number;
+        };
         SceneSurfaceRef: {
             object_id: string;
             orientation: number[];

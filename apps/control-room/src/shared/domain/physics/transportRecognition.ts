@@ -66,7 +66,7 @@ function isLinearSolver(value: unknown): boolean {
     && isFiniteNumber(value.relative_tolerance);
 }
 
-function isChargeSolver(value: unknown, coupling: unknown): boolean {
+function isChargeSolver(value: unknown, coupling: unknown, hasStructuredClosure: boolean): boolean {
   if (!isObject(value)
     || !hasOnlyKeys(value, ["engine", "linear", "operator_version", "physical_residual_version"])
     || !isLinearSolver(value.linear)) return false;
@@ -77,8 +77,93 @@ function isChargeSolver(value: unknown, coupling: unknown): boolean {
   }
   return (coupling === undefined || coupling === "one_way")
     && value.engine === "cg"
-    && value.operator_version === "fv_charge_harmonic_v1"
+    && value.operator_version === (hasStructuredClosure
+      ? "fv_charge_harmonic_source_cut_v1"
+      : "fv_charge_harmonic_v1")
     && value.physical_residual_version === "charge_balance_integrated_l2.v1";
+}
+
+function isStructuredCurrentDrive(value: unknown): boolean {
+  return isObject(value)
+    && hasOnlyKeys(value, ["drive_id", "kind", "potential_jump_V", "schema_version"])
+    && typeof value.drive_id === "string"
+    && value.drive_id.trim().length > 0
+    && value.kind === "impressed_potential_jump"
+    && isFiniteNumber(value.potential_jump_V)
+    && value.potential_jump_V !== 0
+    && value.schema_version === "impressed_potential_jump.v1";
+}
+
+function isStructuredCurrentSourceCut(value: unknown): boolean {
+  return isObject(value)
+    && hasOnlyKeys(value, ["circuit_id", "drive", "plane", "region", "source_cut_id"])
+    && typeof value.circuit_id === "string"
+    && value.circuit_id.trim().length > 0
+    && isStructuredCurrentDrive(value.drive)
+    && isObject(value.plane)
+    && hasOnlyKeys(value.plane, ["axis", "normal", "offset_m"])
+    && ["x", "y", "z"].includes(value.plane.axis as string)
+    && ["positive_axis", "negative_axis"].includes(value.plane.normal as string)
+    && isFiniteNumber(value.plane.offset_m)
+    && isRegionRef(value.region)
+    && typeof value.source_cut_id === "string"
+    && value.source_cut_id.trim().length > 0;
+}
+
+function isStructuredCurrentClosure(value: unknown): boolean {
+  if (!isObject(value)
+    || !hasOnlyKeys(value, ["closure_id", "kind", "schema_version", "source_cuts"])
+    || typeof value.closure_id !== "string"
+    || value.closure_id.trim().length === 0
+    || value.kind !== "closed_geometry"
+    || value.schema_version !== "structured_current_closure.v1"
+    || !Array.isArray(value.source_cuts)
+    || !value.source_cuts.every(isStructuredCurrentSourceCut)
+    || value.source_cuts.length === 0) return false;
+  const cuts = value.source_cuts as JsonObject[];
+  const unique = (key: "circuit_id" | "source_cut_id"): boolean => {
+    const values = cuts.map((cut) => cut[key]);
+    return new Set(values).size === values.length;
+  };
+  const driveIds = cuts.map((cut) => (cut.drive as JsonObject).drive_id);
+  return unique("source_cut_id")
+    && unique("circuit_id")
+    && new Set(driveIds).size === driveIds.length;
+}
+
+function isTimeEnvelopePoint(value: unknown): boolean {
+  return isObject(value)
+    && hasOnlyKeys(value, ["time_s", "value"])
+    && isFiniteNumber(value.time_s)
+    && isFiniteNumber(value.value);
+}
+
+function isTimeEnvelope(value: unknown): boolean {
+  if (!isObject(value) || typeof value.kind !== "string") return false;
+  switch (value.kind) {
+    case "constant":
+      return hasOnlyKeys(value, ["kind", "value"]) && isFiniteNumber(value.value);
+    case "sinusoidal":
+      return hasOnlyKeys(value, ["amplitude", "frequency_hz", "kind", "offset", "phase_rad"])
+        && [value.amplitude, value.frequency_hz, value.offset, value.phase_rad].every(isFiniteNumber);
+    case "pulse":
+      return hasOnlyKeys(value, ["amplitude", "kind", "t_off_s", "t_on_s"])
+        && [value.amplitude, value.t_off_s, value.t_on_s].every(isFiniteNumber);
+    case "piecewise_linear":
+      return hasOnlyKeys(value, ["kind", "points"])
+        && isArrayOf(value.points, isTimeEnvelopePoint);
+    case "sinc":
+      return hasOnlyKeys(value, ["amplitude", "bandwidth_hz", "center_s", "kind", "offset"])
+        && [value.amplitude, value.bandwidth_hz, value.center_s, value.offset].every(isFiniteNumber);
+    case "tabulated":
+      return hasOnlyKeys(value, ["artifact_ref", "bandwidth_hz", "extrapolation", "interpolation", "kind"])
+        && typeof value.artifact_ref === "string"
+        && (value.bandwidth_hz === undefined || value.bandwidth_hz === null || isFiniteNumber(value.bandwidth_hz))
+        && ["zero", "hold", "error"].includes(value.extrapolation as string)
+        && ["linear", "previous"].includes(value.interpolation as string);
+    default:
+      return false;
+  }
 }
 
 function isSpinSolver(value: unknown, constitutiveVersion: unknown): boolean {
@@ -302,7 +387,11 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
     "name",
     "solve_region",
     "solver",
+    "structured_current_closure",
+    "time_envelope",
   ])) return false;
+  const hasStructuredClosure = value.structured_current_closure !== undefined
+    && value.structured_current_closure !== null;
   return value.kind === "current_transport"
     && ["ohmic_poisson", "magnetoresistive_poisson", "prescribed_density"].includes(value.model as string)
     && transportIdentity("current_transport", value) !== null
@@ -313,6 +402,9 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
     && (value.conservative_current_view === undefined
       || value.conservative_current_view === null
       || isObject(value.conservative_current_view))
+    && (!hasStructuredClosure
+      || value.conservative_current_view === undefined
+      || value.conservative_current_view === null)
     && (value.coupling === undefined || value.coupling === "one_way" || value.coupling === "bidirectional")
     && (value.current_density === undefined || value.current_density === null || isVec3(value.current_density))
     && (value.domain === undefined || isArrayOf(value.domain, isRegionRef))
@@ -321,6 +413,7 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
       || value.gauge === "dirichlet_reference"
       || value.gauge === "zero_mean")
     && (value.model !== "magnetoresistive_poisson" || value.coupling === "bidirectional")
+    && (!hasStructuredClosure || (value.model === "ohmic_poisson" && value.coupling === "one_way"))
     && (value.materials === undefined || isArrayOf(
       value.materials,
       (item) => isChargeMaterialAssignment(
@@ -329,7 +422,13 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
       ),
     ))
     && (value.solve_region === undefined || value.solve_region === null || typeof value.solve_region === "string")
-    && (value.solver === undefined || value.solver === null || isChargeSolver(value.solver, value.coupling));
+    && (!hasStructuredClosure || isStructuredCurrentClosure(value.structured_current_closure))
+    && (value.time_envelope === undefined || value.time_envelope === null || isTimeEnvelope(value.time_envelope))
+    && (value.solver === undefined
+      ? !hasStructuredClosure
+      : value.solver === null
+        ? !hasStructuredClosure
+        : isChargeSolver(value.solver, value.coupling, hasStructuredClosure));
 }
 
 export function isKnownSpinTransport(value: SceneSpinTransport): value is KnownSceneSpinTransport {

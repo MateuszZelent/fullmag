@@ -61,6 +61,7 @@ from fullmag.model.current_transport import (
     ChargeSolverPolicy,
     ChargeTransportMaterialAssignment,
     ConservativeCurrentView,
+    StructuredCurrentClosure,
     CurrentTransport,
 )
 from fullmag.model.energy import (
@@ -5376,6 +5377,7 @@ class StudyBuilder:
         solver: ChargeSolverPolicy | None = None,
         time_envelope: TimeEnvelope | None = None,
         conservative_current_view: ConservativeCurrentView | None = None,
+        structured_current_closure: StructuredCurrentClosure | None = None,
     ) -> CurrentTransport:
         return current_transport(
             name=name,
@@ -5391,6 +5393,7 @@ class StudyBuilder:
             solver=solver,
             time_envelope=time_envelope,
             conservative_current_view=conservative_current_view,
+            structured_current_closure=structured_current_closure,
         )
 
     def spin_torque(self, module: SpinTorqueModule) -> SpinTorqueModule:
@@ -7511,6 +7514,7 @@ def current_transport(
     solver: ChargeSolverPolicy | None = None,
     time_envelope: TimeEnvelope | None = None,
     conservative_current_view: ConservativeCurrentView | None = None,
+    structured_current_closure: StructuredCurrentClosure | None = None,
 ) -> CurrentTransport:
     module = CurrentTransport(
         name=name,
@@ -7526,6 +7530,7 @@ def current_transport(
         solver=solver,
         time_envelope=time_envelope,
         conservative_current_view=conservative_current_view,
+        structured_current_closure=structured_current_closure,
     )
     _state._current_modules.append(module)
     return module

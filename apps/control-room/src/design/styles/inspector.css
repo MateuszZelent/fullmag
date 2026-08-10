@@ -570,6 +570,42 @@
   font-size: var(--fm-font-size-xs);
 }
 
+.fm-structured-current-closure {
+  display: grid;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-surface);
+}
+
+.fm-structured-current-closure__cuts {
+  display: grid;
+  gap: var(--fm-space-2);
+}
+
+.fm-structured-current-closure__cut {
+  display: grid;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-2) 0;
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
+.fm-structured-current-closure__cut[data-focused="true"] {
+  border-color: var(--fm-accent);
+  background: color-mix(in srgb, var(--fm-accent) 6%, transparent);
+}
+
+.fm-structured-current-closure__cut-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
 /* ── Redesigned Inspector Shell ── */
 .fm-inspector {
   display: grid;

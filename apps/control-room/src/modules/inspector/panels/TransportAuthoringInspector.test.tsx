@@ -83,11 +83,41 @@ const futureMixingSpin = {
   },
 };
 
+const structuredCurrent = {
+  boundaries: [],
+  coupling: "one_way",
+  domain: [{ object_id: "ring", region_id: "conductor" }],
+  gauge: "zero_mean",
+  kind: "current_transport",
+  materials: [{ material: { sigma_Spm: 5.8e7 }, region: { object_id: "ring", region_id: "conductor" } }],
+  model: "ohmic_poisson",
+  name: "closed-loop",
+  solver: {
+    engine: "cg",
+    linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+    operator_version: "fv_charge_harmonic_source_cut_v1",
+    physical_residual_version: "charge_balance_integrated_l2.v1",
+  },
+  structured_current_closure: {
+    closure_id: "ring-closure",
+    kind: "closed_geometry",
+    schema_version: "structured_current_closure.v1",
+    source_cuts: [{
+      circuit_id: "ring-circuit",
+      drive: { drive_id: "ring-drive", kind: "impressed_potential_jump", potential_jump_V: 0.125, schema_version: "impressed_potential_jump.v1" },
+      plane: { axis: "y", normal: "positive_axis", offset_m: 2e-9 },
+      region: { object_id: "ring", region_id: "source-arm" },
+      source_cut_id: "ring-cut",
+    }],
+  },
+};
+
 const currentItems = [
   { future_kind: "charge.v9", opaque: { value: 1 } },
   { future_kind: "charge.v10", opaque: { value: 2 } },
   futureCurrent,
   { current_density: [1, 0, 0], kind: "current_transport", model: "prescribed_density", name: "   " },
+  structuredCurrent,
 ];
 
 vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
@@ -279,6 +309,27 @@ describe("TransportAuthoringInspector", () => {
     expect(html).not.toContain(">Delete<");
     expect(html).not.toContain(">Name<");
     expect(html).not.toContain(">Model<");
+  });
+
+  it("renders typed closed-geometry source-cut controls for a known current resource", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <CurrentTransportInspectorPanel selection={selection("physics.current-transport", {
+          currentTransportId: "closed-loop",
+          kind: "physics.current-transport",
+          nodeId: "model:physics:current-transports:closed-loop",
+          type: "current-transport",
+        })} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("Closed-geometry current closure");
+    expect(html).toContain('value="ring-closure"');
+    expect(html).toContain('value="ring-cut"');
+    expect(html).toContain('value="ring-circuit"');
+    expect(html).toContain('value="ring-drive"');
+    expect(html).toContain('value="0.125"');
+    expect(html).toContain("Add source cut");
   });
 
   it("renders future spin versions losslessly without edit, Replace, or Delete actions", () => {

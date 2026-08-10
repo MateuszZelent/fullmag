@@ -81,6 +81,36 @@ enum {
     FULLMAG_FDM_GPU_TRANSPORT_CHARGE_OPERATOR_CONSERVATIVE_FV_V1 = 1,
     FULLMAG_FDM_GPU_TRANSPORT_CHARGE_ENGINE_CG_DEVICE_AMG_V1 = 1,
     FULLMAG_FDM_GPU_TRANSPORT_CHARGE_RESIDUAL_FIXED_TREE_FP64_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INSULATING = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SINK = 2,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SPECIFIED_POTENTIAL = 3,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_TRANSPARENT = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2 = 2,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_SML_RESERVOIR_V2 = 3,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_REACTION = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_TORQUE = 2,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_INTERFACE = 3,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_FORMULA_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_FORMULA_ONE_WAY_FULLMAG_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_OPERATOR_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_OPERATOR_FV_UPWIND_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_ELECTRIC_RECONSTRUCTION_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_ELECTRIC_RECONSTRUCTION_EXACT_FACE_CURRENT_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_INTERFACE_FORMULA_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_INTERFACE_FORMULA_MAGNETOELECTRONIC_FULLMAG_V2 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_TORQUE_OPERATOR_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_TORQUE_OPERATOR_CELL_SURFACE_BALANCE_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_ENGINE_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_ENGINE_BLOCK_GMRES_CUDA_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_PRECONDITIONER_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_PRECONDITIONER_COMPONENT_AMG_BLOCK_JACOBI_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INTEGRATED_L2_V1 = 1,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_INVALID = 0,
+    FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_FV_V1 = 1,
     FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_INVALID = 0,
     FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_COMPONENT_AMG_V1 = 1,
     FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_BLOCK_JACOBI_PROTOTYPE_V1 = 2,
@@ -133,6 +163,7 @@ enum {
     FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORED_STATE_SPIN_ACCEPTED = 2,
     FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_CODEC_VALID = 1,
     FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_CHARGE = 2,
+    FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_VALID_SPIN = 3,
     FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK = 0,
     FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED = 1,
     FULLMAG_FDM_GPU_TRANSPORT_ERROR_INCOMPATIBLE_ABI = 2,
@@ -203,6 +234,72 @@ typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_charge_formula_ids_v
     uint32_t formula_id, operator_id, engine_id, residual_id;
     uint64_t operator_revision, reserved1;
 } fullmag_fdm_gpu_transport_charge_formula_ids_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_spin_cell_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t active, conductor, material_index, reserved1;
+    uint32_t spin_active, torque_target, region_id, reserved2;
+    double saturation_magnetization;
+} fullmag_fdm_gpu_transport_spin_cell_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_spin_material_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t material_index, reserved1;
+    double conductivity;
+    uint64_t material_revision;
+    double spin_conductivity, polarization, spin_hall_angle;
+    double spin_flip_length, exchange_length, dephasing_length;
+    uint64_t spin_revision;
+} fullmag_fdm_gpu_transport_spin_material_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_spin_boundary_face_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t kind, axis;
+    int32_t side, outward_sign;
+    uint64_t adjacent_cell, canonical_face_index;
+    double area, potential_xyz[3];
+    uint64_t source_id;
+} fullmag_fdm_gpu_transport_spin_boundary_face_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_spin_interface_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t kind, axis;
+    int32_t orientation;
+    uint32_t reserved1;
+    uint64_t negative_cell, positive_cell, from_cell, to_cell;
+    uint64_t canonical_face_index;
+    double area, G_up, G_down, G_r, G_i, magnetization_xyz[3];
+    uint64_t source_id, topology_id;
+    uint32_t charge_edge_enabled, reserved2;
+} fullmag_fdm_gpu_transport_spin_interface_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_spin_observation_record_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t kind, axis;
+    int32_t orientation;
+    uint32_t reserved1;
+    uint64_t cell_index, source_id, topology_id, canonical_face_index;
+    uint64_t negative_cell, positive_cell, from_cell, to_cell;
+    uint32_t region_id, reserved2;
+    double charge_from_trace_v, charge_to_trace_v, charge_delta_trace_v;
+    double lane0_xyz[3], lane1_xyz[3], lane2_xyz[3];
+    double lane3_xyz[3], lane4_xyz[3], lane5_xyz[3];
+} fullmag_fdm_gpu_transport_spin_observation_record_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_charge_interface_trace_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t axis;
+    int32_t orientation;
+    uint32_t reserved1, reserved2;
+    uint64_t source_id, topology_id, canonical_face_index;
+    uint64_t negative_cell, positive_cell, from_cell, to_cell;
+    double from_trace_v, to_trace_v, delta_trace_v, oriented_current_density;
+} fullmag_fdm_gpu_transport_charge_interface_trace_v1;
+typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_formula_ids_v1 {
+    FULLMAG_GPU_PREFIX;
+    uint32_t formula_id, operator_id, engine_id, residual_id;
+    uint64_t operator_revision, reserved1;
+    uint32_t spin_formula_id, spin_operator_id, electric_reconstruction_id;
+    uint32_t interface_formula_id, torque_operator_id, spin_engine_id;
+    uint32_t preconditioner_id, spin_residual_id, local_residual_id, reserved2;
+    uint64_t spin_operator_revision, preconditioner_revision;
+    double gamma_e;
+    uint64_t gmres_restart, reserved3;
+} fullmag_fdm_gpu_transport_formula_ids_v1;
 typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_context_create_request_v1 { FULLMAG_GPU_PREFIX; uint8_t device_uuid[16]; int32_t device_ordinal; uint32_t precision, strict_residency, deterministic; uint64_t allocator_limit, workspace_limit; uint32_t stream_policy, reserved1; uint64_t requested_device_features, reserved2; } fullmag_fdm_gpu_transport_context_create_request_v1;
 typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_context_create_result_v1 { FULLMAG_GPU_PREFIX; fullmag_fdm_gpu_transport_context_handle_v1 context_handle; uint8_t device_uuid[16]; uint32_t compute_major, compute_minor, cuda_runtime, cuda_driver; uint8_t build_digest[32]; uint64_t supported_features; } fullmag_fdm_gpu_transport_context_create_result_v1;
 typedef struct FULLMAG_GPU_ALIGN8 fullmag_fdm_gpu_transport_static_descriptor_v1 { FULLMAG_GPU_PREFIX; uint64_t grid[3]; double cell_size[3]; uint64_t descriptor_revision, source_revision; uint8_t descriptor_digest[32]; uint64_t masks_view_ptr, materials_view_ptr, interfaces_view_ptr, charge_faces_view_ptr, spin_faces_view_ptr, formula_ids_view_ptr, reserved1; } fullmag_fdm_gpu_transport_static_descriptor_v1;
@@ -285,6 +382,11 @@ uint32_t fullmag_fdm_gpu_transport_test_charge_audit_v1(
     uint64_t *coarse_unknown_count,
     uint32_t *hierarchy_levels,
     uint8_t hierarchy_digest[32]);
+uint32_t fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    uint64_t *aggregate, uint64_t aggregate_count,
+    double *coarse_diagonal, uint64_t coarse_count,
+    double *structured_edge_weight, uint64_t edge_count);
 #ifdef __cplusplus
 }
 #endif

@@ -210,7 +210,7 @@ int main() {
     constexpr double h = 1.0e-9;
     constexpr double sigma = 5.0e6;
     constexpr double imposed_j = 1.0;
-    constexpr uint64_t mutation_count = 14;
+    constexpr uint64_t mutation_count = 16;
 
     int device = -1;
     require(cudaGetDevice(&device) == cudaSuccess,
@@ -222,7 +222,9 @@ int main() {
     // Absence of the M1 feature is absence of the charge graph.  Sentinel
     // values prove that append-only charge fields are not interpreted.
     fullmag_fdm_gpu_transport_context_create_request_v1 absent_create{};
-    init_record(absent_create);
+    init_record(absent_create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                                   FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK |
+                                   FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1);
     absent_create.device_ordinal = device;
     absent_create.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     absent_create.strict_residency = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;
@@ -263,6 +265,12 @@ int main() {
                 absent_context.context_handle, 0, nullptr, 0, &absent_count) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK && absent_count == 0,
             "module-absence upload published charge telemetry");
+    auto absent_to_m1 = absent_descriptor;
+    absent_to_m1.required_features = FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE;
+    require(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                absent_context.context_handle, &absent_to_m1) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+            "idempotent absent descriptor accepted an M1 feature transition");
     fullmag_fdm_gpu_charge_solve_request_v1 absent_solve{};
     init_record(absent_solve);
     absent_solve.context_handle = absent_context.context_handle;
@@ -328,7 +336,8 @@ int main() {
                 absent_context.context_handle) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "module-absence context teardown failed");
     fullmag_fdm_gpu_transport_context_create_request_v1 create{};
-    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+    init_record(create, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                            FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
     create.device_ordinal = device;
     create.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     create.strict_residency = FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE;
@@ -485,6 +494,8 @@ int main() {
         case 11: ++faces[0].canonical_face_index; break;
         case 12: faces[2].value = 1.0; break;
         case 13: faces.pop_back(); break;
+        case 14: faces.erase(faces.begin()); break;
+        case 15: faces.erase(faces.begin() + faces.size() / 2); break;
         default: require(false, "unknown test mutation");
         }
         fullmag_fdm_gpu_transport_context_create_result_v1 created{};
@@ -553,6 +564,18 @@ int main() {
                      valid_upload, faces.size());
     require(valid_upload == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "valid exact-density/voltage/insulating descriptor upload failed");
+    auto m1_to_absent = descriptor;
+    m1_to_absent.required_features = 0;
+    m1_to_absent.masks_view_ptr = UINT64_C(0x1);
+    m1_to_absent.materials_view_ptr = UINT64_C(0x3);
+    m1_to_absent.interfaces_view_ptr = UINT64_C(0x5);
+    m1_to_absent.charge_faces_view_ptr = UINT64_C(0x7);
+    m1_to_absent.spin_faces_view_ptr = UINT64_C(0x9);
+    m1_to_absent.formula_ids_view_ptr = UINT64_C(0xb);
+    require(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                created.context_handle, &m1_to_absent) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+            "idempotent M1 descriptor accepted a module-absence transition");
     fullmag_fdm_gpu_charge_solve_request_v1 solve{};
     init_record(solve);
     solve.context_handle = created.context_handle;
@@ -605,11 +628,29 @@ int main() {
                 created.context_handle, baseline_generation, baseline_sequence) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "runtime counter reset failed");
+    solve.relative_tolerance = 1.0e-15;
+    solve.max_iterations = 1;
+    init_record(solved);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(&solve, &solved) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_NONCONVERGED,
+            "one-iteration cold solve must exercise transactional cache rollback");
+    solve.relative_tolerance = 1.0e-12;
+    solve.max_iterations = 128;
     init_record(solved);
     require(fullmag_fdm_gpu_transport_solve_charge_v1(&solve, &solved) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 solved.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
             "valid mixed-boundary device solve failed");
+    uint64_t retry_builds = 0, retry_hits = 0, retry_applies = 0,
+             retry_fallbacks = 0, retry_fine = 0, retry_coarse = 0;
+    uint32_t retry_levels = 0;
+    std::array<uint8_t, 32> retry_digest{};
+    require(fullmag_fdm_gpu_transport_test_charge_audit_v1(
+                created.context_handle, &retry_builds, &retry_hits, &retry_applies,
+                &retry_fallbacks, &retry_fine, &retry_coarse, &retry_levels,
+                retry_digest.data()) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                retry_builds == 1 && retry_hits == 0,
+            "retry after rejected cold solve must rebuild provisional hierarchy");
     fullmag_fdm_gpu_charge_snapshot_info_v1 snapshot{};
     init_record(snapshot);
     require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(

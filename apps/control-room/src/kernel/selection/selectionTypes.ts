@@ -386,6 +386,21 @@ export type SelectionRef =
       type: "current-transport";
     }
   | {
+      currentTransportId: string;
+      kind: "physics.structured-current-closure";
+      nodeId: string;
+      structuredCurrentClosureId: string;
+      type: "structured-current-closure";
+    }
+  | {
+      currentTransportId: string;
+      kind: "physics.structured-current-source-cut";
+      nodeId: string;
+      structuredCurrentClosureId: string;
+      structuredCurrentSourceCutId: string;
+      type: "structured-current-source-cut";
+    }
+  | {
       draft?: boolean;
       kind: "physics.spin-transport";
       nodeId: string;
@@ -812,6 +827,23 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.currentTransportId === right.currentTransportId &&
         left.currentTransportIndex === right.currentTransportIndex
+      );
+    case "structured-current-closure":
+      return (
+        right.type === "structured-current-closure" &&
+        left.currentTransportId === right.currentTransportId &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.structuredCurrentClosureId === right.structuredCurrentClosureId
+      );
+    case "structured-current-source-cut":
+      return (
+        right.type === "structured-current-source-cut" &&
+        left.currentTransportId === right.currentTransportId &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.structuredCurrentClosureId === right.structuredCurrentClosureId &&
+        left.structuredCurrentSourceCutId === right.structuredCurrentSourceCutId
       );
     case "spin-interface":
       return (

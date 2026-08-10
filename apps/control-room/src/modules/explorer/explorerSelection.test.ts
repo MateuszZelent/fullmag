@@ -1470,4 +1470,43 @@ describe("selectExplorerNode", () => {
     });
     expect(kernel.selection.get().kind).toBe("physics.current-transport");
   });
+
+  it("routes structured-current closure and source-cut nodes to distinct inspector selections", () => {
+    const kernel = makeKernel();
+    const closureNode: ExplorerNode = {
+      currentTransportId: "closed-loop",
+      id: "model:physics:global:module:closed-loop:structured-current-closure:ring",
+      kind: "physics.structured-current-closure",
+      label: "ring",
+      parentId: "model:physics:global:module:closed-loop",
+      structuredCurrentClosureId: "ring",
+    };
+    selectExplorerNode(kernel, closureNode, "explorer");
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportId: "closed-loop",
+      kind: "physics.structured-current-closure",
+      nodeId: closureNode.id,
+      structuredCurrentClosureId: "ring",
+      type: "structured-current-closure",
+    });
+
+    const sourceCutNode: ExplorerNode = {
+      currentTransportId: "closed-loop",
+      id: `${closureNode.id}:source-cut:ring-cut`,
+      kind: "physics.structured-current-source-cut",
+      label: "ring-cut",
+      parentId: closureNode.id,
+      structuredCurrentClosureId: "ring",
+      structuredCurrentSourceCutId: "ring-cut",
+    };
+    selectExplorerNode(kernel, sourceCutNode, "explorer");
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportId: "closed-loop",
+      kind: "physics.structured-current-source-cut",
+      nodeId: sourceCutNode.id,
+      structuredCurrentClosureId: "ring",
+      structuredCurrentSourceCutId: "ring-cut",
+      type: "structured-current-source-cut",
+    });
+  });
 });

@@ -484,6 +484,45 @@ def _assert_page_contract(page: str) -> None:
 
 
 class DynamicCurrentOerstedContractDocsTests(unittest.TestCase):
+    def test_fdm_cpu_public_binding_scope_includes_positive_closed_geometry(self) -> None:
+        page = _normalise(PAGE.read_text(encoding="utf-8"))
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        for required in (
+            "fullmag_fdm_cpu_oersted_solve_v1",
+            "fullmag_fdm_cpu_oersted_request_v1",
+            "fullmag_fdm_cpu_oersted_result_v1",
+            "global_closed_current_certificate.v1",
+            "accepted raw face-current",
+            "fdm_oersted_cell_integrated_open.v1",
+            "oersted_fdm_fft_open.v1",
+            "fdm_oersted_fft_open_v1",
+            "StructuredCurrentClosure",
+            "structured_current_closure.v1",
+            "fv_charge_harmonic_source_cut_v1",
+            "publiczny test E2E",
+            "niezerowe `H_oe`",
+            "`certified_import` pozostają odrzucone",
+            "nie wprowadza globalnego sztywnego budżetu 512 MiB",
+            "semantic_only",
+        ):
+            self.assertIn(_normalise(required), page)
+        sources = {source["id"]: source for source in source_map["sources"]}
+        expected_paths = {
+            "fdm-oersted-public-c-abi": "native/include/fullmag_fdm.h",
+            "fdm-oersted-public-native-adapter": "backends/fdm/api/cpu_oersted_fft_v1.cpp",
+            "fdm-oersted-public-abi-contract-test": "backends/fdm/tests/cpu_oersted_fft_public_abi_contract.cpp",
+            "fdm-oersted-public-rust-ffi": "crates/fullmag-fdm-sys/src/lib.rs",
+            "fdm-oersted-public-runner-binding": "crates/fullmag-runner/src/fdm/cpu/native_transport.rs",
+            "fdm-oersted-public-positive-e2e": "crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs",
+            "planner-structured-current-closure": "crates/fullmag-plan/src/spin_transport.rs",
+            "control-room-structured-current-closure": "apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts",
+            "openapi-structured-current-closure": "crates/fullmag-api/src/openapi_v2.rs",
+        }
+        self.assertEqual(
+            expected_paths,
+            {source_id: sources[source_id]["path"] for source_id in expected_paths},
+        )
+
     def test_fdm_oersted_open_v1_is_fully_frozen_and_semantic_only(self) -> None:
         page = _normalise(PAGE.read_text(encoding="utf-8"))
         source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))

@@ -66,6 +66,13 @@ void frozen_prefix_and_records_are_exposed() {
     CHECK_PREFIX(fullmag_fdm_gpu_transport_charge_material_v1);
     CHECK_PREFIX(fullmag_fdm_gpu_transport_charge_face_v1);
     CHECK_PREFIX(fullmag_fdm_gpu_transport_charge_formula_ids_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_spin_cell_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_spin_material_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_spin_boundary_face_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_spin_interface_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_spin_observation_record_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_charge_interface_trace_v1);
+    CHECK_PREFIX(fullmag_fdm_gpu_transport_formula_ids_v1);
     CHECK_PREFIX(fullmag_fdm_gpu_transport_context_create_request_v1);
     CHECK_PREFIX(fullmag_fdm_gpu_transport_context_create_result_v1);
     CHECK_PREFIX(fullmag_fdm_gpu_transport_static_descriptor_v1);
@@ -94,6 +101,11 @@ void frozen_prefix_and_records_are_exposed() {
     static_assert(sizeof(fullmag_fdm_gpu_transport_charge_material_v1) == 56);
     static_assert(sizeof(fullmag_fdm_gpu_transport_charge_face_v1) == 88);
     static_assert(sizeof(fullmag_fdm_gpu_transport_charge_formula_ids_v1) == 64);
+    static_assert(sizeof(fullmag_fdm_gpu_transport_spin_cell_v1) == 72);
+    static_assert(sizeof(fullmag_fdm_gpu_transport_spin_material_v1) == 112);
+    static_assert(sizeof(fullmag_fdm_gpu_transport_spin_boundary_face_v1) == 104);
+    static_assert(sizeof(fullmag_fdm_gpu_transport_spin_interface_v1) == 176);
+    static_assert(sizeof(fullmag_fdm_gpu_transport_formula_ids_v1) == 144);
     static_assert(offsetof(fullmag_fdm_gpu_transport_charge_face_v1, source_id) == 80);
     static_assert(offsetof(fullmag_fdm_gpu_transport_context_create_request_v1,
                            required_features) == 16);
@@ -153,14 +165,33 @@ void unsupported_operations_never_fabricate_state() {
           "snapshot acceptance with a stale context must not publish state");
     fullmag_fdm_gpu_steady_spin_solve_request_v1 spin_request{};
     init(spin_request);
+    spin_request.required_features =
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN;
+    spin_request.context_handle = context;
+    spin_request.snapshot_handle = {5, 6, 7, 8};
     spin_request.solver_policy = FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_COMPONENT_AMG_V1;
-    fullmag_fdm_gpu_steady_spin_solve_result_v1 spin_output;
-    std::memset(&spin_output, 0xa5, sizeof(spin_output));
+    spin_request.relative_tolerance = 1.0e-12;
+    spin_request.max_iterations = 64;
+    fullmag_fdm_gpu_transport_buffer_view_v1 m_view{};
+    init(m_view);
+    m_view.pointer_space = FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_DEVICE_READ_ONLY;
+    m_view.element_type = FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64;
+    m_view.component_order = FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ;
+    m_view.element_count = 3;
+    m_view.byte_stride = sizeof(double);
+    m_view.byte_length = 3 * sizeof(double);
+    m_view.address = 1;
+    auto torque_view = m_view;
+    torque_view.pointer_space = FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_DEVICE_WRITE_ONLY;
+    spin_request.m_stage_view_ptr = reinterpret_cast<uintptr_t>(&m_view);
+    spin_request.torque_view_ptr = reinterpret_cast<uintptr_t>(&torque_view);
+    fullmag_fdm_gpu_steady_spin_solve_result_v1 spin_output{};
+    init(spin_output);
     const auto spin_before = spin_output;
     check(fullmag_fdm_gpu_transport_solve_steady_spin_v1(&spin_request, &spin_output) ==
-              FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED &&
+              FULLMAG_FDM_GPU_TRANSPORT_ERROR_STALE_SNAPSHOT &&
               unchanged(spin_output, spin_before),
-          "unsupported steady-spin solve must not publish state");
+          "steady-spin solve with a stale snapshot must not publish state");
     fullmag_fdm_gpu_transport_telemetry_v1 telemetry;
     std::memset(&telemetry, 0xa5, sizeof(telemetry));
     const auto telemetry_before = telemetry;
@@ -252,6 +283,18 @@ void every_closed_registry_rejects_an_unknown_value() {
     check_registry({FULLMAG_FDM_GPU_TRANSPORT_STREAM_POLICY_INVALID, FULLMAG_FDM_GPU_TRANSPORT_STREAM_POLICY_CONTEXT_OWNED_SINGLE_STREAM}, 2, "stream_policy registry");
     check_registry({FULLMAG_FDM_GPU_TRANSPORT_CHARGE_SOLVER_POLICY_INVALID, FULLMAG_FDM_GPU_TRANSPORT_CHARGE_SOLVER_POLICY_CG_DEVICE_AMG_V1}, 2, "charge_solver_policy registry");
     check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_COMPONENT_AMG_V1, FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_BLOCK_JACOBI_PROTOTYPE_V1}, 3, "spin_solver_policy registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INSULATING, FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SINK, FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SPECIFIED_POTENTIAL}, 4, "spin_boundary registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_TRANSPARENT, FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2, FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_SML_RESERVOIR_V2}, 4, "spin_interface registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_REACTION, FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_TORQUE, FULLMAG_FDM_GPU_TRANSPORT_SPIN_OBSERVATION_INTERFACE}, 4, "spin_observation_kind registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_FORMULA_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_FORMULA_ONE_WAY_FULLMAG_V1}, 2, "spin_formula registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_OPERATOR_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_OPERATOR_FV_UPWIND_V1}, 2, "spin_operator registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_ELECTRIC_RECONSTRUCTION_INVALID, FULLMAG_FDM_GPU_TRANSPORT_ELECTRIC_RECONSTRUCTION_EXACT_FACE_CURRENT_V1}, 2, "electric_reconstruction registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_INTERFACE_FORMULA_INVALID, FULLMAG_FDM_GPU_TRANSPORT_INTERFACE_FORMULA_MAGNETOELECTRONIC_FULLMAG_V2}, 2, "interface_formula registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_TORQUE_OPERATOR_INVALID, FULLMAG_FDM_GPU_TRANSPORT_TORQUE_OPERATOR_CELL_SURFACE_BALANCE_V1}, 2, "torque_operator registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_ENGINE_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_ENGINE_BLOCK_GMRES_CUDA_V1}, 2, "spin_engine registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_PRECONDITIONER_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_PRECONDITIONER_COMPONENT_AMG_BLOCK_JACOBI_V1}, 2, "spin_preconditioner registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INTEGRATED_L2_V1}, 2, "spin_residual registry");
+    check_registry({FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_INVALID, FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_FV_V1}, 2, "spin_local_residual registry");
     check_registry({FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_INVALID, FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT, FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT}, 3, "gauge_policy registry");
     check_registry({FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_UNSET, FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED, FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS, FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_NON_FINITE, FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE, FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_PHYSICAL_BALANCE_FAILURE, FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CANCELLED}, 7, "convergence_reason registry");
     check_registry({FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_NONE, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D}, 5, "telemetry_direction registry");
@@ -327,7 +370,10 @@ void actual_device_context_is_strict_fp64() {
     request.abi_version = 1;
     request.struct_version = 1;
     request.struct_size = sizeof(request);
-    request.required_features = 0x3;
+    request.required_features =
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STRICT_RESIDENCY |
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_DETERMINISTIC_REDUCTIONS |
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE;
     request.device_ordinal = 0;
     request.precision = FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE;
     request.strict_residency = 1;
@@ -341,7 +387,10 @@ void actual_device_context_is_strict_fp64() {
     check(fullmag_fdm_gpu_transport_context_create_v1(&request, &result) ==
               FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED_REQUIRED_FEATURE,
           "unknown required feature must fail before CUDA allocation");
-    request.required_features = 0x3;
+    request.required_features =
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STRICT_RESIDENCY |
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_DETERMINISTIC_REDUCTIONS |
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE;
     request.reserved_flags = 1;
     check(fullmag_fdm_gpu_transport_context_create_v1(&request, &result) ==
               FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR,
@@ -443,10 +492,42 @@ void actual_device_context_is_strict_fp64() {
     descriptor.charge_faces_view_ptr = reinterpret_cast<uint64_t>(&charge_faces);
     descriptor.spin_faces_view_ptr = reinterpret_cast<uint64_t>(&spin_faces);
     descriptor.formula_ids_view_ptr = reinterpret_cast<uint64_t>(&formula_ids);
+    auto expect_invalid_upload_fresh = [&](const char *message) {
+        fullmag_fdm_gpu_transport_context_create_result_v1 fresh{};
+        fresh.abi_version = fresh.struct_version = 1;
+        fresh.struct_size = sizeof(fresh);
+        check(fullmag_fdm_gpu_transport_context_create_v1(&request, &fresh) ==
+                  FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+              "negative upload fixture must create a fresh context");
+        const uint32_t status = fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+            fresh.context_handle, &descriptor);
+        check(fullmag_fdm_gpu_transport_context_destroy_v1(fresh.context_handle) ==
+                  FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+              "negative upload fixture must remain destroyable");
+        check(status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR, message);
+    };
+    interfaces.element_count = 1;
+    interfaces.byte_length = 1;
+    expect_invalid_upload_fresh(
+        "charge-only interface stride 1 must fail before H2D publication");
+    interfaces.element_count = 0;
+    interfaces.byte_length = 0;
+    const auto valid_charge_faces = charge_faces;
+    charge_faces.address = reinterpret_cast<uint64_t>(charge_faces_payload.data() + 1);
+    charge_faces.element_count = charge_faces_payload.size() - 1;
+    charge_faces.byte_length = charge_faces.element_count * charge_faces.byte_stride;
+    expect_invalid_upload_fresh(
+        "charge boundary list missing the first face must fail before device launch");
+    charge_faces = valid_charge_faces;
     const double valid_material = materials_payload;
     materials_payload = std::numeric_limits<double>::quiet_NaN();
-    check(fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
-              result.context_handle, &descriptor) ==
+    const uint32_t nonfinite_material_status =
+        fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+            result.context_handle, &descriptor);
+    if (nonfinite_material_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR)
+        std::fprintf(stderr, "non-finite material upload status=%u\\n",
+                     nonfinite_material_status);
+    check(nonfinite_material_status ==
               FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR,
           "non-finite material metadata must fail before allocation");
     materials_payload = valid_material;
