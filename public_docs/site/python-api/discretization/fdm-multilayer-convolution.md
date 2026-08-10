@@ -28,6 +28,13 @@ Three layouts must not be confused:
 3. an optional **target-only Airbox grid** carries only the published `H_demag` observation outside
    the magnetic support.
 
+This is an FDM multimesh configuration, not a FEM meshing workflow. Each `per_magnet` entry
+defines that magnet's native Cartesian grid. The common XY grid is the shared FFT supercell/kernel
+layout selected by `common_cells_xy` (or its three-dimensional analogue), not an extra material
+body. Layer separation is set by the geometry transforms, hence by the resulting native-grid
+origins along $z$; it is not encoded by a `universe.mesh(...)` call. Do not add a FEM universe-mesh
+request to make this FDM method executable.
+
 (python-api-fdm-multilayer-convolution-governing-equations)=
 <!-- (governing-equations)= -->
 ## Authoring-to-grid relations
@@ -51,15 +58,22 @@ resolved transform-grid cell count to
 =\left(N_x^{\mathrm{common}},N_y^{\mathrm{common}},1\right).
 ```
 
-For $L$ layers the planner records $L^2$ ordered source-to-destination interactions, while the
-number of stored shifted kernels may be smaller because equal signed layer separations can reuse a
-kernel:
+For $L$ layers the planner records $L^2$ ordered source-to-destination interactions. Kernel reuse
+is not determined by a physical separation alone. The reusable implementation key quantizes the
+signed $z$ displacement in units of the resolved convolution-cell thickness and also contains the
+source and destination cell sizes and the common convolution-grid shape:
 
 ```{math}
 :label: eq-python-fdm-multilayer-pair-count
 K_{\mathrm{pair}}=L^2,
 \qquad
-K_{\mathrm{unique}}=\left|\left\{z_{\ell}-z_m:\ell,m\in\{1,\ldots,L\}\right\}\right|.
+K_{\mathrm{unique}}
+=\left|\left\{
+\left(
+\operatorname{round}\!\left(\frac{o_{d,z}-o_{s,z}}{h_{c,z}}\right),
+Q(\mathbf h_s),Q(\mathbf h_d),\mathbf C
+\right):d,s\in\{1,\ldots,L\}\right\}\right|,
+\qquad Q(h)=\operatorname{round}(10^{12}h).
 ```
 
 These relations define the numerical layout only. They do not replace the demagnetizing-field and
@@ -82,9 +96,11 @@ energy equations on the physics page.
 | $C_x,C_y$ | resolved common in-plane cell counts | $1$ |
 | $N_x^{\mathrm{common}},N_y^{\mathrm{common}}$ | authored `common_cells_xy` components | $1$ |
 | $L$ | number of magnetic layers | $1$ |
-| $z_{\ell},z_m$ | reference origins of the destination and source layer along $z$ | $\mathrm{m}$ |
+| $o_{d,z},o_{s,z}$ | destination and source native-grid origins along $z$ | $\mathrm{m}$ |
+| $h_{c,z}$ | resolved convolution-cell thickness | $\mathrm{m}$ |
+| $Q$ | picometre quantizer used in the reuse key | $\mathrm{m^{-1}}$ |
 | $K_{\mathrm{pair}}$ | number of ordered layer pairs | $1$ |
-| $K_{\mathrm{unique}}$ | number of unique signed layer-separation kernels | $1$ |
+| $K_{\mathrm{unique}}$ | number of distinct reuse keys, not merely distinct physical separations | $1$ |
 
 (python-api-fdm-multilayer-convolution-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
@@ -166,6 +182,7 @@ study.universe(
     center=(0.0, 0.0, 9.0 * nm),
     padding=(0.0, 0.0, 0.0),
 )
+
 layer_size = (32.0 * nm, 16.0 * nm, 3.0 * nm)
 bottom = study.geometry(fm.Box(size=layer_size), name="layer_bottom")
 middle = study.geometry(
@@ -200,7 +217,8 @@ study.stages.add_run(until=1.0e-13, stage_id="multilayer_run")
 
 Use `mode="three_d"` with `common_cells=(N_x,N_y,N_z)` when any native layer has more than one
 Z cell. Do not set both common-grid fields. Omitting both delegates common-grid sizing to the
-planner; it does not turn the common grid into a physical layer mesh.
+planner; it does not turn the common grid into a physical layer mesh. The common grid is a
+supercell for kernel/FFT work, while each layer retains its own FDM grid and z origin.
 
 ### Optional CPU FP64 target-only Airbox observation
 
@@ -292,8 +310,11 @@ design because it is an authoring/display preference:
 }
 ```
 
-The physical interaction remains a separate `Demag` energy term. The planner lowers the authored
-subtree to `BackendPlanIR::FdmMultilayer`, whose resolved payload contains:
+The physical interaction remains a separate global `Demag` energy term. `study.demag(enabled=True)`
+controls whether that term is enabled; `study.fdm(..., demag=FDMDemag(...))` is a distinct FDM
+discretization policy which selects how that enabled term is realized. They are not normalized by
+one shared Python resolver. The planner lowers the authored FDM subtree to
+`BackendPlanIR::FdmMultilayer`, whose resolved payload contains:
 
 - `mode`, `common_cells`, and a topology-bound `grid_certificate`;
 - one `FdmLayerPlanIR` per named magnet with `layer_id`, `object_id`, native grid, native origin,
@@ -340,9 +361,10 @@ non-Python producers. Planner validation errors reject geometry and capability v
 allocation. Unsupported combinations fail without silently changing multilayer to single-grid,
 CUDA to CPU, or `three_d` to `two_d_stack`.
 
-The UI scene document uses the same field names and exports them back as `study.fdm(...)`,
-`fm.FDMGrid(...)`, and `fm.FDMDemag(...)`. A saved `explain` checkbox may round-trip through the
-authoring document and generated Python even though it does not enter physical `ProblemIR`.
+The Control Room's global Demag toggle is exported as `study.demag(...)`; the FDM policy is
+exported independently as `study.fdm(..., demag=fm.FDMDemag(...))`. A saved `explain` checkbox may
+round-trip through authoring state and generated Python even though it does not enter physical
+`ProblemIR`.
 
 (python-api-fdm-multilayer-convolution-discrete-realization)=
 <!-- (discrete-realization)= -->
@@ -374,9 +396,10 @@ authoring document and generated Python even though it does not enter physical `
 5. Optionally enable **Explain FDM demag plan** and configure boundary correction. Press **Save
    globals** only after the Inspector has no validation errors.
 
-The global Demagnetization method and the study's FDM demag strategy represent the same requested
-realization and are normalized together. The method is unavailable until the active discretization
-is FDM, and capability-disabled ribbon actions remain disabled with an explanation.
+The global Demagnetization control enables the physical `Demag` term. The study's FDM demag
+strategy is a separate discretization-policy request; the current code does not normalize the two
+fields through one resolver. The policy is meaningful only for an FDM lane, and capability-disabled
+ribbon actions remain disabled with an explanation.
 
 ### Inspect the realized meshes
 
@@ -387,8 +410,10 @@ After planning/materialization, open **Mesh** in Explorer:
 - **Native Layers** contains one node per named magnet. Each layer exposes **Native Grid**,
   **Active Mask**, **Transfer**, and **Provenance** children. Inspect them to verify the realized
   carrier, active/inactive counts, `identity`/`push_pull`, layout fingerprint, and revisions.
-- A missing or unavailable layout is shown as unavailable/degraded. The UI does not synthesize a
-  common single-grid mesh for a multilayer result.
+- The current Explorer omits layout-specific nodes when their layout resource has
+  `available=false`; it does not synthesize a common/native grid or a single-grid fallback. A
+  caller must inspect the resource's `reason` or `degraded` payload rather than infer a mesh from
+  missing nodes.
 
 ### Inspect and display target-only Airbox `H_demag`
 
@@ -410,10 +435,12 @@ buffer, verified field requests/responses, and separate screenshots for each cla
 
 ### Runtime resource boundary
 
-The Control Room reads the versioned resource
-`GET /v2/sessions/current/data/domain/fdm-multilayer-layout`. Native-layer and Airbox field vectors
-remain scoped binary data-plane resources. The layout resource is fail-closed when artifacts,
-fingerprints, counts, or revisions are missing or inconsistent.
+The layout resource may publish availability from the resolved plan and/or an artifact and may
+report missing parts through `reason` and `degraded` payloads. This availability contract is
+separate from the target-only Airbox carrier. Native-layer and Airbox field vectors remain scoped
+binary data-plane resources. The strong fail-closed contract applies to the target-only Airbox:
+invalid target metadata, a mismatched fingerprint, an unsupported quantity, or non-CPU-FP64
+provenance must not produce a substitute carrier.
 
 (python-api-fdm-multilayer-convolution-validation)=
 <!-- (validation)= -->
@@ -460,12 +487,17 @@ runtime-resource, and UI behavior.
 |---|---|---|---|---|
 | Native cell constructor and lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | validates one layer's cell size and serializes it | Python/IR tests |
 | Demag policy and removed fallback | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | strategy, mode, common grid, validation, lowering | Python/IR tests |
+| Global physical Demag term | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | physical energy-term configuration, separate from FDM policy | Python authoring tests |
+| Study authoring split | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` (`fdm`, `demag`) | independently accepts the global interaction and FDM discretization policy | Python authoring tests |
 | Complete FDM hint container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | default/native grids and boundary policy | Python/UI round-trip tests |
+| Generated stage-first Python | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `render_loaded_problem_as_script` | emits independent `study.demag(...)` and `study.fdm(...)` calls from canonical state | script-builder tests |
+| Kernel reuse identity | `crates/fullmag-fdm-demag/src/types.rs` | `KernelReuseKey::new` | quantizes signed z displacement and includes source/destination cell sizes and the common-grid shape | unit tests |
+| Per-magnet local validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM.__init__` | rejects empty names and non-`FDMGrid` values; matching names to authored geometry is planner validation | Python/planner tests |
 | Resolved multilayer plan | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | geometry eligibility, mode/grid resolution, transfer, certificate, provenance | planner tests |
 | Topology-bound identity | `crates/fullmag-ir/src/mesh_hints.rs` | `fdm_multilayer_topology_tokens` | hashes mode, layer/object identity, native layout, mask, convolution layout, and transfer | IR migration/validation tests |
 | Optional Airbox carrier | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `execute_reference_fdm_multilayer` | CPU FP64 multilayer runner; optional target-only `H_demag` is a scoped post-run extension | runner unit tests and local numerical evidence |
 | UI scene lowering and validation | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | `buildStudyGlobalMergePatch` | maps Inspector fields to the canonical scene merge patch | frontend model tests |
-| Explorer native/common nodes | `apps/control-room/src/modules/explorer/builders/buildModelTree.ts` | `buildModelTree` | exposes the semantic Explorer tree to which FFT scratch and native-layer nodes belong | Explorer tests |
+| Explorer node omission boundary | `apps/control-room/src/modules/explorer/builders/buildModelTree.ts` | `buildModelTree` | the committed tree has no fabricated multilayer layout node when no available layout is supplied | Explorer tests |
 | Layer/common/Airbox Inspector | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | `createStudyGlobalDraft` | reads committed study values into the Inspector draft; detailed layout facts are scoped extensions | Inspector tests |
 | Dedicated target-only Airbox Inspector | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainPresentation` | adapts the committed FDM presentation carrier; target capability and provenance remain scoped | Inspector tests |
 | Versioned layout resource | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `fdm_grid_descriptor` | provides the committed FDM domain metadata base for native/common/Airbox exposure | API v2 tests |

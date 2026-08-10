@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/physics/interactions/demagnetization/multilayer-convolution.md",
-    "title": "Wielowarstwowa konwolucja FDM",
+    "title": "FDM multilayer convolution",
     "interaction": "demagnetization"
   },
   "backend_matrix": [
@@ -48,6 +48,24 @@
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FDM",
       "responsibility": "Lower the complete FDM discretization hints including per-magnet grids."
+    },
+    {
+      "id": "python-study-fdm",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Attaches named FDM grids and the separate FDM demagnetization policy to a study."
+    },
+    {
+      "id": "python-study-demag",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Enables the separate global Demag energy term."
+    },
+    {
+      "id": "generated-python",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "render_loaded_problem_as_script",
+      "responsibility": "Emits stage-first Python with independent Demag and FDM policy calls."
     },
     {
       "id": "ir-topology",

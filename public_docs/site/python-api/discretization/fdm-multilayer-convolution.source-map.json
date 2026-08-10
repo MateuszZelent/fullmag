@@ -49,6 +49,30 @@
       "responsibility": "Owns default and per-magnet grids plus boundary-correction policy."
     },
     {
+      "id": "python-global-demag",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "Defines the global physical demagnetization energy term separately from the FDM discretization policy."
+    },
+    {
+      "id": "python-study-fdm",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Attaches FDM discretization hints to a study."
+    },
+    {
+      "id": "python-study-demag",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Enables and configures the separate global Demag energy term."
+    },
+    {
+      "id": "generated-python",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "render_loaded_problem_as_script",
+      "responsibility": "Renders canonical study state as independent stage-first Python calls."
+    },
+    {
       "id": "planner",
       "path": "crates/fullmag-plan/src/fdm.rs",
       "symbol": "plan_fdm_multilayer",
@@ -121,9 +145,11 @@
     {"id": "Cxy", "latex": "$C_x,C_y$", "meaning": "resolved common in-plane cell counts", "si_unit": "$1$"},
     {"id": "Nxy", "latex": "$N_x^{\\mathrm{common}},N_y^{\\mathrm{common}}$", "meaning": "authored `common_cells_xy` components", "si_unit": "$1$"},
     {"id": "L", "latex": "$L$", "meaning": "number of magnetic layers", "si_unit": "$1$"},
-    {"id": "zlm", "latex": "$z_{\\ell},z_m$", "meaning": "reference origins of the destination and source layer along $z$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "odz", "latex": "$o_{d,z},o_{s,z}$", "meaning": "destination and source native-grid origins along $z$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "hcz", "latex": "$h_{c,z}$", "meaning": "resolved convolution-cell thickness", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Q", "latex": "$Q$", "meaning": "picometre quantizer used in the reuse key", "si_unit": "$\\mathrm{m^{-1}}$"},
     {"id": "Kpair", "latex": "$K_{\\mathrm{pair}}$", "meaning": "number of ordered layer pairs", "si_unit": "$1$"},
-    {"id": "Kunique", "latex": "$K_{\\mathrm{unique}}$", "meaning": "number of unique signed layer-separation kernels", "si_unit": "$1$"}
+    {"id": "Kunique", "latex": "$K_{\\mathrm{unique}}$", "meaning": "number of distinct reuse keys, not merely distinct physical separations", "si_unit": "$1$"}
   ],
   "equations": [
     {
@@ -138,7 +164,7 @@
     },
     {
       "id": "eq-python-fdm-multilayer-pair-count",
-      "symbols": ["ellm", "L", "zlm", "Kpair", "Kunique"],
+      "symbols": ["ellm", "L", "odz", "hcz", "Q", "Kpair", "Kunique"],
       "sources": ["planner"]
     }
   ],

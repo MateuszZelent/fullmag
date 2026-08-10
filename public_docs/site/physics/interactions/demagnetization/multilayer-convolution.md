@@ -1,5 +1,5 @@
 ---
-title: Wielowarstwowa konwolucja FDM
+title: FDM multilayer convolution
 status: partial
 doc_kind: reference
 audience: user
@@ -8,13 +8,19 @@ source_of_truth: docs/physics/0421-fdm-multilayer-convolution-demag.md
 ---
 
 (public-docs-physics-interactions-demagnetization-multilayer-convolution)=
-# Wielowarstwowa konwolucja pola demagnetyzującego w FDM
+# FDM multilayer demagnetizing-field convolution
 
 Ta strona opisuje fizykę, dyskretyzację i publiczny kontrakt konfiguracji
-`multilayer_convolution`. Metoda oblicza pole demagnetyzujące układu rozłącznych
+`multilayer_convolution`. The method computes the demagnetizing field of disconnected
 magnetycznych warstw lub obiektów na osobnych siatkach FDM. Nie jest to model
 FEM Poissona ani BEM; wybór tej strategii zmienia realizację numeryczną, ale nie
-zmienia fizycznej definicji pola demagnetyzującego.
+does not change the physical definition of the demagnetizing field.
+
+Each magnetic object owns a native FDM grid. The common convolution grid is an FFT supercell used
+for pair kernels and transfers; it is neither a material mesh nor a FEM universe mesh. Geometry
+translations determine layer offsets, including the signed $z$ offsets used by the kernels. A
+public FDM multilayer script therefore needs `study.fdm(..., per_magnet=..., demag=FDMDemag(...))`
+and named geometry, but no `study.universe.mesh(...)` dependency.
 
 Status `partial` jest zamierzony. FDM CPU FP64 ma wykonane lokalne dowody pola,
 energii, reciprocity i transferu dla opisanych klas przypadków. Źródła CUDA i

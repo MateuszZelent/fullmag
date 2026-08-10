@@ -216,7 +216,7 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",
     "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
     "physics/interactions/dmi/interfacial.md": "Interfacial Dzyaloshinskii–Moriya interaction",
-    "physics/interactions/demagnetization/multilayer-convolution.md": "Wielowarstwowa konwolucja FDM",
+    "physics/interactions/demagnetization/multilayer-convolution.md": "FDM multilayer convolution",
     "python-api/discretization/fdm-multilayer-convolution.md": "FDM multilayer convolution — Python, ProblemIR, and UI",
     "physics/interactions/thermal-noise/index.md": "Thermal Brown noise",
     "physics/interactions/oersted-field/index.md": "Oersted field",
