@@ -153,127 +153,145 @@
     },
     {
       "id": "boris-rect-collection",
-      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
-      "symbol": "SDemag::set_Rect_collection",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-rect-collection",
+      "evidence_status": "planned_contract",
       "line_anchor": "L98-L179",
       "responsibility": "BORIS traceability for per-mesh/per-layer convolution rectangles and scratch alignment."
     },
     {
       "id": "boris-common-n",
-      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
-      "symbol": "SDemag::set_default_n_common",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-common-n",
+      "evidence_status": "planned_contract",
       "line_anchor": "L56-L96",
       "responsibility": "BORIS traceability for n_common defaults and the forced two-dimensional Z count."
     },
     {
       "id": "boris-header-force-mode",
-      "path": "external_solvers/BORIS/Boris/SDemag.h",
-      "symbol": "set_default_n_common",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-header-force-mode",
+      "evidence_status": "planned_contract",
       "line_anchor": "L81-L103",
       "responsibility": "BORIS header traceability for force_2d_convolution values 0, 1, and 2."
     },
     {
       "id": "boris-set-n-common",
-      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
-      "symbol": "SDemag::Set_n_common",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-set-n-common",
+      "evidence_status": "planned_contract",
       "line_anchor": "L206-L227",
       "responsibility": "BORIS traceability for explicit common convolution counts."
     },
     {
       "id": "boris-convolution-rect",
-      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
-      "symbol": "SDemag::get_convolution_rect",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-convolution-rect",
+      "evidence_status": "planned_contract",
       "line_anchor": "L194-L204",
       "responsibility": "BORIS traceability for the adjusted convolution rectangle returned to scratch modules."
     },
     {
       "id": "boris-mconv-init",
-      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
-      "symbol": "SDemag::Initialize_MConv_Demag",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-mconv-init",
+      "evidence_status": "planned_contract",
       "line_anchor": "L128-L166",
       "responsibility": "BORIS traceability for multilayer scratch-space and convolution initialization."
     },
     {
       "id": "boris-mconv-update",
-      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
-      "symbol": "SDemag::UpdateField_MConv_Demag",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-mconv-update",
+      "evidence_status": "planned_contract",
       "line_anchor": "L197-L337",
       "responsibility": "BORIS traceability for forward FFT, pair multiplication, and inverse FFT stages."
     },
     {
       "id": "boris-2d-mode",
-      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
-      "symbol": "SDemag::Set_2D_Multilayered_Convolution",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-2d-mode",
+      "evidence_status": "planned_contract",
       "line_anchor": "L1203-L1223",
       "responsibility": "BORIS traceability for the force_2d_convolution switch."
     },
     {
       "id": "boris-multilayer-toggle",
-      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
-      "symbol": "SDemag::Set_Multilayered_Convolution",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-multilayer-toggle",
+      "evidence_status": "planned_contract",
       "line_anchor": "L1195-L1202",
       "responsibility": "BORIS traceability for the multilayer-versus-supermesh switch."
     },
     {
       "id": "boris-kernel-catalog",
-      "path": "external_solvers/BORIS/Boris/DemagKernelCollection.h",
-      "symbol": "Calculate_Demag_Kernels_2D_Self",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-catalog",
+      "evidence_status": "planned_contract",
       "line_anchor": "L108-L131",
       "responsibility": "BORIS traceability for the self, shifted, and full-complex kernel catalog declarations."
     },
     {
       "id": "boris-kernel-reuse",
-      "path": "external_solvers/BORIS/Boris/DemagKernelCollection.h",
-      "symbol": "KernelAlreadyComputed",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-reuse",
+      "evidence_status": "planned_contract",
       "line_anchor": "L130-L131",
       "responsibility": "BORIS traceability for source/destination-cell and shift based kernel reuse."
     },
     {
       "id": "boris-kernel-storage",
-      "path": "external_solvers/BORIS/Boris/DemagKernelCollection.h",
-      "symbol": "KernelAlreadyComputed",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-storage",
+      "evidence_status": "planned_contract",
       "line_anchor": "L35-L62",
       "responsibility": "BORIS traceability for KerType real/complex, shift flags, source/destination cell sizes, and FFT dimensions."
     },
     {
       "id": "boris-kernel-multiply",
-      "path": "external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp",
-      "symbol": "DemagKernelCollection::KernelMultiplication_2D",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-multiply",
+      "evidence_status": "planned_contract",
       "line_anchor": "L635-L735",
       "responsibility": "BORIS traceability for full ordered-input 2-D and 3-D pair multiplication."
     },
     {
       "id": "boris-kernel-multiply-3d",
-      "path": "external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp",
-      "symbol": "DemagKernelCollection::KernelMultiplication_3D",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-kernel-multiply-3d",
+      "evidence_status": "planned_contract",
       "line_anchor": "L685-L735",
       "responsibility": "BORIS traceability for full ordered-input 3-D pair multiplication."
     },
     {
       "id": "boris-irregular-thickness",
-      "path": "external_solvers/BORIS/Boris/DemagTFunc_Irregular.cpp",
-      "symbol": "DemagTFunc::CalcDiagTens2D_Shifted_Irregular",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-irregular-thickness",
+      "evidence_status": "planned_contract",
       "line_anchor": "L5-L119",
       "responsibility": "BORIS traceability for unequal source/destination Z thickness with common XY."
     },
     {
       "id": "boris-weighted-transfer",
-      "path": "external_solvers/BORIS/Boris/SDemag_Demag.cpp",
-      "symbol": "SDemag_Demag::Initialize_Mesh_Transfer",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-weighted-transfer",
+      "evidence_status": "planned_contract",
       "line_anchor": "L63-L87",
       "responsibility": "BORIS traceability for weighted mesh-transfer initialization."
     },
     {
       "id": "boris-cuda-update",
-      "path": "external_solvers/BORIS/Boris/SDemagCUDA_MConv.cpp",
-      "symbol": "SDemagCUDA::UpdateField_MConv_Demag",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-cuda-update",
+      "evidence_status": "planned_contract",
       "line_anchor": "L114-L277",
       "responsibility": "BORIS CUDA traceability for multilayer update staging."
     },
     {
       "id": "boris-cuda-init",
-      "path": "external_solvers/BORIS/Boris/SDemagCUDA_MConv.cpp",
-      "symbol": "SDemagCUDA::Initialize_MConv_Demag",
+      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
+      "symbol": "DOC-ANCHOR:boris-cuda-init",
+      "evidence_status": "planned_contract",
       "line_anchor": "L14-L100",
       "responsibility": "BORIS CUDA traceability for multilayer scratch initialization."
     },

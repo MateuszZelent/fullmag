@@ -202,6 +202,75 @@ the resolved shared-domain mesh and the FEM solver policy. The solver policy is 
 {doc}`../../../python-api/interactions/demagnetization`; the table below records the boundary-facing
 selection and its canonical lowering.
 
+### Complete Robin boundary stage
+
+The script below declares the airbox, magnetic body, Robin boundary realization, linear-solver
+policy, relaxation stage, and saved observables. Change only `boundary_variant` to `"dirichlet"`
+to run the same physical and numerical setup with essential boundary values instead of the Robin
+boundary mass operator.
+
+```python
+# %% Imports and boundary selection
+import fullmag as fm
+
+nm = 1.0e-9
+boundary_variant = "robin"  # Use "dirichlet" for u = 0 on the airbox boundary.
+
+# %% Study, execution lane, and shared magnetic-plus-air domain
+study = fm.study(f"demag_airbox_{boundary_variant}")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(
+    mode="manual",
+    size=(300 * nm, 300 * nm, 300 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    minimum_element_size=5 * nm,
+    maximum_element_size=20 * nm,
+    maximum_element_growth_rate=1.7,
+    grading="geometric",
+)
+
+# %% Magnetic body, material, initial state, and body mesh
+body = study.geometry(
+    fm.Sphere(radius=50 * nm, name="sphere"),
+    name="sphere",
+)
+body.Ms = 8.0e5
+body.Aex = 1.3e-11
+body.alpha = 0.1
+body.m = fm.init.UniformMagnetization((0.0, 0.0, 1.0))
+body.mesh(maximum_element_size=8 * nm, order=1)
+
+# %% Demagnetization realization and FEM linear solver
+study.demag(model="airbox", variant=boundary_variant)
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1.0e-10,
+    max_iterations=500,
+)
+
+# %% Ordered stage and scientific outputs
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=10_000,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "e_demag", "e_total", "max_torque_T"],
+        ),
+        fields=[fm.FieldAutosave("H_demag", every_steps=100)],
+    )
+)
+```
+
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

@@ -63,6 +63,50 @@ without executed-device identity remain capability evidence, not GPU qualificati
 (dmi-validation-python-api)=
 ## Python API test request
 
+The following complete stage-first scenario is the executable authoring fixture for the
+interfacial-DMI zero-field test. A uniform state makes every spatial derivative vanish; the saved
+`H_dmi` field and `e_dmi` scalar must therefore be zero to the tolerance declared by the validation
+artifact. This Python example defines the request but does not itself promote a backend lane to
+qualified status.
+
+```python
+# %% Imports and units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Deterministic FDM reference study
+study = fm.study("interfacial_dmi_uniform_zero_test")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.fdm(default_cell=(2 * nm, 2 * nm, 2 * nm))
+
+# %% Geometry, material, uniform state, and isolated DMI term
+film = study.geometry(
+    fm.Box(size=(40 * nm, 40 * nm, 2 * nm), name="film"),
+    name="film",
+)
+film.Ms = 5.8e5
+film.Aex = 15.0e-12
+film.Dind = 3.0e-3
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((0.0, 0.0, 1.0))
+study.exchange(enabled=False)
+study.demag(enabled=False)
+study.solver(integrator="rk4", fix_dt=1.0e-14)
+
+# %% Ordered measurement stage
+study.stages.add_run(stage_id="measure_zero_field", until=1.0e-13).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            t_sampl=1.0e-14,
+            quantities=["t", "mx", "my", "mz", "e_dmi", "e_total"],
+        ),
+        fields=[fm.FieldAutosave("H_dmi", every=1.0e-14)],
+    )
+)
+```
 
 The stage-first solver scenarios that execute these terms must use the repository-owned
 study/stages pattern. The lowering fixture verifies only canonical normalization, not field output.
