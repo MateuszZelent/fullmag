@@ -46,6 +46,26 @@ function entry(id: string, buildKey: string): FdmCuboidAsyncBuildEntry {
 }
 
 describe("FDM cuboid batch build controller", () => {
+  it("does not publish a new snapshot when reconciling unchanged entries", () => {
+    const controller = createFdmCuboidBatchBuildController(
+      async () => EMPTY_RESULT,
+    );
+    let notifications = 0;
+    const unsubscribe = controller.subscribe(() => {
+      notifications += 1;
+    });
+    const entries = [entry("bottom", "bottom:r1")];
+
+    controller.reconcile(entries);
+    const firstSnapshot = controller.getSnapshot();
+    controller.reconcile(entries);
+
+    expect(notifications).toBe(1);
+    expect(controller.getSnapshot()).toBe(firstSnapshot);
+    unsubscribe();
+    controller.dispose();
+  });
+
   it("rebuilds only the changed target and aborts 2 -> 1 -> 0 with stale resolve ignored", async () => {
     const pending: Array<{
       buildKey: string;

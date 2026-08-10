@@ -589,27 +589,34 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
     snapshot = next;
     for (const listener of listeners) listener();
   };
-  return {
-    begin: (entries) =>
-      publish(
-        new Map(
-          entries.flatMap((entry) =>
-            entry.enabled && entry.buildKey
-              ? [[
-                  entry.id,
-                  snapshot.get(entry.id)?.buildKey === entry.buildKey
-                    ? snapshot.get(entry.id)!
-                    : {
-                        buildKey: entry.buildKey,
-                        error: null,
-                        result: null,
-                        status: "pending" as const,
-                      },
-                ] as const]
-              : [],
-          ),
-        ),
+  const begin = (entries: readonly FdmCuboidAsyncBuildEntry[]) => {
+    const next = new Map(
+      entries.flatMap((entry) =>
+        entry.enabled && entry.buildKey
+          ? [[
+              entry.id,
+              snapshot.get(entry.id)?.buildKey === entry.buildKey
+                ? snapshot.get(entry.id)!
+                : {
+                    buildKey: entry.buildKey,
+                    error: null,
+                    result: null,
+                    status: "pending" as const,
+                  },
+            ] as const]
+          : [],
       ),
+    );
+    if (
+      next.size === snapshot.size &&
+      [...next].every(([id, state]) => snapshot.get(id) === state)
+    ) {
+      return;
+    }
+    publish(next);
+  };
+  return {
+    begin,
     getSnapshot: () => snapshot,
     reject: (id, buildKey, error) => {
       const current = snapshot.get(id);

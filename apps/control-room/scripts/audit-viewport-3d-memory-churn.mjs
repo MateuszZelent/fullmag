@@ -734,6 +734,10 @@ async function installFdmFixtureApi(page, fixture, requests) {
       await fulfillJson(route, fdmDomainMetaFixture());
       return;
     }
+    if (path === "/v2/sessions/current/data/fields") {
+      await fulfillJson(route, fdmFieldCatalogFixture());
+      return;
+    }
     if (path === "/v2/sessions/current/data/domain/topology") {
       await fulfillEmpty(route, 204);
       return;
@@ -1207,6 +1211,30 @@ function fdmDomainMetaFixture() {
       spacing: [1.25e-8, 1.25e-8, 5e-8],
     },
     units: { length: "m" },
+  };
+}
+
+function fdmFieldCatalogFixture() {
+  return {
+    domain_generation_id: "1",
+    revision: 1,
+    quantities: ["m", "H_eff", "H_demag", "H_ex"].map((quantityId) => ({
+      available: true,
+      components: 3,
+      domain_generation_id: "1",
+      field_revision: 1,
+      kind: "vector",
+      label: quantityId,
+      location: "cell",
+      materialization_wall_time_ns: 0,
+      materialized_at_unix_ms: 0,
+      quantity_id: quantityId,
+      source_revision: 1,
+      source_step: 0,
+      stale_by_steps: 0,
+      state: "complete",
+      unit: "A/m",
+    })),
   };
 }
 
