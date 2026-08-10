@@ -1820,6 +1820,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         if (failure_policy.failed_boundary != 0) {
             slot.test_failure_boundary = 0;
+            const uint64_t metrics_bytes =
+                fullmag::fdm::gpu::transport::charge::solve_metrics_bytes();
             const uint64_t failed_state_bytes =
                 slot.grid[0] * slot.grid[1] * slot.grid[2] *
                 (sizeof(uint8_t) + sizeof(double));
@@ -1841,7 +1843,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
                 {FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
-                     FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL, 128, 1},
+                     FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL,
+                 metrics_bytes, 1},
                 {FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |

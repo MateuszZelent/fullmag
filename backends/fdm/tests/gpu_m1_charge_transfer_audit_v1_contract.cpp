@@ -437,7 +437,10 @@ int main() {
                 solved.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
             "charge solve failed");
     const uint64_t solve_state_bytes = cells * (sizeof(uint8_t) + sizeof(double));
-    constexpr uint64_t metrics_bytes = 128;
+    require(solved.transfer_bytes > solve_state_bytes + 32 + sizeof(uint32_t),
+            "charge solve transfer ledger is too small for metrics readback");
+    const uint64_t metrics_bytes =
+        solved.transfer_bytes - solve_state_bytes - 32 - sizeof(uint32_t);
     constexpr uint32_t provisional_transfer =
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;

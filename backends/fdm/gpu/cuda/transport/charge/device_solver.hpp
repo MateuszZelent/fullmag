@@ -86,6 +86,11 @@ struct SolveOutput {
     uint64_t peak_bytes = 0;
 };
 
+// Bytes copied from the device-side solve metrics record for one charge
+// attempt. The CUDA implementation owns the layout so all audit paths share
+// one layout-derived value.
+uint64_t solve_metrics_bytes() noexcept;
+
 struct ContentDigestIdentity {
     std::array<uint8_t, 16> device_uuid{};
     std::array<uint8_t, 32> build_digest{};
