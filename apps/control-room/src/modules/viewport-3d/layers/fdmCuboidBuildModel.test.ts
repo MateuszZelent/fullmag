@@ -8,6 +8,9 @@ import {
   buildFdmCuboidInstanceModel,
   buildFdmDenseNativeLayerInstanceModel,
   buildViewport3DFdmCuboid,
+  estimateFdmCuboidBuildOutputBytes,
+  resolveFdmCuboidMembershipRevision,
+  transferablesForFdmCuboidBuildResult,
 } from "./fdmCuboidBuildModel";
 
 function allActiveMembership(cellCount: number): Uint32Array {
@@ -33,6 +36,33 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("keeps membership revision stable across geometry-only changes", () => {
+    const domain = {
+      bounds: null,
+      displayCellBudget: 3,
+      displayCellCount: 3,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [3, 1, 1] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 1,
+      totalCells: 3,
+    };
+    const original = buildFdmDenseNativeLayerInstanceModel(domain);
+    const translated = buildFdmDenseNativeLayerInstanceModel({
+      ...domain,
+      origin: [10, 0, 0],
+    });
+
+    expect(original?.matrixContentRevision).not.toBe(
+      translated?.matrixContentRevision,
+    );
+    expect(original?.membershipRevision).toBe(translated?.membershipRevision);
+    expect(resolveFdmCuboidMembershipRevision(Uint32Array.from([0, 2, 1]))).not.toBe(
+      original?.membershipRevision,
+    );
+  });
+
   it("builds a bounded native layer display without accepting an FMRM mask", () => {
     const model = buildFdmDenseNativeLayerInstanceModel({
       bounds: null,
@@ -79,6 +109,54 @@ describe("FDM cuboid realized membership", () => {
 
     expect(result.model?.count).toBe(4096);
     expect(result.model?.centers).toHaveLength(4096 * 3);
+    expect(result.model?.matrices).toHaveLength(4096 * 16);
+    expect(result.model?.matrices.slice(0, 16)).toEqual(Float32Array.from([
+      0.92, 0, 0, 0,
+      0, 0.92, 0, 0,
+      0, 0, 0.92, 0,
+      0.5, 0.5, 0.5, 1,
+    ]));
+    expect(transferablesForFdmCuboidBuildResult(result)).toContain(
+      result.model?.matrices.buffer,
+    );
+  });
+
+  it("accounts for prepared matrices in the worker output memory estimate", () => {
+    const request = {
+      cellSelection: "dense" as const,
+      domain: {
+        bounds: null,
+        displayCellBudget: 153_600,
+        displayCellCount: 153_600,
+        kind: "fdm-grid" as const,
+        origin: [0, 0, 0] as [number, number, number],
+        shape: [320, 240, 2] as [number, number, number],
+        spacing: [1, 1, 1] as [number, number, number],
+        stride: 1,
+        totalCells: 153_600,
+      },
+      maxVectorGlyphs: 0,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center" as const,
+      vectorScale: 1,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude" as const,
+        enabled: false,
+      },
+    };
+
+    expect(estimateFdmCuboidBuildOutputBytes(request)).toBeGreaterThanOrEqual(
+      153_600 * (16 + 3 + 1) * Float32Array.BYTES_PER_ELEMENT,
+    );
+    expect(estimateFdmCuboidBuildOutputBytes(request)).toBe(
+      153_600 *
+        (16 * Float32Array.BYTES_PER_ELEMENT +
+          3 * Float32Array.BYTES_PER_ELEMENT +
+          2 * Uint32Array.BYTES_PER_ELEMENT),
+    );
   });
 
   it("keeps surface vector indices in the same order and scope as worker segments", () => {

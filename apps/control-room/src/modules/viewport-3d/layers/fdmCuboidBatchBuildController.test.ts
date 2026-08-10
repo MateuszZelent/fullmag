@@ -55,6 +55,7 @@ describe("FDM cuboid batch build controller", () => {
     const controller = createFdmCuboidBatchBuildController(
       (_request, options) =>
         new Promise((resolve) => {
+          if (!options) throw new Error("batch build options are required");
           pending.push({
             buildKey: options.buildKey ?? "missing",
             resolve,

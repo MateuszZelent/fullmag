@@ -7,6 +7,8 @@ import {
   buildViewport3DFdmTargetSurfaceCellIndices,
   buildViewport3DFdmTargetViews,
   memoizeViewport3DFdmTargetRenderView,
+  memoizeViewport3DFdmTargetSurfaceColors,
+  memoizeViewport3DFdmSurfaceColors,
   type Viewport3DFdmTargetRenderView,
 } from "./viewport3DFdmTargetViews";
 
@@ -42,11 +44,85 @@ function model(regionIds: number[]): FdmCuboidInstanceModel {
     centers: Float32Array.from(regionIds.flatMap((_, index) => [index, 0, 0])),
     count: regionIds.length,
     gridShape: [regionIds.length, 1, 1],
+    matrices: new Float32Array(regionIds.length * 16),
+    matrixContentRevision: "test-matrix",
+    membershipRevision: "test-membership",
     regionIds: Uint32Array.from(regionIds),
   };
 }
 
 describe("buildViewport3DFdmTargetViews", () => {
+  it("reuses surface colors across visibility changes and invalidates scalar range or palette", () => {
+    const [view] = buildViewport3DFdmTargetViews({
+      membership: membership(),
+      model: model([1, 2, 1, 2]),
+      realizedRegionIds: Uint32Array.from([1, 2, 1, 2]),
+    }).views;
+    expect(view).toBeDefined();
+    let builds = 0;
+    const build = (key: string) =>
+      memoizeViewport3DFdmTargetSurfaceColors({
+        build: () => {
+          builds += 1;
+          return {
+            buildKey: key,
+            colors: new Float32Array(6),
+            colorPalette: key.includes("magma") ? "magma" : "viridis",
+            range: key.includes("range:2")
+              ? { max: 2, min: -2 }
+              : { max: 1, min: -1 },
+          };
+        },
+        colorKey: key,
+        view: view!,
+      });
+
+    const visible = build("scalar:r1|range:1|palette:viridis");
+    const hidden = build("scalar:r1|range:1|palette:viridis");
+    const ranged = build("scalar:r1|range:2|palette:viridis");
+    const palette = build("scalar:r1|range:2|palette:magma");
+
+    expect(hidden).toBe(visible);
+    expect(ranged).not.toBe(visible);
+    expect(palette).not.toBe(ranged);
+    expect(builds).toBe(3);
+  });
+
+  it.each(["native-layer", "multilayer-airbox"])(
+    "uploads %s colors once across surface-wireframe-surface and once per semantic revision",
+    (kind) => {
+      const owner = {};
+      let builds = 0;
+      const resolve = (key: string) =>
+        memoizeViewport3DFdmSurfaceColors({
+          build: () => {
+            builds += 1;
+            return {
+              buildKey: key,
+              colors: new Float32Array(6),
+              colorPalette: key.includes("magma") ? "magma" : "viridis",
+              range: key.includes("field:r2")
+                ? { max: 2, min: -2 }
+                : { max: 1, min: -1 },
+            };
+          },
+          colorKey: `${kind}|${key}`,
+          owner,
+        });
+
+      const surface = resolve("field:r1|palette:viridis");
+      const wireframe = resolve("field:r1|palette:viridis");
+      const surfaceAgain = resolve("field:r1|palette:viridis");
+      const fieldRevision = resolve("field:r2|palette:viridis");
+      const paletteRevision = resolve("field:r2|palette:magma");
+
+      expect(wireframe).toBe(surface);
+      expect(surfaceAgain).toBe(surface);
+      expect(fieldRevision).not.toBe(surface);
+      expect(paletteRevision).not.toBe(fieldRevision);
+      expect(builds).toBe(3);
+    },
+  );
   it("fails closed when a malformed membership omits freshness", () => {
     const result = buildViewport3DFdmTargetViews({
       membership: { ...membership(), freshness: undefined } as never,
@@ -194,6 +270,9 @@ describe("buildViewport3DFdmTargetViews", () => {
       centers: new Float32Array(27 * 3),
       count: 27,
       gridShape: [3, 3, 3],
+      matrices: new Float32Array(27 * 16),
+      matrixContentRevision: "test-matrix",
+      membershipRevision: "test-membership",
       regionIds: realizedRegionIds,
     };
 
@@ -257,6 +336,9 @@ describe("buildViewport3DFdmTargetViews", () => {
       centers: Float32Array.from([0, 0, 0, 2, 2, 2]),
       count: 2,
       gridShape: [5, 5, 5],
+      matrices: new Float32Array(2 * 16),
+      matrixContentRevision: "test-matrix",
+      membershipRevision: "test-membership",
       regionIds: Uint32Array.from([1, 1]),
     };
 
@@ -284,6 +366,9 @@ describe("buildViewport3DFdmTargetViews", () => {
       centers: Float32Array.from([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0]),
       count: 4,
       gridShape: [4, 1, 1],
+      matrices: new Float32Array(4 * 16),
+      matrixContentRevision: "test-matrix",
+      membershipRevision: "test-membership",
       regionIds: Uint32Array.from([1, 1, 1, 1]),
     };
     const view = {

@@ -189,6 +189,8 @@ import {
   buildViewport3DFdmTargetDefinitions,
   buildViewport3DFdmTargetViews,
   memoizeViewport3DFdmTargetRenderView,
+  memoizeViewport3DFdmTargetSurfaceColors,
+  memoizeViewport3DFdmSurfaceColors,
   type Viewport3DFdmTargetRenderView,
 } from "../model/viewport3DFdmTargetViews";
 import {
@@ -4522,6 +4524,52 @@ export function useViewport3DSceneModel({
           const targetSourceFieldBufferId = targetFieldVector
             ? `decoded:${targetFieldVector.quantityId}:${targetFieldVector.pointCount}:${targetFieldVector.values.byteLength}`
             : "none";
+          const fieldCompatible = Boolean(
+            targetFieldVector &&
+              sameViewport3DQuantityId(
+                settings.activeQuantityId,
+                targetFieldVector.quantityId,
+              ),
+          );
+          const surfaceMode = fieldCompatible
+            ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+            : null;
+          const surfaceColorKey = [
+            targetSourceFieldBufferId,
+            targetFieldRevision ?? "none",
+            targetFieldResourceKey ?? "none",
+            settings.geometryScope,
+            settings.surfaceColorSource,
+            surfaceMode ?? "none",
+            settings.scalarColorPalette,
+            view.target.id,
+            view.instanceOrdinals.length,
+            view.surfaceInstanceOrdinals.length,
+          ].join("|");
+          const surfaceColors = memoizeViewport3DFdmTargetSurfaceColors({
+            build: () => {
+              if (!targetFieldVector || !fdmDomain || !surfaceMode) return null;
+              const colors = buildFdmSampledScalarColors(
+                targetFieldVector,
+                settings.geometryScope === "surface"
+                  ? buildViewport3DFdmTargetSurfaceCellIndices(view)
+                  : view.cellIndices,
+                fdmDomain.totalCells,
+                surfaceMode,
+                settings.scalarColorPalette,
+              );
+              return colors
+                ? {
+                    ...colors,
+                    buildKey: surfaceColorKey,
+                    sourceFieldBufferId: targetSourceFieldBufferId,
+                    sourceResourceKey: targetFieldResourceKey,
+                  }
+                : null;
+            },
+            colorKey: surfaceColorKey,
+            view,
+          });
           const renderKey = [
             targetSourceFieldBufferId,
             targetFieldRevision ?? "none",
@@ -4544,25 +4592,6 @@ export function useViewport3DSceneModel({
                     vectorSegments: null,
                   };
                 }
-                const fieldCompatible = sameViewport3DQuantityId(
-                  settings.activeQuantityId,
-                  targetFieldVector.quantityId,
-                );
-                const surfaceMode =
-                  settings.visible && settings.shaderVisible && fieldCompatible
-                    ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
-                    : null;
-                const surfaceColors = surfaceMode
-                  ? buildFdmSampledScalarColors(
-                      targetFieldVector,
-                      settings.geometryScope === "surface"
-                        ? buildViewport3DFdmTargetSurfaceCellIndices(view)
-                        : view.cellIndices,
-                      fdmDomain.totalCells,
-                      surfaceMode,
-                      settings.scalarColorPalette,
-                    )
-                  : null;
                 const vectorsVisible =
                   settings.visible && settings.vectorsVisible && fieldCompatible;
                 const vectorColors = vectorsVisible
@@ -4614,7 +4643,7 @@ export function useViewport3DSceneModel({
                   ...view,
                   fieldVector: targetFieldVector,
                   settings,
-                  surfaceColors: withSource(surfaceColors),
+                  surfaceColors,
                   vectorColors: withSource(vectorColors),
                   vectorGlyphColors: withSource(vectorGlyphColors),
                   vectorSegments: vectorsVisible
@@ -4840,22 +4869,45 @@ export function useViewport3DSceneModel({
         const buildResult = fdmMultilayerCuboidBuildResults.get(
           `native:${domain.layerId}`,
         )?.result;
-        const model = nativeLayerIsDense && settings.visible
+        const model = nativeLayerIsDense
           ? buildResult?.model ?? null
           : null;
         const surfaceMode =
-          model && fieldVector && settings.visible && settings.shaderVisible
+          model && fieldVector
             ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
             : null;
-        const surfaceColors = model && fieldVector && surfaceMode
-          ? buildFdmSampledScalarColors(
+        const surfaceColorKey = [
+          "native-layer",
+          domain.layerId,
+          request?.requestId ?? "none",
+          request
+            ? String(
+                nativeLayerFieldVectors.payloadRevisionByRequestId.get(
+                  request.requestId,
+                ) ?? "missing",
+              )
+            : "none",
+          model?.membershipRevision ?? "none",
+          settings.activeQuantityId,
+          settings.surfaceColorSource,
+          surfaceMode ?? "none",
+          settings.scalarColorPalette,
+        ].join("|");
+        const surfaceColors = memoizeViewport3DFdmSurfaceColors({
+          build: () => {
+            if (!model || !fieldVector || !surfaceMode) return null;
+            const colors = buildFdmSampledScalarColors(
               fieldVector,
               model.cellIndices,
               domain.totalCells,
               surfaceMode,
               settings.scalarColorPalette,
-            )
-          : null;
+            );
+            return colors ? { ...colors, buildKey: surfaceColorKey } : null;
+          },
+          colorKey: surfaceColorKey,
+          owner: domain,
+        });
         const vectorsVisible =
           Boolean(model && fieldVector) &&
           settings.visible &&
@@ -4897,6 +4949,7 @@ export function useViewport3DSceneModel({
       fdmMultilayerCuboidBuildResults,
       nativeLayerFieldRequests,
       nativeLayerFieldVectors.data,
+      nativeLayerFieldVectors.payloadRevisionByRequestId,
     ],
   );
   const fdmMultilayerAirboxView = useMemo<FdmMultilayerAirboxRenderView | null>(() => {
@@ -4913,18 +4966,33 @@ export function useViewport3DSceneModel({
         ? compatibleField
         : null;
     const surfaceMode =
-      model && fieldVector && airboxSettings.shaderVisible
+      model && fieldVector
         ? surfaceColorSourceToColorMode(airboxSettings.surfaceColorSource)
         : null;
-    const surfaceColors = model && fieldVector && surfaceMode
-      ? buildFdmSampledScalarColors(
+    const surfaceColorKey = [
+      "multilayer-airbox",
+      String(fdmMultilayerAirboxField.payloadRevision ?? "missing"),
+      model?.membershipRevision ?? "none",
+      airboxSettings.activeQuantityId,
+      airboxSettings.surfaceColorSource,
+      surfaceMode ?? "none",
+      airboxSettings.scalarColorPalette,
+    ].join("|");
+    const surfaceColors = memoizeViewport3DFdmSurfaceColors({
+      build: () => {
+        if (!model || !fieldVector || !surfaceMode) return null;
+        const colors = buildFdmSampledScalarColors(
           fieldVector,
           model.cellIndices,
           fdmMultilayerAirboxDomain.totalCells,
           surfaceMode,
           airboxSettings.scalarColorPalette,
-        )
-      : null;
+        );
+        return colors ? { ...colors, buildKey: surfaceColorKey } : null;
+      },
+      colorKey: surfaceColorKey,
+      owner: fdmMultilayerAirboxDomain,
+    });
     const vectorsVisible = Boolean(model && fieldVector) && airboxSettings.vectorsVisible;
     const vectorCellIndices = vectorsVisible
       ? buildResult?.vectorCellIndices ?? null
@@ -4952,6 +5020,7 @@ export function useViewport3DSceneModel({
     airboxSettings,
     fdmMultilayerAirboxDomain,
     fdmMultilayerAirboxField.data,
+    fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerCuboidBuildResults,
   ]);
   const fdmSurfaceColors =

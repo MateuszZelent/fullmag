@@ -70,6 +70,38 @@ const renderViewCache = new WeakMap<
   Viewport3DFdmTargetView,
   Viewport3DFdmTargetRenderViewCacheEntry
 >();
+const surfaceColorCache = new WeakMap<
+  object,
+  { colorKey: string; colors: ScalarColorBuffer | null }
+>();
+
+export function memoizeViewport3DFdmSurfaceColors({
+  build,
+  colorKey,
+  owner,
+}: {
+  build: () => ScalarColorBuffer | null;
+  colorKey: string;
+  owner: object;
+}): ScalarColorBuffer | null {
+  const cached = surfaceColorCache.get(owner);
+  if (cached?.colorKey === colorKey) return cached.colors;
+  const colors = build();
+  surfaceColorCache.set(owner, { colorKey, colors });
+  return colors;
+}
+
+export function memoizeViewport3DFdmTargetSurfaceColors({
+  build,
+  colorKey,
+  view,
+}: {
+  build: () => ScalarColorBuffer | null;
+  colorKey: string;
+  view: Viewport3DFdmTargetView;
+}): ScalarColorBuffer | null {
+  return memoizeViewport3DFdmSurfaceColors({ build, colorKey, owner: view });
+}
 
 interface MutableTargetView {
   instanceOrdinals: number[];

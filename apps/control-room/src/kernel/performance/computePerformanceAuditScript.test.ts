@@ -122,8 +122,21 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("fullmag.viewport3d.buildVectorGlyphInstances");
     expect(auditScript).toContain("fullmag.viewport3d.uploadVectorGlyphColors");
     expect(auditScript).toContain("fullmag.viewport3d.uploadVectorGlyphMatrices");
-    expect(auditScript).toContain("checkFdmCuboidChunkedUpload");
-    expect(auditScript).toContain("buildFdmCuboidUploadBatches");
+    expect(auditScript).toContain("checkFdmCuboidRetainedCarrierBulkUpload");
+    expect(auditScript).toContain("prepareFdmCuboidInstanceMatrices");
+    expect(auditScript).toContain("uploadFdmCuboidAttribute");
+    expect(auditScript).toContain("membershipRevision");
+    expect(auditScript).toContain("matrixContentRevision");
+    expect(auditScript).toContain("attribute.addUpdateRange(0, source.length)");
+    expect(auditScript).toContain(
+      "if (uploadedRevision === contentRevision) return uploadedRevision",
+    );
+    expect(auditScript).toContain("createFdmCuboidBatchBuildController");
+    expect(auditScript).toContain("active.controller.abort()");
+    expect(auditScript).toContain("rawInspectListenerEnabled");
+    expect(auditScript).toContain("event.preventDefault()");
+    expect(auditScript).not.toContain("mesh.setMatrixAt(index, matrix)");
+    expect(auditScript).not.toContain("mesh.setColorAt(index, color)");
     expect(auditScript).toContain("checkFdmVectorSegmentCache");
     expect(auditScript).toContain("fdmVectorSegmentCache");
     expect(auditScript).toContain("checkFdmCuboidSceneModelReuse");
