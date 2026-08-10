@@ -49,6 +49,15 @@ declare -A FAMILY_COUNTS=()
 mark_process_reference() {
   local raw_path="${1:-}"
   [ -n "${raw_path}" ] || return 0
+  # Process command lines contain arbitrary paths from unrelated mounts.  Do
+  # not call readlink -f on those paths: a stale sshfs/FUSE mount can block
+  # indefinitely and hold the managed-runtime export lock.  Only runtime
+  # paths can protect a managed variant, so reject everything else before
+  # touching the filesystem.
+  case "${raw_path}" in
+    "${VARIANTS_ROOT}"/*|"${RUNTIME_PARENT}"/*) ;;
+    *) return 0 ;;
+  esac
   local resolved_path
   resolved_path="$(readlink -f -- "${raw_path}" 2>/dev/null || true)"
   [ -n "${resolved_path}" ] || resolved_path="${raw_path}"
@@ -71,7 +80,10 @@ mark_process_reference() {
 for process_dir in "${PROC_ROOT}"/[0-9]*; do
   [ -d "${process_dir}" ] || continue
   for process_link in exe cwd; do
-    mark_process_reference "$(readlink -f -- "${process_dir}/${process_link}" 2>/dev/null || true)"
+    # Read only the symlink target here.  Resolving a process cwd/exe before
+    # the runtime-path filter can block on an unrelated stale FUSE/SSHFS mount
+    # and keep the export lock held indefinitely.
+    mark_process_reference "$(readlink -- "${process_dir}/${process_link}" 2>/dev/null || true)"
   done
   if [ -r "${process_dir}/cmdline" ]; then
     while IFS= read -r -d '' argument; do

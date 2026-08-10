@@ -34,6 +34,12 @@ struct ModalExecutionProvenance {
     std::string fallback_reason = "none";
 };
 
+struct ModalCertificateBindingProvenance {
+    std::uint32_t status = 0;
+    std::string canonical_preimage_sha256{};
+    std::string reason = "none";
+};
+
 struct FrequencyDomainContractResult {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
     std::string error_message;
@@ -42,6 +48,7 @@ struct FrequencyDomainContractResult {
     std::string artifact_manifest_path;
     ModalEigenTypedResult modal_eigen{};
     ModalExecutionProvenance modal_execution{};
+    ModalCertificateBindingProvenance certificate_binding{};
 };
 
 } // namespace fullmag::fem::frequency_domain

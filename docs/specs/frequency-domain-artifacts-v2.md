@@ -27,6 +27,142 @@ artifacts/response/field_payloads.zarr/
 artifacts/mesh/periodic_pairs.v1.json
 ```
 
+## A1S — typed server-side analysis artifacts (schema freeze)
+
+Poniższy kontrakt jest właścicielem serwerowych danych używanych przez późniejszą
+warstwę API i Control Room. Nie nadaje żadnemu backendowi statusu
+`production_qualified`; stan wykonania i stan kwalifikacji są niezależne.
+
+### Wspólna koperta i digest
+
+Każdy z artefaktów A1S publikuje te same pola identyfikujące zakres i pochodzenie:
+
+| Pole | Typ | Znaczenie i warunek |
+|---|---|---|
+| `schema_version` | `string` | Jedna z wersji kanonicznych poniżej; zmiana kształtu wymaga nowej wersji. |
+| `artifact_id` | `string` | Stabilny identyfikator produktu analizy, niezależny od ścieżki pliku. |
+| `source` | `{kind, artifact, revision}` | Bezpośrednie źródło danych; `revision` musi być zgodne z `source_revision`. |
+| `source_revision` | `string` | Digest `sha256:<hex>` źródła, a nie timestamp ani długość pliku. |
+| `run_id`, `stage_id`, `scope_id`, `runtime_id` | `string` | Tożsamość sesji/run/stage/zakresu/runtime. Brak runtime proof jest jawnie oznaczany `runtime:not_provided`. |
+| `revision` | `string` | Digest treści artefaktu; zmiana dowolnego pola naukowego musi go zmienić. |
+| `content_sha256` | `string` | Ten sam digest co `revision`; obliczany z pełnego JSON po wyzerowaniu `revision` i `content_sha256`. |
+| `status` | enum | `complete`, `partial`, `interrupted` albo `corrupt`. |
+| `complete` | `boolean` | `true` wyłącznie, gdy cały zadeklarowany zakres i wszystkie referencje są obecne. |
+| `interrupted` | `boolean` | `true` tylko dla kontrolowanego przerwania; nie zastępuje `status`. |
+| `requested_execution`, `resolved_execution` | typed object | Żądana intencja i faktycznie rozwiązane wykonanie; brak inferencji z nazwy solvera. |
+| `units` | typed object | Jednoznaczne jednostki SI każdej osi i observable. |
+| `topology` | typed object | `mesh_id`, `topology_revision`, indeksowanie i osie; konflikt topologii wymusza `partial`. |
+| `cross_artifact_refs` | lista `{relation, artifact, revision}` | Referencje muszą wskazywać istniejący artefakt o zgodnym digest. |
+
+Status `partial` zachowuje poprawnie zapisane rekordy, ale nie może być awansowany
+do `complete` przez klienta. `corrupt` oznacza niespójność lub nieprawidłową
+wartość i jest odrzucany przez promotion verifier. Writer nie tworzy zastępczych
+wektorów jednorodnych, pól bias ani brakujących wartości covariance.
+
+### `eigen/field_sweep.v1.json`
+
+Jest to fizyczny skan po bias field, nie konfiguracja oracle Kittela. Writer
+publikuje go tylko wtedy, gdy każdy sample ma skończone
+`bias_field_a_per_m[3]` w per-sample native diagnostics. Dane
+`FemEigenK0KittelValidationIR.samples[]` są wyłącznie referencją postsolve i nie
+mogą zasilać tego artefaktu.
+
+```json
+{
+  "schema_version": "eigen/field_sweep.v1",
+  "scan_axis": {
+    "kind": "bias_field",
+    "coordinate": "bias_field_a_per_m",
+    "unit": "A/m",
+    "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": 0.00000125663706212}]
+  },
+  "samples": [{
+    "sample_id": "bias-field-sample-0000",
+    "sample_index": 0,
+    "bias_field_a_per_m": [40000.0, 0.0, 0.0],
+    "bias_field_mu0_t": [0.0502654824848, 0.0, 0.0],
+    "equilibrium_artifact_sha256": "sha256:...",
+    "linearization_state_sha256": "sha256:...",
+    "operator_input_signature_sha256": "sha256:...",
+    "modes": [{
+      "sample_id": "bias-field-sample-0000",
+      "mode_id": "sample-0000/mode-0000",
+      "raw_mode_index": 0,
+      "branch_id": 0,
+      "frequency_hz": 1.0e9,
+      "angular_frequency_rad_per_s": 6.283185307179586e9,
+      "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
+      "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+      "mode_field_resource_key": "/v2/sessions/current/data/fields/...",
+      "residual_relative_l2": 1.0e-9,
+      "source_revision": "sha256:...",
+      "status": "complete"
+    }],
+    "status": "complete"
+  }]
+}
+```
+
+`sample_id` i `mode_id` są stabilną tożsamością danych, natomiast
+`sample_index`/`raw_mode_index` są indeksami prezentacyjnymi. Każdy mode field
+referuje Cartesian complex payload; sam tangent-local vector bez rekonstrukcji
+`global_xyz` nie jest poprawnym `mode_field_id` do wizualizacji.
+
+### `fmr/peaks.v1.json`
+
+Peaks są derived data setem. `source.kind=driven_response` wymaga istniejącego
+`response/magnetic_response_sweep.v2.json` i fizycznego
+`max_response_amplitude`/observable z jednostką artefaktu. `source.kind=modal_coupling`
+jest dozwolone dopiero z zatwierdzonym drive/polarization i oscillator-strength
+observable. Sama lista eigenfrequency nigdy nie jest automatycznie FMR intensity.
+Jednostka `response_amplitude` musi być przepisana z mapy `si_units` źródłowego
+response artifact; brak deklaracji pozostaje `null`, nie może być zastąpiony
+wartością domyślną.
+
+Obowiązkowe pola root to `algorithm`, `algorithm_parameters`, `requested_point_count`,
+`completed_point_count`, `peaks[]`, `source_revision`, `units` i wspólna koperta.
+Każdy peak ma `peak_id`, source frequency index, `frequency_hz`,
+`response_amplitude`, `bracketed` oraz jawne `uncertainty`. Peak na końcu skanu
+może być zapisany diagnostycznie z `bracketed=false`, lecz nie może być promowany
+do refined resonance.
+
+Jeżeli peak pochodzi z modalnego źródła, writer zachowuje jego `sample_id` i
+`mode_id`; dla driven-response pozostają one `null`, a identyfikatorem punktu
+źródłowego jest `frequency-point-####` w response sweep.
+
+### `fmr/resonance_fits.v1.json`
+
+Fit zapisuje `model`, `fit_range_hz`, `baseline`, `weights`,
+`peak_frequency_hz`, `linewidth_hz`, `q_factor`, `coefficients`, `covariance`,
+`conditioning`, `residual_l2`, uncertainty i referencję do `fmr/peaks.v1.json`. Writer może
+opublikować lokalny fit diagnostyczny, ale bez modelu szumu covariance pozostaje
+`null`, `status=partial`, a `complete=false`; brak covariance nie może być
+przedstawiony jako niepewność statystyczna.
+
+### `fmr/kittel_fit.v1.json`
+
+Jest to wersjonowany postsolve comparison job. `model` (np.
+`macrospin_larmor` albo `thin_film_in_plane`), `parameters`, `validation_status`,
+`validation_tolerance_relative`, `points[]`, `excluded_samples` i niezależne
+`source_revision` muszą być zapisane. Każdy point wiąże
+`sample_id`, `mode_id`, `bias_field_a_per_m`, expected/solved frequency i
+`relative_frequency_error`. Artefakt nie jest wejściem solvera. Jeśli fit nie ma
+covariance/conditioning, pozostaje `partial` mimo kompletnego porównania punktów.
+
+### Implementacja i dowody
+
+Rust writer znajduje się w
+`crates/fullmag-runner/src/eigen/artifacts.rs`:
+`build_frequency_domain_field_sweep_artifact`, `build_fmr_peaks_artifact`,
+`build_resonance_fits_artifact`, `build_kittel_fit_artifact` oraz odpowiadające
+funkcje `write_*`. Typy są re-exportowane przez `crates/fullmag-runner/src/eigen/mod.rs`.
+Focused tests sprawdzają brak fabrykacji pola z Kittel metadata, sample/mode
+identity, status `interrupted`, źródło driven response, digest całej koperty
+(w tym zmianę execution/topology o tej samej długości), bezpieczną podmianę
+plików JSON oraz obecność ścieżek typed artifacts w manifeście.
+Te testy są kontraktowe; nie są dowodem managed CPU/GPU runtime ani kwalifikacji
+fizycznej.
+
 ## Storage format policy
 
 JSON is the control-plane format only. Frequency-domain JSON artifacts may
@@ -165,6 +301,7 @@ Every manifest that claims a numeric FEM solve must include:
 ```json
 {
   "assembly_kind": "mfem_weak_form_shared_domain",
+  "operator_input_signature_sha256": "sha256:...",
   "phase_convention": "exp_i_omega_t",
   "phase_constraint_sha256": "sha256:...",
   "equilibrium_artifact_sha256": "sha256:...",
@@ -178,6 +315,27 @@ magnetic/scalar equivalence classes, translations and tangent-frame transforms
 used by the solved operator. For a nonperiodic solve it is the hash of an
 explicit `not_applicable` phase-constraint descriptor. Hashes identify content,
 not filesystem paths or display labels.
+
+`operator_input_signature_sha256` is the lane-independent signature of the
+physical/operator inputs for one sample. It is generated from the accepted
+periodic mesh certificate and equivalence-map binding, reduced magnetic and
+scalar maps and DOF counts, k/phase convention, Poisson-Robin boundary and
+gauge tuple, material/physics/boundary snapshot identities, demag realization,
+SI constants and operator dictionary. It deliberately excludes the raw
+floating-point equilibrium, tangent-frame basis and linearization arrays.
+The signature is compared exactly between CPU and GPU for the same sample and
+is allowed to vary across a field/path sweep when the requested operator
+inputs vary.
+
+`phase_constraint_sha256`, `equilibrium_artifact_sha256` and
+`linearization_state_sha256` remain required lane-specific provenance
+identities. Independent CPU/GPU relaxations are not required to serialize
+bit-identical state hashes: the parity gate compares the accepted
+`m_initial.json` vectors component-wise against the explicit physical state
+tolerance, while still rejecting missing, stale or unaccepted v6 handoff
+artifacts and sidecars whose `content_sha256` does not match the diagnostic
+identity. A state mismatch outside that tolerance is a parity failure, not a
+warning or an implicit fallback.
 
 `equilibrium_artifact_sha256` and `linearization_state_sha256` are required for
 both products under the target v6 handoff. The periodic certificate hash is
@@ -324,6 +482,13 @@ only after transfer-audit and preconditioner-residency gates pass. Existing
 `gpu_device_resident_krylov`, `device_residency` or transfer counters remain
 current evidence but must agree with the hardened object.
 
+Native K0 modal diagnostics also expose `setup_h2d_transfer_count` and
+`final_d2h_transfer_count`. These are logical block/vector transfers measured
+at the successful native matrix-assembly and accepted-mode export boundaries;
+they are not runner-supplied estimates. They describe setup/final movement
+only. The independent hot-loop counters above must remain zero for a
+device-resident modal claim.
+
 ### Artifact/API/UI consistency
 
 The same envelope is inspectable through the result manifest resource and
@@ -335,6 +500,7 @@ and resource hooks, then exposes:
 - requested versus resolved backend/device/precision/engine,
 - implementation and validation state plus exact validated scope,
 - assembly and operator dictionary,
+- lane-independent operator-input signature for each sample,
 - phase, equilibrium, linearization and periodic-certificate identities,
 - BC/gauge and spectral shift tuples,
 - block residual certification,
@@ -343,6 +509,42 @@ and resource hooks, then exposes:
 Missing optional artifacts still return diagnostic `404`. A malformed or
 contradictory hardened envelope is not optional: resource publication must fail
 with a diagnostic error rather than provide an empty plot or partial success.
+
+For a multi-sample native modal path, v6 equilibrium and linearization
+sidecars are stored under `eigen/metadata/sample_NNNN/`. A single unscoped
+sidecar must not overwrite another sample's accepted state; the manifest array
+and each sample's diagnostics identify the corresponding content hash.
+
+### Chapter-24 validation scope and non-object evidence
+
+Production promotion uses the closed
+`frequency_domain_validation_scope.v1` object and its content-addressed
+`scope_catalog.v1`; a short device/k/demag tuple or an opaque scope hash is not
+enough. The complete scope is hashed after reject-before-hash validation and
+the manifest/promotion record carries the resulting `scope_id`,
+`scope_catalog_uri`, and `scope_catalog_sha256`. Every JSON-object evidence
+artifact carries one closed `verified_coverage_of` binding. CSV, Zarr, binary,
+and plain-text evidence carries the same binding through the deterministic
+sidecar `<artifact-name>.validation_manifest.v1.json`, whose artifact hash or
+canonical Zarr-tree hash must match before rows or arrays are consumed.
+
+The fail-closed reference implementation is
+`scripts/verify_fem_frequency_domain_production_dod.py`. It validates scope
+cross-field legality (including K0 versus Floquet), catalog entry hashes,
+direct/coverage binding shape and directional coverage predicates, and
+non-object sidecar hashes. A bundle that
+does not provide a complete scope/catalog binding remains readable for its
+bounded implementation state but is not eligible for
+`validation_state=production_qualified`.
+
+Each passing production-DOD item also carries a closed verifier execution
+proof. The proof records the exact argv, zero exit status, RFC3339 UTC execution
+time, scope and catalog identities, runtime commit/build identity, and SHA-256
+digests of immutable stdout/stderr files. Those files require the same
+`validation_artifact_manifest.v1` sidecars and scope binding as other text
+evidence. The validator checks this proof before consuming metrics; a copied
+metrics object or a declared `verifier.result=pass` without an executed,
+hash-bound proof remains blocked.
 
 ## spectrum.v2.json
 
@@ -750,6 +952,15 @@ spectrum summary for phasor convention, eigenvalue mapping, eigenvalue
 components, `frequency_imag_hz`, `omega_rad_s`, mass norm, tangent leakage
 diagnostics, and SI constants.
 
+For native shared-domain FEM modal samples, the per-mode metadata must also
+carry the sample's physical and handoff provenance: `external_field_a_per_m`,
+`assembly_kind`, `operator_input_signature_sha256`,
+`phase_constraint_sha256`, `equilibrium_artifact_sha256`,
+`linearization_state_sha256`, and `periodic_mesh_certificate_sha256`. These
+fields bind a mode-field visualization to the exact bias sample, assembled
+operator, accepted v6 equilibrium/linearization handoff, and periodic mesh
+certificate; a consumer must not infer them from a global first-sample file.
+
 The canonical Zarr group layout for modal fields is:
 
 ```text
@@ -826,6 +1037,15 @@ promoted. Modal eigen manifests must additionally include:
 - `artifacts.dispersion_csv_path = "eigen/dispersion.csv"`,
 - `artifacts.solver_diagnostics_path = "eigen/diagnostics/solver.v1.json"`,
 - `artifacts.mode_metadata_paths[]`,
+- optional `artifacts.field_sweep_v1_path =
+  "eigen/field_sweep.v1.json"` when a physical per-sample bias-field
+  handoff is present,
+- optional `artifacts.fmr_kittel_fit_v1_path = "fmr/kittel_fit.v1.json"`
+  when the postsolve Kittel comparison is derivable; this artifact remains
+  `partial` when statistical covariance is unavailable,
+- `artifacts.equilibrium_artifact_v6_paths[]` and
+  `artifacts.linearization_state_v6_paths[]` for a multi-sample native
+  handoff (each path is scoped to `sample_NNNN`),
 - `resources.mode_field_resources[]`,
 - `validation.dispersion_validation` as the optional
   `FemEigenDispersionValidationIR` payload copied from the FEM eigen plan,
@@ -860,7 +1080,12 @@ Driven response manifests must additionally include:
 - `physics.phase_convention`,
 - `physics.frequency_units = "Hz"`,
 - `physics.field_units = "dimensionless_delta_m"`,
-- `artifacts.solver_diagnostics_path = "response/diagnostics/solver.v1.json"`.
+- `artifacts.solver_diagnostics_path = "response/diagnostics/solver.v1.json"`,
+- optional `artifacts.fmr_peaks_v1_path = "fmr/peaks.v1.json"` and
+  `artifacts.fmr_resonance_fits_v1_path = "fmr/resonance_fits.v1.json"`
+  when the response sweep contains at least one written point.  These paths
+  are artifact discovery hints only; typed resource keys are specified by the
+  A2 API/resource contract and must not be inferred from this v1 manifest.
 
 Completed driven-response manifests must also link the durable progress
 checkpoint explicitly:
@@ -1002,8 +1227,16 @@ publish the resolved window search contract:
 - `resolved_search_window_hz = [min_guarded_hz, max_guarded_hz]`,
 - `requested_mode_count`, copied from the public `Eigenmodes.count` mode cap,
 - `window_completeness.{policy,status,certification_method,additional_modes_may_exist}`,
-- `subwindows[]` with requested/search bounds, shift, iteration totals,
-  candidate/accepted counts, residual max, and a modal `stop_reason`.
+- either one global `subwindows[]` list, when every sample used the same
+  operator search, or `sample_solver_diagnostics[]` when field/k samples were
+  solved independently. Each sampled entry must have a unique `sample_index`
+  and a nonempty `diagnostics.subwindows[]` list. Native sampled subwindows
+  publish a unique `subwindow_index`, `shift_frequency_hz`, solver `status`,
+  nonnegative converged/candidate/accepted counts, and the frequencies actually
+  accepted inside the requested global window. Guard-region eigenpairs remain
+  candidates and must not be reported as accepted modes.
+  Producers must not fabricate a global search by copying or merging
+  subwindows executed against different sample operators.
 
 `mode_count` is the public number of published modes. For a multi-k dispersion
 bundle, it is the maximum `spectrum.samples[*].modes.length` after applying the
@@ -1934,6 +2167,65 @@ The runner may still emit this artifact with `status = "failed"` when required
 same-step `H_demag`/`demag_phi` snapshots, full-domain field lengths, node
 pairs, or boundary-face pairs are missing. Validators must treat any non-`ok`
 status as failed acceptance evidence, not as a successful degraded mode.
+
+## K0 CPU/GPU parity and performance evidence
+
+The exact production K0 pair is not qualified by matching frequencies alone.
+Each sample's `eigen/diagnostics/solver.v1.json` entry must publish the same
+operator identity and boundary contract on CPU and GPU:
+
+- `assembly_kind = mfem_weak_form_shared_domain`,
+- `demag_kind = periodic_airbox_k0`,
+- the real-split modal equation and `FrequencyOperatorDictionary.v1`,
+- `poisson_robin`, positive `robin_beta` in `1/m`, and
+  `gauge_policy = none` with reason `coercive_outer_boundary`,
+- complete `block_residuals` and `certification` objects,
+- an exact lane-independent `operator_input_signature_sha256` for the
+  corresponding bias-field sample,
+- matching mesh and equivalence-map certificate identities, plus required
+  lane-specific phase/equilibrium/linearization provenance.
+
+The parity verifier compares frequencies, modal residuals, all four block
+residuals, accepted mode counts, and the canonical input signature. It compares
+the accepted `m_initial.json` vectors component-wise against the explicit
+physical state tolerance; it does not mistake bitwise differences from two
+independent CPU/GPU relaxations for an operator mismatch. Historical bundles
+that publish an unknown boundary/gauge tuple, omit native action/residual
+counts, or omit the canonical input signature must fail closed and cannot be
+used as production evidence.
+
+GPU production evidence additionally requires a separate
+`fem_k0_modal_performance.v1` proof. It contains at least three distinct DOF
+sizes, one persistent-context reuse and one signature invalidation, zero hot
+loop allocations, zero full-vector H2D/D2H bytes, a bounded memory envelope,
+successful cancellation/partial-artifact preservation, and a passing Compute
+Sanitizer result. The proof also contains a closed
+`fem_k0_modal_performance_execution.v1` record: the exact managed argv, zero
+exit status, runtime/source hashes, and hash-bound stdout/stderr. The stdout
+record lists every completed run ID and reports cancellation and sanitizer
+status, so copied timing rows or a declared sanitizer status cannot qualify the
+lane. The managed release recipe must verify this proof before it can evaluate
+the CPU/GPU promotion record.
+
+Every entry in `runs[]` is additionally bound to two separate hash-addressed
+raw files. `native_diagnostics` must be the native PETSc/SLEPc diagnostics
+record for that exact solve and must prove
+`execution_lane=production_gpu`, device-resident modal execution,
+`fallback_used=false`, the same operator-context signature/reuse decision, and
+zero per-iteration full-vector transfers. `runtime_telemetry` must be emitted
+by the managed native runtime with schema
+`fem_k0_modal_performance_telemetry.v1`; it mirrors the run ID, DOF count,
+elapsed time, peak memory, and hot-loop counters. The verifier rejects a run
+when either raw file is absent, stale, or disagrees with the summary row. A
+hand-authored performance JSON containing only copied summary numbers is
+therefore not sufficient evidence.
+
+The Rust runner must not call the GPU runtime finalizer after an individual
+modal request. PETSc/SLEPc and the Schur context remain process-local and are
+released by the native `atexit` handler (or by the explicit shutdown ABI); this
+is what makes a same-process signature reuse and signature invalidation
+observable. A request-level finalizer is therefore a teardown operation, not a
+normal solve lifecycle step.
 
 ## Frontend contract
 

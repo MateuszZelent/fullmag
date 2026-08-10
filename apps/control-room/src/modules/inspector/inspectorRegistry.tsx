@@ -81,10 +81,12 @@ import {
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
   FmrComparisonInspectorPanel,
+  FmrKittelFitInspectorPanel,
   FmrModalSpectrumInspectorPanel,
   FmrOverviewInspectorPanel,
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
+  FmrResonanceFitsInspectorPanel,
   FmrResponseSweepInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
@@ -198,6 +200,8 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.frequency_domain.fmr_response_sweep",
   "results.frequency_domain.fmr_peaks",
   "results.frequency_domain.fmr_peak",
+  "results.frequency_domain.fmr_resonance_fits",
+  "results.frequency_domain.fmr_kittel_fit",
   "results.frequency_domain.dispersion",
   "results.frequency_domain.response_map",
   "results.eigen.root",
@@ -332,6 +336,9 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
     FmrModalSpectrumInspectorPanel,
   "results.frequency_domain.fmr_peaks": FmrPeaksInspectorPanel,
   "results.frequency_domain.fmr_peak": FmrPeakInspectorPanel,
+  "results.frequency_domain.fmr_resonance_fits":
+    FmrResonanceFitsInspectorPanel,
+  "results.frequency_domain.fmr_kittel_fit": FmrKittelFitInspectorPanel,
   "results.frequency_domain.fmr_response_sweep": FmrResponseSweepInspectorPanel,
   "results.frequency_domain.comparison": FmrComparisonInspectorPanel,
   "results.frequency_domain.exports": FrequencyDomainExportsInspectorPanel,

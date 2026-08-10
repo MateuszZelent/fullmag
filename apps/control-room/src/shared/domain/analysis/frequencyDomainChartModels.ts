@@ -124,14 +124,49 @@ export interface FrequencyDomainChartSeries {
 export interface EigenSpectrumPoint {
   branchId: string | null;
   dampingRateHz: number | null;
+  displayModeIndex: number;
   frequencyHz: number;
   imaginaryFrequencyHz: number | null;
   modeFieldId: string | null;
   modeFieldResourceKey: string | null;
+  modeId: string | null;
   rawModeIndex: number;
   residualNorm: number | null;
   sampleIndex: number;
   tangentLeakageMax: number | null;
+}
+
+export interface EigenSpectrumPayloadMode {
+  branchId: string | null;
+  dampingRateHz: number | null;
+  displayModeIndex: number;
+  frequencyHz: number | null;
+  imaginaryFrequencyHz: number | null;
+  modeFieldId: string | null;
+  modeFieldResourceKey: string | null;
+  modeId: string | null;
+  rawModeIndex: number;
+  residualNorm: number | null;
+  sampleIndex: number;
+  tangentLeakageMax: number | null;
+}
+
+export interface EigenSpectrumPayloadModel {
+  modes: readonly EigenSpectrumPayloadMode[];
+}
+
+export interface EigenBranchesPayloadModel {
+  branches: readonly {
+    branchId: string;
+    maxFrequencyHz: number | null;
+    minFrequencyHz: number | null;
+    modes: readonly unknown[];
+  }[];
+}
+
+export interface EigenDispersionPayloadModel {
+  kPath: readonly unknown[];
+  kPoints: readonly unknown[];
 }
 
 export interface EigenDispersionPoint {
@@ -456,59 +491,121 @@ function normalizeCalculationMode(rawMode: string | null): FrequencyDomainCalcul
   }
 }
 
+/**
+ * Narrow the generated JSON artifact payload once at the domain boundary.
+ * Panels consume this typed view instead of casting an entire resource
+ * wrapper. A stable `mode_id` owns display rank; `raw_mode_index` remains
+ * compatibility metadata for artifact lookup and selection refs.
+ */
+export function readEigenSpectrumPayload(
+  payload: unknown,
+): EigenSpectrumPayloadModel | null {
+  const root = record(payload);
+  if (!root) return null;
+  const rows = spectrumRows(payload);
+  if (rows.length === 0 && !("modes" in root) && !("samples" in root)) {
+    return null;
+  }
+
+  const sampleRanks = new Map<number, number>();
+  const modes = rows.flatMap((row, rowIndex) => {
+    const item = record(row);
+    if (!item) return [];
+    const sampleIndex = finiteInteger(item.sample_index ?? item.sampleIndex, 0);
+    const rawModeIndex = finiteInteger(
+      item.raw_mode_index ?? item.mode_index ?? item.rawModeIndex ?? item.modeIndex,
+      rowIndex,
+    );
+    const modeId = stringValue(item.mode_id ?? item.modeId ?? item.id);
+    const rank = sampleRanks.get(sampleIndex) ?? 0;
+    sampleRanks.set(sampleIndex, rank + 1);
+    const modeFieldId = stringValue(item.mode_field_id ?? item.modeFieldId);
+    return [{
+      branchId: stringValue(item.branch_id ?? item.branchId),
+      dampingRateHz: finiteNumber(item.damping_rate_hz ?? item.dampingRateHz ?? item.damping_factor),
+      displayModeIndex: modeId != null ? rank : rawModeIndex,
+      frequencyHz: finiteNumber(
+        item.frequency_hz ?? item.frequency_real_hz ?? item.frequencyHz ?? item.frequencyRealHz ?? item.f_hz,
+      ),
+      imaginaryFrequencyHz: finiteNumber(
+        item.frequency_imag_hz ?? item.frequencyImagHz ?? item.imag_frequency_hz ?? item.imaginary_frequency_hz,
+      ),
+      modeFieldId,
+      modeFieldResourceKey:
+        stringValue(item.mode_field_resource_key ?? item.modeFieldResourceKey) ??
+        (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null),
+      modeId,
+      rawModeIndex,
+      residualNorm: finiteNumber(item.residual_norm ?? item.relative_residual_norm),
+      sampleIndex,
+      tangentLeakageMax: finiteNumber(item.tangent_leakage_max ?? item.tangentLeakageMax),
+    } satisfies EigenSpectrumPayloadMode];
+  });
+  return { modes };
+}
+
+export function readEigenBranchesPayload(
+  payload: unknown,
+): EigenBranchesPayloadModel | null {
+  const root = record(payload);
+  if (!root) return null;
+  const rows = array(root.branches ?? root.rows);
+  if (rows.length === 0 && !("branches" in root)) return null;
+  return {
+    branches: rows.flatMap((row) => {
+      const item = record(row);
+      const branchId = stringValue(item?.branch_id ?? item?.branchId);
+      if (!item || branchId == null) return [];
+      return [{
+        branchId,
+        maxFrequencyHz: finiteNumber(item.max_frequency_hz ?? item.maxFrequencyHz),
+        minFrequencyHz: finiteNumber(item.min_frequency_hz ?? item.minFrequencyHz),
+        modes: array(item.modes),
+      }];
+    }),
+  };
+}
+
+export function readEigenDispersionPayload(
+  resource: { path_metadata?: unknown; text?: string | null } | null | undefined,
+): EigenDispersionPayloadModel | null {
+  if (!resource) return null;
+  const metadata = record(resource.path_metadata);
+  const sampling = record(metadata?.sampling);
+  if (!sampling && (resource.text == null || resource.text.trim().length === 0)) {
+    return null;
+  }
+  const points = array(sampling?.points);
+  return { kPath: points, kPoints: points };
+}
+
 export function buildEigenSpectrumChartModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
 ): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
-  const rows = spectrumRows(resource?.payload);
+  const payloadModel = readEigenSpectrumPayload(resource?.payload);
   const points: EigenSpectrumPoint[] = [];
   let droppedPointCount = 0;
 
-  rows.forEach((row, rowIndex) => {
-    const item = record(row);
-    const frequencyHz = finiteNumber(
-      item?.frequency_hz ??
-        item?.frequency_real_hz ??
-        item?.frequencyHz ??
-        item?.frequencyRealHz ??
-        item?.f_hz,
-    );
-    if (frequencyHz == null) {
+  (payloadModel?.modes ?? []).forEach((mode) => {
+    if (mode.frequencyHz == null) {
       droppedPointCount += 1;
       return;
     }
-    const rawModeIndex = finiteInteger(
-      item?.raw_mode_index ?? item?.mode_index ?? item?.modeIndex,
-      rowIndex,
-    );
-    const sampleIndex = finiteInteger(item?.sample_index ?? item?.sampleIndex);
-    const modeFieldId = stringValue(item?.mode_field_id ?? item?.modeFieldId);
-    const modeFieldResourceKey =
-      stringValue(item?.mode_field_resource_key ?? item?.modeFieldResourceKey) ??
-      (modeFieldId ? fieldVectorResourceKey(modeFieldId) : null);
     points.push({
-      branchId: stringValue(item?.branch_id ?? item?.branchId),
-      dampingRateHz: finiteNumber(item?.damping_rate_hz ?? item?.dampingRateHz),
-      frequencyHz,
-      imaginaryFrequencyHz: finiteNumber(
-        item?.frequency_imag_hz ??
-          item?.frequencyImagHz ??
-          item?.imag_frequency_hz ??
-          item?.imaginary_frequency_hz,
-      ),
-      modeFieldId,
-      modeFieldResourceKey,
-      rawModeIndex,
-      residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
-      sampleIndex,
-      tangentLeakageMax: finiteNumber(
-        item?.tangent_leakage_max ?? item?.tangentLeakageMax,
-      ),
+      branchId: mode.branchId,
+      dampingRateHz: mode.dampingRateHz,
+      displayModeIndex: mode.displayModeIndex,
+      frequencyHz: mode.frequencyHz,
+      imaginaryFrequencyHz: mode.imaginaryFrequencyHz,
+      modeFieldId: mode.modeFieldId,
+      modeFieldResourceKey: mode.modeFieldResourceKey,
+      modeId: mode.modeId,
+      rawModeIndex: mode.rawModeIndex,
+      residualNorm: mode.residualNorm,
+      sampleIndex: mode.sampleIndex,
+      tangentLeakageMax: mode.tangentLeakageMax,
     });
   });
-
-  const frequencyScale = frequencyChartScale(
-    points.map((point) => point.frequencyHz),
-  );
 
   return {
     dataSourceVersion: "unknown",
@@ -521,8 +618,8 @@ export function buildEigenSpectrumChartModel(
         label: "Eigen frequency",
         points: points.map((point, rowIndex) => ({
           rowIndex,
-          x: point.frequencyHz / frequencyScale.divisor,
-          y: point.rawModeIndex,
+          x: point.displayModeIndex,
+          y: point.frequencyHz,
         })),
         quantity: "frequency",
         source: {
@@ -531,8 +628,8 @@ export function buildEigenSpectrumChartModel(
           tableId: "frequency-domain:eigen-spectrum",
         },
         status: artifactStatus(resource),
-        unit: frequencyScale.unit,
-        xUnit: frequencyScale.unit,
+        unit: "Hz",
+        xUnit: "1",
       },
     ],
   };

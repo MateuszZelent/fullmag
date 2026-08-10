@@ -57,6 +57,33 @@ services:
       - fem
       - fem-gpu
 
+  # The modal CPU production lane uses the same pinned PETSc/SLEPc image as
+  # fem-gpu, but must not request a Docker GPU device.  Keeping this as a
+  # separate service prevents a host without an NVIDIA driver from blocking a
+  # strict CPU qualification run while leaving the GPU lane fail-closed.
+  fem-modal-cpu:
+    image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}
+    working_dir: /workspace
+    command: sleep infinity
+    volumes:
+      - ./:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+      - pnpm-store:/pnpm/store
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_PYTHON: /usr/bin/python3
+      FULLMAG_USE_MFEM_STACK: "ON"
+      FULLMAG_FEM_REQUIRE_CEED: "1"
+      FULLMAG_FEM_WITH_SLEPC: "ON"
+      FULLMAG_FEM_GPU_MIN_NODES: "0"
+      FULLMAG_FEM_MFEM_DEVICE: cpu
+      CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      PKG_CONFIG_PATH: /opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig
+      LD_LIBRARY_PATH: /opt/fullmag-deps/lib
+    profiles:
+      - fem-modal-cpu
+
   fem-cpu:
     build:
       context: .

@@ -2,6 +2,8 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
@@ -212,6 +214,22 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     resource: "modal mode field or driven response field",
     title: "FMR Peak",
     visualization: "peak provenance, frequency, validation, and 3D field target",
+  },
+  "results.frequency_domain.fmr_resonance_fits": {
+    artifact: "fmr/resonance_fits.v1.json",
+    focus: "published resonance fits",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    title: "FMR Resonance Fits",
+    visualization:
+      "peak frequency [Hz], linewidth [Hz], fit uncertainty, and source revision",
+  },
+  "results.frequency_domain.fmr_kittel_fit": {
+    artifact: "fmr/kittel_fit.v1.json",
+    focus: "published Kittel fit",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+    title: "FMR Kittel Fit",
+    visualization:
+      "bias field [A/m], solved frequency [Hz], parameter units, covariance, and source revision",
   },
   "results.frequency_domain.dispersion": {
     artifact: "eigen/dispersion.csv",

@@ -214,6 +214,7 @@ mod tests {
             relaxation_steps: 0,
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             solver_notes: Vec::new(),
+            solver_diagnostics: None,
         }
     }
 

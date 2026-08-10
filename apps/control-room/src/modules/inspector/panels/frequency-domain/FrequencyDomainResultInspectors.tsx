@@ -20,6 +20,8 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
@@ -35,6 +37,8 @@ import {
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainEigenModeFieldMetaResource,
   useFrequencyDomainEigenModeResource,
+  useFrequencyDomainFmrKittelFitResource,
+  useFrequencyDomainFmrResonanceFitsResource,
   useFrequencyDomainManifestResource,
   useFrequencyDomainResponseCancelRequestedResource,
   useFrequencyDomainResponseDiagnosticsResource,
@@ -2494,6 +2498,162 @@ function FmrPeakBrowser({
   );
 }
 
+type FmrPublishedArtifactState =
+  | "loading"
+  | "missing"
+  | "partial"
+  | "corrupt"
+  | "ready";
+
+interface ResonanceFitView {
+  fitId: string;
+  linewidthHz: number | null;
+  model: string;
+  peakFrequencyHz: number | null;
+  qFactor: number | null;
+  sourcePeakRevision: string;
+  status: string;
+  uncertainty: string;
+}
+
+interface KittelParameterView {
+  name: string;
+  unit: string;
+  value: number | null;
+}
+
+interface KittelPointView {
+  biasField: readonly number[];
+  relativeFrequencyError: number | null;
+  sampleId: string;
+  solvedFrequencyHz: number | null;
+  status: string;
+}
+
+export function FmrResonanceFitsInspectorPanel(props: InspectorPanelProps) {
+  void props;
+  const summary = useFmrResonanceFitsSummary();
+
+  return (
+    <div
+      data-inspector-surface="fmr-resonance-fits"
+      data-status={summary.state}
+    >
+      <InspectorGroup title="FMR Resonance Fits" badge={summary.state}>
+        <FieldRow label="Artifact state" value={summary.state} />
+        <FieldRow label="Reason" value={summary.reason} />
+        <FieldRow
+          label="Published source revision"
+          value={summary.sourceRevision}
+        />
+        <FieldRow label="Resource revision" value={summary.resourceRevision} />
+        <FieldRow label="Resource" value={summary.resourceKey} />
+        <FieldRow label="Frequency unit" value={summary.frequencyUnit} />
+        <FieldRow label="Linewidth unit" value={summary.linewidthUnit} />
+        <FieldRow label="Q factor unit" value={summary.qFactorUnit} />
+        <FieldRow label="Covariance unit" value={summary.covarianceUnit} />
+      </InspectorGroup>
+      <InspectorGroup
+        title="Published Resonance Fits"
+        badge={`${summary.fits.length} fit(s)`}
+      >
+        {summary.fits.length === 0 ? (
+          <div className="fm-frequency-domain-table-empty" role="status">
+            No published resonance fits are available.
+          </div>
+        ) : (
+          summary.fits.map((fit) => (
+            <article className="fm-frequency-domain-peak-card" key={fit.fitId}>
+              <FieldRow label="Fit" value={fit.fitId} />
+              <FieldRow label="Model" value={fit.model} />
+              <FieldRow
+                label="Peak frequency"
+                value={formatFrequency(fit.peakFrequencyHz)}
+              />
+              <FieldRow
+                label="Linewidth"
+                value={formatFrequency(fit.linewidthHz)}
+              />
+              <FieldRow
+                label="Q factor"
+                value={formatNumberOrUnavailable(fit.qFactor)}
+              />
+              <FieldRow label="Uncertainty" value={fit.uncertainty} />
+              <FieldRow
+                label="Peak source revision"
+                value={fit.sourcePeakRevision}
+              />
+              <FieldRow label="Status" value={fit.status} />
+            </article>
+          ))
+        )}
+      </InspectorGroup>
+    </div>
+  );
+}
+
+export function FmrKittelFitInspectorPanel(props: InspectorPanelProps) {
+  void props;
+  const summary = useFmrKittelFitSummary();
+
+  return (
+    <div data-inspector-surface="fmr-kittel-fit" data-status={summary.state}>
+      <InspectorGroup title="FMR Kittel Fit" badge={summary.state}>
+        <FieldRow label="Artifact state" value={summary.state} />
+        <FieldRow label="Reason" value={summary.reason} />
+        <FieldRow
+          label="Published source revision"
+          value={summary.sourceRevision}
+        />
+        <FieldRow label="Resource revision" value={summary.resourceRevision} />
+        <FieldRow label="Resource" value={summary.resourceKey} />
+        <FieldRow label="Model" value={summary.model} />
+        <FieldRow label="Validation state" value={summary.validationStatus} />
+        <FieldRow label="Frequency unit" value={summary.frequencyUnit} />
+        <FieldRow label="Bias field unit" value={summary.biasFieldUnit} />
+        <FieldRow label="Covariance" value={summary.covariance} />
+        <FieldRow label="Conditioning" value={summary.conditioning} />
+      </InspectorGroup>
+      <InspectorGroup
+        title="Kittel Fit Parameters"
+        badge={`${summary.parameters.length} parameter(s)`}
+      >
+        {summary.parameters.length === 0 ? (
+          <div className="fm-frequency-domain-table-empty" role="status">
+            No published Kittel parameters are available.
+          </div>
+        ) : (
+          summary.parameters.map((parameter) => (
+            <FieldRow
+              key={parameter.name}
+              label={parameter.name}
+              value={`${formatCompactNumberOrUnavailable(parameter.value)} ${parameter.unit}`}
+            />
+          ))
+        )}
+      </InspectorGroup>
+      <InspectorGroup
+        title="Kittel Validation Points"
+        badge={`${summary.points.length} point(s)`}
+      >
+        {summary.points.length === 0 ? (
+          <div className="fm-frequency-domain-table-empty" role="status">
+            No published Kittel validation points are available.
+          </div>
+        ) : (
+          summary.points.map((point) => (
+            <FieldRow
+              key={point.sampleId}
+              label={point.sampleId}
+              value={`H=[${point.biasField.map(formatNumber).join(", ")}] ${summary.biasFieldUnit}; f=${formatFrequency(point.solvedFrequencyHz)}; relative error ${formatRelativeError(point.relativeFrequencyError)}; ${point.status}`}
+            />
+          ))
+        )}
+      </InspectorGroup>
+    </div>
+  );
+}
+
 export function FmrPeakInspectorPanel(props: InspectorPanelProps) {
   const summary = useFmrPeakSummary(props);
 
@@ -4583,6 +4743,331 @@ function useFmrResultSummary() {
     spectrumModel,
     workflowMode: chartRoute.mode,
   };
+}
+
+function useFmrResonanceFitsSummary() {
+  const resource = useFrequencyDomainFmrResonanceFitsResource();
+  const envelope = publishedFmrArtifactEnvelope({
+    data: resource.data,
+    error: resource.error,
+    expectedSchema: "resonance_fits",
+    kind: "resonance-fits",
+    resourceRevision: resource.revision,
+    resourceStatus: resource.status,
+  });
+  const units = record(envelope.payload?.units);
+  const fits = Array.isArray(envelope.payload?.fits)
+    ? envelope.payload.fits.flatMap((entry): ResonanceFitView[] => {
+        const fit = record(entry);
+        const fitId = stringValue(fit?.fit_id);
+        if (!fit || !fitId) return [];
+        return [
+          {
+            fitId,
+            linewidthHz: finiteOptionalNumber(fit.linewidth_hz),
+            model: stringValue(fit.model) ?? "not published",
+            peakFrequencyHz: finiteOptionalNumber(fit.peak_frequency_hz),
+            qFactor: finiteOptionalNumber(fit.q_factor),
+            sourcePeakRevision:
+              stringValue(fit.source_peak_revision) ?? "not published",
+            status: stringValue(fit.status) ?? "not published",
+            uncertainty: formatPublishedFitUncertainty(fit.uncertainty),
+          },
+        ];
+      })
+    : [];
+
+  return {
+    covarianceUnit: stringValue(units?.covariance) ?? "not published",
+    fits,
+    frequencyUnit: stringValue(units?.frequency) ?? "not published",
+    linewidthUnit: stringValue(units?.linewidth) ?? "not published",
+    qFactorUnit: stringValue(units?.q_factor) ?? "not published",
+    reason: envelope.reason,
+    resourceKey:
+      stringValue(envelope.artifact?.resource_key) ??
+      ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    resourceRevision: envelope.resourceRevision,
+    sourceRevision:
+      stringValue(envelope.payload?.source_revision) ?? "not published",
+    state: envelope.state,
+  };
+}
+
+function useFmrKittelFitSummary() {
+  const resource = useFrequencyDomainFmrKittelFitResource();
+  const envelope = publishedFmrArtifactEnvelope({
+    data: resource.data,
+    error: resource.error,
+    expectedSchema: "kittel_fit",
+    kind: "kittel",
+    resourceRevision: resource.revision,
+    resourceStatus: resource.status,
+  });
+  const units = record(envelope.payload?.units);
+  const parameters = Array.isArray(envelope.payload?.parameters)
+    ? envelope.payload.parameters.flatMap((entry): KittelParameterView[] => {
+        const parameter = record(entry);
+        const name = stringValue(parameter?.name);
+        if (!parameter || !name) return [];
+        return [
+          {
+            name,
+            unit: stringValue(parameter.unit) ?? "not published",
+            value: finiteOptionalNumber(parameter.value),
+          },
+        ];
+      })
+    : [];
+  const points = Array.isArray(envelope.payload?.points)
+    ? envelope.payload.points.flatMap((entry): KittelPointView[] => {
+        const point = record(entry);
+        const sampleId = stringValue(point?.sample_id);
+        if (!point || !sampleId) return [];
+        return [
+          {
+            biasField: numericArray(point.bias_field_a_per_m),
+            relativeFrequencyError: finiteOptionalNumber(
+              point.relative_frequency_error,
+            ),
+            sampleId,
+            solvedFrequencyHz: finiteOptionalNumber(point.solved_frequency_hz),
+            status: stringValue(point.status) ?? "not published",
+          },
+        ];
+      })
+    : [];
+
+  return {
+    biasFieldUnit: stringValue(units?.bias_field) ?? "not published",
+    conditioning: formatNumberOrUnavailable(
+      finiteOptionalNumber(envelope.payload?.conditioning),
+    ),
+    covariance: formatPublishedCovariance(
+      envelope.payload?.covariance,
+      stringValue(units?.covariance),
+    ),
+    frequencyUnit: stringValue(units?.frequency) ?? "not published",
+    model: stringValue(envelope.payload?.model) ?? "not published",
+    parameters,
+    points,
+    reason: envelope.reason,
+    resourceKey:
+      stringValue(envelope.artifact?.resource_key) ??
+      ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+    resourceRevision: envelope.resourceRevision,
+    sourceRevision:
+      stringValue(envelope.payload?.source_revision) ?? "not published",
+    state: envelope.state,
+    validationStatus:
+      stringValue(envelope.payload?.validation_status) ?? "not published",
+  };
+}
+
+function publishedFmrArtifactEnvelope({
+  data,
+  error,
+  expectedSchema,
+  kind,
+  resourceRevision,
+  resourceStatus,
+}: {
+  data: unknown;
+  error: unknown;
+  expectedSchema: "kittel_fit" | "resonance_fits";
+  kind: "kittel" | "resonance-fits";
+  resourceRevision: string | number | null;
+  resourceStatus: string;
+}): {
+  artifact: Record<string, unknown> | null;
+  payload: Record<string, unknown> | null;
+  reason: string;
+  resourceRevision: string;
+  state: FmrPublishedArtifactState;
+} {
+  const artifact = record(data);
+  const payload = record(artifact?.payload);
+  const artifactStatus = normalizedPublishedStatus(artifact?.status);
+  const payloadStatus = normalizedPublishedStatus(payload?.status);
+  const missingReason = stringValue(artifact?.missing_reason);
+  const stopReason = stringValue(payload?.stop_reason);
+  const revision =
+    resourceRevision == null ? "not published" : String(resourceRevision);
+
+  if (resourceStatus === "loading") {
+    return {
+      artifact,
+      payload,
+      reason: "Artifact resource is loading.",
+      resourceRevision: revision,
+      state: "loading",
+    };
+  }
+  if (error) {
+    return {
+      artifact,
+      payload,
+      reason: "Artifact resource could not be decoded.",
+      resourceRevision: revision,
+      state: "corrupt",
+    };
+  }
+  if (!artifact) {
+    return {
+      artifact,
+      payload,
+      reason: "Artifact was not published.",
+      resourceRevision: revision,
+      state: "missing",
+    };
+  }
+  if (isCorruptPublishedStatus(artifactStatus)) {
+    return {
+      artifact,
+      payload,
+      reason: missingReason ?? "Artifact payload is corrupt.",
+      resourceRevision: revision,
+      state: "corrupt",
+    };
+  }
+  if (
+    artifactStatus === "missing" ||
+    artifactStatus === "absent" ||
+    artifactStatus === "not_found" ||
+    (missingReason && artifactStatus !== "partial")
+  ) {
+    return {
+      artifact,
+      payload,
+      reason: missingReason ?? "Artifact was not published.",
+      resourceRevision: revision,
+      state: "missing",
+    };
+  }
+  if (
+    !payload ||
+    !stringValue(payload.schema_version)?.includes(expectedSchema) ||
+    isCorruptPublishedStatus(payloadStatus) ||
+    !hasPublishedFitCollections(payload, kind)
+  ) {
+    return {
+      artifact,
+      payload,
+      reason: "Artifact payload is corrupt.",
+      resourceRevision: revision,
+      state: "corrupt",
+    };
+  }
+  if (
+    artifactStatus === "partial" ||
+    payloadStatus === "partial" ||
+    payloadStatus === "incomplete" ||
+    payload.complete !== true ||
+    !stringValue(payload.source_revision) ||
+    !stringValue(record(payload.units)?.frequency)
+  ) {
+    return {
+      artifact,
+      payload,
+      reason:
+        missingReason ?? stopReason ?? "Artifact publication is incomplete.",
+      resourceRevision: revision,
+      state: "partial",
+    };
+  }
+
+  return {
+    artifact,
+    payload,
+    reason: "none",
+    resourceRevision: revision,
+    state: "ready",
+  };
+}
+
+function normalizedPublishedStatus(value: unknown): string {
+  return stringValue(value)?.trim().toLowerCase().replace(/[-\s]+/g, "_") ?? "";
+}
+
+function isCorruptPublishedStatus(value: string): boolean {
+  return ["corrupt", "error", "failed", "invalid", "malformed"].includes(
+    value,
+  );
+}
+
+function hasPublishedFitCollections(
+  payload: Record<string, unknown>,
+  kind: "kittel" | "resonance-fits",
+): boolean {
+  if (kind === "resonance-fits") {
+    if (!Array.isArray(payload.fits)) return false;
+    return payload.fits.every((entry) => {
+      const fit = record(entry);
+      return Boolean(
+        stringValue(fit?.fit_id) &&
+          stringValue(fit?.source_peak_revision) &&
+          record(fit?.uncertainty),
+      );
+    });
+  }
+  if (!Array.isArray(payload.parameters) || !Array.isArray(payload.points)) {
+    return false;
+  }
+  const parametersAreValid = payload.parameters.every((entry) => {
+    const parameter = record(entry);
+    return Boolean(
+      stringValue(parameter?.name) &&
+        stringValue(parameter?.unit) &&
+        finiteOptionalNumber(parameter?.value) != null,
+    );
+  });
+  const pointsAreValid = payload.points.every((entry) => {
+    const point = record(entry);
+    return Boolean(
+      stringValue(point?.sample_id) &&
+        numericArray(point?.bias_field_a_per_m).length > 0 &&
+        finiteOptionalNumber(point?.solved_frequency_hz) != null,
+    );
+  });
+  return parametersAreValid && pointsAreValid;
+}
+
+function formatPublishedFitUncertainty(value: unknown): string {
+  const uncertainty = record(value);
+  if (!uncertainty) return "not published";
+  const parts = [
+    stringValue(uncertainty.kind),
+    finiteOptionalNumber(uncertainty.frequency_hz) == null
+      ? null
+      : `frequency ${formatFrequency(
+          finiteOptionalNumber(uncertainty.frequency_hz),
+        )}`,
+    finiteOptionalNumber(uncertainty.amplitude) == null
+      ? null
+      : `amplitude ${formatCompactNumberOrUnavailable(
+          finiteOptionalNumber(uncertainty.amplitude),
+        )}`,
+    stringValue(uncertainty.reason),
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("; ") : "not published";
+}
+
+function formatPublishedCovariance(
+  value: unknown,
+  unit: string | null,
+): string {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "not published";
+  }
+  const columnCount = Array.isArray(value[0]) ? value[0].length : 0;
+  if (columnCount === 0 || value.some((row) => !Array.isArray(row))) {
+    return "corrupt";
+  }
+  return `${unit ?? "unit not published"}; ${value.length} x ${columnCount}`;
+}
+
+function formatRelativeError(value: number | null): string {
+  return value == null ? "not available" : `${formatNumber(value * 100)}%`;
 }
 
 function useFrequencyDomainOverviewSummary() {

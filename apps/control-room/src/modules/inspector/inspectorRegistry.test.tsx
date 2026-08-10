@@ -82,10 +82,12 @@ import {
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
   FmrComparisonInspectorPanel,
+  FmrKittelFitInspectorPanel,
   FmrModalSpectrumInspectorPanel,
   FmrOverviewInspectorPanel,
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
+  FmrResonanceFitsInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { FrequencyDomainInspectorPanel } from "./panels/FrequencyDomainInspectorPanel";
 import {
@@ -513,9 +515,20 @@ describe("inspectorRegistry", () => {
         ?.component,
     ).toBe(FmrPeakInspectorPanel);
     expect(
+      resolveInspectorPanel({
+        kind: "results.frequency_domain.fmr_resonance_fits",
+      })?.component,
+    ).toBe(FmrResonanceFitsInspectorPanel);
+    expect(
+      resolveInspectorPanel({ kind: "results.frequency_domain.fmr_kittel_fit" })
+        ?.component,
+    ).toBe(FmrKittelFitInspectorPanel);
+    expect(
       resolveInspectorPanel({ kind: "results.frequency_domain.comparison" })
         ?.component,
     ).toBe(FmrComparisonInspectorPanel);
+    expect(FmrResonanceFitsInspectorPanel).not.toBe(FmrComparisonInspectorPanel);
+    expect(FmrKittelFitInspectorPanel).not.toBe(FmrComparisonInspectorPanel);
     expect(
       resolveInspectorPanel({ kind: "results.frequency_domain.exports" })
         ?.component,

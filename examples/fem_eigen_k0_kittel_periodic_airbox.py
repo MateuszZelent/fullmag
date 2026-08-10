@@ -24,11 +24,16 @@ AIRBOX_FACTOR = float(os.environ.get("FULLMAG_K0_KITTEL_AIRBOX_FACTOR", "5.0"))
 BODY_X_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_X_NM", "40.0")) * 1e-9
 BODY_Y_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Y_NM", "20.0")) * 1e-9
 BODY_Z_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Z_NM", "10.0")) * 1e-9
+BIAS_FIELD_MIN_T = 5.0e-3
+BIAS_FIELD_MAX_T = 0.10
 BIAS_FIELDS_T = tuple(
-    1.0e-9 if sample_index == 0 else 0.10 * sample_index / 14.0
+    BIAS_FIELD_MIN_T
+    + (BIAS_FIELD_MAX_T - BIAS_FIELD_MIN_T) * sample_index / 14.0
     for sample_index in range(15)
 )
 BIAS_FIELDS_A_PER_M = tuple(field_t / MU0 for field_t in BIAS_FIELDS_T)
+# The production GPU lane currently qualifies one accepted K0 mode per
+# sample; keep the CPU peer on the same exact modal request for parity.
 N_MODES = 1
 FREQUENCY_MAX_HZ = 25.0e9
 
@@ -49,7 +54,7 @@ study.universe.mesh(
     grading="linear",
 )
 study.objects.mesh.defaults(
-    periodic_pair_ids=["x_faces"],
+    periodic_pair_ids=["x_faces", "y_faces"],
     algorithm_2d=6,
     algorithm_3d=1,
     smoothing_steps=1,
@@ -75,10 +80,14 @@ body.mesh.thin_film(
     order=1,
 )
 
-study.pbc(x=True, demag="periodic_airbox_k0")
+study.pbc(x=True, y=True, demag="periodic_airbox_k0")
 study.b_ext(BIAS_FIELDS_T[0], 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
+# Keep the iterative solve tighter than the independent 1e-8 residual gate;
+# otherwise a backend stopping at its own 1e-8 estimate can miss the
+# independently recomputed threshold by roundoff on refined meshes.
+study.fem_demag_solver(rtol=1e-10, max_iterations=1000)
 study.build_domain_mesh()
 
 study.save("spectrum")
@@ -108,17 +117,22 @@ study.stages.add_relax(
 )
 study.stages.add_eigenmodes(
     count=N_MODES,
-    target="frequency_window",
-    frequency_min=1e3,
-    frequency_max=FREQUENCY_MAX_HZ,
+    target="nearest",
+    target_frequency=2.0e9,
     operator="full_2x2",
     include_demag=True,
     equilibrium_source="relax",
     normalization="unit_l2",
     damping_policy="ignore",
-    # The production K0 shared-domain lane is one exact Gamma sample.  The
-    # independent K0-3 field sweep above remains a post-solve validation
-    # oracle; it is not encoded as a fake k-path.
-    k_sampling=fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
-    bc=fm.PeriodicBC(["x_faces"]),
+    # The K0-3 validation is a real zero-k field sweep: the path keeps the
+    # physical wavevector at Gamma while the runner applies each declared
+    # bias-field sample to the native modal solve.
+    k_sampling=fm.KPath(
+        [
+            fm.KPoint("Hnear0", (0.0, 0.0, 0.0)),
+            fm.KPoint("H100mT", (0.0, 0.0, 0.0)),
+        ],
+        samples_per_segment=[14],
+    ),
+    bc=fm.PeriodicBC(["x_faces", "y_faces"]),
 )

@@ -31376,14 +31376,25 @@ fn schema_property_names(
     schemas: &serde_json::Map<String, serde_json::Value>,
     schema_name: &str,
 ) -> BTreeSet<String> {
-    schemas
+    let schema = schemas
         .get(schema_name)
-        .and_then(|schema| schema.get("properties"))
-        .and_then(|properties| properties.as_object())
-        .unwrap_or_else(|| panic!("schema `{schema_name}` must expose object properties"))
-        .keys()
-        .cloned()
-        .collect()
+        .unwrap_or_else(|| panic!("schema `{schema_name}` must be present"));
+    let mut names = BTreeSet::new();
+    if let Some(properties) = schema.get("properties").and_then(|value| value.as_object()) {
+        names.extend(properties.keys().cloned());
+    }
+    if let Some(all_of) = schema.get("allOf").and_then(|value| value.as_array()) {
+        for part in all_of {
+            if let Some(properties) = part.get("properties").and_then(|value| value.as_object()) {
+                names.extend(properties.keys().cloned());
+            }
+        }
+    }
+    assert!(
+        !names.is_empty(),
+        "schema `{schema_name}` must expose object properties"
+    );
+    names
 }
 
 #[test]
@@ -31461,6 +31472,215 @@ fn openapi_frequency_domain_text_artifact_schema_exposes_path_metadata() {
         point_schema["properties"]["k_vector"]["maxItems"], 3,
         "FrequencyDomainKPathControlPointResource.k_vector must document length 3"
     );
+}
+
+#[test]
+fn openapi_frequency_domain_json_artifact_schema_is_typed_and_revisioned() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    let schema = schemas
+        .get("FrequencyDomainJsonArtifactResource")
+        .expect("FrequencyDomainJsonArtifactResource schema must be present");
+    let payload = schema
+        .get("properties")
+        .and_then(|properties| properties.get("payload"))
+        .expect("typed artifact resource must expose payload schema");
+    assert!(
+        payload.get("oneOf").is_some() || payload.get("anyOf").is_some(),
+        "frequency-domain payload must be represented as an OpenAPI union"
+    );
+    let properties = schema
+        .get("properties")
+        .and_then(|properties| properties.as_object())
+        .expect("artifact resource properties must be present");
+    assert!(properties.contains_key("revision"));
+    assert!(properties.contains_key("content_digest"));
+    for (schema_name, field) in [
+        ("FrequencyDomainSpectrumSamplePayload", "sample_id"),
+        ("FrequencyDomainSpectrumModePayload", "mode_id"),
+        ("FrequencyDomainResponsePointPayload", "point_id"),
+        ("FrequencyDomainFmrPeakPayload", "sample_id"),
+        ("FrequencyDomainFmrPeakPayload", "mode_id"),
+    ] {
+        assert!(
+            schema_property_names(schemas, schema_name).contains(field),
+            "{schema_name} must expose stable identity `{field}`"
+        );
+    }
+    for schema_name in [
+        "FrequencyDomainSpectrumSamplePayload",
+        "FrequencyDomainResponsePointPayload",
+        "FrequencyDomainFmrPeakPayload",
+    ] {
+        let payload_schema = schemas
+            .get(schema_name)
+            .expect("typed payload schema must be present");
+        let allows_additional_properties = payload_schema
+            .get("additionalProperties")
+            .is_some_and(|value| value != &serde_json::Value::Bool(false))
+            || payload_schema
+                .get("allOf")
+                .and_then(|value| value.as_array())
+                .map(|all_of| {
+                    all_of.iter().any(|part| {
+                        part.get("$ref").and_then(|value| value.as_str())
+                            == Some("#/components/schemas/FrequencyDomainArtifactExtras")
+                            || part
+                                .get("additionalProperties")
+                                .is_some_and(|value| value != &serde_json::Value::Bool(false))
+                    })
+                })
+                .unwrap_or(false);
+        assert!(
+            allows_additional_properties,
+            "{schema_name} must allow forward-compatible JSON properties"
+        );
+    }
+}
+
+#[test]
+fn openapi_frequency_domain_fmr_and_field_sweep_resources_are_registered() {
+    let value = crate::openapi_v2::openapi_json();
+    let paths = value
+        .get("paths")
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI paths must be present");
+    for path in [
+        "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+        "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+        "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+        "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+    ] {
+        assert!(
+            paths.get(path).and_then(|item| item.get("get")).is_some(),
+            "missing OpenAPI GET {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_revision_changes_for_same_length_content_change() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    let artifact_path = eigen_dir.join("spectrum.v2.json");
+    let first = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"a"}"#;
+    let second = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"b"}"#;
+    assert_eq!(first.len(), second.len());
+    fs::write(&artifact_path, first).expect("first spectrum artifact should be written");
+
+    let request = || {
+        Request::builder()
+            .method("GET")
+            .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_payload = body_json(response).await;
+    let first_revision = first_payload["revision"]
+        .as_str()
+        .expect("ready resource must expose content revision")
+        .to_string();
+    assert_eq!(first_payload["content_digest"], first_payload["revision"]);
+
+    fs::write(&artifact_path, second).expect("second spectrum artifact should be written");
+    let response = app.oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second_payload = body_json(response).await;
+    assert_ne!(
+        first_revision,
+        second_payload["revision"]
+            .as_str()
+            .expect("ready resource must expose content revision")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_rejects_malformed_typed_payload() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    fs::write(eigen_dir.join("spectrum.v2.json"), b"null")
+        .expect("malformed spectrum artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    let fmr_dir = artifact_dir.join("fmr");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    fs::create_dir_all(&fmr_dir).expect("fmr artifact directory should exist");
+    let fixtures = [
+        (
+            "eigen/field_sweep.v1.json",
+            serde_json::json!({"schema_version":"eigen/field_sweep.v1","samples":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+        ),
+        (
+            "fmr/peaks.v1.json",
+            serde_json::json!({"schema_version":"fmr/peaks.v1","peaks":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+        ),
+        (
+            "fmr/resonance_fits.v1.json",
+            serde_json::json!({"schema_version":"fmr/resonance_fits.v1","fits":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+        ),
+        (
+            "fmr/kittel_fit.v1.json",
+            serde_json::json!({"schema_version":"fmr/kittel_fit.v1","points":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+        ),
+    ];
+    for (relative_path, payload, uri) in fixtures {
+        let path = artifact_dir.join(relative_path);
+        fs::write(
+            path,
+            serde_json::to_vec(&payload).expect("artifact fixture should serialize"),
+        )
+        .expect("typed artifact fixture should be written");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "GET {uri}");
+        let response_payload = body_json(response).await;
+        assert_eq!(response_payload["status"], "ready", "GET {uri}");
+        assert!(
+            response_payload["payload"].is_object(),
+            "GET {uri} payload must be typed object"
+        );
+        assert!(
+            response_payload["revision"].as_str().is_some(),
+            "GET {uri} must expose revision"
+        );
+    }
 }
 
 #[tokio::test]
@@ -32598,6 +32818,7 @@ async fn frequency_domain_progress_fallback_uses_v2_linked_frequency_point_paths
         linked_dir.join("frequency_0001.json"),
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "frequency_response_point.v1",
+            "point_id": "frequency-point-0001",
             "frequency_index": 1,
             "point": {
                 "frequency_hz": 4.2e9
@@ -32832,6 +33053,7 @@ async fn frequency_domain_response_frequency_point_uses_v2_linked_artifact_path(
         payload["artifact_path"],
         "response/frequency_points/linked/frequency_0001.json"
     );
+    assert_eq!(payload["payload"]["point_id"], "frequency-point-0001");
     assert_eq!(payload["payload"]["point"]["frequency_hz"], 4.2e9);
 }
 
@@ -34716,6 +34938,7 @@ fn frequency_domain_response_sweep_fixture(point_count: usize) -> FieldDrivenRes
             .map(|index| {
                 let frequency_hz = (index + 1) as f64 * 1.0e9;
                 FieldDrivenResponseSweepPointArtifact {
+                    point_id: format!("frequency-point-{index:04}"),
                     frequency_hz,
                     angular_frequency_rad_per_s: frequency_hz * 2.0 * std::f64::consts::PI,
                     m_complex: vec![[0.0, -1.0], [0.25, 0.0], [0.0, 0.5]],

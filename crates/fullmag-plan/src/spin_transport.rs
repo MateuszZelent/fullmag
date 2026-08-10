@@ -2147,10 +2147,11 @@ mod tests {
             formula_version: "magnetoelectronic.fullmag.v2".into(),
         }];
 
-        let mut resolution_context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
+        let mut resolution_context =
+            context(&owners, &region_mask, &magnetization, &ms, &region_ids);
         resolution_context.grid_cells = [2, 1, 1];
         let plans = resolve_spin_transport(&problem, BackendTarget::Fdm, &resolution_context)
-        .expect("SML v2 should lower to the FDM M2 reference descriptor");
+            .expect("SML v2 should lower to the FDM M2 reference descriptor");
         let descriptor = plans[0]
             .fdm_cpu_double_reciprocal
             .as_ref()
@@ -2504,7 +2505,10 @@ mod tests {
             geometry_id: None,
             material_id: None,
             element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 6 },
-            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 12 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                start: 0,
+                count: 12,
+            },
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 8 },
             boundary_face_indices: (0..12).collect(),
             node_indices: (0..8).collect(),

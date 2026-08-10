@@ -563,8 +563,8 @@ function plotCommand(
         return { status: "failed", message: "No analysis field is selected." };
       }
       const adopt = () => {
-        context.analysisFieldOverlay!.set(state);
         activateViewport3D(context);
+        context.analysisFieldOverlay!.set(state);
       };
       if (!context.chartViewportHandoff) {
         adopt();

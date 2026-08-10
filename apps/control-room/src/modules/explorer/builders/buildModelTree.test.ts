@@ -160,6 +160,25 @@ const FREQUENCY_DOMAIN_MANIFEST: FrequencyDomainManifestResource = {
   schema_version: "frequency_domain_manifest.v1",
 };
 
+const FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST = {
+  artifact_path: "frequency_domain/manifest.v1.json",
+  missing_reason: null,
+  payload: {
+    resources: {
+      response_field_resources: [
+        {
+          field_resource_id: "analysis:frequency-response:field-0001",
+          frequency_index: 1,
+        },
+      ],
+    },
+    schema_version: "frequency_domain_manifest.v1",
+  },
+  resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+  schema_version: "frequency_domain_manifest.v1",
+  status: "ready",
+} satisfies NonNullable<FrequencyDomainManifestResource["result_manifest"]>;
+
 const FREQUENCY_DOMAIN_SPECTRUM = {
   artifact_path: "eigen/spectrum.v2.json",
   missing_reason: null,
@@ -2613,18 +2632,7 @@ describe("buildModelTree", () => {
           },
           frequencyDomainManifest: {
             ...FREQUENCY_DOMAIN_MANIFEST,
-            result_manifest: {
-              payload: {
-                resources: {
-                  response_field_resources: [
-                    {
-                      field_resource_id: "analysis:frequency-response:field-0001",
-                      frequency_index: 1,
-                    },
-                  ],
-                },
-              },
-            },
+            result_manifest: FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
           } as FrequencyDomainManifestResource,
           frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
           frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
@@ -2770,18 +2778,7 @@ describe("buildModelTree", () => {
         },
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
-          result_manifest: {
-            payload: {
-              resources: {
-                response_field_resources: [
-                  {
-                    field_resource_id: "analysis:frequency-response:field-0001",
-                    frequency_index: 1,
-                  },
-                ],
-              },
-            },
-          },
+          result_manifest: FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
         } as FrequencyDomainManifestResource,
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
       }),
@@ -2812,18 +2809,7 @@ describe("buildModelTree", () => {
         },
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
-          result_manifest: {
-            payload: {
-              resources: {
-                response_field_resources: [
-                  {
-                    field_resource_id: "analysis:frequency-response:field-0001",
-                    frequency_index: 1,
-                  },
-                ],
-              },
-            },
-          },
+          result_manifest: FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
         } as FrequencyDomainManifestResource,
       }),
     );

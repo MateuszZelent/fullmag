@@ -301,6 +301,12 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu
         )
+        if(FULLMAG_FEM_WITH_SLEPC)
+            # The GPU modal lane calls PETSc/SLEPc directly.  Keep it out of
+            # demag-only builds, whose contract intentionally disables the
+            # PETSc/SLEPc dependency slice.
+            list(APPEND FEM_SOURCES gpu/frequency_domain/modal_petsc_slepc.cpp)
+        endif()
     endif()
 endif()
 
@@ -813,6 +819,28 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     add_test(
         NAME fem_gpu_petsc_slepc_runtime_contract
         COMMAND fem_gpu_petsc_slepc_runtime_contract
+    )
+    add_executable(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            fullmag_fem
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    target_include_directories(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_gpu_k0_modal_petsc_slepc_contract
+        COMMAND fem_gpu_k0_modal_petsc_slepc_contract
     )
 endif()
 add_fem_source_facade_contract(

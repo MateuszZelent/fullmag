@@ -71,6 +71,10 @@ export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
 );
 
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+);
+
 export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
 );
@@ -113,6 +117,18 @@ export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH =
 
 export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/response/field/{frequency_index}/meta",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
 );
 
 export const ANALYSIS_HYSTERESIS_POINTS_PATH = openApiV2Path(

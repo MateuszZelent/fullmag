@@ -23,6 +23,7 @@ import {
   StudyBoundarySection,
   StudyCommandButton,
   StudySelectedStageSection,
+  studyInspectorRuntimeStatusEquals,
 } from "./StudyInspectorPanel";
 import {
   StudyPipelineSection,
@@ -55,6 +56,38 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("rerenders when the runtime advertises a new relaxation algorithm", () => {
+    const previous = {
+      capabilities: {
+        algorithms_available: ["llg_overdamped"],
+        binary_fields: true,
+        explicit_topology: true,
+      },
+      domain: { discretization: "fem" },
+      resources: {
+        mesh_build_revision: 1,
+        mesh_revision: 1,
+        commands_revision: 1,
+        scalars_revision: 1,
+        scene_revision: 1,
+        stages_revision: 1,
+      },
+      run: null,
+    } as NonNullable<Parameters<typeof studyInspectorRuntimeStatusEquals>[0]>;
+    const next = {
+      ...previous,
+      capabilities: {
+        ...previous.capabilities,
+        algorithms_available: [
+          "llg_overdamped",
+          "projected_gradient_bb",
+        ],
+      },
+    };
+
+    expect(studyInspectorRuntimeStatusEquals(previous, next)).toBe(false);
+  });
+
   it("derives K0 production readiness by selected equilibrium provenance", () => {
     const resources = {
         checkpoints: [
@@ -1295,8 +1328,11 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Frequencies");
     expect(html).toContain("Excitation");
     expect(html).toContain("Include demag");
-    expect(html).toContain("Solver method");
-    expect(html).toContain("GPU operator host Krylov");
+    expect(html).toContain(
+      "Solver implementation is resolved from device, precision, certificates, and active capabilities.",
+    );
+    expect(html).not.toContain("Solver method");
+    expect(html).not.toContain("GPU operator host Krylov");
     expect(html).toContain("k sampling");
     expect(html).toContain("BC");
   });
@@ -1333,6 +1369,29 @@ describe("StudyInspectorPanel", () => {
     expect(responseHtml).toContain('value="9500000000 12000000000"');
     expect(eigenHtml).toContain("Stored as Hz; preview 750 MHz");
     expect(eigenHtml).toContain('value="750000000"');
+  });
+
+  it("renders canonical frequency-window controls for K0 modal authoring", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      frequencyMax: "2e9",
+      frequencyMin: "1e9",
+      target: "frequency_window",
+    };
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={draft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Frequency min"');
+    expect(html).toContain('aria-label="Frequency max"');
+    expect(html).toContain('value="1e9"');
+    expect(html).toContain('value="2e9"');
+    expect(html).toContain('value="frequency_window"');
   });
 
   it("renders change-device stage authoring controls", () => {

@@ -974,7 +974,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;");
-    expect(source).toContain("if (analysisOverlay) {");
+    expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
     expect(source).toContain("visualizationPhaseRad:");
@@ -3017,7 +3017,9 @@ describe("useViewport3DSceneModel", () => {
   it("derives primary field resource keys and loads from the primary request object", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
-    expect(source).toContain("const primaryFieldDemandPlan = useMemo");
+    expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo");
+    expect(source).toContain("const livePrimaryFieldDemandPlan = useMemo");
+    expect(source).toContain("const primaryFieldDemandPlan =");
     expect(source).toContain("resolveViewport3DPrimaryFieldDemandPlan({");
     expect(source).toContain("const primaryFieldRequest = primaryFieldDemandPlan.request;");
     expect(source).toContain(

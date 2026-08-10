@@ -52,4 +52,12 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxSchurMatShellCertificationResult *out_result) noexcept;
 
+// Production shared-domain K0 lane.  The scalar Poisson block is eliminated
+// through a persistent PETSc factorization and SLEPc operates on the
+// real-frequency-rotated Schur pencil.  Synthetic/dense certification remains
+// owned by certify_poisson_airbox_schur_matshell_cpu().
+FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
+    const PoissonAirboxEigenBlockProblem &problem,
+    PoissonAirboxModalEigenResult *out_result) noexcept;
+
 } // namespace fullmag::fem::frequency_domain

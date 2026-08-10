@@ -5,6 +5,7 @@ import {
   DATA_FIELD_VECTOR_PATH,
   DATA_FIELDS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
@@ -85,6 +86,36 @@ describe("inactiveViewportResourcePolicy", () => {
 
     dispose();
     expect(releasePause).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not classify ordinary field vectors as planar-monitor resources", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    const predicates: Array<(resourceKey: string) => boolean> = [];
+    const runtimeStore = {
+      beginPauseMatching: vi.fn((predicate: (resourceKey: string) => boolean) => {
+        predicates.push(predicate);
+        return vi.fn();
+      }),
+    };
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+
+    const eigenFieldKey =
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "analysis%3Aeigen%3Asample-0000%3Amode-0002")}?component=full&scope_kind=full`;
+    expect(predicates[0]?.(eigenFieldKey)).toBe(false);
+    expect(
+      predicates[0]?.(
+        DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m").replace(
+          "{monitor_id}",
+          "monitor-1",
+        ),
+      ),
+    ).toBe(true);
+
+    dispose();
   });
 
   it("starts paused when the initial active center tab is non-3D and releases on dispose", () => {

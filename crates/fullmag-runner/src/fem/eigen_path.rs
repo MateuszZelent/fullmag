@@ -30,7 +30,9 @@ impl SingleKSolver for KSolverAdapter {
 
         let executed = match self.engine {
             FemEngine::CpuNative => fem_eigen::execute_baseline_fem_eigen(&point_plan, outputs)?,
-            FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs)?,
+            FemEngine::NativeGpu => {
+                fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs, None)?
+            }
         };
 
         let spectrum_bytes = executed
@@ -92,6 +94,7 @@ impl SingleKSolver for KSolverAdapter {
             relaxation_steps,
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             solver_notes: vec![solver_kind],
+            solver_diagnostics: spectrum.get("solver_diagnostics").cloned(),
         })
     }
 }

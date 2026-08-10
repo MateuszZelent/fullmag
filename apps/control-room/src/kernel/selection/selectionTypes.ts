@@ -460,6 +460,8 @@ export type SelectionRef =
       type: "study-stage";
     }
   | {
+      /** Stable frequency-domain artifact/mode identity; indexes remain legacy hints. */
+      artifactRevision?: string;
       analysisRunId?: string;
       analysisStageId?: string;
       artifactPath?: string;
@@ -469,10 +471,14 @@ export type SelectionRef =
       fmrPeakIndex?: number;
       frequencyIndex?: number;
       kind: string;
+      modeId?: string;
       modeIndex?: number;
       nodeId: string;
       observableId?: string;
+      pointId?: string;
+      rawModeIndex?: number;
       resourceRef?: string;
+      sampleId?: string;
       sampleIndex?: number;
       type: "frequency-domain";
     }
@@ -814,6 +820,7 @@ export function selectionRefEquals(
         right.type === "frequency-domain" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.artifactRevision, right.artifactRevision) &&
         nullableStringEquals(left.analysisRunId, right.analysisRunId) &&
         nullableStringEquals(left.analysisStageId, right.analysisStageId) &&
         nullableStringEquals(left.artifactPath, right.artifactPath) &&
@@ -821,9 +828,13 @@ export function selectionRefEquals(
         nullableStringEquals(left.calculationMode, right.calculationMode) &&
         nullableStringEquals(left.fieldId, right.fieldId) &&
         left.frequencyIndex === right.frequencyIndex &&
+        nullableStringEquals(left.modeId, right.modeId) &&
         left.modeIndex === right.modeIndex &&
         nullableStringEquals(left.observableId, right.observableId) &&
+        nullableStringEquals(left.pointId, right.pointId) &&
+        left.rawModeIndex === right.rawModeIndex &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
+        nullableStringEquals(left.sampleId, right.sampleId) &&
         left.sampleIndex === right.sampleIndex
       );
     case "mode-visualization":

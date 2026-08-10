@@ -3323,24 +3323,25 @@ export function useViewport3DSceneModel({
         fieldRenderOptions: primaryFieldDataOptions,
         selectedSnapshotId,
       }));
-  const primaryFieldDemandPlan = useMemo(
-    () => {
-      if (analysisOverlay) {
-        const request: Viewport3DFieldResourceRequest = {
-          consumers: ["primary-field-vector"],
-          quantityId: primaryFieldQuantityId,
-          query: analysisOverlay.query,
-          requestId: buildViewport3DFieldResourceRequestId(
-            primaryFieldQuantityId,
-            analysisOverlay.query,
-          ),
-        };
-        return {
-          demands: [],
-          request,
-        };
-      }
-      return resolveViewport3DPrimaryFieldDemandPlan({
+  const analysisPrimaryFieldDemandPlan = useMemo(() => {
+    if (!analysisOverlay) return null;
+    const request: Viewport3DFieldResourceRequest = {
+      consumers: ["primary-field-vector"],
+      quantityId: primaryFieldQuantityId,
+      query: analysisOverlay.query,
+      requestId: buildViewport3DFieldResourceRequestId(
+        primaryFieldQuantityId,
+        analysisOverlay.query,
+      ),
+    };
+    return {
+      demands: [],
+      request,
+    };
+  }, [analysisOverlay, primaryFieldQuantityId]);
+  const livePrimaryFieldDemandPlan = useMemo(
+    () =>
+      resolveViewport3DPrimaryFieldDemandPlan({
         fdmInstanceModelNeedsFieldVector,
         fdmSurfaceColorMode,
         fdmTopographyEnabled,
@@ -3349,10 +3350,8 @@ export function useViewport3DSceneModel({
         primaryFieldQuantityId,
         snapshotId: selectedSnapshotId,
         snapshotQuery: selectedSnapshotQuery,
-      });
-    },
+      }),
     [
-      analysisOverlay,
       fdmInstanceModelNeedsFieldVector,
       fdmSurfaceColorMode,
       fdmTopographyEnabled,
@@ -3363,6 +3362,8 @@ export function useViewport3DSceneModel({
       selectedSnapshotQuery,
     ],
   );
+  const primaryFieldDemandPlan =
+    analysisPrimaryFieldDemandPlan ?? livePrimaryFieldDemandPlan;
   const primaryFieldRequest = primaryFieldDemandPlan.request;
   const fieldDemandDiagnostics = useMemo<Viewport3DFieldDemandDiagnosticSummary[]>(
     () =>

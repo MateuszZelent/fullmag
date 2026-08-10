@@ -8,6 +8,7 @@ import type { CommandRegistry } from "./commands/CommandRegistry";
 import type { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
 import type { LayoutController } from "./layout/LayoutController";
+import type { RibbonTabId } from "./layout/layoutTypes";
 import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import type { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
@@ -45,6 +46,8 @@ export interface ModuleProps {
 }
 
 export interface ModuleManifest {
+  /** Optional ribbon tab that selects this module when its slot is shared. */
+  activationTab?: RibbonTabId;
   id: ModuleId;
   title: string;
   version: string;

@@ -11,8 +11,11 @@ use crate::native_fem::FrequencyDomainSweepProgress;
 use crate::types::AuxiliaryArtifact;
 use nalgebra::DVector;
 use num_complex::Complex64;
+use serde::Deserialize;
 use serde::Serialize;
-use std::fs;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,7 +46,8 @@ fn resolved_mode_mass_norm(mode: &SingleKModeResult) -> f64 {
 fn modal_phasor_convention(solver_model: EigenSolverModel) -> &'static str {
     match solver_model {
         EigenSolverModel::ProductionCpuShiftInvert
-        | EigenSolverModel::ProductionGpuDenseK0Macrospin => "exp_i_omega_t",
+        | EigenSolverModel::ProductionGpuDenseK0Macrospin
+        | EigenSolverModel::ProductionGpuModalDeviceKrylov => "exp_i_omega_t",
         _ => "not_applicable_real_reference",
     }
 }
@@ -51,13 +55,15 @@ fn modal_phasor_convention(solver_model: EigenSolverModel) -> &'static str {
 fn modal_eigenvalue_mapping(solver_model: EigenSolverModel) -> &'static str {
     match solver_model {
         EigenSolverModel::ProductionCpuShiftInvert
-        | EigenSolverModel::ProductionGpuDenseK0Macrospin => "lambda_eq_i_omega",
+        | EigenSolverModel::ProductionGpuDenseK0Macrospin
+        | EigenSolverModel::ProductionGpuModalDeviceKrylov => "lambda_eq_i_omega",
         _ => "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct ModeSummaryArtifact {
+    mode_id: String,
     raw_mode_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_id: Option<usize>,
@@ -97,6 +103,7 @@ struct ModeSummaryArtifact {
 
 #[derive(Debug, Clone, Serialize)]
 struct SampleArtifact {
+    sample_id: String,
     sample_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
@@ -220,6 +227,20 @@ struct ModeArtifact {
     tangent_leakage_max_abs: Option<f64>,
     dominant_polarization: String,
     k_vector: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_field_a_per_m: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assembly_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_input_signature_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase_constraint_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    equilibrium_artifact_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linearization_state_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    periodic_mesh_certificate_sha256: Option<String>,
     value_kind: &'static str,
     component_basis: &'static str,
     component_count: usize,
@@ -278,6 +299,7 @@ struct ResponseSweepV2Artifact<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 struct ResponseSweepV2PointArtifact {
+    point_id: String,
     frequency_index: usize,
     frequency_hz: f64,
     angular_frequency_rad_per_s: f64,
@@ -349,13 +371,39 @@ struct FrequencyDomainArtifactManifest<'a> {
     stage_kind: &'static str,
     created_at: String,
     requested_execution: FrequencyDomainRequestedExecution<'a>,
-    resolved_execution: FrequencyDomainResolvedExecution<'a>,
+    resolved_execution: FrequencyDomainResolvedExecution,
     physics: FrequencyDomainPhysics<'a>,
     artifacts: FrequencyDomainArtifactIndex,
     resources: FrequencyDomainResourceIndex,
     validation: FrequencyDomainValidation<'a>,
     diagnostics: FrequencyDomainDiagnostics,
     capabilities: FrequencyDomainCapabilitySnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physics_contract_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_dictionary_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    implementation_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    validation_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    validated_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assembly_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_input_signature_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    boundary_gauge: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spectral: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase_constraint_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    equilibrium_artifact_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linearization_state_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    periodic_mesh_certificate_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -375,9 +423,9 @@ struct FrequencyDomainValidation<'a> {
 struct FrequencyDomainRequestedExecution<'a> {
     calculation_mode: &'static str,
     backend: &'static str,
-    device: &'static str,
-    precision: &'static str,
-    execution_mode: &'static str,
+    device: String,
+    precision: String,
+    execution_mode: String,
     ui_mode: &'static str,
     operator: &'a str,
     solver_family: &'static str,
@@ -387,22 +435,45 @@ struct FrequencyDomainRequestedExecution<'a> {
     equilibrium_source: &'static str,
     k_sampling: &'static str,
     outputs: Vec<&'static str>,
+    solver_method: String,
+    preconditioner: String,
+    magnetostatic_bc: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct FrequencyDomainResolvedExecution<'a> {
+struct FrequencyDomainResolvedExecution {
     backend: &'static str,
-    device: &'static str,
-    precision: &'static str,
-    engine: &'a str,
-    native_backend: &'static str,
-    reference_or_production: &'static str,
+    device: String,
+    precision: String,
+    engine: String,
+    native_backend: String,
+    reference_or_production: String,
     container_image: Option<&'static str>,
     build_features: Vec<&'static str>,
-    demag_realization: &'static str,
-    solver_library: &'a str,
-    solver_algorithm: &'a str,
+    demag_realization: String,
+    solver_library: String,
+    solver_algorithm: String,
     solve_kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    implementation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_residency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vector_residency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    krylov_residency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preconditioner_residency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_used: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_from_engine: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_to_engine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -410,12 +481,12 @@ struct FrequencyDomainPhysics<'a> {
     analysis_family: &'static str,
     llg_gamma0_si: Option<f64>,
     llg_alpha: Option<f64>,
-    phase_convention: &'static str,
+    phase_convention: String,
     frequency_units: &'static str,
     field_units: &'static str,
     normalization: &'static str,
-    spin_wave_bc: &'static str,
-    periodic_or_floquet: &'static str,
+    spin_wave_bc: String,
+    periodic_or_floquet: String,
     equilibrium_residual_summary: Option<&'static str>,
     response_map_axes: Vec<&'a str>,
 }
@@ -434,6 +505,10 @@ struct FrequencyDomainArtifactIndex {
     response_diagnostics_v1_path: Option<&'static str>,
     response_progress_v1_path: Option<&'static str>,
     response_cancel_requested_v1_path: Option<&'static str>,
+    field_sweep_v1_path: Option<&'static str>,
+    fmr_peaks_v1_path: Option<&'static str>,
+    fmr_resonance_fits_v1_path: Option<&'static str>,
+    fmr_kittel_fit_v1_path: Option<&'static str>,
     mode_metadata_paths: Vec<String>,
     frequency_point_paths: Vec<String>,
 }
@@ -528,6 +603,7 @@ struct K0KittelSelectedBranch {
 #[derive(Debug, Clone, Serialize)]
 struct ResponseFrequencyPointArtifact<'a> {
     schema_version: &'static str,
+    point_id: String,
     frequency_index: usize,
     frequency_hz: f64,
     angular_frequency_rad_per_s: f64,
@@ -558,6 +634,307 @@ struct ResponseFrequencyPointArtifact<'a> {
     point: &'a crate::eigen::response_block_real::FieldDrivenResponseSweepPointArtifact,
 }
 
+/// Stable lifecycle states for server-produced frequency-domain artifacts.
+///
+/// `complete` is reserved for an artifact whose declared source scope and all
+/// referenced payloads are present.  An interrupted or partially populated
+/// scan must remain inspectable, but it must never be represented as a
+/// complete result by omission of a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerArtifactStatus {
+    Complete,
+    Partial,
+    Interrupted,
+    Corrupt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerArtifactSource {
+    pub kind: String,
+    pub artifact: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerArtifactReference {
+    pub relation: String,
+    pub artifact: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerArtifactExecution {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub execution_mode: String,
+    pub engine: String,
+    pub implementation_id: Option<String>,
+    pub status: String,
+    pub fallback_used: Option<bool>,
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerArtifactUnits {
+    pub frequency: String,
+    pub angular_frequency: String,
+    pub bias_field: String,
+    pub bias_field_display: String,
+    pub response_amplitude: Option<String>,
+    pub linewidth: Option<String>,
+    pub q_factor: Option<String>,
+    pub covariance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerArtifactTopology {
+    pub mesh_id: String,
+    pub topology_revision: String,
+    pub indexing: String,
+    pub sample_axis: String,
+    pub mode_axis: String,
+    pub node_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldSweepAxisArtifact {
+    pub kind: String,
+    pub coordinate: String,
+    pub unit: String,
+    pub display_conversions: Vec<FieldSweepDisplayConversion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldSweepDisplayConversion {
+    pub name: String,
+    pub unit: String,
+    pub scale: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrequencyDomainFieldSweepModeArtifact {
+    pub sample_id: String,
+    pub mode_id: String,
+    pub raw_mode_index: usize,
+    pub branch_id: Option<usize>,
+    pub frequency_hz: f64,
+    pub angular_frequency_rad_per_s: f64,
+    pub mode_artifact_path: String,
+    pub mode_field_id: String,
+    pub mode_field_resource_key: String,
+    pub residual_relative_l2: Option<f64>,
+    pub source_revision: String,
+    pub status: ServerArtifactStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrequencyDomainFieldSweepSampleArtifact {
+    pub sample_id: String,
+    pub sample_index: Option<usize>,
+    pub scan_axis: FieldSweepAxisArtifact,
+    pub bias_field_a_per_m: [f64; 3],
+    pub bias_field_mu0_t: [f64; 3],
+    pub equilibrium_artifact_sha256: Option<String>,
+    pub linearization_state_sha256: Option<String>,
+    pub operator_input_signature_sha256: Option<String>,
+    pub topology: ServerArtifactTopology,
+    pub branch_ids: Vec<usize>,
+    pub modes: Vec<FrequencyDomainFieldSweepModeArtifact>,
+    pub status: ServerArtifactStatus,
+    pub stop_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrequencyDomainFieldSweepArtifact {
+    pub schema_version: &'static str,
+    pub artifact_id: String,
+    pub source: ServerArtifactSource,
+    pub source_revision: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub scope_id: String,
+    pub runtime_id: String,
+    pub revision: String,
+    pub content_sha256: String,
+    pub status: ServerArtifactStatus,
+    pub complete: bool,
+    pub interrupted: bool,
+    pub stop_reason: Option<String>,
+    pub requested_sample_count: usize,
+    pub completed_sample_count: usize,
+    pub scan_axis: FieldSweepAxisArtifact,
+    pub units: ServerArtifactUnits,
+    pub topology: ServerArtifactTopology,
+    pub requested_execution: ServerArtifactExecution,
+    pub resolved_execution: ServerArtifactExecution,
+    pub samples: Vec<FrequencyDomainFieldSweepSampleArtifact>,
+    pub cross_artifact_refs: Vec<ServerArtifactReference>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FmrPeakSourceKind {
+    ModalCoupling,
+    DrivenResponse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FmrPeakSource {
+    pub kind: FmrPeakSourceKind,
+    pub artifact: String,
+    pub revision: String,
+    pub coupling_observable: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FmrPeakUncertainty {
+    pub kind: String,
+    pub frequency_hz: Option<f64>,
+    pub amplitude: Option<f64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FmrPeakArtifact {
+    pub peak_id: String,
+    pub source_artifact: String,
+    pub source_revision: String,
+    pub source_frequency_index: usize,
+    pub sample_id: Option<String>,
+    pub mode_id: Option<String>,
+    pub frequency_hz: f64,
+    pub response_amplitude: f64,
+    pub bracketed: bool,
+    pub uncertainty: FmrPeakUncertainty,
+    pub status: ServerArtifactStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FmrPeaksArtifact {
+    pub schema_version: &'static str,
+    pub artifact_id: String,
+    pub source: FmrPeakSource,
+    pub source_revision: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub scope_id: String,
+    pub runtime_id: String,
+    pub revision: String,
+    pub content_sha256: String,
+    pub status: ServerArtifactStatus,
+    pub complete: bool,
+    pub interrupted: bool,
+    pub stop_reason: Option<String>,
+    pub algorithm: String,
+    pub algorithm_parameters: BTreeMap<String, String>,
+    pub units: ServerArtifactUnits,
+    pub topology: ServerArtifactTopology,
+    pub requested_execution: ServerArtifactExecution,
+    pub resolved_execution: ServerArtifactExecution,
+    pub requested_point_count: usize,
+    pub completed_point_count: usize,
+    pub peaks: Vec<FmrPeakArtifact>,
+    pub cross_artifact_refs: Vec<ServerArtifactReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResonanceFitArtifact {
+    pub fit_id: String,
+    pub peak_id: Option<String>,
+    pub source_peak_revision: String,
+    pub model: String,
+    pub fit_range_hz: [f64; 2],
+    pub baseline: f64,
+    pub weights: Option<Vec<f64>>,
+    pub peak_frequency_hz: Option<f64>,
+    pub linewidth_hz: Option<f64>,
+    pub q_factor: Option<f64>,
+    pub coefficients: Option<[f64; 3]>,
+    pub covariance: Option<[[f64; 3]; 3]>,
+    pub conditioning: Option<f64>,
+    pub residual_l2: Option<f64>,
+    pub uncertainty: FmrPeakUncertainty,
+    pub status: ServerArtifactStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResonanceFitsArtifact {
+    pub schema_version: &'static str,
+    pub artifact_id: String,
+    pub source: ServerArtifactSource,
+    pub source_revision: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub scope_id: String,
+    pub runtime_id: String,
+    pub revision: String,
+    pub content_sha256: String,
+    pub status: ServerArtifactStatus,
+    pub complete: bool,
+    pub interrupted: bool,
+    pub stop_reason: Option<String>,
+    pub algorithm: String,
+    pub units: ServerArtifactUnits,
+    pub topology: ServerArtifactTopology,
+    pub requested_execution: ServerArtifactExecution,
+    pub resolved_execution: ServerArtifactExecution,
+    pub fits: Vec<ResonanceFitArtifact>,
+    pub cross_artifact_refs: Vec<ServerArtifactReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KittelFitPointArtifact {
+    pub sample_id: String,
+    pub mode_id: String,
+    pub sample_index: usize,
+    pub bias_field_a_per_m: [f64; 3],
+    pub expected_frequency_hz: f64,
+    pub solved_frequency_hz: f64,
+    pub relative_frequency_error: f64,
+    pub branch_id: usize,
+    pub status: ServerArtifactStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KittelFitParameterArtifact {
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KittelFitArtifact {
+    pub schema_version: &'static str,
+    pub artifact_id: String,
+    pub source: ServerArtifactSource,
+    pub source_revision: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub scope_id: String,
+    pub runtime_id: String,
+    pub revision: String,
+    pub content_sha256: String,
+    pub status: ServerArtifactStatus,
+    pub complete: bool,
+    pub interrupted: bool,
+    pub stop_reason: Option<String>,
+    pub model: String,
+    pub units: ServerArtifactUnits,
+    pub topology: ServerArtifactTopology,
+    pub requested_execution: ServerArtifactExecution,
+    pub resolved_execution: ServerArtifactExecution,
+    pub parameters: Vec<KittelFitParameterArtifact>,
+    pub covariance: Option<Vec<Vec<f64>>>,
+    pub conditioning: Option<f64>,
+    pub validation_status: String,
+    pub validation_tolerance_relative: Option<f64>,
+    pub excluded_samples: Vec<usize>,
+    pub points: Vec<KittelFitPointArtifact>,
+    pub cross_artifact_refs: Vec<ServerArtifactReference>,
+}
+
 fn summarize_mode(
     sample: &SingleKSolveResult,
     mode: &SingleKModeResult,
@@ -571,6 +948,10 @@ fn summarize_mode(
     let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
     let tangent_leakage_max_abs = finite_or_default(mode.tangent_leakage_max_abs, 0.0);
     ModeSummaryArtifact {
+        mode_id: format!(
+            "sample-{:04}/mode-{:04}",
+            sample.sample.sample_index, mode.raw_mode_index
+        ),
         raw_mode_index: mode.raw_mode_index,
         branch_id: mode.branch_id,
         mode_field_id,
@@ -633,6 +1014,45 @@ fn result_sample(result: &PathSolveResult, sample_index: usize) -> Option<&Singl
         .samples
         .iter()
         .find(|sample| sample.sample.sample_index == sample_index)
+}
+
+fn sample_native_solver_diagnostics(sample: &SingleKSolveResult) -> Option<&serde_json::Value> {
+    let root = sample.solver_diagnostics.as_ref()?;
+    if let Some(entries) = root
+        .get("sample_solver_diagnostics")
+        .and_then(serde_json::Value::as_array)
+    {
+        return entries
+            .iter()
+            .find(|entry| {
+                entry
+                    .get("sample_index")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(sample.sample.sample_index as u64)
+            })
+            .and_then(|entry| entry.get("diagnostics"))
+            .or_else(|| entries.first().and_then(|entry| entry.get("diagnostics")));
+    }
+    Some(root)
+}
+
+fn sample_external_field(result: &PathSolveResult, sample_index: usize) -> Option<[f64; 3]> {
+    result
+        .k0_kittel_validation
+        .as_ref()
+        .and_then(|validation| {
+            validation
+                .samples
+                .iter()
+                .find(|sample| sample.sample_index as usize == sample_index)
+                .map(|sample| sample.bias_field)
+        })
+        .or_else(|| {
+            result
+                .dispersion_analytic_reference
+                .as_ref()
+                .map(|reference| reference.external_field)
+        })
 }
 
 fn branch_point_modal_overlap_available(
@@ -853,6 +1273,16 @@ fn modal_solver_classification(
                 validation_artifact: false,
             }
         }
+        EigenSolverModel::ProductionGpuModalDeviceKrylov => {
+            FrequencyDomainModalSolverClassification {
+                engine: "multi_k_orchestrator/gpu_modal_device_krylov",
+                native_backend: "native_gpu",
+                reference_or_production: "production_gpu",
+                solver_library: "slepc_petsc_hypre_cuda",
+                production_native_solver_available: true,
+                validation_artifact: false,
+            }
+        }
         _ => FrequencyDomainModalSolverClassification {
             engine: "runner.reference_eigen",
             native_backend: "runner_validation",
@@ -862,6 +1292,271 @@ fn modal_solver_classification(
             validation_artifact: true,
         },
     }
+}
+
+fn modal_native_solver_diagnostics(result: &PathSolveResult) -> Option<&serde_json::Value> {
+    for sample in &result.samples {
+        let Some(root) = sample.solver_diagnostics.as_ref() else {
+            continue;
+        };
+        if let Some(diagnostics) = root
+            .get("sample_solver_diagnostics")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("diagnostics"))
+        {
+            return Some(diagnostics);
+        }
+        if root.get("resolved_execution").is_some()
+            || root.get("solver_adapter").is_some()
+            || root.get("assembly_kind").is_some()
+        {
+            return Some(root);
+        }
+    }
+    None
+}
+
+fn diagnostic_string(diagnostics: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    diagnostics
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn diagnostic_nested_string(
+    diagnostics: Option<&serde_json::Value>,
+    object_key: &str,
+    key: &str,
+) -> Option<String> {
+    diagnostics
+        .and_then(|value| value.get(object_key))
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn diagnostic_nested_bool(
+    diagnostics: Option<&serde_json::Value>,
+    object_key: &str,
+    key: &str,
+) -> Option<bool> {
+    diagnostics
+        .and_then(|value| value.get(object_key))
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_bool)
+}
+
+fn diagnostic_bool(diagnostics: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    diagnostics
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_bool)
+}
+
+fn diagnostic_known_object(
+    diagnostics: Option<&serde_json::Value>,
+    key: &str,
+) -> Option<serde_json::Value> {
+    let value = diagnostics.and_then(|diagnostics| diagnostics.get(key))?;
+    let object = value.as_object()?;
+    if object
+        .values()
+        .any(|value| value.as_str() == Some("unknown"))
+    {
+        return None;
+    }
+    Some(value.clone())
+}
+
+fn modal_manifest_execution(
+    result: &PathSolveResult,
+    classification: FrequencyDomainModalSolverClassification,
+) -> (
+    FrequencyDomainRequestedExecution<'static>,
+    FrequencyDomainResolvedExecution,
+) {
+    let diagnostics = modal_native_solver_diagnostics(result);
+    let requested_device = diagnostic_nested_string(diagnostics, "requested_execution", "device")
+        .unwrap_or_else(|| {
+            if classification.native_backend == "native_gpu" {
+                "gpu".to_string()
+            } else {
+                "cpu".to_string()
+            }
+        });
+    let requested_precision =
+        diagnostic_nested_string(diagnostics, "requested_execution", "precision")
+            .unwrap_or_else(|| "double".to_string());
+    let requested_execution_mode =
+        diagnostic_nested_string(diagnostics, "requested_execution", "execution_mode")
+            .unwrap_or_else(|| "extended".to_string());
+    let requested_solver_method =
+        diagnostic_nested_string(diagnostics, "requested_execution", "solver_method")
+            .unwrap_or_else(|| match result.solver_model {
+                EigenSolverModel::ProductionCpuShiftInvert
+                | EigenSolverModel::ProductionGpuDenseK0Macrospin
+                | EigenSolverModel::ProductionGpuModalDeviceKrylov => "shift_invert".to_string(),
+                _ => "auto".to_string(),
+            });
+    let requested_preconditioner =
+        diagnostic_nested_string(diagnostics, "requested_execution", "preconditioner")
+            .unwrap_or_else(|| "not_applicable".to_string());
+    let requested_magnetostatic_bc =
+        diagnostic_nested_string(diagnostics, "requested_execution", "magnetostatic_bc")
+            .or_else(|| {
+                result
+                    .k0_kittel_periodic_airbox_demag
+                    .as_ref()
+                    .map(|_| "periodic_airbox_k0".to_string())
+            })
+            .unwrap_or_else(|| "not_applicable".to_string());
+
+    let resolved_device = diagnostic_nested_string(diagnostics, "resolved_execution", "device")
+        .unwrap_or_else(|| requested_device.clone());
+    let resolved_precision =
+        diagnostic_nested_string(diagnostics, "resolved_execution", "precision")
+            .unwrap_or_else(|| requested_precision.clone());
+    let resolved_engine = diagnostic_nested_string(diagnostics, "resolved_execution", "engine")
+        .unwrap_or_else(|| classification.engine.to_string());
+    let resolved_native_backend =
+        diagnostic_nested_string(diagnostics, "resolved_execution", "native_backend")
+            .unwrap_or_else(|| classification.native_backend.to_string());
+    let resolved_reference_or_production = diagnostic_bool(diagnostics, "validation_only")
+        .and_then(|value| value.then_some("validation".to_string()))
+        .unwrap_or_else(|| classification.reference_or_production.to_string());
+    let resolved_demag_realization =
+        diagnostic_nested_string(diagnostics, "resolved_execution", "demag_realization")
+            .or_else(|| {
+                result
+                    .k0_kittel_periodic_airbox_demag
+                    .as_ref()
+                    .map(|_| "periodic_airbox_k0".to_string())
+            })
+            .unwrap_or_else(|| "none_or_validation_contract".to_string());
+    let resolved_solver_library =
+        diagnostic_nested_string(diagnostics, "resolved_execution", "solver_library")
+            .or_else(|| diagnostic_string(diagnostics, "solver_library"))
+            .unwrap_or_else(|| classification.solver_library.to_string());
+    let resolved_solver_algorithm =
+        diagnostic_nested_string(diagnostics, "resolved_execution", "solver_algorithm")
+            .or_else(|| diagnostic_string(diagnostics, "solver_adapter"))
+            .unwrap_or_else(|| classification.engine.to_string());
+
+    let resolved = FrequencyDomainResolvedExecution {
+        backend: "fem",
+        device: resolved_device,
+        precision: resolved_precision,
+        engine: resolved_engine,
+        native_backend: resolved_native_backend,
+        reference_or_production: resolved_reference_or_production,
+        container_image: None,
+        build_features: Vec::new(),
+        demag_realization: resolved_demag_realization,
+        solver_library: resolved_solver_library,
+        solver_algorithm: resolved_solver_algorithm,
+        solve_kind: "modal_eigen",
+        status: diagnostic_nested_string(diagnostics, "resolved_execution", "status"),
+        implementation_id: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "implementation_id",
+        ),
+        operator_residency: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "operator_residency",
+        ),
+        vector_residency: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "vector_residency",
+        ),
+        krylov_residency: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "krylov_residency",
+        ),
+        preconditioner_residency: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "preconditioner_residency",
+        ),
+        fallback_used: diagnostic_nested_bool(diagnostics, "resolved_execution", "fallback_used"),
+        fallback_reason: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "fallback_reason",
+        ),
+        fallback_from_engine: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "fallback_from_engine",
+        ),
+        fallback_to_engine: diagnostic_nested_string(
+            diagnostics,
+            "resolved_execution",
+            "fallback_to_engine",
+        ),
+    };
+    let requested = FrequencyDomainRequestedExecution {
+        calculation_mode: eigen_calculation_mode(result),
+        backend: "fem",
+        device: requested_device,
+        precision: requested_precision,
+        execution_mode: requested_execution_mode,
+        ui_mode: "auto",
+        operator: "linearized_llg",
+        solver_family: "modal_eigen",
+        solve_equation: "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
+        include_demag: result.include_demag,
+        damping_policy: "ignore",
+        equilibrium_source: "provided_or_planned",
+        k_sampling: if result.samples.len() > 1 {
+            "path"
+        } else {
+            "single"
+        },
+        outputs: vec!["spectrum", "branches", "dispersion", "mode_fields"],
+        solver_method: requested_solver_method,
+        preconditioner: requested_preconditioner,
+        magnetostatic_bc: requested_magnetostatic_bc,
+    };
+    (requested, resolved)
+}
+
+fn modal_manifest_hardened_fields(
+    result: &PathSolveResult,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let diagnostics = modal_native_solver_diagnostics(result);
+    (
+        diagnostic_string(diagnostics, "physics_contract_version"),
+        diagnostic_string(diagnostics, "operator_dictionary_version"),
+        diagnostic_string(diagnostics, "implementation_state"),
+        diagnostic_string(diagnostics, "validation_state"),
+        diagnostic_string(diagnostics, "validated_scope"),
+        diagnostic_string(diagnostics, "assembly_kind"),
+        diagnostic_string(diagnostics, "operator_input_signature_sha256"),
+        diagnostic_known_object(diagnostics, "boundary_gauge"),
+        diagnostic_known_object(diagnostics, "spectral"),
+        diagnostic_string(diagnostics, "phase_constraint_sha256"),
+        diagnostic_string(diagnostics, "equilibrium_artifact_sha256"),
+        diagnostic_string(diagnostics, "linearization_state_sha256"),
+        diagnostic_string(diagnostics, "periodic_mesh_certificate_sha256"),
+    )
 }
 
 fn mode_amplitude_summary(amplitude: &[f64]) -> ModeAmplitudeSummary {
@@ -892,6 +1587,847 @@ fn mode_component_summary(real: &[[f64; 3]], imag: &[[f64; 3]]) -> ModeComponent
         imag_sample_count: imag.len(),
         component_count: 3,
     }
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    format!(
+        "sha256:{}",
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn digest_serialized<T: Serialize>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).expect("frequency-domain artifact must serialize");
+    sha256_prefixed(&bytes)
+}
+
+/// Compute the content revision from the complete serialized artifact envelope.
+///
+/// The self-referential `revision` and `content_sha256` fields are normalized
+/// before hashing.  Keeping this normalization at the JSON snapshot boundary
+/// makes the digest sensitive to every declared field (including execution,
+/// topology, units and cross-artifact references) without requiring each
+/// artifact type to duplicate the canonicalization logic.
+fn canonical_artifact_digest<T: Serialize>(artifact: &T) -> String {
+    let mut snapshot = serde_json::to_value(artifact)
+        .expect("frequency-domain artifact must serialize to a JSON object");
+    if let serde_json::Value::Object(fields) = &mut snapshot {
+        fields.insert(
+            "revision".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        fields.insert(
+            "content_sha256".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+    }
+    digest_serialized(&snapshot)
+}
+
+/// Publish a typed JSON artifact by replacement, never by exposing a
+/// partially-written destination file.  The response sweep itself remains
+/// progressively inspectable through its checkpoint/manifest artifacts; this
+/// helper only protects the immutable typed envelope files.
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        fs::create_dir_all(parent)?;
+    }
+    let filename = path.file_name().ok_or_else(|| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            "typed artifact path must include a file name",
+        )
+    })?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temporary_path = parent.join(format!(
+        ".{}.tmp-{}-{}",
+        filename.to_string_lossy(),
+        std::process::id(),
+        nonce
+    ));
+    let result = (|| {
+        let mut temporary = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)?;
+        temporary.write_all(&bytes)?;
+        temporary.sync_all()?;
+        drop(temporary);
+        fs::rename(&temporary_path, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
+fn result_source_revision(result: &PathSolveResult) -> String {
+    let value = serde_json::json!({
+        "solver_model": result.solver_model.as_str(),
+        "include_demag": result.include_demag,
+        "samples": result.samples.iter().map(|sample| serde_json::json!({
+            "sample_index": sample.sample.sample_index,
+            "label": sample.sample.label,
+            "k_vector": sample.sample.k_vector,
+            "path_s": sample.sample.path_s,
+            "modes": sample.modes.iter().map(|mode| serde_json::json!({
+                "raw_mode_index": mode.raw_mode_index,
+                "branch_id": mode.branch_id,
+                "frequency_real_hz": mode.frequency_real_hz,
+                "frequency_imag_hz": mode.frequency_imag_hz,
+                "angular_frequency_rad_per_s": mode.angular_frequency_rad_per_s,
+                "eigenvalue_real": mode.eigenvalue_real,
+                "eigenvalue_imag": mode.eigenvalue_imag,
+                "residual_norm": mode.residual_norm,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "branches": result.branches.iter().map(|branch| serde_json::json!({
+            "branch_id": branch.branch_id,
+            "points": branch.points.iter().map(|point| serde_json::json!({
+                "sample_index": point.sample_index,
+                "raw_mode_index": point.raw_mode_index,
+                "frequency_real_hz": point.frequency_real_hz,
+                "frequency_imag_hz": point.frequency_imag_hz,
+                "overlap_prev": point.overlap_prev,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    });
+    digest_serialized(&value)
+}
+
+fn response_source_revision(artifact: &FieldDrivenResponseSweepArtifact) -> String {
+    digest_serialized(artifact)
+}
+
+fn server_artifact_units_response(
+    source_units: &BTreeMap<&'static str, &'static str>,
+) -> ServerArtifactUnits {
+    ServerArtifactUnits {
+        frequency: "Hz".to_string(),
+        angular_frequency: "rad/s".to_string(),
+        bias_field: "A/m".to_string(),
+        bias_field_display: "mu0 H (T)".to_string(),
+        response_amplitude: source_units
+            .get("response_amplitude")
+            .map(|unit| (*unit).to_string()),
+        linewidth: Some("Hz".to_string()),
+        q_factor: Some("1".to_string()),
+        covariance: None,
+    }
+}
+
+fn server_artifact_units_modal() -> ServerArtifactUnits {
+    ServerArtifactUnits {
+        frequency: "Hz".to_string(),
+        angular_frequency: "rad/s".to_string(),
+        bias_field: "A/m".to_string(),
+        bias_field_display: "mu0 H (T)".to_string(),
+        response_amplitude: None,
+        linewidth: None,
+        q_factor: None,
+        covariance: None,
+    }
+}
+
+fn empty_server_topology() -> ServerArtifactTopology {
+    ServerArtifactTopology {
+        mesh_id: "topology:not_provided".to_string(),
+        topology_revision: "topology:not_provided".to_string(),
+        indexing: "sample_index_then_raw_mode_index".to_string(),
+        sample_axis: "sample_id".to_string(),
+        mode_axis: "mode_id".to_string(),
+        node_count: None,
+    }
+}
+
+fn diagnostic_string_any(diagnostics: Option<&serde_json::Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| diagnostic_string(diagnostics, key))
+}
+
+fn diagnostic_field_a_per_m(diagnostics: Option<&serde_json::Value>) -> Option<[f64; 3]> {
+    let candidates = [
+        diagnostics.and_then(|value| value.get("external_field_a_per_m")),
+        diagnostics.and_then(|value| value.get("bias_field_a_per_m")),
+        diagnostics.and_then(|value| value.get("field_a_per_m")),
+        diagnostics
+            .and_then(|value| value.get("requested_execution"))
+            .and_then(|value| value.get("external_field_a_per_m")),
+        diagnostics
+            .and_then(|value| value.get("requested_execution"))
+            .and_then(|value| value.get("bias_field_a_per_m")),
+        diagnostics
+            .and_then(|value| value.get("resolved_execution"))
+            .and_then(|value| value.get("external_field_a_per_m")),
+        diagnostics
+            .and_then(|value| value.get("resolved_execution"))
+            .and_then(|value| value.get("bias_field_a_per_m")),
+    ];
+    candidates.into_iter().flatten().find_map(|value| {
+        let values = value.as_array()?;
+        if values.len() != 3 {
+            return None;
+        }
+        let vector = [
+            values[0].as_f64()?,
+            values[1].as_f64()?,
+            values[2].as_f64()?,
+        ];
+        vector
+            .iter()
+            .all(|component| component.is_finite())
+            .then_some(vector)
+    })
+}
+
+fn diagnostic_status(
+    diagnostics: Option<&serde_json::Value>,
+    mode_count: usize,
+) -> ServerArtifactStatus {
+    match diagnostic_string_any(diagnostics, &["status", "state"]).as_deref() {
+        Some("interrupted") | Some("cancelled") | Some("canceled") => {
+            ServerArtifactStatus::Interrupted
+        }
+        Some("corrupt") | Some("invalid") => ServerArtifactStatus::Corrupt,
+        Some("partial") | Some("incomplete") | Some("failed") => ServerArtifactStatus::Partial,
+        _ if mode_count > 0 => ServerArtifactStatus::Complete,
+        _ => ServerArtifactStatus::Partial,
+    }
+}
+
+fn server_execution_from_modal_result(
+    result: &PathSolveResult,
+) -> (ServerArtifactExecution, ServerArtifactExecution, String) {
+    let classification = modal_solver_classification(result.solver_model);
+    let (requested, resolved) = modal_manifest_execution(result, classification);
+    let runtime_id = modal_native_solver_diagnostics(result)
+        .and_then(|diagnostics| {
+            diagnostic_string_any(
+                Some(diagnostics),
+                &["runtime_id", "runtime_bundle_id", "runtime_source_revision"],
+            )
+        })
+        .unwrap_or_else(|| "runtime:not_provided".to_string());
+    let requested_execution = ServerArtifactExecution {
+        backend: requested.backend.to_string(),
+        device: requested.device,
+        precision: requested.precision,
+        execution_mode: requested.execution_mode,
+        engine: "requested_frequency_domain_modal".to_string(),
+        implementation_id: None,
+        status: "requested".to_string(),
+        fallback_used: Some(false),
+        fallback_reason: None,
+    };
+    let resolved_execution = ServerArtifactExecution {
+        backend: resolved.backend.to_string(),
+        device: resolved.device,
+        precision: resolved.precision,
+        execution_mode: requested_execution.execution_mode.clone(),
+        engine: resolved.engine,
+        implementation_id: resolved.implementation_id,
+        status: resolved.status.unwrap_or_else(|| "source_only".to_string()),
+        fallback_used: resolved.fallback_used,
+        fallback_reason: resolved.fallback_reason,
+    };
+    (requested_execution, resolved_execution, runtime_id)
+}
+
+fn field_sweep_axis() -> FieldSweepAxisArtifact {
+    FieldSweepAxisArtifact {
+        kind: "bias_field".to_string(),
+        coordinate: "bias_field_a_per_m".to_string(),
+        unit: "A/m".to_string(),
+        display_conversions: vec![FieldSweepDisplayConversion {
+            name: "mu0_H".to_string(),
+            unit: "T".to_string(),
+            scale: crate::MU0,
+        }],
+    }
+}
+
+fn topology_from_diagnostics(diagnostics: Option<&serde_json::Value>) -> ServerArtifactTopology {
+    let mut topology = empty_server_topology();
+    if let Some(value) = diagnostics {
+        topology.mesh_id = diagnostic_string_any(Some(value), &["mesh_id", "topology_id"])
+            .unwrap_or(topology.mesh_id);
+        topology.topology_revision = diagnostic_string_any(
+            Some(value),
+            &[
+                "topology_revision",
+                "mesh_revision",
+                "topology_content_sha256",
+            ],
+        )
+        .unwrap_or(topology.topology_revision);
+        topology.node_count = value
+            .get("node_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok());
+    }
+    topology
+}
+
+fn combine_status(
+    statuses: impl IntoIterator<Item = ServerArtifactStatus>,
+) -> ServerArtifactStatus {
+    let mut saw_partial = false;
+    let mut saw_interrupted = false;
+    for status in statuses {
+        match status {
+            ServerArtifactStatus::Corrupt => return ServerArtifactStatus::Corrupt,
+            ServerArtifactStatus::Interrupted => saw_interrupted = true,
+            ServerArtifactStatus::Partial => saw_partial = true,
+            ServerArtifactStatus::Complete => {}
+        }
+    }
+    if saw_interrupted {
+        ServerArtifactStatus::Interrupted
+    } else if saw_partial {
+        ServerArtifactStatus::Partial
+    } else {
+        ServerArtifactStatus::Complete
+    }
+}
+
+/// Build the physical bias-field scan artifact from per-sample solver
+/// provenance.  Kittel validation metadata is deliberately not consulted as
+/// an input source; when native diagnostics do not declare a field, no scan is
+/// emitted instead of inventing one from an oracle configuration.
+pub fn build_frequency_domain_field_sweep_artifact(
+    result: &PathSolveResult,
+) -> std::io::Result<Option<FrequencyDomainFieldSweepArtifact>> {
+    if result.samples.is_empty() {
+        return Ok(None);
+    }
+    let mut samples = Vec::with_capacity(result.samples.len());
+    for sample in &result.samples {
+        let diagnostics = sample_native_solver_diagnostics(sample);
+        let Some(bias_field_a_per_m) = diagnostic_field_a_per_m(diagnostics) else {
+            return Ok(None);
+        };
+        let topology = topology_from_diagnostics(diagnostics);
+        let mut status = diagnostic_status(diagnostics, sample.modes.len());
+        let mode_values_valid = sample.modes.iter().all(|mode| {
+            mode.frequency_real_hz.is_finite()
+                && mode.frequency_real_hz >= 0.0
+                && mode.frequency_imag_hz.is_finite()
+                && mode.angular_frequency_rad_per_s.is_finite()
+                && mode
+                    .residual_norm
+                    .map(|value| value.is_finite() && value >= 0.0)
+                    .unwrap_or(true)
+        });
+        if !mode_values_valid {
+            status = ServerArtifactStatus::Corrupt;
+        }
+        let branch_ids = sample
+            .modes
+            .iter()
+            .filter_map(|mode| mode.branch_id)
+            .collect::<Vec<_>>();
+        let sample_id = format!("bias-field-sample-{:04}", sample.sample.sample_index);
+        let modes = sample
+            .modes
+            .iter()
+            .map(|mode| FrequencyDomainFieldSweepModeArtifact {
+                sample_id: sample_id.clone(),
+                mode_id: format!(
+                    "sample-{:04}/mode-{:04}",
+                    sample.sample.sample_index, mode.raw_mode_index
+                ),
+                raw_mode_index: mode.raw_mode_index,
+                branch_id: mode.branch_id,
+                frequency_hz: mode.frequency_real_hz,
+                angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
+                mode_artifact_path: format!(
+                    "eigen/modes/sample_{:04}/mode_{:04}.json",
+                    sample.sample.sample_index, mode.raw_mode_index
+                ),
+                mode_field_id: eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index),
+                mode_field_resource_key: eigen_mode_field_resource_key(&eigen_mode_field_id(
+                    sample.sample.sample_index,
+                    mode.raw_mode_index,
+                )),
+                residual_relative_l2: mode.residual_norm,
+                source_revision: result_source_revision(result),
+                status,
+            })
+            .collect::<Vec<_>>();
+        let stop_reason = diagnostic_string_any(diagnostics, &["stop_reason", "failure_reason"]);
+        samples.push(FrequencyDomainFieldSweepSampleArtifact {
+            sample_id,
+            sample_index: Some(sample.sample.sample_index),
+            scan_axis: field_sweep_axis(),
+            bias_field_a_per_m,
+            bias_field_mu0_t: bias_field_a_per_m.map(|value| value * crate::MU0),
+            equilibrium_artifact_sha256: diagnostic_string_any(
+                diagnostics,
+                &["equilibrium_artifact_sha256", "equilibrium_content_sha256"],
+            ),
+            linearization_state_sha256: diagnostic_string_any(
+                diagnostics,
+                &["linearization_state_sha256", "linearization_content_sha256"],
+            ),
+            operator_input_signature_sha256: diagnostic_string_any(
+                diagnostics,
+                &["operator_input_signature_sha256"],
+            ),
+            topology,
+            branch_ids,
+            modes,
+            status,
+            stop_reason,
+        });
+    }
+    let mut status = combine_status(samples.iter().map(|sample| sample.status));
+    let topology_consistent = samples.windows(2).all(|window| {
+        window[0].topology.mesh_id == window[1].topology.mesh_id
+            && window[0].topology.topology_revision == window[1].topology.topology_revision
+    });
+    if !topology_consistent && status == ServerArtifactStatus::Complete {
+        status = ServerArtifactStatus::Partial;
+    }
+    let complete = status == ServerArtifactStatus::Complete
+        && samples.iter().all(|sample| {
+            sample.equilibrium_artifact_sha256.is_some()
+                && sample.linearization_state_sha256.is_some()
+                && sample.operator_input_signature_sha256.is_some()
+                && sample.status == ServerArtifactStatus::Complete
+        });
+    let status = if status == ServerArtifactStatus::Complete && !complete {
+        ServerArtifactStatus::Partial
+    } else {
+        status
+    };
+    let (requested_execution, resolved_execution, runtime_id) =
+        server_execution_from_modal_result(result);
+    let source_revision = result_source_revision(result);
+    let mut artifact = FrequencyDomainFieldSweepArtifact {
+        schema_version: "eigen/field_sweep.v1",
+        artifact_id: "analysis:eigen:field-sweep".to_string(),
+        source: ServerArtifactSource {
+            kind: "modal_eigensolve".to_string(),
+            artifact: "eigen/spectrum.v2.json".to_string(),
+            revision: source_revision.clone(),
+        },
+        source_revision: source_revision.clone(),
+        run_id: "run:current".to_string(),
+        stage_id: "stage:eigenmodes".to_string(),
+        scope_id: "scope:bias-field".to_string(),
+        runtime_id,
+        revision: String::new(),
+        content_sha256: String::new(),
+        status,
+        complete,
+        interrupted: status == ServerArtifactStatus::Interrupted,
+        stop_reason: samples.iter().find_map(|sample| sample.stop_reason.clone()),
+        requested_sample_count: samples.len(),
+        completed_sample_count: samples
+            .iter()
+            .filter(|sample| !sample.modes.is_empty())
+            .count(),
+        scan_axis: field_sweep_axis(),
+        units: server_artifact_units_modal(),
+        topology: if topology_consistent {
+            samples
+                .first()
+                .map(|sample| sample.topology.clone())
+                .unwrap_or_else(empty_server_topology)
+        } else {
+            ServerArtifactTopology {
+                mesh_id: "topology:inconsistent".to_string(),
+                topology_revision: "topology:inconsistent".to_string(),
+                ..empty_server_topology()
+            }
+        },
+        requested_execution,
+        resolved_execution,
+        samples,
+        cross_artifact_refs: vec![ServerArtifactReference {
+            relation: "source_spectrum".to_string(),
+            artifact: "eigen/spectrum.v2.json".to_string(),
+            revision: result_source_revision(result),
+        }],
+    };
+    artifact.content_sha256 = canonical_artifact_digest(&artifact);
+    artifact.revision = artifact.content_sha256.clone();
+    Ok(Some(artifact))
+}
+
+pub fn write_frequency_domain_field_sweep_artifact(
+    base_dir: &Path,
+    result: &PathSolveResult,
+) -> std::io::Result<bool> {
+    let Some(artifact) = build_frequency_domain_field_sweep_artifact(result)? else {
+        return Ok(false);
+    };
+    let path = base_dir.join("eigen").join("field_sweep.v1.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_json_atomic(&path, &artifact)?;
+    Ok(true)
+}
+
+fn response_execution_identity(
+    artifact: &FieldDrivenResponseSweepArtifact,
+) -> ServerArtifactExecution {
+    ServerArtifactExecution {
+        backend: "fem".to_string(),
+        device: "not_provided".to_string(),
+        precision: "not_provided".to_string(),
+        execution_mode: "not_provided".to_string(),
+        engine: artifact.backend_engine_id.clone(),
+        implementation_id: Some(artifact.solver_model.clone()),
+        status: "source_artifact".to_string(),
+        fallback_used: None,
+        fallback_reason: None,
+    }
+}
+
+fn fmr_artifact_topology() -> ServerArtifactTopology {
+    ServerArtifactTopology {
+        mesh_id: "topology:not_provided".to_string(),
+        topology_revision: "topology:not_provided".to_string(),
+        indexing: "frequency_index".to_string(),
+        sample_axis: "frequency_index".to_string(),
+        mode_axis: "not_applicable".to_string(),
+        node_count: None,
+    }
+}
+
+fn response_point_amplitude(
+    point: &crate::eigen::response_block_real::FieldDrivenResponseSweepPointArtifact,
+) -> std::io::Result<f64> {
+    finite_max(&point.response_amplitude).ok_or_else(|| {
+        Error::new(
+            ErrorKind::InvalidData,
+            "FMR peak extraction requires finite response_amplitude values",
+        )
+    })
+}
+
+fn fmr_peak_uncertainty() -> FmrPeakUncertainty {
+    FmrPeakUncertainty {
+        kind: "not_estimated".to_string(),
+        frequency_hz: None,
+        amplitude: None,
+        reason: Some("response sweep has no noise or covariance model".to_string()),
+    }
+}
+
+fn response_peak_indices(amplitudes: &[f64]) -> Vec<usize> {
+    if amplitudes.is_empty() {
+        return Vec::new();
+    }
+    if amplitudes.len() == 1 {
+        return vec![0];
+    }
+    let mut indices = Vec::new();
+    for index in 0..amplitudes.len() {
+        let is_peak = if index == 0 {
+            amplitudes[index] > amplitudes[index + 1]
+        } else if index + 1 == amplitudes.len() {
+            amplitudes[index] >= amplitudes[index - 1]
+        } else {
+            amplitudes[index] >= amplitudes[index - 1]
+                && amplitudes[index] >= amplitudes[index + 1]
+                && (amplitudes[index] > amplitudes[index - 1]
+                    || amplitudes[index] > amplitudes[index + 1])
+        };
+        if is_peak {
+            indices.push(index);
+        }
+    }
+    indices
+}
+
+pub fn build_fmr_peaks_artifact_with_progress(
+    source: &FieldDrivenResponseSweepArtifact,
+    source_revision: &str,
+    requested_point_count: usize,
+    interrupted: bool,
+) -> std::io::Result<FmrPeaksArtifact> {
+    if source.points.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "FMR peak extraction requires at least one driven response point",
+        ));
+    }
+    if source.excitation_kind != "field" {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "FMR peak extraction requires a field-driven response source",
+        ));
+    }
+    if source.points.iter().any(|point| {
+        !point.frequency_hz.is_finite()
+            || point.frequency_hz < 0.0
+            || !point.angular_frequency_rad_per_s.is_finite()
+    }) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "FMR peak extraction requires finite non-negative frequency samples",
+        ));
+    }
+    let amplitudes = source
+        .points
+        .iter()
+        .map(response_point_amplitude)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let source_revision = source_revision.to_string();
+    let peaks = response_peak_indices(&amplitudes)
+        .into_iter()
+        .map(|frequency_index| FmrPeakArtifact {
+            peak_id: format!("response-peak-{frequency_index:04}"),
+            source_artifact: "response/magnetic_response_sweep.v2.json".to_string(),
+            source_revision: source_revision.clone(),
+            source_frequency_index: frequency_index,
+            sample_id: None,
+            mode_id: None,
+            frequency_hz: source.points[frequency_index].frequency_hz,
+            response_amplitude: amplitudes[frequency_index],
+            bracketed: frequency_index > 0 && frequency_index + 1 < source.points.len(),
+            uncertainty: fmr_peak_uncertainty(),
+            status: if interrupted {
+                ServerArtifactStatus::Interrupted
+            } else {
+                ServerArtifactStatus::Complete
+            },
+        })
+        .collect::<Vec<_>>();
+    let status = if interrupted {
+        ServerArtifactStatus::Interrupted
+    } else {
+        ServerArtifactStatus::Complete
+    };
+    let complete = !interrupted && source.points.len() == requested_point_count;
+    let status = if status == ServerArtifactStatus::Complete && !complete {
+        ServerArtifactStatus::Partial
+    } else {
+        status
+    };
+    let execution = response_execution_identity(source);
+    let mut artifact = FmrPeaksArtifact {
+        schema_version: "fmr/peaks.v1",
+        artifact_id: "analysis:fmr:peaks".to_string(),
+        source: FmrPeakSource {
+            kind: FmrPeakSourceKind::DrivenResponse,
+            artifact: "response/magnetic_response_sweep.v2.json".to_string(),
+            revision: source_revision.clone(),
+            coupling_observable: Some("max_response_amplitude".to_string()),
+        },
+        source_revision: source_revision.clone(),
+        run_id: "run:current".to_string(),
+        stage_id: "stage:frequency-response".to_string(),
+        scope_id: "scope:driven-response".to_string(),
+        runtime_id: "runtime:not_provided".to_string(),
+        revision: String::new(),
+        content_sha256: String::new(),
+        status,
+        complete,
+        interrupted,
+        stop_reason: interrupted.then_some("interrupt_requested".to_string()),
+        algorithm: "select_local_maxima_of_max_response_amplitude".to_string(),
+        algorithm_parameters: BTreeMap::from([
+            (
+                "endpoint_peaks_are_bracketed".to_string(),
+                "false".to_string(),
+            ),
+            (
+                "response_quantity".to_string(),
+                "max_response_amplitude".to_string(),
+            ),
+        ]),
+        units: server_artifact_units_response(&source.si_units),
+        topology: fmr_artifact_topology(),
+        requested_execution: execution.clone(),
+        resolved_execution: execution,
+        requested_point_count,
+        completed_point_count: source.points.len(),
+        peaks,
+        cross_artifact_refs: vec![ServerArtifactReference {
+            relation: "source_response".to_string(),
+            artifact: "response/magnetic_response_sweep.v2.json".to_string(),
+            revision: source_revision,
+        }],
+    };
+    artifact.content_sha256 = canonical_artifact_digest(&artifact);
+    artifact.revision = artifact.content_sha256.clone();
+    Ok(artifact)
+}
+
+pub fn build_fmr_peaks_artifact(
+    source: &FieldDrivenResponseSweepArtifact,
+    source_revision: &str,
+    interrupted: bool,
+) -> std::io::Result<FmrPeaksArtifact> {
+    build_fmr_peaks_artifact_with_progress(
+        source,
+        source_revision,
+        source.points.len(),
+        interrupted,
+    )
+}
+
+fn local_quadratic_fit(
+    frequencies: [f64; 3],
+    amplitudes: [f64; 3],
+) -> Option<([f64; 3], f64, f64)> {
+    let [x0, x1, x2] = frequencies;
+    let [y0, y1, y2] = amplitudes;
+    let denominator = (x0 - x1) * (x0 - x2) * (x1 - x2);
+    if !denominator.is_finite() || denominator.abs() <= f64::EPSILON {
+        return None;
+    }
+    let a = (y0 * (x1 - x2) + y1 * (x2 - x0) + y2 * (x0 - x1)) / denominator;
+    let b = (y0 * (x2 * x2 - x1 * x1) + y1 * (x0 * x0 - x2 * x2) + y2 * (x1 * x1 - x0 * x0))
+        / denominator;
+    let c = (y0 * x1 * x2 * (x1 - x2) + y1 * x2 * x0 * (x2 - x0) + y2 * x0 * x1 * (x0 - x1))
+        / denominator;
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() || a >= 0.0 {
+        return None;
+    }
+    let vertex = -b / (2.0 * a);
+    if !vertex.is_finite() || vertex < x0.min(x2) || vertex > x0.max(x2) {
+        return None;
+    }
+    let residual_l2 = [x0, x1, x2]
+        .into_iter()
+        .zip([y0, y1, y2])
+        .map(|(x, y)| {
+            let error = a * x * x + b * x + c - y;
+            error * error
+        })
+        .sum::<f64>()
+        .sqrt();
+    Some(([a, b, c], vertex, residual_l2))
+}
+
+pub fn build_resonance_fits_artifact(
+    peaks: &FmrPeaksArtifact,
+    source: &FieldDrivenResponseSweepArtifact,
+) -> std::io::Result<ResonanceFitsArtifact> {
+    let mut fits = Vec::new();
+    for peak in peaks.peaks.iter().filter(|peak| peak.bracketed) {
+        let index = peak.source_frequency_index;
+        let Some(left) = source.points.get(index.saturating_sub(1)) else {
+            continue;
+        };
+        let Some(center) = source.points.get(index) else {
+            continue;
+        };
+        let Some(right) = source.points.get(index + 1) else {
+            continue;
+        };
+        let y = [
+            response_point_amplitude(left)?,
+            response_point_amplitude(center)?,
+            response_point_amplitude(right)?,
+        ];
+        let x = [left.frequency_hz, center.frequency_hz, right.frequency_hz];
+        let Some((coefficients, fitted_frequency_hz, residual_l2)) = local_quadratic_fit(x, y)
+        else {
+            continue;
+        };
+        fits.push(ResonanceFitArtifact {
+            fit_id: format!("resonance-fit-{index:04}"),
+            peak_id: Some(peak.peak_id.clone()),
+            source_peak_revision: peaks.revision.clone(),
+            model: "quadratic_local_peak".to_string(),
+            fit_range_hz: [x[0], x[2]],
+            baseline: y[0].min(y[2]),
+            weights: None,
+            peak_frequency_hz: Some(fitted_frequency_hz),
+            linewidth_hz: None,
+            q_factor: None,
+            coefficients: Some(coefficients),
+            covariance: None,
+            conditioning: Some(1.0 / ((x[0] - x[2]).abs().max(f64::MIN_POSITIVE))),
+            residual_l2: Some(residual_l2),
+            uncertainty: fmr_peak_uncertainty(),
+            status: ServerArtifactStatus::Partial,
+        });
+    }
+    let status = if peaks.interrupted {
+        ServerArtifactStatus::Interrupted
+    } else if fits.is_empty() {
+        ServerArtifactStatus::Partial
+    } else {
+        ServerArtifactStatus::Partial
+    };
+    let execution = response_execution_identity(source);
+    let mut artifact = ResonanceFitsArtifact {
+        schema_version: "fmr/resonance_fits.v1",
+        artifact_id: "analysis:fmr:resonance-fits".to_string(),
+        source: ServerArtifactSource {
+            kind: "fmr_peaks".to_string(),
+            artifact: "fmr/peaks.v1.json".to_string(),
+            revision: peaks.revision.clone(),
+        },
+        source_revision: peaks.revision.clone(),
+        run_id: peaks.run_id.clone(),
+        stage_id: peaks.stage_id.clone(),
+        scope_id: peaks.scope_id.clone(),
+        runtime_id: peaks.runtime_id.clone(),
+        revision: String::new(),
+        content_sha256: String::new(),
+        status,
+        complete: false,
+        interrupted: peaks.interrupted,
+        stop_reason: if fits.is_empty() {
+            Some("no_bracketed_peak_with_valid_fit_window".to_string())
+        } else {
+            Some("covariance_not_estimated".to_string())
+        },
+        algorithm: "quadratic_local_peak_without_statistical_covariance".to_string(),
+        units: server_artifact_units_response(&source.si_units),
+        topology: fmr_artifact_topology(),
+        requested_execution: execution.clone(),
+        resolved_execution: execution,
+        fits,
+        cross_artifact_refs: vec![ServerArtifactReference {
+            relation: "source_peaks".to_string(),
+            artifact: "fmr/peaks.v1.json".to_string(),
+            revision: peaks.revision.clone(),
+        }],
+    };
+    artifact.content_sha256 = canonical_artifact_digest(&artifact);
+    artifact.revision = artifact.content_sha256.clone();
+    Ok(artifact)
+}
+
+pub fn write_fmr_analysis_artifacts(
+    base_dir: &Path,
+    source: &FieldDrivenResponseSweepArtifact,
+    requested_point_count: usize,
+    interrupted: bool,
+) -> std::io::Result<()> {
+    let source_revision = response_source_revision(source);
+    let peaks = build_fmr_peaks_artifact_with_progress(
+        source,
+        &source_revision,
+        requested_point_count,
+        interrupted,
+    )?;
+    let fits = build_resonance_fits_artifact(&peaks, source)?;
+    let fmr_dir = base_dir.join("fmr");
+    fs::create_dir_all(&fmr_dir)?;
+    write_json_atomic(&fmr_dir.join("peaks.v1.json"), &peaks)?;
+    write_json_atomic(&fmr_dir.join("resonance_fits.v1.json"), &fits)?;
+    Ok(())
 }
 
 pub fn write_response_sweep_artifact(
@@ -939,6 +2475,7 @@ pub fn write_response_sweep_bundle_with_progress(
         write_complex_response_field_payloads(base_dir, index, &response_field_values)?;
         let point_artifact = ResponseFrequencyPointArtifact {
             schema_version: "frequency_response_point.v1",
+            point_id: point.point_id.clone(),
             frequency_index: index,
             frequency_hz: point.frequency_hz,
             angular_frequency_rad_per_s: point.angular_frequency_rad_per_s,
@@ -1037,6 +2574,14 @@ pub fn write_response_sweep_bundle_with_progress(
         manifest.complete,
         manifest.interrupted,
     )?;
+    if !artifact.points.is_empty() {
+        write_fmr_analysis_artifacts(
+            base_dir,
+            artifact,
+            requested_frequency_point_count,
+            interrupted,
+        )?;
+    }
     Ok(())
 }
 
@@ -1055,6 +2600,7 @@ fn write_response_sweep_v2_artifact(
             let zarr_array_path = response_zarr_array_path(index);
             let zarr_chunk_path = response_zarr_chunk_path(index);
             ResponseSweepV2PointArtifact {
+                point_id: format!("frequency-point-{index:04}"),
                 frequency_index: index,
                 frequency_hz: point.frequency_hz,
                 angular_frequency_rad_per_s: point.angular_frequency_rad_per_s,
@@ -1555,9 +3101,9 @@ fn write_frequency_domain_response_manifest(
         requested_execution: FrequencyDomainRequestedExecution {
             calculation_mode: "frequency_response",
             backend: "fem",
-            device: "cpu",
-            precision: "double",
-            execution_mode: "extended",
+            device: "cpu".to_string(),
+            precision: "double".to_string(),
+            execution_mode: "extended".to_string(),
             ui_mode: "auto",
             operator: "linearized_llg",
             solver_family: "frequency_response",
@@ -1567,31 +3113,44 @@ fn write_frequency_domain_response_manifest(
             equilibrium_source: "provided_or_planned",
             k_sampling: "single",
             outputs: vec!["susceptibility_tensor"],
+            solver_method: "direct_harmonic_response".to_string(),
+            preconditioner: "not_applicable".to_string(),
+            magnetostatic_bc: "not_applicable".to_string(),
         },
         resolved_execution: FrequencyDomainResolvedExecution {
             backend: "fem",
-            device: "cpu",
-            precision: "double",
-            engine: artifact.backend_engine_id.as_str(),
-            native_backend: "runner_validation",
-            reference_or_production: "reference",
+            device: "cpu".to_string(),
+            precision: "double".to_string(),
+            engine: artifact.backend_engine_id.clone(),
+            native_backend: "runner_validation".to_string(),
+            reference_or_production: "reference".to_string(),
             container_image: None,
             build_features: Vec::new(),
-            demag_realization: "none_or_validation_contract",
-            solver_library: "nalgebra",
-            solver_algorithm: artifact.solver_model.as_str(),
+            demag_realization: "none_or_validation_contract".to_string(),
+            solver_library: "nalgebra".to_string(),
+            solver_algorithm: artifact.solver_model.clone(),
             solve_kind: "direct_harmonic_response",
+            status: Some(if complete { "ok" } else { "partial" }.to_string()),
+            implementation_id: Some(artifact.backend_engine_id.clone()),
+            operator_residency: Some("host".to_string()),
+            vector_residency: Some("host".to_string()),
+            krylov_residency: Some("host".to_string()),
+            preconditioner_residency: Some("not_applicable".to_string()),
+            fallback_used: Some(false),
+            fallback_reason: None,
+            fallback_from_engine: None,
+            fallback_to_engine: None,
         },
         physics: FrequencyDomainPhysics {
             analysis_family: "magnetic_frequency_domain",
             llg_gamma0_si: None,
             llg_alpha: None,
-            phase_convention: "exp_minus_i_omega_t",
+            phase_convention: "exp_minus_i_omega_t".to_string(),
             frequency_units: "Hz",
             field_units: "A/m",
             normalization: "unit_l2",
-            spin_wave_bc: "planned",
-            periodic_or_floquet: "none",
+            spin_wave_bc: "planned".to_string(),
+            periodic_or_floquet: "none".to_string(),
             equilibrium_residual_summary: None,
             response_map_axes: vec!["frequency_hz"],
         },
@@ -1609,6 +3168,11 @@ fn write_frequency_domain_response_manifest(
             response_progress_v1_path: Some("response/progress.v1.json"),
             response_cancel_requested_v1_path: interrupted
                 .then_some("response/cancel_requested.v1.json"),
+            field_sweep_v1_path: None,
+            fmr_peaks_v1_path: (!artifact.points.is_empty()).then_some("fmr/peaks.v1.json"),
+            fmr_resonance_fits_v1_path: (!artifact.points.is_empty())
+                .then_some("fmr/resonance_fits.v1.json"),
+            fmr_kittel_fit_v1_path: None,
             mode_metadata_paths: Vec::new(),
             frequency_point_paths: frequency_point_artifacts,
         },
@@ -1668,6 +3232,19 @@ fn write_frequency_domain_response_manifest(
             production_native_solver_available: false,
             validation_artifact: true,
         },
+        physics_contract_version: None,
+        operator_dictionary_version: None,
+        implementation_state: None,
+        validation_state: None,
+        validated_scope: None,
+        assembly_kind: None,
+        operator_input_signature_sha256: None,
+        boundary_gauge: None,
+        spectral: None,
+        phase_constraint_sha256: None,
+        equilibrium_artifact_sha256: None,
+        linearization_state_sha256: None,
+        periodic_mesh_certificate_sha256: None,
     };
     fs::write(
         manifest_dir.join("manifest.v1.json"),
@@ -1914,29 +3491,26 @@ fn uniformity_score_from_lifted_vectors(real: &[[f64; 3]], imag: &[[f64; 3]]) ->
     Some((numerator / denominator).clamp(0.0, 1.0))
 }
 
-fn k0_kittel_mode_uniformity_score(mode: Option<&SingleKModeResult>) -> f64 {
-    let Some(mode) = mode else {
-        return 1.0;
-    };
+fn k0_kittel_mode_uniformity_score(mode: &SingleKModeResult) -> Option<f64> {
     if let Some(values) = mode.reduced_vector.as_deref() {
         if let Some(weights) = mode.node_mass_weights.as_deref() {
             if let Some(score) = weighted_uniformity_score_from_complex_xyz(values, weights)
                 .or_else(|| weighted_uniformity_score_from_tangent_components(values, weights))
             {
-                return score;
+                return Some(score);
             }
         }
         if let Some(score) = uniformity_score_from_complex_xyz(values)
             .or_else(|| uniformity_score_from_tangent_components(values))
         {
-            return score;
+            return Some(score);
         }
     }
     match (mode.lifted_real.as_deref(), mode.lifted_imag.as_deref()) {
-        (Some(real), Some(imag)) => uniformity_score_from_lifted_vectors(real, imag).unwrap_or(1.0),
-        (Some(real), None) => uniformity_score_from_lifted_vectors(real, &[]).unwrap_or(1.0),
-        (None, Some(imag)) => uniformity_score_from_lifted_vectors(&[], imag).unwrap_or(1.0),
-        (None, None) => 1.0,
+        (Some(real), Some(imag)) => uniformity_score_from_lifted_vectors(real, imag),
+        (Some(real), None) => uniformity_score_from_lifted_vectors(real, &[]),
+        (None, Some(imag)) => uniformity_score_from_lifted_vectors(&[], imag),
+        (None, None) => None,
     }
 }
 
@@ -2020,10 +3594,12 @@ fn k0_kittel_branch_candidate(
             result,
             branch_point.sample_index,
             branch_point.raw_mode_index,
-        );
-        let eigen_frequency_hz = mode
-            .map(|mode| mode.frequency_real_hz)
-            .unwrap_or(branch_point.frequency_real_hz);
+        )?;
+        let uniformity_score = k0_kittel_mode_uniformity_score(mode)?;
+        if !uniformity_score.is_finite() || !(0.0..=1.0).contains(&uniformity_score) {
+            return None;
+        }
+        let eigen_frequency_hz = mode.frequency_real_hz;
         if !eigen_frequency_hz.is_finite() || eigen_frequency_hz < 0.0 {
             return None;
         }
@@ -2045,18 +3621,13 @@ fn k0_kittel_branch_candidate(
             eigen_frequency_hz,
             relative_frequency_error,
             selected_mode_index: branch_point.raw_mode_index,
-            eigenvalue_real: mode.map(|mode| mode.eigenvalue_real).unwrap_or(0.0),
-            eigenvalue_imag: mode
-                .map(|mode| mode.eigenvalue_imag)
-                .unwrap_or(std::f64::consts::TAU * eigen_frequency_hz),
-            mode_residual_relative: finite_non_negative_or_default(
-                mode.and_then(|mode| mode.residual_norm),
-                0.0,
-            ),
-            uniformity_score: k0_kittel_mode_uniformity_score(mode),
+            eigenvalue_real: mode.eigenvalue_real,
+            eigenvalue_imag: mode.eigenvalue_imag,
+            mode_residual_relative: finite_non_negative_or_default(mode.residual_norm, 0.0),
+            uniformity_score,
             branch_overlap_previous: unit_interval_or_default(branch_point.overlap_prev, 1.0),
             max_m0_dot_delta_m_abs: finite_non_negative_or_default(
-                mode.and_then(|mode| mode.tangent_leakage_max_abs),
+                mode.tangent_leakage_max_abs,
                 0.0,
             ),
             max_periodic_seam_mismatch: 0.0,
@@ -2105,11 +3676,189 @@ fn select_k0_kittel_branch(
             left.minimum_uniformity_score
                 .total_cmp(&right.minimum_uniformity_score)
                 .then_with(|| {
-                    right
-                        .max_relative_frequency_error
-                        .total_cmp(&left.max_relative_frequency_error)
+                    left.minimum_branch_overlap
+                        .total_cmp(&right.minimum_branch_overlap)
+                })
+                .then_with(|| {
+                    // Branch identity must be deterministic, but the analytical
+                    // Kittel frequency is only a post-solve validation metric.
+                    right.branch_id.cmp(&left.branch_id)
                 })
         })
+}
+
+/// Build the Kittel comparison as a postsolve derived artifact.  The declared
+/// Kittel samples are used only as an analytical reference: this function
+/// never turns them into solver input or into a physical field sweep.
+pub fn build_kittel_fit_artifact(
+    result: &PathSolveResult,
+) -> std::io::Result<Option<KittelFitArtifact>> {
+    let Some(validation) = result.k0_kittel_validation.as_ref() else {
+        return Ok(None);
+    };
+    let expected_points = k0_kittel_expected_points(validation)?;
+    if expected_points.is_empty() {
+        return Ok(None);
+    }
+    let Some(selected_branch) = select_k0_kittel_branch(result, &expected_points) else {
+        return Ok(None);
+    };
+    let source_revision = result_source_revision(result);
+    let (requested_execution, resolved_execution, runtime_id) =
+        server_execution_from_modal_result(result);
+    let points = selected_branch
+        .points
+        .iter()
+        .map(|point| {
+            let expected = expected_points
+                .iter()
+                .find(|expected| expected.field_index == point.field_index)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        "Kittel branch point has no matching declared oracle sample",
+                    )
+                })?;
+            let sample = validation
+                .samples
+                .iter()
+                .find(|sample| sample.sample_index as usize == expected.sample_index)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        "Kittel oracle point has no declared bias field",
+                    )
+                })?;
+            Ok(KittelFitPointArtifact {
+                sample_id: format!("bias-field-sample-{:04}", expected.sample_index),
+                mode_id: format!(
+                    "sample-{:04}/mode-{:04}",
+                    expected.sample_index, point.selected_mode_index
+                ),
+                sample_index: expected.sample_index,
+                bias_field_a_per_m: sample.bias_field,
+                expected_frequency_hz: point.expected_frequency_hz,
+                solved_frequency_hz: point.eigen_frequency_hz,
+                relative_frequency_error: point.relative_frequency_error,
+                branch_id: selected_branch.branch_id,
+                status: ServerArtifactStatus::Complete,
+            })
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let validation_status = if validation.relative_tolerance.is_finite()
+        && selected_branch.max_relative_frequency_error <= validation.relative_tolerance
+    {
+        "passed"
+    } else {
+        "failed"
+    };
+    let mut parameters = vec![KittelFitParameterArtifact {
+        name: "gamma0_rad_s_per_A_m".to_string(),
+        value: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+        unit: "rad/(s A/m)".to_string(),
+    }];
+    if let Some(effective_magnetisation) = validation
+        .material
+        .effective_magnetisation
+        .filter(|value| value.is_finite())
+    {
+        parameters.push(KittelFitParameterArtifact {
+            name: "effective_magnetisation".to_string(),
+            value: effective_magnetisation,
+            unit: "A/m".to_string(),
+        });
+    }
+    let topologies = result
+        .samples
+        .iter()
+        .map(|sample| topology_from_diagnostics(sample_native_solver_diagnostics(sample)))
+        .collect::<Vec<_>>();
+    let topology_consistent = topologies.windows(2).all(|window| {
+        window[0].mesh_id == window[1].mesh_id
+            && window[0].topology_revision == window[1].topology_revision
+    });
+    let topology = if topology_consistent {
+        topologies
+            .first()
+            .cloned()
+            .unwrap_or_else(empty_server_topology)
+    } else {
+        ServerArtifactTopology {
+            mesh_id: "topology:inconsistent".to_string(),
+            topology_revision: "topology:inconsistent".to_string(),
+            ..empty_server_topology()
+        }
+    };
+    let status = if points
+        .iter()
+        .all(|point| point.status == ServerArtifactStatus::Complete)
+    {
+        ServerArtifactStatus::Partial
+    } else {
+        ServerArtifactStatus::Corrupt
+    };
+    let mut artifact = KittelFitArtifact {
+        schema_version: "fmr/kittel_fit.v1",
+        artifact_id: "analysis:fmr:kittel-fit".to_string(),
+        source: ServerArtifactSource {
+            kind: "postsolve_kittel_oracle".to_string(),
+            artifact: "eigen/spectrum.v2.json".to_string(),
+            revision: source_revision.clone(),
+        },
+        source_revision,
+        run_id: "run:current".to_string(),
+        stage_id: "stage:eigenmodes".to_string(),
+        scope_id: "scope:k0-kittel-postsolve".to_string(),
+        runtime_id,
+        revision: String::new(),
+        content_sha256: String::new(),
+        status,
+        complete: false,
+        interrupted: false,
+        stop_reason: Some("statistical_fit_covariance_not_available".to_string()),
+        model: validation.model.clone(),
+        units: server_artifact_units_modal(),
+        topology,
+        requested_execution,
+        resolved_execution,
+        parameters,
+        covariance: None,
+        conditioning: None,
+        validation_status: validation_status.to_string(),
+        validation_tolerance_relative: Some(validation.relative_tolerance),
+        excluded_samples: expected_points
+            .iter()
+            .filter(|expected| {
+                !selected_branch
+                    .points
+                    .iter()
+                    .any(|point| point.field_index == expected.field_index)
+            })
+            .map(|expected| expected.sample_index)
+            .collect(),
+        points,
+        cross_artifact_refs: vec![ServerArtifactReference {
+            relation: "source_spectrum".to_string(),
+            artifact: "eigen/spectrum.v2.json".to_string(),
+            revision: result_source_revision(result),
+        }],
+    };
+    artifact.content_sha256 = canonical_artifact_digest(&artifact);
+    artifact.revision = artifact.content_sha256.clone();
+    Ok(Some(artifact))
+}
+
+pub fn write_kittel_fit_artifact(
+    base_dir: &Path,
+    result: &PathSolveResult,
+) -> std::io::Result<bool> {
+    let Some(artifact) = build_kittel_fit_artifact(result)? else {
+        return Ok(false);
+    };
+    let fmr_dir = base_dir.join("fmr");
+    fs::create_dir_all(&fmr_dir)?;
+    write_json_atomic(&fmr_dir.join("kittel_fit.v1.json"), &artifact)?;
+    Ok(true)
 }
 
 fn k0_kittel_points_csv_bytes(
@@ -2167,9 +3916,9 @@ fn validate_k0_kittel_periodic_airbox_metrics(
             "K0-3 periodic_airbox_k0 metrics require positive phi_dof_count",
         ));
     }
-    if metrics.augmented_phi_dof_count <= metrics.phi_dof_count {
+    if metrics.augmented_phi_dof_count < metrics.phi_dof_count {
         return Err(invalid_k0_kittel_artifact(
-            "K0-3 periodic_airbox_k0 metrics require augmented_phi_dof_count > phi_dof_count",
+            "K0-3 periodic_airbox_k0 metrics require augmented_phi_dof_count >= phi_dof_count",
         ));
     }
     if !(metrics.poisson_constraint_relative_residual.is_finite()
@@ -2286,7 +4035,11 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
         serde_json::json!({
             "kind": k0_kittel_validation_demag_kind(validation),
             "effective_magnetisation_A_per_m": metrics.effective_magnetisation_a_per_m,
-            "gauge_policy": "mean_zero_augmented",
+            "gauge_policy": if metrics.augmented_phi_dof_count > metrics.phi_dof_count {
+                "mean_zero_augmented"
+            } else {
+                "none"
+            },
             "phi_dof_count": metrics.phi_dof_count,
             "augmented_phi_dof_count": metrics.augmented_phi_dof_count,
             "poisson_constraint_relative_residual": metrics.poisson_constraint_relative_residual,
@@ -2321,7 +4074,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
             "label": selected_branch.label.as_deref(),
         },
         "mode_selection": {
-            "strategy": "uniformity_score_then_tracked_branch_frequency_error",
+            "strategy": "uniformity_score_then_tracked_branch_overlap_then_branch_id",
             "minimum_uniformity_score": selected_branch.minimum_uniformity_score,
             "minimum_branch_overlap": selected_branch.minimum_branch_overlap,
             "maximum_tangent_leakage": selected_branch.maximum_tangent_leakage,
@@ -2386,9 +4139,60 @@ pub fn write_frequency_domain_eigen_manifest(
     let mode_metadata_paths = eigen_mode_metadata_paths(result);
     let mode_field_resources = eigen_mode_field_resources(result);
     let sample_count = result.samples.len();
+    let field_sweep_v1_path = build_frequency_domain_field_sweep_artifact(result)?
+        .is_some()
+        .then_some("eigen/field_sweep.v1.json");
+    let fmr_kittel_fit_v1_path = build_kittel_fit_artifact(result)?
+        .is_some()
+        .then_some("fmr/kittel_fit.v1.json");
     let calculation_mode = eigen_calculation_mode(result);
     let tracking = tracking_summary(result);
     let solver_classification = modal_solver_classification(result.solver_model);
+    let (requested_execution, resolved_execution) =
+        modal_manifest_execution(result, solver_classification);
+    let (
+        physics_contract_version,
+        operator_dictionary_version,
+        implementation_state,
+        validation_state,
+        validated_scope,
+        assembly_kind,
+        operator_input_signature_sha256,
+        boundary_gauge,
+        spectral,
+        phase_constraint_sha256,
+        equilibrium_artifact_sha256,
+        linearization_state_sha256,
+        periodic_mesh_certificate_sha256,
+    ) = modal_manifest_hardened_fields(result);
+    let diagnostics = modal_native_solver_diagnostics(result);
+    let production_native_solver_available =
+        diagnostic_bool(diagnostics, "production_solver_available")
+            .unwrap_or(solver_classification.production_native_solver_available);
+    let validation_artifact = diagnostic_bool(diagnostics, "validation_only")
+        .unwrap_or(solver_classification.validation_artifact);
+    let phase_convention = diagnostic_string(diagnostics, "phasor_convention")
+        .unwrap_or_else(|| "exp_minus_i_omega_t".to_string());
+    let spin_wave_bc = diagnostic_string(diagnostics, "demag_kind")
+        .or_else(|| diagnostic_string(diagnostics, "spin_wave_bc"))
+        .unwrap_or_else(|| {
+            if calculation_mode == "dispersion_modal" {
+                "periodic".to_string()
+            } else {
+                "planned".to_string()
+            }
+        });
+    let periodic_or_floquet = if result
+        .samples
+        .iter()
+        .any(|sample| sample.sample.k_vector.iter().any(|value| value.abs() > 0.0))
+    {
+        "bloch_or_path_sampling".to_string()
+    } else if result.include_demag {
+        "periodic_k0".to_string()
+    } else {
+        "none".to_string()
+    };
     let manifest = FrequencyDomainArtifactManifest {
         schema_version: "frequency_domain_manifest.v1",
         analysis_family: "magnetic_frequency_domain",
@@ -2404,50 +4208,18 @@ pub fn write_frequency_domain_eigen_manifest(
         stage_id: "eigenmodes",
         stage_kind: "eigenmodes",
         created_at,
-        requested_execution: FrequencyDomainRequestedExecution {
-            calculation_mode,
-            backend: "fem",
-            device: "cpu",
-            precision: "double",
-            execution_mode: "extended",
-            ui_mode: "auto",
-            operator: "linearized_llg",
-            solver_family: "modal_eigen",
-            solve_equation: "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)",
-            include_demag: result.include_demag,
-            damping_policy: "ignore",
-            equilibrium_source: "provided_or_planned",
-            k_sampling: if sample_count > 1 { "path" } else { "single" },
-            outputs: vec!["spectrum", "branches", "dispersion", "mode_fields"],
-        },
-        resolved_execution: FrequencyDomainResolvedExecution {
-            backend: "fem",
-            device: "cpu",
-            precision: "double",
-            engine: solver_classification.engine,
-            native_backend: solver_classification.native_backend,
-            reference_or_production: solver_classification.reference_or_production,
-            container_image: None,
-            build_features: Vec::new(),
-            demag_realization: "none_or_validation_contract",
-            solver_library: solver_classification.solver_library,
-            solver_algorithm: result.solver_model.as_str(),
-            solve_kind: "modal_eigen",
-        },
+        requested_execution,
+        resolved_execution,
         physics: FrequencyDomainPhysics {
             analysis_family: "magnetic_frequency_domain",
             llg_gamma0_si: None,
             llg_alpha: None,
-            phase_convention: "exp_minus_i_omega_t",
+            phase_convention,
             frequency_units: "Hz",
             field_units: "dimensionless_delta_m",
             normalization: "unit_l2",
-            spin_wave_bc: "planned",
-            periodic_or_floquet: if calculation_mode == "dispersion_modal" {
-                "bloch_or_path_sampling"
-            } else {
-                "none"
-            },
+            spin_wave_bc,
+            periodic_or_floquet,
             equilibrium_residual_summary: None,
             response_map_axes: Vec::new(),
         },
@@ -2464,6 +4236,10 @@ pub fn write_frequency_domain_eigen_manifest(
             response_diagnostics_v1_path: None,
             response_progress_v1_path: None,
             response_cancel_requested_v1_path: None,
+            field_sweep_v1_path,
+            fmr_peaks_v1_path: None,
+            fmr_resonance_fits_v1_path: None,
+            fmr_kittel_fit_v1_path,
             mode_metadata_paths,
             frequency_point_paths: Vec::new(),
         },
@@ -2510,15 +4286,29 @@ pub fn write_frequency_domain_eigen_manifest(
         capabilities: FrequencyDomainCapabilitySnapshot {
             driven_response_artifact_available: false,
             modal_artifact_available: true,
-            production_native_solver_available: solver_classification
-                .production_native_solver_available,
-            validation_artifact: solver_classification.validation_artifact,
+            production_native_solver_available,
+            validation_artifact,
         },
+        physics_contract_version,
+        operator_dictionary_version,
+        implementation_state,
+        validation_state,
+        validated_scope,
+        assembly_kind,
+        operator_input_signature_sha256,
+        boundary_gauge,
+        spectral,
+        phase_constraint_sha256,
+        equilibrium_artifact_sha256,
+        linearization_state_sha256,
+        periodic_mesh_certificate_sha256,
     };
     fs::write(
         manifest_dir.join("manifest.v1.json"),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )?;
+    let _ = write_frequency_domain_field_sweep_artifact(base_dir, result)?;
+    let _ = write_kittel_fit_artifact(base_dir, result)?;
     write_k0_kittel_validation_artifacts(base_dir, result)?;
     Ok(())
 }
@@ -2635,6 +4425,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
         .samples
         .iter()
         .map(|sample| SampleArtifact {
+            sample_id: format!("bias-field-sample-{:04}", sample.sample.sample_index),
             sample_index: sample.sample.sample_index,
             label: sample.sample.label.clone(),
             k_vector: sample.sample.k_vector,
@@ -2981,6 +4772,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
             let tangent_leakage_max_abs =
                 finite_or_default(mode.tangent_leakage_max_abs, 0.0).max(tangent_leakage_mean_abs);
+            let diagnostics = sample_native_solver_diagnostics(sample);
             let payload = ModeArtifact {
                 schema_version: "2",
                 solver_model: result.solver_model.as_str().to_string(),
@@ -3012,6 +4804,25 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 tangent_leakage_max_abs: Some(tangent_leakage_max_abs),
                 dominant_polarization: mode.dominant_polarization.clone(),
                 k_vector: sample.sample.k_vector,
+                external_field_a_per_m: sample_external_field(result, sample.sample.sample_index),
+                assembly_kind: diagnostic_string(diagnostics, "assembly_kind"),
+                operator_input_signature_sha256: diagnostic_string(
+                    diagnostics,
+                    "operator_input_signature_sha256",
+                ),
+                phase_constraint_sha256: diagnostic_string(diagnostics, "phase_constraint_sha256"),
+                equilibrium_artifact_sha256: diagnostic_string(
+                    diagnostics,
+                    "equilibrium_artifact_sha256",
+                ),
+                linearization_state_sha256: diagnostic_string(
+                    diagnostics,
+                    "linearization_state_sha256",
+                ),
+                periodic_mesh_certificate_sha256: diagnostic_string(
+                    diagnostics,
+                    "periodic_mesh_certificate_sha256",
+                ),
                 value_kind: "complex_spatial_vector",
                 component_basis: "global_xyz",
                 component_count: 3,
@@ -3136,6 +4947,7 @@ mod tests {
                 relaxation_steps: 0,
                 solver_model,
                 solver_notes: vec!["test fixture".to_string()],
+                solver_diagnostics: None,
             }],
             branches: vec![TrackedBranch {
                 branch_id: 0,
@@ -3284,6 +5096,14 @@ mod tests {
         .expect("spectrum.v2.json should be valid JSON");
         assert_eq!(spectrum["schema_version"], "eigen_spectrum.v2");
         assert_eq!(spectrum["sample_count"], 1);
+        assert_eq!(
+            spectrum["samples"][0]["sample_id"],
+            "bias-field-sample-0000"
+        );
+        assert_eq!(
+            spectrum["samples"][0]["modes"][0]["mode_id"],
+            "sample-0000/mode-0000"
+        );
         assert_eq!(
             spectrum["samples"][0]["modes"][0]["mode_field_id"],
             "analysis:eigen:sample-0000:mode-0000"
@@ -3575,6 +5395,115 @@ mod tests {
     }
 
     #[test]
+    fn eigen_manifest_preserves_native_gpu_execution_and_hardened_provenance() {
+        let temp = TempDirGuard::new("eigen-artifacts-native-gpu-provenance");
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.include_demag = true;
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "sample_solver_diagnostics": [{
+                "diagnostics": {
+                    "physics_contract_version": "micromagnetics_frequency_domain_v5",
+                    "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
+                    "implementation_state": "executable",
+                    "validation_state": "unvalidated",
+                    "validated_scope": "fem_k0_periodic_airbox_p1_double_gpu_device_krylov",
+                    "assembly_kind": "mfem_weak_form_shared_domain",
+                    "operator_input_signature_sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    "production_solver_available": true,
+                    "validation_only": false,
+                    "boundary_gauge": {
+                        "magnetostatic_bc": "periodic_airbox_k0",
+                        "outer_boundary_kind": "poisson_robin",
+                        "robin_beta": 8.0e6,
+                        "robin_beta_unit": "1/m",
+                        "gauge_policy": "none",
+                        "gauge_reason": "coercive_outer_boundary",
+                        "eta_row_present": false
+                    },
+                    "spectral": {
+                        "spectral_transform": "shift_invert",
+                        "spectral_scalar_mode": "real_split",
+                        "sigma_real_per_s": 0.0,
+                        "sigma_imag_rad_per_s": 1.0e10
+                    },
+                    "phase_constraint_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                    "phasor_convention": "exp_plus_i_omega_t",
+                    "requested_execution": {
+                        "device": "gpu",
+                        "precision": "double",
+                        "execution_mode": "strict",
+                        "solver_method": "shift_invert",
+                        "preconditioner": "shifted_schur_device",
+                        "magnetostatic_bc": "periodic_airbox_k0"
+                    },
+                    "resolved_execution": {
+                        "device": "gpu",
+                        "precision": "double",
+                        "engine": "gpu_petsc_slepc_cuda",
+                        "implementation_id": "k0_poisson_airbox_gpu_petsc_slepc",
+                        "status": "ok",
+                        "operator_residency": "device",
+                        "vector_residency": "device",
+                        "krylov_residency": "device",
+                        "preconditioner_residency": "device",
+                        "solver_library": "SLEPc/PETSc/hypre CUDA",
+                        "fallback_used": false,
+                        "fallback_reason": null
+                    }
+                }
+            }]
+        }));
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain manifest should write");
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain manifest should be written"),
+        )
+        .expect("frequency-domain manifest should parse");
+
+        assert_eq!(manifest["requested_execution"]["device"], "gpu");
+        assert_eq!(manifest["requested_execution"]["execution_mode"], "strict");
+        assert_eq!(
+            manifest["requested_execution"]["preconditioner"],
+            "shifted_schur_device"
+        );
+        assert_eq!(manifest["resolved_execution"]["device"], "gpu");
+        assert_eq!(
+            manifest["resolved_execution"]["engine"],
+            "gpu_petsc_slepc_cuda"
+        );
+        assert_eq!(
+            manifest["resolved_execution"]["implementation_id"],
+            "k0_poisson_airbox_gpu_petsc_slepc"
+        );
+        assert_eq!(manifest["resolved_execution"]["krylov_residency"], "device");
+        assert_eq!(
+            manifest["capabilities"]["production_native_solver_available"],
+            true
+        );
+        assert_eq!(manifest["capabilities"]["validation_artifact"], false);
+        assert_eq!(manifest["assembly_kind"], "mfem_weak_form_shared_domain");
+        assert_eq!(
+            manifest["operator_input_signature_sha256"],
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        );
+        assert_eq!(
+            manifest["boundary_gauge"]["outer_boundary_kind"],
+            "poisson_robin"
+        );
+        assert_eq!(manifest["spectral"]["spectral_scalar_mode"], "real_split");
+        assert_eq!(
+            manifest["phase_constraint_sha256"],
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    #[test]
     fn eigen_artifacts_write_k0_kittel_summary_and_points() {
         let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-summary");
         let result = sample_result_with_k0_kittel_sweep();
@@ -3611,6 +5540,51 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert!(rows[0].starts_with("case_id,demag_kind,field_index,H0_A_per_m,mu0_H0_T"));
         assert!(rows[0].contains("relative_frequency_error"));
+
+        let kittel_fit: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("fmr/kittel_fit.v1.json"))
+                .expect("typed Kittel fit artifact should be written"),
+        )
+        .expect("typed Kittel fit artifact should be valid JSON");
+        assert_eq!(kittel_fit["schema_version"], "fmr/kittel_fit.v1");
+        assert_eq!(kittel_fit["source"]["artifact"], "eigen/spectrum.v2.json");
+        assert_eq!(kittel_fit["model"], "macrospin_larmor");
+        assert_eq!(kittel_fit["complete"], false);
+    }
+
+    #[test]
+    fn mode_bundle_preserves_k0_operator_provenance() {
+        let temp = TempDirGuard::new("eigen-artifacts-mode-provenance");
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "assembly_kind": "mfem_weak_form_shared_domain",
+            "operator_input_signature_sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "phase_constraint_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        }));
+
+        write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+        let mode: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("eigen/modes/sample_0000/mode_0000.json"))
+                .expect("mode metadata should be written"),
+        )
+        .expect("mode metadata should parse");
+
+        assert_eq!(
+            mode["external_field_a_per_m"],
+            serde_json::json!([40_000.0, 0.0, 0.0])
+        );
+        assert_eq!(mode["assembly_kind"], "mfem_weak_form_shared_domain");
+        assert_eq!(
+            mode["operator_input_signature_sha256"],
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        );
+        assert_eq!(
+            mode["linearization_state_sha256"],
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        );
     }
 
     #[test]
@@ -3809,6 +5783,106 @@ mod tests {
     }
 
     #[test]
+    fn k0_kittel_validation_rejects_modes_without_native_vectors() {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        for sample in &mut result.samples {
+            for mode in &mut sample.modes {
+                mode.reduced_vector = None;
+                mode.lifted_real = None;
+                mode.lifted_imag = None;
+            }
+        }
+
+        let err = k0_kittel_validation_auxiliary_artifacts(&result)
+            .expect_err("K0 Kittel validation must not fabricate a uniform mode");
+        assert!(err.to_string().contains("no tracked eigen branch"));
+    }
+
+    #[test]
+    fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
+        let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-frequency-tiebreaker");
+        let mut result = sample_result_with_k0_kittel_sweep();
+
+        result.branches = vec![
+            TrackedBranch {
+                branch_id: 0,
+                label: Some("tracked_branch_zero".to_string()),
+                points: Vec::new(),
+            },
+            TrackedBranch {
+                branch_id: 1,
+                label: Some("analytical_frequency_match".to_string()),
+                points: Vec::new(),
+            },
+        ];
+
+        for sample_result in &mut result.samples {
+            let expected_frequency = sample_result.modes[0].frequency_real_hz;
+            let mut branch_zero_mode = sample_result.modes[0].clone();
+            branch_zero_mode.raw_mode_index = 0;
+            branch_zero_mode.frequency_real_hz = expected_frequency * 1.001;
+            branch_zero_mode.angular_frequency_rad_per_s =
+                std::f64::consts::TAU * branch_zero_mode.frequency_real_hz;
+            branch_zero_mode.eigenvalue_imag = branch_zero_mode.angular_frequency_rad_per_s;
+            branch_zero_mode.reduced_vector = Some(vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+            ]);
+
+            let mut analytical_match_mode = sample_result.modes[0].clone();
+            analytical_match_mode.raw_mode_index = 1;
+            analytical_match_mode.frequency_real_hz = expected_frequency;
+            analytical_match_mode.angular_frequency_rad_per_s =
+                std::f64::consts::TAU * analytical_match_mode.frequency_real_hz;
+            analytical_match_mode.eigenvalue_imag =
+                analytical_match_mode.angular_frequency_rad_per_s;
+            analytical_match_mode.reduced_vector = Some(vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+            ]);
+
+            sample_result.modes = vec![branch_zero_mode, analytical_match_mode];
+            let sample_index = sample_result.sample.sample_index;
+            result.branches[0].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 0,
+                frequency_real_hz: expected_frequency * 1.001,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+            result.branches[1].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 1,
+                frequency_real_hz: expected_frequency,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+        }
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let summary: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("validation/kittel_k0_pbc/summary.v1.json"))
+                .expect("Kittel k0 summary should be written"),
+        )
+        .expect("Kittel k0 summary should be valid JSON");
+        assert_eq!(summary["selected_branch"]["branch_id"], 0);
+        assert!(
+            summary["max_relative_frequency_error"]
+                .as_f64()
+                .expect("relative error should be numeric")
+                > 0.0009
+        );
+    }
+
+    #[test]
     fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available() {
         let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-mass-weighted-selector");
         let mut result = sample_result_with_k0_kittel_sweep();
@@ -3895,6 +5969,265 @@ mod tests {
     }
 
     #[test]
+    fn field_sweep_builder_does_not_fabricate_bias_field_from_kittel_metadata() {
+        let result = sample_result_with_k0_kittel_sweep();
+        let artifact = build_frequency_domain_field_sweep_artifact(&result)
+            .expect("field-sweep builder should validate the source");
+        assert!(
+            artifact.is_none(),
+            "Kittel oracle metadata is not a physical bias-field source"
+        );
+    }
+
+    #[test]
+    fn field_sweep_builder_preserves_sample_and_mode_identity_and_marks_missing_handoff_partial() {
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "operator_input_signature_sha256": "sha256:operator",
+            "equilibrium_artifact_sha256": "sha256:equilibrium",
+            "linearization_state_sha256": "sha256:linearization",
+            "status": "completed"
+        }));
+        let artifact = build_frequency_domain_field_sweep_artifact(&result)
+            .expect("field-sweep builder should validate the source")
+            .expect("declared physical bias field should produce an artifact");
+        assert_eq!(artifact.schema_version, "eigen/field_sweep.v1");
+        assert_eq!(artifact.status, ServerArtifactStatus::Complete);
+        assert!(artifact.complete);
+        assert_eq!(artifact.samples[0].sample_id, "bias-field-sample-0000");
+        assert_eq!(
+            artifact.samples[0].modes[0].sample_id,
+            "bias-field-sample-0000"
+        );
+        assert_eq!(
+            artifact.samples[0].modes[0].mode_id,
+            "sample-0000/mode-0000"
+        );
+        assert_eq!(artifact.samples[0].bias_field_a_per_m, [40_000.0, 0.0, 0.0]);
+        assert_eq!(
+            artifact.samples[0].modes[0].mode_field_id,
+            "analysis:eigen:sample-0000:mode-0000"
+        );
+        assert_eq!(
+            artifact.samples[0]
+                .operator_input_signature_sha256
+                .as_deref(),
+            Some("sha256:operator")
+        );
+    }
+
+    #[test]
+    fn typed_artifact_revision_binds_execution_and_topology() {
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "operator_input_signature_sha256": "sha256:operator",
+            "equilibrium_artifact_sha256": "sha256:equilibrium",
+            "linearization_state_sha256": "sha256:linearization",
+            "status": "completed"
+        }));
+        let artifact = build_frequency_domain_field_sweep_artifact(&result)
+            .expect("field-sweep builder should validate the source")
+            .expect("declared physical bias field should produce an artifact");
+
+        assert_eq!(artifact.revision, artifact.content_sha256);
+        assert_eq!(artifact.revision, canonical_artifact_digest(&artifact));
+
+        let mut execution_changed = artifact.clone();
+        execution_changed.resolved_execution.device = "gpu".to_string();
+        assert_ne!(
+            artifact.revision,
+            canonical_artifact_digest(&execution_changed),
+            "execution provenance must be covered by the content revision"
+        );
+
+        let mut topology_changed = artifact.clone();
+        topology_changed.topology.topology_revision = "mesh-rev:2".to_string();
+        assert_ne!(
+            artifact.revision,
+            canonical_artifact_digest(&topology_changed),
+            "topology provenance must be covered by the content revision"
+        );
+    }
+
+    #[test]
+    fn typed_json_writer_replaces_complete_envelope_without_temp_residue() {
+        let temp = TempDirGuard::new("typed-json-atomic-writer");
+        let path = temp.path.join("fmr/peaks.v1.json");
+        write_json_atomic(&path, &serde_json::json!({"revision": "same-length-a"}))
+            .expect("first typed artifact publication should succeed");
+        write_json_atomic(&path, &serde_json::json!({"revision": "same-length-b"}))
+            .expect("replacement typed artifact publication should succeed");
+
+        let value: Value = serde_json::from_slice(
+            &std::fs::read(&path).expect("replacement artifact should remain readable"),
+        )
+        .expect("replacement artifact should remain valid JSON");
+        assert_eq!(value["revision"], "same-length-b");
+        let temporary_files = std::fs::read_dir(path.parent().expect("parent directory"))
+            .expect("typed artifact directory should be readable")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(temporary_files, 0);
+    }
+
+    #[test]
+    fn fmr_peaks_are_derived_only_from_driven_response_and_carry_revision() {
+        let template = BlockRealHarmonicTemplate {
+            stiffness: DMatrix::from_diagonal_element(1, 1, 1.0),
+            mass: DMatrix::from_diagonal_element(1, 1, 1.0),
+            damping: Some(DMatrix::from_diagonal_element(1, 1, 0.1)),
+        };
+        let frequencies = [1.0, 2.0, 3.0, 4.0];
+        let excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+        let response = solve_field_driven_block_real_sweep(&template, &frequencies, &excitation)
+            .expect("response fixture should solve");
+        let source = build_field_driven_response_sweep_artifact(
+            &response,
+            "test.response",
+            "test_solver",
+            "gilbert",
+            "validation",
+        );
+        let peaks = build_fmr_peaks_artifact(&source, "sha256:response-source", false)
+            .expect("peaks should derive from a valid driven response");
+        assert_eq!(peaks.schema_version, "fmr/peaks.v1");
+        assert_eq!(peaks.source.kind, FmrPeakSourceKind::DrivenResponse);
+        assert_eq!(peaks.source.revision, "sha256:response-source");
+        assert_eq!(peaks.units.frequency, "Hz");
+        assert_eq!(
+            peaks.units.response_amplitude.as_deref(),
+            Some("normalized_magnetization")
+        );
+        assert!(peaks.units.covariance.is_none());
+        assert_eq!(peaks.status, ServerArtifactStatus::Complete);
+        assert!(!peaks.peaks.is_empty());
+        assert!(peaks.peaks.iter().all(|peak| {
+            peak.source_artifact == "response/magnetic_response_sweep.v2.json"
+                && peak.sample_id.is_none()
+                && peak.mode_id.is_none()
+                && peak.peak_id == format!("response-peak-{:04}", peak.source_frequency_index)
+        }));
+    }
+
+    #[test]
+    fn fmr_peaks_reject_nonfinite_frequency_source() {
+        let template = BlockRealHarmonicTemplate {
+            stiffness: DMatrix::from_diagonal_element(1, 1, 1.0),
+            mass: DMatrix::from_diagonal_element(1, 1, 1.0),
+            damping: Some(DMatrix::from_diagonal_element(1, 1, 0.1)),
+        };
+        let response = solve_field_driven_block_real_sweep(
+            &template,
+            &[1.0, 2.0],
+            &DVector::from_element(1, Complex64::new(1.0, 0.0)),
+        )
+        .expect("response fixture should solve");
+        let mut source = build_field_driven_response_sweep_artifact(
+            &response,
+            "test.response",
+            "test_solver",
+            "gilbert",
+            "validation",
+        );
+        source.points[0].frequency_hz = f64::NAN;
+        let error = build_fmr_peaks_artifact(&source, "sha256:response-source", false)
+            .expect_err("non-finite frequency must fail closed");
+        assert!(error.to_string().contains("finite non-negative frequency"));
+    }
+
+    #[test]
+    fn interrupted_response_produces_partial_fmr_artifacts_without_complete_claim() {
+        let template = BlockRealHarmonicTemplate {
+            stiffness: DMatrix::from_diagonal_element(1, 1, 1.0),
+            mass: DMatrix::from_diagonal_element(1, 1, 1.0),
+            damping: Some(DMatrix::from_diagonal_element(1, 1, 0.1)),
+        };
+        let response = solve_field_driven_block_real_sweep_with_interrupt(
+            &template,
+            &[1.0, 2.0, 3.0],
+            &DVector::from_element(1, Complex64::new(1.0, 0.0)),
+            |completed| completed >= 1,
+        )
+        .expect("response fixture should solve");
+        let source = build_field_driven_response_sweep_artifact(
+            &response.points,
+            "test.response",
+            "test_solver",
+            "gilbert",
+            "validation",
+        );
+        let peaks = build_fmr_peaks_artifact_with_progress(
+            &source,
+            "sha256:response-source",
+            3,
+            response.interrupted,
+        )
+        .expect("partial response remains a valid derived artifact");
+        assert_eq!(peaks.status, ServerArtifactStatus::Interrupted);
+        assert!(!peaks.complete);
+        assert!(peaks.interrupted);
+        assert_eq!(peaks.requested_point_count, 3);
+        assert_eq!(peaks.completed_point_count, 1);
+
+        let temp = TempDirGuard::new("response-artifact-interrupted-fmr");
+        write_response_sweep_bundle_with_progress(&temp.path, &source, 3, true)
+            .expect("interrupted response writer should preserve typed analysis artifacts");
+        let written_peaks: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("fmr/peaks.v1.json"))
+                .expect("interrupted peaks artifact should be written"),
+        )
+        .expect("interrupted peaks artifact should be valid JSON");
+        let written_fits: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("fmr/resonance_fits.v1.json"))
+                .expect("interrupted fits artifact should be written"),
+        )
+        .expect("interrupted fits artifact should be valid JSON");
+        assert_eq!(written_peaks["status"], "interrupted");
+        assert_eq!(written_peaks["complete"], false);
+        assert_eq!(written_fits["status"], "interrupted");
+        assert_eq!(written_fits["complete"], false);
+    }
+
+    #[test]
+    fn kittel_fit_contains_only_postsolve_comparison_and_digest_bound_source() {
+        let result = sample_result_with_k0_kittel_sweep();
+        let fit = build_kittel_fit_artifact(&result)
+            .expect("Kittel fit artifact should be derivable from a solved oracle fixture")
+            .expect("fixture declares a postsolve Kittel oracle");
+        assert_eq!(fit.schema_version, "fmr/kittel_fit.v1");
+        assert_eq!(fit.model, "macrospin_larmor");
+        assert_eq!(fit.units.frequency, "Hz");
+        assert_eq!(fit.points.len(), 3);
+        assert!(fit
+            .points
+            .iter()
+            .all(|point| point.sample_id.starts_with("bias-field-sample-")));
+        assert!(fit
+            .points
+            .iter()
+            .all(|point| point.mode_id == "sample-0000/mode-0000"
+                || point.mode_id == "sample-0001/mode-0000"
+                || point.mode_id == "sample-0002/mode-0000"));
+        assert!(fit.source.revision.starts_with("sha256:"));
+        assert!(!fit.source.revision.is_empty());
+        assert_eq!(fit.status, ServerArtifactStatus::Partial);
+        assert!(!fit.complete);
+        assert_eq!(
+            fit.stop_reason.as_deref(),
+            Some("statistical_fit_covariance_not_available")
+        );
+    }
+
+    #[test]
     fn eigen_manifest_carries_k0_kittel_validation_contract() {
         let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-validation");
         let result = sample_result_with_k0_kittel_sweep();
@@ -3930,6 +6263,11 @@ mod tests {
                 .expect("samples should be an array")
                 .len(),
             3
+        );
+        assert!(manifest["artifacts"]["field_sweep_v1_path"].is_null());
+        assert_eq!(
+            manifest["artifacts"]["fmr_kittel_fit_v1_path"],
+            "fmr/kittel_fit.v1.json"
         );
     }
 
@@ -4149,6 +6487,7 @@ mod tests {
         assert_eq!(value["schema_version"], "magnetic_response_sweep.v1");
         assert_eq!(value["backend_engine_id"], "runner.dense_block_real");
         assert_eq!(value["point_count"], 1);
+        assert_eq!(value["points"][0]["point_id"], "frequency-point-0000");
         assert_eq!(value["si_units"]["frequency_hz"], "Hz");
         assert_eq!(value["points"][0]["angular_frequency_rad_per_s"], 2.0);
         assert_eq!(
@@ -4214,6 +6553,7 @@ mod tests {
             "response/frequency_points/frequency_0001.json"
         );
         assert_eq!(point["schema_version"], "frequency_response_point.v1");
+        assert_eq!(point["point_id"], "frequency-point-0001");
         assert_eq!(point["frequency_index"], 1);
         assert_eq!(point["point"]["angular_frequency_rad_per_s"], 3.0);
         assert_eq!(
@@ -4282,6 +6622,28 @@ mod tests {
         assert!(response_dir
             .join("magnetic_response_sweep.v1.json")
             .is_file());
+
+        let peaks: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("fmr/peaks.v1.json"))
+                .expect("typed FMR peaks artifact should be written"),
+        )
+        .expect("typed FMR peaks artifact should be valid JSON");
+        assert_eq!(peaks["schema_version"], "fmr/peaks.v1");
+        assert_eq!(
+            peaks["source"]["artifact"],
+            "response/magnetic_response_sweep.v2.json"
+        );
+        assert_eq!(peaks["status"], "complete");
+        assert_eq!(peaks["complete"], true);
+
+        let fits: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("fmr/resonance_fits.v1.json"))
+                .expect("typed resonance fits artifact should be written"),
+        )
+        .expect("typed resonance fits artifact should be valid JSON");
+        assert_eq!(fits["schema_version"], "fmr/resonance_fits.v1");
+        assert_eq!(fits["source"]["artifact"], "fmr/peaks.v1.json");
+        assert_eq!(fits["complete"], false);
     }
 
     #[test]
@@ -4327,6 +6689,7 @@ mod tests {
         assert_eq!(response_v2["status"], "completed");
         assert_eq!(response_v2["complete"], true);
         assert_eq!(response_v2["completed_frequency_point_count"], 2);
+        assert_eq!(response_v2["points"][1]["point_id"], "frequency-point-0001");
         assert_eq!(
             response_v2["frequency_point_artifact_paths"][1],
             "response/frequency_points/frequency_0001.json"
@@ -4368,6 +6731,14 @@ mod tests {
         assert_eq!(
             family_manifest["artifacts"]["response_sweep_v2_path"],
             "response/magnetic_response_sweep.v2.json"
+        );
+        assert_eq!(
+            family_manifest["artifacts"]["fmr_peaks_v1_path"],
+            "fmr/peaks.v1.json"
+        );
+        assert_eq!(
+            family_manifest["artifacts"]["fmr_resonance_fits_v1_path"],
+            "fmr/resonance_fits.v1.json"
         );
         assert!(
             family_manifest["artifacts"]["response_map_v1_path"].is_null(),

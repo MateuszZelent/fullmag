@@ -1575,6 +1575,7 @@ pub(crate) fn plan_fdm(
                     resolved_integrator: integrator,
                 }
             }),
+            fem_eigen_execution_resolution: None,
         },
     })
 }
@@ -2639,6 +2640,7 @@ pub(crate) fn plan_fdm_multilayer(
                     resolved_integrator: integrator,
                 }
             }),
+            fem_eigen_execution_resolution: None,
         },
     })
 }

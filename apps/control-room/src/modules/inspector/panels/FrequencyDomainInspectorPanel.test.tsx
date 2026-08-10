@@ -9,6 +9,8 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
@@ -71,10 +73,12 @@ import {
   FrequencyResponseObservablesInspectorPanel,
   FrequencyResponseFrequencyPointsInspectorPanel,
   FmrComparisonInspectorPanel,
+  FmrKittelFitInspectorPanel,
   FmrModalSpectrumInspectorPanel,
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
   FmrResponseSweepInspectorPanel,
+  FmrResonanceFitsInspectorPanel,
   FrequencyResponsePointInspectorPanel,
   FrequencyResponseFrequencyJobInspectorPanel,
   FrequencyResponseProvenanceInspectorPanel,
@@ -85,6 +89,7 @@ import {
   frequencyDomainVisualizationReadiness,
 } from "./frequency-domain/FrequencyDomainResultInspectors";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
+import { modePointKey } from "./frequency-domain/FrequencyDomainHelpers";
 
 const emptyResource = {
   data: null,
@@ -136,6 +141,94 @@ const responseDiagnosticsFixture = vi.hoisted(() => ({
   } as Record<string, unknown>,
 }));
 
+const fmrFitResourcesFixture = vi.hoisted((): {
+  kittel: { data: unknown; revision: string | null; status: string };
+  resonance: { data: unknown; revision: string | null; status: string };
+} => ({
+  kittel: { data: null, revision: null, status: "idle" },
+  resonance: { data: null, revision: null, status: "idle" },
+}));
+
+function readyResonanceFitsResource() {
+  return {
+    artifact_path: "fmr/resonance_fits.v1.json",
+    missing_reason: null,
+    payload: {
+      complete: true,
+      fits: [
+        {
+          fit_id: "fit-7",
+          linewidth_hz: 2.5e7,
+          model: "lorentzian",
+          peak_frequency_hz: 9.75e9,
+          q_factor: 390,
+          source_peak_revision: "sha256:peak-7",
+          status: "ready",
+          uncertainty: {
+            amplitude: 0.015,
+            frequency_hz: 1.25e6,
+            kind: "covariance",
+            reason: null,
+          },
+        },
+      ],
+      schema_version: "fmr/resonance_fits.v1",
+      source_revision: "sha256:peaks-source",
+      status: "ready",
+      units: {
+        covariance: "fit_parameter_covariance",
+        frequency: "Hz",
+        linewidth: "Hz",
+        q_factor: "1",
+      },
+    },
+    resource_key: ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    schema_version: "fmr/resonance_fits.v1",
+    status: "ready",
+  };
+}
+
+function readyKittelFitResource() {
+  return {
+    artifact_path: "fmr/kittel_fit.v1.json",
+    missing_reason: null,
+    payload: {
+      complete: true,
+      conditioning: 12.5,
+      covariance: [
+        [0.04, 0],
+        [0, 0.01],
+      ],
+      model: "in_plane_kittel",
+      parameters: [
+        { name: "gamma", unit: "rad/(s*T)", value: 1.76e11 },
+        { name: "M_eff", unit: "A/m", value: 7.95e5 },
+      ],
+      points: [
+        {
+          bias_field_a_per_m: [79577.5, 0, 0],
+          relative_frequency_error: 0.002,
+          sample_id: "sample-4",
+          solved_frequency_hz: 1.01e10,
+          status: "ready",
+        },
+      ],
+      schema_version: "fmr/kittel_fit.v1",
+      source_revision: "sha256:field-sweep-source",
+      status: "ready",
+      units: {
+        bias_field: "A/m",
+        covariance: "parameter_covariance",
+        frequency: "Hz",
+      },
+      validation_status: "pass",
+    },
+    resource_key: ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+    schema_version: "fmr/kittel_fit.v1",
+    status: "ready",
+  };
+}
+
 function analysisFieldVectorResourceKey(fieldId: string): string {
   return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
 }
@@ -148,6 +241,8 @@ const EXPLORER_GENERATED_FREQUENCY_DOMAIN_NODE_KINDS = [
   "results.frequency_domain.fmr_modal_spectrum",
   "results.frequency_domain.fmr_response_sweep",
   "results.frequency_domain.fmr_peaks",
+  "results.frequency_domain.fmr_resonance_fits",
+  "results.frequency_domain.fmr_kittel_fit",
   "results.frequency_domain.dispersion",
   "results.frequency_domain.response_map",
   "results.frequency_domain.comparison",
@@ -439,6 +534,14 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     },
     revision: "spectrum:1",
     status: "ready",
+  }),
+  useFrequencyDomainFmrKittelFitResource: () => ({
+    ...emptyResource,
+    ...fmrFitResourcesFixture.kittel,
+  }),
+  useFrequencyDomainFmrResonanceFitsResource: () => ({
+    ...emptyResource,
+    ...fmrFitResourcesFixture.resonance,
   }),
   useFrequencyDomainManifestResource: () => ({
     ...emptyResource,
@@ -871,6 +974,16 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 }));
 
 beforeEach(() => {
+  fmrFitResourcesFixture.kittel = {
+    data: readyKittelFitResource(),
+    revision: "kittel-resource:3",
+    status: "ready",
+  };
+  fmrFitResourcesFixture.resonance = {
+    data: readyResonanceFitsResource(),
+    revision: "resonance-resource:5",
+    status: "ready",
+  };
   eigenDiagnosticsFixture.payload = {
     basis_transport_policy: "tangent_frame_transport",
     floquet_tangent_frame_max_mismatch: 0,
@@ -2840,6 +2953,135 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Response Map");
   });
 
+  it("renders resonance fits from their published artifact with units, uncertainty, and revisions", () => {
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr_resonance_fits",
+      label: "Resonance Fits",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr:resonance-fits",
+      objectId: null,
+      ref: {
+        kind: "results.frequency_domain.fmr_resonance_fits",
+        nodeId: "results:frequency-domain:fmr:resonance-fits",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FmrResonanceFitsInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("FMR Resonance Fits");
+    expect(html).toContain('data-status="ready"');
+    expect(html).toContain("Published source revision");
+    expect(html).toContain("sha256:peaks-source");
+    expect(html).toContain("Resource revision");
+    expect(html).toContain("resonance-resource:5");
+    expect(html).toContain("Frequency unit");
+    expect(html).toContain("Hz");
+    expect(html).toContain("Linewidth unit");
+    expect(html).toContain("fit-7");
+    expect(html).toContain("9.75 GHz");
+    expect(html).toContain("25 MHz");
+    expect(html).toContain("covariance; frequency 1.25 MHz; amplitude 0.015");
+    expect(html).toContain("sha256:peak-7");
+    expect(html).not.toContain("Modal vs Driven");
+    expect(html).not.toContain("Eigenmodes resonance");
+  });
+
+  it("renders the Kittel fit as an independent artifact with parameter units and covariance", () => {
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr_kittel_fit",
+      label: "Kittel Fit",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr:kittel-fit",
+      objectId: null,
+      ref: {
+        kind: "results.frequency_domain.fmr_kittel_fit",
+        nodeId: "results:frequency-domain:fmr:kittel-fit",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FmrKittelFitInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("FMR Kittel Fit");
+    expect(html).toContain('data-status="ready"');
+    expect(html).toContain("sha256:field-sweep-source");
+    expect(html).toContain("kittel-resource:3");
+    expect(html).toContain("A/m");
+    expect(html).toContain("parameter_covariance; 2 x 2");
+    expect(html).toContain("gamma");
+    expect(html).toContain("rad/(s*T)");
+    expect(html).toContain("M_eff");
+    expect(html).toContain("sample-4");
+    expect(html).toContain("10.1 GHz");
+    expect(html).not.toContain("Modal vs Driven");
+    expect(html).not.toContain("Driven peak");
+  });
+
+  it("fails resonance-fit artifacts closed as missing, partial, or corrupt", () => {
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr_resonance_fits",
+      label: "Resonance Fits",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr:resonance-fits",
+      objectId: null,
+      ref: {
+        kind: "results.frequency_domain.fmr_resonance_fits",
+        nodeId: "results:frequency-domain:fmr:resonance-fits",
+        type: "frequency-domain",
+      },
+    };
+
+    fmrFitResourcesFixture.resonance = {
+      data: null,
+      revision: null,
+      status: "idle",
+    };
+    const missingHtml = renderToStaticMarkup(
+      <FmrResonanceFitsInspectorPanel selection={selection} />,
+    );
+    expect(missingHtml).toContain('data-status="missing"');
+    expect(missingHtml).toContain("Artifact state");
+    expect(missingHtml).not.toContain('data-status="ready"');
+
+    const partialResource = readyResonanceFitsResource();
+    partialResource.status = "partial";
+    partialResource.payload.complete = false;
+    partialResource.payload.status = "partial";
+    fmrFitResourcesFixture.resonance = {
+      data: partialResource,
+      revision: "resonance-resource:partial",
+      status: "ready",
+    };
+    const partialHtml = renderToStaticMarkup(
+      <FmrResonanceFitsInspectorPanel selection={selection} />,
+    );
+    expect(partialHtml).toContain('data-status="partial"');
+    expect(partialHtml).not.toContain('data-status="ready"');
+
+    fmrFitResourcesFixture.resonance = {
+      data: {
+        ...readyResonanceFitsResource(),
+        payload: null,
+        status: "corrupt",
+      },
+      revision: "resonance-resource:corrupt",
+      status: "ready",
+    };
+    const corruptHtml = renderToStaticMarkup(
+      <FmrResonanceFitsInspectorPanel selection={selection} />,
+    );
+    expect(corruptHtml).toContain('data-status="corrupt"');
+    expect(corruptHtml).toContain("Artifact payload is corrupt");
+    expect(corruptHtml).not.toContain('data-status="ready"');
+  });
+
   it("renders a dedicated FMR modal-vs-driven comparison surface", () => {
     const selection: Selection = {
       kind: "results.frequency_domain.comparison",
@@ -4592,6 +4834,24 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(source).not.toContain(
       'key={`${selectedEigenModeFieldId ?? "none"}:selected-mode-rate`}',
     );
+  });
+
+  it("keeps eigen payload wrappers explicit and selection identity raw-index based", () => {
+    const source = readFileSync(
+      resolve(__dirname, "FrequencyDomainEigenSection.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "readEigenSpectrumPayload(spectrum.data?.payload)",
+    );
+    expect(source).toContain(
+      "readEigenBranchesPayload(branches.data?.payload)",
+    );
+    expect(source).toContain("rawModeIndex: mode.rawModeIndex");
+    expect(source).not.toContain("rawModeIndex: mode.displayModeIndex");
+    expect(modePointKey({ rawModeIndex: 17, sampleIndex: 0 })).toBe("0:17");
+    expect(modePointKey({ rawModeIndex: 99, sampleIndex: 0 })).toBe("0:99");
   });
 
   it("renders dedicated diagnostic node detail for frequency-domain diagnostics", () => {

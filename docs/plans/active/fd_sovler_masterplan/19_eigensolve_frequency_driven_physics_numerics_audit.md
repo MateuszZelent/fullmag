@@ -31,8 +31,12 @@ runtime was actually rerun, which it was not.
 
 ## Capability matrix integration
 
-`docs/specs/capability-matrix-v0.md` and `.json` are consumed without editing.
-Parallel dynamic-solver remediation owns:
+`docs/specs/capability-matrix-v0.md` and `.json` are maintained as the
+product-facing projection of this audit. The current recovery update edited
+those projections to describe the implemented shared-domain CPU Schur and GPU
+PETSc/SLEPc paths while keeping their validation state unqualified. The
+readiness matrix remains the immutable status authority. Parallel
+dynamic-solver remediation owns:
 
 - correcting any stale heading or downstream copy that calls the seven
   product-facing statuses a "four-state status vocabulary";
@@ -45,14 +49,19 @@ Parallel dynamic-solver remediation owns:
   coarse family gates that may coexist with narrow executable readiness cells
   exposed through `frequency_domain_capabilities.v1`.
 
-This task intentionally does not edit the capability matrix to avoid
-overwriting parallel work.
+Any future capability-matrix change must preserve the same separation between
+source-visible implementation, executable scope, runtime verification and
+production qualification.
 
 ## Finding register
 
 | ID | Severity | Affected scope | Finding | Required disposition | Documentation state | Code state | Verification state | Evidence paths |
 |---|---|---|---|---|---|---|---|---|
-| F-01 | BLOCKER | K0-3 CPU Poisson-airbox modal, Kittel demag, GPU promotion | PA-E4b/topology-shaped Kittel payload is not real shared-domain FEM Poisson-airbox assembly. | Keep synthetic/topology-shaped payload as algebra evidence only; require `production_periodic_airbox_claim=false`; build separate `mfem_weak_form_shared_domain` assembly with Kittel answer removed from operator inputs. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`; `crates/fullmag-runner/src/fem_eigen.rs`; `25_frequency_domain_readiness_matrix.json` |
+| F-01 | BLOCKER | K0-3 CPU Poisson-airbox modal, Kittel demag, GPU promotion | PA-E4b/topology-shaped Kittel payload is not real shared-domain FEM Poisson-airbox assembly. | Keep synthetic/topology-shaped payload as algebra evidence only; require `production_periodic_airbox_claim=false`; build separate `mfem_weak_form_shared_domain` assembly with Kittel answer removed from operator inputs. The synthetic lane is identified explicitly as `assembly_kind = synthetic_algebraic_oracle`. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`; `crates/fullmag-runner/src/fem_eigen.rs`; `25_frequency_domain_readiness_matrix.json` |
+
+The field `production_periodic_airbox_claim` może mieć wartość `true` dopiero po
+wykazaniu rzeczywistej wspólnej domeny FEM, certyfikatu par okresowych, konwergencji
+siatkowej oraz niezależnej walidacji CPU/GPU.
 | F-02 | BLOCKER | K0 Poisson-airbox modal BC/gauge | Mean-zero gauge is invalid for Robin/Dirichlet coercive scalar blocks. | Enforce boundary/gauge tuple: Robin/Dirichlet use `gauge_policy=none`; pure Neumann uses mean-zero; keep unsupported combinations fail-closed until implemented. | resolved_in_docs | implemented | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
 | F-03 | BLOCKER | CPU SLEPc modal selected spectrum | `spectral_transform.cpp` converts the requested Hz target to a positive real `omega`; `slepc_modal_eigen.cpp` and `poisson_airbox_modal_eigen.cpp` then use `EPS_TARGET_MAGNITUDE` with that real target. This is not the canonical `sigma=i*omega` transform or a proven real-split equivalent. | Implement one explicit target realization: complex PETSc, real-split transformed pencil, or a rigorously derived real Hamiltonian/gyrotropic pencil; artifact must publish sigma components and scalar mode. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/spectral_transform.cpp`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
 | F-04 | BLOCKER | Modal descriptor residual certification | Full residual certification previously could hide bad reconstruction by taking the smaller SLEPc residual. | Certify only the reconstructed blockwise original-unscaled descriptor residual; publish SLEPc, scaled and transformed residuals separately as diagnostics; use `eps_full_original_unscaled=max(eps_q,eps_phi,eps_gauge)`. | resolved_in_docs | implemented | not_run | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp`; `docs/plans/active/fd_sovler_masterplan/11_runtime_telemetry_performance.md` |
@@ -73,7 +82,7 @@ overwriting parallel work.
 | F-19 | MEDIUM_HIGH | Periodic tangent transport | `mesh_symmetry_certificate.cpp` computes and stores pairwise `T_dst^T T_src` blocks, but no single canonical constraint consumes them consistently in assembly, RHS projection, output lift and residual reconstruction; gauge-rotation/nonuniform-frame tests are also absent. | Add arbitrary tangent-basis rotation invariance, nonuniform texture projection and periodic seam transfer tests, then use one phase-plus-frame constraint in every Floquet consumer before broad promotion. | resolved_in_docs | source_visible | not_run | `docs/physics/0828-fem-frequency-domain-floquet-demag.md`; `docs/plans/active/fd_sovler_masterplan/23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md`; `backends/fem/include/frequency_domain/mesh_symmetry_certificate.hpp`; `backends/fem/src/frequency_domain/mesh_symmetry_certificate.cpp` |
 | F-20 | BLOCKER | GPU modal production claims | GPU macrospin dense proof is not a scalable eigensolver. | Keep the current `gpu_dense_k0_macrospin_modal_eigen` lane scoped to the double-precision no-demag macrospin cell; do not publish broad `gpu_device_resident_modal_eigensolver=true` from one-shot dense paths. | resolved_in_docs | implemented | not_run | `docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md`; `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu`; `.fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts/eigen/diagnostics/solver.v1.json` |
 | F-21 | MEDIUM | GPU descriptor apply residency | One-shot GPU descriptor apply allocates/transfers per call and is not a persistent device context. The current device-Krylov transfer diagnostics expose counts but not the Chapter 11 byte/allocation/workspace-reuse telemetry, so zero transfer counts alone cannot certify persistence. | Build persistent modal context before using GPU apply inside Arnoldi/Krylov; bind `hot_loop_h2d_bytes`, `hot_loop_d2h_bytes`, host/device allocated bytes, allocation count and workspace reuse/rebuild counters into the engine result. Production requires all hot-loop transfer/allocation counters and rebuild count to be zero. | resolved_in_docs | open | not_run | `docs/plans/active/fd_sovler_masterplan/11_runtime_telemetry_performance.md`; `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu`; `backends/fem/include/frequency_domain/gpu_device_krylov.hpp` |
-| F-22 | MEDIUM | GPU callback/readiness levels | GPU operator callbacks, shifted apply probes, the current dense macrospin eigensolve and the target dense-contract eigensolver are different readiness levels and must not be collapsed. | Keep labels separate: current emitted GPU modal validation lane `gpu_dense_k0_macrospin_modal_eigen`; target/source-visible `gpu_dense_contract_eigensolver` until migration; `gpu_operator_host_krylov`; `gpu_device_krylov`; `gpu_modal_device_krylov`. Do not call the target dense-contract label emitted until artifacts publish it. | resolved_in_docs | source_visible | not_run | `docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md`; `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_matrix.json`; `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu`; `.fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts/eigen/diagnostics/solver.v1.json` |
+| F-22 | MEDIUM | GPU callback/readiness levels | GPU operator callbacks, shifted apply probes, the no-demag macrospin validation lane and the shared-domain PETSc/SLEPc CUDA lane are different readiness levels and must not be collapsed. | Keep labels separate: `gpu_dense_k0_macrospin_modal_eigen` for the no-demag macrospin validation scope; `gpu_dense_modal_validation` for the bounded dense oracle; `k0_poisson_airbox_gpu_petsc_slepc` for the source-visible shared-domain production adapter; and `gpu_modal_device_krylov` for the planner capability token. Do not promote any label until the exact scope has fresh managed evidence. | resolved_in_docs | source_visible | not_run | `docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md`; `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_matrix.json`; `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp`; `backends/fem/gpu/cuda/frequency_domain/modal_krylov.cu` |
 
 ## Remediation ownership
 
@@ -137,3 +146,38 @@ Accordingly all finding rows whose `verification_state` is `not_run` remain
 not runtime solver proof; source-visible artifacts are not production
 qualification; and GPU compilation without an executed device is not GPU
 validation.
+
+## Current recovery snapshot (2026-08-05; supersedes stale implementation prose)
+
+The active recovery branch is `codex/eigensolve-k0-demag` at
+`138d95325cee241fae1b6ffa44d3d7c883242cbf`, with dirty source snapshot
+`8d6c8a993d9e6361f85430882d570233c6712c40489ab145d8888ba42742fbb5`.
+The managed runtime export is currently blocked by a held lock owned by a
+stale export process. The current GPU pointer is stale and the matching
+PETSc/SLEPc bundle has only been used for syntax/build diagnostics. There is
+therefore no fresh current-HEAD CPU solve, GPU-device solve, convergence
+matrix, parity/performance record, browser mode-field proof, or release DOD
+claim.
+
+The code state has nevertheless advanced beyond the historical rows above:
+
+- CPU K0 shared-domain execution is wired through the real-split Schur
+  MatShell route with persistent Poisson factorization, original-unscaled
+  block residual reconstruction, cancellation/progress callbacks, and
+  positive-frequency filtering. Synthetic algebraic fixtures remain a
+  separate oracle.
+- GPU K0 shared-domain execution is wired through the PETSc/SLEPc CUDA
+  adapter with device-resident operator application and residual workspace,
+  persistent context telemetry, and explicit no-fallback diagnostics. The
+  implementation is source-visible, not production-qualified.
+- The artifact/performance verifiers now require hash-bound native diagnostics
+  and managed-runtime telemetry for every performance run; hand-authored or
+  summary-only timing cannot pass.
+- FDM remains an explicit negative capability for modal Eigenmodes and
+  FrequencyResponse. FDM time-domain/FFT response is a separate product path,
+  not a modal eigensolve implementation.
+
+The readiness matrix validation state therefore remains unchanged: CPU/GPU
+shared-domain K0 cells are source-visible but not promoted until fresh managed evidence satisfies the mesh/airbox
+convergence, CPU/GPU parity, device-residency, mode-quality, browser, and
+release gates.

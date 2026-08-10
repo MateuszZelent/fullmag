@@ -5023,4 +5023,34 @@ describe("ControlRoomApi", () => {
       },
     ]);
   });
+
+  it("loads dedicated frequency-domain field-sweep and FMR artifact resources", async () => {
+    const observedUrls: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrls.push(String(url));
+        return jsonResponse({
+          artifact_path: "frequency-domain/artifact.json",
+          missing_reason: null,
+          payload: { schema_version: "frequency_domain_artifact.v1" },
+          resource_key: String(url).replace("http://127.0.0.1:8765", ""),
+          schema_version: "frequency_domain_json_artifact.v1",
+          status: "ready",
+        });
+      },
+    });
+
+    await api.analysis.frequencyDomain.eigenFieldSweep();
+    await api.analysis.frequencyDomain.fmrPeaks();
+    await api.analysis.frequencyDomain.fmrResonanceFits();
+    await api.analysis.frequencyDomain.fmrKittelFit();
+
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+    ]);
+  });
 });

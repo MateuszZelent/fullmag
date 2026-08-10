@@ -17,24 +17,14 @@ import {
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainManifestResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import {
+  readEigenBranchesPayload,
+  readEigenDispersionPayload,
+  readEigenSpectrumPayload,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 type SpectrumResource = ReturnType<typeof useFrequencyDomainEigenSpectrumResource>;
 type BranchesResource = ReturnType<typeof useFrequencyDomainEigenBranchesResource>;
-type SpectrumMode = {
-  damping_factor?: number | null;
-  frequency_hz?: number | null;
-  mode_index: number;
-  sample_index?: number;
-};
-type EigenBranch = {
-  branch_id: string;
-  max_frequency_hz?: number | null;
-  min_frequency_hz?: number | null;
-  modes?: readonly unknown[];
-};
-type SpectrumData = { modes?: SpectrumMode[]; status?: string };
-type BranchesData = { branches?: EigenBranch[] };
-type DispersionData = { k_path?: readonly unknown[]; k_points?: readonly unknown[] };
 
 interface FrequencyDomainEigenSectionProps {
   selection: InspectorPanelProps["selection"];
@@ -57,9 +47,11 @@ export function FrequencyDomainEigenSection({
 }: FrequencyDomainEigenSectionProps) {
   const kind = selection.kind ?? "";
   const { selectedEigenBranchId, selectedSpectrumModeKey } = inspectorState;
-  const spectrumData = spectrum.data as unknown as SpectrumData | null;
-  const branchesData = branches.data as unknown as BranchesData | null;
-  const dispersionData = dispersion.data as unknown as DispersionData | null;
+  const spectrumData = readEigenSpectrumPayload(spectrum.data?.payload);
+  const branchesData = readEigenBranchesPayload(branches.data?.payload);
+  const dispersionData = readEigenDispersionPayload(dispersion.data);
+  const modeFieldCount =
+    spectrumData?.modes.filter((mode) => Boolean(mode.modeFieldId)).length ?? 0;
 
   const showModalSolver = isExactFrequencyDomainKind(
     kind,
@@ -99,8 +91,16 @@ export function FrequencyDomainEigenSection({
     "results.frequency_domain.dispersion",
   );
 
+  const showSpectrumTable = isExactFrequencyDomainKind(
+    kind,
+    "results.eigen.spectrum",
+    "resources.analysis.eigen.spectrum",
+    "results.frequency_domain.fmr_modal_spectrum",
+    "results.frequency_domain.fmr",
+  );
+
   const selectedEigenBranch = branchesData?.branches?.find(
-    (branch: EigenBranch) => branch.branch_id === selectedEigenBranchId,
+    (branch) => branch.branchId === selectedEigenBranchId,
   );
 
   return (
@@ -152,7 +152,11 @@ export function FrequencyDomainEigenSection({
           />
           <FieldRow
             label="3D mode plotting"
-            value="waiting for mode-field artifacts"
+            value={
+              modeFieldCount > 0
+                ? `${modeFieldCount} mode-field payload(s) ready`
+                : "waiting for mode-field artifacts"
+            }
           />
         </InspectorGroup>
       ) : null}
@@ -163,7 +167,7 @@ export function FrequencyDomainEigenSection({
             label="Reciprocal path"
             value={
               dispersionData
-                ? String(dispersionData.k_path?.length ?? 0)
+                ? String(dispersionData.kPath.length)
                 : "not loaded"
             }
           />
@@ -171,7 +175,7 @@ export function FrequencyDomainEigenSection({
             label="k-point count"
             value={
               dispersionData
-                ? String(dispersionData.k_points?.length ?? 0)
+                ? String(dispersionData.kPoints.length)
                 : "not loaded"
             }
           />
@@ -187,9 +191,9 @@ export function FrequencyDomainEigenSection({
                 }
               >
                 <option value="">(all branches)</option>
-                {branchesData?.branches?.map((branch: EigenBranch) => (
-                  <option key={branch.branch_id} value={branch.branch_id}>
-                    {branch.branch_id} ({branch.modes?.length ?? 0} modes)
+                {branchesData?.branches.map((branch) => (
+                  <option key={branch.branchId} value={branch.branchId}>
+                    {branch.branchId} ({branch.modes.length} modes)
                   </option>
                 ))}
               </select>
@@ -197,18 +201,18 @@ export function FrequencyDomainEigenSection({
           />
           {selectedEigenBranch ? (
             <>
-              <FieldRow label="Branch modes" value={String(selectedEigenBranch.modes?.length ?? 0)} />
+              <FieldRow label="Branch modes" value={String(selectedEigenBranch.modes.length)} />
               <FieldRow
                 label="Branch frequency"
-                value={`${formatScalar(selectedEigenBranch.min_frequency_hz, " Hz")} to ${formatScalar(selectedEigenBranch.max_frequency_hz, " Hz")}`}
+                value={`${formatScalar(selectedEigenBranch.minFrequencyHz, " Hz")} to ${formatScalar(selectedEigenBranch.maxFrequencyHz, " Hz")}`}
               />
             </>
           ) : null}
         </InspectorGroup>
       ) : null}
 
-      {spectrumData?.modes && spectrumData.modes.length > 0 ? (
-        <InspectorGroup title="Modal Spectrum" badge={spectrumData.status ?? spectrum.status}>
+      {showSpectrumTable && spectrumData?.modes && spectrumData.modes.length > 0 ? (
+        <InspectorGroup title="Modal Spectrum" badge={spectrum.status}>
           <div className="fm-frequency-domain-table-wrap">
             <table className="fm-frequency-domain-table">
               <thead>
@@ -220,17 +224,17 @@ export function FrequencyDomainEigenSection({
                 </tr>
               </thead>
               <tbody>
-                {spectrumData.modes.map((mode: SpectrumMode) => {
+                {spectrumData.modes.map((mode) => {
                   const key = modePointKey({
-                    rawModeIndex: mode.mode_index,
-                    sampleIndex: mode.sample_index ?? 0,
+                    rawModeIndex: mode.rawModeIndex,
+                    sampleIndex: mode.sampleIndex,
                   });
                   const isSelected = key === selectedSpectrumModeKey;
                   return (
                     <tr key={key} data-selected={isSelected ? "true" : undefined}>
-                      <td>{mode.mode_index}</td>
-                      <td>{formatScalar(mode.frequency_hz, " Hz")}</td>
-                      <td>{formatScalar(mode.damping_factor)}</td>
+                      <td>{mode.displayModeIndex}</td>
+                      <td>{formatScalar(mode.frequencyHz, " Hz")}</td>
+                      <td>{formatScalar(mode.dampingRateHz)}</td>
                       <td className="fm-frequency-domain-table__actions">
                         <Button
                           aria-pressed={isSelected}

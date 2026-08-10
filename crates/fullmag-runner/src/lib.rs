@@ -5321,6 +5321,7 @@ mod tests {
             provenance: fullmag_ir::ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
             },
         };
         let unique = SystemTime::now()

@@ -108,6 +108,10 @@ export function VisualizationDebugPanelView({
     ageMs > STALE_SNAPSHOT_AGE_MS ||
     allIssues(model).some((issue) => issue.code.includes("stale"))
   );
+  // A stale snapshot cannot support a ready health claim. Keep explicit
+  // degraded/blocked states intact, but fail closed from ready to unknown
+  // until fresh evidence is published.
+  const displayDisposition = stale && disposition === "ready" ? "unknown" : disposition;
   const scanning = observations.some(({ carrier }) => carrier.scanState === "scanning");
   const noFieldRequested = observations.length > 0 && observations.every(
     ({ carrier }) => !carrier.request.resourceKey && !carrier.payload,
@@ -119,7 +123,7 @@ export function VisualizationDebugPanelView({
 
   return (
     <div className="fm-visualization-debug-panel" data-state={model.state}>
-      <InspectorGroup title="Health" badge={disposition}>
+      <InspectorGroup title="Health" badge={displayDisposition}>
         {emptyMessage ? (
           <div className="fm-visualization-debug-state" role="status">
             <strong>{emptyMessage.title}</strong>
@@ -128,11 +132,11 @@ export function VisualizationDebugPanelView({
         ) : (
           <div
             className="fm-visualization-debug-health"
-            data-disposition={disposition}
+            data-disposition={displayDisposition}
             role="status"
           >
-            <strong>{disposition}</strong>
-            <span>{healthDiagnosis(disposition)}</span>
+            <strong>{displayDisposition}</strong>
+            <span>{healthDiagnosis(displayDisposition)}</span>
             <span>Snapshot age {formatDuration(ageMs)}</span>
           </div>
         )}

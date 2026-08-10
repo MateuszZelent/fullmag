@@ -1735,8 +1735,10 @@ class MeshScaffoldTests(unittest.TestCase):
             def getPeriodicNodes(self, dim: int, slave_tag: int):
                 assert dim == 2
                 data = {
-                    18: (14, [180, 181], [140, 141], []),
-                    20: (16, [200, 201], [160, 161], []),
+                    # Deliberately return the pairs out of node order.  The
+                    # Gmsh API does not promise an ordering across processes.
+                    18: (14, [181, 180], [141, 140], []),
+                    20: (16, [201, 200], [161, 160], []),
                 }
                 return data[slave_tag]
 

@@ -25,6 +25,26 @@
 - Native FEM builds and runtime proof start and finish with repository container-backed `just` recipes.
 - Capability promotion occurs only after DOD-01 through DOD-14 pass for the exact CPU or GPU scope.
 
+## Current recovery status (2026-08-05)
+
+The implementation portion of this plan is substantially present in the
+recovery worktree: the Python/ProblemIR/planner contracts, ABI v3, shared-domain
+CPU Schur route, GPU PETSc/SLEPc CUDA adapter, runner cancellation/progress,
+artifacts-v2 sidecars, performance/evidence verifiers, Spectrum/mode-field UI,
+and unified-viewport resource tests are in source. Focused Rust/Python tests,
+the masterplan pack check, Control Room typecheck, and 134 focused UI tests
+pass in the current worktree.
+
+The unchecked boxes below remain an acceptance checklist, not a claim that
+the feature is production-qualified. A fresh managed runtime export is still
+blocked by `.fullmag/runtimes/.fem-gpu-host.export.lock`; the current runtime
+pointer is stale for the dirty source snapshot. Until that lock is resolved,
+the fresh CPU/GPU solve, mesh/airbox convergence, parity/performance,
+executed-device residency, browser-native mode-field proof, scope catalog and
+DOD-01..DOD-14 release record remain open. The plan is FEM-only: FDM has
+time-domain/FFT spectrum analysis but no modal Eigenmodes/FrequencyResponse
+eigensolve lane under this scope.
+
 ## Production Deliverables
 
 1. Canonical Python/UI/ProblemIR round-trip for K0 periodic-airbox modal demag.
@@ -388,3 +408,36 @@ python3 scripts/build_fd_solver_masterplan_full_pack.py --check
 ```
 
 Completion is prohibited unless every command succeeds on fresh evidence, the browser smoke proves Spectrum-to-mode-to-viewport behavior, and `frequency_domain_production_dod.v1` records passing evidence for all DOD-01 through DOD-14 for both exact CPU and exact GPU scopes.
+
+## Recovery implementation status (2026-08-05)
+
+The source and control-room contracts are now present for the bounded FEM K0
+shared-domain dynamic-demag lane. The production evidence boundary is kept
+explicit: existing artifacts and source-visible PETSc/SLEPc CUDA code are not
+fresh qualification for the current dirty source snapshot, and the FDM
+planner still rejects native `Eigenmodes` and `FrequencyResponse` studies.
+FDM can continue to produce a time-domain FFT spectrum; that is not an FDM
+modal eigensolver or a mode-field result.
+
+The performance gate now has a real producer, not only a verifier:
+`scripts/capture_fem_eigen_k0_periodic_airbox_performance.py`. It executes an
+explicit managed `just` command once per configured DOF case, measures wall
+time and child peak RSS itself, requires each command to emit hash-addressable
+native diagnostics with hot-loop counters, packages cancellation and Compute
+Sanitizer artifacts, and invokes the fail-closed
+`verify_fem_eigen_k0_periodic_airbox_performance.py` before writing the final
+proof. It refuses missing measurements, failed commands, stale output files,
+unsupported paths, non-managed commands, or inferred residency. The managed
+per-case producer is
+`run-fem-frequency-domain-eigen-k0-poisson-airbox-performance-case`; the
+orchestrating capture recipe is
+`capture-fem-frequency-domain-eigen-k0-poisson-airbox-performance`, which first
+ensures the managed runtime and then invokes the producer for each size,
+cancellation, and Compute Sanitizer phase.
+
+This producer closes the evidence-generation gap but does not manufacture the
+missing qualification. The release gate remains blocked until the managed
+runtime export lock is cleared and a fresh clean/identified runtime supplies
+CPU/GPU convergence, parity, three-size scaling, cancellation, Sanitizer, DOD,
+and browser Spectrum-to-mode-to-viewport evidence for the exact source
+snapshot.

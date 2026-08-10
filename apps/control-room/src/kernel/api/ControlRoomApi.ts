@@ -3,8 +3,12 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
@@ -768,6 +772,26 @@ export class ControlRoomApi {
       ) => this.analysis.eigen.eigenModeFieldMeta(sampleIndex, modeIndex, options),
       eigenSpectrumV2: (options?: RequestOptions) =>
         this.analysis.eigen.eigenSpectrumV2(options),
+      eigenFieldSweep: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+          options,
+        ),
+      fmrKittelFit: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+          options,
+        ),
+      fmrPeaks: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+          options,
+        ),
+      fmrResonanceFits: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+          options,
+        ),
       manifestV1: (options?: RequestOptions) =>
         this.requestJson<FrequencyDomainManifestResource>(
           ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,

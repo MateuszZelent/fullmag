@@ -7,6 +7,13 @@ import {
   serializeCanonicalFieldVectorResourceKey,
 } from "../api/fieldQueryIdentity";
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+} from "../api/apiPaths";
+import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyDomainResourceKeys";
+import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
@@ -69,6 +76,79 @@ function dependentRevision(resourceKey: string, revision: string | number): stri
 }
 
 describe("RealtimeInvalidationBridge", () => {
+  it.each([
+    [
+      "field sweep",
+      ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+    ],
+    ["FMR peaks", ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH],
+    [
+      "FMR resonance fits",
+      ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    ],
+    ["FMR Kittel fit", ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH],
+    [
+      "mode metadata",
+      frequencyDomainModeFieldMetaResourceKey(3, 7),
+    ],
+  ])(
+    "invalidates only the named frequency-domain %s resource by content digest",
+    (_label, resourceKey) => {
+      const bus = new EventBus<KernelEventMap>();
+      const resources = new ResourceInvalidationController(bus);
+      const bridge = new RealtimeInvalidationBridge(resources);
+      const siblingKeys = [
+        ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+        frequencyDomainModeFieldMetaResourceKey(3, 7),
+      ];
+      for (const key of siblingKeys) resources.subscribe(key, () => {});
+
+      const digest = "sha256:frequency-domain-test";
+      expect(
+        bridge.handleEvent({
+          payload: {
+            changes: [
+              {
+                content_digest: digest,
+                resource_key: resourceKey,
+              },
+            ],
+          },
+          type: "resource.batch_changed",
+        }),
+      ).toBe(true);
+
+      expect(resources.getRevision(resourceKey)).toBe(digest);
+      for (const siblingKey of siblingKeys) {
+        if (siblingKey !== resourceKey) {
+          expect(resources.getRevision(siblingKey)).toBeNull();
+        }
+      }
+    },
+  );
+
+  it("normalizes a direct artifact update to the canonical FMR resource key", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const digest = "sha256:fmr-peaks-update";
+
+    expect(
+      bridge.handleEvent({
+        artifact_path: "fmr/peaks.v1.json",
+        content_digest: digest,
+        type: "resource.updated",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH)).toBe(
+      digest,
+    );
+  });
+
   it("invalidates preparation from the exact backend revision-only change", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

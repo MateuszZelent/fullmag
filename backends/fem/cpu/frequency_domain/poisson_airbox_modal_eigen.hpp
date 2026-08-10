@@ -3,12 +3,13 @@
 #include "frequency_domain/modal_eigen_request.hpp"
 
 #include <complex>
+#include <cstdio>
 #include <cstdint>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 2;
+constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 3;
 
 struct PoissonAirboxEigenBlockProblem {
     std::uint32_t abi_version = kPoissonAirboxEigenBlockProblemAbiVersion;
@@ -27,6 +28,9 @@ struct PoissonAirboxEigenBlockProblem {
     std::uint64_t phi_mean_weights_count = 0;
 
     double target_frequency_hz = 0.0;
+    const char *target_kind = "nearest_frequency";
+    double frequency_min_hz = 0.0;
+    double frequency_max_hz = 0.0;
     double expected_reference_frequency_hz = 0.0;
     double residual_tolerance = 1.0e-10;
     std::uint32_t requested_mode_count = 1;
@@ -52,7 +56,79 @@ struct PoissonAirboxEigenBlockProblem {
     bool symmetric_mesh_certificate_required = true;
     bool periodic_mesh_certificate_required = true;
     bool real_fem_blocks = true;
+    // Direct C++ fixtures may provide shared-domain-shaped algebraic blocks
+    // for validation.  Only the API path that consumed a real shared-domain
+    // payload may describe the resulting lane as production-intended.
+    bool production_shared_domain = false;
+    // Synthetic algebraic fixtures must opt into this adapter explicitly.  It
+    // is never accepted as production provenance and may use bounded
+    // materialized validation operators.
+    bool validation_only_adapter = false;
+
+    // Runtime control callbacks are appended to preserve the algebraic block
+    // layout.  Production CPU/GPU lanes poll cancellation from PETSc KSP
+    // iterations and publish the same progress JSON as the public ABI.
+    void *cancel_user_data = nullptr;
+    int (*cancel_requested)(void *user_data) = nullptr;
+    void *progress_user_data = nullptr;
+    void (*progress_callback)(void *user_data, const char *progress_json) = nullptr;
 };
+
+inline bool poisson_airbox_modal_cancel_requested(
+    const PoissonAirboxEigenBlockProblem &problem) noexcept
+{
+    return problem.cancel_requested != nullptr &&
+        problem.cancel_requested(problem.cancel_user_data) != 0;
+}
+
+inline void poisson_airbox_modal_emit_progress(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const char *solver_phase,
+    const char *execution_lane,
+    std::uint32_t outer_iteration,
+    std::uint32_t candidate_mode_count,
+    std::uint32_t accepted_mode_count,
+    std::uint32_t linear_iteration,
+    double residual_relative,
+    const char *stop_reason = nullptr) noexcept
+{
+    if (problem.progress_callback == nullptr) {
+        return;
+    }
+    char progress_json[1024]{};
+    const int written = std::snprintf(
+        progress_json,
+        sizeof(progress_json),
+        "{\"schema_version\":\"fem_frequency_domain_progress.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"solver_phase\":\"%s\","
+        "\"execution_lane\":\"%s\","
+        "\"candidate_mode_count\":%u,"
+        "\"accepted_mode_count\":%u,"
+        "\"outer_iteration\":%u,"
+        "\"max_outer_iterations\":%u,"
+        "\"linear_iteration\":%u,"
+        "\"max_linear_iterations\":%u,"
+        "\"current_residual_relative_l2\":%.17g,"
+        "\"target_residual_relative_l2\":%.17g,"
+        "\"partial_artifacts_available\":false,"
+        "\"latest_artifact_manifest_path\":\"\","
+        "\"stop_reason\":%s}",
+        solver_phase != nullptr ? solver_phase : "solving_shift_invert",
+        execution_lane != nullptr ? execution_lane : "production_cpu",
+        candidate_mode_count,
+        accepted_mode_count,
+        outer_iteration,
+        problem.max_outer_iterations,
+        linear_iteration,
+        problem.max_linear_iterations,
+        residual_relative,
+        problem.residual_tolerance,
+        stop_reason != nullptr ? "\"cancel_requested\"" : "null");
+    if (written > 0 && static_cast<std::size_t>(written) < sizeof(progress_json)) {
+        problem.progress_callback(problem.progress_user_data, progress_json);
+    }
+}
 
 struct PoissonAirboxModalEigenResult {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
@@ -65,6 +141,11 @@ struct PoissonAirboxModalEigenResult {
     std::uint64_t airbox_pair_count = 0;
 
     std::uint32_t converged_eigenpair_count = 0;
+    std::uint32_t finite_real_eigenpair_count = 0;
+    std::uint32_t positive_frequency_eigenpair_count = 0;
+    std::uint32_t action_residual_evaluated_count = 0;
+    std::uint32_t reconstructed_mode_count = 0;
+    std::uint32_t full_residual_accepted_count = 0;
     std::uint32_t accepted_mode_count = 0;
     std::uint32_t selected_eigenpair_index = 0;
     std::uint32_t outer_iterations = 0;
@@ -81,10 +162,67 @@ struct PoissonAirboxModalEigenResult {
     double magnetic_block_backward_error = 0.0;
     double poisson_block_backward_error = 0.0;
     double gauge_constraint_backward_error = 0.0;
+    double magnetic_residual_l2 = 0.0;
+    double poisson_residual_l2 = 0.0;
+    double gauge_residual_abs = 0.0;
     double poisson_constraint_relative_residual = 0.0;
     double gauge_mean_abs = 0.0;
     double expected_reference_frequency_hz = 0.0;
     double relative_reference_frequency_error = 0.0;
+
+    // The Schur operator remains a MatShell.  This records only the bounded
+    // shifted-system preconditioner selected for the outer SLEPc transform.
+    char shifted_preconditioner_kind[64]{};
+    // Exact provenance for every shift executed by a frequency-window solve.
+    // Kept separate so the common diagnostics writer can embed it verbatim.
+    char executed_subwindows_json[16384]{};
+    // Stable solver/window outcome fields.  These are native diagnostics, not
+    // part of the public C ABI request/result layout.
+    char slepc_converged_reason[64]{};
+    int slepc_converged_reason_code = 0;
+    char stop_reason[96]{};
+    std::uint32_t window_subwindow_count = 0;
+    std::uint32_t window_completed_subwindow_count = 0;
+    std::uint32_t window_failed_subwindow_count = 0;
+    std::uint32_t window_empty_subwindow_count = 0;
+    char window_certificate_json[8192]{};
+    // The GPU Schur/KSP context is cached by an exact content signature of
+    // the coupled CSR blocks and numerical tolerances.  This distinguishes a
+    // real reuse from the legacy per-call allocation path.
+    bool operator_context_reused = false;
+    char operator_context_signature[32]{};
+
+    // Logical host/device transfer counts for the modal solve.  These are
+    // measured at the native block/vector boundaries and are copied into the
+    // diagnostics resource; they are not estimates supplied by the runner.
+    std::uint64_t setup_h2d_transfer_count = 0;
+    std::uint64_t final_d2h_transfer_count = 0;
+    // The persistent PETSc/SLEPc adapter allocates its operator, Krylov,
+    // Poisson, and residual workspaces before entering the repeated modal
+    // action loop.  This counter is the explicit native-loop allocation
+    // telemetry; it must remain zero for the production device lane.
+    std::uint64_t hot_loop_allocations = 0;
+    std::uint64_t hot_loop_h2d_bytes = 0;
+    std::uint64_t hot_loop_d2h_bytes = 0;
+
+    // GPU PETSc/SLEPc execution telemetry.  These fields are populated only
+    // by the GPU adapters; zero/false means that the corresponding native
+    // measurement was not available, not that the operation did not occur.
+    std::uint64_t operator_apply_count = 0;
+    std::uint64_t poisson_solve_count = 0;
+    std::uint64_t poisson_iteration_count = 0;
+    std::uint64_t shift_linear_iteration_count = 0;
+    std::uint32_t eps_monitor_iteration_count = 0;
+    std::int32_t eps_converged_reason = 0;
+    bool eps_reason_available = false;
+    bool eps_cancellation_observed = false;
+    bool persistent_context_verified = false;
+    bool device_residency_verified = false;
+    bool hot_loop_telemetry_measured = false;
+    bool window_complete = false;
+    bool window_failed_subwindow = false;
+    bool window_cancelled = false;
+    char eps_stop_reason[64]{};
 
     bool gauge_augmented = false;
     bool q_layout_interleaved_node_component = false;
@@ -107,12 +245,15 @@ struct PoissonAirboxModalEigenResult {
         double magnetic_block_backward_error = 0.0;
         double poisson_block_backward_error = 0.0;
         double gauge_constraint_backward_error = 0.0;
+        double magnetic_residual_l2 = 0.0;
+        double poisson_residual_l2 = 0.0;
+        double gauge_residual_abs = 0.0;
         double gauge_mean_abs = 0.0;
         std::vector<std::complex<double>> full_vector{};
     };
     std::vector<AcceptedMode> accepted_modes{};
 
-    char diagnostics_json[8192]{};
+    char diagnostics_json[32768]{};
 };
 
 struct PoissonAirboxModalResidualMetrics {
@@ -123,6 +264,11 @@ struct PoissonAirboxModalResidualMetrics {
     double poisson_block_backward_error = 0.0;
     double gauge_constraint_backward_error = 0.0;
     double gauge_mean_abs = 0.0;
+    // Original, unscaled block norms retained for scientific diagnostics. The
+    // relative fields above are the acceptance quantities.
+    double magnetic_residual_l2 = 0.0;
+    double poisson_residual_l2 = 0.0;
+    double gauge_residual_abs = 0.0;
 };
 
 struct PoissonAirboxModalShiftInvertActionResult {

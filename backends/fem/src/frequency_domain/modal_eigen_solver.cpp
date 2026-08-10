@@ -125,6 +125,32 @@ std::string with_operator_diagnostics(
 
 std::string format_double(double value) noexcept;
 
+std::uint64_t required_modal_mode_vector_count(
+    const PoissonAirboxModalEigenResult &result) noexcept
+{
+    const std::uint64_t max_count = std::numeric_limits<std::uint64_t>::max();
+    if (result.q_dof_count > max_count - result.phi_dof_count) {
+        return max_count;
+    }
+    const std::uint64_t base_count = result.q_dof_count + result.phi_dof_count;
+    if (result.gauge_augmented && base_count == max_count) {
+        return max_count;
+    }
+    return base_count + (result.gauge_augmented ? 1u : 0u);
+}
+
+bool accepted_modal_mode_vectors_valid(
+    const PoissonAirboxModalEigenResult &result) noexcept
+{
+    const std::uint64_t required_count = required_modal_mode_vector_count(result);
+    for (const PoissonAirboxModalEigenResult::AcceptedMode &mode : result.accepted_modes) {
+        if (mode.full_vector.size() < required_count) {
+            return false;
+        }
+    }
+    return true;
+}
+
 DynamicPencilMetadata magnetic_pencil_metadata(
     const ModalEigenRequest &request) noexcept
 {
@@ -210,7 +236,31 @@ FrequencyDomainContractResult validation_error_result(
         "\"study_product\":\"" +
         std::string(study_product != nullptr ? study_product : "") +
         "\",\"status\":\"validation_error\"}";
+    result.modal_execution.execution_target =
+        FULLMAG_FEM_MODAL_EXECUTION_VALIDATION;
+    result.modal_execution.scalar_representation =
+        static_cast<std::uint32_t>(ModalScalarRepresentation::complex_double);
+    result.modal_execution.spectral_transform_kind =
+        static_cast<std::uint32_t>(ModalSpectralTransformKind::auto_select);
+    result.modal_execution.fallback_state = ModalResolvedFallbackState::none;
+    result.modal_execution.engine_id = "validation_error";
+    result.modal_execution.fallback_reason = "none";
     return result;
+}
+
+void set_modal_execution(
+    FrequencyDomainContractResult &result,
+    ModalExecutionTarget target,
+    ModalSpectralTransformKind transform,
+    const char *engine_id) noexcept
+{
+    result.modal_execution.execution_target = static_cast<std::uint32_t>(target);
+    result.modal_execution.scalar_representation =
+        static_cast<std::uint32_t>(ModalScalarRepresentation::complex_double);
+    result.modal_execution.spectral_transform_kind = static_cast<std::uint32_t>(transform);
+    result.modal_execution.fallback_state = ModalResolvedFallbackState::none;
+    result.modal_execution.engine_id = engine_id != nullptr ? engine_id : "unavailable";
+    result.modal_execution.fallback_reason = "none";
 }
 
 bool output_directory_required(int write_partial_artifacts, const char *output_directory) noexcept
@@ -287,10 +337,29 @@ bool append_shared_domain_cartesian_modes(
         return false;
     }
 
+    const std::uint32_t inactive_class = std::numeric_limits<std::uint32_t>::max();
+    std::vector<double> equilibrium_for_frames(
+        payload.equilibrium_m0_xyz,
+        payload.equilibrium_m0_xyz + payload.equilibrium_m0_xyz_count);
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        const std::uint32_t reduced_node = payload.magnetic_reduced_node[node];
+        if (reduced_node == inactive_class) {
+            // Shared magnetic/airbox meshes carry zero magnetisation in airbox
+            // nodes.  Use the same neutral frame as the operator assembly for
+            // those nodes; their tangent amplitudes remain zero below.
+            equilibrium_for_frames[3u * node] = 0.0;
+            equilibrium_for_frames[3u * node + 1u] = 0.0;
+            equilibrium_for_frames[3u * node + 2u] = 1.0;
+        } else if (reduced_node >= payload.magnetic_reduced_node_count) {
+            error_message = "shared-domain magnetic class map contains an out-of-range node";
+            return false;
+        }
+    }
+
     std::vector<TangentFrameNode> frames(static_cast<std::size_t>(node_count));
     TangentFrameDiagnostics frame_diagnostics{};
     if (build_tangent_frame(
-            payload.equilibrium_m0_xyz,
+            equilibrium_for_frames.data(),
             node_count,
             frames.data(),
             &frame_diagnostics) != FrequencyDomainStatus::ok) {
@@ -299,7 +368,6 @@ bool append_shared_domain_cartesian_modes(
     }
 
     const std::uint64_t q_dof_count = poisson_result.q_dof_count;
-    const std::uint32_t inactive_class = std::numeric_limits<std::uint32_t>::max();
     out_result->mode_delta_m_xyz_complex.clear();
     out_result->mode_delta_m_xyz_complex.reserve(
         poisson_result.accepted_modes.size() * 3u * node_count);
@@ -347,6 +415,12 @@ bool append_shared_domain_cartesian_modes(
 std::string format_poisson_airbox_modes_json(
     const PoissonAirboxModalEigenResult &result)
 {
+    // Keep the serializer fail-closed even if a future caller bypasses the
+    // contract-result validation below.  Never index an accepted mode vector
+    // until the complete q+phi(+gauge) extent has been checked.
+    if (!accepted_modal_mode_vectors_valid(result)) {
+        return "[]";
+    }
     std::string modes = "[";
     for (std::size_t mode_index = 0; mode_index < result.accepted_modes.size(); ++mode_index) {
         const PoissonAirboxModalEigenResult::AcceptedMode &mode =
@@ -372,6 +446,12 @@ std::string format_poisson_airbox_modes_json(
             format_double(mode.poisson_block_backward_error) +
             ",\"gauge_constraint_backward_error\":" +
             format_double(mode.gauge_constraint_backward_error) +
+            ",\"magnetic_residual_l2\":" +
+            format_double(mode.magnetic_residual_l2) +
+            ",\"poisson_residual_l2\":" +
+            format_double(mode.poisson_residual_l2) +
+            ",\"gauge_residual_abs\":" +
+            format_double(mode.gauge_residual_abs) +
             ",\"gauge_mean_abs\":" + format_double(mode.gauge_mean_abs);
         modes += ",\"q_layout\":\"" +
             std::string(result.q_layout_interleaved_node_component
@@ -422,6 +502,7 @@ std::string format_poisson_airbox_modes_json(
             }
             modes += format_double(mode.full_vector[static_cast<std::size_t>(q_count + index)].imag());
         }
+        modes += "]";
         if (result.gauge_augmented) {
             const std::size_t gauge_index = static_cast<std::size_t>(q_count + phi_count);
             modes += ",\"mode_gauge_real\":" +
@@ -1048,6 +1129,11 @@ FrequencyDomainContractResult slepc_tiny_validation_result(
         format_double(kTwoPi * shift_frequency_hz) +
         "}";
     result.artifact_manifest_path.clear();
+    set_modal_execution(
+        result,
+        ModalExecutionTarget::validation,
+        ModalSpectralTransformKind::shift_invert,
+        "slepc_tiny_validation");
     return result;
 }
 
@@ -1570,7 +1656,13 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             request.operator_request.operator_diagnostics_json);
     }
     if (request.tiny_validation_enabled != 0) {
-        return solve_tiny_validation_modal_problem(request);
+        FrequencyDomainContractResult result = solve_tiny_validation_modal_problem(request);
+        set_modal_execution(
+            result,
+            ModalExecutionTarget::validation,
+            ModalSpectralTransformKind::shift_invert,
+            "tiny_validation_modal_eigen");
+        return result;
     }
     ModalEigenRequest effective_request = request;
     PoissonAirboxSharedDomainAssemblyResult shared_domain_assembly{};
@@ -1642,6 +1734,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             request.poisson_airbox_phi_mean_weights_count;
         problem.target_frequency_hz =
             request.poisson_airbox_target_frequency_hz;
+        problem.target_kind = request.target_kind;
+        problem.frequency_min_hz = request.frequency_min_hz;
+        problem.frequency_max_hz = request.frequency_max_hz;
         problem.expected_reference_frequency_hz =
             request.poisson_airbox_expected_reference_frequency_hz;
         problem.periodic_mesh_certificate_schema =
@@ -1658,8 +1753,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         problem.assembly_kind = request.poisson_airbox_assembly_kind;
         problem.solver_adapter =
             request.execution_target == ModalExecutionTarget::production_gpu ?
-                "k0_poisson_airbox_gpu_modal_device_krylov" :
-                "k0_poisson_airbox_cpu_full_coupled_slepc";
+                "k0_poisson_airbox_gpu_petsc_slepc" :
+                (std::strcmp(problem.assembly_kind, "mfem_weak_form_shared_domain") == 0
+                     ? "k0_poisson_airbox_cpu_schur_slepc"
+                     : "k0_poisson_airbox_cpu_full_coupled_slepc");
         problem.residual_tolerance = request.residual_tolerance;
         problem.requested_mode_count =
             static_cast<std::uint32_t>(request.requested_mode_count);
@@ -1667,6 +1764,12 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             static_cast<std::uint32_t>(request.max_outer_iterations);
         problem.max_linear_iterations =
             static_cast<std::uint32_t>(request.max_linear_iterations);
+        problem.production_shared_domain =
+            request.poisson_airbox_shared_domain_enabled != 0;
+        problem.cancel_user_data = request.cancel_user_data;
+        problem.cancel_requested = request.cancel_requested;
+        problem.progress_user_data = request.progress_user_data;
+        problem.progress_callback = request.progress_callback;
 
         if (request.poisson_airbox_shift_invert_action_enabled != 0) {
             if (request.poisson_airbox_shift_invert_action_device != 0 &&
@@ -1684,6 +1787,11 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                     "{\"schema_version\":\"frequency_domain_modal_result.v1\","
                     "\"study_product\":\"modal_eigen\","
                     "\"status\":\"validation_error\"}";
+                set_modal_execution(
+                    result,
+                    request.execution_target,
+                    ModalSpectralTransformKind::shift_invert,
+                    "validation_error");
                 return result;
             }
             if (request.poisson_airbox_shift_invert_action_device == 1) {
@@ -1692,6 +1800,11 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 char diagnostics_json[4096]{};
                 char error_message[256]{};
                 FrequencyDomainContractResult result{};
+                set_modal_execution(
+                    result,
+                    ModalExecutionTarget::production_gpu,
+                    ModalSpectralTransformKind::shift_invert,
+                    "gpu_device_dense_modal_shift_invert_action_contract");
 #if FULLMAG_HAS_CUDA_RUNTIME
                 const int gpu_status =
                     fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
@@ -1805,6 +1918,11 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                     &action_result);
 
             FrequencyDomainContractResult result{};
+            set_modal_execution(
+                result,
+                ModalExecutionTarget::production_cpu,
+                ModalSpectralTransformKind::shift_invert,
+                "k0_poisson_airbox_cpu_full_coupled_shift_invert_reference");
             result.status = status;
             result.error_message = action_result.error_message;
             result.diagnostics_json = action_result.diagnostics_json;
@@ -1871,11 +1989,35 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
 
         PoissonAirboxModalEigenResult poisson_result{};
         FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
-#if FULLMAG_HAS_CUDA_RUNTIME
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_FEM_WITH_SLEPC
         if (request.execution_target == ModalExecutionTarget::production_gpu) {
-            status = solve_poisson_airbox_modal_eigen_gpu_device_krylov(
+            status = solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 problem,
                 &poisson_result);
+        } else {
+            status = solve_poisson_airbox_modal_eigen_cpu_slepc(
+                problem,
+                &poisson_result);
+        }
+#elif FULLMAG_HAS_CUDA_RUNTIME
+        if (request.execution_target == ModalExecutionTarget::production_gpu) {
+            poisson_result.status = FrequencyDomainStatus::unavailable;
+            poisson_result.q_dof_count = problem.q_dof_count;
+            poisson_result.phi_dof_count = problem.phi_dof_count;
+            poisson_result.augmented_dof_count = problem.q_dof_count + problem.phi_dof_count;
+            std::strncpy(
+                poisson_result.error_message,
+                "GPU modal K0 requires PETSc/SLEPc support",
+                sizeof(poisson_result.error_message) - 1u);
+            std::snprintf(
+                poisson_result.diagnostics_json,
+                sizeof(poisson_result.diagnostics_json),
+                "{\"schema_version\":\"poisson_airbox_modal_eigen_gpu.v1\","
+                "\"status\":\"unavailable\","
+                "\"reason\":\"slepc_unavailable\","
+                "\"execution_lane\":\"production_gpu\","
+                "\"cpu_fallback\":\"disabled\",\"fallback_used\":false}");
+            status = poisson_result.status;
         } else {
             status = solve_poisson_airbox_modal_eigen_cpu_slepc(
                 problem,
@@ -1897,7 +2039,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 "{\"schema_version\":\"poisson_airbox_modal_eigen_gpu.v1\","
                 "\"status\":\"unavailable\","
                 "\"reason\":\"cuda_runtime_unavailable\","
-                "\"execution_lane\":\"gpu_modal_device_krylov\","
+                "\"execution_lane\":\"production_gpu\","
                 "\"cpu_fallback\":\"disabled\",\"fallback_used\":false}");
             status = poisson_result.status;
         } else {
@@ -1919,24 +2061,73 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.status = status;
         result.error_message = poisson_result.error_message;
         result.diagnostics_json = poisson_result.diagnostics_json;
+        const char *modal_status_text =
+            status == FrequencyDomainStatus::ok ? "ok" :
+            status == FrequencyDomainStatus::interrupted ? "interrupted" :
+            status == FrequencyDomainStatus::unavailable ? "unavailable" :
+            status == FrequencyDomainStatus::validation_error ? "validation_error" :
+            status == FrequencyDomainStatus::operator_error ? "operator_error" :
+            status == FrequencyDomainStatus::artifact_error ? "artifact_error" :
+            "solve_error";
         const bool requested_gpu = request.execution_target == ModalExecutionTarget::production_gpu;
         const char *requested_execution = requested_gpu ? "production_gpu" : "production_cpu";
+        const char *requested_solver_adapter = requested_gpu
+            ? "k0_poisson_airbox_gpu_petsc_slepc"
+            : "k0_poisson_airbox_cpu_full_coupled_slepc";
+        const bool resolves_to_cpu_schur =
+            !requested_gpu &&
+            (std::strcmp(problem.assembly_kind, "mfem_weak_form_shared_domain") == 0 ||
+             (std::strcmp(problem.solver_adapter, "k0_poisson_airbox_cpu_full_coupled_slepc") == 0 &&
+              std::strcmp(problem.gauge_policy, "mean_zero_augmented") == 0));
+        const char *resolved_solver_adapter = requested_gpu || resolves_to_cpu_schur
+            ? (requested_gpu
+                   ? "k0_poisson_airbox_gpu_petsc_slepc"
+                   : "k0_poisson_airbox_cpu_schur_slepc")
+            : "k0_poisson_airbox_cpu_full_coupled_slepc";
+        set_modal_execution(
+            result,
+            requested_gpu ? ModalExecutionTarget::production_gpu
+                          : ModalExecutionTarget::production_cpu,
+            request.spectral_transform_kind,
+            resolved_solver_adapter);
+        if (!accepted_modal_mode_vectors_valid(poisson_result)) {
+            result.status = FrequencyDomainStatus::operator_error;
+            result.error_message =
+                "native FEM modal_eigen accepted mode vector is shorter than q+phi+gauge dimensions";
+            result.diagnostics_json =
+                "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"operator_error\","
+                "\"reason\":\"accepted_mode_vector_short\"}";
+            result.result_json =
+                "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"operator_error\","
+                "\"accepted_mode_count\":0,\"modes\":[]}";
+            return result;
+        }
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
+            "\"status\":\"" +
+            std::string(modal_status_text) +
+            "\",\"complete\":" +
+            std::string(status == FrequencyDomainStatus::ok ? "true" : "false") +
+            ","
             "\"requested_execution\":\"" +
             std::string(requested_execution) +
             "\",\"resolved_execution\":\"" +
             std::string(requested_execution) +
             "\","
+            "\"requested_solver_adapter\":\"" +
+            std::string(requested_solver_adapter) +
+            "\","
             "\"solver_adapter\":\"" +
-            std::string(requested_gpu ?
-                            "k0_poisson_airbox_gpu_modal_device_krylov" :
-                            "k0_poisson_airbox_cpu_full_coupled_slepc") +
+            std::string(resolved_solver_adapter) +
             "\","
             "\"execution_lane\":\"" +
             std::string(requested_gpu ?
-                            "gpu_modal_device_krylov" :
+                            "production_gpu" :
                             "production_cpu") +
             "\","
             "\"demag_kind\":\"periodic_airbox_k0\","
@@ -1967,7 +2158,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "},\"modes\":" +
             format_poisson_airbox_modes_json(poisson_result) +
             "}";
-        if (status == FrequencyDomainStatus::ok &&
+        if ((status == FrequencyDomainStatus::ok ||
+             status == FrequencyDomainStatus::interrupted) &&
             !poisson_result.accepted_modes.empty()) {
             result.modal_eigen.q_dof_count = poisson_result.q_dof_count;
             result.modal_eigen.phi_dof_count = poisson_result.phi_dof_count;
@@ -1988,12 +2180,11 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 result.modal_eigen.mode_residuals.push_back(mode.relative_residual);
                 result.modal_eigen.mode_cluster_ids.push_back(
                     static_cast<std::uint64_t>(mode_index));
-                if (mode.full_vector.size() <
-                    poisson_result.q_dof_count + poisson_result.phi_dof_count) {
+                if (mode.full_vector.size() < required_modal_mode_vector_count(poisson_result)) {
                     result.modal_eigen = ModalEigenTypedResult{};
                     result.status = FrequencyDomainStatus::operator_error;
                     result.error_message =
-                        "native FEM modal_eigen accepted mode vector is shorter than q+phi dimensions";
+                        "native FEM modal_eigen accepted mode vector is shorter than q+phi+gauge dimensions";
                     result.diagnostics_json =
                         "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
                         "\"study_product\":\"modal_eigen\","
@@ -2051,6 +2242,19 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         std::move(result.diagnostics_json), request, "linearized_dynamic_pencil_digest");
     result.result_json = with_magnetic_pencil_digest(
         std::move(result.result_json), request, "linearized_dynamic_pencil_digest");
+    const ModalExecutionTarget unavailable_target =
+        request.execution_target == ModalExecutionTarget::production_gpu
+            ? ModalExecutionTarget::production_gpu
+            : request.execution_target == ModalExecutionTarget::production_cpu
+                ? ModalExecutionTarget::production_cpu
+                : ModalExecutionTarget::auto_select;
+    set_modal_execution(
+        result,
+        unavailable_target,
+        request.spectral_transform_kind,
+        unavailable_target == ModalExecutionTarget::production_gpu
+            ? "production_gpu_modal_eigen_unavailable"
+            : "production_cpu_modal_eigen_unavailable");
     return result;
     }
 }

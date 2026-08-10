@@ -15,7 +15,7 @@ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionCont
 import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
-import type { KernelApi } from "../types";
+import type { KernelApi, ModuleManifest } from "../types";
 import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "../visualization/CameraRegistryController";
@@ -24,7 +24,7 @@ import { VisualizationDebugController } from "../visualization/VisualizationDebu
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
 
-import { SlotHost } from "./SlotHost";
+import { resolveSlotModuleManifest, SlotHost } from "./SlotHost";
 
 function TestModule() {
   return <div>Auto-discovered module</div>;
@@ -62,6 +62,29 @@ function makeKernel(): KernelApi {
 }
 
 describe("SlotHost", () => {
+  it("activates a shared panel module from the canonical Results ribbon tab", () => {
+    const explorer: ModuleManifest = {
+      id: "explorer",
+      title: "Explorer",
+      version: "0.1.0",
+      slots: ["panel-left"],
+      component: async () => ({ default: TestModule }),
+    };
+    const results: ModuleManifest = {
+      ...explorer,
+      activationTab: "results" as const,
+      id: "results-navigator",
+      title: "Results",
+    };
+
+    expect(resolveSlotModuleManifest([explorer, results], "results")?.id).toBe(
+      "results-navigator",
+    );
+    expect(resolveSlotModuleManifest([explorer, results], "home")?.id).toBe(
+      "explorer",
+    );
+  });
+
   it("renders an empty slot fallback when no module is active", () => {
     const kernel = makeKernel();
     const html = renderToStaticMarkup(

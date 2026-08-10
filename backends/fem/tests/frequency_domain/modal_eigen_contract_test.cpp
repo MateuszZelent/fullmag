@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/mfem_modal_operator_payload.hpp"
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
+#include "frequency_domain/mesh_symmetry_certificate.hpp"
 #include "fullmag_fem.h"
 
 #include <cmath>
@@ -9,9 +10,25 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+namespace fd = fullmag::fem::frequency_domain;
+
+static_assert(
+    std::is_same<decltype(FullmagFemModalEigenRequest::spectral_transform_kind),
+                 fullmag_fem_modal_spectral_transform_kind>::value,
+    "modal request spectral_transform_kind preserves the named enum ABI field");
+static_assert(
+    std::is_same<decltype(FullmagFemFrequencyDomainResult::resolved_spectral_transform_kind),
+                 fullmag_fem_modal_spectral_transform_kind>::value,
+    "modal result resolved_spectral_transform_kind preserves the named enum ABI field");
+static_assert(
+    std::is_same<decltype(FullmagFemFrequencyDomainResult::resolved_certificate_binding_status),
+                 std::uint32_t>::value,
+    "modal result certificate binding status is a uint32_t ABI field");
 
 void check(bool condition, const char *message)
 {
@@ -138,6 +155,7 @@ FullmagFemModalEigenRequest base_request()
     request.residual_tolerance = 1.0e-12;
     request.max_outer_iterations = 32;
     request.max_linear_iterations = 128;
+    request.struct_size = sizeof(request);
     return request;
 }
 
@@ -173,16 +191,30 @@ void modal_invalid_abi_returns_validation_error()
 {
     FullmagFemModalEigenRequest invalid{};
     invalid.abi_version = 999u;
-    invalid.operator_request.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    invalid.operator_request.abi_version = 0u;
+    invalid.struct_size = 0u;
     FullmagFemFrequencyDomainResult invalid_result =
         fullmag_fem_modal_eigen_solve(&invalid);
     check(invalid_result.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
           "modal result returns ABI version");
     check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "invalid modal ABI must return validation_error");
-    check(contains(invalid_result.diagnostics_json, "unsupported_abi_version"),
-          "invalid modal ABI exposes diagnostics");
+    check(contains(invalid_result.diagnostics_json, "unknown_abi"),
+          "unknown modal ABI is rejected before optional tail dereference");
     fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+
+    FullmagFemModalEigenRequest short_prefix{};
+    short_prefix.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    short_prefix.struct_size =
+        static_cast<std::uint64_t>(offsetof(FullmagFemModalEigenRequest, operator_request));
+    short_prefix.operator_request.abi_version = 999u;
+    FullmagFemFrequencyDomainResult short_result =
+        fullmag_fem_modal_eigen_solve(&short_prefix);
+    check(short_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "known modal ABI with a short prefix must return validation_error");
+    check(contains(short_result.diagnostics_json, "struct_size_too_small"),
+          "short modal prefix is rejected before reading the operator ABI tail");
+    fullmag_fem_frequency_domain_result_destroy(&short_result);
 }
 
 void modal_v13_extension_rejects_unknown_enum_and_releases_zero_result()
@@ -193,8 +225,25 @@ void modal_v13_extension_rejects_unknown_enum_and_releases_zero_result()
         fullmag_fem_modal_eigen_solve(&invalid);
     check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "modal v13 rejects an unknown execution target");
+    check(invalid_result.resolved_execution_target ==
+              FULLMAG_FEM_MODAL_EXECUTION_VALIDATION,
+          "modal v13 rejects an unknown execution target with resolved validation provenance");
+    check(invalid_result.resolved_scalar_representation ==
+              FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE &&
+              invalid_result.resolved_spectral_transform_kind ==
+                  FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO,
+          "modal v13 validation provenance has explicit scalar and transform defaults");
     check(contains(invalid_result.diagnostics_json, "unknown_execution_target"),
           "modal v13 reports the unknown execution target reason");
+    fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+
+    invalid = base_request();
+    invalid.execution_target = FULLMAG_FEM_MODAL_EXECUTION_VALIDATION;
+    invalid_result = fullmag_fem_modal_eigen_solve(&invalid);
+    check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "validation is a resolved-only modal lane and cannot be requested");
+    check(contains(invalid_result.diagnostics_json, "unknown_execution_target"),
+          "resolved-only validation lane request reports a stable reason");
     fullmag_fem_frequency_domain_result_destroy(&invalid_result);
 
     invalid = base_request();
@@ -203,6 +252,9 @@ void modal_v13_extension_rejects_unknown_enum_and_releases_zero_result()
     invalid_result = fullmag_fem_modal_eigen_solve(&invalid);
     check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "modal typed tail rejects an unknown scalar representation");
+    check(invalid_result.resolved_execution_target ==
+              FULLMAG_FEM_MODAL_EXECUTION_VALIDATION,
+          "unknown scalar representation reports resolved validation provenance");
     check(contains(invalid_result.diagnostics_json, "unknown_scalar_representation"),
           "modal typed tail reports the unknown scalar representation reason");
     fullmag_fem_frequency_domain_result_destroy(&invalid_result);
@@ -213,6 +265,9 @@ void modal_v13_extension_rejects_unknown_enum_and_releases_zero_result()
     invalid_result = fullmag_fem_modal_eigen_solve(&invalid);
     check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "modal typed tail rejects an unknown result field representation");
+    check(invalid_result.resolved_execution_target ==
+              FULLMAG_FEM_MODAL_EXECUTION_VALIDATION,
+          "unknown result field representation reports resolved validation provenance");
     check(contains(invalid_result.diagnostics_json,
                    "unknown_result_field_representation"),
           "modal typed tail reports the unknown result field representation reason");
@@ -247,45 +302,328 @@ void modal_v16_extension_rejects_unknown_spectral_transform_and_short_prefix()
     check(contains(short_result.diagnostics_json, "struct_size_too_small"),
           "modal v16 reports the short struct prefix reason");
     fullmag_fem_frequency_domain_result_destroy(&short_result);
+
+    FullmagFemModalEigenRequest absent_size = base_request();
+    absent_size.struct_size = 0;
+    FullmagFemFrequencyDomainResult absent_size_result =
+        fullmag_fem_modal_eigen_solve(&absent_size);
+    check(absent_size_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal v16 rejects an absent struct_size instead of reading typed tails");
+    check(absent_size_result.resolved_execution_target ==
+              FULLMAG_FEM_MODAL_EXECUTION_VALIDATION,
+          "modal v16 absent struct_size reports resolved validation provenance");
+    check(contains(absent_size_result.diagnostics_json, "struct_size_too_small"),
+          "modal v16 reports the absent struct_size reason");
+    fullmag_fem_frequency_domain_result_destroy(&absent_size_result);
 }
 
 void modal_abi_layout_publishes_versioned_modal_structs()
 {
-    fullmag_fem_frequency_domain_abi_layout layout{};
-    check(
-        fullmag_fem_get_frequency_domain_abi_layout(&layout) == FULLMAG_FEM_OK,
-        "modal ABI layout query succeeds");
-    check(layout.modal_abi_schema == 1u,
-          "modal ABI layout publishes its schema");
-    check(layout.modal_abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
-          "modal ABI layout publishes the current ABI version");
-    check(layout.modal_eigen_request_size == sizeof(FullmagFemModalEigenRequest),
-          "modal ABI layout reports modal request size");
-    check(layout.modal_eigen_request_shared_domain_payload_offset ==
-              offsetof(FullmagFemModalEigenRequest, shared_domain_payload),
-          "modal ABI layout reports modal request payload offset");
-    check(layout.modal_shared_domain_payload_size == sizeof(FullmagFemModalSharedDomainPayload),
-          "modal ABI layout reports shared-domain payload size");
-    check(layout.modal_shared_domain_payload_struct_size_offset ==
-              offsetof(FullmagFemModalSharedDomainPayload, struct_size),
-          "modal ABI layout reports shared-domain payload prefix");
-    check(layout.modal_frequency_domain_result_size == sizeof(FullmagFemFrequencyDomainResult),
-          "modal ABI layout reports modal result size");
-    check(layout.modal_frequency_domain_result_struct_size_offset ==
-              offsetof(FullmagFemFrequencyDomainResult, struct_size),
-          "modal ABI layout reports modal result tail");
-    check(layout.modal_csr_matrix_view_size == sizeof(FullmagFemCsrMatrixView),
-          "modal ABI layout reports CSR view size");
-    check(layout.modal_csr_matrix_view_values_len_offset ==
-              offsetof(FullmagFemCsrMatrixView, values_len),
-          "modal ABI layout reports CSR nested field offset");
+    fullmag_fem_frequency_domain_abi_layout legacy{};
+    check(fullmag_fem_get_frequency_domain_abi_layout(&legacy) == FULLMAG_FEM_OK,
+          "legacy frequency-domain ABI layout query succeeds");
+    check(legacy.solve_result_size == sizeof(fullmag_fem_frequency_domain_solve_result),
+          "legacy v1 layout retains its baseline tail");
+    check(legacy.modal_abi_schema == 1u &&
+              legacy.modal_abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+          "legacy v1 layout publishes its modal schema and ABI version");
+    check(legacy.modal_eigen_request_size == sizeof(FullmagFemModalEigenRequest) &&
+              legacy.modal_shared_domain_payload_size ==
+                  offsetof(FullmagFemModalSharedDomainPayload, linearization_descriptor) &&
+              legacy.modal_frequency_domain_result_size ==
+                  sizeof(FullmagFemFrequencyDomainResult) &&
+              legacy.modal_csr_matrix_view_size == sizeof(FullmagFemCsrMatrixView),
+          "legacy v1 layout publishes all modal envelope sizes");
+    check(legacy.modal_eigen_request_struct_size_offset ==
+                  offsetof(FullmagFemModalEigenRequest, struct_size) &&
+              legacy.modal_eigen_request_shared_domain_payload_offset ==
+                  offsetof(FullmagFemModalEigenRequest, shared_domain_payload) &&
+              legacy.modal_shared_domain_payload_struct_size_offset ==
+                  offsetof(FullmagFemModalSharedDomainPayload, struct_size) &&
+              legacy.modal_frequency_domain_result_struct_size_offset ==
+                  offsetof(FullmagFemFrequencyDomainResult, struct_size) &&
+              legacy.modal_csr_matrix_view_values_len_offset ==
+                  offsetof(FullmagFemCsrMatrixView, values_len),
+          "legacy v1 layout publishes modal prefix and payload offsets");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v2 short_modal{};
+    short_modal.struct_size = sizeof(short_modal) - 1u;
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v2(&short_modal) ==
+              FULLMAG_FEM_ERR_INVALID,
+          "modal v2 ABI query rejects a short caller prefix");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v2 absent_size_modal{};
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v2(&absent_size_modal) ==
+              FULLMAG_FEM_ERR_INVALID,
+          "modal v2 ABI query rejects an absent caller struct_size");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v2 modal{};
+    modal.struct_size = sizeof(modal);
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v2(&modal) == FULLMAG_FEM_OK,
+          "versioned modal ABI layout query succeeds");
+    check(modal.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V2,
+          "modal ABI layout publishes v2 ABI version");
+    check(modal.modal_abi_schema == 2u, "modal ABI layout publishes schema v2");
+    check(modal.modal_eigen_request_size == sizeof(FullmagFemModalEigenRequest) &&
+              modal.modal_linearized_operator_request_size ==
+                  sizeof(FullmagFemLinearizedOperatorRequest) &&
+              modal.modal_shared_domain_payload_size ==
+                  offsetof(FullmagFemModalSharedDomainPayload, linearization_descriptor) &&
+              modal.modal_frequency_domain_result_size ==
+                  sizeof(FullmagFemFrequencyDomainResult) &&
+              modal.modal_csr_matrix_view_size == sizeof(FullmagFemCsrMatrixView),
+          "modal v2 manifest publishes all cross-language struct sizes");
+    check(legacy.modal_eigen_request_size == modal.modal_eigen_request_size &&
+              legacy.modal_shared_domain_payload_size == modal.modal_shared_domain_payload_size &&
+              legacy.modal_frequency_domain_result_size ==
+                  modal.modal_frequency_domain_result_size &&
+              legacy.modal_csr_matrix_view_size == modal.modal_csr_matrix_view_size,
+          "legacy v1 and modal v2 manifests agree on envelope sizes");
+    check(modal.modal_eigen_request_field_count == 78u &&
+              modal.modal_linearized_operator_request_field_count == 14u &&
+              modal.modal_shared_domain_payload_field_count == 57u &&
+              modal.modal_frequency_domain_result_field_count == 32u &&
+              modal.modal_csr_matrix_view_field_count == 8u,
+          "modal v2 manifest publishes complete field counts");
+#define FULLMAG_FEM_V2_TEST_V6_RELATION(member) \
+    offsetof(FullmagFemModalCertificateV6Relation, member),
+    constexpr std::uint64_t v6_relation_offsets[] = {
+        FULLMAG_FEM_MODAL_CERTIFICATE_V6_RELATION_FIELD_LIST(
+            FULLMAG_FEM_V2_TEST_V6_RELATION)
+    };
+#undef FULLMAG_FEM_V2_TEST_V6_RELATION
+#define FULLMAG_FEM_V2_TEST_V6_REGION_ROLE(member) \
+    offsetof(FullmagFemModalCertificateV6RegionRole, member),
+    constexpr std::uint64_t v6_region_role_offsets[] = {
+        FULLMAG_FEM_MODAL_CERTIFICATE_V6_REGION_ROLE_FIELD_LIST(
+            FULLMAG_FEM_V2_TEST_V6_REGION_ROLE)
+    };
+#undef FULLMAG_FEM_V2_TEST_V6_REGION_ROLE
+#define FULLMAG_FEM_V2_TEST_V6_CLASS_DIGEST(member) \
+    offsetof(FullmagFemModalCertificateV6ClassDigest, member),
+    constexpr std::uint64_t v6_class_digest_offsets[] = {
+        FULLMAG_FEM_MODAL_CERTIFICATE_V6_CLASS_DIGEST_FIELD_LIST(
+            FULLMAG_FEM_V2_TEST_V6_CLASS_DIGEST)
+    };
+#undef FULLMAG_FEM_V2_TEST_V6_CLASS_DIGEST
+#define FULLMAG_FEM_V2_TEST_V6_VIEW(member) \
+    offsetof(FullmagFemModalCertificateV6View, member),
+    constexpr std::uint64_t v6_view_offsets[] = {
+        FULLMAG_FEM_MODAL_CERTIFICATE_V6_VIEW_FIELD_LIST(FULLMAG_FEM_V2_TEST_V6_VIEW)
+    };
+#undef FULLMAG_FEM_V2_TEST_V6_VIEW
+#define FULLMAG_FEM_V2_TEST_V6_BINDING_REQUEST(member) \
+    offsetof(FullmagFemModalCertificateV6BindingRequest, member),
+    constexpr std::uint64_t v6_binding_request_offsets[] = {
+        FULLMAG_FEM_MODAL_CERTIFICATE_V6_BINDING_REQUEST_FIELD_LIST(
+            FULLMAG_FEM_V2_TEST_V6_BINDING_REQUEST)
+    };
+#undef FULLMAG_FEM_V2_TEST_V6_BINDING_REQUEST
+    check(modal.modal_certificate_v6_relation_size ==
+                  sizeof(FullmagFemModalCertificateV6Relation) &&
+              modal.modal_certificate_v6_region_role_size ==
+                  sizeof(FullmagFemModalCertificateV6RegionRole) &&
+              modal.modal_certificate_v6_class_digest_size ==
+                  sizeof(FullmagFemModalCertificateV6ClassDigest) &&
+              modal.modal_certificate_v6_view_size == sizeof(FullmagFemModalCertificateV6View) &&
+              modal.modal_certificate_v6_binding_request_size ==
+                  sizeof(FullmagFemModalCertificateV6BindingRequest),
+          "modal v2 manifest publishes nested v6 certificate sizes");
+    check(modal.modal_certificate_v6_relation_field_count ==
+                  FULLMAG_FEM_MODAL_CERTIFICATE_V6_RELATION_FIELD_COUNT &&
+              modal.modal_certificate_v6_region_role_field_count ==
+                  FULLMAG_FEM_MODAL_CERTIFICATE_V6_REGION_ROLE_FIELD_COUNT &&
+              modal.modal_certificate_v6_class_digest_field_count ==
+                  FULLMAG_FEM_MODAL_CERTIFICATE_V6_CLASS_DIGEST_FIELD_COUNT &&
+              modal.modal_certificate_v6_view_field_count ==
+                  FULLMAG_FEM_MODAL_CERTIFICATE_V6_VIEW_FIELD_COUNT &&
+              modal.modal_certificate_v6_binding_request_field_count ==
+                  FULLMAG_FEM_MODAL_CERTIFICATE_V6_BINDING_REQUEST_FIELD_COUNT,
+          "modal v2 manifest publishes nested v6 certificate field counts");
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_CERTIFICATE_V6_RELATION_FIELD_COUNT; ++i) {
+        check(modal.modal_certificate_v6_relation_field_offsets[i] == v6_relation_offsets[i],
+              "modal v2 relation offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_CERTIFICATE_V6_REGION_ROLE_FIELD_COUNT; ++i) {
+        check(modal.modal_certificate_v6_region_role_field_offsets[i] == v6_region_role_offsets[i],
+              "modal v2 region-role offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_CERTIFICATE_V6_CLASS_DIGEST_FIELD_COUNT; ++i) {
+        check(modal.modal_certificate_v6_class_digest_field_offsets[i] == v6_class_digest_offsets[i],
+              "modal v2 class-digest offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_CERTIFICATE_V6_VIEW_FIELD_COUNT; ++i) {
+        check(modal.modal_certificate_v6_view_field_offsets[i] == v6_view_offsets[i],
+              "modal v2 view offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_CERTIFICATE_V6_BINDING_REQUEST_FIELD_COUNT; ++i) {
+        check(modal.modal_certificate_v6_binding_request_field_offsets[i] ==
+                  v6_binding_request_offsets[i],
+              "modal v2 binding-request offset mismatch");
+    }
+#define FULLMAG_FEM_V2_TEST_OPERATOR(member) offsetof(FullmagFemLinearizedOperatorRequest, member),
+    constexpr std::uint64_t operator_offsets[] = {
+        FULLMAG_FEM_MODAL_LINEARIZED_OPERATOR_REQUEST_FIELD_LIST(FULLMAG_FEM_V2_TEST_OPERATOR)
+    };
+#undef FULLMAG_FEM_V2_TEST_OPERATOR
+#define FULLMAG_FEM_V2_TEST_REQUEST(member) offsetof(FullmagFemModalEigenRequest, member),
+    constexpr std::uint64_t request_offsets[] = {
+        FULLMAG_FEM_MODAL_EIGEN_REQUEST_FIELD_LIST(FULLMAG_FEM_V2_TEST_REQUEST)
+    };
+#undef FULLMAG_FEM_V2_TEST_REQUEST
+#define FULLMAG_FEM_V2_TEST_PAYLOAD(member) offsetof(FullmagFemModalSharedDomainPayload, member),
+    constexpr std::uint64_t payload_offsets[] = {
+        FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_LIST(FULLMAG_FEM_V2_TEST_PAYLOAD)
+    };
+#undef FULLMAG_FEM_V2_TEST_PAYLOAD
+#define FULLMAG_FEM_V2_TEST_RESULT(member) offsetof(FullmagFemFrequencyDomainResult, member),
+    constexpr std::uint64_t result_offsets[] = {
+        FULLMAG_FEM_MODAL_FREQUENCY_DOMAIN_RESULT_FIELD_LIST(FULLMAG_FEM_V2_TEST_RESULT)
+    };
+#undef FULLMAG_FEM_V2_TEST_RESULT
+#define FULLMAG_FEM_V2_TEST_CSR(member) offsetof(FullmagFemCsrMatrixView, member),
+    constexpr std::uint64_t csr_offsets[] = {
+        FULLMAG_FEM_MODAL_CSR_MATRIX_VIEW_FIELD_LIST(FULLMAG_FEM_V2_TEST_CSR)
+    };
+#undef FULLMAG_FEM_V2_TEST_CSR
+    check(modal.modal_eigen_request_field_offsets[70] ==
+                  legacy.modal_eigen_request_struct_size_offset &&
+              modal.modal_eigen_request_field_offsets[75] ==
+                  legacy.modal_eigen_request_shared_domain_payload_offset &&
+              modal.modal_shared_domain_payload_field_offsets[1] ==
+                  legacy.modal_shared_domain_payload_struct_size_offset &&
+              modal.modal_shared_domain_payload_field_offsets[20] ==
+                  legacy.modal_shared_domain_payload_mesh_certificate_digest_offset &&
+              modal.modal_shared_domain_payload_field_offsets[41] ==
+                  legacy.modal_shared_domain_payload_map_binding_digest_offset &&
+              modal.modal_shared_domain_payload_field_offsets[44] ==
+                  legacy.modal_shared_domain_payload_bias_field_sample_id_offset &&
+              modal.modal_frequency_domain_result_field_offsets[25] ==
+                  legacy.modal_frequency_domain_result_struct_size_offset &&
+              modal.modal_frequency_domain_result_field_offsets[27] ==
+                  legacy.modal_frequency_domain_result_resolved_engine_id_offset &&
+              modal.modal_csr_matrix_view_field_offsets[7] ==
+                  legacy.modal_csr_matrix_view_values_len_offset,
+          "legacy v1 offsets agree with modal v2 manifest offsets");
+    check(modal.modal_eigen_request_field_offsets[76] ==
+                  offsetof(FullmagFemModalEigenRequest, mesh_generation_identity) &&
+              modal.modal_eigen_request_field_offsets[77] ==
+                  offsetof(FullmagFemModalEigenRequest, canonical_preimage_sha256) &&
+              modal.modal_shared_domain_payload_field_offsets[48] ==
+                  offsetof(FullmagFemModalSharedDomainPayload, mesh_generation_identity) &&
+              modal.modal_shared_domain_payload_field_offsets[55] ==
+                  offsetof(FullmagFemModalSharedDomainPayload, certificate_binding_reason) &&
+              modal.modal_shared_domain_payload_field_offsets[56] ==
+                  offsetof(FullmagFemModalSharedDomainPayload, certificate_binding_v6) &&
+              modal.modal_frequency_domain_result_field_offsets[29] ==
+                  offsetof(FullmagFemFrequencyDomainResult,
+                           resolved_canonical_preimage_sha256) &&
+              modal.modal_frequency_domain_result_field_offsets[31] ==
+                  offsetof(FullmagFemFrequencyDomainResult,
+                           resolved_certificate_binding_reason),
+          "modal v2 manifest publishes v17 certificate binding offsets");
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_LINEARIZED_OPERATOR_REQUEST_FIELD_COUNT; ++i) {
+        check(modal.modal_linearized_operator_request_field_offsets[i] == operator_offsets[i],
+              "modal v2 operator offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_EIGEN_REQUEST_FIELD_COUNT; ++i) {
+        check(modal.modal_eigen_request_field_offsets[i] == request_offsets[i],
+              "modal v2 request offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT; ++i) {
+        check(modal.modal_shared_domain_payload_field_offsets[i] == payload_offsets[i],
+              "modal v2 payload offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_FREQUENCY_DOMAIN_RESULT_FIELD_COUNT; ++i) {
+        check(modal.modal_frequency_domain_result_field_offsets[i] == result_offsets[i],
+              "modal v2 result offset mismatch");
+    }
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_CSR_MATRIX_VIEW_FIELD_COUNT; ++i) {
+        check(modal.modal_csr_matrix_view_field_offsets[i] == csr_offsets[i],
+              "modal v2 CSR offset mismatch");
+    }
+    check(modal.modal_eigen_request_field_offsets[78] == 0u &&
+              modal.modal_shared_domain_payload_field_offsets[57] == 0u &&
+              modal.modal_frequency_domain_result_field_offsets[32] == 0u,
+          "modal v2 manifest zero-fills unused capacity");
+    check(modal.modal_linearized_operator_request_field_offsets[14] == 0u &&
+              modal.modal_csr_matrix_view_field_offsets[7] == csr_offsets[7],
+          "modal v2 manifest preserves operator tail and full CSR capacity");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v3 short_v3{};
+    short_v3.v2.struct_size = sizeof(short_v3) - 1u;
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v3(&short_v3) ==
+              FULLMAG_FEM_ERR_INVALID,
+          "modal v3 ABI layout query rejects a short caller struct_size");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v3 v3{};
+    v3.v2.struct_size = sizeof(v3);
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v3(&v3) == FULLMAG_FEM_OK,
+          "modal v3 ABI layout query succeeds");
+    check(v3.v2.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V3 &&
+              v3.v2.modal_shared_domain_payload_size ==
+                  sizeof(FullmagFemModalSharedDomainPayload) &&
+              v3.v2.modal_shared_domain_payload_field_count ==
+                  FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT + 2u &&
+              v3.v2.modal_shared_domain_payload_field_offsets[
+                  FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT] ==
+                  offsetof(FullmagFemModalSharedDomainPayload, linearization_descriptor) &&
+              v3.v2.modal_shared_domain_payload_field_offsets[
+                  FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT + 1u] ==
+                  offsetof(FullmagFemModalSharedDomainPayload, exchange_material_view),
+          "modal v3 manifest publishes the V18 payload tail");
+    check(v3.modal_linearization_descriptor_size ==
+                  sizeof(FullmagFemModalLinearizationDescriptor) &&
+              v3.modal_linearization_descriptor_field_count ==
+                  FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_COUNT,
+          "modal v3 manifest publishes descriptor size and field count");
+#define FULLMAG_FEM_V3_TEST_DESCRIPTOR(member) \
+    offsetof(FullmagFemModalLinearizationDescriptor, member),
+    constexpr std::uint64_t descriptor_offsets[] = {
+        FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_LIST(
+            FULLMAG_FEM_V3_TEST_DESCRIPTOR)
+    };
+#undef FULLMAG_FEM_V3_TEST_DESCRIPTOR
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_COUNT; ++i) {
+        check(v3.modal_linearization_descriptor_field_offsets[i] == descriptor_offsets[i],
+              "modal v3 descriptor offset mismatch");
+    }
+    check(v3.modal_linearization_descriptor_field_offsets[
+                  FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_COUNT] == 0u,
+          "modal v3 descriptor manifest zero-fills unused capacity");
+    check(v3.modal_exchange_material_view_size ==
+                  sizeof(FullmagFemModalExchangeMaterialView) &&
+              v3.modal_exchange_material_view_field_count ==
+                  FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT,
+          "modal v3 manifest publishes scalar exchange material view");
+#define FULLMAG_FEM_V3_TEST_MATERIAL(member) \
+    offsetof(FullmagFemModalExchangeMaterialView, member),
+    constexpr std::uint64_t material_offsets[] = {
+        FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_LIST(
+            FULLMAG_FEM_V3_TEST_MATERIAL)
+    };
+#undef FULLMAG_FEM_V3_TEST_MATERIAL
+    for (std::size_t i = 0; i < FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT; ++i) {
+        check(v3.modal_exchange_material_view_field_offsets[i] == material_offsets[i],
+              "modal v3 scalar exchange material offset mismatch");
+    }
+    check(v3.modal_exchange_material_view_field_offsets[
+                  FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT] == 0u,
+          "modal v3 scalar exchange material manifest zero-fills unused capacity");
 }
 
 FullmagFemModalSharedDomainPayload certificate_payload()
 {
+    static constexpr char kCanonicalPreimage[] =
+        "periodic_modal_equivalence_map_binding.v1\n"
+        "schema=periodic_mesh_certificate.v6\n";
     FullmagFemModalSharedDomainPayload payload{};
-    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
-    payload.struct_size = sizeof(payload);
+    /* This golden fixture deliberately exercises the preserved V17 prefix;
+       V18 descriptor cases are tested separately below. */
+    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION;
+    payload.struct_size =
+        static_cast<std::uint32_t>(offsetof(FullmagFemModalSharedDomainPayload,
+                                             linearization_descriptor));
     payload.magnetic_pair_count = 1;
     payload.airbox_pair_count = 1;
     payload.boundary_kind = "periodic";
@@ -307,7 +645,532 @@ FullmagFemModalSharedDomainPayload certificate_payload()
         "sha256:5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     payload.magnetic_part_identity = "part:magnetic";
     payload.airbox_part_identity = "part:airbox";
+    payload.mesh_generation_identity = "mesh-generation:fixture";
+    payload.canonical_preimage = kCanonicalPreimage;
+    payload.canonical_preimage_len = std::strlen(kCanonicalPreimage);
+    payload.canonical_preimage_sha256 =
+        "sha256:5c4867e34716043a16db534f5ffca90613cff84119573b5da0afdb2f1aafb6d2";
+    payload.magnetic_class_digest_sha256 =
+        "sha256:6123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.scalar_class_digest_sha256 =
+        "sha256:7123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    payload.certificate_binding_status =
+        FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED;
+    payload.certificate_binding_reason = "canonical_certificate_binding_unverifiable";
     return payload;
+}
+
+struct ModalLinearizationDescriptorFixture {
+    static constexpr char kDigest[] =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    double tangent_frames[12] = {
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    double equilibrium[6] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0};
+    double effective_field[6] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0};
+    double external_field[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    double alpha[2] = {0.01, 0.01};
+    FullmagFemModalLinearizationDescriptor descriptor{};
+
+    ModalLinearizationDescriptorFixture()
+    {
+        descriptor.abi_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION;
+        descriptor.struct_size = sizeof(descriptor);
+        descriptor.schema_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_SCHEMA;
+        descriptor.node_count = 2;
+        descriptor.tangent_dof_count = 4;
+        descriptor.coordinate_unit = "m";
+        descriptor.magnetisation_unit = "A/m";
+        descriptor.time_unit = "s";
+        descriptor.frequency_unit = "Hz";
+        descriptor.angular_frequency_unit = "rad/s";
+        descriptor.linearization_state_digest = kDigest;
+        descriptor.equilibrium_digest = kDigest;
+        descriptor.operator_input_digest = kDigest;
+        descriptor.term_presence_mask = 0;
+        descriptor.tangent_frame_xyz = tangent_frames;
+        descriptor.tangent_frame_xyz_count = 12;
+        descriptor.equilibrium_m0_xyz = equilibrium;
+        descriptor.equilibrium_m0_xyz_count = 6;
+        descriptor.effective_field_h_eff0_xyz = effective_field;
+        descriptor.effective_field_h_eff0_xyz_count = 6;
+        descriptor.external_field_h_ext0_xyz = external_field;
+        descriptor.external_field_h_ext0_xyz_count = 6;
+        descriptor.alpha_per_node = alpha;
+        descriptor.alpha_per_node_count = 2;
+        descriptor.uniform_saturation_magnetisation_a_per_m = 1.0;
+    }
+};
+
+constexpr char ModalLinearizationDescriptorFixture::kDigest[];
+
+struct ModalCertificateV6CAbiGoldenFixture {
+    std::uint32_t magnetic_regions[4] = {7, 7, 7, 7};
+    std::uint32_t scalar_regions[4] = {100, 100, 100, 100};
+    std::uint32_t boundary_axes[4] = {0, 1, 2, 3};
+    fd::MeshSymmetryCertificateRegionRole magnetic_roles[1] = {
+        {7, fd::MeshSymmetryCertificatePartRole::magnetic},
+    };
+    fd::MeshSymmetryCertificateRegionRole scalar_roles[1] = {
+        {100, fd::MeshSymmetryCertificatePartRole::scalar_airbox},
+    };
+    fd::MeshSymmetryCertificateV6Relation generators[4] = {
+        {0, 1, 1, fd::MeshSymmetryCertificateRelationKind::face},
+        {2, 3, 1, fd::MeshSymmetryCertificateRelationKind::face},
+        {0, 2, 2, fd::MeshSymmetryCertificateRelationKind::face},
+        {1, 3, 2, fd::MeshSymmetryCertificateRelationKind::face},
+    };
+    fd::MeshSymmetryCertificateV6Relation closure[6] = {
+        {0, 1, 1, fd::MeshSymmetryCertificateRelationKind::face},
+        {2, 3, 1, fd::MeshSymmetryCertificateRelationKind::face},
+        {0, 2, 2, fd::MeshSymmetryCertificateRelationKind::face},
+        {1, 3, 2, fd::MeshSymmetryCertificateRelationKind::face},
+        {0, 3, 3, fd::MeshSymmetryCertificateRelationKind::edge},
+        {1, 2, 3, fd::MeshSymmetryCertificateRelationKind::edge},
+    };
+    std::uint64_t class_ids[4] = {0, 0, 0, 0};
+    fd::MeshSymmetryCertificateV6ClassDigest magnetic_class_digest[1] = {
+        {0, 4, "sha256:88feeb3b3663fbb296e50c8f7793b69577d882945f921a5d296cbbd0d93cebac"},
+    };
+    fd::MeshSymmetryCertificateV6ClassDigest scalar_class_digest[1] = {
+        {0, 4, "sha256:7ff33f86d0dc4a728a5beaf03ef9b05fb20ee1821b92218d846272a01db7366c"},
+    };
+    FullmagFemModalCertificateV6Relation c_generators[4] = {
+        {0, 1, 1, 1}, {2, 3, 1, 1}, {0, 2, 2, 1}, {1, 3, 2, 1},
+    };
+    FullmagFemModalCertificateV6Relation c_closure[6] = {
+        {0, 1, 1, 1}, {2, 3, 1, 1}, {0, 2, 2, 1}, {1, 3, 2, 1},
+        {0, 3, 3, 2}, {1, 2, 3, 2},
+    };
+    FullmagFemModalCertificateV6RegionRole c_magnetic_roles[1] = {{7, 1}};
+    FullmagFemModalCertificateV6RegionRole c_scalar_roles[1] = {{100, 2}};
+    FullmagFemModalCertificateV6ClassDigest c_magnetic_class_digest[1] = {
+        {0, 4, "sha256:88feeb3b3663fbb296e50c8f7793b69577d882945f921a5d296cbbd0d93cebac"},
+    };
+    FullmagFemModalCertificateV6ClassDigest c_scalar_class_digest[1] = {
+        {0, 4, "sha256:7ff33f86d0dc4a728a5beaf03ef9b05fb20ee1821b92218d846272a01db7366c"},
+    };
+    FullmagFemModalCertificateV6View c_views[4]{};
+    FullmagFemModalCertificateV6BindingRequest c_binding{};
+    fd::MeshSymmetryCertificateV6Binding native_binding{};
+
+    fd::MeshSymmetryCertificateV6View native_view(
+        fd::MeshSymmetryCertificateV6ViewKind view_kind,
+        fd::MeshSymmetryCertificatePartRole part_role,
+        const char *part_identity,
+        const char *topology_fingerprint,
+        const std::uint32_t *regions,
+        const fd::MeshSymmetryCertificateRegionRole *roles,
+        const fd::MeshSymmetryCertificateV6ClassDigest *digests)
+    {
+        fd::MeshSymmetryCertificateV6View view{};
+        view.schema_version = "periodic_mesh_certificate.v6";
+        view.view_kind = view_kind;
+        view.part_role = part_role;
+        view.part_identity = part_identity;
+        view.topology_fingerprint = topology_fingerprint;
+        view.node_count = 4;
+        view.region_ids = regions;
+        view.boundary_axis_masks = boundary_axes;
+        view.region_roles = roles;
+        view.region_role_count = 1;
+        view.generator_relations = generators;
+        view.generator_relation_count = 4;
+        view.closure_relations = closure;
+        view.closure_relation_count = 6;
+        view.require_complete_closure = true;
+        view.expected_class_ids = class_ids;
+        view.expected_class_id_count = 4;
+        view.expected_class_digests = digests;
+        view.expected_class_digest_count = 1;
+        return view;
+    }
+
+    FullmagFemModalCertificateV6View c_view(
+        std::uint32_t view_kind,
+        std::uint32_t part_role,
+        const char *part_identity,
+        const char *topology_fingerprint,
+        const std::uint32_t *regions,
+        const FullmagFemModalCertificateV6RegionRole *roles,
+        const FullmagFemModalCertificateV6ClassDigest *digests)
+    {
+        FullmagFemModalCertificateV6View view{};
+        view.view_kind = view_kind;
+        view.part_role = part_role;
+        view.part_identity = part_identity;
+        view.topology_fingerprint = topology_fingerprint;
+        view.node_count = 4;
+        view.region_ids = regions;
+        view.boundary_axis_masks = boundary_axes;
+        view.region_roles = roles;
+        view.region_role_count = 1;
+        view.generator_relations = c_generators;
+        view.generator_relation_count = 4;
+        view.closure_relations = c_closure;
+        view.closure_relation_count = 6;
+        view.require_complete_closure = 1;
+        view.expected_class_ids = class_ids;
+        view.expected_class_id_count = 4;
+        view.expected_class_digests = digests;
+        view.expected_class_digest_count = 1;
+        return view;
+    }
+
+    void initialize()
+    {
+        fd::MeshSymmetryCertificateV6BindingRequest native_request{};
+        native_request.schema_version = "periodic_mesh_certificate.v6";
+        native_request.mesh_generation_identity = "mesh-generation:fixture";
+        native_request.mesh_magnetic = native_view(
+            fd::MeshSymmetryCertificateV6ViewKind::authoritative_mesh,
+            fd::MeshSymmetryCertificatePartRole::magnetic,
+            "magnetic:fixture",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            magnetic_regions,
+            magnetic_roles,
+            magnetic_class_digest);
+        native_request.payload_magnetic = native_view(
+            fd::MeshSymmetryCertificateV6ViewKind::compact_payload,
+            fd::MeshSymmetryCertificatePartRole::magnetic,
+            "magnetic:fixture",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            magnetic_regions,
+            magnetic_roles,
+            magnetic_class_digest);
+        native_request.mesh_scalar = native_view(
+            fd::MeshSymmetryCertificateV6ViewKind::authoritative_mesh,
+            fd::MeshSymmetryCertificatePartRole::scalar_airbox,
+            "airbox:fixture",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            scalar_regions,
+            scalar_roles,
+            scalar_class_digest);
+        native_request.payload_scalar = native_view(
+            fd::MeshSymmetryCertificateV6ViewKind::compact_payload,
+            fd::MeshSymmetryCertificatePartRole::scalar_airbox,
+            "airbox:fixture",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            scalar_regions,
+            scalar_roles,
+            scalar_class_digest);
+        fd::verify_mesh_symmetry_certificate_v6(native_request, native_binding);
+
+        c_views[0] = c_view(
+            1,
+            1,
+            "magnetic:fixture",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            magnetic_regions,
+            c_magnetic_roles,
+            c_magnetic_class_digest);
+        c_views[1] = c_view(
+            2,
+            1,
+            "magnetic:fixture",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            magnetic_regions,
+            c_magnetic_roles,
+            c_magnetic_class_digest);
+        c_views[2] = c_view(
+            1,
+            2,
+            "airbox:fixture",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            scalar_regions,
+            c_scalar_roles,
+            c_scalar_class_digest);
+        c_views[3] = c_view(
+            2,
+            2,
+            "airbox:fixture",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            scalar_regions,
+            c_scalar_roles,
+            c_scalar_class_digest);
+        c_binding.schema_version = "periodic_mesh_certificate.v6";
+        c_binding.mesh_magnetic = c_views[0];
+        c_binding.payload_magnetic = c_views[1];
+        c_binding.mesh_scalar = c_views[2];
+        c_binding.payload_scalar = c_views[3];
+    }
+};
+
+void modal_v6_c_abi_relation_views_accept_golden_and_reject_digest_tamper()
+{
+    ModalCertificateV6CAbiGoldenFixture fixture{};
+    fixture.initialize();
+    check(fixture.native_binding.canonical_preimage_sha256[0] != '\0',
+          "v6 golden fixture must produce a canonical preimage digest");
+
+    fullmag_fem_mesh_desc sentinel_mesh{};
+    std::uint32_t reduced_node[] = {0u};
+    FullmagFemModalSharedDomainPayload payload = certificate_payload();
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    payload.canonical_preimage = fixture.native_binding.canonical_preimage.c_str();
+    payload.canonical_preimage_len = fixture.native_binding.canonical_preimage.size();
+    payload.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+    payload.magnetic_class_digest_sha256 = fixture.native_binding.magnetic_class_digest_sha256;
+    payload.scalar_class_digest_sha256 = fixture.native_binding.scalar_class_digest_sha256;
+    payload.certificate_binding_v6 = &fixture.c_binding;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.poisson_airbox_periodic_mesh_certificate_schema =
+        "periodic_mesh_certificate.v6";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.mesh_generation_identity = "mesh-generation:fixture";
+    request.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+    request.shared_domain_payload = &payload;
+
+    const FullmagFemModalCertificateV6Relation *saved_generators =
+        fixture.c_binding.mesh_magnetic.generator_relations;
+    fixture.c_binding.mesh_magnetic.generator_relations = nullptr;
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a v6 view with a missing generator relation array");
+    check(contains(result.diagnostics_json, "periodic_mesh_certificate_v6_c_abi_view_missing"),
+          "modal C ABI reports a stable malformed v6 view token");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    fixture.c_binding.mesh_magnetic.generator_relations = saved_generators;
+
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.resolved_certificate_binding_status ==
+              FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_ACCEPTED,
+          "modal C ABI accepts a complete v6 relation-view binding before solver dispatch");
+    check(!contains(result.diagnostics_json, "unsupported_abi_version"),
+          "public v17 relation fixture is normalized to the internal v16 solver ABI");
+    check(contains(result.resolved_canonical_preimage_sha256,
+                   fixture.native_binding.canonical_preimage_sha256),
+          "modal C ABI publishes the accepted v6 canonical binding digest");
+    check(!contains(result.diagnostics_json, "canonical_certificate_binding_unverifiable"),
+          "accepted v6 relation views must not be reported as unverifiable");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload.canonical_preimage = nullptr;
+    payload.canonical_preimage_len = 0;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects complete v6 relation views without canonical preimage bytes");
+    check(contains(result.diagnostics_json, "canonical_preimage_missing"),
+          "modal C ABI reports missing canonical preimage bytes");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    payload.canonical_preimage = fixture.native_binding.canonical_preimage.c_str();
+    payload.canonical_preimage_len = fixture.native_binding.canonical_preimage.size();
+
+    payload.canonical_preimage_sha256 = nullptr;
+    request.canonical_preimage_sha256 = nullptr;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a v6 binding with a missing canonical digest");
+    check(contains(result.diagnostics_json, "canonical_certificate_binding_unverifiable"),
+          "modal C ABI reports a stable missing canonical digest reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    payload.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+    request.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+
+    payload.canonical_preimage_sha256 =
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    request.canonical_preimage_sha256 = payload.canonical_preimage_sha256;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a stale v6 canonical binding digest");
+    check(contains(result.diagnostics_json, "certificate_binding_digest_mismatch"),
+          "modal C ABI reports a stable v6 binding digest mismatch");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_v18_linearization_descriptor_is_fail_closed()
+{
+    ModalCertificateV6CAbiGoldenFixture certificate_fixture{};
+    certificate_fixture.initialize();
+    ModalLinearizationDescriptorFixture descriptor_fixture{};
+    fullmag_fem_mesh_desc sentinel_mesh{};
+    std::uint32_t reduced_node[] = {0u};
+    fullmag_fem_frequency_domain_exchange_edge exchange_edge{0u, 1u, 1.0};
+    FullmagFemModalSharedDomainPayload payload = certificate_payload();
+    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    payload.struct_size = sizeof(payload);
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    payload.canonical_preimage = certificate_fixture.native_binding.canonical_preimage.c_str();
+    payload.canonical_preimage_len = certificate_fixture.native_binding.canonical_preimage.size();
+    payload.canonical_preimage_sha256 =
+        certificate_fixture.native_binding.canonical_preimage_sha256;
+    payload.magnetic_class_digest_sha256 =
+        certificate_fixture.native_binding.magnetic_class_digest_sha256;
+    payload.scalar_class_digest_sha256 = certificate_fixture.native_binding.scalar_class_digest_sha256;
+    payload.certificate_binding_v6 = &certificate_fixture.c_binding;
+    descriptor_fixture.descriptor.linearization_state_digest = payload.linearization_state_digest;
+    descriptor_fixture.descriptor.equilibrium_digest = payload.equilibrium_digest;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.mesh_generation_identity = "mesh-generation:fixture";
+    request.canonical_preimage_sha256 =
+        certificate_fixture.native_binding.canonical_preimage_sha256;
+    request.shared_domain_payload = &payload;
+
+    FullmagFemModalSharedDomainPayload short_payload = payload;
+    short_payload.struct_size = static_cast<std::uint32_t>(
+        offsetof(FullmagFemModalSharedDomainPayload, linearization_descriptor));
+    request.shared_domain_payload = &short_payload;
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload with a short descriptor tail must fail closed");
+    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
+          "v18 modal payload reports a short descriptor-tail reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    FullmagFemModalSharedDomainPayload v17_prefix_payload = payload;
+    v17_prefix_payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION;
+    v17_prefix_payload.struct_size = static_cast<std::uint32_t>(
+        offsetof(FullmagFemModalSharedDomainPayload, linearization_descriptor));
+    request.shared_domain_payload = &v17_prefix_payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal payload must fail before reading v18 tail fields");
+    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
+          "v17 modal payload reports a stable short-prefix reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    FullmagFemModalSharedDomainPayload v16_prefix_payload = payload;
+    v16_prefix_payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION;
+    v16_prefix_payload.struct_size = static_cast<std::uint32_t>(
+        offsetof(FullmagFemModalSharedDomainPayload, mesh_generation_identity));
+    request.shared_domain_payload = &v16_prefix_payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v16 modal payload must fail before reading v18 tail fields");
+    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
+          "v16 modal payload reports a stable short-prefix reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    request.shared_domain_payload = &payload;
+
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload without a descriptor must fail closed");
+    check(contains(result.diagnostics_json, "linearization_descriptor_missing"),
+          "v18 modal payload reports a missing descriptor reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload.linearization_descriptor = &descriptor_fixture.descriptor;
+    descriptor_fixture.descriptor.coordinate_unit = "mm";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects a non-SI descriptor unit");
+    check(contains(result.diagnostics_json, "linearization_descriptor_unit_invalid"),
+          "v18 modal payload reports the unit validation reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    descriptor_fixture.descriptor.coordinate_unit = "m";
+
+    descriptor_fixture.descriptor.linearization_state_digest = "not-a-digest";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects a malformed descriptor digest");
+    check(contains(result.diagnostics_json, "linearization_descriptor_digest_invalid"),
+          "v18 modal payload reports the descriptor digest reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    descriptor_fixture.descriptor.linearization_state_digest =
+        payload.linearization_state_digest;
+
+    descriptor_fixture.descriptor.linearization_state_digest =
+        ModalLinearizationDescriptorFixture::kDigest;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects a descriptor state-digest mismatch");
+    check(contains(result.diagnostics_json, "linearization_descriptor_state_digest_mismatch"),
+          "v18 modal payload reports the state-digest mismatch reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    descriptor_fixture.descriptor.linearization_state_digest =
+        payload.linearization_state_digest;
+
+    descriptor_fixture.descriptor.equilibrium_digest =
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects a descriptor equilibrium-digest mismatch");
+    check(contains(result.diagnostics_json, "linearization_descriptor_equilibrium_digest_mismatch"),
+          "v18 modal payload reports the equilibrium-digest mismatch reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    descriptor_fixture.descriptor.equilibrium_digest = payload.equilibrium_digest;
+
+    descriptor_fixture.descriptor.tangent_frame_xyz_count = 0;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects a descriptor with an incompatible array count");
+    check(contains(result.diagnostics_json, "linearization_descriptor_state_arrays_invalid"),
+          "v18 modal payload reports the descriptor array-count reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    descriptor_fixture.descriptor.tangent_frame_xyz_count = 12;
+    descriptor_fixture.descriptor.exchange_edge_count = 1;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects an inactive exchange view with a non-zero count");
+    check(contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
+          "v18 modal payload reports the inactive exchange-view reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    descriptor_fixture.descriptor.exchange_edge_count = 0;
+    descriptor_fixture.descriptor.exchange_edges = &exchange_edge;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects an inactive exchange view with a non-null pointer");
+    check(contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
+          "v18 modal payload reports the inactive exchange-pointer reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    descriptor_fixture.descriptor.term_presence_mask =
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_EXCHANGE;
+    descriptor_fixture.descriptor.exchange_term_digest = payload.linearization_state_digest;
+    descriptor_fixture.descriptor.exchange_edge_count = 1;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+              contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
+          "v18 modal payload rejects graph-only exchange without scalar material carrier");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    FullmagFemModalExchangeMaterialView material_view{};
+    material_view.abi_version = FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_V1_ABI_VERSION;
+    material_view.struct_size = sizeof(material_view);
+    material_view.schema_version = FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_SCHEMA;
+    material_view.material_kind = FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_KIND_AEX;
+    material_view.exchange_stiffness_j_per_m = 1.0;
+    payload.exchange_material_view = &material_view;
+    descriptor_fixture.descriptor.exchange_edges = nullptr;
+    descriptor_fixture.descriptor.exchange_edge_count = 0;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(!contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
+          "v18 modal payload accepts scalar exchange material carrier without graph edges");
+    check(!contains(result.diagnostics_json, "exchange_material_view_invalid"),
+          "v18 modal payload accepts a valid append-only exchange material view");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    material_view.exchange_stiffness_j_per_m = -1.0;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v18 modal payload rejects non-positive scalar exchange material");
+    check(contains(result.diagnostics_json, "exchange_material_view_invalid"),
+          "invalid scalar exchange material uses a stable reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    material_view.exchange_stiffness_j_per_m = 1.0;
+    payload.exchange_material_view = nullptr;
+
+    descriptor_fixture.descriptor.term_presence_mask = 0;
+    descriptor_fixture.descriptor.exchange_term_digest = nullptr;
+    descriptor_fixture.descriptor.exchange_edges = nullptr;
+    descriptor_fixture.descriptor.exchange_edge_count = 0;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(!contains(result.diagnostics_json, "linearization_descriptor_"),
+          "v18 modal payload accepts a complete inactive-term descriptor");
+    fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
 void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
@@ -318,6 +1181,9 @@ void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
     request.poisson_airbox_airbox_pair_count = 1;
     request.poisson_airbox_periodic_mesh_certificate_schema =
         "periodic_mesh_certificate.v5";
+    request.mesh_generation_identity = "mesh-generation:fixture";
+    request.canonical_preimage_sha256 =
+        "sha256:5c4867e34716043a16db534f5ffca90613cff84119573b5da0afdb2f1aafb6d2";
 
     FullmagFemModalSharedDomainPayload payload = certificate_payload();
     request.shared_domain_payload = &payload;
@@ -352,6 +1218,194 @@ void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
     check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
           "modal C ABI reports stable short payload reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload = certificate_payload();
+    payload.struct_size = 0;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects an absent shared payload struct_size before tail dereference");
+    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
+          "modal C ABI reports an absent shared payload prefix reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload = certificate_payload();
+    payload.magnetic_pair_count = 2;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a changed magnetic certificate pair count");
+    check(contains(result.diagnostics_json, "certificate_pair_count_mismatch"),
+          "modal C ABI reports the changed pair count with a stable token");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    FullmagFemModalSharedDomainPayload missing_identity = certificate_payload();
+    missing_identity.bias_field_sample_id = nullptr;
+    request.shared_domain_payload = &missing_identity;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a missing certificate identity");
+    check(contains(result.diagnostics_json, "missing_certificate_identity"),
+          "modal C ABI reports the missing identity with a stable token");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    fullmag_fem_mesh_desc sentinel_mesh{};
+    std::uint32_t reduced_node[] = {0u};
+    payload = certificate_payload();
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    payload.boundary_marker = 0;
+    request.shared_domain_payload = &payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects an unknown airbox marker before assembly");
+    check(contains(result.diagnostics_json, "unknown_airbox_marker"),
+          "modal C ABI reports the unknown marker with a stable token");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload.boundary_marker = 1;
+    payload.equilibrium_digest =
+        "sha256:6123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI refuses a well-formed identity without a canonical binding verifier");
+    check(contains(result.diagnostics_json, "canonical_certificate_binding_unverifiable"),
+          "modal C ABI fails closed when the producer cannot prove canonical identity binding");
+    check(result.resolved_certificate_binding_status ==
+              FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNVERIFIABLE,
+          "modal C ABI exposes an unverifiable certificate binding status");
+    check(result.resolved_canonical_preimage_sha256 != nullptr &&
+              result.resolved_canonical_preimage_sha256[0] == '\0',
+          "modal C ABI does not publish a producer canonical digest without relation views");
+    check(contains(result.resolved_certificate_binding_reason,
+                   "canonical_certificate_binding_unverifiable"),
+          "modal C ABI exposes the stable binding reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_v17_certificate_preimage_validation_is_fail_closed()
+{
+    fullmag_fem_mesh_desc sentinel_mesh{};
+    std::uint32_t reduced_node[] = {0u};
+    ModalCertificateV6CAbiGoldenFixture fixture{};
+    fixture.initialize();
+    const auto bind_v6_payload = [&](FullmagFemModalSharedDomainPayload &payload) {
+        payload.canonical_preimage = fixture.native_binding.canonical_preimage.c_str();
+        payload.canonical_preimage_len = fixture.native_binding.canonical_preimage.size();
+        payload.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+        payload.magnetic_class_digest_sha256 =
+            fixture.native_binding.magnetic_class_digest_sha256;
+        payload.scalar_class_digest_sha256 =
+            fixture.native_binding.scalar_class_digest_sha256;
+        payload.certificate_binding_v6 = &fixture.c_binding;
+    };
+    FullmagFemModalEigenRequest request = base_request();
+    request.poisson_airbox_periodic_mesh_certificate_schema =
+        "periodic_mesh_certificate.v6";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.mesh_generation_identity = "mesh-generation:fixture";
+    request.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+
+    FullmagFemModalSharedDomainPayload payload = certificate_payload();
+    bind_v6_payload(payload);
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    request.shared_domain_payload = &payload;
+
+    FullmagFemModalEigenRequest short_request = request;
+    short_request.struct_size =
+        static_cast<std::uint64_t>(offsetof(FullmagFemModalEigenRequest,
+                                            mesh_generation_identity));
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&short_request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal request rejects a prefix shorter than certificate identity fields");
+    check(contains(result.diagnostics_json, "struct_size_too_small"),
+          "v17 modal request reports a short certificate prefix");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    FullmagFemModalSharedDomainPayload short_payload = payload;
+    short_payload.struct_size = static_cast<std::uint32_t>(
+        offsetof(FullmagFemModalSharedDomainPayload, mesh_generation_identity));
+    request.shared_domain_payload = &short_payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal payload rejects a prefix shorter than certificate fields");
+    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
+          "v17 modal payload reports a short certificate prefix");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    request.shared_domain_payload = &payload;
+    payload.canonical_preimage_sha256 =
+        "sha256:8c4867e34716043a16db534f5ffca90613cff84119573b5da0afdb2f1aafb6d2";
+    request.canonical_preimage_sha256 = payload.canonical_preimage_sha256;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal payload rejects a mismatched canonical preimage digest");
+    check(contains(result.diagnostics_json, "certificate_binding_digest_mismatch"),
+          "v17 modal payload reports the v6 binding digest mismatch");
+    check(result.resolved_certificate_binding_status ==
+              FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID,
+          "v17 digest mismatch reports invalid binding status");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload = certificate_payload();
+    bind_v6_payload(payload);
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    static const char invalid_utf8[] = "canonical\xC0\xAF";
+    payload.canonical_preimage = invalid_utf8;
+    payload.canonical_preimage_len = sizeof(invalid_utf8) - 1u;
+    payload.canonical_preimage_sha256 = fixture.native_binding.canonical_preimage_sha256;
+    request.canonical_preimage_sha256 = payload.canonical_preimage_sha256;
+    request.shared_domain_payload = &payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal payload rejects invalid UTF-8 canonical preimage bytes");
+    check(contains(result.diagnostics_json, "canonical_preimage_utf8_invalid"),
+          "v17 modal payload reports invalid UTF-8");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload = certificate_payload();
+    bind_v6_payload(payload);
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    payload.canonical_preimage_len -= 1u;
+    request.canonical_preimage_sha256 = payload.canonical_preimage_sha256;
+    request.shared_domain_payload = &payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal payload rejects a canonical preimage length mismatch");
+    check(contains(result.diagnostics_json, "canonical_preimage_digest_mismatch"),
+          "v17 modal payload fails closed after a preimage length mismatch");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload = certificate_payload();
+    bind_v6_payload(payload);
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
+    request.mesh_generation_identity = "mesh-generation:other";
+    request.canonical_preimage_sha256 = payload.canonical_preimage_sha256;
+    request.shared_domain_payload = &payload;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "v17 modal request rejects a mismatched mesh generation identity");
+    check(contains(result.diagnostics_json, "certificate_binding_identity_mismatch"),
+          "v17 modal request reports identity mismatch");
+    fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
 void modal_result_provenance_is_resolved_or_explicitly_unavailable()
@@ -377,9 +1431,13 @@ void modal_result_destroy_is_safe_for_partial_allocation_and_repeated_calls()
     partial.mode_lambda = new FullmagFemComplex64[1]{};
     partial.mode_lambda_count = 1;
     partial.resolved_engine_id = new char[1]{'\0'};
+    partial.resolved_canonical_preimage_sha256 = new char[1]{'\0'};
+    partial.resolved_certificate_binding_reason = new char[1]{'\0'};
     fullmag_fem_frequency_domain_result_destroy(&partial);
     check(partial.error_message == nullptr && partial.mode_lambda == nullptr &&
-              partial.resolved_engine_id == nullptr,
+              partial.resolved_engine_id == nullptr &&
+              partial.resolved_canonical_preimage_sha256 == nullptr &&
+              partial.resolved_certificate_binding_reason == nullptr,
           "destroy clears a partially allocated modal result");
     fullmag_fem_frequency_domain_result_destroy(&partial);
 }
@@ -403,6 +1461,16 @@ void modal_shift_invert_finds_macrospin_mode()
           "macrospin modal result reports ok");
     check(contains(result.result_json, "\"accepted_mode_count\":1"),
           "macrospin modal result accepts one positive-frequency mode");
+    check(result.resolved_execution_target == FULLMAG_FEM_MODAL_EXECUTION_VALIDATION,
+          "tiny validation reports the execution lane selected by the solver");
+    check(result.resolved_spectral_transform_kind ==
+              FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT,
+          "tiny validation reports its actual shift-invert transform");
+    check(contains(result.resolved_engine_id, "tiny_validation_modal_eigen"),
+          "tiny validation reports the actual modal engine without JSON inference");
+    check(result.resolved_fallback_state == 0u &&
+              contains(result.resolved_fallback_reason, "none"),
+          "tiny validation records that no fallback was used");
     const double frequency_hz =
         extract_json_number(result.result_json, "\"frequency_hz\":");
     check(std::abs(frequency_hz - 0.15915494309189535) < 1.0e-12,
@@ -1771,6 +2839,9 @@ int main()
     modal_v16_extension_rejects_unknown_spectral_transform_and_short_prefix();
     modal_abi_layout_publishes_versioned_modal_structs();
     modal_certificate_boundary_rejects_stale_and_mismatched_identity();
+    modal_v17_certificate_preimage_validation_is_fail_closed();
+    modal_v6_c_abi_relation_views_accept_golden_and_reject_digest_tamper();
+    modal_v18_linearization_descriptor_is_fail_closed();
     modal_result_provenance_is_resolved_or_explicitly_unavailable();
     modal_result_destroy_is_safe_for_partial_allocation_and_repeated_calls();
     modal_shift_invert_finds_macrospin_mode();

@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
+#include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
 
@@ -44,6 +45,9 @@ bool uses_mean_zero_gauge(const PoissonAirboxEigenBlockProblem &problem) noexcep
 
 const char *algebraic_form_for(const PoissonAirboxEigenBlockProblem &problem) noexcept
 {
+    if (string_equals(problem.solver_adapter, "k0_poisson_airbox_cpu_schur_slepc")) {
+        return "schur_reduced_descriptor";
+    }
     return uses_mean_zero_gauge(problem) ?
         "full_coupled_descriptor_augmented_gauge" :
         "full_coupled_descriptor_no_gauge";
@@ -155,6 +159,7 @@ void write_diagnostics_json(
         {result.eigenvalue_real, result.eigenvalue_imag},
         FrequencyDomainPhaseConvention::exp_i_omega_t);
     const bool production_shared_domain =
+        problem.production_shared_domain &&
         string_equals(problem.assembly_kind, "mfem_weak_form_shared_domain") &&
         string_equals(problem.periodic_mesh_certificate_schema, "periodic_mesh_certificate.v6");
     std::snprintf(
@@ -164,6 +169,11 @@ void write_diagnostics_json(
         "\"schema_version\":\"poisson_airbox_modal_eigen_slepc.v1\","
         "\"status\":\"%s\","
         "\"reason\":\"%s\","
+        "\"target_kind\":\"%s\","
+        "\"requested_mode_count\":%u,"
+        "\"slepc_converged_reason\":\"%s\","
+        "\"slepc_converged_reason_code\":%d,"
+        "\"stop_reason\":\"%s\","
         "\"study_product\":\"modal_eigen\","
         "\"test_id\":\"%s\","
         "\"solver_adapter\":\"%s\","
@@ -174,6 +184,7 @@ void write_diagnostics_json(
         "\"gauge_reason\":\"%s\","
         "\"assembly_kind\":\"%s\","
         "\"production_implication\":%s,"
+        "\"validation_only\":%s,"
         "\"phasor_convention\":\"%s\","
         "\"eigenvalue_convention\":\"%s\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
@@ -217,6 +228,24 @@ void write_diagnostics_json(
         "\"eigen_residual_relative\":%.17g,"
         "\"relative_reference_frequency_error\":%.17g"
         "},"
+        "\"residual_fields\":{"
+        "\"residual_acceptance_name\":\"modal_original_unscaled_full_descriptor_backward_error\","
+        "\"modal_original_unscaled_full_descriptor_backward_error\":%.17g,"
+        "\"modal_original_unscaled_magnetic_block_backward_error\":%.17g,"
+        "\"modal_original_unscaled_poisson_block_backward_error\":%.17g,"
+        "\"modal_original_unscaled_gauge_constraint_backward_error\":%.17g,"
+        "\"modal_original_unscaled_magnetic_residual_l2\":%.17g,"
+        "\"modal_original_unscaled_poisson_residual_l2\":%.17g,"
+        "\"modal_original_unscaled_gauge_residual_abs\":%.17g,"
+        "\"modal_original_unscaled_full_descriptor_threshold\":%.17g,"
+        "\"slepc_reported_backward_error_diagnostic\":%.17g,"
+        "\"scaled_descriptor_backward_error_diagnostic\":null,"
+        "\"transformed_pencil_backward_error_diagnostic\":null,"
+        "\"reconstruction_vs_slepc_ratio\":%.17g,"
+        "\"eps_full_original_unscaled\":%.17g,"
+        "\"eta_row_present\":%s,"
+        "\"finite_mode_filter_status\":\"%s\""
+        "},"
         "\"eigenpair\":{"
         "\"eigenvalue_real\":%.17g,"
         "\"eigenvalue_imag\":%.17g,"
@@ -240,6 +269,14 @@ void write_diagnostics_json(
         "}",
         status != nullptr ? status : "unknown",
         reason != nullptr ? reason : "",
+        problem.target_kind != nullptr ? problem.target_kind : "",
+        problem.requested_mode_count,
+        result.slepc_converged_reason[0] != '\0'
+            ? result.slepc_converged_reason
+            : "not_available",
+        result.slepc_converged_reason_code,
+        result.stop_reason[0] != '\0' ? result.stop_reason :
+            (reason != nullptr ? reason : "not_available"),
         problem.test_id != nullptr ? problem.test_id : "",
         problem.solver_adapter != nullptr ? problem.solver_adapter : "",
         problem.demag_kind != nullptr ? problem.demag_kind : "",
@@ -249,6 +286,7 @@ void write_diagnostics_json(
         problem.gauge_reason != nullptr ? problem.gauge_reason : "",
         problem.assembly_kind != nullptr ? problem.assembly_kind : "",
         production_shared_domain ? "true" : "false",
+        production_shared_domain ? "false" : "true",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
         algebraic_form_for(problem),
@@ -275,6 +313,19 @@ void write_diagnostics_json(
         result.gauge_mean_abs,
         result.eigen_residual_relative,
         result.relative_reference_frequency_error,
+        result.reconstructed_full_descriptor_backward_error,
+        result.magnetic_block_backward_error,
+        result.poisson_block_backward_error,
+        result.gauge_constraint_backward_error,
+        result.magnetic_residual_l2,
+        result.poisson_residual_l2,
+        result.gauge_residual_abs,
+        problem.residual_tolerance,
+        result.slepc_reported_backward_error,
+        result.reconstruction_vs_slepc_ratio,
+        result.reconstructed_full_descriptor_backward_error,
+        uses_mean_zero_gauge(problem) ? "true" : "false",
+        result.positive_frequency_branch_found ? "passed" : "failed",
         result.eigenvalue_real,
         result.eigenvalue_imag,
         kinematics.lambda.real_per_s,
@@ -303,6 +354,7 @@ FrequencyDomainStatus fail(
     if (result != nullptr) {
         result->status = status;
         copy_message(result->error_message, sizeof(result->error_message), message);
+        copy_message(result->stop_reason, sizeof(result->stop_reason), reason);
         const char *status_json = "failed";
         if (status == FrequencyDomainStatus::unavailable) {
             status_json = "unavailable";
@@ -333,13 +385,57 @@ FrequencyDomainStatus validate_problem(
     result->airbox_pair_count = problem.airbox_pair_count;
     result->expected_reference_frequency_hz = problem.expected_reference_frequency_hz;
 
+    if (problem.requested_mode_count == 0) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires requested_mode_count > 0",
+            "poisson_airbox_eigen_invalid_requested_mode_count");
+    }
+    const bool nearest_target = string_equals(problem.target_kind, "nearest_frequency");
+    const bool window_target = string_equals(problem.target_kind, "frequency_window");
+    if (!nearest_target && !window_target) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires target_kind=nearest_frequency or frequency_window",
+            problem.target_kind == nullptr
+                ? "poisson_airbox_eigen_missing_target_kind"
+                : "poisson_airbox_eigen_unsupported_target_kind");
+    }
+    if (!std::isfinite(problem.frequency_min_hz) ||
+        !std::isfinite(problem.frequency_max_hz) ||
+        problem.frequency_min_hz < 0.0 ||
+        problem.frequency_max_hz < 0.0 ||
+        (window_target && !(problem.frequency_max_hz > problem.frequency_min_hz))) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires a finite positive frequency window only for frequency_window",
+            "poisson_airbox_eigen_invalid_frequency_window");
+    }
+    if (!std::isfinite(problem.target_frequency_hz) || problem.target_frequency_hz < 0.0 ||
+        (window_target && problem.target_frequency_hz != 0.0 &&
+         (problem.target_frequency_hz < problem.frequency_min_hz ||
+          problem.target_frequency_hz > problem.frequency_max_hz))) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 target_frequency_hz must be finite and non-negative; a non-zero frequency_window target must lie inside the requested window",
+            "poisson_airbox_eigen_target_outside_frequency_window");
+    }
+
     if (problem.abi_version != kPoissonAirboxEigenBlockProblemAbiVersion ||
         problem.struct_size < sizeof(PoissonAirboxEigenBlockProblem)) {
         return fail(
             problem,
             result,
             FrequencyDomainStatus::validation_error,
-            "PA-E2 Poisson-airbox modal eigensolver requires ABI version 2",
+            "PA-E2 Poisson-airbox modal eigensolver requires ABI version 3",
             "poisson_airbox_eigen_unsupported_abi");
     }
     const bool robin = string_equals(problem.outer_boundary_kind, "poisson_robin");
@@ -487,12 +583,14 @@ FrequencyDomainStatus validate_problem(
             "PA-E2 Poisson-airbox modal eigensolver requires exp_plus_i_omega_t and lambda_imag_positive_frequency",
             "poisson_airbox_eigen_convention_mismatch");
     }
-    if (!string_equals(problem.solver_adapter, "k0_poisson_airbox_cpu_full_coupled_slepc")) {
+    if (!string_equals(problem.solver_adapter, "k0_poisson_airbox_cpu_full_coupled_slepc") &&
+        !string_equals(problem.solver_adapter, "k0_poisson_airbox_cpu_schur_slepc") &&
+        !string_equals(problem.solver_adapter, "k0_poisson_airbox_gpu_petsc_slepc")) {
         return fail(
             problem,
             result,
             FrequencyDomainStatus::validation_error,
-            "PA-E2 Poisson-airbox modal eigensolver requires the full-coupled SLEPc adapter",
+            "PA-E2 Poisson-airbox modal residual evaluator requires a supported CPU/GPU SLEPc adapter",
             "poisson_airbox_eigen_solver_adapter_mismatch");
     }
     if (!problem.k0_only ||
@@ -750,6 +848,8 @@ struct ResidualMetrics {
     double phi_relative = 0.0;
     double gauge_relative = 0.0;
     double gauge_abs = 0.0;
+    double q_l2 = 0.0;
+    double phi_l2 = 0.0;
 };
 
 ResidualMetrics compute_residual_metrics(
@@ -801,10 +901,12 @@ ResidualMetrics compute_residual_metrics(
     }
     const double weight_norm = std::sqrt(static_cast<double>(weight_norm_squared));
     ResidualMetrics metrics{};
-    metrics.q_relative = complex_l2_norm(q_residual) /
+    metrics.q_l2 = complex_l2_norm(q_residual);
+    metrics.phi_l2 = complex_l2_norm(phi_residual);
+    metrics.q_relative = metrics.q_l2 /
         (complex_l2_norm(a_qq_q) + complex_l2_norm(a_qphi_phi) +
          std::abs(lambda) * complex_l2_norm(b_qq_q) + 1.0e-30);
-    metrics.phi_relative = complex_l2_norm(phi_residual) /
+    metrics.phi_relative = metrics.phi_l2 /
         (complex_l2_norm(a_phiq_q) + complex_l2_norm(a_phiphi_phi) +
          weight_norm * std::abs(eta) + 1.0e-30);
     metrics.gauge_abs = std::abs(gauge_residual);
@@ -969,17 +1071,24 @@ bool create_sequential_sparse_matrix(
     std::vector<PetscInt> row_nonzeros;
     row_nonzeros.reserve(static_cast<std::size_t>(rows));
     for (PetscInt row = 0; row < rows; ++row) {
-        row_nonzeros.push_back(static_cast<PetscInt>(
+        row_nonzeros.push_back(1 + static_cast<PetscInt>(
             csr.row_offsets[static_cast<std::size_t>(row + 1)] -
             csr.row_offsets[static_cast<std::size_t>(row)]));
     }
     if (MatCreateSeqAIJ(PETSC_COMM_SELF, rows, columns, 0, row_nonzeros.data(), matrix) != 0) {
         return false;
     }
+    if (MatSetOption(*matrix, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE) != 0 ||
+        MatSetOption(*matrix, MAT_IGNORE_ZERO_ENTRIES, PETSC_FALSE) != 0) {
+        return false;
+    }
     for (PetscInt row = 0; row < rows; ++row) {
         const std::uint32_t begin = csr.row_offsets[static_cast<std::size_t>(row)];
         const std::uint32_t end = csr.row_offsets[static_cast<std::size_t>(row + 1)];
+        bool diagonal_present = false;
         for (std::uint32_t entry = begin; entry < end; ++entry) {
+            diagonal_present = diagonal_present ||
+                static_cast<PetscInt>(csr.column_indices[entry]) == row;
             if (MatSetValue(
                     *matrix,
                     row,
@@ -988,6 +1097,12 @@ bool create_sequential_sparse_matrix(
                     INSERT_VALUES) != 0) {
                 return false;
             }
+        }
+        // Shift-and-invert LU requires a structural diagonal even when the
+        // real-frequency-rotated physics has an exact zero at this location.
+        if (row < columns && !diagonal_present &&
+            MatSetValue(*matrix, row, row, 0.0, INSERT_VALUES) != 0) {
+            return false;
         }
     }
     return MatAssemblyBegin(*matrix, MAT_FINAL_ASSEMBLY) == 0 &&
@@ -1136,12 +1251,18 @@ FrequencyDomainStatus evaluate_poisson_airbox_modal_residuals(
     out_metrics->poisson_block_backward_error = residuals.phi_relative;
     out_metrics->gauge_constraint_backward_error = residuals.gauge_relative;
     out_metrics->gauge_mean_abs = residuals.gauge_abs;
+    out_metrics->magnetic_residual_l2 = residuals.q_l2;
+    out_metrics->poisson_residual_l2 = residuals.phi_l2;
+    out_metrics->gauge_residual_abs = residuals.gauge_abs;
     if (!std::isfinite(out_metrics->reconstructed_full_descriptor_backward_error) ||
         !std::isfinite(out_metrics->reconstruction_vs_slepc_ratio) ||
         !std::isfinite(out_metrics->magnetic_block_backward_error) ||
         !std::isfinite(out_metrics->poisson_block_backward_error) ||
         !std::isfinite(out_metrics->gauge_constraint_backward_error) ||
-        !std::isfinite(out_metrics->gauge_mean_abs)) {
+        !std::isfinite(out_metrics->gauge_mean_abs) ||
+        !std::isfinite(out_metrics->magnetic_residual_l2) ||
+        !std::isfinite(out_metrics->poisson_residual_l2) ||
+        !std::isfinite(out_metrics->gauge_residual_abs)) {
         *out_metrics = PoissonAirboxModalResidualMetrics{};
         return FrequencyDomainStatus::operator_error;
     }
@@ -1168,12 +1289,18 @@ FrequencyDomainStatus apply_poisson_airbox_modal_residual_certification(
         !std::isfinite(metrics.magnetic_block_backward_error) ||
         !std::isfinite(metrics.poisson_block_backward_error) ||
         !std::isfinite(metrics.gauge_constraint_backward_error) ||
+        !std::isfinite(metrics.magnetic_residual_l2) ||
+        !std::isfinite(metrics.poisson_residual_l2) ||
+        !std::isfinite(metrics.gauge_residual_abs) ||
         !std::isfinite(metrics.gauge_mean_abs) ||
         metrics.slepc_reported_backward_error < 0.0 ||
         metrics.reconstructed_full_descriptor_backward_error < 0.0 ||
         metrics.magnetic_block_backward_error < 0.0 ||
         metrics.poisson_block_backward_error < 0.0 ||
         metrics.gauge_constraint_backward_error < 0.0 ||
+        metrics.magnetic_residual_l2 < 0.0 ||
+        metrics.poisson_residual_l2 < 0.0 ||
+        metrics.gauge_residual_abs < 0.0 ||
         metrics.reconstructed_full_descriptor_backward_error != expected_full) {
         return FrequencyDomainStatus::operator_error;
     }
@@ -1185,6 +1312,9 @@ FrequencyDomainStatus apply_poisson_airbox_modal_residual_certification(
     out_result->magnetic_block_backward_error = metrics.magnetic_block_backward_error;
     out_result->poisson_block_backward_error = metrics.poisson_block_backward_error;
     out_result->gauge_constraint_backward_error = metrics.gauge_constraint_backward_error;
+    out_result->magnetic_residual_l2 = metrics.magnetic_residual_l2;
+    out_result->poisson_residual_l2 = metrics.poisson_residual_l2;
+    out_result->gauge_residual_abs = metrics.gauge_residual_abs;
     out_result->full_residual_reconstruction_relative_error =
         metrics.reconstructed_full_descriptor_backward_error;
     out_result->poisson_constraint_relative_residual = metrics.poisson_block_backward_error;
@@ -1333,6 +1463,37 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         return status;
     }
 
+    // The real shared-domain payload is the production dynamic-demag lane.
+    // Keep the legacy full-coupled implementation for the bounded synthetic
+    // oracle only; production shared-domain solves must eliminate the scalar
+    // Poisson block before entering the eigensolver.
+    // A pure-Neumann descriptor needs the augmented-gauge Schur realization
+    // even when the caller requested the legacy full-coupled adapter.  Keep
+    // the requested adapter in the Schur diagnostics so the resolution is
+    // auditable; non-gauged synthetic fixtures still exercise the bounded
+    // full-coupled oracle.
+    const bool requested_frequency_window = string_equals(
+        problem.target_kind,
+        "frequency_window");
+    const bool shared_domain = string_equals(
+        problem.assembly_kind,
+        "mfem_weak_form_shared_domain");
+    const bool production_shared_domain = problem.production_shared_domain && shared_domain;
+    if (string_equals(problem.solver_adapter, "k0_poisson_airbox_cpu_schur_slepc") ||
+        (string_equals(problem.solver_adapter, "k0_poisson_airbox_cpu_full_coupled_slepc") &&
+         (uses_mean_zero_gauge(problem) ||
+          (requested_frequency_window && production_shared_domain)))) {
+        return solve_poisson_airbox_modal_eigen_cpu_schur(problem, out_result);
+    }
+    if (requested_frequency_window) {
+        return fail(
+            problem,
+            out_result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 frequency_window requires the CPU Schur selected-spectrum adapter",
+            "poisson_airbox_eigen_frequency_window_requires_schur_adapter");
+    }
+
 #if !FULLMAG_FEM_WITH_SLEPC
     return fail(
         problem,
@@ -1412,13 +1573,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         KSPSetType(ksp, KSPPREONLY) == 0 &&
         KSPGetPC(ksp, &pc) == 0 &&
         PCSetType(pc, PCLU) == 0 &&
-#if defined(MATSOLVERUMFPACK)
-        PCFactorSetMatSolverType(pc, MATSOLVERUMFPACK) == 0 &&
-#elif defined(MATSOLVERKLU)
-        PCFactorSetMatSolverType(pc, MATSOLVERKLU) == 0 &&
-#else
-        PCFactorSetShiftType(pc, MAT_SHIFT_NONZERO) == 0 &&
-#endif
+        // Solver-name macros are defined by PETSc headers regardless of
+        // whether that optional package was configured. Let PETSc select its
+        // available sequential LU implementation for this bounded oracle.
+        // The descriptor's rotated-real ordering has exact zero diagonal
+        // blocks despite a nonsingular shifted system.  PETSc's built-in
+        // sparse LU does not numerically pivot, so move existing nonzeros onto
+        // the diagonal without perturbing the operator.
+        PCFactorReorderForNonzeroDiagonal(pc, 1.0e-12) == 0 &&
+        PCFactorSetShiftType(pc, MAT_SHIFT_NONE) == 0 &&
         KSPSetTolerances(ksp, std::min(0.01 * tolerance, 1.0e-10), 1.0e-14, PETSC_DEFAULT, max_linear) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, total, &xr) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, total, &xi) == 0;
@@ -1434,9 +1597,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
 
     PetscInt outer_iterations = 0;
     PetscInt converged = 0;
-    if (EPSSolve(eps) != 0 ||
+    const PetscErrorCode eps_solve_status = EPSSolve(eps);
+    EPSConvergedReason eps_reason = EPS_CONVERGED_ITERATING;
+    if (eps_solve_status != 0 ||
         EPSGetIterationNumber(eps, &outer_iterations) != 0 ||
-        EPSGetConverged(eps, &converged) != 0) {
+        EPSGetConverged(eps, &converged) != 0 ||
+        EPSGetConvergedReason(eps, &eps_reason) != 0) {
         destroy_slepc_objects(&eps, &xr, &xi, &A, &B);
         return fail(
             problem,
@@ -1445,6 +1611,22 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
             "PA-E2 SLEPc eigensolve failed",
             "slepc_solve_failed");
     }
+    out_result->slepc_converged_reason_code = static_cast<int>(eps_reason);
+    copy_message(
+        out_result->slepc_converged_reason,
+        sizeof(out_result->slepc_converged_reason),
+        eps_reason > 0 ? "eps_converged" :
+            eps_reason < 0 ? "eps_diverged" : "eps_iterating");
+    if (eps_reason <= 0) {
+        destroy_slepc_objects(&eps, &xr, &xi, &A, &B);
+        return fail(
+            problem,
+            out_result,
+            FrequencyDomainStatus::solve_error,
+            "PA-E2 SLEPc did not report a converged eigensolve",
+            "slepc_not_converged");
+    }
+    copy_message(out_result->stop_reason, sizeof(out_result->stop_reason), "converged");
     out_result->outer_iterations = static_cast<std::uint32_t>(std::max<PetscInt>(0, outer_iterations));
     out_result->converged_eigenpair_count = static_cast<std::uint32_t>(std::max<PetscInt>(0, converged));
 
@@ -1583,6 +1765,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         mode.magnetic_block_backward_error = accepted.metrics.magnetic_block_backward_error;
         mode.poisson_block_backward_error = accepted.metrics.poisson_block_backward_error;
         mode.gauge_constraint_backward_error = accepted.metrics.gauge_constraint_backward_error;
+        mode.magnetic_residual_l2 = accepted.metrics.magnetic_residual_l2;
+        mode.poisson_residual_l2 = accepted.metrics.poisson_residual_l2;
+        mode.gauge_residual_abs = accepted.metrics.gauge_residual_abs;
         mode.gauge_mean_abs = accepted.metrics.gauge_mean_abs;
         mode.full_vector = accepted.candidate.full_vector;
         out_result->accepted_modes.push_back(std::move(mode));

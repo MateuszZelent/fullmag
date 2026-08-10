@@ -584,12 +584,20 @@ function studyInspectorRunEquals(
   );
 }
 
-function studyInspectorRuntimeStatusEquals(
+export function studyInspectorRuntimeStatusEquals(
   previous: StudyInspectorRuntimeStatus | null,
   next: StudyInspectorRuntimeStatus | null,
 ): boolean {
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
+  const previousAlgorithms = previous.capabilities.algorithms_available ?? [];
+  const nextAlgorithms = next.capabilities.algorithms_available ?? [];
+  if (
+    previousAlgorithms.length !== nextAlgorithms.length ||
+    previousAlgorithms.some((algorithm, index) => algorithm !== nextAlgorithms[index])
+  ) {
+    return false;
+  }
   return (
     previous.capabilities.binary_fields === next.capabilities.binary_fields &&
     previous.capabilities.explicit_topology ===

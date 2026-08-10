@@ -506,7 +506,10 @@ function createInspectableTimers() {
 
 async function settleMountedPanel(container: TestElement): Promise<void> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (container.textContent.includes("Evidence is internally consistent")) {
+    if (
+      container.textContent.includes("Evidence is internally consistent") ||
+      container.textContent.includes("Health is unknown because evidence is incomplete.")
+    ) {
       return;
     }
     await act(async () => {

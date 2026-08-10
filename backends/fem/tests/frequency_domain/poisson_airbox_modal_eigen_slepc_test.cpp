@@ -4,10 +4,12 @@
  */
 
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
+#include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "frequency_domain/dense_poisson_airbox_eigen_oracle.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -89,6 +91,11 @@ void check(bool condition, const char *message)
 bool contains(const char *haystack, const char *needle)
 {
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
+}
+
+int always_cancel(void *)
+{
+    return 1;
 }
 
 std::string read_text(const std::filesystem::path &path)
@@ -237,7 +244,9 @@ fd::PoissonAirboxEigenBlockProblem sparse_problem_from_fixture(
     problem.gauge_policy = "mean_zero_augmented";
     problem.gauge_reason = "pure_neumann_nullspace";
     problem.assembly_kind = "synthetic_algebraic_oracle";
-    problem.target_frequency_hz = 2.0e9;
+    // Keep the shift strictly between eigenvalues.  An exact eigenvalue shift
+    // makes the shift-invert linear system singular by construction.
+    problem.target_frequency_hz = 1.5e9;
     problem.expected_reference_frequency_hz = fixture.dense_result.frequency_hz;
     problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
     problem.magnetic_pair_count = 1;
@@ -1134,8 +1143,16 @@ void EmitsSlepcAdapterDiagnostics()
     check(
         contains(
             fixture.sparse_result.diagnostics_json,
-            "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
-        "PA-E2 diagnostics must name the full-coupled SLEPc adapter");
+            "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\""),
+        "PA-E2 singular pure-Neumann diagnostics must name the Schur adapter");
+    check(
+        contains(
+            fixture.sparse_result.diagnostics_json,
+            "\"requested_solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
+        "PA-E2 singular pure-Neumann diagnostics must preserve the requested full-coupled adapter");
+    check(
+        contains(fixture.sparse_result.diagnostics_json, "\"validation_only\":true"),
+        "PA-E2 synthetic singular pure-Neumann diagnostics must remain validation-only");
     check(
         contains(fixture.sparse_result.diagnostics_json, "\"demag_kind\":\"periodic_airbox_k0\""),
         "PA-E2 diagnostics must claim periodic_airbox_k0 only on the full-coupled sparse path");
@@ -1172,6 +1189,191 @@ void AnalyticalReferenceDoesNotGateTheModalSolve()
     check(
         result.full_residual_certified,
         "PA-E2 analytical-reference mismatch must not weaken descriptor residual certification");
+}
+
+void RejectsZeroRequestedModeCountAndUnknownTargetKind()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+
+    problem.requested_mode_count = 0;
+    fd::PoissonAirboxModalEigenResult zero_count_result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &zero_count_result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "PA-E2 must reject requested_mode_count=0 instead of silently promoting it to one");
+    check(
+        contains(zero_count_result.diagnostics_json, "poisson_airbox_eigen_invalid_requested_mode_count"),
+        "PA-E2 zero mode-count rejection must publish a stable reason");
+
+    problem = sparse_problem_from_fixture(fixture);
+    problem.target_kind = "unsupported_target";
+    fd::PoissonAirboxModalEigenResult target_result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &target_result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "PA-E2 must reject an unknown target_kind before invoking SLEPc");
+    check(
+        contains(target_result.diagnostics_json, "poisson_airbox_eigen_unsupported_target_kind"),
+        "PA-E2 unknown target rejection must publish a stable reason");
+}
+
+void RejectsFrequencyWindowOnFullCoupledAdapter()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.target_kind = "frequency_window";
+    problem.frequency_min_hz = 1.0e9;
+    problem.frequency_max_hz = 2.0e9;
+    problem.target_frequency_hz = 0.0;
+    problem.solver_adapter = "k0_poisson_airbox_cpu_full_coupled_slepc";
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.phi_mean_weights = nullptr;
+    problem.phi_mean_weights_count = 0;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "PA-E2 full-coupled adapter must not silently ignore a frequency window");
+    check(
+        contains(result.diagnostics_json,
+                 "poisson_airbox_eigen_frequency_window_requires_schur_adapter"),
+        "PA-E2 frequency-window adapter rejection must publish a stable reason");
+}
+
+void PublishesCanonicalResidualFieldsAndSolverReasons()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        result.error_message);
+    check(
+        contains(result.diagnostics_json,
+                 "\"modal_original_unscaled_full_descriptor_backward_error\":"),
+        "PA-E2 must publish the canonical original-unscaled full residual field");
+    check(
+        contains(result.diagnostics_json,
+                 "\"modal_original_unscaled_magnetic_block_backward_error\":"),
+        "PA-E2 must publish the canonical original-unscaled magnetic residual field");
+    check(
+        contains(result.diagnostics_json,
+                 "\"modal_original_unscaled_poisson_block_backward_error\":"),
+        "PA-E2 must publish the canonical original-unscaled Poisson residual field");
+    check(
+        contains(result.diagnostics_json,
+                 "\"modal_original_unscaled_gauge_constraint_backward_error\":"),
+        "PA-E2 must publish the canonical original-unscaled gauge residual field");
+    check(
+        contains(result.diagnostics_json, "\"slepc_converged_reason\":"),
+        "PA-E2 must publish the explicit SLEPc convergence reason");
+    check(
+        contains(result.diagnostics_json, "\"stop_reason\":"),
+        "PA-E2 must publish the explicit solver stop reason");
+}
+
+void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
+{
+    constexpr std::uint64_t q_count = 4;
+    constexpr std::uint64_t phi_count = 1;
+    const double omega_1 = kTwoPi * 1.0e9;
+    const double omega_2 = kTwoPi * 2.0e9;
+    const double a_qq_values[16] = {
+        omega_1, 0.0, 0.0, 0.0,
+        0.0, omega_1, 0.0, 0.0,
+        0.0, 0.0, omega_2, 0.0,
+        0.0, 0.0, 0.0, omega_2,
+    };
+    const double a_qphi_values[4] = {1.0e-6, 0.0, 0.0, 0.0};
+    const double a_phiq_values[4] = {1.0e-6, 0.0, 0.0, 0.0};
+    const double a_phiphi_values[1] = {1.0};
+    const double b_qq_values[16] = {
+        0.0, -1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.0,
+        0.0, 0.0, 1.0, 0.0,
+    };
+    CsrOwned a_qq = dense_to_csr(q_count, q_count, a_qq_values);
+    CsrOwned a_qphi = dense_to_csr(q_count, phi_count, a_qphi_values);
+    CsrOwned a_phiq = dense_to_csr(phi_count, q_count, a_phiq_values);
+    CsrOwned a_phiphi = dense_to_csr(phi_count, phi_count, a_phiphi_values);
+    CsrOwned b_qq = dense_to_csr(q_count, q_count, b_qq_values);
+
+    fd::PoissonAirboxEigenBlockProblem problem{};
+    problem.q_dof_count = q_count;
+    problem.phi_dof_count = phi_count;
+    problem.A_qq = a_qq.view();
+    problem.A_qphi = a_qphi.view();
+    problem.A_phiq = a_phiq.view();
+    problem.A_phiphi = a_phiphi.view();
+    problem.B_qq = b_qq.view();
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.production_shared_domain = true;
+    problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    problem.magnetic_pair_count = 1;
+    problem.airbox_pair_count = 1;
+    problem.target_kind = "frequency_window";
+    problem.frequency_min_hz = 0.5e9;
+    problem.frequency_max_hz = 2.5e9;
+    problem.target_frequency_hz = 1.5e9;
+    problem.residual_tolerance = 1.0e-8;
+    problem.requested_mode_count = 2;
+    problem.max_outer_iterations = 64;
+    problem.max_linear_iterations = 512;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        result.error_message);
+    check(result.window_complete,
+          "synthetic CPU frequency window must expose a complete-window certificate");
+    check(result.window_subwindow_count > 0u,
+          "complete-window certificate must record executed subwindow count");
+    check(result.window_completed_subwindow_count == result.window_subwindow_count,
+          "complete-window certificate must account for every subwindow");
+    check(result.window_failed_subwindow_count == 0u,
+          "complete-window certificate must report no failed subwindows");
+    check(contains(result.diagnostics_json, "\"window_completeness\":{\"status\":\"certified\""),
+          "CPU diagnostics must publish a certified window-completeness object");
+    check(contains(result.diagnostics_json, "\"window_certificate\":"),
+          "CPU diagnostics must publish the complete-window certificate payload");
+}
+
+void FrequencyWindowCancellationPreservesStopReason()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.target_kind = "frequency_window";
+    problem.frequency_min_hz = 0.5e9;
+    problem.frequency_max_hz = 2.5e9;
+    problem.target_frequency_hz = 0.0;
+    problem.solver_adapter = "k0_poisson_airbox_cpu_schur_slepc";
+    problem.cancel_requested = &always_cancel;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+            fd::FrequencyDomainStatus::interrupted,
+        "PA-E2 cancelled frequency window must report interrupted status");
+    check(!result.window_complete,
+          "PA-E2 cancelled frequency window must never advertise complete coverage");
+    check(result.window_failed_subwindow_count == 0u,
+          "PA-E2 cancellation must not misclassify the interrupted subwindow as a solver failure");
+    check(std::strcmp(result.stop_reason, "cancel_requested") == 0,
+          "PA-E2 cancellation must preserve the exact stop reason");
+    check(contains(result.diagnostics_json, "\"window_completeness\":{\"status\":\"not_certified\""),
+          "PA-E2 cancelled window diagnostics must remain schema-compatible and non-certified");
 }
 
 void RejectsSyntheticPaE1DemagKind()
@@ -1428,7 +1630,196 @@ void RejectsInconsistentProvenanceBeforeSlepcSetup()
         "PA-E2 assembly-kind rejection must preserve a pre-SLEPc reason");
 }
 
-void SolvesSharedDomainGpuDeviceResidentModalFixture()
+void SolvesSharedDomainCpuSchurModalFixture()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    const double omega = kTwoPi * 2.0e9;
+    const double a_qq[4] = {omega, 0.0, 0.0, omega};
+    const double coupling[4] = {1.0e-6, 0.0, 0.0, 0.0};
+    const double poisson[4] = {1.0, 0.0, 0.0, 1.0};
+    const double b_qq[4] = {0.0, -1.0, 1.0, 0.0};
+    std::memcpy(fixture.a_qq, a_qq, sizeof(a_qq));
+    std::memcpy(fixture.a_qphi, coupling, sizeof(coupling));
+    std::memcpy(fixture.a_phiq, coupling, sizeof(coupling));
+    std::memcpy(fixture.a_phiphi, poisson, sizeof(poisson));
+    std::memcpy(fixture.b_qq, b_qq, sizeof(b_qq));
+    fixture.A_qq = dense_to_csr(2, 2, fixture.a_qq);
+    fixture.A_qphi = dense_to_csr(2, 2, fixture.a_qphi);
+    fixture.A_phiq = dense_to_csr(2, 2, fixture.a_phiq);
+    fixture.A_phiphi = dense_to_csr(2, 2, fixture.a_phiphi);
+    fixture.B_qq = dense_to_csr(2, 2, fixture.b_qq);
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.phi_mean_weights = nullptr;
+    problem.phi_mean_weights_count = 0;
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.production_shared_domain = true;
+    problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    // Keep the shift strictly off the exact eigenvalue: shift-invert is
+    // undefined for a singular A-tau B factorization.
+    problem.target_frequency_hz = 1.9e9;
+    problem.expected_reference_frequency_hz = 0.0;
+    problem.residual_tolerance = 1.0e-8;
+    problem.requested_mode_count = 1;
+    problem.max_outer_iterations = 64;
+    problem.max_linear_iterations = 512;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result);
+    check(status == fd::FrequencyDomainStatus::ok, result.error_message);
+    check(result.accepted_mode_count == 1u,
+          "shared-domain CPU Schur fixture must return one accepted mode");
+    check(result.full_residual_certified,
+          "shared-domain CPU Schur fixture must certify the full descriptor residual");
+    check(contains(result.diagnostics_json,
+                   "\"algebraic_form\":\"schur_reduced_descriptor\""),
+          "shared-domain CPU diagnostics must identify the Schur-reduced descriptor");
+    check(contains(result.diagnostics_json,
+                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\""),
+          "shared-domain CPU diagnostics must identify the Schur adapter");
+    check(contains(result.diagnostics_json,
+                   "\"requested_execution\":\"production_cpu\""),
+          "shared-domain CPU diagnostics must preserve the requested execution lane");
+    check(contains(result.diagnostics_json,
+                   "\"resolved_execution\":\"production_cpu\""),
+          "shared-domain CPU diagnostics must preserve the resolved execution lane");
+    check(contains(result.diagnostics_json,
+                   "\"production_implication\":true"),
+          "shared-domain CPU diagnostics must identify production-intended execution");
+    check(contains(result.diagnostics_json,
+                   "\"validation_only\":false"),
+          "shared-domain CPU diagnostics must not describe the production lane as validation-only");
+    check(contains(result.diagnostics_json,
+                   "\"persistent_solver_context\":true"),
+          "shared-domain CPU diagnostics must disclose the persistent Poisson context");
+    check(contains(result.diagnostics_json,
+                   "\"gpu_device_resident_modal_eigensolver\":false"),
+          "shared-domain CPU diagnostics must identify host-resident execution");
+    check(contains(result.diagnostics_json,
+                   "\"full_residual_certified\":true"),
+          "shared-domain CPU diagnostics must publish scalar full-residual certification");
+    check(contains(result.diagnostics_json,
+                   "\"spectral_pencil_kind\":\"real_frequency_rotated\""),
+          "shared-domain CPU Schur diagnostics must publish the real split pencil");
+    check(contains(result.diagnostics_json,
+                   "\"target_representation\":\"tau=omega_target\""),
+          "shared-domain CPU Schur diagnostics must publish the real tau target");
+    check(contains(result.diagnostics_json,
+                   "\"ksp_type\":\"preonly\""),
+          "bounded shared-domain CPU Schur diagnostics must report the exact direct shifted solve");
+}
+
+void ReturnsRequestedSharedDomainCpuSchurModes()
+{
+    constexpr std::uint64_t q_count = 4;
+    constexpr std::uint64_t phi_count = 1;
+    const double omega_1 = kTwoPi * 1.0e9;
+    const double omega_2 = kTwoPi * 2.0e9;
+    const double a_qq_values[16] = {
+        omega_1, 0.0, 0.0, 0.0,
+        0.0, omega_1, 0.0, 0.0,
+        0.0, 0.0, omega_2, 0.0,
+        0.0, 0.0, 0.0, omega_2,
+    };
+    const double a_qphi_values[4] = {1.0e-6, 0.0, 0.0, 0.0};
+    const double a_phiq_values[4] = {1.0e-6, 0.0, 0.0, 0.0};
+    const double a_phiphi_values[1] = {1.0};
+    const double b_qq_values[16] = {
+        0.0, -1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.0,
+        0.0, 0.0, 1.0, 0.0,
+    };
+    CsrOwned a_qq = dense_to_csr(q_count, q_count, a_qq_values);
+    CsrOwned a_qphi = dense_to_csr(q_count, phi_count, a_qphi_values);
+    CsrOwned a_phiq = dense_to_csr(phi_count, q_count, a_phiq_values);
+    CsrOwned a_phiphi = dense_to_csr(phi_count, phi_count, a_phiphi_values);
+    CsrOwned b_qq = dense_to_csr(q_count, q_count, b_qq_values);
+
+    fd::PoissonAirboxEigenBlockProblem problem{};
+    problem.q_dof_count = q_count;
+    problem.phi_dof_count = phi_count;
+    problem.A_qq = a_qq.view();
+    problem.A_qphi = a_qphi.view();
+    problem.A_phiq = a_phiq.view();
+    problem.A_phiphi = a_phiphi.view();
+    problem.B_qq = b_qq.view();
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.production_shared_domain = true;
+    problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    problem.magnetic_pair_count = 1;
+    problem.airbox_pair_count = 1;
+    problem.target_frequency_hz = 1.5e9;
+    problem.expected_reference_frequency_hz = 0.0;
+    problem.residual_tolerance = 1.0e-8;
+    problem.requested_mode_count = 2;
+    problem.max_outer_iterations = 64;
+    problem.max_linear_iterations = 512;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result);
+    check(status == fd::FrequencyDomainStatus::ok, result.error_message);
+    check(result.accepted_mode_count == 2u,
+          "shared-domain CPU Schur selected spectrum must return both requested modes");
+    check(result.finite_real_eigenpair_count == result.converged_eigenpair_count,
+          "shared-domain CPU Schur must classify every converged real-split eigenpair");
+    check(result.positive_frequency_eigenpair_count >= result.accepted_mode_count,
+          "shared-domain CPU Schur must count positive-frequency candidates before filtering");
+    check(result.action_residual_evaluated_count ==
+              result.positive_frequency_eigenpair_count,
+          "shared-domain CPU Schur must evaluate the action residual for every positive-frequency candidate");
+    check(result.reconstructed_mode_count == result.action_residual_evaluated_count,
+          "shared-domain CPU Schur fixture must reconstruct every residual-evaluated candidate");
+    check(result.full_residual_accepted_count >= result.accepted_mode_count,
+          "shared-domain CPU Schur fixture must count every full-residual accepted candidate before publication capping");
+    check(contains(result.diagnostics_json,
+                   "\"full_residual_accepted_count\":"),
+          "shared-domain CPU Schur diagnostics must publish rejection-stage counters");
+    std::vector<double> frequencies;
+    for (const auto &mode : result.accepted_modes) {
+        frequencies.push_back(mode.frequency_hz);
+    }
+    std::sort(frequencies.begin(), frequencies.end());
+    check(frequencies.size() == 2u &&
+              std::abs(frequencies[0] - 1.0e9) < 1.0 &&
+              std::abs(frequencies[1] - 2.0e9) < 1.0,
+          "shared-domain CPU Schur selected spectrum must return distinct physical modes, not J-equivalent duplicates");
+
+    problem.target_kind = "frequency_window";
+    problem.frequency_min_hz = 0.5e9;
+    problem.frequency_max_hz = 2.5e9;
+    problem.target_frequency_hz = 2.0e9;
+    problem.requested_mode_count = 1;
+    result = {};
+    check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+              fd::FrequencyDomainStatus::ok,
+          result.error_message);
+    check(result.accepted_mode_count == 1u &&
+              std::abs(result.frequency_hz - 1.0e9) < 1.0,
+          "frequency-window Schur selection must publish the lowest in-window mode instead of the mode nearest the midpoint shift");
+    check(contains(result.diagnostics_json,
+                   "\"target_kind\":\"frequency_window\""),
+          "frequency-window Schur diagnostics must preserve the requested target kind");
+    check(contains(result.diagnostics_json, "\"subwindows\":[{"),
+          "frequency-window Schur diagnostics must publish executed subwindows");
+    check(contains(result.diagnostics_json, "\"shift_frequency_hz\":"),
+          "frequency-window Schur diagnostics must publish each executed shift");
+    check(contains(result.diagnostics_json, "\"accepted_frequencies_hz\":["),
+          "frequency-window Schur diagnostics must publish accepted frequencies per shift");
+    check(contains(result.diagnostics_json, "\"candidate_mode_count\":"),
+          "frequency-window Schur diagnostics must distinguish raw shifted candidates from globally in-window accepted modes");
+}
+
+void SolvesSharedDomainGpuValidationModalFixture()
 {
     TinySparseFixture fixture{};
     const double a_qq[4] = {0.5, -0.2, 0.2, 0.5};
@@ -1478,8 +1869,10 @@ void SolvesSharedDomainGpuDeviceResidentModalFixture()
     check(result.positive_frequency_branch_found && result.frequency_hz > 0.0,
           "GPU modal K0 fixture must select a positive-frequency branch");
     check(contains(result.diagnostics_json,
-                   "\"gpu_device_resident_modal_eigensolver\":true"),
-          "GPU modal K0 diagnostics must publish device residency");
+                   "\"gpu_device_resident_modal_eigensolver\":false"),
+          "bounded GPU modal diagnostics must not claim device-resident Ritz state");
+    check(contains(result.diagnostics_json, "\"validation_only\":true"),
+          "bounded GPU modal diagnostics must identify the validation-only lane");
     check(contains(result.diagnostics_json,
                    "\"persistent_solver_context\":true"),
           "GPU modal K0 diagnostics must publish persistent context");
@@ -1505,23 +1898,144 @@ void SolvesSharedDomainGpuDeviceResidentModalFixture()
           "GPU modal K0 gauge diagnostics must publish the mean-zero policy");
 }
 
+void SolvesSharedDomainGpuArnoldiModalFixture()
+{
+    constexpr std::uint64_t q_count = 66;
+    constexpr std::uint64_t phi_count = 1;
+    CsrOwned a_qq{};
+    a_qq.rows = q_count;
+    a_qq.columns = q_count;
+    a_qq.row_offsets.reserve(static_cast<std::size_t>(q_count + 1u));
+    a_qq.row_offsets.push_back(0u);
+    for (std::uint64_t row = 0; row < q_count; ++row) {
+        const std::uint64_t pair = row / 2u;
+        const double frequency = 0.2 + 0.01 * static_cast<double>(pair);
+        a_qq.column_indices.push_back(static_cast<std::uint32_t>(row));
+        a_qq.values.push_back(0.0);
+        a_qq.column_indices.push_back(static_cast<std::uint32_t>(row ^ 1u));
+        a_qq.values.push_back(row % 2u == 0u ? -frequency : frequency);
+        a_qq.row_offsets.push_back(static_cast<std::uint32_t>(a_qq.values.size()));
+    }
+    CsrOwned a_qphi{};
+    a_qphi.rows = q_count;
+    a_qphi.columns = phi_count;
+    a_qphi.row_offsets.reserve(static_cast<std::size_t>(q_count + 1u));
+    a_qphi.row_offsets.push_back(0u);
+    for (std::uint64_t row = 0; row < q_count; ++row) {
+        a_qphi.column_indices.push_back(0u);
+        a_qphi.values.push_back(row % 2u == 0u ? 1.0e-3 : -1.0e-3);
+        a_qphi.row_offsets.push_back(static_cast<std::uint32_t>(a_qphi.values.size()));
+    }
+    CsrOwned a_phiq{};
+    a_phiq.rows = phi_count;
+    a_phiq.columns = q_count;
+    a_phiq.row_offsets = {0u};
+    for (std::uint64_t column = 0; column < q_count; ++column) {
+        a_phiq.column_indices.push_back(static_cast<std::uint32_t>(column));
+        a_phiq.values.push_back(column % 2u == 0u ? 1.0e-3 : -1.0e-3);
+    }
+    a_phiq.row_offsets.push_back(static_cast<std::uint32_t>(a_phiq.values.size()));
+    const double a_phiphi_values[1] = {1.0};
+    CsrOwned a_phiphi = dense_to_csr(phi_count, phi_count, a_phiphi_values);
+    CsrOwned b_qq{};
+    b_qq.rows = q_count;
+    b_qq.columns = q_count;
+    b_qq.row_offsets.reserve(static_cast<std::size_t>(q_count + 1u));
+    b_qq.row_offsets.push_back(0u);
+    for (std::uint64_t row = 0; row < q_count; ++row) {
+        b_qq.column_indices.push_back(static_cast<std::uint32_t>(row));
+        b_qq.values.push_back(1.0);
+        b_qq.row_offsets.push_back(static_cast<std::uint32_t>(b_qq.values.size()));
+    }
+
+    fd::PoissonAirboxEigenBlockProblem problem{};
+    problem.q_dof_count = q_count;
+    problem.phi_dof_count = phi_count;
+    problem.A_qq = a_qq.view();
+    problem.A_qphi = a_qphi.view();
+    problem.A_phiq = a_phiq.view();
+    problem.A_phiphi = a_phiphi.view();
+    problem.B_qq = b_qq.view();
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    problem.magnetic_pair_count = 1;
+    problem.airbox_pair_count = 1;
+    problem.target_kind = "frequency_window";
+    problem.frequency_min_hz = 0.19 / kTwoPi;
+    problem.frequency_max_hz = 0.215 / kTwoPi;
+    problem.target_frequency_hz = 0.202 / kTwoPi;
+    problem.expected_reference_frequency_hz = 0.0;
+    problem.residual_tolerance = 1.0e-6;
+    problem.requested_mode_count = 1;
+    problem.max_outer_iterations = 128;
+    problem.max_linear_iterations = 4096;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_gpu_device_krylov(problem, &result);
+    if (status == fd::FrequencyDomainStatus::unavailable &&
+        contains(result.error_message, "CUDA")) {
+        return;
+    }
+    check(status == fd::FrequencyDomainStatus::ok, result.error_message);
+    check(result.accepted_mode_count == 1u,
+          "GPU Arnoldi modal fixture must return one accepted mode");
+    check(result.full_residual_certified,
+          "GPU Arnoldi modal fixture must certify the full residual");
+    check(contains(result.diagnostics_json, "\"modal_iteration_method\":\"arnoldi_ritz\""),
+          "GPU Arnoldi modal diagnostics must identify Ritz extraction");
+    check(contains(result.diagnostics_json, "\"linear_solver\":\"device_bicgstab\""),
+          "GPU Arnoldi modal diagnostics must identify the device Krylov shifted action");
+    check(contains(result.diagnostics_json, "\"preconditioner\":\"shifted_2x2_block_jacobi\""),
+          "GPU Arnoldi modal diagnostics must identify the device magnetic block preconditioner");
+    check(contains(result.diagnostics_json, "\"inner_linear_tolerance\":"),
+          "GPU Arnoldi modal diagnostics must disclose the inner linear tolerance");
+    check(contains(result.diagnostics_json, "\"ritz_state_location\":\"host_small_projected\""),
+          "GPU Arnoldi modal diagnostics must disclose host projected Ritz extraction");
+    check(contains(result.diagnostics_json, "\"host_ritz_extraction\":true"),
+          "GPU Arnoldi modal diagnostics must disclose host projected Ritz extraction");
+    check(contains(result.diagnostics_json, "\"scalable_selected_spectrum\":false"),
+          "host-projected GPU Arnoldi must not publish scalable selected-spectrum support");
+    check(std::abs(result.frequency_hz - 0.2 / kTwoPi) < 1.0e-5,
+          "GPU Arnoldi modal fixture must select the nearest positive branch");
+    check(result.frequency_hz >= problem.frequency_min_hz &&
+              result.frequency_hz <= problem.frequency_max_hz,
+          "GPU Arnoldi modal fixture must publish only modes inside the requested window");
+}
+
 } // namespace
 
 int main()
 {
+    // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;
+    // GPU qualification remains a separate device-backed test lane.
+    const bool skip_gpu_tests = std::getenv("FULLMAG_SKIP_GPU_TESTS") != nullptr;
+    ReturnsRequestedSharedDomainCpuSchurModes();
+    SolvesSharedDomainCpuSchurModalFixture();
     SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle();
     ReconstructedResidualCannotBeHiddenBySlepcBackwardError();
     ResidualCertificationRejectsBackendAndReconstructionDisagreement();
     ConjugatedCandidateRequiresConjugatedEigenvalue();
     ResidualEvaluatorRejectsNonfiniteComputedMetrics();
     AppliesFullCoupledShiftInvertActionReference();
-    AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference();
-    SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference();
-    AppliesGpuFullCoupledDescriptorAndMatchesCpuReference();
-    AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference();
+    if (!skip_gpu_tests) {
+        AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference();
+        SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference();
+        AppliesGpuFullCoupledDescriptorAndMatchesCpuReference();
+        AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference();
+    }
     ModalContractWritesShiftInvertActionArtifact();
     EmitsSlepcAdapterDiagnostics();
     AnalyticalReferenceDoesNotGateTheModalSolve();
+    RejectsZeroRequestedModeCountAndUnknownTargetKind();
+    RejectsFrequencyWindowOnFullCoupledAdapter();
+    PublishesCanonicalResidualFieldsAndSolverReasons();
+    FrequencyWindowPublishesCompleteCertificateForSyntheticFixture();
+    FrequencyWindowCancellationPreservesStopReason();
     RejectsSyntheticPaE1DemagKind();
     RejectsMissingPeriodicMeshCertificate();
     RejectsDecoupledDemagBlocks();
@@ -1531,6 +2045,9 @@ int main()
     PureNeumannRequiresMeanZeroGaugeWithWeights();
     RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup();
     RejectsInconsistentProvenanceBeforeSlepcSetup();
-    SolvesSharedDomainGpuDeviceResidentModalFixture();
+    if (!skip_gpu_tests) {
+        SolvesSharedDomainGpuValidationModalFixture();
+        SolvesSharedDomainGpuArnoldiModalFixture();
+    }
     return 0;
 }

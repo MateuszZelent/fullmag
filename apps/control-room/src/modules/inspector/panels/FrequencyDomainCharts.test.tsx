@@ -11,6 +11,7 @@ import {
   FrequencyDomainDispersionChart,
   FrequencyDomainResponseChart,
   FrequencyDomainSpectrumChart,
+  frequencyDomainSpectrumChartRenderModel,
   spectrumPointIndexFromChartEvent,
 } from "./FrequencyDomainCharts";
 
@@ -40,10 +41,12 @@ describe("FrequencyDomainCharts", () => {
             {
               branchId: null,
               dampingRateHz: 1.5e6,
+              displayModeIndex: 1,
               frequencyHz: 750e6,
               imaginaryFrequencyHz: null,
               modeFieldId: "analysis:eigen:sample-0000:mode-0001",
               modeFieldResourceKey: null,
+              modeId: null,
               rawModeIndex: 1,
               residualNorm: 1e-8,
               sampleIndex: 0,
@@ -52,11 +55,13 @@ describe("FrequencyDomainCharts", () => {
             ...Array.from({ length: 5 }, (_, index) => ({
               branchId: null,
               dampingRateHz: null,
+              displayModeIndex: index + 2,
               frequencyHz: (800 + index * 25) * 1e6,
               imaginaryFrequencyHz: null,
               modeFieldId:
                 index === 4 ? "analysis:eigen:sample-0000:mode-0006" : null,
               modeFieldResourceKey: null,
+              modeId: null,
               rawModeIndex: index + 2,
               residualNorm: null,
               sampleIndex: 0,
@@ -101,6 +106,76 @@ describe("FrequencyDomainCharts", () => {
     expect(html).toContain("fm-button");
     expect(html).toContain("fm-frequency-domain-chart__mode");
     expect(html).not.toContain("mode 1: 0.75 GHz");
+  });
+
+  it("keeps modal spectrum axes on display mode rank and physical Hz", () => {
+    const renderModel = frequencyDomainSpectrumChartRenderModel({
+      dataSourceVersion: "unknown",
+      diagnostics: [],
+      droppedPointCount: 0,
+      points: [
+        {
+          branchId: null,
+          dampingRateHz: null,
+          displayModeIndex: 0,
+          frequencyHz: 3e9,
+          imaginaryFrequencyHz: null,
+          modeFieldId: null,
+          modeFieldResourceKey: null,
+          modeId: "mode-alpha",
+          rawModeIndex: 17,
+          residualNorm: null,
+          sampleIndex: 0,
+          tangentLeakageMax: null,
+        },
+        {
+          branchId: null,
+          dampingRateHz: null,
+          displayModeIndex: 1,
+          frequencyHz: 4e9,
+          imaginaryFrequencyHz: null,
+          modeFieldId: null,
+          modeFieldResourceKey: null,
+          modeId: "mode-beta",
+          rawModeIndex: 99,
+          residualNorm: null,
+          sampleIndex: 0,
+          tangentLeakageMax: null,
+        },
+      ],
+      series: [
+        {
+          id: "analysis.frequency-domain:eigen:spectrum:frequency",
+          label: "Eigen frequency",
+          points: [
+            { rowIndex: 0, x: 0, y: 3e9 },
+            { rowIndex: 1, x: 1, y: 4e9 },
+          ],
+          quantity: "frequency",
+          source: {
+            kind: "analysis.frequency_domain",
+            resourceKey: "analysis/frequency-domain/eigen/spectrum.v2",
+            tableId: "frequency-domain:eigen-spectrum",
+          },
+          status: "ready",
+          unit: "Hz",
+          xUnit: "1",
+        },
+      ],
+    });
+
+    expect(renderModel.xAxis).toEqual({
+      label: "mode rank [1]",
+      unit: "1",
+    });
+    expect(renderModel.yAxes[0]).toEqual({
+      label: "Eigen frequency [Hz]",
+      unit: "Hz",
+    });
+    expect(renderModel.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 0, y: 3e9 },
+      { rowIndex: 1, x: 1, y: 4e9 },
+    ]);
   });
 
   it("labels response chart x axes with the series frequency unit", () => {

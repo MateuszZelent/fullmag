@@ -174,6 +174,16 @@ export type FrequencyDomainManifestResource =
   components["schemas"]["FrequencyDomainManifestResource"];
 export type FrequencyDomainJsonArtifactResource =
   components["schemas"]["FrequencyDomainJsonArtifactResource"];
+export type FrequencyDomainJsonArtifactPayload =
+  components["schemas"]["FrequencyDomainJsonArtifactPayload"];
+export type FrequencyDomainSpectrumArtifactPayload =
+  components["schemas"]["FrequencyDomainSpectrumArtifactPayload"];
+export type FrequencyDomainBranchesArtifactPayload =
+  components["schemas"]["FrequencyDomainBranchesArtifactPayload"];
+export type FrequencyDomainResponseSweepArtifactPayload =
+  components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"];
+export type FrequencyDomainFmrPeaksArtifactPayload =
+  components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"];
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
 export type ArtifactResource = components["schemas"]["ArtifactResource"];

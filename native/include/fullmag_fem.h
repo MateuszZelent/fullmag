@@ -890,6 +890,7 @@ typedef enum {
     FULLMAG_FEM_MODAL_EXECUTION_AUTO = 0,
     FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU = 1,
     FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU = 2,
+    FULLMAG_FEM_MODAL_EXECUTION_VALIDATION = 3,
 } fullmag_fem_modal_execution_target;
 
 typedef enum {
@@ -1138,7 +1139,9 @@ typedef struct {
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_PRIOR_ABI_VERSION 13u
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION 14u
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION 15u
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 16u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION 16u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION 17u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 18u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -1179,6 +1182,145 @@ typedef struct {
 } FullmagFemCsrMatrixView;
 
 /*
+ * Append-only v6 periodic certificate handoff used by the shared-domain
+ * modal boundary.  These records intentionally use fixed-width integer
+ * fields and pointers only; the C++ verifier converts them to its
+ * backend-neutral MeshSymmetryCertificateV6* model before any MFEM assembly.
+ */
+typedef struct {
+    uint64_t source_node;
+    uint64_t destination_node;
+    uint32_t axis_mask;
+    uint32_t kind;
+} FullmagFemModalCertificateV6Relation;
+
+typedef struct {
+    uint32_t region_id;
+    uint32_t part_role;
+} FullmagFemModalCertificateV6RegionRole;
+
+typedef struct {
+    uint64_t canonical_class_id;
+    uint64_t member_count;
+    const char *sha256;
+} FullmagFemModalCertificateV6ClassDigest;
+
+typedef struct {
+    uint32_t view_kind;
+    uint32_t part_role;
+    const char *part_identity;
+    const char *topology_fingerprint;
+    uint64_t node_count;
+    const uint32_t *region_ids;
+    const uint32_t *boundary_axis_masks;
+    const FullmagFemModalCertificateV6RegionRole *region_roles;
+    uint64_t region_role_count;
+    const FullmagFemModalCertificateV6Relation *generator_relations;
+    uint64_t generator_relation_count;
+    const FullmagFemModalCertificateV6Relation *closure_relations;
+    uint64_t closure_relation_count;
+    uint8_t require_complete_closure;
+    const uint64_t *expected_class_ids;
+    uint64_t expected_class_id_count;
+    const FullmagFemModalCertificateV6ClassDigest *expected_class_digests;
+    uint64_t expected_class_digest_count;
+} FullmagFemModalCertificateV6View;
+
+typedef struct {
+    const char *schema_version;
+    FullmagFemModalCertificateV6View mesh_magnetic;
+    FullmagFemModalCertificateV6View payload_magnetic;
+    FullmagFemModalCertificateV6View mesh_scalar;
+    FullmagFemModalCertificateV6View payload_scalar;
+} FullmagFemModalCertificateV6BindingRequest;
+
+/*
+ * Append-only backend-neutral physical handoff for the native modal
+ * linearization.  This descriptor names the accepted state and term views;
+ * it deliberately does not carry a preassembled A_qq matrix or solver/UI
+ * policy.  ABI v18 producers must provide the complete v1 descriptor.
+ */
+#define FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION 1u
+#define FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_SCHEMA \
+    "modal_linearization_descriptor.v1"
+#define FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_V1_ABI_VERSION 1u
+#define FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_SCHEMA \
+    "modal_exchange_material_view.v1"
+#define FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_KIND_AEX 1u
+#define FULLMAG_FEM_MODAL_LINEARIZATION_TERM_EXCHANGE (1u << 0)
+#define FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD (1u << 1)
+#define FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY (1u << 2)
+#define FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DMI (1u << 3)
+#define FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DEMAG (1u << 4)
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved0;
+    uint64_t struct_size;
+    const char *schema_version;
+    uint64_t node_count;
+    uint64_t tangent_dof_count;
+    const char *coordinate_unit;
+    const char *magnetisation_unit;
+    const char *time_unit;
+    const char *frequency_unit;
+    const char *angular_frequency_unit;
+    const char *linearization_state_digest;
+    const char *equilibrium_digest;
+    const char *exchange_term_digest;
+    const char *field_term_digest;
+    const char *anisotropy_term_digest;
+    const char *dmi_term_digest;
+    const char *demag_term_digest;
+    const char *operator_input_digest;
+    const char *demag_provider_signature;
+    uint32_t term_presence_mask;
+    uint32_t reserved_contract_flags;
+    const double *tangent_frame_xyz;
+    uint64_t tangent_frame_xyz_count;
+    const double *equilibrium_m0_xyz;
+    uint64_t equilibrium_m0_xyz_count;
+    const double *effective_field_h_eff0_xyz;
+    uint64_t effective_field_h_eff0_xyz_count;
+    const double *external_field_h_ext0_xyz;
+    uint64_t external_field_h_ext0_xyz_count;
+    const double *alpha_per_node;
+    uint64_t alpha_per_node_count;
+    const double *uniaxial_axis_xyz;
+    uint64_t uniaxial_axis_xyz_count;
+    const double *uniaxial_anisotropy_field_a_per_m;
+    uint64_t uniaxial_anisotropy_field_count;
+    const double *saturation_magnetisation_a_per_m;
+    uint64_t saturation_magnetisation_count;
+    double uniform_saturation_magnetisation_a_per_m;
+    const fullmag_fem_frequency_domain_exchange_edge *exchange_edges;
+    uint64_t exchange_edge_count;
+    const fullmag_fem_frequency_domain_dmi_element *dmi_elements;
+    uint64_t dmi_element_count;
+    const double *dmi_lumped_mass;
+    uint64_t dmi_lumped_mass_count;
+    const double *dmi_ms_field;
+    uint64_t dmi_ms_field_count;
+    double dmi_uniform_ms;
+} FullmagFemModalLinearizationDescriptor;
+
+/*
+ * Append-only scalar material carrier for the v18 modal shared-domain path.
+ * It carries no node endpoints: native MFEM assembly owns topology and
+ * quadrature.  The older exchange_edges view remains validation-only
+ * compatibility until producers publish this sidecar.
+ */
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved0;
+    uint64_t struct_size;
+    const char *schema_version;
+    uint32_t material_kind;
+    uint32_t reserved1;
+    double exchange_stiffness_j_per_m;
+} FullmagFemModalExchangeMaterialView;
+
+/*
  * Versioned native modal payload for the physical shared-domain Poisson
  * airbox lane.  The payload is append-only and is referenced by the modal
  * request; all pointed-to storage remains owned by the caller for the
@@ -1186,6 +1328,8 @@ typedef struct {
  */
 typedef struct {
     uint32_t abi_version;
+    /* The payload prefix must cover each identity field consumed by the
+       requested modal ABI before any pointed-to tail is dereferenced. */
     uint32_t struct_size;
     const fullmag_fem_mesh_desc *mesh;
     const double *equilibrium_m0_xyz;
@@ -1237,6 +1381,24 @@ typedef struct {
     const char *bias_field_sample_signature;
     const char *magnetic_part_identity;
     const char *airbox_part_identity;
+    /* v17: canonical certificate preimage binding.  These fields are
+       append-only and may only be read when struct_size covers this tail. */
+    const char *mesh_generation_identity;
+    const char *canonical_preimage;
+    uint64_t canonical_preimage_len;
+    const char *canonical_preimage_sha256;
+    const char *magnetic_class_digest_sha256;
+    const char *scalar_class_digest_sha256;
+    uint32_t certificate_binding_status;
+    const char *certificate_binding_reason;
+    /* Append-only v6 relation views.  The modal boundary must reject a
+       payload whose prefix does not cover this pointer or whose views cannot
+       be verified against the canonical binding digest. */
+    const FullmagFemModalCertificateV6BindingRequest *certificate_binding_v6;
+    /* v18: backend-neutral physical linearization descriptor. */
+    const FullmagFemModalLinearizationDescriptor *linearization_descriptor;
+    /* v18 append-only scalar material carrier for native exchange. */
+    const FullmagFemModalExchangeMaterialView *exchange_material_view;
 } FullmagFemModalSharedDomainPayload;
 
 typedef struct {
@@ -1310,12 +1472,18 @@ typedef struct {
     const char *poisson_airbox_assembly_kind;
     const double *dynamic_demag_k_tangent_matrix_row_major;
     uint64_t dynamic_demag_k_tangent_matrix_value_count;
+    /* v15+ append-only tail gate.  A known ABI version at or above v15
+       requires this byte count to cover every field consumed by that version;
+       callers must not rely on an implicit full-size default. */
     uint64_t struct_size;
     fullmag_fem_modal_execution_target execution_target;
     fullmag_fem_modal_scalar_representation scalar_representation;
     fullmag_fem_modal_result_field_representation result_field_representation;
     uint32_t reserved_modal_contract_flags;
     const FullmagFemModalSharedDomainPayload *shared_domain_payload;
+    /* v17: producer expectations for the canonical certificate binding. */
+    const char *mesh_generation_identity;
+    const char *canonical_preimage_sha256;
 } FullmagFemModalEigenRequest;
 
 typedef struct {
@@ -1372,7 +1540,356 @@ typedef struct {
     uint32_t resolved_fallback_state;
     char *resolved_engine_id;
     char *resolved_fallback_reason;
+    /* v17: resolved canonical certificate binding provenance. */
+    char *resolved_canonical_preimage_sha256;
+    uint32_t resolved_certificate_binding_status;
+    char *resolved_certificate_binding_reason;
 } FullmagFemFrequencyDomainResult;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED = 0,
+    FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_ACCEPTED = 1,
+    FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNVERIFIABLE = 2,
+    FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID = 3,
+} fullmag_fem_modal_certificate_binding_status;
+
+/*
+ * Modal ABI manifest order.  These lists are append-only contract metadata:
+ * every entry names one directly addressable public member of the matching
+ * modal envelope.  `fullmag_fem_frequency_domain_abi_layout` publishes the
+ * corresponding sizeof/offsetof sequence below for C++/Rust ABI checks.
+ */
+#define FULLMAG_FEM_MODAL_LINEARIZED_OPERATOR_REQUEST_FIELD_LIST(X) \
+    X(abi_version) \
+    X(mesh_asset_id) \
+    X(equilibrium_source_kind) \
+    X(gamma_rad_s_T) \
+    X(mu0_T_m_A) \
+    X(alpha) \
+    X(include_exchange) \
+    X(include_demag) \
+    X(demag_realization) \
+    X(damping_policy) \
+    X(spin_wave_bc_kind) \
+    X(k_vector_rad_m) \
+    X(k_vector_len) \
+    X(operator_diagnostics_json)
+
+#define FULLMAG_FEM_MODAL_EIGEN_REQUEST_FIELD_LIST(X) \
+    X(abi_version) \
+    X(operator_request) \
+    X(requested_mode_count) \
+    X(target_kind) \
+    X(target_frequency_hz) \
+    X(frequency_min_hz) \
+    X(frequency_max_hz) \
+    X(residual_tolerance) \
+    X(max_outer_iterations) \
+    X(max_linear_iterations) \
+    X(output_directory) \
+    X(write_partial_artifacts) \
+    X(completeness_policy) \
+    X(eigensolver_family) \
+    X(spectral_transform_kind) \
+    X(cancel_user_data) \
+    X(cancel_requested) \
+    X(progress_user_data) \
+    X(progress_callback) \
+    X(tiny_validation_enabled) \
+    X(tiny_validation_tangent_dof_count) \
+    X(tiny_validation_stiffness_matrix_row_major) \
+    X(tiny_validation_mass_matrix_row_major) \
+    X(tiny_validation_stiffness_diagonal) \
+    X(tiny_validation_mass_diagonal) \
+    X(mfem_operator_enabled) \
+    X(mfem_tangent_dof_count) \
+    X(mfem_stiffness_matrix_row_major) \
+    X(mfem_gyrotropic_matrix_row_major) \
+    X(mfem_mass_matrix_row_major) \
+    X(mfem_linearized_pencil_dependency_digest) \
+    X(mfem_linearized_pencil_gamma0_m_per_a_s) \
+    X(mfem_sparse_operator_enabled) \
+    X(mfem_sparse_stiffness_csr) \
+    X(mfem_sparse_gyrotropic_csr) \
+    X(mfem_sparse_mass_csr) \
+    X(has_floquet_k_vector) \
+    X(floquet_k_vector_rad_per_m) \
+    X(phase_convention) \
+    X(mfem_floquet_periodic_pairs) \
+    X(mfem_floquet_periodic_pair_count) \
+    X(poisson_airbox_block_enabled) \
+    X(poisson_airbox_q_dof_count) \
+    X(poisson_airbox_phi_dof_count) \
+    X(poisson_airbox_a_qq_csr) \
+    X(poisson_airbox_a_qphi_csr) \
+    X(poisson_airbox_a_phiq_csr) \
+    X(poisson_airbox_a_phiphi_csr) \
+    X(poisson_airbox_b_qq_csr) \
+    X(poisson_airbox_phi_mean_weights) \
+    X(poisson_airbox_phi_mean_weights_count) \
+    X(poisson_airbox_target_frequency_hz) \
+    X(poisson_airbox_expected_reference_frequency_hz) \
+    X(poisson_airbox_periodic_mesh_certificate_schema) \
+    X(poisson_airbox_magnetic_pair_count) \
+    X(poisson_airbox_airbox_pair_count) \
+    X(poisson_airbox_shift_invert_action_enabled) \
+    X(poisson_airbox_shift_invert_action_device) \
+    X(poisson_airbox_shift_sigma_real) \
+    X(poisson_airbox_shift_sigma_imag) \
+    X(poisson_airbox_shift_action_vector_real) \
+    X(poisson_airbox_shift_action_vector_imag) \
+    X(poisson_airbox_shift_action_vector_count) \
+    X(poisson_airbox_outer_boundary_kind) \
+    X(poisson_airbox_robin_beta) \
+    X(poisson_airbox_gauge_policy) \
+    X(poisson_airbox_gauge_reason) \
+    X(poisson_airbox_assembly_kind) \
+    X(dynamic_demag_k_tangent_matrix_row_major) \
+    X(dynamic_demag_k_tangent_matrix_value_count) \
+    X(struct_size) \
+    X(execution_target) \
+    X(scalar_representation) \
+    X(result_field_representation) \
+    X(reserved_modal_contract_flags) \
+    X(shared_domain_payload) \
+    X(mesh_generation_identity) \
+    X(canonical_preimage_sha256)
+
+#define FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_LIST(X) \
+    X(abi_version) \
+    X(struct_size) \
+    X(mesh) \
+    X(equilibrium_m0_xyz) \
+    X(equilibrium_m0_xyz_count) \
+    X(saturation_magnetisation_a_per_m) \
+    X(saturation_magnetisation_count) \
+    X(uniform_saturation_magnetisation_a_per_m) \
+    X(gamma0_m_per_a_s) \
+    X(magnetic_a_qq_csr) \
+    X(scalar_reduced_node) \
+    X(scalar_reduced_node_count) \
+    X(magnetic_reduced_node) \
+    X(magnetic_reduced_node_count) \
+    X(magnetic_pair_count) \
+    X(airbox_pair_count) \
+    X(boundary_kind) \
+    X(robin_beta) \
+    X(boundary_marker) \
+    X(equilibrium_digest) \
+    X(mesh_certificate_digest) \
+    X(mesh_certificate_schema) \
+    X(linearization_state_digest) \
+    X(linearization_m0_xyz) \
+    X(linearization_m0_xyz_count) \
+    X(linearization_h_eff0_xyz) \
+    X(linearization_h_eff0_xyz_count) \
+    X(linearization_h_demag0_xyz) \
+    X(linearization_h_demag0_xyz_count) \
+    X(linearization_phi0) \
+    X(linearization_phi0_count) \
+    X(equilibrium_id) \
+    X(mesh_snapshot_id) \
+    X(material_snapshot_id) \
+    X(physics_snapshot_id) \
+    X(boundary_snapshot_id) \
+    X(producer_run_id) \
+    X(equilibrium_content_sha256) \
+    X(demag_model) \
+    X(m0_norm_tolerance) \
+    X(equilibrium_torque_relative_tolerance) \
+    X(mesh_certificate_map_binding_digest) \
+    X(boundary_gauge_digest) \
+    X(bias_field_sample_index) \
+    X(bias_field_sample_id) \
+    X(bias_field_sample_signature) \
+    X(magnetic_part_identity) \
+    X(airbox_part_identity) \
+    X(mesh_generation_identity) \
+    X(canonical_preimage) \
+    X(canonical_preimage_len) \
+    X(canonical_preimage_sha256) \
+    X(magnetic_class_digest_sha256) \
+    X(scalar_class_digest_sha256) \
+    X(certificate_binding_status) \
+    X(certificate_binding_reason) \
+    X(certificate_binding_v6)
+
+#define FULLMAG_FEM_MODAL_FREQUENCY_DOMAIN_RESULT_FIELD_LIST(X) \
+    X(abi_version) \
+    X(status) \
+    X(error_message) \
+    X(diagnostics_json) \
+    X(result_json) \
+    X(artifact_manifest_path) \
+    X(mode_count) \
+    X(q_dof_count) \
+    X(phi_dof_count) \
+    X(mode_lambda_count) \
+    X(mode_q_complex_count) \
+    X(mode_phi_complex_count) \
+    X(mode_delta_m_xyz_complex_count) \
+    X(mode_residual_count) \
+    X(mode_cluster_id_count) \
+    X(mode_lambda) \
+    X(mode_q_complex) \
+    X(mode_phi_complex) \
+    X(mode_delta_m_xyz_complex) \
+    X(mode_residuals) \
+    X(mode_cluster_ids) \
+    X(resolved_execution_target) \
+    X(resolved_scalar_representation) \
+    X(resolved_spectral_transform_kind) \
+    X(result_flags) \
+    X(struct_size) \
+    X(resolved_fallback_state) \
+    X(resolved_engine_id) \
+    X(resolved_fallback_reason) \
+    X(resolved_canonical_preimage_sha256) \
+    X(resolved_certificate_binding_status) \
+    X(resolved_certificate_binding_reason)
+
+#define FULLMAG_FEM_MODAL_CSR_MATRIX_VIEW_FIELD_LIST(X) \
+    X(row_count) \
+    X(column_count) \
+    X(row_offsets) \
+    X(row_offsets_len) \
+    X(column_indices) \
+    X(column_indices_len) \
+    X(values) \
+    X(values_len)
+
+/* Nested v6 certificate records are public C ABI types as well.  Keep these
+   field lists append-only so the v2 manifest can prove their cross-language
+   sizeof/offsetof contract without dereferencing caller-owned arrays. */
+#define FULLMAG_FEM_MODAL_CERTIFICATE_V6_RELATION_FIELD_LIST(X) \
+    X(source_node) \
+    X(destination_node) \
+    X(axis_mask) \
+    X(kind)
+
+#define FULLMAG_FEM_MODAL_CERTIFICATE_V6_REGION_ROLE_FIELD_LIST(X) \
+    X(region_id) \
+    X(part_role)
+
+#define FULLMAG_FEM_MODAL_CERTIFICATE_V6_CLASS_DIGEST_FIELD_LIST(X) \
+    X(canonical_class_id) \
+    X(member_count) \
+    X(sha256)
+
+#define FULLMAG_FEM_MODAL_CERTIFICATE_V6_VIEW_FIELD_LIST(X) \
+    X(view_kind) \
+    X(part_role) \
+    X(part_identity) \
+    X(topology_fingerprint) \
+    X(node_count) \
+    X(region_ids) \
+    X(boundary_axis_masks) \
+    X(region_roles) \
+    X(region_role_count) \
+    X(generator_relations) \
+    X(generator_relation_count) \
+    X(closure_relations) \
+    X(closure_relation_count) \
+    X(require_complete_closure) \
+    X(expected_class_ids) \
+    X(expected_class_id_count) \
+    X(expected_class_digests) \
+    X(expected_class_digest_count)
+
+#define FULLMAG_FEM_MODAL_CERTIFICATE_V6_BINDING_REQUEST_FIELD_LIST(X) \
+    X(schema_version) \
+    X(mesh_magnetic) \
+    X(payload_magnetic) \
+    X(mesh_scalar) \
+    X(payload_scalar)
+
+#define FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_LIST(X) \
+    X(abi_version) \
+    X(reserved0) \
+    X(struct_size) \
+    X(schema_version) \
+    X(node_count) \
+    X(tangent_dof_count) \
+    X(coordinate_unit) \
+    X(magnetisation_unit) \
+    X(time_unit) \
+    X(frequency_unit) \
+    X(angular_frequency_unit) \
+    X(linearization_state_digest) \
+    X(equilibrium_digest) \
+    X(exchange_term_digest) \
+    X(field_term_digest) \
+    X(anisotropy_term_digest) \
+    X(dmi_term_digest) \
+    X(demag_term_digest) \
+    X(operator_input_digest) \
+    X(demag_provider_signature) \
+    X(term_presence_mask) \
+    X(reserved_contract_flags) \
+    X(tangent_frame_xyz) \
+    X(tangent_frame_xyz_count) \
+    X(equilibrium_m0_xyz) \
+    X(equilibrium_m0_xyz_count) \
+    X(effective_field_h_eff0_xyz) \
+    X(effective_field_h_eff0_xyz_count) \
+    X(external_field_h_ext0_xyz) \
+    X(external_field_h_ext0_xyz_count) \
+    X(alpha_per_node) \
+    X(alpha_per_node_count) \
+    X(uniaxial_axis_xyz) \
+    X(uniaxial_axis_xyz_count) \
+    X(uniaxial_anisotropy_field_a_per_m) \
+    X(uniaxial_anisotropy_field_count) \
+    X(saturation_magnetisation_a_per_m) \
+    X(saturation_magnetisation_count) \
+    X(uniform_saturation_magnetisation_a_per_m) \
+    X(exchange_edges) \
+    X(exchange_edge_count) \
+    X(dmi_elements) \
+    X(dmi_element_count) \
+    X(dmi_lumped_mass) \
+    X(dmi_lumped_mass_count) \
+    X(dmi_ms_field) \
+    X(dmi_ms_field_count) \
+    X(dmi_uniform_ms)
+
+#define FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_LIST(X) \
+    X(abi_version) \
+    X(reserved0) \
+    X(struct_size) \
+    X(schema_version) \
+    X(material_kind) \
+    X(reserved1) \
+    X(exchange_stiffness_j_per_m)
+
+#define FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER(name) + 1
+enum {
+    FULLMAG_FEM_MODAL_LINEARIZED_OPERATOR_REQUEST_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_LINEARIZED_OPERATOR_REQUEST_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_EIGEN_REQUEST_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_EIGEN_REQUEST_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_FREQUENCY_DOMAIN_RESULT_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_FREQUENCY_DOMAIN_RESULT_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_CSR_MATRIX_VIEW_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_CSR_MATRIX_VIEW_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_CERTIFICATE_V6_RELATION_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_CERTIFICATE_V6_RELATION_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_CERTIFICATE_V6_REGION_ROLE_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_CERTIFICATE_V6_REGION_ROLE_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_CERTIFICATE_V6_CLASS_DIGEST_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_CERTIFICATE_V6_CLASS_DIGEST_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_CERTIFICATE_V6_VIEW_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_CERTIFICATE_V6_VIEW_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_CERTIFICATE_V6_BINDING_REQUEST_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_CERTIFICATE_V6_BINDING_REQUEST_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+    FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT =
+        0 FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_LIST(FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER),
+};
+#undef FULLMAG_FEM_ABI_FIELD_COUNT_MEMBER
 
 typedef struct {
     uint64_t availability_request_size;
@@ -1423,7 +1940,9 @@ typedef struct {
     uint64_t driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset;
     uint64_t solve_result_size;
     uint64_t solve_result_artifact_manifest_path_offset;
-    /* Append-only modal ABI manifest (schema v1). */
+    /* Legacy modal manifest fields are retained in the v1 envelope.  New
+       complete manifests use fullmag_fem_frequency_domain_modal_abi_layout_v2
+       below; removing these fields would break existing Rust/C consumers. */
     uint64_t modal_abi_schema;
     uint64_t modal_abi_version;
     uint64_t modal_eigen_request_size;
@@ -1439,8 +1958,6 @@ typedef struct {
     uint64_t modal_frequency_domain_result_resolved_engine_id_offset;
     uint64_t modal_csr_matrix_view_size;
     uint64_t modal_csr_matrix_view_values_len_offset;
-    /* v16 modal manifest completion: every public modal envelope exposes
-       its prefix, identity tail, resolved provenance, and every CSR member. */
     uint64_t modal_eigen_request_abi_version_offset;
     uint64_t modal_eigen_request_operator_request_offset;
     uint64_t modal_eigen_request_spectral_transform_kind_offset;
@@ -1480,6 +1997,59 @@ typedef struct {
     uint64_t modal_csr_matrix_view_column_indices_len_offset;
     uint64_t modal_csr_matrix_view_values_offset;
 } fullmag_fem_frequency_domain_abi_layout;
+
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V2 2u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved0;
+    uint64_t struct_size;
+    uint64_t modal_abi_schema;
+    uint64_t modal_eigen_request_size;
+    uint64_t modal_linearized_operator_request_size;
+    uint64_t modal_shared_domain_payload_size;
+    uint64_t modal_frequency_domain_result_size;
+    uint64_t modal_csr_matrix_view_size;
+    uint64_t modal_eigen_request_field_count;
+    uint64_t modal_eigen_request_field_offsets[128];
+    uint64_t modal_linearized_operator_request_field_count;
+    uint64_t modal_linearized_operator_request_field_offsets[32];
+    uint64_t modal_shared_domain_payload_field_count;
+    uint64_t modal_shared_domain_payload_field_offsets[128];
+    uint64_t modal_frequency_domain_result_field_count;
+    uint64_t modal_frequency_domain_result_field_offsets[64];
+    uint64_t modal_csr_matrix_view_field_count;
+    uint64_t modal_csr_matrix_view_field_offsets[8];
+    uint64_t modal_certificate_v6_relation_size;
+    uint64_t modal_certificate_v6_relation_field_count;
+    uint64_t modal_certificate_v6_relation_field_offsets[8];
+    uint64_t modal_certificate_v6_region_role_size;
+    uint64_t modal_certificate_v6_region_role_field_count;
+    uint64_t modal_certificate_v6_region_role_field_offsets[4];
+    uint64_t modal_certificate_v6_class_digest_size;
+    uint64_t modal_certificate_v6_class_digest_field_count;
+    uint64_t modal_certificate_v6_class_digest_field_offsets[8];
+    uint64_t modal_certificate_v6_view_size;
+    uint64_t modal_certificate_v6_view_field_count;
+    uint64_t modal_certificate_v6_view_field_offsets[32];
+    uint64_t modal_certificate_v6_binding_request_size;
+    uint64_t modal_certificate_v6_binding_request_field_count;
+    uint64_t modal_certificate_v6_binding_request_field_offsets[8];
+} fullmag_fem_frequency_domain_modal_abi_layout_v2;
+
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V3 3u
+typedef struct {
+    /* v2 remains the legacy V17-prefix manifest.  This wrapper publishes the
+       V18 payload tail and its descriptor offsets without changing v2.  The
+       caller supplies `v2.struct_size >= sizeof(v3)` as the wrapper prefix
+       guard; the returned nested v2 record reports its own sizeof(v2). */
+    fullmag_fem_frequency_domain_modal_abi_layout_v2 v2;
+    uint64_t modal_linearization_descriptor_size;
+    uint64_t modal_linearization_descriptor_field_count;
+    uint64_t modal_linearization_descriptor_field_offsets[128];
+    uint64_t modal_exchange_material_view_size;
+    uint64_t modal_exchange_material_view_field_count;
+    uint64_t modal_exchange_material_view_field_offsets[16];
+} fullmag_fem_frequency_domain_modal_abi_layout_v3;
 
 typedef struct {
     uint64_t h2d_bytes;
@@ -1570,6 +2140,12 @@ int fullmag_fem_get_frequency_domain_dependency_info(
 );
 int fullmag_fem_get_frequency_domain_abi_layout(
     fullmag_fem_frequency_domain_abi_layout *out_layout
+);
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v2(
+    fullmag_fem_frequency_domain_modal_abi_layout_v2 *out_layout
+);
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
+    fullmag_fem_frequency_domain_modal_abi_layout_v3 *out_layout
 );
 int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
 int fullmag_fem_frequency_domain_initial_sweep_progress(

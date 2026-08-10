@@ -124,6 +124,42 @@ describe("frequencyDomainSeriesAdapter", () => {
     );
   });
 
+  it("plots eigen spectrum with mode rank on a dimensionless x-axis and Hz on y", () => {
+    const model = buildEigenSpectrumChartModel({
+      payload: {
+        modes: [
+          {
+            frequency_hz: 3e9,
+            mode_id: "mode-alpha",
+            raw_mode_index: 17,
+            sample_index: 0,
+          },
+          {
+            frequency_hz: 4e9,
+            mode_id: "mode-beta",
+            raw_mode_index: 99,
+            sample_index: 0,
+          },
+        ],
+      },
+      status: "ready",
+    });
+
+    const [series] = frequencyDomainChartSeriesForAnalysisPlots(model);
+
+    expect(series).toEqual(
+      expect.objectContaining({
+        unit: "Hz",
+        xUnit: "1",
+      }),
+    );
+    expect(series?.points).toEqual([
+      { rowIndex: 0, x: 0, y: 3e9 },
+      { rowIndex: 1, x: 1, y: 4e9 },
+    ]);
+    expect(frequencyDomainXAxisLabel(series ? [series] : [])).toBe("mode index");
+  });
+
   it("labels ECharts x axes by frequency-domain chart semantics", () => {
     const spectrum = frequencyDomainChartSeriesForAnalysisPlots(
       buildEigenSpectrumChartModel({
@@ -175,7 +211,7 @@ describe("frequencyDomainSeriesAdapter", () => {
     expect(frequencyDomainXAxisLabel(series)).toBe("frequency [MHz]");
   });
 
-  it("uses MHz units for sub-GHz eigen spectrum frequencies", () => {
+  it("keeps eigen spectrum frequency values in canonical Hz", () => {
     const model = buildEigenSpectrumChartModel({
       payload: {
         modes: [{ frequency_hz: 750e6, raw_mode_index: 1, sample_index: 0 }],
@@ -185,10 +221,11 @@ describe("frequencyDomainSeriesAdapter", () => {
 
     expect(model.series[0]).toEqual(
       expect.objectContaining({
-        unit: "MHz",
+        unit: "Hz",
+        xUnit: "1",
       }),
     );
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 750, y: 1 }]);
+    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 1, y: 750e6 }]);
   });
 
   it("uses MHz units for sub-GHz dispersion frequencies", () => {

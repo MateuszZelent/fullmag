@@ -340,6 +340,49 @@ fn validate_eigen_k0_kittel_validation(
     }
 }
 
+fn bias_field_sweep_kittel_mapping_errors(
+    sweep: &fullmag_ir::BiasFieldSweepIR,
+    validation: &FemEigenK0KittelValidationIR,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if sweep.samples_a_per_m.len() != validation.samples.len() {
+        errors.push(format!(
+            concat!(
+                "eigenmodes.bias_field_sweep_kittel_sample_count_mismatch: ",
+                "bias_field_sweep has {} samples but k0_kittel_validation has {}; ",
+                "fallback=none",
+            ),
+            sweep.samples_a_per_m.len(),
+            validation.samples.len(),
+        ));
+    }
+    for (position, field_a_per_m) in sweep.samples_a_per_m.iter().enumerate() {
+        let Some(validation_sample) = validation.samples.get(position) else {
+            continue;
+        };
+        if validation_sample.sample_index as usize != position {
+            errors.push(format!(
+                concat!(
+                    "eigenmodes.bias_field_sweep_kittel_sample_index_mismatch: ",
+                    "position {} has k0 sample_index {}; fallback=none",
+                ),
+                position, validation_sample.sample_index,
+            ));
+        }
+        if validation_sample.bias_field != *field_a_per_m {
+            errors.push(format!(
+                concat!(
+                    "eigenmodes.bias_field_sweep_kittel_field_mismatch: position {} ",
+                    "bias_field_sweep={:?}, ",
+                    "k0_kittel_validation={:?}; fallback=none",
+                ),
+                position, field_a_per_m, validation_sample.bias_field,
+            ));
+        }
+    }
+    errors
+}
+
 fn validate_eigen_dispersion_validation(
     validation: &FemEigenDispersionValidationIR,
 ) -> Result<(), PlanError> {
@@ -3097,6 +3140,18 @@ pub(crate) fn plan_fem_eigen(
 
     if bias_field_sweep.is_some() {
         let mut reasons = Vec::new();
+        if let Some(sweep) = bias_field_sweep.as_ref() {
+            if sweep.equilibrium_policy
+                == fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach
+                && sweep.continuation_seed
+                    == fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium
+            {
+                reasons.push(
+                    "eigenmodes.bias_field_sweep_relax_each_requires_initial_state_seed; fallback=none"
+                        .to_string(),
+                );
+            }
+        }
         if !operator.include_demag
             || !problem
                 .energy_terms
@@ -3405,6 +3460,12 @@ pub(crate) fn plan_fem_eigen(
             None
         }
     };
+    if let (Some(sweep), Some(validation)) = (
+        bias_field_sweep.as_ref(),
+        k0_kittel_validation.as_ref(),
+    ) {
+        errors.extend(bias_field_sweep_kittel_mapping_errors(sweep, validation));
+    }
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),

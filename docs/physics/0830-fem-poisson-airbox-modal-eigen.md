@@ -1,8 +1,8 @@
 # FEM Poisson-Airbox Modal Eigenproblem
 
-- Status: implementation contract
+- Status: bounded CPU/GPU engine executable; independent field-sweep validation open
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-07-12
+- Last updated: 2026-08-03
 - Related physics notes:
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
@@ -12,7 +12,8 @@
 - Related implementation plan:
   - `docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md`
 
-## 1. Problem statement
+(problem-statement)=
+## 1. Physical domain and problem statement
 
 This note defines the first physically valid FEM modal eigensolve with dynamic
 Poisson-airbox demagnetization. It is a `k=0`, alpha-zero, shared-domain
@@ -23,8 +24,18 @@ on the full magnetic-plus-airbox domain.
 The topology-shaped PA-E1/PA-E4b payload is an algebraic test oracle only. It
 is not a FEM Poisson-airbox model and must not be labeled production physics.
 
+### Backend and device qualification boundary
+
+| Solver | Device | Current state | Boundary |
+|---|---|---|---|
+| FEM | CPU | bounded executable; validation blocked | The shared-domain P1 solver executes, but a physics-owned field-sweep request independent of the Kittel oracle remains open. |
+| FEM | GPU | bounded executable; validation blocked | Managed device-resident PETSc/SLEPc execution exists, but an independent field sweep, larger matrix-free cases, and convergence remain open. |
+| FDM | CPU | not applicable | FDM demagnetization has a separate canonical physics owner. |
+| FDM | GPU | not applicable | FDM demagnetization has a separate canonical physics owner. |
+
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations
 
 Fullmag uses
@@ -65,21 +76,46 @@ A_phiq q + P phi = 0,
 lambda = i omega.
 ```
 
+```{math}
+:label: eq-poisson-airbox-modal-block
+\begin{aligned}
+P\,\delta\phi &= C_{\phi q}q, \\
+A_{\phi q}q + P\,\phi &= 0, \\
+L_{\mathrm{eff}}q &= \lambda B_{qq}q, \qquad
+L_{\mathrm{eff}} = A_{qq}-A_{q\phi}P^{-1}A_{\phi q},
+\qquad \lambda = i\omega .
+\end{aligned}
+```
+
+```{math}
+:label: eq-poisson-airbox-weak-form
+\int_{D}\nabla\psi\cdot\nabla\delta\phi\,\mathrm{d}V
+ + \beta\int_{\Gamma_{\mathrm{open}}}\psi\,\delta\phi\,\mathrm{d}S
+ = \int_{\Omega_m} M_s\,\delta\mathbf m\cdot\nabla\psi\,\mathrm{d}V .
+```
+
 For a pure-Neumann scalar block, the second row is augmented by `c eta` and
 `cT phi=0`. Robin and Dirichlet have no `eta` row.
 
+(symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
 | Symbol | Meaning | Unit |
 |---|---|---|
-| `m0`, `delta_m` | normalized magnetization and perturbation | 1 |
-| `Ms` | saturation magnetization | A/m |
-| `h_eff0`, `delta_H_demag` | effective/demag fields | A/m |
-| `delta_phi` | scalar magnetic potential | A |
-| `gamma0` | `mu0 abs(gamma)` | rad s^-1 per (A/m) |
-| `omega` | angular frequency | rad/s |
-| `beta` | Robin coefficient | 1/m |
+| `$m_0$`, `$\delta\mathbf m$` | normalized equilibrium magnetization and tangent perturbation | `$1$` |
+| `$M_s$` | saturation magnetization | `$\mathrm{A\,m^{-1}}$` |
+| `$\mathbf h_{\mathrm{eff},0}$`, `$\delta\mathbf H_{\mathrm{demag}}$` | equilibrium effective field and dynamic demagnetizing field | `$\mathrm{A\,m^{-1}}$` |
+| `$\delta\phi$` | scalar magnetic potential | `$\mathrm{A}$` |
+| `$\gamma_0$` | `$\mu_0|\gamma|$` gyromagnetic factor in the A/m convention | `$\mathrm{rad\,s^{-1}\,(A\,m^{-1})^{-1}}$` |
+| `$\omega$` | angular frequency | `$\mathrm{rad\,s^{-1}}$` |
+| `$\beta$` | Robin coefficient | `$\mathrm{m^{-1}}$` |
+| `$P$` | scalar Poisson stiffness block | `$\mathrm{m}$` |
+| `$q$` | tangent-plane modal coefficients | `$1$` |
+| `$\lambda$` | modal eigenvalue | `$\mathrm{s^{-1}}$` |
+| `$B_{qq}$` | gyrotropic tangent mass block | `$\mathrm{m^3}$` |
+| `$A_{qq},A_{q\phi},A_{\phi q}$` | magnetic and mixed descriptor blocks | `$\mathrm{m^3\,s^{-1}}$`, `$\mathrm{m^3\,(A)^{-1}\,s^{-1}}$`, `$\mathrm{A\,m}$` respectively |
 
+(assumptions-and-validity)=
 ### 2.3 Assumptions and validity limits
 
 - `m0` originates in an accepted equilibrium artifact with matching mesh,
@@ -90,13 +126,32 @@ For a pure-Neumann scalar block, the second row is augmented by `c eta` and
 - Nonzero-k dynamic demag requires complex Bloch `grad_k/div_k` assembly and is
   not approximated by the k=0 operator.
 
-## 3. Numerical interpretation
+## 3. Solver family and numerical interpretation
+
+(discrete-realization)=
 
 ### 3.1 FEM
 
 `P`, source `C`, potential feedback and magnetic blocks are assembled from the
 same shared mesh and quadrature. The production selected-spectrum solve is
 Schur reduced, with the full descriptor reconstructed solely for certification.
+
+The mixed blocks use the descriptor signs
+
+```text
+C_phi_q q = int_Omega_m Ms (Tq) dot grad(psi) dV
+A_phiq = -C_phi_q
+A_qphi = -mu0 A_phiq^T = mu0 C_phi_q^T
+phi(q) = -P^-1 A_phiq q
+L_eff = A_qq - A_qphi P^-1 A_phiq.
+```
+
+Consequently, the demagnetizing contribution to the energy Hessian is
+positive semidefinite. For an in-plane, x/y-periodic thin film, the uniform
+out-of-plane tangent component receives the `+Ms` restoring stiffness while
+the uniform in-plane component does not. Reversing the `A_qphi` sign produces
+`H0-Ms`, a real unstable eigenvalue, and must fail the reciprocal-coupling and
+K0-3 Kittel gates.
 
 Certification reports dimensionless blockwise backward errors:
 
@@ -127,17 +182,115 @@ must reject rather than approximate the imaginary-axis target.
 
 A GPU result is production-capable only when the assembled blocks, vectors,
 Krylov basis and preconditioner remain resident on the device through the full
-selected-spectrum iteration. One-shot `A*x` or dense inverse-iteration
+selected-spectrum iteration. The managed PETSc/SLEPc lane now executes the
+bounded shared-domain K0 fixture with `seqaijcusparse` matrices and
+`seqcuda` vectors, a device Schur operator, shift-invert, and no CPU fallback.
+The bounded materialized path is used through 1024 descriptor dimensions;
+larger problems select the explicit matrix-free shell and still require a
+separate convergence qualification. One-shot `A*x` or dense inverse-iteration
 contracts are not a device-resident modal solver.
 
-### 3.3 FDM and hybrid
+### 3.3 FDM CPU and GPU
+
+FDM CPU/GPU are not realizations of this FEM Poisson-airbox note. Their
+demagnetization kernels and FFT/Newell boundary semantics are documented by the
+FDM interaction owner; no FDM capability is inferred from the FEM results.
+
+### 3.4 FDM and hybrid
 
 This note does not alter FDM demagnetization or introduce hybrid semantics.
 
-## 4. API, IR, planner, and provenance impact
+(python-api)=
+## 4. Python API
 
-The public Python model remains physics-first. The internal modal payload adds
-only backend-owned provenance:
+The public API is stage-first and physics-first. The following example is the
+smallest complete K0 request: it declares the shared domain, material, static
+demagnetization, accepted relaxation source, and an explicit frequency window.
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("k0_modal_airbox")
+study.engine("fem")
+study.device("auto", precision="double")
+study.mode("strict")
+study.interactive(True)
+
+# %%
+study.universe(mode="manual", size=(1200e-9, 600e-9, 550e-9))
+film = study.geometry(
+    fm.Box(size=(500e-9, 125e-9, 3e-9), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.alpha = 0.0
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.demag(realization="poisson_robin")
+
+# %%
+study.stages.add_eigenmodes(
+    count=1,
+    target="frequency_window",
+    frequency_min=1.0e9,
+    frequency_max=3.0e9,
+    operator="linearized_llg",
+    include_demag=True,
+    equilibrium_source="relax",
+    normalization="unit_l2",
+    damping_policy="ignore",
+    k_vector=(0.0, 0.0, 0.0),
+    bc="free",
+    magnetostatic_bc="open",
+)
+result = study.run()
+```
+
+For the bounded production lane, `include_demag=True`, `k_vector=(0, 0, 0)`,
+`damping_policy="ignore"`, and `magnetostatic_bc="open"` are part of the
+qualified contract. The public function also accepts the parameters below;
+unsupported combinations are rejected during validation rather than silently
+falling back to a different operator.
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `eigenmodes.count` | `int` | `10` | `$1$` | `count > 0` | selected mode count | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_count` |
+| `eigenmodes.target` | `str` | `"lowest"` | `$1$` | `lowest`, `nearest`, or `frequency_window` | spectral selection strategy | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_target` |
+| `eigenmodes.target_frequency` | `float or None` | `None` | `$\mathrm{Hz}$` | finite when target is `nearest` | nearest target frequency | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_target_frequency` |
+| `eigenmodes.frequency_min` | `float or None` | `None` | `$\mathrm{Hz}$` | finite and no greater than `frequency_max` | lower frequency-window bound | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_frequency_min` |
+| `eigenmodes.frequency_max` | `float or None` | `None` | `$\mathrm{Hz}$` | finite and no less than `frequency_min` | upper frequency-window bound | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_frequency_max` |
+| `eigenmodes.operator` | `str` | `"linearized_llg"` | `$1$` | supported operator identifier | linearized dynamics operator | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_operator` |
+| `eigenmodes.include_demag` | `bool` | `True` | `$1$` | must be `True` for K0 demag qualification | dynamic demagnetizing feedback | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_include_demag` |
+| `eigenmodes.equilibrium_source` | `str` | `"relax"` | `$1$` | `relax`, `provided`, or `artifact` | source of accepted equilibrium | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_equilibrium_source` |
+| `eigenmodes.equilibrium_artifact` | `str or None` | `None` | `$1$` | required when source is `artifact` | equilibrium artifact path | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_equilibrium_artifact` |
+| `eigenmodes.normalization` | `str` | `"unit_l2"` | `$1$` | `unit_l2` or `unit_max_amplitude` | mode normalization convention | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_normalization` |
+| `eigenmodes.damping_policy` | `str` | `"ignore"` | `$1$` | `ignore` or `include`; `include` is not qualified here | damping treatment | FEM CPU and FEM GPU bounded K0 only with `ignore` | `stages[].eigen_damping_policy` |
+| `eigenmodes.k_vector` | `tuple[float, float, float] or None` | `None` | `$\mathrm{m^{-1}}$` | K0 requires `(0, 0, 0)`; nonzero k is deferred | Bloch wave vector | FEM CPU and FEM GPU at K0 only | `stages[].eigen_k_vector` |
+| `eigenmodes.k_sampling` | `object or None` | `None` | `$1$` | only supported by a qualified dispersion planner | dispersion sampling request | not qualified by this note | `stages[].eigen_k_sampling` |
+| `eigenmodes.bc` | `str or dict` | `"free"` | `$1$` | supported spin boundary policy | exchange boundary policy | FEM CPU and FEM GPU bounded K0 | `stages[].eigen_spin_wave_bc` |
+| `eigenmodes.magnetostatic_bc` | `str` | `"open"` | `$1$` | `open`, `poisson_robin`, `poisson_dirichlet`, or `pure_neumann` policy | scalar-potential boundary policy | FEM CPU and FEM GPU bounded K0 with open airbox | `stages[].eigen_magnetostatic_bc` |
+
+(problem-ir)=
+## 5. ProblemIR, planning, and provenance
+
+The Python fields lower to one canonical stage object. A normalized request
+retains the user's requested intent, for example
+`eigen_k_vector=(0, 0, 0)` and `eigen_include_demag=True`. Planning then adds
+resolved execution and provenance without rewriting the physical request:
+
+```text
+requested: engine=fem, device=auto, precision=double,
+           eigen_operator=linearized_llg, k=(0,0,0), include_demag=true
+resolved:  solver_adapter=k0_poisson_airbox_cpu_schur_slepc
+           or k0_poisson_airbox_gpu_petsc_slepc,
+           algebraic_form=schur_reduced_descriptor,
+           spectral_transform=shift_invert,
+           spectral_scalar_mode=real_split,
+           assembly_kind=mfem_weak_form_shared_domain
+```
+
+The internal modal payload carries the following backend-owned provenance:
 
 ```text
 assembly_kind = mfem_weak_form_shared_domain | synthetic_algebraic_oracle
@@ -152,24 +305,63 @@ The boundary, gauge, and reason form one validated tuple. `poisson_robin` and
 `poisson_dirichlet` require `gauge_policy=none` and
 `gauge_reason=coercive_outer_boundary`; `pure_neumann` requires
 `gauge_policy=mean_zero_augmented`, normalized quadrature-assembled mean
-weights, and `gauge_reason=pure_neumann_nullspace`. Those weights need not be
-strictly positive at eliminated or inactive scalar DOFs. The current PA-E2
-executable accepts only `assembly_kind=synthetic_algebraic_oracle`; the real
-shared-domain token must remain unavailable until its MFEM weak-form assembly
-exists. The native SLEPc adapter exists, but it does not turn a synthetic
-payload into real assembly and its real-axis spectral targeting remains open.
+weights, and `gauge_reason=pure_neumann_nullspace`. Synthetic PA-E1/PA-E4b
+payloads remain algebra-only and cannot establish a production claim.
+
+`k0_kittel_validation` is a postsolve oracle only. It must not change the
+physical external field, assembled blocks, equilibrium or periodic
+certificates, spectral target, execution-lane selection, solver status, or
+request signatures. A multi-field K0-3 study therefore requires a separate
+physics-owned field-sweep request; a Gamma-point path whose fields are sourced
+from analytical Kittel samples is not valid physical evidence.
+
+(round-trip-and-failure-semantics)=
+## 6. Round-trip and failure semantics
+
+Script export reproduces the stage-first Python fields and their canonical
+`ProblemIR` destinations. The exported request must preserve requested intent;
+the runtime report separately records resolved execution, solver adapter,
+device ownership, transfer audit, and artifact provenance. This separation is
+required for reproducibility and for comparing CPU and GPU runs.
+
+Validation errors are fail-closed. The planner rejects missing accepted
+equilibrium fields, a missing shared-airbox periodic certificate, an invalid
+boundary/gauge tuple, a nonzero k-vector in the K0 lane, a real target applied
+to the unrotated imaginary-axis pencil, or a request for an unavailable
+device-resident realization. Unsupported combinations are reported with the
+requested fields and the resolved capability reason; they do not silently
+select CPU, synthetic algebra, or a different demagnetization boundary.
 
 Any artifact with `assembly_kind=synthetic_algebraic_oracle` must carry
 `production_periodic_airbox_claim=false`. Production-labelled periodic-airbox
-verification requires `assembly_kind=mfem_weak_form_shared_domain` and the
-matching managed assembly and physics evidence.
+verification requires `assembly_kind=mfem_weak_form_shared_domain` and matching
+managed assembly and physics evidence.
 
-The planner rejects a modal periodic-airbox request if required accepted
-equilibrium fields, shared-airbox periodic certificate or supported BC policy
-are absent. The capability matrix cannot label the path production until the
-real assembly and validation matrix pass.
+(implementation-mapping)=
+## 7. Implementation and evidence mapping
 
-## 5. Validation strategy
+| Contract | Source/evidence |
+|---|---|
+| Shared-domain P1 blocks and reciprocal sign | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp`; `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` |
+| CPU Schur MatShell and executed target subwindows | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp`; `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` |
+| GPU device Schur PETSc/SLEPc realization | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp`; `backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp` |
+| Oracle-independent single-point request lowering | `crates/fullmag-runner/src/dispatch.rs`; `eigen_path_single_k_point_plan` |
+| Deferred physical K0-3 field sweep | Requires a separate physics-owned field-sweep request; the Kittel oracle cannot supply physical fields. |
+| CPU/GPU parity and transfer audit | `docs/audits/2026-08-02-fem-k0-eigensolve-current-status.md`; `scripts/verify_fem_frequency_domain_eigen_artifacts.py` |
+| Artifact validation and mode payloads | `scripts/verify_fem_frequency_domain_eigen_artifacts.py`; `docs/specs/frequency-domain-artifacts-v2.md` |
+
+(discrete-realization)=
+## 8. Discrete realization and validation strategy
+
+The CPU and GPU lanes share the FEM weak-form physics and descriptor signs,
+but use separate PETSc/MFEM runtime realizations. CPU uses host PETSc vectors
+and the bounded Schur MatShell. GPU uses managed PETSc/SLEPc with
+`seqaijcusparse` matrices, `seqcuda` vectors, device Schur application and
+zero per-iteration full-vector transfers. The materialized GPU path is bounded
+to descriptor dimensions through 1024; larger problems select a matrix-free
+shell and still require convergence and scaling evidence.
+
+Validation proceeds in this order:
 
 1. Manufactured Robin and Dirichlet potential tests establish weak-form signs
    and gauge policy.
@@ -179,27 +371,63 @@ real assembly and validation matrix pass.
    thin-film Kittel behavior respectively.
 5. Multi-mode selected-spectrum tests establish the target transformation.
 6. CPU/GPU parity applies only after both operate on the same real assembled
-   blocks.
+   blocks and both certify the original descriptor residual.
 
-## 6. Completeness checklist
+(validation)=
+## 9. Validation evidence and completion gates
 
-- [ ] Real shared-domain FEM modal block assembly
-- [ ] BC-dependent gauge policy
-- [ ] ADR-017 `real_frequency_rotated` selected-spectrum transform with
+Existing managed artifacts demonstrate bounded CPU/GPU execution, residual
+certification, normalized mode metadata, spectrum/branch/dispersion payloads,
+binary plus Zarr mode fields, and GPU residency telemetry. Their 15-point
+frequency sweep used analytical Kittel samples to set the physical external
+field, so it cannot qualify K0-3 physics or CPU/GPU field-sweep parity. Fresh
+physics validation requires a separate physical field-sweep request whose
+inputs are independent of the analytical oracle.
+
+The bounded evidence does not qualify arbitrary mesh sizes, the GPU
+matrix-free branch, damping, nonzero k, or release-wide negative/capability
+coverage. Those are explicit continuation gates, not implied by the Kittel
+fixture.
+
+## 10. Completeness checklist
+
+- [x] Real shared-domain FEM modal block assembly for the bounded P1 K0 CPU scope
+- [x] BC-dependent gauge policy for the bounded CPU path
+- [x] ADR-017 `real_frequency_rotated` selected-spectrum transform with
   `tau=omega_target` for the managed real PETSc/SLEPc runtime
-- [ ] Full residual block certification
-- [ ] K0-3 real assembly fixture and convergence suite
-- [ ] Persistent GPU modal solver
+- [x] Full original-block residual certification for the bounded CPU and GPU paths
+- [ ] Independent K0-3 physical field sweep and managed CPU/GPU parity evidence
+- [x] Bounded device-resident GPU modal solver for the materialized Schur path
+- [ ] GPU matrix-free convergence and scaling beyond the materialized bound
 - [ ] Nonzero-k Floquet dynamic demag
 
-## 7. Known limits and deferred work
+(limitations)=
+## 11. Known limits and deferred work
 
-Nonzero-k dynamic demag, device-resident modal Krylov, damping qualification,
-nonuniform-texture qualification and broad periodic-airbox production coverage
-are deferred. They must fail explicitly rather than reuse this k=0 path.
+Nonzero-k dynamic demag, damping qualification, nonuniform-texture
+qualification, arbitrary mesh-size coverage, GPU matrix-free convergence,
+large-problem scaling, an explicit physical K0 field-sweep request, and broad
+periodic-airbox release gates remain open.
+They must fail explicitly rather than reuse this bounded k=0 path.
 
-## 8. References
+(scientific-bibliography)=
+## 12. Scientific bibliography
 
 - COMSOL Micromagnetics Module User's Guide V2.13, frequency-domain chapter.
 - `docs/physics/0700-frequency-domain-linearized-llg.md`.
+- `docs/physics/0800-fem-static-pbc-demag.md`.
+- `docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
 - `docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md`.
+
+(source-code-index)=
+## 13. Source-code index
+
+| Responsibility | Repository path | Stable symbol |
+|---|---|---|
+| Public stage construction | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` |
+| CPU shared-domain Schur solve | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` | `FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur` |
+| GPU PETSc/SLEPc Schur solve | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` | `FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` |
+| Runner native shared-domain state | `crates/fullmag-runner/src/fem_eigen.rs` | `build_shared_domain_linearization_state` |
+| Oracle-independent single-k lowering | `crates/fullmag-runner/src/dispatch.rs` | `eigen_path_single_k_point_plan` |
+| K0 sweep artifact validation | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_k0_kittel_field_sweep` |
+| GPU device provenance validation | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `validate_gpu_modal_k0_periodic_airbox_provenance` |

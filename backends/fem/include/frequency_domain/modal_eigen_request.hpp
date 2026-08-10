@@ -12,12 +12,16 @@ constexpr std::uint32_t kFrequencyDomainLegacyAbiVersion = 12;
 constexpr std::uint32_t kFrequencyDomainPriorAbiVersion = 13;
 constexpr std::uint32_t kFrequencyDomainPreviousAbiVersion = 14;
 constexpr std::uint32_t kFrequencyDomainV15AbiVersion = 15;
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 16;
+constexpr std::uint32_t kFrequencyDomainV16AbiVersion = 16;
+constexpr std::uint32_t kFrequencyDomainV17AbiVersion = 17;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 18;
 
 enum class ModalExecutionTarget : std::uint32_t {
     auto_select = 0,
     production_cpu = 1,
     production_gpu = 2,
+    // Resolved-result lane only; public requests must use an execution lane.
+    validation = 3,
 };
 
 enum class ModalScalarRepresentation : std::uint32_t {
@@ -29,6 +33,11 @@ enum class ModalResultFieldRepresentation : std::uint32_t {
     tangent_q = 0,
     cartesian_delta_m = 1,
     tangent_q_and_cartesian_delta_m = 2,
+};
+
+enum class ModalSpectralTransformKind : std::uint32_t {
+    auto_select = 0,
+    shift_invert = 1,
 };
 
 struct LinearizedOperatorRequest {
@@ -86,7 +95,8 @@ struct ModalEigenRequest {
     int write_partial_artifacts = 0;
     int completeness_policy = 0;
     int eigensolver_family = 0;
-    int spectral_transform_kind = 0;
+    ModalSpectralTransformKind spectral_transform_kind =
+        ModalSpectralTransformKind::auto_select;
     void *cancel_user_data = nullptr;
     int (*cancel_requested)(void *user_data) = nullptr;
     void *progress_user_data = nullptr;

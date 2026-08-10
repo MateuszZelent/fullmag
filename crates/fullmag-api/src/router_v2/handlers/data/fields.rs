@@ -1295,9 +1295,7 @@ pub async fn get_field_meta(
         ))
     } else {
         transport_artifact_values()
-            .or_else(|| {
-                resolved_current_field_values(snapshot, quantity_id, n_comp as usize)
-            })
+            .or_else(|| resolved_current_field_values(snapshot, quantity_id, n_comp as usize))
     };
 
     let materializer_status = materializer_status(snapshot, quantity_id)
@@ -2177,11 +2175,10 @@ pub async fn get_field_vector(
             snapshot_id,
         )?)
     } else {
-        transport_artifact_values()
-            .or_else(|| {
-                resolved_current_field_values(snapshot, quantity_id, n_comp)
-                    .map(|(values, grid, _freshness)| (values, grid))
-            })
+        transport_artifact_values().or_else(|| {
+            resolved_current_field_values(snapshot, quantity_id, n_comp)
+                .map(|(values, grid, _freshness)| (values, grid))
+        })
     };
     let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
         || snapshot.preview_cache.get(quantity_id).is_some()

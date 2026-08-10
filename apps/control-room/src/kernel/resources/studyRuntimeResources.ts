@@ -6,8 +6,12 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
@@ -155,7 +159,7 @@ import { useResource } from "./useResource";
 /** Browser trace state is bounded and mutates only on sampled profile events. */
 export const solverTraceObserver = createSolverTraceObserver();
 
-function ignoreMissingResource<T>(error: unknown): T | null {
+export function ignoreMissingResource<T>(error: unknown): T | null {
   if (error instanceof ControlRoomApiError && error.status === 404) {
     return null;
   }
@@ -534,6 +538,22 @@ export function frequencyDomainTextArtifactRevision(
     text.length,
     checksum.toString(16),
   ].join("|");
+}
+
+export function frequencyDomainJsonArtifactRevision(
+  data: Pick<
+    FrequencyDomainJsonArtifactResource,
+    "artifact_path" | "content_digest" | "missing_reason" | "revision" | "status"
+  > | null,
+): string | null {
+  if (!data) return null;
+  return [
+    data.status,
+    data.artifact_path,
+    data.revision ?? "",
+    data.content_digest ?? "",
+    data.missing_reason ?? "",
+  ].join(":");
 }
 
 function hasPositiveRevision(
@@ -1058,6 +1078,78 @@ export function useFrequencyDomainEigenSpectrumResource({
   );
 }
 
+export function useFrequencyDomainEigenFieldSweepResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain
+        .eigenFieldSweep({ signal })
+        .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainFmrPeaksResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain
+        .fmrPeaks({ signal })
+        .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainFmrResonanceFitsResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain
+        .fmrResonanceFits({ signal })
+        .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    load,
+    enabled,
+  );
+}
+
+export function useFrequencyDomainFmrKittelFitResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyDomain
+        .fmrKittelFit({ signal })
+        .catch(ignoreMissingResource<FrequencyDomainJsonArtifactResource>),
+    [api],
+  );
+  return useFrequencyDomainJsonResource(
+    ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+    load,
+    enabled,
+  );
+}
+
 export function useFrequencyDomainEigenBranchesResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
@@ -1345,7 +1437,7 @@ export function useFrequencyResponseFieldMetaResource(
 
 function useFrequencyDomainJsonResource(
   resourceKey: string,
-  load: (context: { signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource>,
+  load: (context: { signal: AbortSignal }) => Promise<FrequencyDomainJsonArtifactResource | null>,
   enabled: boolean,
 ) {
   const sessionStatus = useSessionStatusSelector(
@@ -1355,7 +1447,7 @@ function useFrequencyDomainJsonResource(
   return useResource<FrequencyDomainJsonArtifactResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
-    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resolveRevision: frequencyDomainJsonArtifactRevision,
     resourceKey,
   });
 }
@@ -1372,7 +1464,7 @@ function useFrequencyDomainIndexedJsonResource(
   return useResource<FrequencyDomainJsonArtifactResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
-    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resolveRevision: frequencyDomainJsonArtifactRevision,
     resourceKey,
   });
 }

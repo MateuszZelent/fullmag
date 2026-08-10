@@ -647,7 +647,8 @@ def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def run_periodic_airbox_convergence_validator(
-    *roots: Path,
+    mesh_roots: list[Path],
+    airbox_roots: list[Path],
     max_relative_error: float = 0.05,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -656,7 +657,10 @@ def run_periodic_airbox_convergence_validator(
             str(REPO_ROOT / "scripts" / "verify_fem_eigen_k0_periodic_airbox_convergence.py"),
             "--max-relative-error",
             str(max_relative_error),
-            *(str(root) for root in roots),
+            "--minimum-field-count",
+            "3",
+            *(item for root in mesh_roots for item in ("--mesh-root", str(root))),
+            *(item for root in airbox_roots for item in ("--airbox-root", str(root))),
         ],
         check=False,
         cwd=REPO_ROOT,
@@ -1288,6 +1292,7 @@ def write_k0_kittel_convergence_table(
     *,
     relative_error: float = 0.0,
     mesh_resolution_m: float = 5e-9,
+    airbox_size_m: float = 80e-9,
 ) -> None:
     validation_dir = root / "validation" / "kittel_k0_pbc"
     validation_dir.mkdir(parents=True, exist_ok=True)
@@ -1296,9 +1301,7 @@ def write_k0_kittel_convergence_table(
         "poisson_residual_relative,relative_kittel_frequency_error,"
         "effective_magnetisation_A_per_m\n"
     )
-    row = (
-        f"K0-3,periodic_airbox_k0,{mesh_resolution_m},80e-9,8,1e-12,{relative_error},800000.0\n"
-    )
+    row = f"K0-3,periodic_airbox_k0,{mesh_resolution_m},{airbox_size_m},8,1e-12,{relative_error},800000.0\n"
     (validation_dir / "convergence.v1.csv").write_text(header + row)
 
 
@@ -1316,6 +1319,11 @@ def mark_poisson_airbox_k0_solver_fixture(root: Path) -> None:
             "algebraic_form": "full_coupled_poisson_airbox_augmented_gauge",
             "phasor_convention": "exp_plus_i_omega_t",
             "eigenvalue_mapping": "lambda_imag_positive_frequency",
+            "constants": {
+                "gamma_rad_s_T": 221100.0 / MU0,
+                "gamma0_rad_s_per_A_m": 221100.0,
+                "mu0_T_m_per_A": MU0,
+            },
         }
     )
     solver_path.write_text(json.dumps(solver))
@@ -1381,6 +1389,74 @@ def mark_gpu_modal_k0_kittel_fixture(root: Path) -> None:
     summary = json.loads(summary_path.read_text())
     summary["solver"]["execution_lane"] = "production_gpu"
     summary["solver"]["solver_algorithm"] = "gpu_dense_k0_macrospin_modal_eigen"
+    summary_path.write_text(json.dumps(summary))
+
+
+def mark_gpu_modal_k0_periodic_airbox_fixture(root: Path) -> None:
+    mark_poisson_airbox_k0_solver_fixture(root)
+    solver_path = root / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    native_diagnostics = {
+        "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
+        "assembly_kind": "mfem_weak_form_shared_domain",
+        "demag_kind": "periodic_airbox_k0",
+        "algebraic_form": "schur_reduced_descriptor",
+        "matrix_equation": "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
+        "spectral_transform": "shift_invert",
+        "spectral": {"spectral_scalar_mode": "real_split"},
+        "persistent_solver_context": True,
+        "gpu_device_resident_modal_eigensolver": True,
+        "scalable_selected_spectrum": True,
+        "production_implication": True,
+        "validation_only": False,
+        "cpu_fallback": "disabled",
+        "fallback_used": False,
+        "per_iteration_h2d_transfer_count": 0,
+        "per_iteration_d2h_transfer_count": 0,
+        "full_residual_certified": True,
+    }
+    solver.update(
+        {
+            "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
+            "solver_model": "k0_poisson_airbox_gpu_petsc_slepc",
+            "resolved_solver_family": "device_resident_arnoldi_shift_invert",
+            "execution_lane": "production_gpu",
+            "demag_kind": "periodic_airbox_k0",
+            "algebraic_form": "schur_reduced_descriptor",
+            "matrix_equation": "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
+            "spectral_transform": "shift_invert",
+            "production_periodic_airbox_claim": True,
+            "sample_solver_diagnostics": [
+                {"sample_index": 0, "diagnostics": native_diagnostics},
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "include_demag": True,
+    }
+    manifest["resolved_execution"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "engine": "multi_k_orchestrator/k0_poisson_airbox_gpu_petsc_slepc",
+        "native_backend": "native_gpu",
+        "reference_or_production": "production",
+        "solver_algorithm": "k0_poisson_airbox_gpu_petsc_slepc",
+        "device_residency": "gpu_device_resident",
+    }
+    manifest_path.write_text(json.dumps(manifest))
+
+    summary_path = root / "validation" / "kittel_k0_pbc" / "summary.v1.json"
+    summary = json.loads(summary_path.read_text())
+    summary["solver"]["execution_lane"] = "production_gpu"
+    summary["solver"]["solver_algorithm"] = "k0_poisson_airbox_gpu_petsc_slepc"
     summary_path.write_text(json.dumps(summary))
 
 
@@ -2325,6 +2401,52 @@ def test_validator_rejects_window_completeness_without_subwindows(
 
     assert result.returncode != 0
     assert "solver_diagnostics.subwindows" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_executed_subwindows_scoped_per_field_sample(
+    tmp_path: Path,
+) -> None:
+    requested_window = [1.0e8, 5.0e9]
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "requested_mode_count": 1,
+            "requested_window_hz": requested_window,
+            "resolved_search_window_hz": requested_window,
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "additional_modes_may_exist": True,
+            },
+            "sample_solver_diagnostics": [
+                {
+                    "sample_index": 0,
+                    "label": "H0",
+                    "k_vector": [0.0, 0.0, 0.0],
+                    "diagnostics": {
+                        "requested_window_hz": requested_window,
+                        "resolved_search_window_hz": requested_window,
+                        "subwindows": [
+                            {
+                                "subwindow_index": 0,
+                                "shift_frequency_hz": 2.55e9,
+                                "status": "ok",
+                                "converged_eigenpair_count": 4,
+                                "candidate_mode_count": 2,
+                                "accepted_mode_count": 1,
+                                "accepted_frequencies_hz": [1.0e9],
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_validator_rejects_frequency_window_without_requested_mode_count(
@@ -4757,7 +4879,7 @@ def test_validator_rejects_periodic_airbox_kittel_without_poisson_airbox_solver(
     result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
 
     assert result.returncode != 0
-    assert "k0_poisson_airbox_cpu_full_coupled_slepc" in (result.stderr + result.stdout)
+    assert "certified CPU or GPU K0 periodic-airbox adapter" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_periodic_airbox_kittel_with_reference_solver_model(
@@ -4846,13 +4968,18 @@ def test_validator_accepts_periodic_airbox_kittel_relaxed_stage_handoff(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_periodic_airbox_convergence_validator_accepts_two_mesh_resolutions(
+def write_periodic_airbox_convergence_fixture_set(
     tmp_path: Path,
-) -> None:
-    roots = [tmp_path / "coarse", tmp_path / "fine"]
+) -> tuple[list[Path], list[Path]]:
+    mesh_roots = [tmp_path / f"mesh_{index}" for index in range(3)]
+    airbox_roots = [tmp_path / f"airbox_{index}" for index in range(3)]
     fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
     frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
-    for root, mesh_resolution in zip(roots, (20e-9, 10e-9), strict=True):
+    configurations = [
+        *((root, mesh_resolution, 100e-9) for root, mesh_resolution in zip(mesh_roots, (30e-9, 20e-9, 10e-9), strict=True)),
+        *((root, 10e-9, airbox_size) for root, airbox_size in zip(airbox_roots, (60e-9, 80e-9, 100e-9), strict=True)),
+    ]
+    for root, mesh_resolution, airbox_size in configurations:
         write_eigen_fixture(root)
         expand_reference_floquet_fixture_to_k_path(
             root,
@@ -4866,75 +4993,54 @@ def test_periodic_airbox_convergence_validator_accepts_two_mesh_resolutions(
             frequencies,
             demag_kind="periodic_airbox_k0",
         )
-        write_k0_kittel_convergence_table(root, mesh_resolution_m=mesh_resolution)
+        write_k0_kittel_convergence_table(
+            root,
+            mesh_resolution_m=mesh_resolution,
+            airbox_size_m=airbox_size,
+        )
         mark_poisson_airbox_k0_solver_fixture(root)
         mark_relaxed_equilibrium_fixture(root)
+    return mesh_roots, airbox_roots
 
-    result = run_periodic_airbox_convergence_validator(*roots)
+
+def test_periodic_airbox_convergence_validator_accepts_independent_three_level_sequences(
+    tmp_path: Path,
+) -> None:
+    mesh_roots, airbox_roots = write_periodic_airbox_convergence_fixture_set(tmp_path)
+
+    result = run_periodic_airbox_convergence_validator(mesh_roots, airbox_roots)
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert '"sample_count": 2' in result.stdout
+    assert '"level_count": 3' in result.stdout
 
 
 def test_periodic_airbox_convergence_validator_rejects_single_mesh_resolution(
     tmp_path: Path,
 ) -> None:
-    roots = [tmp_path / "a", tmp_path / "b"]
-    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
-    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
-    for root in roots:
-        write_eigen_fixture(root)
-        expand_reference_floquet_fixture_to_k_path(
+    mesh_roots, airbox_roots = write_periodic_airbox_convergence_fixture_set(tmp_path)
+    for root in mesh_roots:
+        write_k0_kittel_convergence_table(
             root,
-            frequencies_hz=frequencies,
-            k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+            mesh_resolution_m=20e-9,
+            airbox_size_m=100e-9,
         )
-        write_k0_kittel_field_sweep_metadata(root, demag_kind="periodic_airbox_k0")
-        write_k0_kittel_summary_and_points(
-            root,
-            fields,
-            frequencies,
-            demag_kind="periodic_airbox_k0",
-        )
-        write_k0_kittel_convergence_table(root, mesh_resolution_m=20e-9)
-        mark_poisson_airbox_k0_solver_fixture(root)
-        mark_relaxed_equilibrium_fixture(root)
 
-    result = run_periodic_airbox_convergence_validator(*roots)
+    result = run_periodic_airbox_convergence_validator(mesh_roots, airbox_roots)
 
     assert result.returncode != 0
-    assert "distinct mesh resolutions" in (result.stderr + result.stdout)
+    assert "distinct runtime signatures" in (result.stderr + result.stdout)
 
 
 def test_periodic_airbox_convergence_validator_rejects_reference_solver_model(
     tmp_path: Path,
 ) -> None:
-    roots = [tmp_path / "coarse", tmp_path / "fine"]
-    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
-    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
-    for root, mesh_resolution in zip(roots, (20e-9, 10e-9), strict=True):
-        write_eigen_fixture(root)
-        expand_reference_floquet_fixture_to_k_path(
-            root,
-            frequencies_hz=frequencies,
-            k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
-        )
-        write_k0_kittel_field_sweep_metadata(root, demag_kind="periodic_airbox_k0")
-        write_k0_kittel_summary_and_points(
-            root,
-            fields,
-            frequencies,
-            demag_kind="periodic_airbox_k0",
-        )
-        write_k0_kittel_convergence_table(root, mesh_resolution_m=mesh_resolution)
-        mark_poisson_airbox_k0_solver_fixture(root)
-        mark_relaxed_equilibrium_fixture(root)
-    solver_path = roots[0] / "eigen" / "diagnostics" / "solver.v1.json"
+    mesh_roots, airbox_roots = write_periodic_airbox_convergence_fixture_set(tmp_path)
+    solver_path = mesh_roots[0] / "eigen" / "diagnostics" / "solver.v1.json"
     solver = json.loads(solver_path.read_text())
     solver["solver_model"] = "reference_full_2x2_tangent"
     solver_path.write_text(json.dumps(solver))
 
-    result = run_periodic_airbox_convergence_validator(*roots)
+    result = run_periodic_airbox_convergence_validator(mesh_roots, airbox_roots)
 
     assert result.returncode != 0
     assert "solver_model" in (result.stderr + result.stdout)
@@ -5009,6 +5115,71 @@ def test_validator_accepts_gpu_modal_k0_kittel_provenance(
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_gpu_modal_k0_periodic_airbox_provenance(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_gpu_modal_k0_periodic_airbox_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        "--require-gpu-modal-k0-periodic-airbox-provenance",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_gpu_periodic_airbox_hidden_cpu_fallback(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_gpu_modal_k0_periodic_airbox_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver["sample_solver_diagnostics"][0]["diagnostics"]["fallback_used"] = True
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(
+        tmp_path,
+        "--require-gpu-modal-k0-periodic-airbox-provenance",
+    )
+
+    assert result.returncode != 0
+    assert "fallback_used" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_cpu_k0_kittel_as_gpu_provenance(

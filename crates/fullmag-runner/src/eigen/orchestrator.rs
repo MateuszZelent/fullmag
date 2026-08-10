@@ -193,6 +193,7 @@ mod tests {
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ReferenceScalarTangent,
                 solver_notes: vec!["fake solver".to_string()],
+                solver_diagnostics: None,
             })
         }
     }
@@ -260,6 +261,7 @@ mod tests {
             target: EigenTargetIR::Lowest,
             equilibrium: EquilibriumSourceIR::Provided,
             k_sampling,
+            bias_field_samples: Vec::new(),
             normalization: EigenNormalizationIR::UnitL2,
             damping_policy: EigenDampingPolicyIR::Ignore,
             enable_exchange: true,
@@ -362,6 +364,7 @@ mod tests {
                 relaxation_steps: 0,
                 solver_model: self.models[sample.sample_index],
                 solver_notes: vec!["sample model fixture".to_string()],
+                solver_diagnostics: None,
             })
         }
     }

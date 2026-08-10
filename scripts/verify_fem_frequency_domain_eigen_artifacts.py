@@ -35,6 +35,7 @@ ALLOWED_MODAL_ALGEBRAIC_FORMS = {
     "gyrotropic_generalized",
     "k0_macrospin_field_generalized_to_gyrotropic_modal",
     "full_coupled_poisson_airbox_augmented_gauge",
+    "schur_reduced_descriptor",
 }
 ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
     "seed_only",
@@ -616,10 +617,14 @@ def validate_manifest_physics(manifest: dict) -> None:
         "manifest.physics.analysis_family",
     )
     phase_convention = physics.get("phase_convention")
-    if phase_convention not in {"exp_i_omega_t", "exp_minus_i_omega_t"}:
+    if phase_convention not in {
+        "exp_i_omega_t",
+        "exp_plus_i_omega_t",
+        "exp_minus_i_omega_t",
+    }:
         fail(
-            "manifest.physics.phase_convention must be exp_i_omega_t "
-            "or exp_minus_i_omega_t"
+            "manifest.physics.phase_convention must be exp_i_omega_t, "
+            "exp_plus_i_omega_t, or exp_minus_i_omega_t"
         )
     require_equal(
         physics.get("frequency_units"),
@@ -1208,8 +1213,101 @@ def validate_solver_window_diagnostics(
                 f"solver_diagnostics.window_completeness.{key}",
             )
 
+    top_level_subwindows = diagnostics.get("subwindows")
+    if top_level_subwindows is None and "sample_solver_diagnostics" in diagnostics:
+        sample_diagnostics = require_object_list(
+            diagnostics.get("sample_solver_diagnostics"),
+            "solver_diagnostics.sample_solver_diagnostics",
+        )
+        sample_count = require_non_negative_int(
+            diagnostics.get("sample_count"),
+            "solver_diagnostics.sample_count",
+        )
+        if not sample_diagnostics or len(sample_diagnostics) != sample_count:
+            fail(
+                "solver_diagnostics.sample_solver_diagnostics must contain one entry "
+                "per field/k sample"
+            )
+        seen_sample_indices: set[int] = set()
+        valid_sample_statuses = {"ok", "unavailable", "validation_error", "operator_error", "solve_error"}
+        for sample_position, sample in enumerate(sample_diagnostics):
+            sample_name = f"solver_diagnostics.sample_solver_diagnostics[{sample_position}]"
+            sample_index = require_non_negative_int(
+                sample.get("sample_index"),
+                f"{sample_name}.sample_index",
+            )
+            if sample_index in seen_sample_indices:
+                fail(f"{sample_name}.sample_index must be unique")
+            seen_sample_indices.add(sample_index)
+            executed = sample.get("diagnostics")
+            if not isinstance(executed, dict):
+                fail(f"{sample_name}.diagnostics must be an object")
+            if "requested_window_hz" in executed:
+                sample_requested = require_frequency_pair(
+                    executed.get("requested_window_hz"),
+                    f"{sample_name}.diagnostics.requested_window_hz",
+                )
+                require_close(sample_requested[0], requested[0], f"{sample_name}.diagnostics.requested_window_hz[0]")
+                require_close(sample_requested[1], requested[1], f"{sample_name}.diagnostics.requested_window_hz[1]")
+            subwindows = require_object_list(
+                executed.get("subwindows"),
+                f"{sample_name}.diagnostics.subwindows",
+            )
+            if not subwindows:
+                fail(f"{sample_name}.diagnostics.subwindows must not be empty")
+            seen_subwindow_indices: set[int] = set()
+            for subwindow_position, subwindow in enumerate(subwindows):
+                name = f"{sample_name}.diagnostics.subwindows[{subwindow_position}]"
+                subwindow_index = require_non_negative_int(
+                    subwindow.get("subwindow_index"),
+                    f"{name}.subwindow_index",
+                )
+                if subwindow_index in seen_subwindow_indices:
+                    fail(f"{name}.subwindow_index must be unique within its sample")
+                seen_subwindow_indices.add(subwindow_index)
+                shift_frequency_hz = require_finite_number(
+                    subwindow.get("shift_frequency_hz"),
+                    f"{name}.shift_frequency_hz",
+                )
+                if shift_frequency_hz < requested[0] or shift_frequency_hz > requested[1]:
+                    fail(f"{name}.shift_frequency_hz must be inside requested_window_hz")
+                if subwindow.get("status") not in valid_sample_statuses:
+                    fail(f"{name}.status is invalid")
+                require_non_negative_int(
+                    subwindow.get("converged_eigenpair_count"),
+                    f"{name}.converged_eigenpair_count",
+                )
+                candidate_mode_count = None
+                if "candidate_mode_count" in subwindow:
+                    candidate_mode_count = require_non_negative_int(
+                        subwindow.get("candidate_mode_count"),
+                        f"{name}.candidate_mode_count",
+                    )
+                accepted_mode_count = require_non_negative_int(
+                    subwindow.get("accepted_mode_count"),
+                    f"{name}.accepted_mode_count",
+                )
+                if (
+                    candidate_mode_count is not None
+                    and accepted_mode_count > candidate_mode_count
+                ):
+                    fail(f"{name}.accepted_mode_count must not exceed candidate_mode_count")
+                accepted_frequencies = subwindow.get("accepted_frequencies_hz")
+                if not isinstance(accepted_frequencies, list):
+                    fail(f"{name}.accepted_frequencies_hz must be a list")
+                if len(accepted_frequencies) != accepted_mode_count:
+                    fail(f"{name}.accepted_frequencies_hz must match accepted_mode_count")
+                for frequency_position, frequency in enumerate(accepted_frequencies):
+                    value = require_finite_number(
+                        frequency,
+                        f"{name}.accepted_frequencies_hz[{frequency_position}]",
+                    )
+                    if value < 0.0:
+                        fail(f"{name}.accepted_frequencies_hz must be non-negative")
+        return requested
+
     subwindows = require_object_list(
-        diagnostics.get("subwindows"),
+        top_level_subwindows,
         "solver_diagnostics.subwindows",
     )
     if not subwindows:
@@ -2536,36 +2634,71 @@ def validate_k0_kittel_summary_artifacts(
                     "unless eigen_summary.equilibrium_source.handoff=stage_continuation"
                 )
             solver_diagnostics = load_json(root / "eigen/diagnostics/solver.v1.json")
-            require_equal(
-                solver_diagnostics.get("solver_adapter"),
+            if solver_diagnostics.get("solver_adapter") not in {
                 "k0_poisson_airbox_cpu_full_coupled_slepc",
-                "solver_diagnostics.solver_adapter",
-            )
-            require_equal(
-                solver_diagnostics.get("solver_model"),
+                "k0_poisson_airbox_cpu_schur_slepc",
+                "k0_poisson_airbox_gpu_petsc_slepc",
+                "k0_poisson_airbox_gpu_modal_device_krylov",
+            }:
+                fail(
+                    "solver_diagnostics.solver_adapter must be a certified "
+                    "CPU or GPU K0 periodic-airbox adapter"
+                )
+            if solver_diagnostics.get("solver_model") not in {
                 "k0_poisson_airbox_cpu_full_coupled_slepc",
-                "solver_diagnostics.solver_model",
-            )
-            require_equal(
-                solver_diagnostics.get("resolved_solver_family"),
+                "k0_poisson_airbox_cpu_schur_slepc",
+                "k0_poisson_airbox_gpu_petsc_slepc",
+                "k0_poisson_airbox_gpu_modal_device_krylov",
+            }:
+                fail("solver_diagnostics.solver_model is not a certified K0 periodic-airbox model")
+            if solver_diagnostics.get("resolved_solver_family") not in {
                 "k0_poisson_airbox_full_coupled",
-                "solver_diagnostics.resolved_solver_family",
-            )
+                "k0_poisson_airbox_schur",
+                "device_resident_arnoldi_shift_invert",
+            }:
+                fail("solver_diagnostics.resolved_solver_family is not a certified K0 periodic-airbox family")
             require_equal(
                 solver_diagnostics.get("demag_kind"),
                 "periodic_airbox_k0",
                 "solver_diagnostics.demag_kind",
             )
-            require_equal(
-                solver_diagnostics.get("assembly_kind"),
-                "mfem_weak_form_shared_domain",
-                "solver_diagnostics.assembly_kind",
-            )
-            require_equal(
+            assembly_kind = solver_diagnostics.get("assembly_kind")
+            if assembly_kind is None:
+                sampled = require_object_list(
+                    solver_diagnostics.get("sample_solver_diagnostics"),
+                    "solver_diagnostics.sample_solver_diagnostics",
+                )
+                if not sampled:
+                    fail("solver_diagnostics.assembly_kind is required")
+                sampled_assembly_kinds: list[object] = []
+                for sample_position, sample in enumerate(sampled):
+                    sample_payload = sample.get("diagnostics")
+                    if not isinstance(sample_payload, dict):
+                        fail(
+                            "solver_diagnostics.sample_solver_diagnostics"
+                            f"[{sample_position}].diagnostics must be an object"
+                        )
+                    sampled_assembly_kinds.append(sample_payload.get("assembly_kind"))
+                if any(
+                    value != "mfem_weak_form_shared_domain"
+                    for value in sampled_assembly_kinds
+                ):
+                    fail(
+                        "every sampled solver diagnostic must use "
+                        "assembly_kind=mfem_weak_form_shared_domain"
+                    )
+            else:
+                require_equal(
+                    assembly_kind,
+                    "mfem_weak_form_shared_domain",
+                    "solver_diagnostics.assembly_kind",
+                )
+            gauge_policy = require_non_empty_string(
                 demag.get("gauge_policy"),
-                "mean_zero_augmented",
                 f"{summary_name}.demag.gauge_policy",
             )
+            if gauge_policy not in {"none", "mean_zero_augmented"}:
+                fail(f"{summary_name}.demag.gauge_policy is invalid")
             phi_dof_count = require_non_negative_int(
                 demag.get("phi_dof_count"),
                 f"{summary_name}.demag.phi_dof_count",
@@ -2576,10 +2709,15 @@ def validate_k0_kittel_summary_artifacts(
                 demag.get("augmented_phi_dof_count"),
                 f"{summary_name}.demag.augmented_phi_dof_count",
             )
-            if augmented_phi_dof_count <= phi_dof_count:
+            if gauge_policy == "mean_zero_augmented" and augmented_phi_dof_count <= phi_dof_count:
                 fail(
                     f"{summary_name}.demag.augmented_phi_dof_count must exceed "
                     f"{summary_name}.demag.phi_dof_count for mean-zero gauge"
+                )
+            if gauge_policy == "none" and augmented_phi_dof_count != phi_dof_count:
+                fail(
+                    f"{summary_name}.demag.augmented_phi_dof_count must equal "
+                    f"{summary_name}.demag.phi_dof_count when no gauge is present"
                 )
             poisson_residual = require_finite_number(
                 demag.get("poisson_constraint_relative_residual"),
@@ -3080,6 +3218,188 @@ def validate_gpu_modal_k0_kittel_provenance(root: Path) -> None:
             "validation/kittel_k0_pbc/summary.v1.json.solver.solver_algorithm "
             "must match manifest.resolved_execution.solver_algorithm"
         )
+
+
+def validate_gpu_modal_k0_periodic_airbox_provenance(root: Path) -> None:
+    manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    requested = manifest.get("requested_execution")
+    resolved = manifest.get("resolved_execution")
+    if not isinstance(requested, dict) or not isinstance(resolved, dict):
+        fail("GPU periodic-airbox provenance requires requested/resolved execution objects")
+    require_equal(requested.get("backend"), "fem", "manifest.requested_execution.backend")
+    require_equal(requested.get("device"), "gpu", "manifest.requested_execution.device")
+    require_equal(requested.get("precision"), "double", "manifest.requested_execution.precision")
+    require_equal(requested.get("include_demag"), True, "manifest.requested_execution.include_demag")
+    require_equal(resolved.get("backend"), "fem", "manifest.resolved_execution.backend")
+    require_equal(resolved.get("device"), "gpu", "manifest.resolved_execution.device")
+    require_equal(resolved.get("native_backend"), "native_gpu", "manifest.resolved_execution.native_backend")
+    require_equal(
+        resolved.get("reference_or_production"),
+        "production",
+        "manifest.resolved_execution.reference_or_production",
+    )
+    if resolved.get("solver_algorithm") not in {
+        "k0_poisson_airbox_gpu_petsc_slepc",
+        "k0_poisson_airbox_gpu_modal_device_krylov",
+    }:
+        fail("manifest.resolved_execution.solver_algorithm must identify a GPU K0 PETSc/SLEPc adapter")
+    require_equal(
+        resolved.get("device_residency"),
+        "gpu_device_resident",
+        "manifest.resolved_execution.device_residency",
+    )
+    engine = require_non_empty_string(resolved.get("engine"), "manifest.resolved_execution.engine")
+    if "cpu" in engine.lower():
+        fail("manifest.resolved_execution.engine must not contain a CPU solver for strict GPU K0 demag")
+
+    solver = load_json(root / "eigen/diagnostics/solver.v1.json")
+    if solver.get("solver_adapter") not in {
+        "k0_poisson_airbox_gpu_petsc_slepc",
+        "k0_poisson_airbox_gpu_modal_device_krylov",
+    }:
+        fail("solver_diagnostics.solver_adapter must identify a GPU K0 PETSc/SLEPc adapter")
+    require_equal(solver.get("execution_lane"), "production_gpu", "solver_diagnostics.execution_lane")
+    require_equal(solver.get("demag_kind"), "periodic_airbox_k0", "solver_diagnostics.demag_kind")
+    require_equal(solver.get("algebraic_form"), "schur_reduced_descriptor", "solver_diagnostics.algebraic_form")
+    require_equal(solver.get("matrix_equation"), "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q", "solver_diagnostics.matrix_equation")
+    require_equal(solver.get("spectral_transform"), "shift_invert", "solver_diagnostics.spectral_transform")
+    require_equal(
+        solver.get("production_periodic_airbox_claim"),
+        True,
+        "solver_diagnostics.production_periodic_airbox_claim",
+    )
+    samples = require_object_list(
+        solver.get("sample_solver_diagnostics"),
+        "solver_diagnostics.sample_solver_diagnostics",
+    )
+    if not samples:
+        fail("GPU periodic-airbox provenance requires executed per-sample native diagnostics")
+    for sample_index, sample in enumerate(samples):
+        diagnostics = sample.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            fail(f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics must be an object")
+        prefix = f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics"
+        if diagnostics.get("solver_adapter") not in {
+            "k0_poisson_airbox_gpu_petsc_slepc",
+            "k0_poisson_airbox_gpu_modal_device_krylov",
+        }:
+            fail(f"{prefix}.solver_adapter must identify a GPU K0 PETSc/SLEPc adapter")
+        require_equal(diagnostics.get("assembly_kind"), "mfem_weak_form_shared_domain", f"{prefix}.assembly_kind")
+        require_equal(diagnostics.get("demag_kind"), "periodic_airbox_k0", f"{prefix}.demag_kind")
+        require_equal(diagnostics.get("algebraic_form"), "schur_reduced_descriptor", f"{prefix}.algebraic_form")
+        require_equal(diagnostics.get("matrix_equation"), "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q", f"{prefix}.matrix_equation")
+        require_equal(diagnostics.get("spectral_transform"), "shift_invert", f"{prefix}.spectral_transform")
+        spectral = diagnostics.get("spectral")
+        if isinstance(spectral, dict):
+            require_equal(spectral.get("spectral_scalar_mode"), "real_split", f"{prefix}.spectral.spectral_scalar_mode")
+        require_equal(diagnostics.get("persistent_solver_context"), True, f"{prefix}.persistent_solver_context")
+        require_equal(diagnostics.get("gpu_device_resident_modal_eigensolver"), True, f"{prefix}.gpu_device_resident_modal_eigensolver")
+        require_equal(diagnostics.get("scalable_selected_spectrum"), True, f"{prefix}.scalable_selected_spectrum")
+        require_equal(diagnostics.get("production_implication"), True, f"{prefix}.production_implication")
+        require_equal(diagnostics.get("validation_only"), False, f"{prefix}.validation_only")
+        require_equal(diagnostics.get("cpu_fallback"), "disabled", f"{prefix}.cpu_fallback")
+        require_equal(diagnostics.get("fallback_used"), False, f"{prefix}.fallback_used")
+        require_equal(diagnostics.get("per_iteration_h2d_transfer_count"), 0, f"{prefix}.per_iteration_h2d_transfer_count")
+        require_equal(diagnostics.get("per_iteration_d2h_transfer_count"), 0, f"{prefix}.per_iteration_d2h_transfer_count")
+        require_equal(diagnostics.get("full_residual_certified"), True, f"{prefix}.full_residual_certified")
+
+
+def validate_cpu_modal_k0_periodic_airbox_provenance(root: Path) -> None:
+    """Validate a fresh CPU P1 artifact without accepting Kittel metadata."""
+    manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    requested = manifest.get("requested_execution")
+    resolved = manifest.get("resolved_execution")
+    if not isinstance(requested, dict) or not isinstance(resolved, dict):
+        fail("CPU periodic-airbox provenance requires requested/resolved execution objects")
+    require_equal(requested.get("backend"), "fem", "manifest.requested_execution.backend")
+    require_equal(requested.get("device"), "cpu", "manifest.requested_execution.device")
+    require_equal(requested.get("precision"), "double", "manifest.requested_execution.precision")
+    require_equal(requested.get("include_demag"), True, "manifest.requested_execution.include_demag")
+    require_equal(resolved.get("backend"), "fem", "manifest.resolved_execution.backend")
+    require_equal(resolved.get("device"), "cpu", "manifest.resolved_execution.device")
+    require_equal(resolved.get("native_backend"), "native_cpu", "manifest.resolved_execution.native_backend")
+    require_equal(
+        resolved.get("reference_or_production"),
+        "production",
+        "manifest.resolved_execution.reference_or_production",
+    )
+    if resolved.get("solver_algorithm") not in {
+        "k0_poisson_airbox_cpu_full_coupled_slepc",
+        "k0_poisson_airbox_cpu_schur_slepc",
+    }:
+        fail("manifest.resolved_execution.solver_algorithm must identify a CPU K0 PETSc/SLEPc adapter")
+    require_equal(
+        resolved.get("device_residency"),
+        "host",
+        "manifest.resolved_execution.device_residency",
+    )
+    require_equal(resolved.get("fallback_used"), False, "manifest.resolved_execution.fallback_used")
+    validation = manifest.get("validation")
+    if not isinstance(validation, dict):
+        fail("manifest.validation must be an object")
+    if validation.get("k0_kittel_validation") is not None:
+        fail("production CPU artifact must not carry analytical Kittel validation metadata")
+
+    solver = load_json(root / "eigen/diagnostics/solver.v1.json")
+    if solver.get("solver_adapter") not in {
+        "k0_poisson_airbox_cpu_full_coupled_slepc",
+        "k0_poisson_airbox_cpu_schur_slepc",
+    }:
+        fail("solver_diagnostics.solver_adapter must identify a CPU K0 PETSc/SLEPc adapter")
+    require_equal(solver.get("execution_lane"), "production_cpu", "solver_diagnostics.execution_lane")
+    require_equal(solver.get("demag_kind"), "periodic_airbox_k0", "solver_diagnostics.demag_kind")
+    require_equal(solver.get("algebraic_form"), "schur_reduced_descriptor", "solver_diagnostics.algebraic_form")
+    require_equal(
+        solver.get("matrix_equation"),
+        "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
+        "solver_diagnostics.matrix_equation",
+    )
+    require_equal(solver.get("spectral_transform"), "shift_invert", "solver_diagnostics.spectral_transform")
+    require_equal(
+        solver.get("production_periodic_airbox_claim"),
+        True,
+        "solver_diagnostics.production_periodic_airbox_claim",
+    )
+    samples = require_object_list(
+        solver.get("sample_solver_diagnostics"),
+        "solver_diagnostics.sample_solver_diagnostics",
+    )
+    if not samples:
+        fail("CPU periodic-airbox provenance requires executed per-sample native diagnostics")
+    for sample_index, sample in enumerate(samples):
+        diagnostics = sample.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            fail(f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics must be an object")
+        prefix = f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics"
+        if diagnostics.get("solver_adapter") not in {
+            "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "k0_poisson_airbox_cpu_schur_slepc",
+        }:
+            fail(f"{prefix}.solver_adapter must identify a CPU K0 PETSc/SLEPc adapter")
+        require_equal(diagnostics.get("assembly_kind"), "mfem_weak_form_shared_domain", f"{prefix}.assembly_kind")
+        require_equal(diagnostics.get("demag_kind"), "periodic_airbox_k0", f"{prefix}.demag_kind")
+        require_equal(diagnostics.get("spectral_transform"), "shift_invert", f"{prefix}.spectral_transform")
+        require_equal(diagnostics.get("fallback_used"), False, f"{prefix}.fallback_used")
+        require_equal(diagnostics.get("full_residual_certified"), True, f"{prefix}.full_residual_certified")
+
+
+def validate_k0_periodic_airbox_production_provenance(root: Path) -> None:
+    manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    requested = manifest.get("requested_execution")
+    if not isinstance(requested, dict):
+        fail("K0 production provenance requires manifest.requested_execution")
+    device = requested.get("device")
+    if device == "cpu":
+        validate_cpu_modal_k0_periodic_airbox_provenance(root)
+    elif device == "gpu":
+        validate_gpu_modal_k0_periodic_airbox_provenance(root)
+        validation = manifest.get("validation")
+        if not isinstance(validation, dict):
+            fail("manifest.validation must be an object for GPU K0 production provenance")
+        if validation.get("k0_kittel_validation") is not None:
+            fail("production GPU artifact must not carry analytical Kittel validation metadata")
+    else:
+        fail("K0 production provenance requires requested device cpu or gpu")
 
 
 def validate_exchange_only_reciprocal_dispersion(
@@ -3813,6 +4133,31 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-gpu-modal-k0-periodic-airbox-provenance",
+        action="store_true",
+        help=(
+            "require strict production GPU K0 periodic-airbox modal execution, "
+            "persistent device Krylov residency, zero iterative vector transfers, "
+            "full residual certification, and no CPU fallback"
+        ),
+    )
+    parser.add_argument(
+        "--require-k0-periodic-airbox-production",
+        action="store_true",
+        help=(
+            "require a fresh CPU or GPU P1 periodic-airbox modal artifact "
+            "without analytical Kittel metadata"
+        ),
+    )
+    parser.add_argument(
+        "--require-gpu-modal-k0-periodic-airbox-production",
+        action="store_true",
+        help=(
+            "require a fresh GPU P1 periodic-airbox modal artifact without "
+            "analytical Kittel metadata"
+        ),
+    )
+    parser.add_argument(
         "--require-low-k-de-bv-analytic-dispersion",
         action="store_true",
         help=(
@@ -3828,6 +4173,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     if args.require_k0_kittel_periodic_airbox_demag:
         args.require_k0_kittel_demag = True
+    if args.require_gpu_modal_k0_periodic_airbox_provenance:
+        args.require_k0_kittel_periodic_airbox_demag = True
+        args.require_k0_kittel_demag = True
+    if args.require_gpu_modal_k0_periodic_airbox_production:
+        args.require_k0_periodic_airbox_production = True
     if args.require_k0_kittel_demag:
         args.require_k0_kittel_field_sweep = True
     if args.require_production_modal_k_path and args.require_production_gamma_k_path:
@@ -3941,6 +4291,7 @@ def main(argv: list[str] | None = None) -> int:
         and (
             args.require_low_k_de_bv_analytic_dispersion
             or args.require_k0_kittel_demag
+            or args.require_k0_periodic_airbox_production
         )
     ):
         require_equal(
@@ -4212,6 +4563,19 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.require_gpu_modal_k0_kittel_provenance:
         validate_gpu_modal_k0_kittel_provenance(root)
+    if args.require_gpu_modal_k0_periodic_airbox_provenance:
+        validate_gpu_modal_k0_periodic_airbox_provenance(root)
+    if args.require_k0_periodic_airbox_production:
+        validate_k0_periodic_airbox_production_provenance(root)
+        if args.require_gpu_modal_k0_periodic_airbox_production:
+            requested_execution = manifest.get("requested_execution")
+            if not isinstance(requested_execution, dict):
+                fail("GPU K0 production provenance requires requested execution metadata")
+            require_equal(
+                requested_execution.get("device"),
+                "gpu",
+                "manifest.requested_execution.device",
+            )
     if args.require_low_k_de_bv_analytic_dispersion:
         validate_low_k_de_bv_analytic_dispersion(
             root,

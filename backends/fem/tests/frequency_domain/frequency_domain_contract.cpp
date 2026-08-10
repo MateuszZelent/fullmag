@@ -6711,6 +6711,202 @@ void symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema(
         "legacy mesh certificate rejection names v6 contract");
 }
 
+void symmetric_mesh_certificate_verifies_canonical_map_binding_before_native_assembly()
+{
+    const fd::PeriodicNodePair mesh_magnetic_pairs[] = {{0, 0}, {1, 1}};
+    const fd::PeriodicNodePair payload_magnetic_pairs[] = {{1, 1}, {0, 0}};
+    const fd::PeriodicNodePair mesh_airbox_pairs[] = {{0, 0}};
+    const fd::PeriodicNodePair payload_airbox_pairs[] = {{0, 0}};
+    const std::uint32_t magnetic_source_regions[] = {7, 8};
+    const std::uint32_t magnetic_destination_regions[] = {7, 8};
+    const std::uint32_t airbox_source_regions[] = {100};
+    const std::uint32_t airbox_destination_regions[] = {100};
+
+    fd::MeshSymmetryCertificateMapBindingRequest request{};
+    request.mesh_magnetic = {
+        mesh_magnetic_pairs,
+        2,
+        2,
+        2,
+        magnetic_source_regions,
+        magnetic_destination_regions,
+    };
+    request.payload_magnetic = {
+        payload_magnetic_pairs,
+        2,
+        2,
+        2,
+        nullptr,
+        nullptr,
+    };
+    request.mesh_airbox = {
+        mesh_airbox_pairs,
+        1,
+        1,
+        1,
+        airbox_source_regions,
+        airbox_destination_regions,
+    };
+    request.payload_airbox = {
+        payload_airbox_pairs,
+        1,
+        1,
+        1,
+        nullptr,
+        nullptr,
+    };
+    request.mesh_magnetic_part_identity = "magnetic:film:mesh-v1";
+    request.payload_magnetic_part_identity = "magnetic:film:mesh-v1";
+    request.mesh_airbox_part_identity = "airbox:poisson:mesh-v1";
+    request.payload_airbox_part_identity = "airbox:poisson:mesh-v1";
+
+    fd::MeshSymmetryCertificateMapBinding missing_digest{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, missing_digest) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a payload without a supplied digest");
+    check(
+        !missing_digest.accepted,
+        "map binding remains fail-closed when the digest is absent");
+    check(
+        std::strcmp(
+            missing_digest.rejection_reason,
+            "periodic_mesh_map_binding_digest_missing") == 0,
+        "map binding reports the stable missing-digest reason");
+    check(
+        std::strncmp(missing_digest.canonical_preimage_sha256, "sha256:", 7) == 0,
+        "map binding exposes the canonical preimage digest for diagnostics");
+
+    fd::MeshSymmetryCertificateMapBinding missing_markers{};
+    fd::MeshSymmetryCertificateMapBindingRequest markerless_request = request;
+    markerless_request.mesh_magnetic.source_region_ids = nullptr;
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(markerless_request, missing_markers) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects authoritative mesh input without region markers");
+    check(
+        std::strcmp(
+            missing_markers.rejection_reason,
+            "periodic_mesh_map_binding_region_markers_missing") == 0,
+        "map binding reports missing authoritative region markers");
+
+    request.payload_map_binding_digest = missing_digest.canonical_preimage_sha256;
+    fd::MeshSymmetryCertificateMapBinding accepted{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, accepted) ==
+            fd::FrequencyDomainStatus::ok,
+        "map binding accepts an identical canonical mesh/payload map");
+    check(accepted.accepted, "accepted map binding is explicitly marked accepted");
+    check(accepted.magnetic_pair_count == 2, "map binding records magnetic map count");
+    check(accepted.airbox_pair_count == 1, "map binding records airbox map count");
+    check(
+        std::strcmp(
+            accepted.canonical_preimage_sha256,
+            missing_digest.canonical_preimage_sha256) == 0,
+        "map binding digest is stable across repeated verification");
+
+    char stale_digest[96] = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    request.payload_map_binding_digest = stale_digest;
+    fd::MeshSymmetryCertificateMapBinding digest_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, digest_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a well-formed but stale digest");
+    check(
+        std::strcmp(
+            digest_rejected.rejection_reason,
+            "periodic_mesh_map_binding_digest_mismatch") == 0,
+        "map binding reports the stable digest-mismatch reason");
+    request.payload_map_binding_digest = missing_digest.canonical_preimage_sha256;
+
+    const fd::PeriodicNodePair tampered_magnetic_pairs[] = {{1, 0}, {0, 1}};
+    request.payload_magnetic.pairs = tampered_magnetic_pairs;
+    fd::MeshSymmetryCertificateMapBinding map_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, map_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a payload map that differs from the mesh map");
+    check(
+        std::strcmp(
+            map_rejected.rejection_reason,
+            "periodic_mesh_map_binding_map_mismatch") == 0,
+        "map binding reports the stable map-mismatch reason");
+
+    request.payload_magnetic.pairs = payload_magnetic_pairs;
+    request.payload_airbox_part_identity = "airbox:poisson:stale-v0";
+    fd::MeshSymmetryCertificateMapBinding identity_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, identity_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects stale airbox part identity");
+    check(
+        std::strcmp(
+            identity_rejected.rejection_reason,
+            "periodic_mesh_map_binding_airbox_part_identity_mismatch") == 0,
+        "map binding reports the stable airbox identity reason");
+
+    request.payload_airbox_part_identity = "airbox:poisson:mesh-v1";
+    const fd::PeriodicNodePair duplicate_airbox_pairs[] = {{0, 0}, {0, 0}};
+    request.payload_airbox.pairs = duplicate_airbox_pairs;
+    request.payload_airbox.pair_count = 2;
+    request.payload_airbox.source_node_count = 2;
+    request.payload_airbox.destination_node_count = 2;
+    fd::MeshSymmetryCertificateMapBinding duplicate_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, duplicate_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects duplicate payload nodes before digest comparison");
+    check(
+        std::strcmp(
+            duplicate_rejected.rejection_reason,
+            "periodic_mesh_map_binding_duplicate_node") == 0,
+        "map binding reports the stable duplicate-node reason");
+
+    request.payload_airbox.pairs = payload_airbox_pairs;
+    request.payload_airbox.pair_count = 1;
+    request.payload_airbox.source_node_count = 1;
+    request.payload_airbox.destination_node_count = 1;
+    const fd::PeriodicNodePair out_of_range_pairs[] = {{2, 0}, {0, 1}};
+    request.payload_magnetic.pairs = out_of_range_pairs;
+    fd::MeshSymmetryCertificateMapBinding range_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, range_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects out-of-range payload nodes before digest comparison");
+    check(
+        std::strcmp(
+            range_rejected.rejection_reason,
+            "periodic_mesh_map_binding_pair_out_of_range") == 0,
+        "map binding reports the stable out-of-range reason");
+
+    request.payload_magnetic.pairs = payload_magnetic_pairs;
+    const std::uint32_t mismatched_destination_regions[] = {7, 9};
+    request.mesh_magnetic.destination_region_ids = mismatched_destination_regions;
+    fd::MeshSymmetryCertificateMapBinding region_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, region_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a mesh region-marker seam mismatch");
+    check(
+        std::strcmp(
+            region_rejected.rejection_reason,
+            "periodic_mesh_map_binding_region_marker_mismatch") == 0,
+        "map binding reports the stable region-marker reason");
+
+    request.mesh_magnetic.destination_region_ids = magnetic_destination_regions;
+    request.schema_version = "periodic_mesh_certificate.v5";
+    fd::MeshSymmetryCertificateMapBinding schema_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, schema_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a legacy certificate schema");
+    check(
+        std::strcmp(
+            schema_rejected.rejection_reason,
+            "periodic_mesh_map_binding_schema_not_v6") == 0,
+        "map binding reports the stable schema reason");
+}
+
 void full_coupled_field_split_prototype_improves_residual_and_reuses_poisson_setup()
 {
     const double a_qq[] = {
@@ -18182,6 +18378,7 @@ int main()
     symmetric_mesh_certificate_rejects_m0_seam_mismatch();
     symmetric_mesh_certificate_checks_static_demag_seam_and_gauge_policy();
     symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema();
+    symmetric_mesh_certificate_verifies_canonical_map_binding_before_native_assembly();
     excitation_projects_uniform_field_into_tangent_space();
     dynamic_field_drive_projection_applies_llg_torque_sign();
     dynamic_field_drive_projection_accepts_zero_physical_drive_with_warning();

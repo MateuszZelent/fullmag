@@ -1,7 +1,7 @@
 {
   "schema_version": "frequency_domain_documentation_manifest.v3",
   "package_version": "COMSOL-aligned v5.1 deterministic static contract",
-  "updated_at": "2026-08-01",
+  "updated_at": "2026-08-09",
   "entrypoint": "00_README_CANONICAL_FULL_READ.md",
   "full_pack": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md",
   "full_pack_generated": true,
@@ -68,7 +68,8 @@
     {"order": 23, "path": "23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 7"},
     {"order": 24, "path": "24_production_definition_of_done.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 8"},
     {"order": 25, "path": "25_frequency_domain_readiness_matrix.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness matrix created by Task 9"},
-    {"order": 26, "path": "25_frequency_domain_readiness_scope_catalog.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness scope catalog created by Task 9"}
+    {"order": 26, "path": "25_frequency_domain_readiness_scope_catalog.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness scope catalog created by Task 9"},
+    {"order": 27, "path": "27_fem_k0_eigensolve_production_completion_and_control_room.md", "role": "implementation_plan", "include_in_full_pack": true, "availability": "current production-completion audit and parallel execution plan; not qualification evidence"}
   ],
   "historical_roots": ["old/"],
   "readiness_matrix": "25_frequency_domain_readiness_matrix.json",

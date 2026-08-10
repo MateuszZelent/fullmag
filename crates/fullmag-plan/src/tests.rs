@@ -7729,6 +7729,11 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
 fn fem_eigen_bias_field_sweep_plans_declared_samples_with_resolved_execution() {
     let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir())
         .expect("bounded K0 fixture serializes");
+    encoded["problem_meta"]["runtime_metadata"]
+        .as_object_mut()
+        .expect("fixture runtime metadata should be an object")
+        .remove("k0_kittel_validation");
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
     encoded["study"]["bias_field_sweep"] = serde_json::json!({
         "samples_a_per_m": [[12500.0, 0.0, 0.0], [25000.0, 0.0, 0.0]],
         "equilibrium_policy": "continuation",
@@ -7758,6 +7763,63 @@ fn fem_eigen_bias_field_sweep_plans_declared_samples_with_resolved_execution() {
         value["provenance"]["fem_eigen_execution_resolution"]["resolved_device"],
         "cpu"
     );
+}
+
+#[test]
+fn fem_eigen_bias_field_sweep_kittel_metadata_requires_sample_field_mapping() {
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir())
+        .expect("bounded K0 fixture serializes");
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [
+            [15915.494309189535, 0.0, 0.0],
+            [39788.735772973836, 0.0, 0.0],
+            [79577.47154594767, 0.0, 0.0]
+        ],
+        "equilibrium_policy": "continuation",
+        "ordering": "declared",
+        "continuation_seed": "previous_accepted_equilibrium"
+    });
+
+    let mut field_mismatch = encoded.clone();
+    field_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][1]
+        ["bias_field"] = serde_json::json!([41_000.0, 0.0, 0.0]);
+    let ir: ProblemIR = serde_json::from_value(field_mismatch).unwrap();
+    let error = plan(&ir).expect_err("mismatched oracle field must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eigenmodes.bias_field_sweep_kittel_field_mismatch")
+    }));
+
+    let mut index_mismatch = encoded;
+    index_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][2]
+        ["sample_index"] = serde_json::json!(7);
+    let ir: ProblemIR = serde_json::from_value(index_mismatch).unwrap();
+    let error = plan(&ir).expect_err("mismatched oracle sample index must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eigenmodes.bias_field_sweep_kittel_sample_index_mismatch")
+    }));
+}
+
+#[test]
+fn fem_eigen_bias_field_sweep_rejects_relax_each_previous_seed() {
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir())
+        .expect("bounded K0 fixture serializes");
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+    encoded["problem_meta"]["runtime_metadata"]
+        .as_object_mut()
+        .expect("fixture runtime metadata should be an object")
+        .remove("k0_kittel_validation");
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+        "equilibrium_policy": "relax_each",
+        "ordering": "declared",
+        "continuation_seed": "previous_accepted_equilibrium"
+    });
+    let ir: ProblemIR = serde_json::from_value(encoded).unwrap();
+    let error = plan(&ir).expect_err("relax_each must not ignore continuation seed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eigenmodes.bias_field_sweep_relax_each_requires_initial_state_seed")
+    }));
 }
 
 #[test]

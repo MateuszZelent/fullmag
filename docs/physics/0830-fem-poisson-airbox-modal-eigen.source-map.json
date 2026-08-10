@@ -1,0 +1,336 @@
+{
+  "document": {
+    "path": "docs/physics/0830-fem-poisson-airbox-modal-eigen.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "executable-validation-blocked"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "executable-validation-blocked"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM demagnetization has a separate canonical interaction owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM demagnetization has a separate canonical interaction owner."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-poisson-airbox-modal-block",
+      "symbols": [
+        "P",
+        "q",
+        "lambda",
+        "Ablocks",
+        "Bqq"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
+    },
+    {
+      "id": "eq-poisson-airbox-weak-form",
+      "symbols": [
+        "beta",
+        "Ms",
+        "delta_m",
+        "delta_phi"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-gpu-petsc"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m0",
+      "latex": "$m_0$",
+      "meaning": "normalized equilibrium magnetization and tangent perturbation",
+      "si_unit": "$1$"
+    },
+    {
+     "id": "delta_m",
+     "latex": "$\\delta\\mathbf m$",
+     "meaning": "normalized equilibrium magnetization and tangent perturbation",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "delta_H_demag",
+      "latex": "$\\delta\\mathbf H_{\\mathrm{demag}}$",
+      "meaning": "equilibrium effective field and dynamic demagnetizing field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "delta_phi",
+      "latex": "$\\delta\\phi$",
+      "meaning": "scalar magnetic potential",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+     "id": "gamma0",
+     "latex": "$\\gamma_0$",
+      "meaning": "`$\\mu_0|\\gamma|$` gyromagnetic factor in the A/m convention",
+      "si_unit": "\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$",
+      "meaning": "angular frequency",
+      "si_unit": "\\mathrm{rad\\,s^{-1}"
+    },
+    {
+      "id": "beta",
+      "latex": "$\\beta$",
+      "meaning": "Robin coefficient",
+      "si_unit": "\\mathrm{m^{-1}"
+    },
+    {
+      "id": "P",
+      "latex": "$P$",
+      "meaning": "scalar Poisson stiffness block",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "q",
+      "latex": "$q$",
+      "meaning": "tangent-plane modal coefficients",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "lambda",
+      "latex": "$\\lambda$",
+      "meaning": "modal eigenvalue",
+      "si_unit": "\\mathrm{s^{-1}"
+    },
+    {
+      "id": "Bqq",
+      "latex": "$B_{qq}$",
+      "meaning": "gyrotropic tangent mass block",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "Ablocks",
+      "latex": "$A_{qq},A_{q\\phi},A_{\\phi q}$",
+      "meaning": "magnetic and mixed descriptor blocks",
+      "si_unit": "\\mathrm{m^3\\,s^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-python-stage",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "eigenmodes_stage",
+      "responsibility": "Construct the stage-first public eigenmodes request."
+    },
+    {
+      "id": "source-cpu-schur",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Assemble and solve the bounded CPU shared-domain Schur modal problem."
+    },
+    {
+      "id": "source-gpu-petsc",
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "symbol": "FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc",
+      "responsibility": "Run the managed GPU PETSc/SLEPc device Schur modal problem."
+    },
+    {
+      "id": "source-runner-ir",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "build_shared_domain_linearization_state",
+      "responsibility": "Lower canonical modal intent to the native shared-domain ProblemIR."
+    },
+    {
+      "id": "source-runner-single-k",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "eigen_path_single_k_point_plan",
+      "responsibility": "Lower a path sample to a native single-k request without carrying or applying analytical validation inputs."
+    },
+    {
+      "id": "source-sweep-validation",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_k0_kittel_field_sweep",
+      "responsibility": "Validate the K0 Kittel sweep, spectrum, residuals, and mode artifacts."
+    },
+    {
+      "id": "source-gpu-validation",
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "validate_gpu_modal_k0_periodic_airbox_provenance",
+      "responsibility": "Validate GPU adapter, device residency, transfer audit, and no-fallback provenance."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "eigenmodes.count",
+        "type": "int",
+        "default": "10",
+        "si_unit": "$1$",
+        "validation": "count > 0",
+        "meaning": "selected mode count",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_count"
+      },
+      {
+        "python": "eigenmodes.target",
+        "type": "str",
+        "default": "lowest",
+        "si_unit": "$1$",
+        "validation": "frequency_window",
+        "meaning": "spectral selection strategy",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_target"
+      },
+      {
+        "python": "eigenmodes.target_frequency",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite",
+        "meaning": "nearest target frequency",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_target_frequency"
+      },
+      {
+        "python": "eigenmodes.frequency_min",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite",
+        "meaning": "lower frequency-window bound",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_frequency_min"
+      },
+      {
+        "python": "eigenmodes.frequency_max",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "finite",
+        "meaning": "upper frequency-window bound",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_frequency_max"
+      },
+      {
+        "python": "eigenmodes.operator",
+        "type": "str",
+        "default": "linearized_llg",
+        "si_unit": "$1$",
+        "validation": "supported",
+        "meaning": "linearized dynamics operator",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_operator"
+      },
+      {
+        "python": "eigenmodes.include_demag",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "K0 demag",
+        "meaning": "dynamic demagnetizing feedback",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_include_demag"
+      },
+      {
+        "python": "eigenmodes.equilibrium_source",
+        "type": "str",
+        "default": "relax",
+        "si_unit": "$1$",
+        "validation": "artifact",
+        "meaning": "source of accepted equilibrium",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_equilibrium_source"
+      },
+      {
+        "python": "eigenmodes.equilibrium_artifact",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "artifact",
+        "meaning": "equilibrium artifact path",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_equilibrium_artifact"
+      },
+      {
+        "python": "eigenmodes.normalization",
+        "type": "str",
+        "default": "unit_l2",
+        "si_unit": "$1$",
+        "validation": "unit_l2",
+        "meaning": "mode normalization convention",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_normalization"
+      },
+      {
+        "python": "eigenmodes.damping_policy",
+        "type": "str",
+        "default": "ignore",
+        "si_unit": "$1$",
+        "validation": "ignore",
+        "meaning": "damping treatment",
+        "backend_support": "FEM CPU and FEM GPU bounded K0 only with",
+        "problem_ir": "stages[].eigen_damping_policy"
+      },
+      {
+        "python": "eigenmodes.k_vector",
+        "type": "tuple[float, float, float] or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m^{-1}}$",
+        "validation": "K0",
+        "meaning": "Bloch wave vector",
+        "backend_support": "FEM CPU and FEM GPU at K0 only",
+        "problem_ir": "stages[].eigen_k_vector"
+      },
+      {
+        "python": "eigenmodes.k_sampling",
+        "type": "object or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "planner",
+        "meaning": "dispersion sampling request",
+        "backend_support": "not qualified by this note",
+        "problem_ir": "stages[].eigen_k_sampling"
+      },
+      {
+        "python": "eigenmodes.bc",
+        "type": "str or dict",
+        "default": "free",
+        "si_unit": "$1$",
+        "validation": "supported",
+        "meaning": "exchange boundary policy",
+        "backend_support": "FEM CPU and FEM GPU bounded K0",
+        "problem_ir": "stages[].eigen_spin_wave_bc"
+      },
+      {
+        "python": "eigenmodes.magnetostatic_bc",
+        "type": "str",
+        "default": "open",
+        "si_unit": "$1$",
+        "validation": "poisson_robin",
+        "meaning": "scalar-potential boundary policy",
+        "backend_support": "FEM CPU and FEM GPU bounded K0 with open airbox",
+        "problem_ir": "stages[].eigen_magnetostatic_bc"
+      }
+    ]
+  }
+}

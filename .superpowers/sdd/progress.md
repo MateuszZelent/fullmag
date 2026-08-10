@@ -70,6 +70,51 @@ real-asset helper export is an explicit
 recipe is the authoritative exact-source runtime gate. Task 4.3 remains
 `implemented` until that managed command itself passes with reviewed evidence.
 
+## Plan: FEM K0 eigensolve Poisson-airbox CPU/GPU i Control Room
+
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/eigensolve-k0-demag-recovery`
+- Branch: `codex/eigensolve-k0-demag`
+- Source plan: `docs/plans/active/fd_sovler_masterplan/27_fem_k0_eigensolve_production_completion_and_control_room.md`
+
+N1b canonical map binding: complete source-level, independent review approved;
+managed MFEM/runtime proof remains open.
+
+N1c runner linearization descriptor: complete source-level, independent
+re-review approved after fixing full-global `3N` importer semantics, runner FFI
+envelope tests and validation-only `A_qq` oracle. `certificate_binding_v6`
+remains `NULL`, aggregate gate remains closed, and N1d owns the full typed v6
+preimage/relation producer. No commit was created because this is a shared dirty
+recovery worktree.
+
+N1d runner-owned certificate v6 producer: complete source-level, final
+independent re-review `SPEC APPROVED / QUALITY APPROVED`. The canonical IR
+producer separates magnetic-prefix and global-scalar evidence; the runner
+regenerates and compares the complete accepted certificate, constructs all four
+owned views, byte-aligns the native preimage and
+`shared_domain_map_binding.v1`, validates the trusted ordered multi-part
+registry for one physical magnetic object plus airbox, and keeps all nested ABI
+v18 pointers alive. The real-plan-like fixture covers `body +
+hole_transition_refinement + air` with magnetic markers 1/2, shared nodes,
+x/y edge/corner closure and open z. Fresh focused evidence: IR 6/6,
+`modal_v6_` 8/8, `shared_domain` 13/13, `native_fem` 22/22, routing 1/1,
+no-default and fem-native no-link checks PASS, scoped diff-check PASS. Managed
+MFEM/CUDA runtime proof remains open and belongs to N1e/integration.
+
+N1e periodic-antidot eigen script slice: complete source-level, final
+independent re-review `SPEC APPROVED / QUALITY APPROVED`. Added the separate
+`examples/fem_periodic_antidot_relax_eigenmodes.py` without changing the
+frequency-driven FMR example. Canonical Python export proves CPU
+`relax -> eigenmodes` and GPU `relax -> change_device -> eigenmodes` with
+devices `[cpu,gpu,gpu]`, strict/double, `full_2x2`, K0,
+`periodic_airbox_k0`, bounded window and spectrum/dispersion/mode outputs.
+Fresh evidence: Python 7/7 plus 5 subtests, canonical pipeline and public
+CPU/GPU run-config PASS, three focused Rust typed producer/CPU routing/strict
+GPU rejection tests each real 1/1, py_compile and diff-check PASS. The
+accidentally zeroed `script_builder.py` was restored exactly from branch HEAD
+with explicit user approval and has no diff. Managed MFEM solve remains open:
+export lock inode 77593 is still owned by Antigravity ptyHost TID 816338 while
+the recipe's flock waiter has been blocked for more than one day.
+
 ## Global constraints
 
 - Native mixed topology is `prism6` in the magnet, `pyramid5` only in air transition, and `tet4` in far air; facets are `tri3 | quad4`.

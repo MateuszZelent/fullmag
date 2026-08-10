@@ -10,6 +10,7 @@ pub enum EigenSolverModel {
     LinearizedLlgTangentPlane,
     ProductionCpuShiftInvert,
     ProductionGpuDenseK0Macrospin,
+    ProductionGpuModalDeviceKrylov,
 }
 
 impl EigenSolverModel {
@@ -24,6 +25,7 @@ impl EigenSolverModel {
             Self::LinearizedLlgTangentPlane => "linearized_llg_tangent_plane",
             Self::ProductionCpuShiftInvert => "slepc_multi_shift_invert_production_cpu_dense",
             Self::ProductionGpuDenseK0Macrospin => "gpu_dense_k0_macrospin_modal_eigen",
+            Self::ProductionGpuModalDeviceKrylov => "gpu_modal_device_krylov",
         }
     }
 }
@@ -76,6 +78,7 @@ pub struct SingleKSolveResult {
     pub relaxation_steps: u64,
     pub solver_model: EigenSolverModel,
     pub solver_notes: Vec<String>,
+    pub solver_diagnostics: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]

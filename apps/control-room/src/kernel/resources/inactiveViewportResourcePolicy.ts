@@ -17,6 +17,7 @@ const VIEWPORT_3D_MODULE_ID = "viewport-3d";
 const FIELD_MAP_MODULE_ID = "field-map";
 const PLANAR_FIELD_PREFIX =
   DATA_PLANAR_FIELD_META_PATH.split("{quantity_id}")[0];
+const PLANAR_FIELD_MARKER = "/planar-monitors/";
 const FIELD_VECTOR_PREFIX = DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[0];
 const FIELD_VECTOR_SUFFIX = DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[1];
 
@@ -70,7 +71,8 @@ export function createViewport3DInactiveResourcePauseController({
       activeViewportMainModuleId !== FIELD_MAP_MODULE_ID;
     if (shouldPausePlanar && !releasePlanarPause) {
       releasePlanarPause = runtimeStore.beginPauseMatching((resourceKey) =>
-        resourceKey.startsWith(PLANAR_FIELD_PREFIX),
+        resourceKey.startsWith(PLANAR_FIELD_PREFIX) &&
+        resourceKey.includes(PLANAR_FIELD_MARKER),
       );
     } else if (!shouldPausePlanar && releasePlanarPause) {
       releasePlanarPause();
