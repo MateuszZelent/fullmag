@@ -2000,6 +2000,12 @@ fn materialize_pipeline_eigenmodes(
         .as_ref()
         .map(|current| current.7.clone())
         .unwrap_or_default();
+    let bias_field_sweep = match &base_ir.study {
+        fullmag_ir::StudyIR::Eigenmodes {
+            bias_field_sweep, ..
+        } => bias_field_sweep.clone(),
+        _ => None,
+    };
     let default_magnetostatic_bc = match &base_ir.study {
         fullmag_ir::StudyIR::Eigenmodes {
             magnetostatic_bc, ..
@@ -2028,6 +2034,7 @@ fn materialize_pipeline_eigenmodes(
             payload,
             current_eigen.as_ref().and_then(|current| current.4.clone()),
         )?,
+        bias_field_sweep,
         normalization: payload_eigen_normalization(payload)?.unwrap_or(default_normalization),
         damping_policy: payload_eigen_damping_policy(payload)?.unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(payload)?.unwrap_or(default_spin_wave_bc),
@@ -4638,6 +4645,51 @@ mod tests {
     }
 
     #[test]
+    fn materialize_pipeline_eigenmodes_preserves_canonical_bias_field_sweep() {
+        let mut base = sample_problem_ir();
+        let dynamics = base.study.dynamics().clone();
+        let sampling = base.study.sampling().clone();
+        let sweep = fullmag_ir::BiasFieldSweepIR {
+            samples_a_per_m: vec![[12_500.0, 0.0, 0.0], [25_000.0, 500.0, -250.0]],
+            equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+            ordering: "declared".to_string(),
+            continuation_seed:
+                fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium,
+        };
+        base.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: true,
+            },
+            count: 4,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            bias_field_sweep: Some(sweep.clone()),
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            mode_tracking: None,
+            sampling,
+        };
+
+        let stage = materialize_pipeline_eigenmodes(&base, &BTreeMap::new())
+            .expect("pipeline eigenmodes stage should materialize");
+        let fullmag_ir::StudyIR::Eigenmodes {
+            bias_field_sweep, ..
+        } = &stage.ir.study
+        else {
+            panic!("pipeline eigenmodes stage must retain eigenmode semantics");
+        };
+
+        assert_eq!(bias_field_sweep.as_ref(), Some(&sweep));
+    }
+
+    #[test]
     fn materialize_script_stages_uses_study_pipeline_when_explicit_stages_are_absent() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -5033,6 +5085,7 @@ mod tests {
             target: fullmag_ir::EigenTargetIR::Lowest,
             equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
             k_sampling: None,
+            bias_field_sweep: None,
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
@@ -7485,6 +7538,7 @@ mod tests {
             target: fullmag_ir::EigenTargetIR::Lowest,
             equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
             k_sampling: None,
+            bias_field_sweep: None,
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),

@@ -1572,6 +1572,7 @@ mod tests {
             k_sampling: Some(fullmag_ir::KSamplingIR::Single {
                 k_vector: [0.0, 0.0, 0.0],
             }),
+            bias_field_sweep: None,
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
