@@ -11491,6 +11491,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Artifact and execution-plan layers have conflicting counts or identities, or cannot be correlated one-to-one without ambiguity */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     data_get_sessions_current_data_domain_meta: {
@@ -13135,7 +13142,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Snapshot does not match the current domain */
+            /** @description Snapshot does not match the current domain, or multilayer artifact and execution-plan layer identities cannot be correlated one-to-one */
             409: {
                 headers: {
                     [name: string]: unknown;

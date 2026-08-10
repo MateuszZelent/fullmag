@@ -145,6 +145,7 @@ import {
   mergeViewport3DFieldVectorQueries,
   resolveViewport3DAirboxFieldVectorDemandPlan,
   resolveViewport3DPrimaryFieldDemandPlan,
+  resolveViewport3DFdmNativeLayerFieldRequests,
   resolveViewport3DScalarComponentRequest,
   resolveViewport3DScopedFieldQuery,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
@@ -2641,41 +2642,6 @@ export function useViewport3DSceneModel({
       ),
     [fdmMultilayerLayout.data],
   );
-  const nativeLayerFieldRequests = useMemo<
-    ReadonlyMap<string, Viewport3DFieldResourceRequest>
-  >(() => {
-    if (!fdmLaneActive || !fdmMultilayerLayout.data?.available) {
-      return new Map();
-    }
-    return new Map(
-      fdmNativeLayerDomains.map((domain) => {
-        const query: FdmMultilayerFieldVectorQuery = {
-          component: "full",
-          max_samples: FDM_DISPLAY_CELL_BUDGET,
-          scope_id: domain.layerId,
-          scope_kind: "layer",
-        };
-        return [
-          domain.layerId,
-          {
-            consumers: [`viewport-3d:fdm-native-layer:${domain.layerId}`],
-            quantityId: primaryFieldQuantityId,
-            query,
-            requestId: `fdm-native-layer:${domain.layerId}:${resolveCanonicalQuantityId(primaryFieldQuantityId)}`,
-          },
-        ];
-      }),
-    );
-  }, [
-    fdmLaneActive,
-    fdmMultilayerLayout.data,
-    fdmNativeLayerDomains,
-    primaryFieldQuantityId,
-  ]);
-  const nativeLayerFieldVectors = useViewport3DQuantityFieldVectors(
-    nativeLayerFieldRequests,
-    Boolean(fdmLaneActive && nativeLayerFieldRequests.size > 0),
-  );
   const fieldCatalog = useFieldCatalogResource({ enabled: Boolean(fdmLaneActive) });
   const availableFieldQuantityIds = useMemo(
     () => resolveViewport3DAvailableFieldQuantityIds(fieldCatalog.data),
@@ -3357,6 +3323,25 @@ export function useViewport3DSceneModel({
     objectVisualizationSnapshot,
     renderingState,
   ]);
+  const nativeLayerFieldRequests = useMemo<
+    ReadonlyMap<string, Viewport3DFieldResourceRequest>
+  >(() => resolveViewport3DFdmNativeLayerFieldRequests({
+    available: Boolean(fdmLaneActive && fdmMultilayerLayout.data?.available),
+    layers: fdmNativeLayerDomains.map((domain) => ({
+      layerId: domain.layerId,
+      settings: fdmNativeLayerSettingsById.get(domain.layerId) ?? null,
+    })),
+    maxSamples: FDM_DISPLAY_CELL_BUDGET,
+  }), [
+    fdmLaneActive,
+    fdmMultilayerLayout.data,
+    fdmNativeLayerDomains,
+    fdmNativeLayerSettingsById,
+  ]);
+  const nativeLayerFieldVectors = useViewport3DQuantityFieldVectors(
+    nativeLayerFieldRequests,
+    Boolean(fdmLaneActive && nativeLayerFieldRequests.size > 0),
+  );
   const fdmTargetSettingsById = useMemo(() => {
     const settingsById = new Map<string, VisualizationTargetSettings>();
     if (!fdmMembershipCurrent || fdmTargetDefinitionsResult.status !== "ready") {

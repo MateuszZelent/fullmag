@@ -18,6 +18,7 @@ use super::field_resolution::{
     field_values_match_current_domain, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
     live_magnetization_available, strict_flat_json_field_values,
 };
+use super::multilayer_identity::correlate_multilayer_layers;
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
@@ -83,8 +84,7 @@ const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.jso
 const FDM_MULTILAYER_AIRBOX_FIELD: &str = "fields/H_demag/airbox/H_demag.samples.v1.json";
 const FDM_MULTILAYER_AIRBOX_SCHEMA: &str = "fdm_multilayer_observation.v1";
 const FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
-const FDM_MULTILAYER_AIRBOX_H_EFF_REASON: &str =
-    "fdm_multilayer_airbox_h_eff_unavailable.v1";
+const FDM_MULTILAYER_AIRBOX_H_EFF_REASON: &str = "fdm_multilayer_airbox_h_eff_unavailable.v1";
 const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
     "V_electric",
     "J_charge",
@@ -247,7 +247,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         || read_required_string(&manifest, "quantity_id", "Airbox manifest")? != "H_demag"
         || read_required_string(&manifest, "unit", "Airbox manifest")? != "A/m"
         || read_required_string(&manifest, "source_policy", "Airbox manifest")? != "target_only"
-        || manifest.get("target_only").and_then(serde_json::Value::as_bool) != Some(true)
+        || manifest
+            .get("target_only")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
         || manifest.get("published_quantities") != Some(&serde_json::json!(["H_demag"]))
         || manifest
             .get("unavailable_quantities")
@@ -262,7 +265,8 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .ok_or_else(|| "Airbox manifest grid is missing".to_string())?;
     let (cells, origin_m, cell_size_m) =
         validated_airbox_grid(Some(manifest_grid), "Airbox manifest")?;
-    let carrier_fingerprint = read_required_string(&manifest, "carrier_fingerprint", "Airbox manifest")?;
+    let carrier_fingerprint =
+        read_required_string(&manifest, "carrier_fingerprint", "Airbox manifest")?;
     if !raw_sha256_hex(carrier_fingerprint) {
         return Err("Airbox manifest carrier_fingerprint must be canonical raw sha256 hex".into());
     }
@@ -270,13 +274,18 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .get("source_grid_fingerprints")
         .and_then(serde_json::Value::as_array)
         .filter(|values| !values.is_empty())
-        .ok_or_else(|| "Airbox manifest source_grid_fingerprints is missing or empty".to_string())?;
+        .ok_or_else(|| {
+            "Airbox manifest source_grid_fingerprints is missing or empty".to_string()
+        })?;
     let source_grid_fingerprints = source_grid_fingerprints_value
         .iter()
         .map(serde_json::Value::as_str)
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| "Airbox manifest source_grid_fingerprints is malformed".to_string())?;
-    if source_grid_fingerprints.iter().any(|value| !raw_sha256_hex(value)) {
+    if source_grid_fingerprints
+        .iter()
+        .any(|value| !raw_sha256_hex(value))
+    {
         return Err("Airbox manifest source_grid_fingerprints must use raw sha256 hex".into());
     }
     let source_common_grid = manifest
@@ -288,7 +297,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .get("source_runtime_identity")
         .filter(|value| value.is_object())
         .cloned()
-        .ok_or_else(|| "Airbox manifest source_runtime_identity is missing or malformed".to_string())?;
+        .ok_or_else(|| {
+            "Airbox manifest source_runtime_identity is missing or malformed".to_string()
+        })?;
     for field in [
         "execution_engine",
         "precision",
@@ -297,16 +308,23 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         "problem_source_hash",
         "run_status",
     ] {
-        read_required_string(&source_runtime_identity, field, "Airbox source_runtime_identity")?;
+        read_required_string(
+            &source_runtime_identity,
+            field,
+            "Airbox source_runtime_identity",
+        )?;
     }
     if read_required_string(&manifest, "field_artifact", "Airbox manifest")?
         != "H_demag.samples.v1.json"
     {
         return Err("Airbox manifest field_artifact is not the canonical H_demag carrier".into());
     }
-    let expected_field_hash = read_required_string(&manifest, "field_artifact_sha256", "Airbox manifest")?;
+    let expected_field_hash =
+        read_required_string(&manifest, "field_artifact_sha256", "Airbox manifest")?;
     if !raw_sha256_hex(expected_field_hash) {
-        return Err("Airbox manifest field_artifact_sha256 must be canonical raw sha256 hex".into());
+        return Err(
+            "Airbox manifest field_artifact_sha256 must be canonical raw sha256 hex".into(),
+        );
     }
     let field_path = try_resolve_artifact_path(&artifact_dir, FDM_MULTILAYER_AIRBOX_FIELD)
         .map_err(|error| format!("failed to resolve Airbox field artifact: {error}"))?
@@ -322,7 +340,8 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
     if read_required_string(&field_payload, "schema_version", "Airbox field artifact")?
         != FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA
         || read_required_string(&field_payload, "observable", "Airbox field artifact")? != "H_demag"
-        || read_required_string(&field_payload, "quantity_id", "Airbox field artifact")? != "H_demag"
+        || read_required_string(&field_payload, "quantity_id", "Airbox field artifact")?
+            != "H_demag"
         || read_required_string(&field_payload, "scope_kind", "Airbox field artifact")? != "airbox"
         || read_required_string(&field_payload, "unit", "Airbox field artifact")? != "A/m"
     {
@@ -347,7 +366,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
             let value = value
                 .as_f64()
                 .filter(|value| value.is_finite())
-                .ok_or_else(|| "Airbox field artifact values contain non-finite data".to_string())?;
+                .ok_or_else(|| {
+                    "Airbox field artifact values contain non-finite data".to_string()
+                })?;
             values.push(value);
         }
     }
@@ -361,7 +382,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .iter()
         .try_fold(1usize, |total, axis| total.checked_mul(*axis as usize))
         .ok_or_else(|| "Airbox target grid cell count overflows usize".to_string())?;
-    if sample_count != vectors.len() || sample_count != grid_count || values.len() != sample_count * 3 {
+    if sample_count != vectors.len()
+        || sample_count != grid_count
+        || values.len() != sample_count * 3
+    {
         return Err("Airbox sample_count, target grid, and vector value count disagree".into());
     }
     let expected_carrier_fingerprint = fdm_multilayer_airbox_carrier_fingerprint(
@@ -372,7 +396,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         expected_field_hash,
     )?;
     if carrier_fingerprint != expected_carrier_fingerprint {
-        return Err("Airbox manifest carrier_fingerprint does not match runner carrier seed".into());
+        return Err(
+            "Airbox manifest carrier_fingerprint does not match runner carrier seed".into(),
+        );
     }
     Ok(Some(FdmMultilayerAirboxCarrier {
         cells,
@@ -382,7 +408,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         sample_count,
         values,
         source_policy: "target_only".to_string(),
-        source_grid_fingerprints: source_grid_fingerprints.into_iter().map(str::to_string).collect(),
+        source_grid_fingerprints: source_grid_fingerprints
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         source_runtime_identity,
     }))
 }
@@ -405,7 +434,11 @@ fn requested_fdm_multilayer_airbox_carrier(
         return Err(ApiError::not_found("multilayer FDM Airbox scope not found"));
     }
     let carrier = load_fdm_multilayer_airbox_carrier(snapshot)
-        .map_err(|reason| ApiError::not_found(format!("multilayer FDM Airbox carrier unavailable: {reason}")))?
+        .map_err(|reason| {
+            ApiError::not_found(format!(
+                "multilayer FDM Airbox carrier unavailable: {reason}"
+            ))
+        })?
         .ok_or_else(|| ApiError::not_found("multilayer FDM Airbox carrier is unavailable"))?;
     if quantity_id == "H_eff" {
         return Err(ApiError::not_found(format!(
@@ -1635,18 +1668,22 @@ pub async fn get_field_meta(
         .map(|field| field.spatial_kind.clone())
         .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
     let component = parse_component(query.component.as_deref(), n_comp as usize)?;
-    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &FieldVectorQuery {
-        component: query.component.clone(),
-        scope_kind: query.scope_kind.clone(),
-        scope_id: query.scope_id.clone(),
-        owner_object_id: query.owner_object_id.clone(),
-        geometry_scope: None,
-        max_samples: None,
-        snapshot_id: query.snapshot_id.clone(),
-        stage_id: query.stage_id.clone(),
-        view: None,
-        phase_rad: None,
-    }, quantity_id)?;
+    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(
+        snapshot,
+        &FieldVectorQuery {
+            component: query.component.clone(),
+            scope_kind: query.scope_kind.clone(),
+            scope_id: query.scope_id.clone(),
+            owner_object_id: query.owner_object_id.clone(),
+            geometry_scope: None,
+            max_samples: None,
+            snapshot_id: query.snapshot_id.clone(),
+            stage_id: query.stage_id.clone(),
+            view: None,
+            phase_rad: None,
+        },
+        quantity_id,
+    )?;
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
@@ -2289,6 +2326,14 @@ fn resolve_multilayer_native_layer_scope(
         .get("layers")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| ApiError::conflict("multilayer FDM field layout has no native layers"))?;
+    let plan_layers = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("execution_plan"))
+        .and_then(|plan| plan.get("backend_plan"))
+        .and_then(|plan| plan.get("layers"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| ApiError::conflict("multilayer FDM execution plan has no native layers"))?;
     let total_count = layers.iter().try_fold(0usize, |total, layer| {
         let count = layer.get("value_count")?.as_u64()?;
         total.checked_add(usize::try_from(count).ok()?)
@@ -2298,49 +2343,56 @@ fn resolve_multilayer_native_layer_scope(
             "multilayer FDM field length does not match native layer payload layout",
         ));
     }
-    // Explorer/viewport targets use the stable `layer_id` identity while the
-    // original runtime artifact historically exposed only `magnet_name`.
-    // Resolve both canonical identities here, without guessing or falling
-    // through to another layer when the layout is ambiguous.  Object scopes
-    // similarly accept the layout's `object_id` (with `magnet_name` retained
-    // as the backwards-compatible alias).
-    let matching_layers = layers
-        .iter()
-        .filter(|layer| {
-            let matches =
-                |key: &str| layer.get(key).and_then(serde_json::Value::as_str) == Some(scope_id);
+    let paired_layers = correlate_multilayer_layers(layers, plan_layers)?;
+    let matching_layers = paired_layers
+        .into_iter()
+        .filter(|(layer, plan_layer)| {
+            let artifact_alias =
+                layer.get("magnet_name").and_then(serde_json::Value::as_str) == Some(scope_id);
             match scope_kind {
-                "layer" => matches("layer_id") || matches("magnet_name"),
-                "object" => matches("object_id") || matches("magnet_name"),
+                "layer" => {
+                    plan_layer
+                        .get("layer_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(scope_id)
+                        || artifact_alias
+                }
+                "object" => {
+                    plan_layer
+                        .get("object_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(scope_id)
+                        || artifact_alias
+                }
                 _ => false,
             }
         })
         .collect::<Vec<_>>();
-    let layer = match matching_layers.as_slice() {
+    let (layer, plan_layer) = match matching_layers.as_slice() {
         [] => {
             return Err(ApiError::not_found(format!(
                 "multilayer FDM {scope_kind} not found: {scope_id}"
             )))
         }
-        [layer] => *layer,
+        [pair] => *pair,
         _ => {
             return Err(ApiError::conflict(format!(
                 "multilayer FDM {scope_kind} is ambiguous: {scope_id}"
             )))
         }
     };
-    let canonical_scope_id = match scope_kind {
-        "layer" => ["magnet_name", "layer_id", "object_id"],
-        "object" => ["object_id", "magnet_name", "layer_id"],
-        _ => unreachable!("scope_kind was validated above"),
-    }
-    .into_iter()
-    .find_map(|key| layer.get(key).and_then(serde_json::Value::as_str))
-    .ok_or_else(|| {
-        ApiError::conflict(format!(
-            "multilayer FDM {scope_kind} has no canonical scope identity"
-        ))
-    })?;
+    let canonical_scope_id = plan_layer
+        .get(if scope_kind == "layer" {
+            "layer_id"
+        } else {
+            "object_id"
+        })
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "multilayer FDM {scope_kind} has no canonical scope identity"
+            ))
+        })?;
     let offset = layer
         .get("value_offset")
         .and_then(serde_json::Value::as_u64)
@@ -2884,7 +2936,7 @@ fn sample_unscoped_field_values(
         (status = 304, description = "Not modified — ETag matched"),
         (status = 400, description = "Invalid component or snapshot parameter"),
         (status = 404, description = "Field not found"),
-        (status = 409, description = "Snapshot does not match the current domain"),
+        (status = 409, description = "Snapshot does not match the current domain, or multilayer artifact and execution-plan layer identities cannot be correlated one-to-one"),
     ),
     tag = "data"
 )]
@@ -2954,7 +3006,9 @@ pub async fn get_field_vector(
             Some((values, grid))
         })
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(carrier) = airbox_carrier.as_ref() {
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(carrier) =
+        airbox_carrier.as_ref()
+    {
         Some((carrier.values.clone(), carrier.cells))
     } else if let Some(snapshot_id) = requested_snapshot_id {
         if quantity_id != "m" {

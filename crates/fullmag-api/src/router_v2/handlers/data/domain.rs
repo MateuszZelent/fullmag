@@ -12,6 +12,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
+use super::multilayer_identity::correlate_multilayer_layers;
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
@@ -21,7 +23,6 @@ use crate::router_v2::handlers::sessions::status::{
 };
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
-use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -148,6 +149,7 @@ pub async fn get_domain_meta(
     responses(
         (status = 200, description = "FDM multilayer native and common transform layouts", body = FdmMultilayerLayoutResource),
         (status = 404, description = "No active workspace"),
+        (status = 409, description = "Artifact and execution-plan layers have conflicting counts or identities, or cannot be correlated one-to-one without ambiguity"),
     ),
     tag = "data"
 )]
@@ -158,10 +160,12 @@ pub async fn get_fdm_multilayer_layout(
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    Ok(Json(fdm_multilayer_layout_resource(snapshot)))
+    Ok(Json(fdm_multilayer_layout_resource(snapshot)?))
 }
 
-fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultilayerLayoutResource {
+fn fdm_multilayer_layout_resource(
+    snapshot: &SessionStateResponse,
+) -> Result<FdmMultilayerLayoutResource, ApiError> {
     let generation = domain_generation_id(snapshot);
     let revisions = (
         domain_generation_revision(snapshot),
@@ -178,7 +182,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
         .filter(|value| value.get("layers").is_some() && value.get("common_cells").is_some());
     let available = artifact.is_some() || backend_plan.is_some();
     if !available {
-        return FdmMultilayerLayoutResource {
+        return Ok(FdmMultilayerLayoutResource {
             schema_version: "fdm-multilayer-layout.v1".into(),
             domain_generation_id: generation,
             available: false,
@@ -194,7 +198,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
             common_transform_layout: None,
             layers: Vec::new(),
             airbox: unavailable_fdm_multilayer_airbox_resource("not_fdm_multilayer"),
-        };
+        });
     }
 
     let plan_summary = backend_plan.and_then(|value| value.get("planner_summary"));
@@ -280,11 +284,23 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
         .and_then(|value| value.get("mesh"))
         .and_then(|value| value.get("transfer_provenance"))
         .and_then(Value::as_array);
-    let layer_count = plan_layers.len().max(artifact_layers.len());
-    let layers = (0..layer_count)
-        .filter_map(|index| {
-            let plan_layer = plan_layers.get(index);
-            let artifact_layer = artifact_layers.get(index);
+    let correlated_layers = if !plan_layers.is_empty() && !artifact_layers.is_empty() {
+        correlate_multilayer_layers(&artifact_layers, &plan_layers)?
+            .into_iter()
+            .map(|(artifact, plan)| (Some(artifact), Some(plan)))
+            .collect::<Vec<_>>()
+    } else if !plan_layers.is_empty() {
+        plan_layers.iter().map(|plan| (None, Some(plan))).collect()
+    } else {
+        artifact_layers
+            .iter()
+            .map(|artifact| (Some(artifact), None))
+            .collect()
+    };
+    let layers = correlated_layers
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, (artifact_layer, plan_layer))| {
             let source = plan_layer.or(artifact_layer)?;
             let magnet_name = value_string(source, "magnet_name")
                 .or_else(|| artifact_layer.and_then(|value| value_string(value, "magnet_name")))?;
@@ -340,7 +356,28 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
                         value_string(entry, "magnet_name").as_deref() == Some(magnet_name.as_str())
                     })
                 })
-                .and_then(|entry| value_string(entry, "source_grid_fingerprint"));
+                .and_then(|entry| value_string(entry, "source_grid_fingerprint"))
+                .or_else(|| {
+                    artifact_layer.and_then(|value| value_string(value, "native_grid_fingerprint"))
+                })
+                .or_else(|| {
+                    fullmag_ir::FdmGridCertificateIR::new(
+                        native_origin,
+                        native_grid,
+                        native_cell_size,
+                        active_cell_count,
+                        1,
+                    )
+                    .ok()
+                    .map(|certificate| certificate.grid_fingerprint)
+                })
+                .map(|fingerprint| {
+                    if fingerprint.starts_with("sha256:") {
+                        fingerprint
+                    } else {
+                        format!("sha256:{fingerprint}")
+                    }
+                });
             Some(FdmLayerLayoutResource {
                 layer_id,
                 object_id,
@@ -374,7 +411,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
         })
     });
 
-    FdmMultilayerLayoutResource {
+    Ok(FdmMultilayerLayoutResource {
         schema_version: "fdm-multilayer-layout.v1".into(),
         domain_generation_id: generation,
         available: true,
@@ -390,7 +427,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
         common_transform_layout: common_layout,
         layers,
         airbox: fdm_multilayer_airbox_resource(snapshot, revisions.1),
-    }
+    })
 }
 
 fn unavailable_fdm_multilayer_airbox_resource(reason: &str) -> FdmMultilayerAirboxResource {
@@ -419,9 +456,13 @@ fn fdm_multilayer_airbox_resource(
     observation_revision: u64,
 ) -> FdmMultilayerAirboxResource {
     match load_fdm_multilayer_airbox_carrier(snapshot) {
-        Ok(Some(carrier)) => fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision),
+        Ok(Some(carrier)) => {
+            fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision)
+        }
         Ok(None) => unavailable_fdm_multilayer_airbox_resource("airbox_carrier_missing"),
-        Err(reason) => unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}")),
+        Err(reason) => {
+            unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}"))
+        }
     }
 }
 

@@ -8,6 +8,7 @@ import type {
   FdmGridInspectorModel,
   FdmGridSelectionInspectorModel,
 } from "./fdmGridInspectorModel";
+import type { FdmMultilayerInspectorModel } from "./fdmMultilayerInspectorModel";
 
 function readyModel(): FdmGridInspectorModel {
   return {
@@ -57,6 +58,29 @@ function selectionDetail(
 }
 
 describe("FdmGridInspectorPanelView", () => {
+  it("keeps native-layer facts and target-local visualization controls in one Inspector", () => {
+    const multilayer: FdmMultilayerInspectorModel = {
+      notice: null,
+      rows: [{ label: "Layer ID", value: "layer:bottom", mono: true }],
+      status: "ready",
+      title: "Bottom · Native Grid",
+    };
+    const html = renderToStaticMarkup(
+      <FdmGridInspectorPanelView
+        detail={selectionDetail()}
+        model={readyModel()}
+        multilayer={multilayer}
+        multilayerVisualizationControls={(
+          <div data-testid="native-layer-visualization-controls">Target controls</div>
+        )}
+      />,
+    );
+
+    expect(html).toContain("Bottom · Native Grid");
+    expect(html).toContain("layer:bottom");
+    expect(html).toContain("native-layer-visualization-controls");
+  });
+
   it("renders structured-grid facts and membership provenance without FEM policy controls", () => {
     const html = renderToStaticMarkup(
       <FdmGridInspectorPanelView

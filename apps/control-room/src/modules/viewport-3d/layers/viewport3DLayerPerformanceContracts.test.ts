@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
+import { resolveViewport3DFdmNativeLayerFieldRequests } from "../model/viewport3DFieldDataPlan";
 
 const fallbackTopologyMeshLayerSource = readFileSync(
   new URL("./FallbackTopologyMeshLayer.tsx", import.meta.url),
@@ -86,6 +87,45 @@ describe("viewport 3D layer performance contracts", () => {
     );
     expect(viewport3dSceneModelSource).not.toContain(
       "buildFdmCuboidInstanceModel(",
+    );
+  });
+
+  it("cleans native multilayer request ownership 2 -> 1 -> 0 and changes quantity target-locally", () => {
+    const settings = (activeQuantityId: string, visible: boolean) => ({
+      activeQuantityId,
+      shaderVisible: true,
+      vectorsVisible: false,
+      visible,
+    });
+    const plan = (bottomVisible: boolean, topVisible: boolean, topQuantity = "m") =>
+      resolveViewport3DFdmNativeLayerFieldRequests({
+        available: true,
+        layers: [
+          { layerId: "layer:bottom", settings: settings("m", bottomVisible) },
+          { layerId: "layer:top", settings: settings(topQuantity, topVisible) },
+        ],
+        maxSamples: 256,
+      });
+
+    const both = plan(true, true);
+    expect([...both.keys()]).toEqual(["layer:bottom", "layer:top"]);
+    expect(both.get("layer:bottom")?.consumers).toEqual([
+      "viewport-3d:fdm-native-layer:layer:bottom",
+    ]);
+    expect(both.get("layer:top")?.consumers).toEqual([
+      "viewport-3d:fdm-native-layer:layer:top",
+    ]);
+
+    const one = plan(false, true);
+    expect([...one.keys()]).toEqual(["layer:top"]);
+    const none = plan(false, false);
+    expect(none.size).toBe(0);
+
+    const topChanged = plan(true, true, "H_demag");
+    expect(topChanged.get("layer:bottom")).toEqual(both.get("layer:bottom"));
+    expect(topChanged.get("layer:top")?.quantityId).toBe("H_demag");
+    expect(topChanged.get("layer:top")?.requestId).toBe(
+      "fdm-native-layer:layer:top:H_demag",
     );
   });
 });

@@ -28,6 +28,7 @@ const attemptState = {
 
 async function main() {
   attemptState.stage = "artifact preparation";
+  assertLayerFieldRequestMatcherSelfTest();
   await mkdir(artifactDir, { recursive: true });
   attemptState.stage = "active-session preflight";
   const status = await getJson("/v2/sessions/current/status");
@@ -60,7 +61,9 @@ async function main() {
     if (request.method() !== "GET") return;
     const url = new URL(request.url());
     if (/\/data\/fields\/[^/]+\/samples\/vector$/.test(url.pathname)) {
-      fieldRequests.push({ path: url.pathname, search: url.search, timestamp: Date.now() });
+      const fieldRequest = { path: url.pathname, search: url.search, timestamp: Date.now() };
+      fieldRequests.push(fieldRequest);
+      console.log(`FDM multilayer browser field request: ${JSON.stringify(fieldRequest)}`);
     }
     if (
       url.pathname.includes("/meshing/meshes/") ||
@@ -92,9 +95,18 @@ async function main() {
     );
     attemptState.stage = "native target preflight";
     const nativeTargetSurface = await assertNativeLayerTargetSurface(page, layers);
+    attemptState.stage = "dual-visible native layer gate";
+    const dualVisibleBaseline = await runDualVisibleNativeLayerGate({ fieldRequests, layers, page });
     attemptState.stage = "native layer matrix";
     const matrix = [];
     for (const layer of layers) {
+      // Qualify the selected native carrier at full fidelity without making
+      // the other physical layer part of the same render workload.  This is
+      // target isolation, not decimation: every cell of the selected layer
+      // remains rendered and both layers receive the complete 12-case matrix.
+      for (const candidate of layers) {
+        await setNativeLayerVisibility(page, candidate, candidate.layer_id === layer.layer_id);
+      }
       for (const geometry of geometries) {
         for (const quantity of quantities) {
           for (const presentation of presentations) {
@@ -136,6 +148,7 @@ async function main() {
       airbox,
       network_failures: networkFailures,
       native_target_surface: nativeTargetSurface,
+      dual_visible_baseline: dualVisibleBaseline,
       runtime_origin: originProof,
       runtime_provenance: runtimeProvenance,
       session_id: status?.session?.session_id ?? status?.session_id ?? null,
@@ -149,6 +162,47 @@ async function main() {
   }
 }
 
+async function runDualVisibleNativeLayerGate({ fieldRequests, layers, page }) {
+  const fieldRequestCountBefore = fieldRequests.length;
+  const targetSettings = [];
+  for (const layer of layers) {
+    targetSettings.push(await setNativeLayerPresentation(page, layer, "surface", "field", "m"));
+  }
+  await patchJson("/v2/sessions/current/visualization/state", buildGlobalQuantityPatch("m"));
+  const requestProofs = [];
+  for (const layer of layers) {
+    requestProofs.push(await waitForLayerRequest(fieldRequests, fieldRequestCountBefore, layer, "m"));
+  }
+  const runtime = await poll("dual-visible native layer listeners", async () => {
+    const snapshot = await pageAuditSnapshot(page);
+    return layers.every((layer) => exactLayerListenerCount(snapshot, layer, "m") > 0)
+      ? snapshot
+      : null;
+  });
+  const canvas = await ensureHealthyCanvas(page);
+  return {
+    canvas,
+    field_request_count_after: fieldRequests.length,
+    field_request_count_before: fieldRequestCountBefore,
+    listener_counts: Object.fromEntries(layers.map((layer) => [
+      layer.layer_id,
+      exactLayerListenerCount(runtime, layer, "m"),
+    ])),
+    request_proofs: requestProofs,
+    target_settings: targetSettings,
+  };
+}
+
+function exactLayerListenerCount(runtime, layer, quantity) {
+  return Object.entries(runtime.listenerCounts ?? {})
+    .filter(([key]) =>
+      key.includes(`/data/fields/${encodeURIComponent(quantity)}/samples/vector`) &&
+      key.includes("scope_kind=layer") &&
+      key.includes(`scope_id=${encodeURIComponent(layer.layer_id)}`)
+    )
+    .reduce((sum, [, count]) => sum + Number(count), 0);
+}
+
 async function assertNativeLayerTargetSurface(page, layers) {
   const rows = [];
   for (const layer of layers) {
@@ -157,7 +211,7 @@ async function assertNativeLayerTargetSurface(page, layers) {
     const inspector = page.locator(".fm-inspector");
     const inspectorText = await inspector.innerText();
     const controls = {
-      quantity: await inspector.getByLabel("Quantity Source", { exact: true }).count(),
+      quantity: await inspector.locator('select[aria-label="Quantity Source"]').count(),
       render_mode: await inspector.locator('[role="radiogroup"][aria-label="Render mode"]').count(),
       target_visibility: await inspector.getByRole("button", { name: "Toggle target visibility", exact: true }).count(),
     };
@@ -192,13 +246,13 @@ async function setNativeLayerPresentation(page, layer, geometry, presentation, q
   const inspector = page.locator(".fm-inspector");
   const visible = inspector.getByRole("button", { name: "Toggle target visibility", exact: true });
   if ((await visible.getAttribute("aria-pressed")) !== "true") await visible.click();
-  const modeLabel = geometry === "surface" ? "Surface" : geometry === "wireframe" ? "Wireframe" : "Points";
+  const modeLabel = geometry === "surface" ? "Shaded" : geometry === "wireframe" ? "Wireframe" : "Points";
   const mode = inspector.locator('[role="radiogroup"][aria-label="Render mode"]').getByRole("radio", { name: modeLabel, exact: true });
   if ((await mode.getAttribute("aria-checked")) !== "true") await mode.click();
   const vectors = inspector.getByRole("button", { name: "Toggle vector field arrows", exact: true });
   const vectorsExpected = presentation === "vector";
   if ((await vectors.getAttribute("aria-pressed")) !== String(vectorsExpected)) await vectors.click();
-  const quantitySelect = inspector.getByLabel("Quantity Source", { exact: true });
+  const quantitySelect = inspector.locator('select[aria-label="Quantity Source"]');
   await quantitySelect.selectOption(quantity);
   return poll(`native layer presentation ${layer.layer_id}`, async () => {
     const settings = await readNativeLayerSettings(inspector);
@@ -224,7 +278,7 @@ async function setNativeLayerVisibility(page, layer, visibleExpected) {
 
 async function readNativeLayerSettings(inspector) {
   const mode = inspector.locator('[role="radiogroup"][aria-label="Render mode"] [role="radio"][aria-checked="true"]');
-  const quantity = inspector.getByLabel("Quantity Source", { exact: true });
+  const quantity = inspector.locator('select[aria-label="Quantity Source"]');
   const visibility = inspector.getByRole("button", { name: "Toggle target visibility", exact: true });
   const vectors = inspector.getByRole("button", { name: "Toggle vector field arrows", exact: true });
   return {
@@ -236,7 +290,7 @@ async function readNativeLayerSettings(inspector) {
 }
 
 function assertNativeLayerPresentation(settings, layer, geometry, presentation, quantity) {
-  const expectedGeometry = geometry === "surface" ? "Surface" : geometry === "wireframe" ? "Wireframe" : "Points";
+  const expectedGeometry = geometry === "surface" ? "Shaded" : geometry === "wireframe" ? "Wireframe" : "Points";
   if (
     settings.geometry !== expectedGeometry ||
     normalizeToken(settings.quantity) !== normalizeToken(quantity) ||
@@ -274,7 +328,12 @@ async function runLayerMatrixCase({ fieldRequests, geometry, geometryRequests, l
   const fieldRequestCountBefore = fieldRequests.length;
   const targetSettings = await setNativeLayerPresentation(page, layer, geometry, presentation, quantity);
   await patchJson("/v2/sessions/current/visualization/state", buildGlobalQuantityPatch(quantity));
-  await waitForLayerRequest(fieldRequests, fieldRequestCountBefore, layer, quantity);
+  const fieldRequestProof = await waitForLayerRequest(
+    fieldRequests,
+    fieldRequestCountBefore,
+    layer,
+    quantity,
+  );
   assertNativeLayerPresentation(targetSettings, layer, geometry, presentation, quantity);
   const canvas = await ensureHealthyCanvas(page);
   const runtime = await pageAuditSnapshot(page);
@@ -287,6 +346,7 @@ async function runLayerMatrixCase({ fieldRequests, geometry, geometryRequests, l
     carrier_fingerprint: layer.native_grid_fingerprint,
     field_request_count_after: fieldRequests.length,
     field_request_count_before: fieldRequestCountBefore,
+    field_request_proof: fieldRequestProof,
     fidelity,
     fingerprint: layout.layout_fingerprint,
     geometry,
@@ -546,7 +606,7 @@ async function assertRuntimeOriginFields(layers, layout) {
   const proof = [];
   for (const layer of layers) {
     for (const quantity of quantities) {
-      const response = await fetchBinaryField(quantity, { component: "full", max_samples: vectorBudget, scope_id: layer.magnet_name, scope_kind: "layer" });
+      const response = await fetchBinaryField(quantity, { component: "full", max_samples: vectorBudget, scope_id: layer.layer_id, scope_kind: "layer" });
       const layoutResponseFingerprint = response.headers.get("x-fullmag-layout-fingerprint") ?? response.headers.get("x-fullmag-domain-fingerprint");
       if (layoutResponseFingerprint && layoutResponseFingerprint !== layout.layout_fingerprint) throw new Error(`Field ${quantity}/${layer.layer_id} layout fingerprint mismatch: ${layoutResponseFingerprint} != ${layout.layout_fingerprint}`);
       const carrierFingerprint = readRequiredCarrierFingerprint(response, layer.native_grid_fingerprint, `${quantity}/${layer.layer_id}`);
@@ -567,11 +627,46 @@ function readRequiredCarrierFingerprint(response, expected, label) {
 }
 
 async function waitForLayerRequest(fieldRequests, countBefore, layer, quantity) {
-  await poll(`layer field request ${layer.layer_id}/${quantity}`, () => fieldRequests.slice(countBefore).some((request) =>
+  // The viewport resource cache may have issued the exact scoped request
+  // during startup or an earlier presentation case.  Requiring a duplicate
+  // GET after every geometry-only switch would reject correct cache reuse.
+  // Keep the guard strict on canonical layer identity and quantity while
+  // accepting a request observed anywhere in this browser run.
+  return poll(
+    `layer field request ${layer.layer_id}/${quantity}`,
+    () => findLayerFieldRequest(fieldRequests, countBefore, layer.layer_id, quantity),
+  );
+}
+
+function findLayerFieldRequest(fieldRequests, countBefore, layerId, quantity) {
+  const index = fieldRequests.findIndex((request) =>
     request.path.includes(`/data/fields/${encodeURIComponent(quantity)}/samples/vector`) &&
-    request.search.includes(`scope_kind=layer`) &&
-    request.search.includes(`scope_id=${encodeURIComponent(layer.magnet_name)}`)
-  ) ? true : null);
+    request.search.includes("scope_kind=layer") &&
+    request.search.includes(`scope_id=${encodeURIComponent(layerId)}`)
+  );
+  if (index < 0) return null;
+  return {
+    observed_after_case_start: index >= countBefore,
+    request: fieldRequests[index],
+    request_index: index,
+  };
+}
+
+function assertLayerFieldRequestMatcherSelfTest() {
+  const requests = [
+    { path: "/v2/sessions/current/data/fields/m/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Abottom" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Atop" },
+  ];
+  const cached = findLayerFieldRequest(requests, 1, "layer:bottom", "m");
+  const fresh = findLayerFieldRequest(requests, 1, "layer:top", "H_demag");
+  const wrongLayer = findLayerFieldRequest(requests, 0, "layer:top", "m");
+  if (
+    cached?.observed_after_case_start !== false ||
+    fresh?.observed_after_case_start !== true ||
+    wrongLayer !== null
+  ) {
+    throw new Error("Layer field request matcher self-test failed.");
+  }
 }
 
 async function waitForAirboxRequest(fieldRequests, countBefore) {
@@ -605,7 +700,7 @@ function assertNoGeometryRequestsAfterSwitch(requests, countBefore, label) {
 }
 
 function assertHiddenLayerHasNoListener(runtime, layer) {
-  const leaked = Object.entries(runtime.listenerCounts ?? {}).filter(([key, count]) => key.includes(`scope_kind=layer`) && key.includes(`scope_id=${encodeURIComponent(layer.magnet_name)}`) && Number(count) > 0);
+  const leaked = Object.entries(runtime.listenerCounts ?? {}).filter(([key, count]) => key.includes(`scope_kind=layer`) && key.includes(`scope_id=${encodeURIComponent(layer.layer_id)}`) && Number(count) > 0);
   if (leaked.length > 0) throw new Error(`Hidden native layer retained field listener: ${JSON.stringify(leaked)}`);
 }
 

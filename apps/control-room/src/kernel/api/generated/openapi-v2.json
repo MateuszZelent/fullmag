@@ -29094,6 +29094,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Artifact and execution-plan layers have conflicting counts or identities, or cannot be correlated one-to-one without ambiguity"
           }
         },
         "tags": [
@@ -32835,7 +32838,7 @@
             "description": "Field not found"
           },
           "409": {
-            "description": "Snapshot does not match the current domain"
+            "description": "Snapshot does not match the current domain, or multilayer artifact and execution-plan layer identities cannot be correlated one-to-one"
           }
         },
         "tags": [

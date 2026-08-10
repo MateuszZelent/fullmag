@@ -13,13 +13,13 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
-use sha2::{Digest, Sha256};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
@@ -2644,6 +2644,118 @@ async fn status_active_lane_does_not_invent_resolved_values_for_an_unresolved_au
     }
 }
 
+#[tokio::test]
+async fn status_active_lane_uses_published_resolved_execution_when_session_fields_lag() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.resolved_backend = None;
+        snapshot.session.resolved_device = None;
+        snapshot.session.resolved_precision = None;
+        snapshot.session.resolved_mode = None;
+        snapshot.metadata = Some(serde_json::json!({
+            "resolved_execution": {
+                "backend": "fdm",
+                "device": "cpu",
+                "precision": "double",
+                "mode": "strict"
+            }
+        }));
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fdm_cpu_reference",
+                "capability_profile_version": "test-profile",
+                "supported_terms": ["exchange", "demag_tensor_fft_newell"],
+                "supported_demag_realizations": ["tensor_fft_newell"],
+                "preview_quantities": ["m", "H_demag"],
+                "snapshot_quantities": ["m", "H_demag"],
+                "scalar_outputs": ["E_total"],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("valid planner capability fixture"),
+        );
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    let resolved = &json["capabilities"]["active_lane"]["resolved"];
+    assert_eq!(resolved["backend"], "fdm");
+    assert_eq!(resolved["discretization"], "fdm");
+    assert_eq!(resolved["device"], "cpu");
+    assert_eq!(resolved["precision"], "double");
+    assert_eq!(resolved["mode"], "strict");
+}
+
+#[tokio::test]
+async fn status_active_lane_fails_closed_for_partial_session_resolution() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.resolved_backend = Some("fdm".into());
+        snapshot.session.resolved_device = None;
+        snapshot.session.resolved_precision = None;
+        snapshot.session.resolved_mode = None;
+        snapshot.metadata = Some(serde_json::json!({
+            "resolved_execution": {
+                "backend": "fdm", "device": "cpu", "precision": "double", "mode": "strict"
+            }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert!(json["capabilities"]["active_lane"]["resolved"].is_null());
+}
+
+#[tokio::test]
+async fn status_active_lane_fails_closed_when_session_and_metadata_conflict() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.resolved_backend = Some("fdm".into());
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.resolved_precision = Some("double".into());
+        snapshot.session.resolved_mode = Some("strict".into());
+        snapshot.metadata = Some(serde_json::json!({
+            "resolved_execution": {
+                "backend": "fdm", "device": "cuda", "precision": "double", "mode": "strict"
+            }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert!(json["capabilities"]["active_lane"]["resolved"].is_null());
+}
+
 #[test]
 fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
     for operation_id in [
@@ -2974,8 +3086,83 @@ async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
         json["layers"][0]["native_grid_fingerprint"],
         "sha256:native-bottom"
     );
-    assert_eq!(json["airbox"]["h_demag_available"], true);
+    assert_eq!(json["airbox"]["carrier_available"], false);
+    assert_eq!(json["airbox"]["h_demag_available"], false);
     assert_eq!(json["airbox"]["h_eff_available"], false);
+    assert_eq!(
+        json["airbox"]["unavailable_reason"],
+        "airbox_carrier_missing"
+    );
+}
+
+#[tokio::test]
+async fn fdm_multilayer_layout_correlates_reordered_artifact_layers_by_identity() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "common_cells": [4, 1, 1],
+                "layers": [
+                    { "layer_id": "layer:top", "object_id": "top", "magnet_name": "top" },
+                    { "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom" }
+                ]
+            } },
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [4, 1, 1],
+                "layers": [
+                    {
+                        "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                        "native_grid": [1, 1, 1], "native_cell_size": [2.0, 1.0, 1.0],
+                        "native_origin": [0.0, 0.0, 2.0]
+                    },
+                    {
+                        "layer_id": "layer:top", "object_id": "top", "magnet_name": "top",
+                        "native_grid": [2, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                        "native_origin": [0.0, 0.0, 5.0]
+                    }
+                ]
+            }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["layers"][0]["layer_id"], "layer:bottom");
+    assert_eq!(
+        json["layers"][0]["native_origin"],
+        serde_json::json!([0.0, 0.0, 2.0])
+    );
+    assert_eq!(json["layers"][1]["layer_id"], "layer:top");
+    assert_eq!(
+        json["layers"][1]["native_origin"],
+        serde_json::json!([0.0, 0.0, 5.0])
+    );
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][0]["magnet_name"] =
+            serde_json::json!("conflicting-name");
+    }
+    let conflicted = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflicted.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -22776,40 +22963,40 @@ fn write_test_fdm_multilayer_airbox_carrier(artifact_dir: &std::path::Path) -> P
     fs::write(carrier_dir.join("H_demag.samples.v1.json"), field_bytes)
         .expect("failed to write multilayer Airbox field payload");
     let mut manifest = serde_json::json!({
-            "schema_version": "fdm_multilayer_observation.v1",
-            "scope_kind": "airbox",
-            "quantity_id": "H_demag",
-            "unit": "A/m",
-            "source_policy": "target_only",
-            "target_only": true,
-            "grid": {
-                "cells": [2, 2, 1],
-                "origin_m": [10.0, 20.0, 30.0],
-                "cell_size_m": [0.5, 0.25, 2.0]
-            },
-            "carrier_fingerprint": "pending",
-            "source_grid_fingerprints": ["b".repeat(64)],
-            "source_common_grid": {
-                "cells": [4, 1, 1],
-                "cell_size_m": [0.5, 0.25, 2.0],
-                "origin_m": [10.0, 20.0, 30.0]
-            },
-            "source_runtime_identity": {
-                "execution_engine": "fdm_cpu_reference",
-                "precision": "double",
-                "demag_operator_kind": "multilayer",
-                "fft_backend": "rustfft",
-                "problem_source_hash": "test-problem-source-hash",
-                "run_status": "completed"
-            },
-            "field_artifact": "H_demag.samples.v1.json",
-            "field_artifact_sha256": field_hash,
-            "sample_count": 4,
-            "published_quantities": ["H_demag"],
-            "unavailable_quantities": {
-                "H_eff": "fdm_multilayer_airbox_h_eff_unavailable.v1"
-            }
-        });
+        "schema_version": "fdm_multilayer_observation.v1",
+        "scope_kind": "airbox",
+        "quantity_id": "H_demag",
+        "unit": "A/m",
+        "source_policy": "target_only",
+        "target_only": true,
+        "grid": {
+            "cells": [2, 2, 1],
+            "origin_m": [10.0, 20.0, 30.0],
+            "cell_size_m": [0.5, 0.25, 2.0]
+        },
+        "carrier_fingerprint": "pending",
+        "source_grid_fingerprints": ["b".repeat(64)],
+        "source_common_grid": {
+            "cells": [4, 1, 1],
+            "cell_size_m": [0.5, 0.25, 2.0],
+            "origin_m": [10.0, 20.0, 30.0]
+        },
+        "source_runtime_identity": {
+            "execution_engine": "fdm_cpu_reference",
+            "precision": "double",
+            "demag_operator_kind": "multilayer",
+            "fft_backend": "rustfft",
+            "problem_source_hash": "test-problem-source-hash",
+            "run_status": "completed"
+        },
+        "field_artifact": "H_demag.samples.v1.json",
+        "field_artifact_sha256": field_hash,
+        "sample_count": 4,
+        "published_quantities": ["H_demag"],
+        "unavailable_quantities": {
+            "H_eff": "fdm_multilayer_airbox_h_eff_unavailable.v1"
+        }
+    });
     let fingerprint_seed = serde_json::json!({
         "schema_version": manifest["schema_version"],
         "scope_kind": manifest["scope_kind"],
@@ -22892,12 +23079,32 @@ async fn fdm_multilayer_airbox_layout_uses_validated_runtime_target_carrier() {
     assert_eq!(json["airbox"]["h_demag_available"], true);
     assert_eq!(json["airbox"]["h_eff_available"], false);
     assert_eq!(json["airbox"]["cells"], serde_json::json!([2, 2, 1]));
-    assert_eq!(json["airbox"]["origin_m"], serde_json::json!([10.0, 20.0, 30.0]));
-    assert_eq!(json["airbox"]["cell_size_m"], serde_json::json!([0.5, 0.25, 2.0]));
-    assert_eq!(json["airbox"]["carrier_fingerprint"], format!("sha256:{fingerprint}"));
+    assert_eq!(
+        json["airbox"]["origin_m"],
+        serde_json::json!([10.0, 20.0, 30.0])
+    );
+    assert_eq!(
+        json["airbox"]["cell_size_m"],
+        serde_json::json!([0.5, 0.25, 2.0])
+    );
+    assert_eq!(
+        json["airbox"]["carrier_fingerprint"],
+        format!("sha256:{fingerprint}")
+    );
     assert_eq!(json["airbox"]["sample_count"], 4);
     assert_eq!(json["airbox"]["value_count"], 12);
-    assert_eq!(json["common_transform_layout"]["shape"], serde_json::json!([4, 1, 1]));
+    assert_eq!(
+        json["common_transform_layout"]["shape"],
+        serde_json::json!([4, 1, 1])
+    );
+    let expected_native_fingerprint =
+        fullmag_ir::FdmGridCertificateIR::new([0.0, 0.0, 0.0], [1, 1, 1], [1.0, 1.0, 1.0], 1, 1)
+            .expect("test native grid certificate should be valid")
+            .grid_fingerprint;
+    assert_eq!(
+        json["layers"][0]["native_grid_fingerprint"],
+        format!("sha256:{expected_native_fingerprint}")
+    );
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 
@@ -22922,7 +23129,9 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     let catalog_json = body_json(catalog).await;
     assert!(catalog_json["quantities"]
         .as_array()
-        .is_some_and(|entries| entries.iter().any(|entry| entry["quantity_id"] == "H_demag")));
+        .is_some_and(|entries| entries
+            .iter()
+            .any(|entry| entry["quantity_id"] == "H_demag")));
 
     let meta = app
         .clone()
@@ -22953,8 +23162,14 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     assert_eq!(vector.headers()["x-fullmag-encoding"], "FMVP;version=3");
     assert_eq!(vector.headers()["x-fullmag-scope-kind"], "airbox");
     assert_eq!(vector.headers()["x-fullmag-scope-id"], "airbox");
-    assert_eq!(vector.headers()["x-fullmag-mesh-topology-hash"], format!("sha256:{fingerprint}"));
-    assert_eq!(vector.headers()["x-fullmag-field-indexing"], "explicit_node_indices");
+    assert_eq!(
+        vector.headers()["x-fullmag-mesh-topology-hash"],
+        format!("sha256:{fingerprint}")
+    );
+    assert_eq!(
+        vector.headers()["x-fullmag-field-indexing"],
+        "explicit_node_indices"
+    );
     assert_eq!(vector.headers()["x-fullmag-point-count"], "4");
     let bytes = body_bytes(vector).await;
     assert_eq!(
@@ -22965,9 +23180,15 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         ],
         [2, 2, 1]
     );
-    assert_eq!(decode_fmvp_metadata_scope(&bytes), ("airbox".into(), "airbox".into()));
+    assert_eq!(
+        decode_fmvp_metadata_scope(&bytes),
+        ("airbox".into(), "airbox".into())
+    );
     assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
-    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(
+        decode_fmvp_payload_f64(&bytes),
+        vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 4.0, 5.0, 6.0]
+    );
 
     let h_eff = app
         .oneshot(
@@ -23005,13 +23226,24 @@ async fn fdm_multilayer_airbox_layout_rejects_fingerprint_and_seed_mismatches() 
     .unwrap();
     let fingerprint_mismatch = app
         .clone()
-        .oneshot(Request::builder().uri(layout_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(layout_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(fingerprint_mismatch.status(), StatusCode::OK);
     let fingerprint_mismatch_json = body_json(fingerprint_mismatch).await;
-    assert_eq!(fingerprint_mismatch_json["airbox"]["carrier_available"], false);
-    assert_eq!(fingerprint_mismatch_json["airbox"]["h_demag_available"], false);
+    assert_eq!(
+        fingerprint_mismatch_json["airbox"]["carrier_available"],
+        false
+    );
+    assert_eq!(
+        fingerprint_mismatch_json["airbox"]["h_demag_available"],
+        false
+    );
     assert!(fingerprint_mismatch_json["airbox"]["unavailable_reason"]
         .as_str()
         .is_some_and(|reason| reason.contains("carrier_fingerprint")));
@@ -23028,7 +23260,12 @@ async fn fdm_multilayer_airbox_layout_rejects_fingerprint_and_seed_mismatches() 
     )
     .unwrap();
     let seed_mismatch = app
-        .oneshot(Request::builder().uri(layout_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(layout_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(seed_mismatch.status(), StatusCode::OK);
@@ -23045,7 +23282,8 @@ async fn fdm_multilayer_airbox_layout_rejects_fingerprint_and_seed_mismatches() 
 async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
-    let vector_uri = "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox";
+    let vector_uri =
+        "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox";
 
     let absent_layout = app
         .clone()
@@ -23072,7 +23310,12 @@ async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches()
         .expect("test carrier field must exist before removal");
     let missing = app
         .clone()
-        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(vector_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
@@ -23092,7 +23335,8 @@ async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches()
     assert_eq!(missing_layout_json["airbox"]["h_demag_available"], false);
     assert!(missing_layout_json["airbox"]["unavailable_reason"]
         .as_str()
-        .is_some_and(|reason| reason.contains("airbox_carrier_invalid") || reason.contains("airbox_carrier_missing")));
+        .is_some_and(|reason| reason.contains("airbox_carrier_invalid")
+            || reason.contains("airbox_carrier_missing")));
 
     write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
     let mut manifest: serde_json::Value = serde_json::from_slice(
@@ -23107,7 +23351,12 @@ async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches()
     .unwrap();
     let bad_hash = app
         .clone()
-        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(vector_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(bad_hash.status(), StatusCode::NOT_FOUND);
@@ -23142,7 +23391,12 @@ async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches()
     .unwrap();
     let bad_count = app
         .clone()
-        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(vector_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(bad_count.status(), StatusCode::NOT_FOUND);
@@ -23166,8 +23420,14 @@ async fn fdm_multilayer_airbox_rejects_missing_hash_and_value_count_mismatches()
 
     fs::write(carrier_dir.join("manifest.json"), b"{")
         .expect("test manifest should be overwritable");
-    let malformed = app.clone()
-        .oneshot(Request::builder().uri(vector_uri).body(Body::empty()).unwrap())
+    let malformed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(vector_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(malformed.status(), StatusCode::NOT_FOUND);
@@ -23720,7 +23980,16 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
             "execution_plan": {
                 "backend_plan": {
                     "kind": "fdm_multilayer",
-                    "common_cells": [4, 1, 1]
+                    "common_cells": [4, 1, 1],
+                    "layers": [{
+                        "layer_id": "layer:top",
+                        "object_id": "top",
+                        "magnet_name": "layer-a"
+                    }, {
+                        "layer_id": "layer:bottom",
+                        "object_id": "bottom",
+                        "magnet_name": "layer-b"
+                    }]
                 }
             },
             "artifact_layout": {
@@ -23728,7 +23997,6 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
                 "common_cells": [4, 1, 1],
                 "layers": [{
                     "layer_id": "layer:top",
-                    "object_id": "top",
                     "magnet_name": "layer-a",
                     "native_grid": [2, 1, 1],
                     "native_cell_size": [1.0, 1.0, 1.0],
@@ -23737,7 +24005,6 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
                     "value_count": 2
                 }, {
                     "layer_id": "layer:bottom",
-                    "object_id": "bottom",
                     "magnet_name": "layer-b",
                     "native_grid": [1, 1, 1],
                     "native_cell_size": [2.0, 1.0, 1.0],
@@ -23759,7 +24026,7 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
         }))
         .expect("multilayer field fixture should deserialize");
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
 
     let response = app
         .clone()
@@ -23774,7 +24041,7 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-fullmag-scope-kind"], "layer");
-    assert_eq!(response.headers()["x-fullmag-scope-id"], "layer-b");
+    assert_eq!(response.headers()["x-fullmag-scope-id"], "layer:bottom");
     assert_eq!(response.headers()["x-fullmag-point-count"], "1");
     let expected_carrier_hash = format!(
         "sha256:{}",
@@ -23795,7 +24062,7 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
     let bytes = body_bytes(response).await;
     assert_eq!(
         decode_fmvp_metadata_scope(&bytes),
-        ("layer".into(), "layer-b".into())
+        ("layer".into(), "layer:bottom".into())
     );
     assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
     assert_eq!(decode_fmvp_payload_f64(&bytes), vec![0.0, 1.0, 0.0]);
@@ -23807,6 +24074,22 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
         ],
         [1, 1, 1]
     );
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["magnet_name"] =
+            serde_json::json!("unmatched-runtime-layer");
+    }
+    let conflicted = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=layer&scope_id=layer%3Abottom")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflicted.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -23814,6 +24097,10 @@ async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm_multilayer", "layers": [
+                { "layer_id": "layer:top", "object_id": "object:top", "magnet_name": "object-a" },
+                { "layer_id": "layer:bottom", "object_id": "object:bottom", "magnet_name": "object-b" }
+            ] } },
             "artifact_layout": {
                 "backend": "fdm_multilayer",
                 "common_cells": [4, 1, 1],
@@ -23903,8 +24190,10 @@ async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
     assert_eq!(alias.status(), StatusCode::OK);
     assert_eq!(alias.headers()["x-fullmag-scope-id"], "object:bottom");
     let alias_bytes = body_bytes(alias).await;
-    assert_eq!(decode_fmvp_metadata_scope(&alias_bytes),
-        ("object".into(), "object:bottom".into()));
+    assert_eq!(
+        decode_fmvp_metadata_scope(&alias_bytes),
+        ("object".into(), "object:bottom".into())
+    );
     assert_eq!(decode_fmvp_node_indices(&alias_bytes), vec![0]);
 }
 
@@ -23913,6 +24202,11 @@ async fn fdm_multilayer_field_vector_scope_rejects_ambiguous_identity_aliases() 
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm_multilayer", "layers": [
+                { "layer_id": "shared-layer", "object_id": "shared-object", "magnet_name": "layer-a" },
+                { "layer_id": "layer-b", "object_id": "object-b", "magnet_name": "shared-layer" },
+                { "layer_id": "layer-c", "object_id": "object-c", "magnet_name": "shared-object" }
+            ] } },
             "artifact_layout": {
                 "backend": "fdm_multilayer",
                 "common_cells": [3, 1, 1],
