@@ -29,6 +29,7 @@ import {
   StudySolverPolicyFields,
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
+import { createStudyGlobalDraft } from "./StudyGlobalAuthoringModel";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
@@ -1289,6 +1290,67 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Not applicable for an explicit FDM lane");
     expect(html).not.toContain("FEM demag policy JSON object");
     expect(html).not.toContain("Poisson Robin");
+  });
+
+  it("marks FDM single grid unsupported for a multi-magnet draft without hiding auto or multilayer", () => {
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        algorithmsAvailable={[]}
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={{
+          ...createStudyGlobalDraft({
+            study: {
+              requested_backend: "fdm",
+              fdm: {
+                default_cell: [2e-9, 2e-9, 1e-9],
+                demag: { strategy: "single_grid", mode: "auto" },
+              },
+            },
+          }),
+          demagRealization: "single_grid",
+        }}
+        magneticObjectCount={2}
+        model={{
+          boundary: testBoundary({ demagRealization: "single_grid" }),
+          requested: testRequested({ backend: "fdm" }),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary({ demagRealization: "single_grid" }),
+          requested: testRequested({ backend: "fdm" }),
+          stages: [],
+        }}
+        onCommit={() => undefined}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toMatch(
+      /<option disabled="" value="single_grid" selected="">FDM single grid \(unsupported for multiple magnets\)<\/option>/,
+    );
+    expect(html).toContain(
+      "multi-body FDM currently supports only the multilayer_convolution strategy",
+    );
+    expect(html).toContain('<option value="auto">Auto</option>');
+    expect(html).toContain('<option value="multilayer_convolution">FDM multilayer convolution</option>');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Save globals<\/button>/);
   });
 
   it("renders spectral stage authoring fields", () => {

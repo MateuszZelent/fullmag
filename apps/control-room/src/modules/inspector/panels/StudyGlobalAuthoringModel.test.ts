@@ -4,6 +4,7 @@ import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveL
 import {
   buildStudyGlobalMergePatch,
   createStudyGlobalDraft,
+  FDM_SINGLE_GRID_MULTI_BODY_REASON,
   isExplicitFdmStudy,
   normalizeDemagRealizationForLane,
   validateStudyGlobalDraft,
@@ -287,6 +288,53 @@ describe("StudyGlobalAuthoringModel", () => {
     ).toEqual([
       "FDM demag realization must be auto, single_grid, or multilayer_convolution.",
     ]);
+  });
+
+  it.each([
+    [0, false],
+    [1, false],
+    [2, true],
+  ])(
+    "fails closed for a programmatic single-grid FDM draft with L=%i magnets",
+    (magneticObjectCount, expectSingleGridError) => {
+      const draft = {
+        ...createStudyGlobalDraft({
+          study: {
+            requested_backend: "fdm",
+            fdm: {
+              default_cell: [2e-9, 2e-9, 1e-9],
+              demag: { strategy: "single_grid", mode: "auto" },
+            },
+          },
+        }),
+        demagRealization: "single_grid",
+      };
+      const messages = validateStudyGlobalDraft(draft, {
+        magneticObjectCount,
+        sessionDiscretization: "fdm",
+      }).map((issue) => issue.message);
+
+      expect(messages.includes(FDM_SINGLE_GRID_MULTI_BODY_REASON)).toBe(
+        expectSingleGridError,
+      );
+    },
+  );
+
+  it("keeps multilayer convolution legal for the L=1 reduction", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: {
+          default_cell: [2e-9, 2e-9, 1e-9],
+          demag: { strategy: "multilayer_convolution", mode: "auto" },
+        },
+      },
+    });
+
+    expect(validateStudyGlobalDraft(draft, {
+      magneticObjectCount: 1,
+      sessionDiscretization: "fdm",
+    })).toEqual([]);
   });
 
   it("creates a global study draft from scene study settings", () => {

@@ -403,6 +403,12 @@ function rawStudyStages(scene: unknown): unknown[] {
   return Array.isArray(study?.stages) ? study.stages : [];
 }
 
+function magneticObjectCount(scene: unknown): number {
+  const objects = asRecord(scene)?.objects;
+  if (!Array.isArray(objects)) return 0;
+  return objects.filter((object) => asRecord(object)?.role === "magnet").length;
+}
+
 function sceneRevisionValue(scene: unknown): number | string | null {
   const revision = asRecord(scene)?.revision;
   return typeof revision === "number" || typeof revision === "string"
@@ -597,6 +603,7 @@ export function useStudyInspectorPanelController(
   const selectedStageIndex = model.selectedStage?.index ?? 0;
   const sceneRevision = sceneRevisionValue(scene.data);
   const sceneHasPayload = sceneHasAuthoringPayload(scene.data);
+  const sceneMagneticObjectCount = magneticObjectCount(scene.data);
   const sceneStageCount = rawStudyStages(scene.data).length;
   const studySignature = studyAuthoringSignature(scene.data);
   useEffect(() => {
@@ -746,6 +753,7 @@ export function useStudyInspectorPanelController(
     const errors = validateStudyGlobalDraft(state.globalDraft, {
       activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+      magneticObjectCount: sceneMagneticObjectCount,
       sessionDiscretization: runtimeStatus?.domain.discretization,
     }).filter(
       (issue) => issue.severity === "error",
@@ -822,6 +830,7 @@ export function useStudyInspectorPanelController(
     runCommand,
     scene,
     sceneHasPayload,
+    sceneMagneticObjectCount,
     sceneRevision,
     sceneStageCount,
     selectedRestoreCheckpoint,
@@ -852,6 +861,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     runCommand,
     scene,
     sceneHasPayload,
+    sceneMagneticObjectCount,
     sceneRevision,
     sceneStageCount,
     selectedRestoreCheckpoint,
@@ -863,6 +873,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+    magneticObjectCount: sceneMagneticObjectCount,
     sessionDiscretization: runtimeStatus?.domain.discretization,
   });
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
@@ -943,6 +954,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
           draft={state.globalDraft}
           model={model}
+          magneticObjectCount={sceneMagneticObjectCount}
           sessionDiscretization={runtimeStatus?.domain.discretization}
           snapshot={snapshot}
           onCommit={() => void commitGlobalDraft()}
@@ -1410,6 +1422,7 @@ export function StudyBoundarySection({
   authoringFeedback,
   draft,
   model,
+  magneticObjectCount,
   onCommit,
   onUpdate,
   sessionDiscretization,
@@ -1425,6 +1438,7 @@ export function StudyBoundarySection({
   } | null;
   draft: StudyGlobalDraft;
   model: StudyInspectorModel;
+  magneticObjectCount?: number;
   onCommit: () => void;
   onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
   requestedDiscretization?: string | null;
@@ -1459,10 +1473,12 @@ export function StudyBoundarySection({
   const validation = validateStudyGlobalDraft(draft, {
     activeLane,
     algorithmsAvailable,
+    magneticObjectCount,
     requestedDiscretization,
     sessionDiscretization,
   });
   const hasErrors = validation.some((issue) => issue.severity === "error");
+  const singleGridUnsupported = explicitFdm && (magneticObjectCount ?? 0) > 1;
   return (
     <InspectorGroup
       title="Global Study Settings"
@@ -1567,7 +1583,10 @@ export function StudyBoundarySection({
         {explicitFdm ? (
           <>
             <option value="auto">Auto</option>
-            <option value="single_grid">FDM single grid</option>
+            <option disabled={singleGridUnsupported} value="single_grid">
+              FDM single grid
+              {singleGridUnsupported ? " (unsupported for multiple magnets)" : ""}
+            </option>
             <option value="multilayer_convolution">
               FDM multilayer convolution
             </option>

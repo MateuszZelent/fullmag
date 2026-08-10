@@ -20,6 +20,9 @@ const FDM_ONLY_DEMAG_REALIZATIONS = [
   "multilayer_convolution",
 ] as const;
 
+export const FDM_SINGLE_GRID_MULTI_BODY_REASON =
+  "multi-body FDM currently supports only the multilayer_convolution strategy; 'single_grid' for multiple magnets is not yet executable";
+
 export interface StudyGlobalDraft {
   demagEnabled: boolean;
   demagRealization: string;
@@ -172,6 +175,7 @@ export function validateStudyGlobalDraft(
   capabilities?: {
     activeLane?: ActiveLaneCapabilitySnapshot | null;
     algorithmsAvailable?: readonly string[];
+    magneticObjectCount?: number;
     requestedDiscretization?: string | null;
     sessionDiscretization?: string | null;
   },
@@ -234,6 +238,16 @@ export function validateStudyGlobalDraft(
   });
   if (explicitFdm) {
     validateFdmDraft(issues, draft.fdm, draft.demagRealization);
+    if (
+      capabilities?.magneticObjectCount !== undefined &&
+      capabilities.magneticObjectCount > 1 &&
+      fdmDemagStrategyForDraft(draft) === "single_grid"
+    ) {
+      issues.push({
+        message: FDM_SINGLE_GRID_MULTI_BODY_REASON,
+        severity: "error",
+      });
+    }
   } else {
     validateOptionalJsonObject(
       issues,
@@ -242,6 +256,13 @@ export function validateStudyGlobalDraft(
     );
   }
   return issues;
+}
+
+function fdmDemagStrategyForDraft(draft: StudyGlobalDraft): string {
+  const strategy = draft.fdm?.demagStrategy;
+  return normalizeDemagStrategy(
+    strategy === "auto" ? draft.demagRealization : strategy ?? draft.demagRealization,
+  );
 }
 
 export function buildStudyGlobalMergePatch(
