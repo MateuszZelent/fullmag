@@ -73,7 +73,7 @@ impl CellPairTensor {
     }
 
     /// Return components in the stable `xx,yy,zz,xy,xz,yz` order.
-    pub const fn components(self) -> [(&'static str, f64); 6] {
+    pub fn components(self) -> [(&'static str, f64); 6] {
         [
             ("xx", self.xx),
             ("yy", self.yy),

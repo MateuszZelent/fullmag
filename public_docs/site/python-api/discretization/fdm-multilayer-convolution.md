@@ -108,12 +108,13 @@ energy equations on the physics page.
 
 The current planner requires all multilayer bodies to have identical XY extents and the same XY
 center. Bodies may be separated along $z$, but they may not overlap there. `two_d_stack` requires
-one native Z cell per layer until a separately qualified moment-preserving Z reduction exists.
-Open boundaries are executable; periodic multilayer axes fail closed. Per-object regions, thermal
-noise, spin torque, Oersted terms, regional field drives, spatial material fields, and bulk DMI are
-currently rejected for this path. CPU execution accepts FP64 only. CUDA FP32/FP64 has separate
-runtime and qualification requirements; representability in Python or `ProblemIR` is not proof that
-a requested GPU lane executed.
+one native Z cell per layer. A multi-cell-Z request fails closed: no public moment-preserving Z
+reduction exists, so the planner never copies one arbitrary native slice. Select `three_d` for
+through-thickness cells. Open boundaries are executable; periodic multilayer axes fail closed.
+Per-object regions, thermal noise, spin torque, Oersted terms, regional field drives, spatial
+material fields, and bulk DMI are currently rejected for this path. CPU execution accepts FP64
+only. CUDA FP32/FP64 has separate runtime and qualification requirements; representability in
+Python or `ProblemIR` is not proof that a requested GPU lane executed.
 
 (python-api-fdm-multilayer-convolution-python-api)=
 <!-- (python-api)= -->
@@ -290,22 +291,31 @@ non-CPU-reference execution engine and rejects non-FP64 provenance.
 ## Canonical ProblemIR
 
 `study.fdm(...)` produces `backend_policy.discretization_hints.fdm`. The following JSON is the
-canonical serialized subtree produced by the first example's FDM objects; `explain` is absent by
-design because it is an authoring/display preference:
+canonical `ProblemIR` wrapper produced by the first example's FDM objects; `explain` is absent by
+design because it is an authoring/display preference. The surrounding `backend_policy` path is
+part of the canonical contract, not an illustrative shorthand:
 
 ```json
 {
-  "cell": [4e-09, 4e-09, 3e-09],
-  "default_cell": [4e-09, 4e-09, 3e-09],
-  "per_magnet": {
-    "layer_bottom": {"cell": [4e-09, 4e-09, 3e-09]},
-    "layer_middle": {"cell": [4e-09, 4e-09, 3e-09]},
-    "layer_top": {"cell": [4e-09, 4e-09, 3e-09]}
-  },
-  "demag": {
-    "strategy": "multilayer_convolution",
-    "mode": "two_d_stack",
-    "common_cells_xy": [8, 4]
+  "backend_policy": {
+    "requested_backend": "fdm",
+    "execution_precision": "double",
+    "discretization_hints": {
+      "fdm": {
+        "cell": [4e-09, 4e-09, 3e-09],
+        "default_cell": [4e-09, 4e-09, 3e-09],
+        "per_magnet": {
+          "layer_bottom": {"cell": [4e-09, 4e-09, 3e-09]},
+          "layer_middle": {"cell": [4e-09, 4e-09, 3e-09]},
+          "layer_top": {"cell": [4e-09, 4e-09, 3e-09]}
+        },
+        "demag": {
+          "strategy": "multilayer_convolution",
+          "mode": "two_d_stack",
+          "common_cells_xy": [8, 4]
+        }
+      }
+    }
   }
 }
 ```
@@ -343,6 +353,26 @@ Python request.
 | `FDM(boundary_correction=...)` | `.fdm.boundary_correction` | literal is preserved |
 | `FDM(boundary_phi_floor=...)` | `.fdm.boundary_phi_floor` | scalar is preserved |
 | `FDM(boundary_delta_min=...)` | `.fdm.boundary_delta_min` | SI metres are preserved |
+
+### UI → generated Python → ProblemIR
+
+The authoring path is one chain, including the per-magnet identity:
+
+| Layer | Source symbol | Contract |
+|---|---|---|
+| Control Room draft | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts::buildStudyGlobalMergePatch` | Global fields (`study.fdm.default_cell`, `study.fdm.per_magnet`, `study.fdm.demag`, and `study.demag_enabled`) are written to one canonical scene merge patch. |
+| Generated script | `packages/fullmag-py/src/fullmag/runtime/script_builder.py::render_loaded_problem_as_script` | The scene patch renders as independent `study.demag(enabled=True)` and `study.fdm(default_cell=..., per_magnet={...}, demag=fm.FDMDemag(...))` calls. |
+| Per-magnet lookup | `study.geometry(..., name="layer_bottom")` and `per_magnet["layer_bottom"]` | The geometry name is the canonical key. It is not a generated mesh alias and it must not be silently renamed. |
+| Python lowering | `packages/fullmag-py/src/fullmag/model/discretization.py::FDM.to_ir` | Native cells and demag policy lower under `backend_policy.discretization_hints.fdm`. |
+| Planner resolution | `crates/fullmag-plan/src/fdm.rs::plan_fdm_multilayer` | Geometry, mode, common transform, transfer, pair keys, and eligibility become resolved execution; authored values remain requested intent. |
+
+`CommonTransformLayout` is computational scratch, not a physical mesh. The resource schema
+(`crates/fullmag-api/src/schemas/domain.rs::FdmCommonTransformLayoutResource`) reports
+`is_physical_mesh=false` and provenance. The resource-first route is
+`GET /v2/sessions/current/data/domain/fdm-multilayer-layout`; an unavailable layout has an
+explicit reason and is not synthesized by Explorer. Native-layer fields use `layer`/`object`
+scopes. The target-only Airbox uses `airbox` scope and publishes `H_demag` only; no request
+projects a field from the common transform layout.
 
 (python-api-fdm-multilayer-convolution-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
@@ -401,6 +431,23 @@ strategy is a separate discretization-policy request; the current code does not 
 fields through one resolver. The policy is meaningful only for an FDM lane, and capability-disabled
 ribbon actions remain disabled with an explanation.
 
+### BORIS comparison and implementation gap
+
+The detailed English BORIS/Fullmag matrix is canonical on
+{doc}`../../physics/interactions/demagnetization/multilayer-convolution` under **BORIS
+comparison and gap matrix**. It is linked here because Python authoring must not imply BORIS
+compatibility. The matrix covers:
+
+| Axis | Fullmag authoring consequence |
+|---|---|
+| BORIS multilayer versus supermesh | `strategy="multilayer_convolution"` is explicit; Fullmag does not silently turn a multi-body request into a supermesh or single-grid fallback. |
+| BORIS `Rect_collection`/scratch and `n_common` | `common_cells` and `common_cells_xy` describe FFT scratch only; native grids, origins, and masks remain per magnet. |
+| BORIS arbitrary XY rectangles and XYZ offsets | Fullmag planner forms a union scratch envelope for different native XY extents/centers and marks the affected layers `push_pull`; an explicit common grid must contain that union. Complete transfer/runtime/CUDA qualification is still open. |
+| BORIS `2dmulticonvolution=0/1/2` | Fullmag `mode="two_d_stack"` is **not** `=1` or `=2`; it requires one native Z cell and rejects multi-cell Z because no public moment-preserving reduction exists. |
+| Pair kernels, unequal thickness, weighted transfer | Fullmag keeps oriented source/destination cell sizes, signed offsets, six components, and explicit `push_pull` transfer; each scope needs field/energy/reciprocity evidence. |
+| Catalog/reuse, spectral storage, FFT, padding, CPU/CUDA | Fullmag records six-component tensor storage, exact transform/crop reuse keys, $L$ forward/$L^2$ pair/$L$ inverse work, and separate CPU/CUDA qualification gates; source presence is not device proof. |
+| Airbox and UI | Target-only Airbox is not the common transform grid; Explorer/viewport expose only scoped native-layer or Airbox resources and fail closed when unavailable. |
+
 ### Inspect the realized meshes
 
 After planning/materialization, open **Mesh** in Explorer:
@@ -449,7 +496,7 @@ provenance must not produce a substitute carrier.
 Before treating a configuration as executable, verify:
 
 - every `per_magnet` name matches an authored magnet;
-- all layers have equal XY extent and center and do not overlap along Z;
+- the planner's common scratch envelope contains every native XY rectangle; layers do not overlap along Z;
 - `two_d_stack` layers each have one native Z cell;
 - the common-grid field matches the mode and is within the planner memory budget;
 - Demag is enabled and requested/resolved strategies are visible in provenance;
@@ -491,7 +538,7 @@ runtime-resource, and UI behavior.
 | Study authoring split | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` (`fdm`, `demag`) | independently accepts the global interaction and FDM discretization policy | Python authoring tests |
 | Complete FDM hint container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | default/native grids and boundary policy | Python/UI round-trip tests |
 | Generated stage-first Python | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `render_loaded_problem_as_script` | emits independent `study.demag(...)` and `study.fdm(...)` calls from canonical state | script-builder tests |
-| Kernel reuse identity | `crates/fullmag-fdm-demag/src/types.rs` | `KernelReuseKey::new` | quantizes signed z displacement and includes source/destination cell sizes and the common-grid shape | unit tests |
+| Kernel reuse identity | `crates/fullmag-fdm-demag/src/descriptors.rs` | `from_pair_with_layout` | builds `KernelReuseKey` from oriented shifts, source/destination cell sizes, exact transform shape, padding, and crop | unit tests |
 | Per-magnet local validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM.__init__` | rejects empty names and non-`FDMGrid` values; matching names to authored geometry is planner validation | Python/planner tests |
 | Resolved multilayer plan | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | geometry eligibility, mode/grid resolution, transfer, certificate, provenance | planner tests |
 | Topology-bound identity | `crates/fullmag-ir/src/mesh_hints.rs` | `fdm_multilayer_topology_tokens` | hashes mode, layer/object identity, native layout, mask, convolution layout, and transfer | IR migration/validation tests |
@@ -503,3 +550,6 @@ runtime-resource, and UI behavior.
 | Versioned layout resource | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `fdm_grid_descriptor` | provides the committed FDM domain metadata base for native/common/Airbox exposure | API v2 tests |
 | Native layer viewport domains | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainMeta` | creates the committed FDM render carrier used for separate native-layer targets | viewport adapter tests |
 | Scoped Airbox field request | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmDomainPresentation` | adapts the committed FDM presentation carrier used for target-scoped `H_demag` | viewport field tests |
+| Multilayer layout resource | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `fdm_multilayer_layout_resource` | publishes availability, explicit reason, native layers, and computational common-transform metadata | API v2 tests |
+| Native multilayer viewport domains | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | adapts physical native-layer carriers and never projects the common scratch grid | viewport adapter tests |
+| Target-only multilayer Airbox domain | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | validates target-only metadata, `H_demag` availability, and unavailable `H_eff` | viewport field tests; no fresh browser proof |

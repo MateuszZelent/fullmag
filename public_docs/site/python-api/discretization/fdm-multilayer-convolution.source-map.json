@@ -131,6 +131,27 @@
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
       "symbol": "adaptFdmDomainPresentation",
       "responsibility": "Adapts the committed FDM presentation carrier used as the base for a target-scoped multilayer Airbox field request."
+    },
+    {
+      "id": "api-layout-resource",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_multilayer_layout_resource",
+      "line_anchor": "L164-L305",
+      "responsibility": "Builds the resource-first multilayer layout, including explicit availability and computational common-transform metadata."
+    },
+    {
+      "id": "ui-native-layout",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmMultilayerNativeLayerDomains",
+      "line_anchor": "L176-L240",
+      "responsibility": "Adapts physical native-layer render carriers and excludes the common FFT scratch grid."
+    },
+    {
+      "id": "ui-airbox-layout",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmMultilayerAirboxDomain",
+      "line_anchor": "L242-L340",
+      "responsibility": "Adapts the target-only Airbox carrier and validates scoped field availability."
     }
   ],
   "symbols": [

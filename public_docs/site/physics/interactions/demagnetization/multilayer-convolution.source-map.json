@@ -150,55 +150,223 @@
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
       "symbol": "adaptFdmDomainPresentation",
       "responsibility": "Adapt the committed FDM presentation domain; the target-only multilayer Airbox carrier is an explicitly scoped extension of this contract."
+    },
+    {
+      "id": "boris-rect-collection",
+      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
+      "symbol": "SDemag::set_Rect_collection",
+      "line_anchor": "L98-L179",
+      "responsibility": "BORIS traceability for per-mesh/per-layer convolution rectangles and scratch alignment."
+    },
+    {
+      "id": "boris-common-n",
+      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
+      "symbol": "SDemag::set_default_n_common",
+      "line_anchor": "L56-L96",
+      "responsibility": "BORIS traceability for n_common defaults and the forced two-dimensional Z count."
+    },
+    {
+      "id": "boris-header-force-mode",
+      "path": "external_solvers/BORIS/Boris/SDemag.h",
+      "symbol": "set_default_n_common",
+      "line_anchor": "L81-L103",
+      "responsibility": "BORIS header traceability for force_2d_convolution values 0, 1, and 2."
+    },
+    {
+      "id": "boris-set-n-common",
+      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
+      "symbol": "SDemag::Set_n_common",
+      "line_anchor": "L206-L227",
+      "responsibility": "BORIS traceability for explicit common convolution counts."
+    },
+    {
+      "id": "boris-convolution-rect",
+      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
+      "symbol": "SDemag::get_convolution_rect",
+      "line_anchor": "L194-L204",
+      "responsibility": "BORIS traceability for the adjusted convolution rectangle returned to scratch modules."
+    },
+    {
+      "id": "boris-mconv-init",
+      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
+      "symbol": "SDemag::Initialize_MConv_Demag",
+      "line_anchor": "L128-L166",
+      "responsibility": "BORIS traceability for multilayer scratch-space and convolution initialization."
+    },
+    {
+      "id": "boris-mconv-update",
+      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
+      "symbol": "SDemag::UpdateField_MConv_Demag",
+      "line_anchor": "L197-L337",
+      "responsibility": "BORIS traceability for forward FFT, pair multiplication, and inverse FFT stages."
+    },
+    {
+      "id": "boris-2d-mode",
+      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
+      "symbol": "SDemag::Set_2D_Multilayered_Convolution",
+      "line_anchor": "L1203-L1223",
+      "responsibility": "BORIS traceability for the force_2d_convolution switch."
+    },
+    {
+      "id": "boris-multilayer-toggle",
+      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
+      "symbol": "SDemag::Set_Multilayered_Convolution",
+      "line_anchor": "L1195-L1202",
+      "responsibility": "BORIS traceability for the multilayer-versus-supermesh switch."
+    },
+    {
+      "id": "boris-kernel-catalog",
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection.h",
+      "symbol": "Calculate_Demag_Kernels_2D_Self",
+      "line_anchor": "L108-L131",
+      "responsibility": "BORIS traceability for the self, shifted, and full-complex kernel catalog declarations."
+    },
+    {
+      "id": "boris-kernel-reuse",
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection.h",
+      "symbol": "KernelAlreadyComputed",
+      "line_anchor": "L130-L131",
+      "responsibility": "BORIS traceability for source/destination-cell and shift based kernel reuse."
+    },
+    {
+      "id": "boris-kernel-storage",
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection.h",
+      "symbol": "KernelAlreadyComputed",
+      "line_anchor": "L35-L62",
+      "responsibility": "BORIS traceability for KerType real/complex, shift flags, source/destination cell sizes, and FFT dimensions."
+    },
+    {
+      "id": "boris-kernel-multiply",
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp",
+      "symbol": "DemagKernelCollection::KernelMultiplication_2D",
+      "line_anchor": "L635-L735",
+      "responsibility": "BORIS traceability for full ordered-input 2-D and 3-D pair multiplication."
+    },
+    {
+      "id": "boris-kernel-multiply-3d",
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp",
+      "symbol": "DemagKernelCollection::KernelMultiplication_3D",
+      "line_anchor": "L685-L735",
+      "responsibility": "BORIS traceability for full ordered-input 3-D pair multiplication."
+    },
+    {
+      "id": "boris-irregular-thickness",
+      "path": "external_solvers/BORIS/Boris/DemagTFunc_Irregular.cpp",
+      "symbol": "DemagTFunc::CalcDiagTens2D_Shifted_Irregular",
+      "line_anchor": "L5-L119",
+      "responsibility": "BORIS traceability for unequal source/destination Z thickness with common XY."
+    },
+    {
+      "id": "boris-weighted-transfer",
+      "path": "external_solvers/BORIS/Boris/SDemag_Demag.cpp",
+      "symbol": "SDemag_Demag::Initialize_Mesh_Transfer",
+      "line_anchor": "L63-L87",
+      "responsibility": "BORIS traceability for weighted mesh-transfer initialization."
+    },
+    {
+      "id": "boris-cuda-update",
+      "path": "external_solvers/BORIS/Boris/SDemagCUDA_MConv.cpp",
+      "symbol": "SDemagCUDA::UpdateField_MConv_Demag",
+      "line_anchor": "L114-L277",
+      "responsibility": "BORIS CUDA traceability for multilayer update staging."
+    },
+    {
+      "id": "boris-cuda-init",
+      "path": "external_solvers/BORIS/Boris/SDemagCUDA_MConv.cpp",
+      "symbol": "SDemagCUDA::Initialize_MConv_Demag",
+      "line_anchor": "L14-L100",
+      "responsibility": "BORIS CUDA traceability for multilayer scratch initialization."
+    },
+    {
+      "id": "fullmag-kernel-reuse",
+      "path": "crates/fullmag-fdm-demag/src/descriptors.rs",
+      "symbol": "from_pair_with_layout",
+      "line_anchor": "L1181-L1204",
+      "responsibility": "Fullmag kernel reuse key construction from the exact transform/crop descriptor."
+    },
+    {
+      "id": "fullmag-layout-schema",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_multilayer_layout_resource",
+      "line_anchor": "L164-L305",
+      "responsibility": "Fullmag API schema distinguishing computational common transform layout from a physical mesh."
+    },
+    {
+      "id": "fullmag-layout-route",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_multilayer_layout_resource",
+      "line_anchor": "L145-L161",
+      "responsibility": "Fullmag resource-first route for multilayer layout availability and explicit unavailable reasons."
+    },
+    {
+      "id": "fullmag-explorer-layout",
+      "path": "apps/control-room/src/modules/explorer/builders/buildModelTree.ts",
+      "symbol": "buildModelTree",
+      "line_anchor": "L1247-L1320",
+      "responsibility": "Fullmag Explorer omission boundary for unavailable multilayer layouts and native-layer nodes."
+    },
+    {
+      "id": "fullmag-native-domains",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmMultilayerNativeLayerDomains",
+      "line_anchor": "L176-L240",
+      "responsibility": "Fullmag viewport adaptation for physical native-layer carriers only."
+    },
+    {
+      "id": "fullmag-airbox-domain",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "adaptFdmMultilayerAirboxDomain",
+      "line_anchor": "L242-L340",
+      "responsibility": "Fullmag target-only Airbox viewport adaptation and field-availability checks."
     }
   ],
   "symbols": [
-    {"id": "L", "latex": "$L$", "meaning": "liczba warstw magnetycznych", "si_unit": "$1$"},
-    {"id": "ds", "latex": "$d,s$", "meaning": "indeksy warstwy docelowej i źródłowej", "si_unit": "$1$"},
-    {"id": "ljci", "latex": "$l,j,c,i$", "meaning": "indeksy komórek, składników lub punktów transferu", "si_unit": "$1$"},
-    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetyczna część domeny", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Vs", "latex": "$V_s$", "meaning": "domena albo objętość komórki źródłowej, zgodnie z kontekstem sumy", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Vd", "latex": "$V_d$", "meaning": "objętość komórki docelowej", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Vdc", "latex": "$V_{d,c}$", "meaning": "objętość aktywnej komórki $c$ warstwy $d$", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Vc", "latex": "$V_c$", "meaning": "objętość komórki siatki konwolucyjnej", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Vn", "latex": "$V_n$", "meaning": "objętość komórki siatki natywnej", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "rrp", "latex": "$\\mathbf r,\\mathbf r'$", "meaning": "pozycja obserwacji i pozycja źródła w modelu ciągłym", "si_unit": "$\\mathrm m$"},
-    {"id": "rdl", "latex": "$\\mathbf r_{d,l}$", "meaning": "środek komórki docelowej", "si_unit": "$\\mathrm m$"},
-    {"id": "rsj", "latex": "$\\mathbf r_{s,j}$", "meaning": "środek komórki źródłowej", "si_unit": "$\\mathrm m$"},
-    {"id": "ri", "latex": "$\\mathbf r_i$", "meaning": "środek komórki wejściowej transferu", "si_unit": "$\\mathrm m$"},
-    {"id": "origins", "latex": "$\\mathbf o_d,\\mathbf o_s$", "meaning": "początki siatek docelowej i źródłowej", "si_unit": "$\\mathrm m$"},
-    {"id": "delta", "latex": "$\\boldsymbol\\delta_{d,s}$", "meaning": "przesunięcie $\\mathbf o_d-\\mathbf o_s$", "si_unit": "$\\mathrm m$"},
-    {"id": "q", "latex": "$\\mathbf q$", "meaning": "lag przestrzenny kernela", "si_unit": "$\\mathrm m$"},
-    {"id": "sxyz", "latex": "$\\mathbf s=(x,y,z)$", "meaning": "argument przestrzenny operatora Appendix A", "si_unit": "$\\mathrm m$"},
-    {"id": "xyz", "latex": "$x,y,z$", "meaning": "współrzędne argumentu kernela", "si_unit": "$\\mathrm m$"},
-    {"id": "R", "latex": "$R$", "meaning": "odległość $\\sqrt{x^2+y^2+z^2}$", "si_unit": "$\\mathrm m$"},
-    {"id": "hsd", "latex": "$\\mathbf h_s,\\mathbf h_d$", "meaning": "rozmiary komórek źródła i celu", "si_unit": "$\\mathrm m$"},
-    {"id": "hhp", "latex": "$\\mathbf h,\\mathbf h'$", "meaning": "rozmiary komórek wejściowej i roboczej siatki transferu", "si_unit": "$\\mathrm m$"},
-    {"id": "hxy", "latex": "$h_x,h_y$", "meaning": "wspólne rozmiary komórki w osiach X i Y", "si_unit": "$\\mathrm m$"},
-    {"id": "hszdz", "latex": "$h_{s,z},h_{d,z}$", "meaning": "grubości komórek źródła i celu", "si_unit": "$\\mathrm m$"},
-    {"id": "Delta", "latex": "$\\Delta$", "meaning": "różnica $h_{s,z}-h_{d,z}$", "si_unit": "$\\mathrm m$"},
-    {"id": "tau", "latex": "$\\tau$", "meaning": "normalizacja $\\pi h_xh_yh_{d,z}$", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "M", "latex": "$\\mathbf M,\\mathbf M_s,\\mathbf M_{d,c}$", "meaning": "magnetyzacja", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "H", "latex": "$\\mathbf H,\\mathbf H_d,\\mathbf H_{d,c},\\mathbf H_c$", "meaning": "pole magnetostatyczne lub demagnetyzujące", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Mhat", "latex": "$\\widehat{\\mathbf M}_s$", "meaning": "transformata dyskretna magnetyzacji źródła", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Hhat", "latex": "$\\widehat{\\mathbf H}_d$", "meaning": "transformata dyskretna pola celu", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ncontinuous", "latex": "$\\mathcal N$", "meaning": "ciągłe jądro magnetostatyczne", "si_unit": "$\\mathrm{m^{-3}}$"},
-    {"id": "Ndiscrete", "latex": "$\\mathsf N,\\mathsf N_{d\\leftarrow s}$", "meaning": "dyskretny tensor demagnetyzujący pary komórek", "si_unit": "$1$"},
-    {"id": "Nhat", "latex": "$\\widehat{\\mathsf N}_{d\\leftarrow s}$", "meaning": "transformata dyskretna tensora pary", "si_unit": "$1$"},
-    {"id": "Ncomponents", "latex": "$N_{xx},N_{yy},N_{zz},N_{xy},N_{xz},N_{yz}$", "meaning": "sześć niezależnych składowych tensora", "si_unit": "$1$"},
-    {"id": "Fourier", "latex": "$\\mathcal F,\\mathcal F^{-1}$", "meaning": "dyskretna transformata Fouriera i jej odwrotność", "si_unit": "$1$"},
-    {"id": "k", "latex": "$\\mathbf k$", "meaning": "indeks lub wektor falowy dyskretnej transformaty", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "P", "latex": "$P,P^*$", "meaning": "transfer native→scratch i jego sprzężenie objętościowe", "si_unit": "$1$"},
-    {"id": "Pset", "latex": "$\\mathcal P$", "meaning": "zbiór komórek uczestniczących w transferze", "si_unit": "$1$"},
-    {"id": "wi", "latex": "$w_i$", "meaning": "znormalizowana waga transferu", "si_unit": "$1$"},
-    {"id": "deltai", "latex": "$\\delta_i$", "meaning": "wskaźnik nakładania komórki", "si_unit": "$1$"},
-    {"id": "dtilde", "latex": "$\\widetilde d_i,\\widetilde d_T$", "meaning": "odległość ważona i jej suma", "si_unit": "$\\mathrm m$"},
-    {"id": "Ad", "latex": "$\\mathcal A_d$", "meaning": "zbiór aktywnych komórek warstwy $d$", "si_unit": "$1$"},
-    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "energia demagnetyzacyjna", "si_unit": "$\\mathrm J$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "przenikalność magnetyczna próżni", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Loperator", "latex": "$\\mathcal L$", "meaning": "nieregularny operator narożnikowy Newella", "si_unit": "$1$"},
-    {"id": "fgw", "latex": "$f,g,w$", "meaning": "funkcje bazowe Appendix A", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "eps", "latex": "$\\epsilon_1,\\epsilon_2$", "meaning": "indeksy sumy narożnikowej", "si_unit": "$1$"}
+    {"id": "L", "latex": "$L$", "meaning": "number of magnetic layers", "si_unit": "$1$"},
+    {"id": "ds", "latex": "$d,s$", "meaning": "destination and source layer indices", "si_unit": "$1$"},
+    {"id": "ljci", "latex": "$l,j,c,i$", "meaning": "cell, component, or transfer-point indices", "si_unit": "$1$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic part of the domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vs", "latex": "$V_s$", "meaning": "source domain or source-cell volume, according to the sum context", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vd", "latex": "$V_d$", "meaning": "destination-cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vdc", "latex": "$V_{d,c}$", "meaning": "volume of active cell $c$ in destination layer $d$", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vc", "latex": "$V_c$", "meaning": "convolution-cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vn", "latex": "$V_n$", "meaning": "native-cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "rrp", "latex": "$\\mathbf r,\\mathbf r'$", "meaning": "observation and source positions in the continuous model", "si_unit": "$\\mathrm m$"},
+    {"id": "rdl", "latex": "$\\mathbf r_{d,l}$", "meaning": "destination-cell center", "si_unit": "$\\mathrm m$"},
+    {"id": "rsj", "latex": "$\\mathbf r_{s,j}$", "meaning": "source-cell center", "si_unit": "$\\mathrm m$"},
+    {"id": "ri", "latex": "$\\mathbf r_i$", "meaning": "input-cell center for transfer", "si_unit": "$\\mathrm m$"},
+    {"id": "origins", "latex": "$\\mathbf o_d,\\mathbf o_s$", "meaning": "destination and source grid origins", "si_unit": "$\\mathrm m$"},
+    {"id": "delta", "latex": "$\\boldsymbol\\delta_{d,s}$", "meaning": "offset $\\mathbf o_d-\\mathbf o_s$", "si_unit": "$\\mathrm m$"},
+    {"id": "q", "latex": "$\\mathbf q$", "meaning": "spatial kernel lag", "si_unit": "$\\mathrm m$"},
+    {"id": "sxyz", "latex": "$\\mathbf s=(x,y,z)$", "meaning": "spatial argument of the Appendix A operator", "si_unit": "$\\mathrm m$"},
+    {"id": "xyz", "latex": "$x,y,z$", "meaning": "coordinates of the kernel argument", "si_unit": "$\\mathrm m$"},
+    {"id": "R", "latex": "$R$", "meaning": "distance $\\sqrt{x^2+y^2+z^2}$", "si_unit": "$\\mathrm m$"},
+    {"id": "hsd", "latex": "$\\mathbf h_s,\\mathbf h_d$", "meaning": "source and destination cell sizes", "si_unit": "$\\mathrm m$"},
+    {"id": "hhp", "latex": "$\\mathbf h,\\mathbf h'$", "meaning": "input and scratch transfer-cell sizes", "si_unit": "$\\mathrm m$"},
+    {"id": "hxy", "latex": "$h_x,h_y$", "meaning": "common cell sizes along X and Y", "si_unit": "$\\mathrm m$"},
+    {"id": "hszdz", "latex": "$h_{s,z},h_{d,z}$", "meaning": "source and destination cell thicknesses", "si_unit": "$\\mathrm m$"},
+    {"id": "Delta", "latex": "$\\Delta$", "meaning": "difference $h_{s,z}-h_{d,z}$", "si_unit": "$\\mathrm m$"},
+    {"id": "tau", "latex": "$\\tau$", "meaning": "normalization $\\pi h_xh_yh_{d,z}$", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "M", "latex": "$\\mathbf M,\\mathbf M_s,\\mathbf M_{d,c}$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "H", "latex": "$\\mathbf H,\\mathbf H_d,\\mathbf H_{d,c},\\mathbf H_c$", "meaning": "magnetostatic or demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Mhat", "latex": "$\\widehat{\\mathbf M}_s$", "meaning": "discrete transform of source magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hhat", "latex": "$\\widehat{\\mathbf H}_d$", "meaning": "discrete transform of the destination field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ncontinuous", "latex": "$\\mathcal N$", "meaning": "continuous magnetostatic kernel", "si_unit": "$\\mathrm{m^{-3}}$"},
+    {"id": "Ndiscrete", "latex": "$\\mathsf N,\\mathsf N_{d\\leftarrow s}$", "meaning": "discrete cell-pair demagnetizing tensor", "si_unit": "$1$"},
+    {"id": "Nhat", "latex": "$\\widehat{\\mathsf N}_{d\\leftarrow s}$", "meaning": "discrete transform of the pair tensor", "si_unit": "$1$"},
+    {"id": "Ncomponents", "latex": "$N_{xx},N_{yy},N_{zz},N_{xy},N_{xz},N_{yz}$", "meaning": "six independent tensor components", "si_unit": "$1$"},
+    {"id": "Fourier", "latex": "$\\mathcal F,\\mathcal F^{-1}$", "meaning": "discrete Fourier transform and inverse", "si_unit": "$1$"},
+    {"id": "k", "latex": "$\\mathbf k$", "meaning": "discrete-transform index or wave vector", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "P", "latex": "$P,P^*$", "meaning": "native-to-scratch transfer and volume adjoint", "si_unit": "$1$"},
+    {"id": "Pset", "latex": "$\\mathcal P$", "meaning": "set of cells participating in transfer", "si_unit": "$1$"},
+    {"id": "wi", "latex": "$w_i$", "meaning": "normalized transfer weight", "si_unit": "$1$"},
+    {"id": "deltai", "latex": "$\\delta_i$", "meaning": "cell-overlap indicator", "si_unit": "$1$"},
+    {"id": "dtilde", "latex": "$\\widetilde d_i,\\widetilde d_T$", "meaning": "weighted distance and its sum", "si_unit": "$\\mathrm m$"},
+    {"id": "Ad", "latex": "$\\mathcal A_d$", "meaning": "active-cell set of layer $d$", "si_unit": "$1$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm J$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Loperator", "latex": "$\\mathcal L$", "meaning": "irregular Newell corner operator", "si_unit": "$1$"},
+    {"id": "fgw", "latex": "$f,g,w$", "meaning": "Appendix A basis functions", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "eps", "latex": "$\\epsilon_1,\\epsilon_2$", "meaning": "corner-sum indices", "si_unit": "$1$"}
   ],
   "equations": [
     {"id": "eq-multilayer-public-continuous-field", "symbols": ["H", "rrp", "Omega", "Ncontinuous", "M"], "sources": ["newell-f", "newell-g"]},
@@ -217,17 +385,17 @@
   "public_api": {
     "constructors": ["fullmag.FDMGrid", "fullmag.FDM", "fullmag.FDMDemag"],
     "parameters": [
-      {"python": "FDMGrid.cell", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm m$", "validation": "Dokładnie trzy skończone wartości większe od zera.", "meaning": "Natywny rozmiar komórki jednego magnesu.", "backend_support": "FDM CPU/GPU authoring; wykonanie zależy od lane'u.", "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet.<name>.cell"},
-      {"python": "FDM.cell", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "Dokładnie trzy dodatnie wartości; nie może wystąpić razem z `default_cell`.", "meaning": "Zgodny wstecznie alias domyślnego rozmiaru komórki.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.cell"},
-      {"python": "FDM.default_cell", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "Dokładnie trzy dodatnie wartości; wymagane, jeżeli mapa per-magnet jest niepełna.", "meaning": "Domyślny natywny rozmiar komórki.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"},
-      {"python": "FDM.per_magnet", "type": "dict[str,FDMGrid] | None", "default": "None", "si_unit": "$1$", "validation": "Klucze są niepustymi nazwami; wartości muszą być `FDMGrid`.", "meaning": "Nadpisania siatki dla nazwanych magnesów.", "backend_support": "FDM multilayer CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"},
-      {"python": "FDM.demag", "type": "FDMDemag | None", "default": "None", "si_unit": "$1$", "validation": "Wartość jest instancją `FDMDemag`.", "meaning": "Polityka realizacji pola demagnetyzującego.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag"},
-      {"python": "FDMDemag.strategy", "type": "Literal[str]", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid` albo `multilayer_convolution`.", "meaning": "Requested strategy; jawny wybór multilayer nie może spaść po cichu do single grid.", "backend_support": "FDM CPU/GPU authoring; runtime kwalifikowany per lane.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.strategy"},
-      {"python": "FDMDemag.mode", "type": "Literal[str]", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack` albo `three_d`.", "meaning": "Requested mode; `auto` rozwiązuje planner po poznaniu geometrii warstw.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.mode"},
-      {"python": "FDMDemag.common_cells", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "Trzy dodatnie liczby całkowite; wyklucza `common_cells_xy` i `two_d_stack`.", "meaning": "Jawny rozmiar wspólnej roboczej siatki 3D.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells"},
-      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int,int] | None", "default": "None", "si_unit": "$1$", "validation": "Dwie dodatnie liczby całkowite; wyklucza `common_cells` i `three_d`.", "meaning": "Jawny rozmiar wspólnej siatki XY dla stosu 2D.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells_xy"},
-      {"python": "FDMDemag.explain", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Wartość logiczna.", "meaning": "Żąda czytelnego wyjaśnienia planu; nie jest polem fizycznym i nie jest serializowana przez `to_ir()`.", "backend_support": "FDM authoring helper.", "problem_ir": "not serialized"},
-      {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "None", "si_unit": "$1$", "validation": "Każda wartość różna od `None` zgłasza `ValueError`.", "meaning": "Usunięty przełącznik zgodności; zabrania cichego fallbacku.", "backend_support": "Unsupported combinations są odrzucane.", "problem_ir": "not serialized"}
+      {"python": "FDMGrid.cell", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm m$", "validation": "Exactly three finite, positive values.", "meaning": "Native cell size of one named magnet.", "backend_support": "FDM CPU/GPU authoring; execution remains lane-gated.", "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet.<name>.cell"},
+      {"python": "FDM.cell", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "Exactly three positive values; cannot be supplied with `default_cell`.", "meaning": "Backward-compatible alias for the default cell size.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.cell"},
+      {"python": "FDM.default_cell", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "Exactly three positive values; required when the per-magnet map is incomplete.", "meaning": "Default native cell size.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"},
+      {"python": "FDM.per_magnet", "type": "dict[str,FDMGrid] | None", "default": "None", "si_unit": "$1$", "validation": "Keys are non-empty names; values must be `FDMGrid`.", "meaning": "Native-grid overrides for named magnets.", "backend_support": "FDM multilayer CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"},
+      {"python": "FDM.demag", "type": "FDMDemag | None", "default": "None", "si_unit": "$1$", "validation": "Value must be an `FDMDemag` instance.", "meaning": "Demagnetizing-field realization policy.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag"},
+      {"python": "FDMDemag.strategy", "type": "Literal[str]", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, or `multilayer_convolution`.", "meaning": "Requested strategy; an explicit multilayer request cannot silently fall back to single grid.", "backend_support": "FDM CPU/GPU authoring; runtime qualified per lane.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.strategy"},
+      {"python": "FDMDemag.mode", "type": "Literal[str]", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack`, or `three_d`.", "meaning": "Requested mode; `auto` is resolved by the planner after layer geometry is known.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.mode"},
+      {"python": "FDMDemag.common_cells", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "Three positive integers; mutually exclusive with `common_cells_xy` and `two_d_stack`.", "meaning": "Explicit full 3-D scratch-grid size.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells"},
+      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int,int] | None", "default": "None", "si_unit": "$1$", "validation": "Two positive integers; mutually exclusive with `common_cells` and `three_d`.", "meaning": "Explicit in-plane scratch-grid size for a 2-D stack.", "backend_support": "FDM CPU/GPU authoring.", "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells_xy"},
+      {"python": "FDMDemag.explain", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean.", "meaning": "Requests a readable plan explanation; it is not physical data and is not serialized by `to_ir()`.", "backend_support": "FDM authoring helper.", "problem_ir": "not serialized"},
+      {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "None", "si_unit": "$1$", "validation": "Any value other than `None` raises `ValueError`.", "meaning": "Removed compatibility switch; forbids silent fallback.", "backend_support": "Unsupported combinations are rejected.", "problem_ir": "not serialized"}
     ]
   }
 }

@@ -12,8 +12,10 @@ use fullmag_engine::{
     ExchangeLlgState, FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
+#[cfg(test)]
+use fullmag_fdm_demag::compute_shifted_kernel;
 use fullmag_fdm_demag::{
-    compute_exact_self_kernel, compute_shifted_kernel,
+    compute_shifted_kernel_pair,
     descriptors::{
         ActiveMaskIdentity, CommonTransformLayout, ConvolutionMode, FdmLayerDescriptor,
         GridGeometry,
@@ -738,19 +740,60 @@ fn build_multilayer_demag_runtime(
     let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
     for (src_index, src_descriptor) in descriptors.iter().enumerate() {
         for (dst_index, dst_descriptor) in descriptors.iter().enumerate() {
-            let z_shift = dst_descriptor.scratch.origin[2] - src_descriptor.scratch.origin[2];
-            let kernel = if src_index == dst_index {
-                compute_exact_self_kernel(
-                    conv_grid[0],
-                    conv_grid[1],
-                    conv_grid[2],
-                    conv_cell_size[0],
-                    conv_cell_size[1],
-                    conv_cell_size[2],
-                )
+            let source_cell_size = if mode == ConvolutionMode::TwoDStack {
+                if src_descriptor.native.shape[2] != 1 {
+                    return Err(RunError {
+                        message: format!(
+                            "two_d_stack source layer '{}' requires one native Z cell for its irregular thickness kernel",
+                            src_descriptor.layer_id
+                        ),
+                    });
+                }
+                [
+                    src_descriptor.scratch.spacing[0],
+                    src_descriptor.scratch.spacing[1],
+                    src_descriptor.native.spacing[2],
+                ]
             } else {
-                compute_shifted_kernel(conv_grid, conv_cell_size, z_shift)
+                src_descriptor.scratch.spacing
             };
+            let destination_cell_size = if mode == ConvolutionMode::TwoDStack {
+                if dst_descriptor.native.shape[2] != 1 {
+                    return Err(RunError {
+                        message: format!(
+                            "two_d_stack destination layer '{}' requires one native Z cell for its irregular thickness kernel",
+                            dst_descriptor.layer_id
+                        ),
+                    });
+                }
+                [
+                    dst_descriptor.scratch.spacing[0],
+                    dst_descriptor.scratch.spacing[1],
+                    dst_descriptor.native.spacing[2],
+                ]
+            } else {
+                dst_descriptor.scratch.spacing
+            };
+            let offset = [
+                dst_descriptor.scratch.origin[0] - src_descriptor.scratch.origin[0]
+                    + 0.5 * (destination_cell_size[0] - source_cell_size[0]),
+                dst_descriptor.scratch.origin[1] - src_descriptor.scratch.origin[1]
+                    + 0.5 * (destination_cell_size[1] - source_cell_size[1]),
+                dst_descriptor.scratch.origin[2] - src_descriptor.scratch.origin[2]
+                    + 0.5 * (destination_cell_size[2] - source_cell_size[2]),
+            ];
+            let kernel = compute_shifted_kernel_pair(
+                conv_grid,
+                source_cell_size,
+                destination_cell_size,
+                offset,
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "kernel pair source='{}' destination='{}' rejected: {error}",
+                    src_descriptor.layer_id, dst_descriptor.layer_id
+                ),
+            })?;
             let kernel = if mode == ConvolutionMode::TwoDStack {
                 collapse_kernel_z_plane(kernel).map_err(|error| RunError {
                     message: format!("2-D multilayer kernel collapse: {error}"),
@@ -1324,6 +1367,53 @@ mod tests {
         assert_eq!(executed.result.final_magnetization.len(), 32);
         assert!(!executed.result.steps.is_empty());
         assert!(executed.result.steps.last().unwrap().e_demag.is_finite());
+    }
+
+    #[test]
+    fn multilayer_runtime_builds_unequal_two_d_layer_thickness_kernel() {
+        let mut plan = make_plan(true);
+        plan.layers[1].native_cell_size[2] = 2.0e-9;
+        plan.layers[1].transfer_kind = "push_pull".to_string();
+        let runtime = build_multilayer_demag_runtime(&plan)
+            .expect("unequal two-dimensional source/destination thickness must be explicit");
+        let legacy_common_thickness =
+            compute_shifted_kernel([4, 4, 1], [2.0e-9, 2.0e-9, 1.0e-9], 3.0e-9);
+        let pair = &runtime.kernel_pairs[1].kernel;
+        let expected_pair = compute_shifted_kernel_pair(
+            [4, 4, 1],
+            [2.0e-9, 2.0e-9, 1.0e-9],
+            [2.0e-9, 2.0e-9, 2.0e-9],
+            [0.0, 0.0, 3.5e-9],
+        )
+        .expect("expected irregular pair kernel should build");
+        let expected_pair = collapse_kernel_z_plane(expected_pair)
+            .expect("expected irregular pair kernel should collapse");
+        assert_eq!(pair.k_xx, expected_pair.k_xx);
+        assert_eq!(pair.k_xy, expected_pair.k_xy);
+        assert_eq!(pair.k_xz, expected_pair.k_xz);
+        assert_eq!(pair.k_yy, expected_pair.k_yy);
+        assert_eq!(pair.k_yz, expected_pair.k_yz);
+        assert_eq!(pair.k_zz, expected_pair.k_zz);
+        let max_kernel_difference = pair
+            .k_xx
+            .iter()
+            .zip(legacy_common_thickness.k_xx.iter())
+            .map(|(actual, legacy)| (actual - legacy).norm())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_kernel_difference > 1.0e-12,
+            "unequal layer thickness must not reuse the common-thickness kernel"
+        );
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("unequal-thickness contexts should build");
+        let fields = compute_demag_fields(&contexts, &states, Some(&runtime))
+            .expect("unequal-thickness demag fields should compute");
+        assert_eq!(fields.len(), 2);
+        assert!(fields
+            .iter()
+            .flatten()
+            .all(|value| value.iter().all(|component| component.is_finite())));
     }
 
     #[test]

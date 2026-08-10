@@ -7334,7 +7334,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
 }
 
 #[test]
-fn multilayer_planner_rejects_xy_offset() {
+fn multilayer_planner_materializes_xy_offset_in_common_scratch_transfer() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.geometry.entries = vec![
         GeometryEntryIR::Translate {
@@ -7380,15 +7380,42 @@ fn multilayer_planner_rejects_xy_offset() {
             absorbing_boundary: None,
         },
     ];
-    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Demag {
-        realization: fullmag_ir::RequestedFemDemagIR::Auto,
-    }];
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        },
+    ];
 
-    let err = plan(&ir).expect_err("XY-offset multilayer problem should be rejected");
-    assert!(err
-        .reasons
+    let planned = plan(&ir)
+        .expect("XY-offset multilayer geometry should lower to scratch transfer");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected FDM multilayer plan");
+    };
+    assert_eq!(multilayer.common_cells, [25, 10, 1]);
+    for (actual, expected) in multilayer.layers[0]
+        .convolution_origin
+        .into_iter()
+        .zip([-20e-9, -10e-9, -1e-9])
+    {
+        assert!((actual - expected).abs() < 1e-24);
+    }
+    for (actual, expected) in multilayer.layers[1]
+        .convolution_origin
+        .into_iter()
+        .zip([-20e-9, -10e-9, 3e-9])
+    {
+        assert!((actual - expected).abs() < 1e-24);
+    }
+    assert!(multilayer
+        .layers
         .iter()
-        .any(|reason| reason.contains("share the same XY center")));
+        .all(|layer| layer.transfer_kind == "push_pull"));
+    assert!(multilayer
+        .planner_summary
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("xy_geometry_uses_common_scratch_transfer")));
 }
 
 #[test]
@@ -7411,6 +7438,40 @@ fn multilayer_planner_lowers_distinct_xy_extents_and_centers() {
     };
     assert_ne!(multilayer.layers[0].native_grid, multilayer.layers[1].native_grid);
     assert_ne!(multilayer.layers[0].native_origin, multilayer.layers[1].native_origin);
+}
+
+#[test]
+fn xy_transfer_does_not_promote_native_cuda_integrator_lane() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    by[0] = 10e-9;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics:
+            fullmag_ir::DynamicsIR::Llg {
+                integrator,
+                fixed_timestep,
+                ..
+            },
+        ..
+    } = &mut ir.study
+    {
+        *integrator = "rk45".to_string();
+        *fixed_timestep = Some(1e-13);
+    }
+
+    let error = plan(&ir).expect_err(
+        "native CUDA multilayer must remain fail-closed when XY transfer descriptors are required",
+    );
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("staged CUDA multilayer FDM runner supports only")
+            && reason.contains("rk45")
+    }));
 }
 
 #[test]

@@ -434,6 +434,24 @@ if(FULLMAG_ENABLE_CUDA)
     endif()
     add_test(NAME fdm_gpu_m1_charge_transfer_audit_v1_contract
              COMMAND fdm_gpu_m1_charge_transfer_audit_v1_contract)
+
+    add_executable(fdm_gpu_m1_spin_red_v1_contract
+        tests/gpu_m1_spin_red_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_spin_red_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_spin_red_v1_contract PRIVATE
+        fullmag_fdm CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_spin_red_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_spin_red_v1_contract
+             COMMAND fdm_gpu_m1_spin_red_v1_contract)
 endif()
 
 if(NOT FULLMAG_ENABLE_CUDA)

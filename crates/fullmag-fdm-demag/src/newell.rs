@@ -327,11 +327,17 @@ pub fn cell_pair_tensor(
         }
     }
 
-    Ok(cell_pair_tensor_exact(
-        source_cell,
-        destination_cell,
-        displacement,
-    ))
+    let tensor = cell_pair_tensor_exact(source_cell, destination_cell, displacement);
+    if tensor
+        .components()
+        .into_iter()
+        .any(|(_, value)| !value.is_finite())
+    {
+        return Err(KernelBuildError::UnsupportedGeometry {
+            reason: "cell-pair Newell evaluation overflowed to a non-finite tensor".to_string(),
+        });
+    }
+    Ok(tensor)
 }
 
 /// Compatibility spelling for callers that prefer an explicit `compute_`
@@ -1021,14 +1027,10 @@ pub fn try_compute_newell_kernels_shifted_pair(
     validate_shifted_pair_inputs(nx, ny, nz, source_cell, destination_cell, offset)?;
 
     if offset == [0.0; 3] && source_cell == destination_cell {
-        return Ok(compute_newell_kernels(
-            nx,
-            ny,
-            nz,
-            source_cell[0],
-            source_cell[1],
-            source_cell[2],
-        ));
+        let kernels =
+            compute_newell_kernels(nx, ny, nz, source_cell[0], source_cell[1], source_cell[2]);
+        ensure_newell_kernels_finite(&kernels)?;
+        return Ok(kernels);
     }
 
     let px = nx
@@ -1101,6 +1103,16 @@ pub fn try_compute_newell_kernels_shifted_pair(
                 } else {
                     cell_pair_tensor_exact(source_cell, destination_cell, displacement)
                 };
+                if tensor
+                    .components()
+                    .into_iter()
+                    .any(|(_, value)| !value.is_finite())
+                {
+                    return Err(KernelBuildError::UnsupportedGeometry {
+                        reason: "shifted Newell evaluation overflowed to a non-finite tensor"
+                            .to_string(),
+                    });
+                }
                 let p = pidx(ix, iy, iz);
                 n_xx[p] = tensor.xx;
                 n_yy[p] = tensor.yy;
@@ -1112,7 +1124,7 @@ pub fn try_compute_newell_kernels_shifted_pair(
         }
     }
 
-    Ok(NewellKernels {
+    let kernels = NewellKernels {
         n_xx,
         n_yy,
         n_zz,
@@ -1122,7 +1134,28 @@ pub fn try_compute_newell_kernels_shifted_pair(
         px,
         py,
         pz,
-    })
+    };
+    ensure_newell_kernels_finite(&kernels)?;
+    Ok(kernels)
+}
+
+fn ensure_newell_kernels_finite(kernels: &NewellKernels) -> Result<(), KernelBuildError> {
+    let all_finite = kernels
+        .n_xx
+        .iter()
+        .chain(kernels.n_yy.iter())
+        .chain(kernels.n_zz.iter())
+        .chain(kernels.n_xy.iter())
+        .chain(kernels.n_xz.iter())
+        .chain(kernels.n_yz.iter())
+        .all(|value| value.is_finite());
+    if all_finite {
+        Ok(())
+    } else {
+        Err(KernelBuildError::UnsupportedGeometry {
+            reason: "shifted Newell kernel contains a non-finite value".to_string(),
+        })
+    }
 }
 
 /// Descriptive alias for [`try_compute_newell_kernels_shifted_pair`].

@@ -1917,6 +1917,33 @@ return `invalid_descriptor`.
 
 #### Frozen v1 records
 
+##### Typed steady-spin payload records outside the manifest
+
+The 18-record operation manifest is closed and unchanged. Static payload
+records are selected by the six existing views and therefore do not consume
+record IDs. A steady-spin descriptor uses these exact 8-byte-aligned layouts:
+
+| Payload | Size | Ordered tail after the common 32-byte prefix | Known features |
+|---|---:|---|---:|
+| `spin_cell_v1` | 72 | `active:u32`, `conductor:u32`, `material_index:u32`, `reserved1:u32`, `spin_active:u32`, `torque_target:u32`, `region_id:u32`, `reserved2:u32`, `saturation_magnetization:f64` | `0x0c` |
+| `spin_material_v1` | 112 | charge-material fields `material_index`, `reserved1`, `conductivity`, `material_revision`, followed by `spin_conductivity:f64`, `polarization:f64`, `spin_hall_angle:f64`, `spin_flip_length:f64`, `exchange_length:f64`, `dephasing_length:f64`, `spin_revision:u64` | `0x0c` |
+| `spin_boundary_face_v1` | 104 | `kind:u32`, `axis:u32`, `side:i32`, `outward_sign:i32`, `adjacent_cell:u64`, `canonical_face_index:u64`, `area:f64`, `potential_xyz:f64[3]`, `source_id:u64` | `0x08` |
+| `spin_interface_v1` | 176 | `kind:u32`, `axis:u32`, `orientation:i32`, `reserved1:u32`, `negative_cell:u64`, `positive_cell:u64`, `from_cell:u64`, `to_cell:u64`, `canonical_face_index:u64`, `area:f64`, `G_up/G_down/G_r/G_i:f64`, `magnetization_xyz:f64[3]`, `source_id:u64`, `topology_id:u64`, `charge_edge_enabled:u32`, `reserved2:u32` | `0x1c` |
+| `formula_ids_v1` | 144 | charge formula fields through byte 63, then nine spin IDs at offsets 64--99, `reserved2:u32`, `spin_operator_revision:u64`, `preconditioner_revision:u64`, `gamma_e:f64`, `gmres_restart:u64`, `reserved3:u64` | `0x1c` |
+
+The exact offsets and C names are normative in the physics note under
+`DOC-ANCHOR:fdm-gpu-m1-fp64-contract`. View order remains cells/materials/
+interfaces/charge-faces/spin-faces/formula-IDs. The first, second and sixth
+records are strict supersets of their existing charge records. Mixed positional
+interface matching is forbidden: the full source-plus-topology tuple is the
+identity and input order has no semantic effect. Boundary enum values are
+`0 invalid`, `1 insulating`, `2 sink`, `3 specified_potential`. Interface enum
+values are `0 invalid`, `1 transparent`, `2 mixing_conductance_v2`,
+`3 sml_reservoir_v2`; v1 bounded GPU rejects value 3. Every unlisted enum,
+nonzero reserved field, invalid feature mask, malformed extent, duplicate
+identity, inactive endpoint, wrong face area/sign/index, nonunit magnetization,
+or nonfinite physical value is rejected before static publication.
+
 The future ABI records have these complete semantic responsibilities:
 
 | Record | Required v1 content |
@@ -2341,6 +2368,19 @@ and its position in the list is its `field_id`:
 | 18 `charge_warm_start` | `engine_id:utf8`, `preconditioner_revision:u64`, `restart_position:u64`, `basis_count:u64`, `iterate:f64[]`, `basis:f64[]`, `deterministic_reduction_state:u8[]` |
 | 19 `spin_warm_start` | same seven fields and types as section 18, for the spin engine |
 | 20 `solver_continuation_meta` | `accepted_sequence:u64`, `attempt_id:u64`, `stage_id:u64`, `telemetry_cursor:u64`, `charge_work_budget:u64`, `spin_work_budget:u64`, `scientific_continuation_digest:sha256` |
+
+For a spin-accepted state, the inclusion mask is exactly `0x3f` and sections
+10--17, 19 and 20 are mandatory in addition to charge sections 1--9 and 18.
+Section 10 fixes formula/operator/electric/interface/torque/engine/
+preconditioner/residual IDs, revisions, convergence reason, iteration/work
+budget and deterministic compute digest. Section 15 contains separate SoA
+`R_sf`, `R_J` and `R_phi`; section 16 keys each observation by the complete
+source-plus-topology tuple and stores incoming, backflow, absorbed, both
+one-sided fluxes and explicit zero-or-valued SML channels; section 17 stores
+volume, surface and final torque plus closure; section 19 stores the restarted
+GMRES iterate, component-AMG/block-Jacobi revision, restart position, basis and
+fixed-tree reduction continuation. Spin checkpoint size is dynamic and must
+never reuse the charge-only 4352-byte oracle as an expected size.
 
 Parallel arrays within one subrecord have equal element counts unless a field
 is explicitly scalar; vector component arrays have the corresponding cell or

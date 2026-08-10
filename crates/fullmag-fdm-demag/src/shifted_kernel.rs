@@ -19,12 +19,13 @@ use crate::types::{KernelBuildError, TensorDemagKernel, TensorDemagKernelF32};
 ///
 /// # Current limitation
 ///
-/// This builder accepts one `conv_cell_size` for both source and destination.
-/// Unequal source/destination cell sizes need a future oriented pair descriptor;
-/// independent cubature reciprocity tests do not qualify that production path.
-/// Far-field selection uses the physical separation after applying `z_shift`.
-/// A finite offset that cancels a large integer lag falls back to the exact
-/// stencil, including when that lag is outside the bounded precomputed window.
+/// This legacy builder accepts one `conv_cell_size` for both source and
+/// destination.  Call [`compute_shifted_kernel_pair`] when independent
+/// source/destination cell sizes or a full XYZ offset are part of the runtime
+/// contract.  Far-field selection uses the physical separation after applying
+/// `z_shift`.  A finite offset that cancels a large integer lag falls back to
+/// the exact stencil, including when that lag is outside the bounded
+/// precomputed window.
 ///
 /// # Arguments
 /// * `conv_cells` — common convolution grid dimensions
@@ -87,7 +88,28 @@ pub fn try_compute_shifted_kernel_pair(
     let px = nk.px;
     let py = nk.py;
     let pz = nk.pz;
-    Ok(fft_newell_to_kernel(nk, px, py, pz))
+    let kernel = fft_newell_to_kernel(nk, px, py, pz);
+    ensure_kernel_finite(&kernel)?;
+    Ok(kernel)
+}
+
+fn ensure_kernel_finite(kernel: &TensorDemagKernel) -> Result<(), KernelBuildError> {
+    let all_finite = kernel
+        .k_xx
+        .iter()
+        .chain(kernel.k_yy.iter())
+        .chain(kernel.k_zz.iter())
+        .chain(kernel.k_xy.iter())
+        .chain(kernel.k_xz.iter())
+        .chain(kernel.k_yz.iter())
+        .all(|value| value.re.is_finite() && value.im.is_finite());
+    if all_finite {
+        Ok(())
+    } else {
+        Err(KernelBuildError::UnsupportedGeometry {
+            reason: "shifted FFT kernel contains a non-finite value".to_string(),
+        })
+    }
 }
 
 /// Descriptive checked alias for [`try_compute_shifted_kernel_pair`].

@@ -1862,6 +1862,16 @@ fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) ->
     let Some(first_layer) = layers.first() else {
         return false;
     };
+    // Native CUDA v2 currently carries identity-grid descriptors only.  A
+    // planner-resolved push/pull transfer (including a lateral offset or a
+    // different native extent) must stay on the staged/assisted path rather
+    // than being mistaken for the single-grid lane.
+    if layers
+        .iter()
+        .any(|layer| layer.transfer_kind.as_str() != "identity")
+    {
+        return false;
+    }
     let reference_material = &first_layer.material;
     let reference_cell_size = first_layer.native_cell_size;
     if layers.iter().any(|layer| {
@@ -2615,6 +2625,12 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
+    let has_distinct_xy_geometry = lowered_bodies.iter().any(|body| {
+        body.native_origin[0] != common_xy_min[0]
+            || body.native_origin[1] != common_xy_min[1]
+            || body.bounding_size[0] != common_xy_extent[0]
+            || body.bounding_size[1] != common_xy_extent[1]
+    });
     let common_origin = lowered_bodies
         .iter()
         .fold([f64::INFINITY; 3], |mut origin, body| {
@@ -2743,7 +2759,13 @@ pub(crate) fn plan_fdm_multilayer(
             estimated_pair_kernels,
             estimated_unique_kernels,
             estimated_kernel_bytes,
-            warnings: Vec::new(),
+            warnings: if has_distinct_xy_geometry {
+                vec![
+                    "xy_geometry_uses_common_scratch_transfer; native CUDA identity lane remains fail-closed until it consumes per-layer insertion/crop descriptors".to_string(),
+                ]
+            } else {
+                Vec::new()
+            },
         },
     };
 

@@ -828,6 +828,75 @@ visible to spin. Context mismatch, source/operator revision mismatch, a stale
 generation, pre-acceptance consumption, or use after destroy fails before any
 spin kernel launch.
 
+#### Frozen typed static payloads for steady spin
+
+The outer v1 operation records and their 18-record manifest remain byte-for-byte
+frozen. In particular, `steady_spin_solve_request_v1` remains 176 bytes and
+`steady_spin_solve_result_v1` remains 176 bytes. The following payload records
+are append-only records selected by the six buffer views of
+`static_descriptor_v1`; they are not additional manifest records. Every record
+starts with the common 32-byte v1 prefix, is aligned to 8 bytes, accepts only a
+larger optional tail at `struct_version=1`, and rejects an unknown required bit,
+short record, nonzero reserved field, invalid stride, or arithmetic overflow
+before pointer access.
+
+| C payload type | Bytes | Exact ordered tail (`offset:name:type`) | Known features |
+|---|---:|---|---:|
+| `fullmag_fdm_gpu_transport_spin_cell_v1` | 72 | `32:active:u32;36:conductor:u32;40:material_index:u32;44:reserved1:u32;48:spin_active:u32;52:torque_target:u32;56:region_id:u32;60:reserved2:u32;64:saturation_magnetization:f64` | `0x0c` |
+| `fullmag_fdm_gpu_transport_spin_material_v1` | 112 | existing charge-material prefix `32:material_index:u32;36:reserved1:u32;40:conductivity:f64;48:material_revision:u64`, then `56:spin_conductivity:f64;64:polarization:f64;72:spin_hall_angle:f64;80:spin_flip_length:f64;88:exchange_length:f64;96:dephasing_length:f64;104:spin_revision:u64` | `0x0c` |
+| `fullmag_fdm_gpu_transport_spin_boundary_face_v1` | 104 | `32:kind:u32;36:axis:u32;40:side:i32;44:outward_sign:i32;48:adjacent_cell:u64;56:canonical_face_index:u64;64:area:f64;72:potential_xyz:f64[3];96:source_id:u64` | `0x08` |
+| `fullmag_fdm_gpu_transport_spin_interface_v1` | 176 | `32:kind:u32;36:axis:u32;40:orientation:i32;44:reserved1:u32;48:negative_cell:u64;56:positive_cell:u64;64:from_cell:u64;72:to_cell:u64;80:canonical_face_index:u64;88:area:f64;96:G_up:f64;104:G_down:f64;112:G_r:f64;120:G_i:f64;128:magnetization_xyz:f64[3];152:source_id:u64;160:topology_id:u64;168:charge_edge_enabled:u32;172:reserved2:u32` | `0x1c` |
+| `fullmag_fdm_gpu_transport_formula_ids_v1` | 144 | existing charge formula fields through offset 63, then `64:spin_formula_id:u32;68:spin_operator_id:u32;72:electric_reconstruction_id:u32;76:interface_formula_id:u32;80:torque_operator_id:u32;84:spin_engine_id:u32;88:preconditioner_id:u32;92:spin_residual_id:u32;96:local_residual_id:u32;100:reserved2:u32;104:spin_operator_revision:u64;112:preconditioner_revision:u64;120:gamma_e:f64;128:gmres_restart:u64;136:reserved3:u64` | `0x1c` |
+
+The six views retain their frozen meanings and order: cells, materials,
+interfaces, charge faces, spin boundary faces, and formula IDs. Spin-aware cell,
+material, and formula records preserve the existing charge record as their
+leading byte-compatible subrecord, so a charge-only v1 consumer reads exactly
+the same charge fields and ignores the larger stride. A descriptor that requests
+steady spin requires the spin-aware forms and complete external spin-face
+coverage. The supported bounded boundary registry is `invalid=0`,
+`insulating=1`, `sink=2`, `specified_potential=3`; other values, including
+specified flux and periodic, fail closed. The interface registry is
+`transparent=1`, `mixing_conductance_v2=2`, `sml_reservoir_v2=3`, but the
+bounded M1 GPU realization rejects SML. `charge_edge_enabled` must be one for a
+transparent or longitudinal mixing edge and exact zero for the legal
+transverse-only branch.
+
+Each interface is identified by the tuple `(source_id, topology_id, axis,
+canonical_face_index, negative_cell, positive_cell, from_cell, to_cell)`.
+Records may arrive in any order; matching by array position is forbidden. The
+two endpoint cells must be adjacent, active and spin-active, `from -> to` is the
+authored N-to-F direction, and exactly one observation must be published for
+each identity. `G_up`, `G_down`, and `G_r` are finite and nonnegative; `G_i` is
+finite and signed; the interface magnetization is unit length. A torque target
+has finite positive $M_s$, and the formula record carries one finite positive
+$\gamma_e$. Disabled reaction lengths are exact zero; enabled lengths are
+finite and positive. Polarization is in $[-1,1]$ and the signed spin Hall angle
+is finite.
+
+The closed spin ID registries are: formula
+`transport_constitutive.one_way.fullmag.v1=1`, operator
+`fv_spin_upwind_v1=1`, electric reconstruction
+`fdm_exact_face_current_electric_reconstruction.v1=1`, interface
+`magnetoelectronic.fullmag.v2=1`, torque
+`fdm_transport_torque_cell_surface_balance.v1=1`, engine
+`fdm_spin_block_gmres_cuda_v1=1`, preconditioner
+`component_amg_block_jacobi_v1=1`, integrated residual
+`transport_balance_integrated_l2.v1=1`, and local residual
+`transport_balance_local_fv.v1=1`. Zero and unknown values fail closed. The
+production policy requires `gmres_restart=50`; policy 2 uses a separately named
+prototype engine and cannot publish these production IDs.
+
+After a successful solve, the accepted snapshot token also owns immutable
+device-resident $\mu_s$, complete oriented $Q_x/Q_y/Q_z$, separate
+$R_{sf}/R_J/R_\phi$ channels, order-independent interface observations
+(incoming, backflow, absorbed, both one-sided fluxes and reserved zero SML
+channels), volume and surface torque terms, final torque in $\mathrm{s^{-1}}$,
+all four physical balances, the deterministic compute digest, and the
+scientific continuation digest. Artifact record 11 remains frozen with feature
+mask `0x44`; legality of `mu_s`, `Q_ia`, torque and observations is determined
+from the accepted spin state and `field_id`, not by changing that record mask.
+
 #### Discrete operator invariants
 
 The GPU charge operator is the same conservative finite-volume map as the CPU

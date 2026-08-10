@@ -150,6 +150,15 @@ fn crop_fits_inside(crop: fullmag_fdm_demag::descriptors::CropWindow, outer: [us
     })
 }
 
+fn source_window_fits(layout: &CommonTransformLayout, source_shape: [usize; 3]) -> bool {
+    layout
+        .source_insert_offset
+        .iter()
+        .zip(source_shape.iter())
+        .zip(layout.fft_shape.iter())
+        .all(|((offset, extent), fft)| offset.saturating_add(*extent) <= *fft)
+}
+
 impl MultilayerDemagRuntime {
     /// Create a new multilayer demag runtime from precomputed kernel pairs.
     pub fn new(
@@ -216,6 +225,15 @@ impl MultilayerDemagRuntime {
         common_layout
             .validate()
             .map_err(|error| format!("invalid common transform layout: {error}"))?;
+        if !source_window_fits(&common_layout, conv_grid)
+            || common_layout.destination_crop.shape != conv_grid
+            || !crop_fits_inside(common_layout.destination_crop, common_layout.fft_shape)
+        {
+            return Err(
+                "common transform source insertion or destination crop exceeds the non-wrapping FFT window"
+                    .to_string(),
+            );
+        }
         if common_layout.fft_shape
             != kernel_pairs
                 .first()
@@ -261,13 +279,7 @@ impl MultilayerDemagRuntime {
                 ));
             }
             let scratch = layer_descriptors[index].scratch.shape;
-            if layout
-                .source_insert_offset
-                .iter()
-                .zip(scratch.iter())
-                .zip(layout.fft_shape.iter())
-                .any(|((offset, extent), fft)| offset.saturating_add(*extent) > *fft)
-            {
+            if !source_window_fits(layout, scratch) {
                 return Err(format!(
                     "source insertion window for layer {index} exceeds the common FFT shape"
                 ));
@@ -283,13 +295,7 @@ impl MultilayerDemagRuntime {
         if layer_transform_layouts.is_empty() {
             for (index, descriptor) in layer_descriptors.iter().enumerate() {
                 let scratch = descriptor.scratch.shape;
-                if common_layout
-                    .source_insert_offset
-                    .iter()
-                    .zip(scratch.iter())
-                    .zip(common_layout.fft_shape.iter())
-                    .any(|((offset, extent), fft)| offset.saturating_add(*extent) > *fft)
-                {
+                if !source_window_fits(&common_layout, scratch) {
                     return Err(format!(
                         "common source insertion window exceeds the FFT shape for layer {index}"
                     ));
@@ -415,6 +421,35 @@ impl MultilayerDemagRuntime {
                 self.layer_descriptors.len()
             ));
         }
+        let padded_len = self.padded_len();
+        for (pair_index, pair) in self.kernel_pairs.iter().enumerate() {
+            if pair.src_layer >= n_layers || pair.dst_layer >= n_layers {
+                return Err(format!(
+                    "kernel pair {pair_index} references source {} or destination {} outside {n_layers} runtime layers",
+                    pair.src_layer, pair.dst_layer
+                ));
+            }
+            if pair.kernel.fft_shape != self.fft_shape {
+                return Err(format!(
+                    "kernel pair {pair_index} FFT shape {:?} disagrees with runtime {:?}",
+                    pair.kernel.fft_shape, self.fft_shape
+                ));
+            }
+            let component_lengths = [
+                pair.kernel.k_xx.len(),
+                pair.kernel.k_yy.len(),
+                pair.kernel.k_zz.len(),
+                pair.kernel.k_xy.len(),
+                pair.kernel.k_xz.len(),
+                pair.kernel.k_yz.len(),
+            ];
+            if component_lengths.iter().any(|length| *length != padded_len) {
+                return Err(format!(
+                    "kernel pair {pair_index} has component lengths {:?}, expected {padded_len}",
+                    component_lengths
+                ));
+            }
+        }
         for (index, (layer, descriptor)) in
             layers.iter().zip(self.layer_descriptors.iter()).enumerate()
         {
@@ -432,6 +467,17 @@ impl MultilayerDemagRuntime {
             if descriptor_needs_transfer != layer.needs_transfer {
                 return Err(format!(
                     "layer {index} transfer flag disagrees with its descriptor"
+                ));
+            }
+            let descriptor_boundary = match descriptor.transfer.boundary {
+                BoundaryPolicy::Open => TransferBoundaryPolicy::OPEN,
+                BoundaryPolicy::Periodic { axes } => {
+                    TransferBoundaryPolicy::from_periodic_axes(axes)
+                }
+            };
+            if descriptor_boundary != layer.transfer_boundary_policy {
+                return Err(format!(
+                    "layer {index} transfer boundary policy disagrees with its descriptor"
                 ));
             }
             match (
@@ -455,7 +501,6 @@ impl MultilayerDemagRuntime {
                 }
             }
         }
-        let padded_len = self.padded_len();
         let [px, py, _pz] = self.fft_shape;
 
         // Step 1: Forward FFT all layers' magnetizations
@@ -478,7 +523,22 @@ impl MultilayerDemagRuntime {
                     layer.transfer_boundary_policy,
                 )
             } else {
-                layer.m.clone()
+                let mut identity_m = layer.m.clone();
+                if let Some(mask) = layer.active_mask.as_deref() {
+                    if mask.len() != identity_m.len() {
+                        return Err(format!(
+                            "layer {layer_index} active mask has {} entries, expected {}",
+                            mask.len(),
+                            identity_m.len()
+                        ));
+                    }
+                    for (value, active) in identity_m.iter_mut().zip(mask.iter()) {
+                        if !active {
+                            *value = [0.0; 3];
+                        }
+                    }
+                }
+                identity_m
             };
 
             // Pad and FFT
@@ -1517,6 +1577,54 @@ mod tests {
                 );
             }
         }
+
+        let mut source_shifted_only = make_layer();
+        let source_shifted_runtime = MultilayerDemagRuntime::new_with_layout_and_descriptors(
+            vec![KernelPair {
+                src_layer: 0,
+                dst_layer: 0,
+                kernel: collapse_kernel_z_plane(fullmag_fdm_demag::compute_exact_self_kernel(
+                    2, 1, 1, 1.0, 1.0, 1.0,
+                ))
+                .expect("2-D source-only kernel"),
+            }],
+            grid,
+            cell_size,
+            layout(1, 0),
+            Vec::new(),
+        )
+        .expect("source-only translated runtime");
+        source_shifted_runtime.compute_demag_fields(std::slice::from_mut(&mut source_shifted_only));
+        let source_only_difference = source_shifted_only
+            .h_demag
+            .iter()
+            .zip(reference.h_demag.iter())
+            .flat_map(|(actual, expected)| {
+                (0..3).map(move |component| (actual[component] - expected[component]).abs())
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            source_only_difference > 1.0e-6,
+            "source insertion must affect the field when the destination crop is unchanged"
+        );
+        let invalid_layout = MultilayerDemagRuntime::new_with_layout_and_descriptors(
+            vec![KernelPair {
+                src_layer: 0,
+                dst_layer: 0,
+                kernel: collapse_kernel_z_plane(fullmag_fdm_demag::compute_exact_self_kernel(
+                    2, 1, 1, 1.0, 1.0, 1.0,
+                ))
+                .expect("2-D invalid-layout kernel"),
+            }],
+            grid,
+            cell_size,
+            layout(3, 0),
+            Vec::new(),
+        );
+        assert!(
+            invalid_layout.is_err(),
+            "non-wrapping source insertion must fail closed when it exceeds the FFT"
+        );
     }
 
     #[test]

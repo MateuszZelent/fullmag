@@ -3,6 +3,7 @@ use std::f64::consts::PI;
 use fullmag_fdm_demag::{
     cell_pair_tensor, compute_shifted_kernel_pair, CellPairTensor, KernelBuildError,
 };
+use rustfft::{num_complex::Complex, FftPlanner};
 
 const GL8_NODES: [f64; 8] = [
     -0.960_289_856_497_536_3,
@@ -132,6 +133,77 @@ fn kernel_tensor_at(kernel: &fullmag_fdm_demag::NewellKernels, lag: [isize; 3]) 
     )
 }
 
+fn inverse_fft_component(values: &[Complex<f64>], shape: [usize; 3]) -> Vec<f64> {
+    let [px, py, pz] = shape;
+    let mut planner = FftPlanner::<f64>::new();
+    let inverse_x = planner.plan_fft_inverse(px);
+    let inverse_y = planner.plan_fft_inverse(py);
+    let inverse_z = planner.plan_fft_inverse(pz);
+    let mut buffer = values.to_vec();
+    let mut line_y = vec![Complex::new(0.0, 0.0); py];
+    let mut line_z = vec![Complex::new(0.0, 0.0); pz];
+
+    for z in 0..pz {
+        for y in 0..py {
+            let start = z * py * px + y * px;
+            inverse_x.process(&mut buffer[start..start + px]);
+        }
+    }
+    for z in 0..pz {
+        for x in 0..px {
+            for y in 0..py {
+                line_y[y] = buffer[z * py * px + y * px + x];
+            }
+            inverse_y.process(&mut line_y);
+            for y in 0..py {
+                buffer[z * py * px + y * px + x] = line_y[y];
+            }
+        }
+    }
+    for y in 0..py {
+        for x in 0..px {
+            for z in 0..pz {
+                line_z[z] = buffer[z * py * px + y * px + x];
+            }
+            inverse_z.process(&mut line_z);
+            for z in 0..pz {
+                buffer[z * py * px + y * px + x] = line_z[z];
+            }
+        }
+    }
+
+    let normalization = (px * py * pz) as f64;
+    buffer
+        .into_iter()
+        .map(|value| value.re / normalization)
+        .collect()
+}
+
+fn tensor_from_fft_components(
+    components: [&[f64]; 6],
+    shape: [usize; 3],
+    lag: [isize; 3],
+) -> CellPairTensor {
+    let wrap = |value: isize, length: usize| {
+        if value >= 0 {
+            value as usize
+        } else {
+            (length as isize + value) as usize
+        }
+    };
+    let index = wrap(lag[2], shape[2]) * shape[1] * shape[0]
+        + wrap(lag[1], shape[1]) * shape[0]
+        + wrap(lag[0], shape[0]);
+    CellPairTensor::new(
+        components[0][index],
+        components[1][index],
+        components[2][index],
+        components[3][index],
+        components[4][index],
+        components[5][index],
+    )
+}
+
 #[test]
 fn unequal_2d_layer_thickness_matches_cubature_for_both_signed_z_offsets() {
     let source = [0.7, 0.9, 0.6];
@@ -204,6 +276,44 @@ fn unequal_2d_pair_keeps_xy_parity_for_positive_and_negative_z_offsets() {
 }
 
 #[test]
+fn fft_pair_inverse_matches_independent_cubature_for_unequal_2d_pair() {
+    let source = [0.7, 0.9, 0.6];
+    let destination = [0.7, 0.9, 1.4];
+    let offset = [0.35, -0.27, 3.2];
+    let kernel = compute_shifted_kernel_pair([3, 3, 1], source, destination, offset)
+        .expect("2-D unequal-thickness FFT pair is supported");
+    let components = [
+        inverse_fft_component(&kernel.k_xx, kernel.fft_shape),
+        inverse_fft_component(&kernel.k_yy, kernel.fft_shape),
+        inverse_fft_component(&kernel.k_zz, kernel.fft_shape),
+        inverse_fft_component(&kernel.k_xy, kernel.fft_shape),
+        inverse_fft_component(&kernel.k_xz, kernel.fft_shape),
+        inverse_fft_component(&kernel.k_yz, kernel.fft_shape),
+    ];
+    for lag in [[1, -1, 0], [-1, 1, 0]] {
+        let displacement = [
+            lag[0] as f64 * source[0] + offset[0],
+            lag[1] as f64 * source[1] + offset[1],
+            offset[2],
+        ];
+        let expected = cubature_cell_pair_tensor(source, destination, displacement);
+        let actual = tensor_from_fft_components(
+            [
+                &components[0],
+                &components[1],
+                &components[2],
+                &components[3],
+                &components[4],
+                &components[5],
+            ],
+            kernel.fft_shape,
+            lag,
+        );
+        assert_tensor_close(actual, expected, &format!("inverse FFT lag={lag:?}"));
+    }
+}
+
+#[test]
 fn unequal_3d_cell_pair_matches_cubature_and_volume_weighted_reciprocity() {
     let source = [0.7, 0.9, 0.6];
     let destination = [0.8, 1.1, 1.4];
@@ -263,6 +373,16 @@ fn three_d_unequal_inplane_spacing_fails_closed_in_translational_kernel_builder(
     let error =
         compute_shifted_kernel_pair([2, 2, 2], [0.7, 0.9, 0.6], [0.8, 0.9, 1.4], [0.0, 0.0, 2.0])
             .expect_err("a single translational kernel cannot encode unequal XY spacing");
+    assert!(matches!(
+        error,
+        KernelBuildError::UnsupportedGeometry { .. }
+    ));
+}
+
+#[test]
+fn finite_but_overflowing_pair_geometry_fails_closed() {
+    let error = cell_pair_tensor([f64::MAX; 3], [f64::MAX; 3], [0.0, 0.0, 0.0])
+        .expect_err("overflowing Newell arithmetic must not return a NaN tensor");
     assert!(matches!(
         error,
         KernelBuildError::UnsupportedGeometry { .. }

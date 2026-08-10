@@ -12518,3 +12518,39 @@ Stan agregatu pozostaje `semantic_only`, `implementation_state=partial`,
 zero-mean gauge, persistent next-solve warm start, publiczny GPU runner,
 spin/SHE/mixing/torque, convergence/performance i produkcyjna kwalifikacja
 pozostają kolejnymi etapami.
+
+## 32.168. Docs-first freeze typed payload ABI dla FDM GPU M1 spin (2026-08-10)
+
+Pierwszy actual-device TDD RED przeszedł przez natywny CUDA charge solve,
+zaakceptował immutable charge snapshot i dopiero na publicznym symbolu steady
+spin zwrócił `UNSUPPORTED=1`. Audyt ujawnił jednak, że zamrożone outer records
+8/9 nie wystarczają do implementacji: sześć view pól descriptoru nie miało
+normatywnych byte layouts dla materiałów spinowych, BC, interfejsów i torque.
+
+Przed kodem solvera zamrożono zatem append-only payload family poza zamkniętym
+18-record manifestem: `spin_cell_v1` 72 B, `spin_material_v1` 112 B,
+`spin_boundary_face_v1` 104 B, `spin_interface_v1` 176 B oraz rozszerzony
+`formula_ids_v1` 144 B. Dokładne offsety, feature masks i enum registries są w
+kanonicznej nocie 0970 i runtime contract. Cell/material/formula zachowują
+byte-compatible charge prefix, view order pozostaje niezmieniony, a outer
+request/result spin pozostają po 176 B.
+
+Interfejs ma pełną tożsamość source+topology, nie zależy od kolejności wejścia,
+przenosi oba endpointy, orientację N-to-F, canonical face, cztery conductance,
+magnetyzację i jawny charge-edge flag dla transverse-only. Pełne sześć spin BC
+używa wartości `insulating=1`, `sink=2`, `specified_potential=3`; periodic,
+specified flux i SML pozostają fail-closed. Torque target jest per-cell z
+dodatnim $M_s$, a dodatnie $\gamma_e$, restart 50 i wszystkie wersjonowane IDs
+są w jednym rozszerzonym formula record.
+
+Zamrożono też accepted spin snapshot i checkpoint: immutable $\mu_s$, pełne
+$Q_x/Q_y/Q_z$, oddzielne reakcje, kompletne observations, volume/surface/final
+torque, balances i dwa digest lanes. Spin checkpoint wymaga maski `0x3f` oraz
+sekcji 10--17/19/20; jego rozmiar jest dynamiczny i nie może dziedziczyć
+charge-only 4352 B. Artifact request pozostaje byte-frozen z maską `0x44`.
+
+Ten wpis jest wyłącznie kontraktem implementacyjnym. Capability pozostaje
+`semantic_only`, `implementation_state=partial`, `validation_state=unvalidated`
+i `validated_workloads=[]` aż do kodu CUDA, actual-device workloadów, parity,
+strict residency, restart, public path, convergence/performance i niezależnego
+review.

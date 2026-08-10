@@ -225,8 +225,14 @@ i full są complex, przy czym full wymaga full storage. Tabela I jest celem
 reprezentacji; obecny Fullmag nie ma jeszcze runtime evidence tej redukcji.
 Appendix A, równania (A1)--(A4), określa irregular Newell dla
 $\mathbf h_s=(h_x,h_y,h_{s,z})$ i $\mathbf h_d=(h_x,h_y,h_{d,z})$, a więc
-różnicy wyłącznie Z. Implementacja produkcyjna musi przejść niezależny oracle
-tych równań; nie jest nim aktualny shifted builder.
+różnicy wyłącznie Z. Checked pair builder w
+`crates/fullmag-fdm-demag/src/shifted_kernel.rs::compute_shifted_kernel_pair`
+korzysta z tego kontraktu i ma niezależne porównanie GL8 oraz test odwrotnej
+transformaty FFT w
+`crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs`. To jest dowód
+matematyczny i wykonywalny, nie kwalifikacja produkcyjna: aktywny runner CPU
+używa tej ścieżki dla nierównych grubości 2D, natomiast pełny per-layer
+transfer/crop, CUDA i świeże artefakty runtime nadal pozostają bramami otwartymi.
 
 Dokładny layout FFT dla pary ma source insertion offset $a_s$, lag-zero
 $z_{d,s}$ i crop celu $C_d$. Współczynnik o lagu $q$ trafia do
@@ -234,6 +240,39 @@ $K[(q+z_{d,s})\bmod F]$, magnetyzacja do $M[(i+a_s)\bmod F]$, a wynik celu
 czyta się z $H[C_d(l)]$. Forward nie normalizuje, inverse mnoży przez
 $1/\prod_\alpha F_\alpha$ dokładnie raz. To są wymagane formuły descriptoru;
 test ma pokryć wrap-around i niezerowy crop.
+
+(boris-gap-matrix)=
+## Macierz różnic względem BORIS
+
+Poniższa macierz rozdziela zgodność fizyczną od zgodności interfejsu. Źródła
+referencyjne BORIS są lokalne: `external_solvers/BORIS/Boris/SDemag.h`,
+`SDemag.cpp`, `SDemag_MConv.cpp`, `SDemag_Demag.cpp`,
+`BorisLib/VEC_MeshTransfer.h` oraz `Simulation.cpp` (komendy
+`multiconvolution`, `2dmulticonvolution`, `ncommon`). Brak odpowiednika w
+kolumnie Fullmag jest świadomą luką, a nie aliasem pod inną nazwą.
+
+| Kontrakt BORIS | Co robi BORIS | Stan Fullmag | Granica i wymagany dowód |
+|---|---|---|---|
+| `multiconvolution=true` | Osobne FFT spaces i `Rect_collection` dla każdego mesh/layer; transfer do wspólnego scratchu i z powrotem. | `strategy="multilayer_convolution"`; planner buduje wspólny scratch XY, a CPU FP64 ma ograniczoną ścieżkę descriptorową. | Nie jest to jeszcze pełny per-layer `Rect_collection` dla wszystkich lane’ów; trzeba wykazać insertion/crop, transfer i energię dla różnych centrów/extents. |
+| `multiconvolution=false` | Jedna konwolucja na supermesh; komórka supermesh musi być pusta albo należeć w całości do jednego input mesh. | `strategy="single_grid"` dla wielu magnetów jest fail-closed, więc nie jest odpowiednikiem BORIS supermesh. | Brak implementacji/kwalifikacji supermesh; UI i docs nie mogą przedstawiać `single_grid` jako zamiennika. |
+| `2dmulticonvolution=0` | Tryb automatyczny: 3D jest dozwolone, jeśli geometria tego wymaga. | Najbliższe `mode="three_d"`/`auto`; translacyjny FFT wymaga wspólnego pitchu na osiach próbkowanych. | Potrzebny pełny 3D cross-layer oracle dla offsetu XYZ i raport runtime. |
+| `2dmulticonvolution=1` | Każdy mesh traktowany jako niezależny 2D mesh, nawet przy własnej dyskretyzacji Z. | Brak publicznego odpowiednika; `two_d_stack` wymaga dokładnie jednej natywnej komórki Z na warstwę. | Nie wolno utożsamiać `two_d_stack` z BORIS `=1`; wielokomórkowe Z kończy się fail-closed. |
+| `2dmulticonvolution=2` | Każdy mesh jest dzielony na warstwy 2D w Z; każda warstwa uczestniczy w layered convolution. | Brak implementacji i pól Python/IR/UI. | To osobna luka funkcjonalna, nie alias `two_d_stack`; potrzebne zdefiniowanie layer decomposition, transferu i testu. |
+| `ncommonstatus=false` | BORIS automatycznie dobiera `n_common` z największych rozmiarów meshów (dla 2D `n_common.z=1`). | Brak flagi status; brak `common_cells*` uruchamia politykę planner-auto, opartą o union scratch i native Z. | Semantyka nie jest 1:1; provenance musi zapisywać auto-policy i resolved grid. |
+| `ncommon=(nx,ny,nz)` | Użytkownik wymusza wspólną liczbę komórek; `nz=1` jest częścią polityki BORIS 2D. | `common_cells=(nx,ny,nz)` lub `common_cells_xy=(nx,ny)`; `nz=1` nie redukuje legalnie warstwy z wieloma natywnymi komórkami Z. | Walidacja wspólnego scratchu, originu i granic insertion/crop; CUDA z transferem pozostaje fail-closed. |
+| Różne XY extents/centers | `Rect_collection` rozszerza i wyrównuje prostokąty do maksymalnego wspólnego rozmiaru. | Planner materializuje union XY i `push_pull`; publiczny IR nie ma jeszcze jawnych pól insertion/crop. | CPU bounded path ma layout checks; pełne różne extents/centers i GPU wymagają świeżych artefaktów. |
+| Różne grubości Z | W 2D wspólny XY cell size, ale dowolne `h_z`; kernel ma niezależne `h_src`, `h_dst`. | Checked `compute_shifted_kernel_pair` + Appendix-A Newell; aktywny CPU runner obsługuje nierówne `h_z` przy `two_d_stack`. | GL8, inverse-FFT i focused CPU test przechodzą; brak production-qualified runtime/CUDA. |
+| Transfer M/H | Weighted-average do scratchu i transfer wyniku z powrotem; `VEC_MeshTransfer` ma coverage/weighting. | `push_pull` i `VolumeWeightedTransfer` istnieją oraz mają testy momentu/adjointness, ale nie są dowodem pełnej integracji każdego runnera. | Należy raportować native→scratch→native, maski aktywne, objętości i błąd transferu osobno od kernela. |
+| Pełny offset XYZ | Pair kernels używają pozycji celu minus źródła; BORIS nie ogranicza się do samego `z_shift`. | Pair API przyjmuje pełny offset center-to-center; runner konwertuje lower-corner origin na środek komórki. | Dla różnych pitchów 3D translacyjny FFT jest odrzucany; direct tensor jest oracle. |
+| Kernel reuse i parzystość | BORIS ma katalog kernel modules, reuse identycznych par i kontrolowane symetrie ±Z. | `KernelReuseKey`/`KernelReuseCatalog` istnieją jako descriptor contract; aktywny CPU builder nadal generuje pary jawnie. | Trzeba podłączyć catalog do runtime i udowodnić, że nie reuse’uje kernela przy różnym `h_src/h_dst`, offset lub boundary policy. |
+| Storage/symmetry | BORIS rozróżnia real/reduced i full-complex; 2D zShift ma specyficzne składowe real/imag. | `TensorDemagKernel` przechowuje sześć pełnych składowych complex; reduced-storage fast path nie jest runtime-qualified. | Potrzebne testy redukcji, rekonstrukcji znaków i pamięci, osobno dla CPU/CUDA. |
+| CPU/GPU | BORIS ma FFTW CPU i CUDA realizację tej samej metody. | CPU FP64 jest referencją; CUDA ma ABI/guardy i authoring/IR, lecz brak świeżej managed parity. FP32 również nie jest qualified. | Nie deklarować wsparcia wykonawczego GPU bez artefaktu urządzenia, parity i telemetry FFT. |
+| Mesh/UI/obserwacja | BORIS operuje na input meshes i transferach; supermesh nie jest fizyczną warstwą. | Explorer/Inspector pokazuje native layers; `CommonTransformLayout` ma `physical_mesh=false`; Airbox `H_demag` jest target-only. | Scratch nie może być rysowany jako ferromagnetyczna geometria; potrzebna świeża macierz viewport/WebGL po integracji. |
+
+Wniosek: obecny Fullmag implementuje i testuje część matematyczną BORIS-style
+multilayer convolution, ale nie oferuje jeszcze pełnego zestawu BORIS
+(`supermesh`, `2dmulticonvolution=1/2`, aktywny per-layer reuse i kwalifikowany
+CUDA). Te luki są wymaganiami implementacyjnymi, nie opcjonalnymi ulepszeniami.
 
 | Table I class | Warunek | $N_{dd}$: x/y/z | $N_{xy}$: x/y/z | $N_{xz}$: x/y/z | $N_{yz}$: x/y/z | DFT/storage |
 |---|---|---|---|---|---|---|
