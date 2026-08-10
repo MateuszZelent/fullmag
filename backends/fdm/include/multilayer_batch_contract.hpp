@@ -63,7 +63,8 @@ struct MultilayerDemagStageCounters {
 
     bool matches(const MultilayerBatchCounts &expected) const
     {
-        return layer_count == expected.layer_count &&
+        return refresh_count == 1 &&
+            layer_count == expected.layer_count &&
             forward_fft_count == expected.forward_fft_count &&
             inverse_fft_count == expected.inverse_fft_count &&
             pair_accumulation_count == expected.pair_accumulation_count &&

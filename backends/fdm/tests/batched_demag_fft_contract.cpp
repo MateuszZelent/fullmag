@@ -267,6 +267,10 @@ void multilayer_stage_counter_is_exact_without_a_gpu() {
         }
         check(actual.matches(expected),
               "stage counter must accept exactly L forward, L inverse and L^2 pairs");
+
+        actual.refresh_count = 0;
+        check(!actual.matches(expected),
+              "stage counter must reject FFT/pair counts without one recorded refresh");
     }
 }
 
