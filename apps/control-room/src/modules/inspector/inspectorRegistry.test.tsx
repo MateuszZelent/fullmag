@@ -18,7 +18,6 @@ import {
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
-import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import {
@@ -326,16 +325,16 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves object and airbox visualization selections to the visualization panel", () => {
-    for (const kind of [
-      "object.visualization",
-      "airbox.visualization",
-    ] as const) {
-      const panel = resolveInspectorPanel({ kind });
-      expect(panel?.id).toBe("object-visualization");
-      expect(panel?.component).toBe(ObjectVisualizationPanel);
-      expect(panel?.component).not.toBe(VisualizationDebugPanel);
-    }
+  it("keeps Airbox, object, and mesh-part visualization owners distinct", () => {
+    expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
+      "airbox-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "object.visualization" })?.id).toBe(
+      "object-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "mesh-part" })?.id).toBe(
+      "mesh-part-visualization",
+    );
   });
 
   it("gives the multilayer Airbox target its own inspector", () => {
