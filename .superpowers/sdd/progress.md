@@ -137,3 +137,9 @@ Task 4 (CLI Eigenmodes bias_field_sweep merge blocker): complete (commit
 7766c1231, independent spec/quality review approved with no findings; focused
 regression, cargo check, rustfmt, and diff-check pass). Fresh managed GREEN
 remains the next integration gate.
+
+Task 11 (N1a mixed-P1 native A_qq): complete (commits 50b3a3b5..78050779c,
+independent spec/quality review approved with no Critical/Important findings;
+focused MFEM container contract exit 0; authoritative `just` route remains
+blocked before build by `/mnt/fullmag-zfn2-native` ENOSPC and no public runtime
+qualification is claimed).
