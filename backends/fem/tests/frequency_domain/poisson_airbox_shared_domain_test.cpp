@@ -187,6 +187,183 @@ std::vector<double> independent_exchange_oracle(
     return oracle;
 }
 
+struct NativeExchangeDescriptorFixture {
+    explicit NativeExchangeDescriptorFixture(std::uint64_t node_count)
+        : tangent_frame_xyz(static_cast<std::size_t>(6u * node_count), 0.0),
+          equilibrium_m0_xyz(static_cast<std::size_t>(3u * node_count), 0.0),
+          effective_field_h_eff0_xyz(static_cast<std::size_t>(3u * node_count), 0.0),
+          alpha_per_node(static_cast<std::size_t>(node_count), 0.01),
+          tangent_frames(static_cast<std::size_t>(node_count))
+    {
+        for (std::uint64_t node = 0u; node < node_count; ++node) {
+            equilibrium_m0_xyz[3u * node + 2u] = 1.0;
+            tangent_frame_xyz[6u * node] = 1.0;
+            tangent_frame_xyz[6u * node + 4u] = 1.0;
+            tangent_frames[static_cast<std::size_t>(node)].m[2] = 1.0;
+            tangent_frames[static_cast<std::size_t>(node)].e1[0] = 1.0;
+            tangent_frames[static_cast<std::size_t>(node)].e2[1] = 1.0;
+        }
+        descriptor.abi_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION;
+        descriptor.struct_size = sizeof(descriptor);
+        descriptor.node_count = node_count;
+        descriptor.tangent_dof_count = 2u * node_count;
+        descriptor.tangent_frame_xyz = tangent_frame_xyz.data();
+        descriptor.tangent_frame_xyz_count = tangent_frame_xyz.size();
+        descriptor.equilibrium_m0_xyz = equilibrium_m0_xyz.data();
+        descriptor.equilibrium_m0_xyz_count = equilibrium_m0_xyz.size();
+        descriptor.effective_field_h_eff0_xyz = effective_field_h_eff0_xyz.data();
+        descriptor.effective_field_h_eff0_xyz_count = effective_field_h_eff0_xyz.size();
+        descriptor.alpha_per_node = alpha_per_node.data();
+        descriptor.alpha_per_node_count = alpha_per_node.size();
+        descriptor.uniform_saturation_magnetisation_a_per_m = 2.0;
+        descriptor.schema_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_SCHEMA;
+        descriptor.coordinate_unit = "m";
+        descriptor.magnetisation_unit = "A/m";
+        descriptor.time_unit = "s";
+        descriptor.frequency_unit = "Hz";
+        descriptor.angular_frequency_unit = "rad/s";
+        descriptor.linearization_state_digest =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        descriptor.equilibrium_digest = descriptor.linearization_state_digest;
+        descriptor.operator_input_digest = descriptor.linearization_state_digest;
+        descriptor.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_EXCHANGE;
+        descriptor.exchange_term_digest = descriptor.linearization_state_digest;
+        descriptor.exchange_edges = &exchange_edge;
+        descriptor.exchange_edge_count = 1u;
+    }
+
+    fullmag_fem_frequency_domain_exchange_edge exchange_edge{0u, 1u, 2.0};
+    std::vector<double> tangent_frame_xyz;
+    std::vector<double> equilibrium_m0_xyz;
+    std::vector<double> effective_field_h_eff0_xyz;
+    std::vector<double> alpha_per_node;
+    std::vector<fd::TangentFrameNode> tangent_frames;
+    FullmagFemModalLinearizationDescriptor descriptor{};
+};
+
+void invert_3x3(const double matrix[3][3], double inverse[3][3], double *determinant)
+{
+    const double det =
+        matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) -
+        matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0]) +
+        matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+    check(std::isfinite(det) && std::abs(det) > 0.0,
+          "independent prism exchange oracle requires a non-degenerate Jacobian");
+    inverse[0][0] = (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) / det;
+    inverse[0][1] = (matrix[0][2] * matrix[2][1] - matrix[0][1] * matrix[2][2]) / det;
+    inverse[0][2] = (matrix[0][1] * matrix[1][2] - matrix[0][2] * matrix[1][1]) / det;
+    inverse[1][0] = (matrix[1][2] * matrix[2][0] - matrix[1][0] * matrix[2][2]) / det;
+    inverse[1][1] = (matrix[0][0] * matrix[2][2] - matrix[0][2] * matrix[2][0]) / det;
+    inverse[1][2] = (matrix[0][2] * matrix[1][0] - matrix[0][0] * matrix[1][2]) / det;
+    inverse[2][0] = (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]) / det;
+    inverse[2][1] = (matrix[0][1] * matrix[2][0] - matrix[0][0] * matrix[2][1]) / det;
+    inverse[2][2] = (matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]) / det;
+    *determinant = det;
+}
+
+std::vector<double> independent_prism_exchange_oracle(
+    mfem::FiniteElementSpace &scalar_space,
+    const std::vector<std::uint8_t> &magnetic_elements,
+    const std::vector<double> &tangent_frames,
+    double exchange_stiffness,
+    std::uint64_t node_count)
+{
+    const std::uint64_t q_count = 2u * node_count;
+    std::vector<double> oracle(static_cast<std::size_t>(q_count * q_count), 0.0);
+    mfem::Mesh *mesh = scalar_space.GetMesh();
+    check(mesh != nullptr, "independent prism exchange oracle requires an MFEM mesh");
+    check(magnetic_elements.size() == static_cast<std::size_t>(mesh->GetNE()),
+          "independent prism exchange oracle requires one mask entry per element");
+    // This is the explicit geometry/math form of the native order-one prism
+    // quadrature: triangle centroid times interval midpoint, with reference
+    // prism measure 1/2.  It intentionally tracks the producer's declared
+    // MFEM quadrature without reading MFEM integration data.
+    constexpr double kReferencePoint[3] = {1.0 / 3.0, 1.0 / 3.0, 0.5};
+    constexpr double kReferenceWeight = 0.5;
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (magnetic_elements[static_cast<std::size_t>(element)] == 0u) {
+            continue;
+        }
+        mfem::Array<int> dofs;
+        mfem::Array<int> vertices;
+        scalar_space.GetElementDofs(element, dofs);
+        mesh->GetElementVertices(element, vertices);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        check(dofs.Size() == 6 && vertices.Size() == 6 && finite_element != nullptr &&
+                  finite_element->GetGeomType() == mfem::Geometry::PRISM &&
+                  finite_element->GetOrder() == 1,
+              "independent prism exchange oracle requires P1 prism6 elements");
+        const double *x0 = mesh->GetVertex(vertices[0]);
+        double jacobian[3][3]{};
+        for (int column = 0; column < 3; ++column) {
+            const double *vertex = mesh->GetVertex(vertices[column + 1]);
+            for (int axis = 0; axis < 3; ++axis) {
+                jacobian[axis][column] = vertex[axis] - x0[axis];
+            }
+        }
+        double inverse_jacobian[3][3]{};
+        double determinant = 0.0;
+        invert_3x3(jacobian, inverse_jacobian, &determinant);
+        const double reference_gradients[6][3] = {
+            {kReferencePoint[2] - 1.0, kReferencePoint[2] - 1.0,
+             kReferencePoint[0] + kReferencePoint[1] - 1.0},
+            {1.0 - kReferencePoint[2], 0.0, -kReferencePoint[0]},
+            {0.0, 1.0 - kReferencePoint[2], -kReferencePoint[1]},
+            {-kReferencePoint[2], -kReferencePoint[2],
+             1.0 - kReferencePoint[0] - kReferencePoint[1]},
+            {kReferencePoint[2], 0.0, kReferencePoint[0]},
+            {0.0, kReferencePoint[2], kReferencePoint[1]},
+        };
+        double physical_gradients[6][3]{};
+        for (int local = 0; local < 6; ++local) {
+            for (int axis = 0; axis < 3; ++axis) {
+                for (int reference_axis = 0; reference_axis < 3; ++reference_axis) {
+                    physical_gradients[local][axis] +=
+                        reference_gradients[local][reference_axis] *
+                        inverse_jacobian[reference_axis][axis];
+                }
+            }
+        }
+        const double weight = std::abs(determinant) * kReferenceWeight;
+        for (int local_row = 0; local_row < 6; ++local_row) {
+            const std::uint64_t row_node = static_cast<std::uint64_t>(
+                dofs[local_row] >= 0 ? dofs[local_row] : -1 - dofs[local_row]);
+            const double row_sign = dofs[local_row] >= 0 ? 1.0 : -1.0;
+            for (int local_column = 0; local_column < 6; ++local_column) {
+                const std::uint64_t column_node = static_cast<std::uint64_t>(
+                    dofs[local_column] >= 0 ? dofs[local_column] : -1 - dofs[local_column]);
+                const double column_sign = dofs[local_column] >= 0 ? 1.0 : -1.0;
+                double gradient_dot = 0.0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    gradient_dot += physical_gradients[local_row][axis] *
+                        physical_gradients[local_column][axis];
+                }
+                const double coefficient = row_sign * column_sign * 2.0 *
+                    exchange_stiffness * gradient_dot * weight;
+                for (std::uint32_t row_component = 0; row_component < 2u;
+                     ++row_component) {
+                    const double *row_frame = &tangent_frames[
+                        static_cast<std::size_t>(6u * row_node + 3u * row_component)];
+                    for (std::uint32_t column_component = 0; column_component < 2u;
+                         ++column_component) {
+                        const double *column_frame = &tangent_frames[
+                            static_cast<std::size_t>(
+                                6u * column_node + 3u * column_component)];
+                        const double frame_dot = row_frame[0] * column_frame[0] +
+                            row_frame[1] * column_frame[1] +
+                            row_frame[2] * column_frame[2];
+                        oracle[static_cast<std::size_t>(
+                            (2u * row_node + row_component) * q_count +
+                            2u * column_node + column_component)] +=
+                            coefficient * frame_dot;
+                    }
+                }
+            }
+        }
+    }
+    return oracle;
+}
+
 } // namespace
 
 int main()
@@ -385,6 +562,167 @@ int main()
     check(energy >= -1.0e-12 * std::max(1.0, action_scale),
           "native exchange energy must be positive semidefinite");
 
+    // The N1a mixed-P1 contract contributes magnetic prism6 exchange exactly
+    // once and must never leak an air tet4 into A_qq.  The prism oracle below
+    // intentionally uses reference prism shape derivatives, an explicit
+    // affine Jacobian inverse, and direct order-one quadrature rather than
+    // MFEM CalcPhysDShape or the assembled CSR as its expected value.
+    mfem::Mesh mixed_mesh(3, 10, 2, 0, 3);
+    const double mixed_vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}, {1.0, 0.0, 1.0}, {0.0, 1.0, 1.0},
+        {3.0, 0.0, 0.0}, {4.0, 0.0, 0.0}, {3.0, 1.0, 0.0},
+        {3.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : mixed_vertices) {
+        mixed_mesh.AddVertex(vertex);
+    }
+    const int prism6[] = {0, 1, 2, 3, 4, 5};
+    const int air_tet4[] = {6, 7, 8, 9};
+    mixed_mesh.AddWedge(prism6, 1);
+    mixed_mesh.AddTet(air_tet4, 2);
+    mixed_mesh.FinalizeTopology();
+    mixed_mesh.Finalize(false, true);
+    mfem::H1_FECollection mixed_collection(1, mixed_mesh.Dimension());
+    mfem::FiniteElementSpace mixed_scalar_space(&mixed_mesh, &mixed_collection);
+    const std::uint64_t mixed_node_count =
+        static_cast<std::uint64_t>(mixed_scalar_space.GetVSize());
+    check(mixed_node_count == 10u, "mixed prism-air fixture has ten scalar P1 nodes");
+    NativeExchangeDescriptorFixture mixed_descriptor(mixed_node_count);
+    const std::vector<std::uint8_t> mixed_magnetic_elements = {1u, 0u};
+    fd::PoissonAirboxSharedDomainCsrMatrix mixed_a_qq{};
+    check(fd::assemble_native_magnetic_a_qq(
+              mixed_descriptor.descriptor,
+              &mixed_scalar_space,
+              mixed_magnetic_elements.data(),
+              mixed_magnetic_elements.size(),
+              &mixed_a_qq,
+              producer_error,
+              nullptr,
+              mixed_descriptor.tangent_frames.data(),
+              mixed_descriptor.tangent_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    const std::uint64_t mixed_q_count = 2u * mixed_node_count;
+    check(mixed_a_qq.row_count == mixed_q_count && mixed_a_qq.column_count == mixed_q_count,
+          "mixed prism A_qq publishes the full tangent block");
+    check(std::abs(matrix_value(mixed_a_qq, 0u, 0u)) > 0.0 &&
+              std::abs(matrix_value(mixed_a_qq, 1u, 1u)) > 0.0,
+          "mixed prism A_qq publishes nonzero tangent components");
+    const std::vector<double> prism_exchange_oracle = independent_prism_exchange_oracle(
+        mixed_scalar_space,
+        mixed_magnetic_elements,
+        mixed_descriptor.tangent_frame_xyz,
+        mixed_descriptor.exchange_edge.stiffness,
+        mixed_node_count);
+    double prism_oracle_error = 0.0;
+    double prism_oracle_scale = 0.0;
+    for (std::uint64_t row = 0u; row < mixed_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < mixed_q_count; ++column) {
+            const double actual = matrix_value(mixed_a_qq, row, column);
+            const double expected = prism_exchange_oracle[
+                static_cast<std::size_t>(row * mixed_q_count + column)];
+            prism_oracle_error = std::max(prism_oracle_error, std::abs(actual - expected));
+            prism_oracle_scale = std::max(
+                prism_oracle_scale, std::max(std::abs(actual), std::abs(expected)));
+        }
+    }
+    check(prism_oracle_scale > 0.0,
+          "independent prism exchange oracle exercises a nonzero tangent block");
+    check(prism_oracle_error <= 1.0e-12 * std::max(1.0, prism_oracle_scale),
+          "native mixed prism exchange matches the independent weak-form oracle");
+    std::vector<double> prism_random_vector(static_cast<std::size_t>(mixed_q_count), 0.0);
+    for (std::uint64_t index = 0u; index < mixed_q_count; ++index) {
+        prism_random_vector[static_cast<std::size_t>(index)] =
+            std::sin(0.19 * static_cast<double>(index + 1u)) +
+            0.31 * std::cos(0.43 * static_cast<double>(index + 2u));
+    }
+    double prism_action_error = 0.0;
+    double prism_action_scale = 0.0;
+    double prism_energy = 0.0;
+    for (std::uint64_t row = 0u; row < mixed_q_count; ++row) {
+        double actual_action = 0.0;
+        double oracle_action = 0.0;
+        for (std::uint64_t column = 0u; column < mixed_q_count; ++column) {
+            const double x = prism_random_vector[static_cast<std::size_t>(column)];
+            actual_action += matrix_value(mixed_a_qq, row, column) * x;
+            oracle_action += prism_exchange_oracle[
+                static_cast<std::size_t>(row * mixed_q_count + column)] * x;
+        }
+        prism_action_error = std::max(prism_action_error,
+                                      std::abs(actual_action - oracle_action));
+        prism_action_scale = std::max(prism_action_scale,
+                                      std::max(std::abs(actual_action),
+                                               std::abs(oracle_action)));
+        prism_energy += prism_random_vector[static_cast<std::size_t>(row)] * actual_action;
+    }
+    check(prism_action_error <= 1.0e-12 * std::max(1.0, prism_action_scale),
+          "native mixed prism random-vector action matches the independent oracle");
+    check(prism_energy >= -1.0e-12 * std::max(1.0, prism_action_scale),
+          "native mixed prism exchange energy is positive semidefinite");
+    mfem::Array<int> air_dofs;
+    mixed_scalar_space.GetElementDofs(1, air_dofs);
+    for (int local_air_dof = 0; local_air_dof < air_dofs.Size(); ++local_air_dof) {
+        const std::uint64_t air_node = static_cast<std::uint64_t>(
+            air_dofs[local_air_dof] >= 0 ? air_dofs[local_air_dof] : -1 - air_dofs[local_air_dof]);
+        for (std::uint64_t column = 0u; column < mixed_q_count; ++column) {
+            check(std::abs(matrix_value(mixed_a_qq, 2u * air_node, column)) <= 1.0e-15 &&
+                      std::abs(matrix_value(mixed_a_qq, 2u * air_node + 1u, column)) <= 1.0e-15 &&
+                      std::abs(matrix_value(mixed_a_qq, column, 2u * air_node)) <= 1.0e-15 &&
+                      std::abs(matrix_value(mixed_a_qq, column, 2u * air_node + 1u)) <= 1.0e-15,
+                  "air tet4 nodes remain isolated from native magnetic A_qq");
+        }
+    }
+
+    // Magnetic P1 pyramid5 and every non-P1 magnetic geometry are outside
+    // the bounded N1a exchange scope and must reject without conversion.
+    mfem::Mesh pyramid_mesh(3, 5, 1, 0, 3);
+    const double pyramid_vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {1.0, 1.0, 0.0},
+        {0.0, 1.0, 0.0}, {0.5, 0.5, 1.0},
+    };
+    for (const auto &vertex : pyramid_vertices) {
+        pyramid_mesh.AddVertex(vertex);
+    }
+    const int pyramid5[] = {0, 1, 2, 3, 4};
+    pyramid_mesh.AddPyramid(pyramid5, 1);
+    pyramid_mesh.FinalizeTopology();
+    pyramid_mesh.Finalize(false, true);
+    mfem::H1_FECollection pyramid_collection(1, pyramid_mesh.Dimension());
+    mfem::FiniteElementSpace pyramid_scalar_space(&pyramid_mesh, &pyramid_collection);
+    NativeExchangeDescriptorFixture pyramid_descriptor(
+        static_cast<std::uint64_t>(pyramid_scalar_space.GetVSize()));
+    const std::vector<std::uint8_t> one_magnetic_element = {1u};
+    check(fd::assemble_native_magnetic_a_qq(
+              pyramid_descriptor.descriptor,
+              &pyramid_scalar_space,
+              one_magnetic_element.data(),
+              one_magnetic_element.size(),
+              &mixed_a_qq,
+              producer_error,
+              nullptr,
+              pyramid_descriptor.tangent_frames.data(),
+              pyramid_descriptor.tangent_frames.size()) == fd::FrequencyDomainStatus::unavailable,
+          "native A_qq must reject magnetic P1 pyramid5 without fallback");
+    check(std::strstr(producer_error, "P1 tet4 or prism6") != nullptr,
+          "magnetic pyramid5 rejection must use the stable topology reason");
+    mfem::H1_FECollection non_p1_collection(2, mixed_mesh.Dimension());
+    mfem::FiniteElementSpace non_p1_scalar_space(&mixed_mesh, &non_p1_collection);
+    NativeExchangeDescriptorFixture non_p1_descriptor(
+        static_cast<std::uint64_t>(non_p1_scalar_space.GetVSize()));
+    check(fd::assemble_native_magnetic_a_qq(
+              non_p1_descriptor.descriptor,
+              &non_p1_scalar_space,
+              mixed_magnetic_elements.data(),
+              mixed_magnetic_elements.size(),
+              &mixed_a_qq,
+              producer_error,
+              nullptr,
+              non_p1_descriptor.tangent_frames.data(),
+              non_p1_descriptor.tangent_frames.size()) == fd::FrequencyDomainStatus::unavailable,
+          "native A_qq must reject non-P1 magnetic prism6 without fallback");
+    check(std::strstr(producer_error, "P1 tet4 or prism6") != nullptr,
+          "non-P1 prism6 rejection must use the stable topology reason");
+
     // Endpoint changes are allowed only as changes to the temporary material
     // carrier.  They must not change native element assembly.
     const fullmag_fem_frequency_domain_exchange_edge alternative_edge{0u, 2u, 2.0};
@@ -413,13 +751,14 @@ int main()
     FullmagFemModalLinearizationDescriptor heterogeneous_material = producer_descriptor;
     heterogeneous_material.exchange_edges = heterogeneous_edges;
     heterogeneous_material.exchange_edge_count = 2u;
+    fd::PoissonAirboxSharedDomainCsrMatrix rejected_a_qq{};
     check(
         fd::assemble_native_magnetic_a_qq(
             heterogeneous_material,
             &scalar_space,
             magnetic_elements.data(),
             magnetic_elements.size(),
-            &produced_a_qq,
+            &rejected_a_qq,
             producer_error,
             nullptr,
             producer_frames.data(),
@@ -465,7 +804,7 @@ int main()
             producer_frames.data(),
             producer_frames.size()) == fd::FrequencyDomainStatus::validation_error,
         "native A_qq producer must reject non-positive exchange stiffness");
-    check(std::strstr(producer_error, "positive stiffness") != nullptr,
+    check(std::strstr(producer_error, "stiffness must be positive") != nullptr,
           "non-positive exchange stiffness must use a stable validation reason");
 
     std::vector<std::uint8_t> airbox_elements(magnetic_elements.size(), 0u);
@@ -526,7 +865,8 @@ int main()
             producer_frames.data(),
             producer_frames.size()) == fd::FrequencyDomainStatus::validation_error,
         "native A_qq producer must require demag provider provenance");
-    const char *operator_input_identity = "sha256:operator-input-identity";
+    const char *operator_input_identity =
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     FullmagFemModalLinearizationDescriptor mismatched_demag_provider = producer_descriptor;
     mismatched_demag_provider.term_presence_mask |=
         FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DEMAG;
@@ -1087,7 +1427,7 @@ int main()
     const std::vector<std::uint32_t> film_air_cell_offsets = {0u, 4u, 8u};
     const std::vector<std::uint32_t> film_air_cell_nodes = {
         0u, 1u, 2u, 3u,
-        0u, 1u, 2u, 4u};
+        0u, 2u, 1u, 4u};
     const std::vector<std::uint64_t> film_air_cell_ordinals = {0u, 1u};
     const std::vector<std::uint32_t> film_air_cell_markers = {1u, 0u};
     const std::vector<std::uint32_t> film_air_facet_types(
@@ -1418,10 +1758,10 @@ int main()
         fd::assemble_poisson_airbox_shared_domain_payload(
             film_air_payload, &film_air_result) == fd::FrequencyDomainStatus::ok,
         film_air_result.error_message);
-    check(film_air_result.p.row_count == 5u,
-          "magnetic+airbox importer assembles scalar Poisson on the full domain");
-    check(film_air_result.a_qq.row_count == 10u && film_air_result.a_qq.values.size() > 0u,
-          "magnetic+airbox importer publishes native magnetic exchange block");
+    check(film_air_result.p.row_count == 2u,
+          "magnetic+airbox importer compacts scalar Poisson to declared classes");
+    check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
+          "magnetic+airbox importer compacts native magnetic exchange to declared classes");
     auto expect_linearization_rejection = [&](FullmagFemModalSharedDomainPayload candidate,
                                                 const char *reason,
                                                 const char *message) {
@@ -1582,10 +1922,6 @@ int main()
     check(std::strstr(missing_certificate_result.error_message,
                       "missing the v6 periodic seam/corner certificate") != nullptr,
           "missing periodic certificate must use a stable reason");
-    for (std::uint64_t component = 0; component < 2u; ++component) {
-        check(matrix_value(film_air_result.a_qq, 8u + component, 8u + component) == 0.0,
-              "airbox node has no native exchange diagonal contribution");
-    }
     FullmagFemModalCertificateV6BindingRequest missing_corner_certificate = film_air_certificate;
     missing_corner_certificate.mesh_magnetic.generator_relation_count = 2u;
     FullmagFemModalSharedDomainPayload missing_corner_payload = film_air_payload;
@@ -1673,8 +2009,8 @@ int main()
             fd::FrequencyDomainStatus::validation_error,
         "v18 exchange descriptor must reject a missing scalar material carrier");
     check(std::strstr(missing_material_result.error_message,
-                      "linearization_descriptor_exchange_material_missing") != nullptr,
-          "missing scalar material carrier must use a stable reason");
+                      "linearization_descriptor_exchange_material_binding_invalid") != nullptr,
+          "missing scalar material carrier must use the stable binding reason");
 
     auto expect_descriptor_rejection = [&](FullmagFemModalLinearizationDescriptor candidate,
                                             const char *reason) {

@@ -1715,11 +1715,15 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                 mfem::Array<int> dofs;
                 scalar_space->GetElementDofs(element, dofs);
                 const mfem::FiniteElement *finite_element = scalar_space->GetFE(element);
+                const bool supported_p1_geometry = finite_element != nullptr &&
+                    ((finite_element->GetGeomType() == mfem::Geometry::TETRAHEDRON &&
+                      dofs.Size() == 4) ||
+                     (finite_element->GetGeomType() == mfem::Geometry::PRISM &&
+                      dofs.Size() == 6));
                 if (finite_element == nullptr ||
-                    finite_element->GetGeomType() != mfem::Geometry::TETRAHEDRON ||
-                    finite_element->GetOrder() != 1 || dofs.Size() != 4) {
+                    finite_element->GetOrder() != 1 || !supported_p1_geometry) {
                     copy_error(error_message,
-                               "native magnetic A_qq exchange supports only P1 tetrahedral elements");
+                               "native magnetic A_qq exchange supports only P1 tet4 or prism6 elements");
                     return FrequencyDomainStatus::unavailable;
                 }
                 mfem::ElementTransformation *transformation =
