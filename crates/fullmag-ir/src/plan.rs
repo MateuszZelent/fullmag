@@ -8,10 +8,10 @@ use crate::{
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
     IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RegionalFieldDriveIR, RelaxStopIR,
-    RelaxationAlgorithmIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
-    PrescribedSotV1DriveIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
+    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedPeriodicImagesIR,
+    ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
+    TimeDependenceIR, TimeEnvelopeIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

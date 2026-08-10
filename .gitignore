@@ -109,3 +109,5 @@ apps/control-room/.next-audit/*
 public_docs/_build/
 tests/vlad/
 apps/control-room/.next*
+apps/control-room/.artifacts/
+public_docs/site/

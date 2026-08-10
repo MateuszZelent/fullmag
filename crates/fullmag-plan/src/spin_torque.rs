@@ -5,6 +5,7 @@ use fullmag_ir::{
 
 use crate::current_transport::ResolvedCurrentTransport;
 use crate::error::PlanError;
+use crate::physics_graph::physics_module_execution_enabled;
 
 fn normalized_axis(axis: [f64; 3]) -> Option<[f64; 3]> {
     let scale = axis.iter().map(|value| value.abs()).fold(0.0, f64::max);
@@ -140,27 +141,74 @@ fn resolve_current_density_source(
         })
 }
 
+fn spin_torque_module_id(module: &SpinTorqueModuleIR) -> Option<&str> {
+    match module {
+        SpinTorqueModuleIR::Slonczewski { id, .. } | SpinTorqueModuleIR::ZhangLi { id, .. } => {
+            id.as_deref()
+        }
+        SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, .. }
+        | SpinTorqueModuleIR::PrescribedSot { id, .. } => Some(id),
+        SpinTorqueModuleIR::InterfaceCpp { .. }
+        | SpinTorqueModuleIR::DriftDiffusion { .. }
+        | SpinTorqueModuleIR::SpinOrbitTorque { .. } => None,
+    }
+}
+
+fn executable_spin_torque_modules<'a>(
+    problem: &'a ProblemIR,
+) -> Result<Vec<&'a SpinTorqueModuleIR>, PlanError> {
+    if problem.physics_graph.is_none() {
+        return Ok(problem.spin_torque_modules.iter().collect());
+    }
+    let mut executable = Vec::new();
+    let mut reasons = Vec::new();
+    for (index, module) in problem.spin_torque_modules.iter().enumerate() {
+        let Some(id) = spin_torque_module_id(module) else {
+            reasons.push(format!(
+                "spin_torque_modules[{index}] requires a stable id when physics_graph is present"
+            ));
+            continue;
+        };
+        match physics_module_execution_enabled(problem, "spin_torque", id) {
+            Ok(Some(true)) => executable.push(module),
+            Ok(Some(false)) => {}
+            Ok(None) => unreachable!("physics_graph presence checked above"),
+            Err(graph_reasons) => reasons.extend(graph_reasons),
+        }
+    }
+    if reasons.is_empty() {
+        Ok(executable)
+    } else {
+        Err(PlanError { reasons })
+    }
+}
+
 pub(crate) fn resolve_legacy_spin_torque(
     problem: &ProblemIR,
     lane: SpinTorqueExecutableLane,
     current_transports: &[ResolvedCurrentTransport],
 ) -> Result<LegacySpinTorqueFields, PlanError> {
     let legacy = LegacySpinTorqueFields::from_problem(problem);
-    if problem.spin_torque_modules.is_empty() {
-        return Ok(legacy);
+    let modules = executable_spin_torque_modules(problem)?;
+    if modules.is_empty() {
+        return Ok(if problem.physics_graph.is_some() {
+            LegacySpinTorqueFields::default()
+        } else {
+            legacy
+        });
     }
 
-    if problem.spin_torque_modules.len() > 1 {
+    if modules.len() > 1 {
         return Err(PlanError {
             reasons: vec![format!(
                 "spin_torque_modules currently supports only one executable module at a time; found {} modules; {}",
-                problem.spin_torque_modules.len(),
+                modules.len(),
                 support_matrix_note(lane)
             )],
         });
     }
 
-    let resolved = match &problem.spin_torque_modules[0] {
+    let resolved = match modules[0] {
         SpinTorqueModuleIR::Slonczewski {
             target,
             formula_version,
@@ -390,10 +438,11 @@ pub(crate) fn resolve_sot_fields(
     current_transports: &[ResolvedCurrentTransport],
     allow_stage_time_envelope: bool,
 ) -> Result<ResolvedSotFields, PlanError> {
-    if problem.spin_torque_modules.is_empty() {
+    let modules = executable_spin_torque_modules(problem)?;
+    if modules.is_empty() {
         return Ok(ResolvedSotFields::default());
     }
-    match &problem.spin_torque_modules[0] {
+    match modules[0] {
         SpinTorqueModuleIR::PrescribedSot {
             target: Some(target),
             formula:
@@ -545,6 +594,49 @@ mod tests {
         PrescribedSotCompatibilityOriginIR, PrescribedSotFormulaIR, PrescribedSotLegacyDriveIR,
         PrescribedSotV1DriveIR, ProblemIR, RegionRefIR,
     };
+
+    #[test]
+    fn inactive_graph_module_filters_nonzero_torque_and_legacy_fields() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.current_density = Some([1.0e11, 0.0, 0.0]);
+        problem.stt_degree = Some(0.4);
+        problem.stt_beta = Some(0.02);
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+            schema_version: Some("zhang_li_torque.v1".to_string()),
+            id: Some("zl".to_string()),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula_version: "zhang_li.fullmag.v1".to_string(),
+            operator_version: Some("zl_central_reference_v1".to_string()),
+            current_density: Some([1.0e11, 0.0, 0.0]),
+            current_source: None,
+            degree: 0.4,
+            beta: 0.02,
+            lande_g: Some(2.1),
+        }];
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [{
+                "id": "zl",
+                "kind": "spin_torque",
+                "applies_to": [{"kind": "object", "object_id": "strip"}],
+                "solve_domain": [{"object_id": "strip"}],
+                "depends_on": [],
+                "activation": "inactive"
+            }],
+            "edges": []
+        }));
+
+        let resolved = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
+            .expect("inactive torque is omitted");
+        assert!(resolved.current_density.is_none());
+        assert!(resolved.stt_degree.is_none());
+        assert!(resolved.stt_beta.is_none());
+        assert!(resolved.zhang_li_formula_version.is_none());
+    }
 
     #[test]
     fn canonical_prescribed_sot_signed_scalar_preserves_current_sign() {

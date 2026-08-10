@@ -513,6 +513,11 @@ The canonical parameter-to-ProblemIR contract is:
 
 | Python | type | default | SI unit | validation | meaning | backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
+| `ZhangLiSTT.id` | `str or None` | `None` | `$1$` | non-empty and required with canonical target/operator fields | stable canonical torque identity | authoring all lanes; execution remains capability-gated | `spin_torque_modules[].id` |
+| `ZhangLiSTT.target` | `RegionRef or None` | `None` | `$1$` | required and resolvable for canonical v1; forbidden in legacy | magnetic region carrying the advective torque | FDM/FEM canonical intent; lane-specific qualification applies | `spin_torque_modules[].target` |
+| `ZhangLiSTT.lande_g` | `float or None` | `None` | `$1$` | finite and positive; exactly `2.0` for the MuMax3-compatible operator | effective Landé factor in drift velocity | FDM/FEM canonical intent; lane-specific qualification applies | `spin_torque_modules[].lande_g` |
+| `ZhangLiSTT.operator_version` | `str or None` | `None` | `$1$` | `zl_central_reference_v1` or `zl_mumax3_central_v1`; must match formula version | discrete advective-gradient identity | FDM/FEM canonical intent; no hidden operator substitution | `spin_torque_modules[].operator_version` |
+| `ZhangLiSTT.formula_version` | `str` | `zhang_li.legacy_fullmag.v0` unless canonical fields are supplied | `$1$` | canonical constructor selects `zhang_li.fullmag.v1` or `zhang_li.mumax3.v1` consistently with operator | torque-law and sign-convention identity | authoring all lanes; execution remains capability-gated | `spin_torque_modules[].formula_version` |
 | `SlonczewskiSTT.current_density` | `tuple[float, float, float]` | required unless `current_source` is used | `\\mathrm{A\\,m^{-2}}` | finite signed vector; `J dot n_stack` is retained | conventional charge-current density | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].current_density` |
 | `SlonczewskiSTT.free_layer_thickness_m` | `float` | required for canonical thin layer | `\\mathrm m` | finite and positive; no hidden geometry fallback in v2 | homogenized free-layer thickness | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].free_layer_thickness` |
 | `SlonczewskiSTT.stack_normal` | `vec3` | required for canonical v2 | `1` | finite non-zero vector normalized once at plan import | fixed-to-free stack orientation | FDM CPU/GPU and FEM CPU/GPU reference lanes | `spin_torque_modules[].stack_normal` |
@@ -731,6 +736,9 @@ hidden change to `alpha`.
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA canonical-SOT trajectory parity against CPU reference prefixes |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_has_bounded_current_scaling_when_cuda_is_available` | Managed isolated FP64 `0.5x/1x/2x` signed-current and target-mask response contract |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT` | Public Python authoring surface |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class ZhangLiSTT` | Public canonical Zhang–Li identity, target, operator and Landé factor |
+| `crates/fullmag-authoring/src/validation.rs` | `validate_spin_torque` | SceneDocument validation and lossless canonical/legacy boundary |
+| `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx` | `buildTorque` | UI mutation payload preserving canonical Zhang–Li fields |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class PrescribedSpinOrbitTorque` | Canonical Python SOT class preserving target, tagged drive, efficiencies, and ferromagnetic thickness |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SignedScalarDrive` | Signed scalar current, polarization axis, and optional envelope authoring |
 | `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class VectorCurrentDrive` | Vector current-source binding with explicit drive and interface axes |

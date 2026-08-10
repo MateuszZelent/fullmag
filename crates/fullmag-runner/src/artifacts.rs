@@ -62,7 +62,7 @@ fn physics_graph_provenance_artifact(
             })?
     };
     let observed_module_ids = executed
-        .map(|run| observed_physics_graph_module_ids(problem, &run.provenance))
+        .map(|run| observed_physics_graph_module_ids(&run.provenance))
         .unwrap_or_default();
     payload.realization = fullmag_plan::physics_graph_realization_provenance(
         problem,
@@ -82,56 +82,19 @@ fn physics_graph_provenance_artifact(
     }))
 }
 
-/// Return only module IDs backed by an execution observation.  Transport
-/// provenance identifies the solved spin module and its bound current source;
-/// an Oersted graph node is accepted only when the same transport record
-/// explicitly contains a solved-current field.  Other graph nodes remain
-/// `resolved` rather than being promoted from planning heuristics.
+/// Return only exact module IDs backed by an execution observation. Legacy
+/// kind-only observations are intentionally ignored. Authored-graph
+/// validation remains fail-closed in `physics_graph_realization_provenance`.
 fn observed_physics_graph_module_ids(
-    problem: &fullmag_ir::ProblemIR,
     provenance: &crate::types::ExecutionProvenance,
 ) -> Vec<String> {
-    let Some(graph) = problem.physics_graph.as_ref() else {
-        return Vec::new();
-    };
-    let Some(modules) = graph.get("modules").and_then(serde_json::Value::as_array) else {
-        return Vec::new();
-    };
-    let graph_ids = modules
+    provenance
+        .executed_physics_module_ids
         .iter()
-        .filter_map(|module| module.get("id").and_then(serde_json::Value::as_str))
-        .collect::<BTreeSet<_>>();
-    let mut observed = BTreeSet::new();
-    for transport in &provenance.transport_modules {
-        for candidate in [transport.module_id.as_str(), transport.current_source_id.as_str()] {
-            if graph_ids.contains(candidate) {
-                observed.insert(candidate.to_string());
-            }
-        }
-        if transport.oersted_source_kind.is_some() {
-            for module in modules {
-                let Some(object) = module.as_object() else {
-                    continue;
-                };
-                if object.get("kind").and_then(serde_json::Value::as_str)
-                    != Some("oersted_field")
-                {
-                    continue;
-                }
-                let source = object
-                    .get("family_payload")
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|payload| payload.get("source"))
-                    .and_then(serde_json::Value::as_str);
-                if source == Some(transport.current_source_id.as_str()) {
-                    if let Some(module_id) = object.get("id").and_then(serde_json::Value::as_str) {
-                        observed.insert(module_id.to_string());
-                    }
-                }
-            }
-        }
-    }
-    observed.into_iter().collect()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Preserve the accepted-step trace across the execution/artifact boundary.
@@ -180,7 +143,39 @@ fn execution_provenance_json(
             "strict native FEM GPU artifacts require MFEM and HYPRE versions from the loaded runtime",
         ));
     }
-    Ok(serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize"))
+    let mut value =
+        serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize");
+    if let Some(transfer) = fdm_multilayer_transfer_realization(plan, execution_provenance) {
+        value
+            .as_object_mut()
+            .expect("ExecutionProvenance must serialize to an object")
+            .insert("fdm_multilayer_transfer".to_string(), transfer);
+    }
+    Ok(value)
+}
+
+fn fdm_multilayer_transfer_realization(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution_provenance: &crate::types::ExecutionProvenance,
+) -> Option<serde_json::Value> {
+    let fullmag_ir::BackendPlanIR::FdmMultilayer(fdm) = &plan.backend_plan else {
+        return None;
+    };
+    let realization = match execution_provenance.execution_engine.as_str() {
+        "cpu_reference_multilayer" => "volume_weighted_overlap_adjoint",
+        // The native CUDA push/pull lane currently has a different pull map;
+        // keep it explicit so an oracle cannot silently assume CPU semantics.
+        "cuda_assisted_multilayer" | "cuda_native_multilayer_single_grid" => "runtime_specific",
+        _ => "unknown",
+    };
+    Some(serde_json::json!({
+        "schema_version": "fdm_multilayer_transfer_realization.v1",
+        "realization": realization,
+        "layers": fdm.layers.iter().map(|layer| serde_json::json!({
+            "magnet_name": layer.magnet_name,
+            "transfer_kind": layer.transfer_kind,
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 pub(crate) fn artifact_provenance_json(
@@ -490,9 +485,13 @@ fn fem_spin_torque_provenance(
     } else {
         "unknown"
     };
-    let active_node_count = contract.active_node_mask.as_ref()
+    let active_node_count = contract
+        .active_node_mask
+        .as_ref()
         .map(|mask| mask.iter().filter(|active| **active).count());
-    let active_element_count = contract.active_element_mask.as_ref()
+    let active_element_count = contract
+        .active_element_mask
+        .as_ref()
         .map(|mask| mask.iter().filter(|active| **active).count());
 
     Some(serde_json::json!({
@@ -629,26 +628,23 @@ fn demag_runtime_metadata(
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
             let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
-            let (runtime_solver, runtime_preconditioner) = if provenance
-                .fem_demag_operator_mode
-                .as_deref()
-                == Some("device_hypre_poisson")
-            {
-                let solver = match linear_solver.as_str() {
-                    "CG" => Some("HyprePCG"),
-                    "GMRES" => Some("HypreGMRES"),
-                    _ => None,
+            let (runtime_solver, runtime_preconditioner) =
+                if provenance.fem_demag_operator_mode.as_deref() == Some("device_hypre_poisson") {
+                    let solver = match linear_solver.as_str() {
+                        "CG" => Some("HyprePCG"),
+                        "GMRES" => Some("HypreGMRES"),
+                        _ => None,
+                    };
+                    let preconditioner = match preconditioner.as_str() {
+                        "AMG" => Some("HypreBoomerAMG"),
+                        "JACOBI" => Some("HypreDiagScale"),
+                        "NONE" => Some("HypreIdentity"),
+                        _ => None,
+                    };
+                    (solver, preconditioner)
+                } else {
+                    (None, None)
                 };
-                let preconditioner = match preconditioner.as_str() {
-                    "AMG" => Some("HypreBoomerAMG"),
-                    "JACOBI" => Some("HypreDiagScale"),
-                    "NONE" => Some("HypreIdentity"),
-                    _ => None,
-                };
-                (solver, preconditioner)
-            } else {
-                (None, None)
-            };
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
@@ -1322,8 +1318,8 @@ pub(crate) fn write_artifacts(
     let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
     let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan, Some(executed))?;
     if let Some(artifact) = physics_graph_artifact.as_ref() {
-        let graph_provenance: serde_json::Value = serde_json::from_slice(&artifact.bytes)
-            .map_err(|error| {
+        let graph_provenance: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).map_err(|error| {
                 Error::new(
                     ErrorKind::InvalidData,
                     format!("physics graph provenance artifact is invalid JSON: {error}"),
@@ -1334,8 +1330,7 @@ pub(crate) fn write_artifacts(
             .expect("ExecutionProvenance must serialize to an object")
             .insert("physics_graph".to_string(), graph_provenance);
     }
-    if let Some(thermal) =
-        thermal_execution_provenance(plan, accepted_steps, &execution_provenance)
+    if let Some(thermal) = thermal_execution_provenance(plan, accepted_steps, &execution_provenance)
     {
         execution_provenance_json
             .as_object_mut()
@@ -1462,6 +1457,27 @@ pub(crate) fn write_artifacts(
     }
 
     let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
+    if matches!(
+        &plan.backend_plan,
+        fullmag_ir::BackendPlanIR::FdmMultilayer(_)
+    ) {
+        let observation_artifacts =
+            crate::fdm::cpu::airbox_observation::materialize_airbox_observation(
+                problem,
+                match &plan.backend_plan {
+                    fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer) => multilayer,
+                    _ => unreachable!("multilayer plan was checked above"),
+                },
+                executed,
+            )
+            .map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("FDM Airbox observation carrier: {error}"),
+                )
+            })?;
+        auxiliary_artifacts.extend(observation_artifacts);
+    }
     auxiliary_artifacts.extend(crate::fdm::artifacts::grid_certificate_artifacts(plan));
     auxiliary_artifacts.extend(crate::fdm::artifacts::pbc_provenance_artifacts(
         plan,
@@ -3290,7 +3306,10 @@ fn write_canonical_field_snapshot_file(
     {
         return Err(Error::new(
             ErrorKind::InvalidData,
-            format!("invalid canonical field snapshot '{}' shape or revision", snapshot.name),
+            format!(
+                "invalid canonical field snapshot '{}' shape or revision",
+                snapshot.name
+            ),
         ));
     }
     let values = if snapshot.component_count == 3 && snapshot.location == "sample" {
@@ -3311,8 +3330,11 @@ fn write_canonical_field_snapshot_file(
         "precision": provenance.precision,
     });
     if !provenance.transport_modules.is_empty() {
-        field_provenance["transport_modules"] =
-            serde_json::json!(provenance.transport_modules);
+        field_provenance["transport_modules"] = serde_json::json!(provenance.transport_modules);
+    }
+    if !provenance.executed_physics_module_ids.is_empty() {
+        field_provenance["executed_physics_module_ids"] =
+            serde_json::json!(provenance.executed_physics_module_ids);
     }
     let field_json = serde_json::json!({
         "observable": snapshot.name,
@@ -3451,8 +3473,7 @@ fn write_layer_field_file(
         "precision": provenance.precision,
     });
     if !provenance.transport_modules.is_empty() {
-        field_provenance["transport_modules"] =
-            serde_json::json!(provenance.transport_modules);
+        field_provenance["transport_modules"] = serde_json::json!(provenance.transport_modules);
     }
     let field_json = serde_json::json!({
         "observable": observable,
@@ -3554,8 +3575,10 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
                     "native_grid": layer.native_grid,
                     "native_cell_size": layer.native_cell_size,
                     "native_origin": layer.native_origin,
+                    "saturation_magnetisation": layer.material.saturation_magnetisation,
                     "convolution_grid": layer.convolution_grid,
                     "convolution_cell_size": layer.convolution_cell_size,
+                    "convolution_origin": layer.convolution_origin,
                     "transfer_kind": layer.transfer_kind,
                     "total_cell_count": total_cells,
                     "active_mask_present": layer.native_active_mask.is_some(),
@@ -3673,16 +3696,23 @@ mod tests {
         assert_eq!(artifact.relative_path, PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
         assert_eq!(payload["schema_version"], "physics_graph.runtime.v1");
         assert_eq!(payload["scene_revision"], 19);
-        assert!(payload["mesh_revision"].as_u64().is_some_and(|value| value != 0));
+        assert!(payload["mesh_revision"]
+            .as_u64()
+            .is_some_and(|value| value != 0));
         assert!(payload["graph_sha256"]
             .as_str()
             .is_some_and(|value| value.len() == 64));
         assert_eq!(payload["requested_lane"], "auto");
         assert_eq!(payload["resolved_lane"], "fem");
-        assert_eq!(payload["modules"][1]["depends_on"], serde_json::json!(["current:film"]));
+        assert_eq!(
+            payload["modules"][1]["depends_on"],
+            serde_json::json!(["current:film"])
+        );
         assert_eq!(payload["modules"][1]["scope"], "object:film");
         assert_eq!(payload["modules"][1]["status"], "blocked");
-        assert!(payload["graph_sha256"].as_str().is_some_and(|value| value.len() == 64));
+        assert!(payload["graph_sha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64));
         assert_eq!(
             payload["realization"]["schema_version"],
             fullmag_ir::PHYSICS_GRAPH_REALIZATION_SCHEMA
@@ -3693,6 +3723,205 @@ mod tests {
                 .map(|values| values.len()),
             Some(2)
         );
+    }
+
+    #[test]
+    fn backend_kind_observation_never_promotes_a_graph_module() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [
+                {
+                    "id": "torque:executed",
+                    "kind": "spin_torque",
+                    "activation": "active"
+                },
+                {
+                    "id": "torque:inactive",
+                    "kind": "spin_torque",
+                    "activation": "inactive"
+                },
+                {
+                    "id": "field:active",
+                    "kind": "regional_field_drive",
+                    "activation": "active"
+                }
+            ],
+            "edges": []
+        }));
+        let provenance = ExecutionProvenance {
+            executed_physics_kinds: vec!["spin_torque".to_string()],
+            ..ExecutionProvenance::default()
+        };
+
+        assert!(observed_physics_graph_module_ids(&provenance).is_empty());
+    }
+
+    #[test]
+    fn backend_kind_observation_fails_closed_when_multiple_active_modules_match() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [
+                {
+                    "id": "torque:first",
+                    "kind": "spin_torque",
+                    "activation": "active"
+                },
+                {
+                    "id": "torque:second",
+                    "kind": "spin_torque",
+                    "activation": "active"
+                }
+            ],
+            "edges": []
+        }));
+        let provenance = ExecutionProvenance {
+            executed_physics_kinds: vec!["spin_torque".to_string()],
+            ..ExecutionProvenance::default()
+        };
+
+        assert!(observed_physics_graph_module_ids(&provenance).is_empty());
+    }
+
+    #[test]
+    fn exact_backend_observation_executes_only_one_of_two_same_kind_modules() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [
+                {
+                    "id": "torque:first",
+                    "kind": "spin_torque",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [],
+                    "depends_on": [],
+                    "activation": "active",
+                    "authored_state": "authored",
+                    "capability": "reference_executable",
+                    "source_path": "/spin_torques/0",
+                    "family_payload": {"kind": "zhang_li"}
+                },
+                {
+                    "id": "torque:second",
+                    "kind": "spin_torque",
+                    "applies_to": [{"kind": "global"}],
+                    "solve_domain": [],
+                    "depends_on": [],
+                    "activation": "active",
+                    "authored_state": "authored",
+                    "capability": "reference_executable",
+                    "source_path": "/spin_torques/1",
+                    "family_payload": {"kind": "zhang_li"}
+                }
+            ],
+            "edges": []
+        }));
+        let plan = test_execution_plan(None);
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                executed_physics_module_ids: vec!["torque:first".to_string()],
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        let artifact = physics_graph_provenance_artifact(&problem, &plan, Some(&executed))
+            .expect("exact runtime observation must resolve")
+            .expect("authored graph must emit an artifact");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("physics graph artifact JSON");
+
+        assert!(
+            payload["realization"].is_object(),
+            "missing concrete realization in {payload:#}"
+        );
+        assert_eq!(
+            payload["realization"]["executed_module_ids"],
+            serde_json::json!(["torque:first"])
+        );
+        assert_eq!(payload["realization"]["modules"][0]["state"], "executed");
+        assert_eq!(payload["realization"]["modules"][1]["state"], "resolved");
+    }
+
+    #[test]
+    fn cancelled_fdm_before_first_evaluation_records_no_executed_module_id() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+            schema_version: Some("zhang_li_torque.v1".to_string()),
+            id: Some("torque:strip".to_string()),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula_version: "zhang_li.mumax3.v1".to_string(),
+            operator_version: Some("zl_mumax3_central_v1".to_string()),
+            current_density: Some([1.0e12, 0.0, 0.0]),
+            current_source: None,
+            degree: 1.0,
+            beta: 0.05,
+            lande_g: Some(2.0),
+        }];
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [{
+                "id": "torque:strip",
+                "kind": "spin_torque",
+                "applies_to": [{"kind": "object", "object_id": "strip"}],
+                "solve_domain": [{"object_id": "strip"}],
+                "depends_on": [],
+                "activation": "active",
+                "authored_state": "authored",
+                "capability": "reference_executable",
+                "source_path": "/spin_torque_modules/0",
+                "family_payload": {"kind": "zhang_li"}
+            }],
+            "edges": []
+        }));
+        let _plan = fullmag_plan::plan(&problem).expect("exact graph-bearing FDM plan");
+        let mut executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Cancelled,
+                steps: Vec::new(),
+                final_magnetization: Vec::new(),
+                completion: None,
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "cpu_reference".to_string(),
+                timestep_policy: Some(
+                    crate::resolve_timestep_policy(
+                        Some(fullmag_ir::IntegratorChoice::Heun),
+                        Some(1.0e-13),
+                        None,
+                        crate::types::TimestepExecutionLane::fdm_cpu(),
+                    )
+                    .expect("fixed FDM policy"),
+                ),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        crate::physics_graph_execution::attach_executed_module_ids(&problem, &mut executed)
+            .expect("cancelled owner must validate graph IDs");
+
+        assert!(executed.provenance.executed_physics_module_ids.is_empty());
     }
 
     #[test]
@@ -4223,7 +4452,10 @@ mod tests {
         );
         assert_eq!(descriptor["object_ids"], serde_json::json!(["body"]));
         assert_eq!(descriptor["cell_count"], 8);
-        assert_eq!(descriptor["magnetic_support"]["semantic_role"], "magnetic-support");
+        assert_eq!(
+            descriptor["magnetic_support"]["semantic_role"],
+            "magnetic-support"
+        );
         assert_eq!(
             descriptor["magnetic_support"]["grid_fingerprint"],
             descriptor["grid_fingerprint"]
@@ -4327,13 +4559,15 @@ mod tests {
                 material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::FdmMultilayer(FdmMultilayerPlanIR {
-                mode: "multilayer_convolution".to_string(),
+                mode: "three_d".to_string(),
                 common_cells: [2, 1, 2],
                 grid_certificate: None,
                 resolved_periodic_images: None,
                 layers: vec![
                     FdmLayerPlanIR {
                         magnet_name: "bottom".to_string(),
+                        layer_id: "layer:bottom".to_string(),
+                        object_id: "bottom".to_string(),
                         native_grid: [2, 1, 1],
                         native_cell_size: [2e-9, 2e-9, 1e-9],
                         native_origin: [0.0, 0.0, 0.0],
@@ -4347,6 +4581,8 @@ mod tests {
                     },
                     FdmLayerPlanIR {
                         magnet_name: "top".to_string(),
+                        layer_id: "layer:top".to_string(),
+                        object_id: "top".to_string(),
                         native_grid: [2, 1, 1],
                         native_cell_size: [2e-9, 2e-9, 1e-9],
                         native_origin: [0.0, 0.0, 4e-9],
@@ -4375,6 +4611,8 @@ mod tests {
                 planner_summary: FdmMultilayerSummaryIR {
                     requested_strategy: "multilayer_convolution".to_string(),
                     selected_strategy: "multilayer_convolution".to_string(),
+                    requested_mode: "three_d".to_string(),
+                    resolved_mode: "three_d".to_string(),
                     eligibility: "eligible".to_string(),
                     estimated_pair_kernels: 4,
                     estimated_unique_kernels: 3,
@@ -4434,6 +4672,32 @@ mod tests {
             metadata["transfer_provenance"][0]["source_grid_fingerprint"]
                 .as_str()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn fdm_multilayer_execution_provenance_records_transfer_realization() {
+        let plan = test_multilayer_execution_plan();
+        let provenance = ExecutionProvenance {
+            execution_engine: "cpu_reference_multilayer".to_string(),
+            ..ExecutionProvenance::default()
+        };
+        let value = execution_provenance_json(&plan, &provenance)
+            .expect("multilayer transfer provenance should serialize");
+        assert_eq!(
+            value["fdm_multilayer_transfer"]["schema_version"],
+            "fdm_multilayer_transfer_realization.v1"
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer"]["realization"],
+            "volume_weighted_overlap_adjoint"
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer"]["layers"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
         );
     }
 
@@ -4899,18 +5163,11 @@ mod tests {
             crate::types::TimestepExecutionLane::fem_cpu(ExecutionPrecision::Double),
         )
         .unwrap();
-        write_solver_diagnostics_artifacts(
-            &root,
-            &test_fem_execution_plan(),
-            Some(&policy),
-            &[],
-        )
-        .unwrap();
+        write_solver_diagnostics_artifacts(&root, &test_fem_execution_plan(), Some(&policy), &[])
+            .unwrap();
 
-        let qualification: serde_json::Value = serde_json::from_slice(
-            &fs::read(root.join("qualification.json")).unwrap(),
-        )
-        .unwrap();
+        let qualification: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("qualification.json")).unwrap()).unwrap();
         let identity = &qualification["timestep_qualification"];
         assert_eq!(identity["validation_state"], "unvalidated");
         assert_eq!(
@@ -5066,7 +5323,9 @@ mod tests {
         let metadata_graph = &metadata["execution_provenance"]["physics_graph"];
         assert_eq!(metadata_graph["schema_version"], "physics_graph.runtime.v1");
         assert_eq!(metadata_graph["scene_revision"], 23);
-        assert!(metadata_graph["mesh_revision"].as_u64().is_some_and(|value| value != 0));
+        assert!(metadata_graph["mesh_revision"]
+            .as_u64()
+            .is_some_and(|value| value != 0));
         assert!(metadata_graph["graph_sha256"]
             .as_str()
             .is_some_and(|value| value.len() == 64));
@@ -5074,13 +5333,15 @@ mod tests {
         assert_eq!(metadata_graph["resolved_lane"], "fem");
         assert_eq!(metadata_graph["modules"][0]["module_id"], "current:film");
         assert_eq!(metadata_graph["modules"][0]["scope"], "object:film");
-        assert_eq!(metadata_graph["modules"][0]["depends_on"], serde_json::json!([]));
+        assert_eq!(
+            metadata_graph["modules"][0]["depends_on"],
+            serde_json::json!([])
+        );
 
         let artifact_path = output_dir.join(PHYSICS_GRAPH_PROVENANCE_ARTIFACT);
-        let artifact: serde_json::Value = serde_json::from_slice(
-            &fs::read(&artifact_path).expect("physics graph artifact file"),
-        )
-        .expect("physics graph artifact JSON");
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&fs::read(&artifact_path).expect("physics graph artifact file"))
+                .expect("physics graph artifact JSON");
         assert_eq!(artifact, *metadata_graph);
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
@@ -5091,7 +5352,10 @@ mod tests {
         problem.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::Slonczewski {
             schema_version: Some("slonczewski_torque.v1".to_string()),
             id: Some("cpp".to_string()),
-            target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "free".to_string(),
+                region_id: None,
+            }),
             formula_version: "slonczewski.fullmag.v2".to_string(),
             current_density: Some([0.0, 0.0, -2.0e11]),
             current_source: None,
@@ -5107,7 +5371,9 @@ mod tests {
             }),
         }];
         let mut plan = test_fem_execution_plan();
-        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else { panic!("FEM fixture") };
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("FEM fixture")
+        };
         fem.current_density = Some([0.0, 0.0, -2.0e11]);
         fem.stt_degree = Some(0.55);
         fem.stt_spin_polarization = Some([0.0, 1.0, 0.0]);
@@ -5118,7 +5384,10 @@ mod tests {
             formula_version: "slonczewski.fullmag.v2".to_string(),
             operator_version: None,
             realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
-            target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "free".to_string(),
+                region_id: None,
+            }),
             stack_normal: Some([0.0, 0.0, 1.0]),
             lande_g: None,
             active_node_mask: Some(vec![true, true, false, false]),
@@ -5135,7 +5404,10 @@ mod tests {
         let output_dir = std::env::temp_dir().join(format!(
             "fullmag-artifacts-fem-stt-provenance-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).expect("clock drift").as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
         ));
         let executed = ExecutedRun {
             result: RunResult {
@@ -5165,27 +5437,44 @@ mod tests {
 
         let metadata: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata"),
-        ).expect("metadata JSON");
+        )
+        .expect("metadata JSON");
         let provenance = &metadata["execution_provenance"]["spin_torque"];
         assert_eq!(provenance["schema_version"], "spin_torque_provenance.v1");
         assert_eq!(provenance["authored_class"], "SlonczewskiSTT");
         assert_eq!(provenance["canonical_class"], "SlonczewskiSTT");
         assert_eq!(provenance["formula_version"], "slonczewski.fullmag.v2");
-        assert_eq!(provenance["realization_version"], "slonczewski_thin_layer_homogenized.v1");
-        assert_eq!(provenance["current_convention"], "conventional_charge_current");
+        assert_eq!(
+            provenance["realization_version"],
+            "slonczewski_thin_layer_homogenized.v1"
+        );
+        assert_eq!(
+            provenance["current_convention"],
+            "conventional_charge_current"
+        );
         assert_eq!(provenance["current_density_unit"], "A/m^2");
-        assert_eq!(provenance["current_density"], serde_json::json!([0.0, 0.0, -2.0e11]));
+        assert_eq!(
+            provenance["current_density"],
+            serde_json::json!([0.0, 0.0, -2.0e11])
+        );
         assert_eq!(provenance["target"]["object_id"], "free");
-        assert_eq!(provenance["stack_normal"], serde_json::json!([0.0, 0.0, 1.0]));
+        assert_eq!(
+            provenance["stack_normal"],
+            serde_json::json!([0.0, 0.0, 1.0])
+        );
         assert_eq!(provenance["active_node_count"], 2);
         assert_eq!(provenance["active_element_count"], 1);
         assert_eq!(provenance["resolved_execution_engine"], "fem_cpu_native");
         assert_eq!(provenance["resolved_precision"], "double");
-        assert_eq!(provenance["resolved_fallback"]["reason"], "fem_gpu_rk_plan_ineligible");
+        assert_eq!(
+            provenance["resolved_fallback"]["reason"],
+            "fem_gpu_rk_plan_ineligible"
+        );
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("physics/spin_torque_provenance.v1.json"))
                 .expect("spin-torque manifest"),
-        ).expect("manifest JSON");
+        )
+        .expect("manifest JSON");
         assert_eq!(manifest, *provenance);
         fs::remove_dir_all(output_dir).expect("remove fixture");
     }
@@ -6396,6 +6685,8 @@ mod tests {
         let context = build_field_context(&problem, &plan);
         let provenance = crate::types::ExecutionProvenance {
             transport_modules: Vec::new(),
+            executed_physics_kinds: Vec::new(),
+            executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: None,
@@ -6418,6 +6709,7 @@ mod tests {
             resolved_demag_realization: None,
             timestep_policy: None,
             fdm_multilayer_transfer_telemetry: None,
+            fdm_multilayer_stage_telemetry: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
@@ -7275,6 +7567,8 @@ mod tests {
         ]));
         let provenance = ExecutionProvenance {
             transport_modules: Vec::new(),
+            executed_physics_kinds: Vec::new(),
+            executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: None,
@@ -7297,6 +7591,7 @@ mod tests {
             resolved_demag_realization: None,
             timestep_policy: None,
             fdm_multilayer_transfer_telemetry: None,
+            fdm_multilayer_stage_telemetry: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
@@ -7368,11 +7663,11 @@ mod tests {
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
-               component_count: 3,
-               component_order: "xyz".into(),
-               location: "sample".into(),
-               scope: "full".into(),
-               revision: (1 as u64).saturating_add(1),
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (1 as u64).saturating_add(1),
                 values: FieldSnapshot::flatten_vec3(vec![
                     [0.0, 0.0, 1.0],
                     [0.0, 1.0, 0.0],
@@ -7666,11 +7961,11 @@ mod tests {
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (1 as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (1 as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(vec![[1.0, 0.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
@@ -7678,11 +7973,11 @@ mod tests {
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (1 as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (1 as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(vec![[5.0, 0.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
@@ -7690,11 +7985,11 @@ mod tests {
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (1 as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (1 as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(vec![[0.0, 0.0, 2.0e-3]; 8]),
                 },
             ],
@@ -7776,11 +8071,11 @@ mod tests {
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
-               component_count: 3,
-               component_order: "xyz".into(),
-               location: "sample".into(),
-               scope: "full".into(),
-               revision: (1 as u64).saturating_add(1),
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (1 as u64).saturating_add(1),
                 values: FieldSnapshot::flatten_vec3(vec![
                     [1.0, 0.0, 0.0],
                     [0.9, 0.1, 0.0],
@@ -7992,11 +8287,11 @@ mod tests {
                     step: 4,
                     time: 2.0e-12,
                     solver_dt: 5.0e-13,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (4 as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (4 as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(vec![[10.0, 2.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
@@ -8004,11 +8299,11 @@ mod tests {
                     step: 4,
                     time: 2.0e-12,
                     solver_dt: 5.0e-13,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (4 as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (4 as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(vec![
                         [1.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],

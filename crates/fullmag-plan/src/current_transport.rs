@@ -1,9 +1,9 @@
 use fullmag_ir::{
-    AntennaFieldSourceModelIR, CurrentModuleIR, CurrentTransportModelIR, ProblemIR,
-    TimeEnvelopeIR,
+    AntennaFieldSourceModelIR, CurrentModuleIR, CurrentTransportModelIR, ProblemIR, TimeEnvelopeIR,
 };
 
 use crate::error::PlanError;
+use crate::physics_graph::physics_module_execution_enabled;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedCurrentTransport {
@@ -39,6 +39,16 @@ pub(crate) fn resolve_current_transports(
     let mut reasons = Vec::new();
 
     for (index, module) in problem.current_modules.iter().enumerate() {
+        if let CurrentModuleIR::CurrentTransport { name, .. } = module {
+            match physics_module_execution_enabled(problem, "current_transport", name) {
+                Ok(Some(false)) => continue,
+                Ok(Some(true) | None) => {}
+                Err(graph_reasons) => {
+                    reasons.extend(graph_reasons);
+                    continue;
+                }
+            }
+        }
         match module {
             CurrentModuleIR::AntennaFieldSource { model, .. } => {
                 if lane == CurrentTransportExecutableLane::Fdm
@@ -125,6 +135,40 @@ mod tests {
         assert_eq!(resolved[0].name, "drive");
         assert_eq!(resolved[0].current_density, [0.0, 0.0, 5e10]);
         assert_eq!(resolved[0].solve_region, None);
+    }
+
+    #[test]
+    fn inactive_graph_module_filters_nonzero_current_payload() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .current_modules
+            .push(CurrentModuleIR::CurrentTransport {
+                name: "drive".to_string(),
+                model: CurrentTransportModelIR::PrescribedDensity,
+                current_density: Some([0.0, 0.0, 5e10]),
+                solve_region: None,
+                conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                time_envelope: None,
+                definition: None,
+            });
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [{
+                "id": "drive",
+                "kind": "current_transport",
+                "applies_to": [{"kind": "global"}],
+                "solve_domain": [],
+                "depends_on": [],
+                "activation": "inactive"
+            }],
+            "edges": []
+        }));
+
+        let resolved = resolve_current_transports(&problem, CurrentTransportExecutableLane::Fdm)
+            .expect("inactive graph payload is omitted");
+        assert!(resolved.is_empty());
     }
 
     #[test]

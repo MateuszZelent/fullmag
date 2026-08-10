@@ -26,7 +26,7 @@ use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(any(feature = "cuda", test))]
-use crate::types::RunError;
+use crate::types::{FdmMultilayerStageTelemetry, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::StepStats;
 #[cfg(feature = "cuda")]
@@ -209,6 +209,51 @@ fn validate_native_step_metrics(
     })
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn validate_multilayer_stage_telemetry(
+    layer_count: u64,
+    refresh_count: u64,
+    forward_fft_count: u64,
+    inverse_fft_count: u64,
+    pair_accumulation_count: u64,
+) -> Result<FdmMultilayerStageTelemetry, RunError> {
+    if refresh_count == 0
+        && forward_fft_count == 0
+        && inverse_fft_count == 0
+        && pair_accumulation_count == 0
+    {
+        return Err(RunError {
+            message: "d07_stage_telemetry_not_recorded: native multilayer demag counters are absent"
+                .to_string(),
+        });
+    }
+    let expected_pairs = layer_count.checked_mul(layer_count).ok_or_else(|| RunError {
+        message: "d07_stage_telemetry_counter_overflow: L^2 does not fit u64".to_string(),
+    })?;
+    if refresh_count != 1
+        || forward_fft_count != layer_count
+        || inverse_fft_count != layer_count
+        || pair_accumulation_count != expected_pairs
+    {
+        return Err(RunError {
+            message: format!(
+                "d07_stage_telemetry_counter_mismatch: expected refresh=1 forward={layer_count} inverse={layer_count} pairs={expected_pairs}, got refresh={refresh_count} forward={forward_fft_count} inverse={inverse_fft_count} pairs={pair_accumulation_count}"
+            ),
+        });
+    }
+    Ok(FdmMultilayerStageTelemetry {
+        status: "recorded".to_string(),
+        execution_engine: "cuda_native_multilayer_demag_v2".to_string(),
+        data_residency: "device_resident_per_refresh".to_string(),
+        fft_backend: "cuFFT".to_string(),
+        layer_count,
+        refresh_count,
+        forward_fft_count,
+        inverse_fft_count,
+        pair_accumulation_count,
+    })
+}
+
 #[cfg(feature = "cuda")]
 fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
     plan.current_density.is_some()
@@ -225,18 +270,22 @@ fn ensure_cuda_slonczewski_supported(plan: &fullmag_ir::FdmPlanIR) -> Result<(),
             let normal = plan.slonczewski_stack_normal.ok_or_else(|| RunError {
                 message: "slonczewski.fullmag.v2 on FDM CUDA requires a stack normal".to_string(),
             })?;
-            let normal_norm = (normal[0] * normal[0]
-                + normal[1] * normal[1]
-                + normal[2] * normal[2])
-                .sqrt();
+            let normal_norm =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
             if !normal_norm.is_finite() || normal_norm <= 0.0 {
                 return Err(RunError {
-                    message: "slonczewski.fullmag.v2 on FDM CUDA requires a finite nonzero stack normal".to_string(),
+                    message:
+                        "slonczewski.fullmag.v2 on FDM CUDA requires a finite nonzero stack normal"
+                            .to_string(),
                 });
             }
-            let target_mask = plan.slonczewski_active_mask.as_ref().ok_or_else(|| RunError {
-                message: "slonczewski.fullmag.v2 on FDM CUDA requires a separate target mask".to_string(),
-            })?;
+            let target_mask = plan
+                .slonczewski_active_mask
+                .as_ref()
+                .ok_or_else(|| RunError {
+                    message: "slonczewski.fullmag.v2 on FDM CUDA requires a separate target mask"
+                        .to_string(),
+                })?;
             if target_mask.len() != plan.initial_magnetization.len() {
                 return Err(RunError {
                     message: "slonczewski.fullmag.v2 on FDM CUDA target mask length must equal cell count".to_string(),
@@ -255,12 +304,12 @@ fn ffi_prescribed_sot_formula(
     plan: &fullmag_ir::FdmPlanIR,
 ) -> Result<ffi::fullmag_fdm_prescribed_sot_formula, RunError> {
     match plan.sot_formula_version.as_deref() {
-        None | Some("prescribed_sot.legacy_fullmag.v0") => Ok(
-            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0,
-        ),
-        Some("prescribed_sot.fullmag.v1") => Ok(
-            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1,
-        ),
+        None | Some("prescribed_sot.legacy_fullmag.v0") => {
+            Ok(ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0)
+        }
+        Some("prescribed_sot.fullmag.v1") => {
+            Ok(ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1)
+        }
         Some(other) => Err(RunError {
             message: format!("unsupported prescribed SOT formula_version '{other}'"),
         }),
@@ -647,10 +696,10 @@ impl NativeFdmBackend {
                 plan.layers
                     .iter()
                     .flat_map(|layer| {
-                        layer
-                            .native_active_mask
-                            .as_deref()
-                            .map_or_else(|| vec![true; layer.initial_magnetization.len()], ToOwned::to_owned)
+                        layer.native_active_mask.as_deref().map_or_else(
+                            || vec![true; layer.initial_magnetization.len()],
+                            ToOwned::to_owned,
+                        )
                     })
                     .collect(),
             )
@@ -880,7 +929,9 @@ impl NativeFdmBackend {
                 Some("slonczewski.fullmag.v2") => {
                     ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2
                 }
-                _ => ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0,
+                _ => {
+                    ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0
+                }
             },
             stt_stack_normal: plan.slonczewski_stack_normal.unwrap_or([0.0, 0.0, 1.0]),
             slonczewski_active_mask: slonczewski_active_mask_flat
@@ -1239,6 +1290,10 @@ impl NativeFdmBackend {
             hot_loop_host_sync_count: 0,
             hot_loop_control_scalar_d2h_bytes: 0,
             hot_loop_control_scalar_host_sync_count: 0,
+            multilayer_refresh_count: 0,
+            multilayer_forward_fft_count: 0,
+            multilayer_inverse_fft_count: 0,
+            multilayer_pair_accumulation_count: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fdm_backend_step(self.handle, dt, &mut stats) };
@@ -1874,6 +1929,51 @@ impl NativeFdmBackend {
         Ok(())
     }
 
+    pub fn snapshot_multilayer_demag_stage_telemetry(
+        &mut self,
+        layer_count: u64,
+    ) -> Result<FdmMultilayerStageTelemetry, RunError> {
+        let mut stats = ffi::fullmag_fdm_step_stats {
+            step: 0,
+            time_seconds: 0.0,
+            dt_seconds: 0.0,
+            exchange_energy_joules: 0.0,
+            demag_energy_joules: 0.0,
+            external_energy_joules: 0.0,
+            anisotropy_energy_joules: 0.0,
+            cubic_energy_joules: 0.0,
+            dmi_energy_joules: 0.0,
+            total_energy_joules: 0.0,
+            max_effective_field_amplitude: 0.0,
+            max_demag_field_amplitude: 0.0,
+            max_rhs_amplitude: 0.0,
+            max_torque_Apm: 0.0,
+            suggested_next_dt: 0.0,
+            wall_time_ns: 0,
+            hot_loop_d2h_bytes: 0,
+            hot_loop_host_sync_count: 0,
+            hot_loop_control_scalar_d2h_bytes: 0,
+            hot_loop_control_scalar_host_sync_count: 0,
+            multilayer_refresh_count: 0,
+            multilayer_forward_fft_count: 0,
+            multilayer_inverse_fft_count: 0,
+            multilayer_pair_accumulation_count: 0,
+        };
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_snapshot_stats(self.handle as *mut _, &mut stats)
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("snapshot multilayer demag telemetry failed"));
+        }
+        validate_multilayer_stage_telemetry(
+            layer_count,
+            stats.multilayer_refresh_count,
+            stats.multilayer_forward_fft_count,
+            stats.multilayer_inverse_fft_count,
+            stats.multilayer_pair_accumulation_count,
+        )
+    }
+
     pub fn refresh_observables(&mut self) -> Result<(), RunError> {
         let rc = unsafe { ffi::fullmag_fdm_backend_refresh_observables(self.handle as *mut _) };
         if rc != ffi::FULLMAG_FDM_OK {
@@ -1904,6 +2004,10 @@ impl NativeFdmBackend {
             hot_loop_host_sync_count: 0,
             hot_loop_control_scalar_d2h_bytes: 0,
             hot_loop_control_scalar_host_sync_count: 0,
+            multilayer_refresh_count: 0,
+            multilayer_forward_fft_count: 0,
+            multilayer_inverse_fft_count: 0,
+            multilayer_pair_accumulation_count: 0,
         };
 
         let rc =
@@ -3156,8 +3260,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_canonical_slonczewski_matches_cpu_reference_with_target_mask_when_cuda_is_available()
-    {
+    fn native_fdm_canonical_slonczewski_matches_cpu_reference_with_target_mask_when_cuda_is_available(
+    ) {
         if !is_cuda_available() {
             eprintln!(
                 "skipping native CUDA FDM canonical Slonczewski parity test: CUDA backend is not available on this host"
@@ -3198,8 +3302,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available()
-    {
+    fn native_fdm_canonical_slonczewski_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available(
+    ) {
         if !is_cuda_available() {
             eprintln!(
                 "skipping native CUDA FDM canonical Slonczewski trajectory parity test: CUDA backend is not available on this host"
@@ -3261,8 +3365,8 @@ mod tests {
         base_plan.external_field = None;
         base_plan.fixed_timestep = Some(1.0e-15);
 
-        let mut baseline_backend = NativeFdmBackend::create(&base_plan)
-            .expect("native fdm baseline create");
+        let mut baseline_backend =
+            NativeFdmBackend::create(&base_plan).expect("native fdm baseline create");
         baseline_backend
             .step(base_plan.fixed_timestep.expect("fixed timestep"))
             .expect("native fdm baseline step");
@@ -4200,10 +4304,14 @@ mod tests {
 
 #[cfg(test)]
 mod exact_metric_contract_tests {
-    use super::{ensure_cuda_slonczewski_supported, validate_native_step_metrics};
+    use super::{
+        ensure_cuda_slonczewski_supported, validate_multilayer_stage_telemetry,
+        validate_native_step_metrics,
+    };
 
     #[test]
-    fn canonical_slonczewski_requires_stack_normal_and_target_mask_before_native_cuda_construction() {
+    fn canonical_slonczewski_requires_stack_normal_and_target_mask_before_native_cuda_construction()
+    {
         let mut plan = fullmag_ir::FdmPlanIR::default();
         plan.slonczewski_formula_version = Some("slonczewski.fullmag.v2".to_string());
         plan.current_density = Some([0.0, 0.0, 7.0e11]);
@@ -4263,6 +4371,34 @@ mod exact_metric_contract_tests {
         ] {
             assert!(validate_native_step_metrics(torque, rhs).is_err());
         }
+    }
+
+    #[test]
+    fn d07_l3_stage_telemetry_requires_exact_counts() {
+        let telemetry = validate_multilayer_stage_telemetry(3, 1, 3, 3, 9)
+            .expect("exact L=3 D-07 telemetry");
+
+        assert_eq!(telemetry.layer_count, 3);
+        assert_eq!(telemetry.refresh_count, 1);
+        assert_eq!(telemetry.forward_fft_count, 3);
+        assert_eq!(telemetry.inverse_fft_count, 3);
+        assert_eq!(telemetry.pair_accumulation_count, 9);
+    }
+
+    #[test]
+    fn d07_stage_telemetry_fails_closed_when_counters_are_absent() {
+        let error = validate_multilayer_stage_telemetry(3, 0, 0, 0, 0)
+            .expect_err("absent D-07 counters must not become recorded provenance");
+
+        assert!(error.message.contains("not_recorded"));
+    }
+
+    #[test]
+    fn d07_stage_telemetry_rejects_inexact_stage_counts() {
+        let error = validate_multilayer_stage_telemetry(3, 1, 3, 2, 9)
+            .expect_err("inexact D-07 counters must fail closed");
+
+        assert!(error.message.contains("counter_mismatch"));
     }
 
     #[test]

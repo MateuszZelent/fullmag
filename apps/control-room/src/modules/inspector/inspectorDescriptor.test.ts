@@ -130,6 +130,25 @@ describe("resolveInspectorDescriptor", () => {
     });
   });
 
+  it("describes the target-only multilayer Airbox with its own inspector vocabulary", () => {
+    const descriptor = resolveInspectorDescriptor({
+      kind: "airbox.multilayer.target",
+      label: "Multilayer H_demag target",
+      moduleSource: "explorer",
+      nodeId: "model:airbox:multilayer-target",
+      objectId: null,
+      ref: {
+        kind: "airbox.multilayer.target",
+        nodeId: "model:airbox:multilayer-target",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+
+    expect(descriptor.typeLabel).toBe("Multilayer Airbox target");
+    expect(descriptor.breadcrumbs[0]).toMatchObject({ label: "Airbox" });
+  });
+
   it("uses object.root for an object breadcrumb instead of an unregistered generic kind", () => {
     const descriptor = resolveInspectorDescriptor(
       selection("object.material", "Film"),

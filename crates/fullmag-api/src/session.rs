@@ -1462,7 +1462,8 @@ fn finalize_current_live_apply(
         .map(|state| state.latest_step.finished)
         .unwrap_or(false);
     let artifact_dir = current_artifact_dir(current);
-    let membership_was_published = artifact_entries_include_complete_fdm_membership(&current.artifacts);
+    let membership_was_published =
+        artifact_entries_include_complete_fdm_membership(&current.artifacts);
     let membership_appeared_on_disk = !membership_was_published
         && artifact_dir
             .as_deref()
@@ -1493,18 +1494,14 @@ fn finalize_current_live_apply(
 
 fn artifact_entries_include_complete_fdm_membership(artifacts: &[ArtifactEntry]) -> bool {
     let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
-    (has("mesh/fdm_region_membership.v2.json")
-        && has("mesh/fdm_region_membership.v2.bin"))
-        || (has("mesh/fdm_region_membership.v1.json")
-            && has("mesh/fdm_region_membership.v1.bin"))
+    (has("mesh/fdm_region_membership.v2.json") && has("mesh/fdm_region_membership.v2.bin"))
+        || (has("mesh/fdm_region_membership.v1.json") && has("mesh/fdm_region_membership.v1.bin"))
 }
 
 fn artifact_dir_has_complete_fdm_membership(artifact_dir: &Path) -> bool {
     let has = |path: &str| artifact_dir.join(path).is_file();
-    (has("mesh/fdm_region_membership.v2.json")
-        && has("mesh/fdm_region_membership.v2.bin"))
-        || (has("mesh/fdm_region_membership.v1.json")
-            && has("mesh/fdm_region_membership.v1.bin"))
+    (has("mesh/fdm_region_membership.v2.json") && has("mesh/fdm_region_membership.v2.bin"))
+        || (has("mesh/fdm_region_membership.v1.json") && has("mesh/fdm_region_membership.v1.bin"))
 }
 
 fn annotate_solver_profile_api_visibility(
@@ -1526,8 +1523,8 @@ fn annotate_solver_profile_api_visibility(
     trace.segments.insert(
         "api_revision_visibility_ns".to_string(),
         crate::schemas::diagnostics::SolverTraceSegmentResource {
-            kind: crate::schemas::diagnostics::SolverTraceSegmentKindResource::
-                ApiRevisionVisibility,
+            kind:
+                crate::schemas::diagnostics::SolverTraceSegmentKindResource::ApiRevisionVisibility,
             duration_ns,
             clock_domain:
                 crate::schemas::diagnostics::SolverTraceClockDomainResource::ServerMonotonic,
@@ -1538,8 +1535,7 @@ fn annotate_solver_profile_api_visibility(
         trace.completeness,
         crate::schemas::diagnostics::SolverTraceCompletenessResource::ServerOnly
     ) {
-        trace.completeness =
-            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
+        trace.completeness = crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
     }
 }
 
@@ -1571,8 +1567,7 @@ fn annotate_solver_profile_publisher_apply(
         trace.completeness,
         crate::schemas::diagnostics::SolverTraceCompletenessResource::ServerOnly
     ) {
-        trace.completeness =
-            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
+        trace.completeness = crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial;
     }
 }
 
@@ -1713,7 +1708,10 @@ pub(crate) fn apply_current_live_snapshot(
         current.solver_profile = solver_profile;
         annotate_solver_profile_api_visibility(
             &mut current.solver_profile,
-            profile_visibility_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            profile_visibility_start
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
         );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
@@ -1845,7 +1843,10 @@ pub(crate) fn apply_current_live_runtime_frame(
         current.solver_profile = solver_profile;
         annotate_solver_profile_api_visibility(
             &mut current.solver_profile,
-            profile_visibility_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            profile_visibility_start
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
         );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
@@ -2041,20 +2042,18 @@ mod tests {
 
     #[test]
     fn api_visibility_annotation_binds_trace_to_profile_revision() {
-        let mut runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
-            &fullmag_runner::StepStats {
+        let mut runner_sample =
+            fullmag_runner::SolverProfileStepSample::from_step_stats(&fullmag_runner::StepStats {
                 step: 4,
                 ..fullmag_runner::StepStats::default()
-            },
-        );
+            });
         runner_sample.trace = Some(fullmag_runner::SolverTrace::server_only(
             fullmag_runner::SolverTraceId::new("run-1", 0, 4, 0).unwrap(),
         ));
         let mut profile = crate::schemas::diagnostics::SolverProfileResource::default();
         profile.revision = 17;
-        profile.latest_samples = vec![
-            serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap(),
-        ];
+        profile.latest_samples =
+            vec![serde_json::from_value(serde_json::to_value(runner_sample).unwrap()).unwrap()];
 
         annotate_solver_profile_api_visibility(&mut profile, 23);
 
@@ -2063,7 +2062,10 @@ mod tests {
             .as_ref()
             .expect("trace should be present");
         assert_eq!(trace.api_revision, Some(17));
-        assert_eq!(trace.completeness, crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial);
+        assert_eq!(
+            trace.completeness,
+            crate::schemas::diagnostics::SolverTraceCompletenessResource::Partial
+        );
         assert_eq!(
             trace
                 .segments

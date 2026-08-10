@@ -1,6 +1,6 @@
-use fullmag_ir::ProblemIR;
 use fullmag_ir::BackendTarget;
 use fullmag_ir::PhysicsGraphRealizationStateIR;
+use fullmag_ir::ProblemIR;
 use fullmag_plan::{resolve_physics_graph, resolve_physics_modules};
 
 #[test]
@@ -72,8 +72,8 @@ fn no_current_module_emits_no_resolved_physics_operator() {
         "edges": []
     }));
 
-    let resolved = resolve_physics_modules(&problem, BackendTarget::Fdm)
-        .expect("empty graph resolution");
+    let resolved =
+        resolve_physics_modules(&problem, BackendTarget::Fdm).expect("empty graph resolution");
     assert!(resolved.is_empty());
 }
 
@@ -99,17 +99,18 @@ fn object_scope_maps_to_stable_fem_marker_and_fdm_mask() {
         "edges": []
     }));
 
-    let fem = resolve_physics_modules(&problem, BackendTarget::Fem)
-        .expect("FEM graph resolution");
+    let fem = resolve_physics_modules(&problem, BackendTarget::Fem).expect("FEM graph resolution");
     assert_eq!(fem[0].scope_key, "object:film");
     assert_eq!(fem[0].resolved_lane, "fem");
     assert_eq!(fem[0].fem_marker_ids.len(), 1);
     assert!(fem[0].fdm_cell_mask_id.is_none());
 
-    let fdm = resolve_physics_modules(&problem, BackendTarget::Fdm)
-        .expect("FDM graph resolution");
+    let fdm = resolve_physics_modules(&problem, BackendTarget::Fdm).expect("FDM graph resolution");
     assert_eq!(fdm[0].scope_key, "object:film");
-    assert_eq!(fdm[0].fdm_cell_mask_id.as_deref(), Some("physics-mask.v1:current:film:object/film"));
+    assert_eq!(
+        fdm[0].fdm_cell_mask_id.as_deref(),
+        Some("physics-mask.v1:current:film:object/film")
+    );
 }
 
 #[test]
@@ -127,7 +128,10 @@ fn module_reordering_does_not_change_semantic_marker_identity() {
     first.physics_graph = Some(graph.clone());
     let mut second = ProblemIR::bootstrap_example();
     let mut reversed = graph;
-    reversed["modules"] = serde_json::json!([reversed["modules"][1].clone(), reversed["modules"][0].clone()]);
+    reversed["modules"] = serde_json::json!([
+        reversed["modules"][1].clone(),
+        reversed["modules"][0].clone()
+    ]);
     second.physics_graph = Some(reversed);
 
     let mut first_resolved = resolve_physics_modules(&first, BackendTarget::Fem).unwrap();
@@ -247,6 +251,52 @@ fn planned_graph_realization_distinguishes_resolved_from_executed() {
         executed.modules[0].state,
         PhysicsGraphRealizationStateIR::Executed
     );
+}
+
+#[test]
+fn fdm_object_scope_accepts_certified_magnet_and_geometry_aliases() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = BackendTarget::Fdm;
+    problem.magnets[0].name = "plate".to_string();
+    problem.physics_graph = Some(serde_json::json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 44,
+        "modules": [{
+            "id": "sp5_zhang_li",
+            "kind": "spin_torque",
+            "applies_to": [{"kind": "object", "object_id": "plate"}],
+            "solve_domain": [{"object_id": "plate"}],
+            "depends_on": [],
+            "activation": "active",
+            "authored_state": "authored",
+            "capability": "reference_executable",
+            "source_path": "/spin_torques/0",
+            "family_payload": {"kind": "zhang_li"}
+        }],
+        "edges": []
+    }));
+
+    let plan = fullmag_plan::plan(&problem).expect("single-grid FDM plan with object aliases");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let certificate = fdm.grid_certificate.as_ref().expect("grid certificate");
+    assert_eq!(certificate.object_ids, vec!["plate", "strip"]);
+    assert!(certificate.region_legend.is_empty());
+
+    let realization = plan
+        .provenance
+        .physics_graph
+        .as_ref()
+        .and_then(|graph| graph.realization.as_ref())
+        .expect("physics graph realization");
+    assert_eq!(realization.resolved_module_ids, vec!["sp5_zhang_li"]);
+    assert_eq!(
+        realization.modules[0].state,
+        PhysicsGraphRealizationStateIR::Resolved
+    );
+    assert!(realization.modules[0].realized_cell_count > 0);
+    assert!(realization.modules[0].reason.is_none());
 }
 
 #[test]

@@ -17,20 +17,25 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "M1 and bounded reciprocal M2 reference slices execute on the CPU lane; broader nonlinear, interface, and cross-backend qualification remains open."
+      "reason": "The existing public Rust planner/runner executes bounded FDM CPU-double steady drift-diffusion and direct-SHE reference workloads. The native C++ FP64 M1 charge/spin owner and explicit opt-in C ABI/runner path execute managed contract and persistent-artifact E2E gates. The current worktree implements the requested binding, exact-provenance, and per-quantity oracle fixes and received final5 independent review APPROVE, no Critical/Important. Capability remains semantic_only with implementation_state executable, validation_state unvalidated, and no stable, public-qualified, validated, or production claim."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "semantic_only",
-      "reason": "The published M1/M2 transport contract has no qualified native GPU transport lane; no hidden fallback is permitted."
+      "reason": "A bounded native CUDA FP64 charge-only FV/CG/strength-graph-AMG slice and exact-identity snapshot/checkpoint path pass managed actual-device uniform, layered, snapshot, and boundary-mutation contract gates with host_fallback_count=0. The aggregate implementation_state is partial, validation_state is unvalidated, and validated_workloads remains empty because free-component zero-mean gauge, next-solve warm-start continuation, public ProblemIR/planner/runner execution, spin/SHE/mixing/torque, convergence, and production qualification remain open."
     }
   ],
   "equations": [
     {
       "id": "m1-constitutive-block",
       "symbols": ["E", "G", "J_c", "Q", "sigma", "sigma_s", "P", "theta_SH"],
-      "sources": ["fem-m1-charge", "fem-m1-spin", "fdm-transport-oracle"]
+      "sources": ["fem-m1-charge", "fem-m1-spin", "fdm-native-charge", "fdm-native-spin", "fdm-transport-oracle", "fdm-gpu-m1-contract"]
+    },
+    {
+      "id": "fdm-gpu-m1-charge-fv",
+      "symbols": ["V", "J_c", "sigma"],
+      "sources": ["fdm-native-charge", "fdm-gpu-m1-charge-solver", "fdm-gpu-m1-uniform-test", "fdm-gpu-m1-layered-test"]
     },
     {
       "id": "m2-reciprocal-constitutive-block",
@@ -45,7 +50,22 @@
     {
       "id": "spin-balance-reaction",
       "symbols": ["Q", "R_sf", "R_J", "R_phi", "lambda_sf", "lambda_J", "lambda_phi"],
-      "sources": ["fem-m1-spin", "fem-m2-oracle", "fdm-transport-oracle"]
+      "sources": ["fem-m1-spin", "fem-m2-oracle", "fdm-native-spin", "fdm-transport-oracle"]
+    },
+    {
+      "id": "m1-mixing-interface-reduction",
+      "symbols": ["G_up", "G_down", "G_r", "G_i", "delta_V_Gamma", "J_c", "Q"],
+      "sources": ["fdm-native-charge", "fdm-native-spin", "fdm-native-charge-test", "fdm-native-spin-test", "fdm-gpu-m1-contract"]
+    },
+    {
+      "id": "fdm-exact-face-current-electric-reconstruction",
+      "symbols": ["E", "J_c", "sigma"],
+      "sources": ["fdm-native-spin", "fdm-native-spin-test", "fdm-rust-parity-oracle", "fdm-native-parity", "fdm-gpu-m1-contract"]
+    },
+    {
+      "id": "fdm-local-fv-balance-and-torque",
+      "symbols": ["Q", "R_sf", "R_J", "R_phi", "r_K", "S_K", "S_Gamma", "tau_abs", "tau_rel", "gamma_e", "M_s", "hbar", "e", "q_abs", "T_tr_G"],
+      "sources": ["fdm-native-spin-validation", "fdm-native-spin", "fdm-native-spin-test", "fdm-gpu-m1-contract"]
     }
   ],
   "symbols": [
@@ -68,7 +88,23 @@
     {"id": "Sigma_mr", "latex": "\\Sigma_{\\mathrm{mr}}", "meaning": "symmetric AMR/PHE charge-conductivity tensor", "si_unit": "\\mathrm{S\\,m^{-1}}"},
     {"id": "R_sf", "latex": "R_{\\mathrm{sf}}", "meaning": "spin-flip reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"},
     {"id": "R_J", "latex": "R_J", "meaning": "transverse exchange reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"},
-    {"id": "R_phi", "latex": "R_\\phi", "meaning": "transverse dephasing reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"}
+    {"id": "R_phi", "latex": "R_\\phi", "meaning": "transverse dephasing reaction density", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "G_up", "latex": "G_{\\uparrow}", "meaning": "majority-spin interface conductance per area", "si_unit": "\\mathrm{S\\,m^{-2}}"},
+    {"id": "G_down", "latex": "G_{\\downarrow}", "meaning": "minority-spin interface conductance per area", "si_unit": "\\mathrm{S\\,m^{-2}}"},
+    {"id": "G_r", "latex": "G_r", "meaning": "real spin-mixing conductance per area", "si_unit": "\\mathrm{S\\,m^{-2}}"},
+    {"id": "G_i", "latex": "G_i", "meaning": "imaginary spin-mixing conductance per area", "si_unit": "\\mathrm{S\\,m^{-2}}"},
+    {"id": "delta_V_Gamma", "latex": "\\Delta V_{\\Gamma}", "meaning": "accepted oriented interface potential-trace jump", "si_unit": "\\mathrm{V}"},
+    {"id": "r_K", "latex": "r_{K,a}", "meaning": "component-wise local finite-volume spin-balance residual", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "S_K", "latex": "S_K", "meaning": "local finite-volume spin-flux and reaction scale", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "S_Gamma", "latex": "S_{\\Gamma,K}", "meaning": "one-sided mixing-interface correction scale", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "tau_abs", "latex": "\\tau_{\\mathrm{abs}}", "meaning": "absolute local spin-balance tolerance", "si_unit": "\\mathrm{A\\,m^{-3}}"},
+    {"id": "tau_rel", "latex": "\\tau_{\\mathrm{rel}}", "meaning": "relative local spin-balance tolerance", "si_unit": "$1$"},
+    {"id": "gamma_e", "latex": "\\gamma_e", "meaning": "positive electron gyromagnetic ratio magnitude", "si_unit": "\\mathrm{s^{-1}\\,T^{-1}}"},
+    {"id": "M_s", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "hbar", "latex": "\\hbar", "meaning": "reduced Planck constant", "si_unit": "\\mathrm{J\\,s}"},
+    {"id": "e", "latex": "e", "meaning": "positive elementary charge", "si_unit": "\\mathrm{C}"},
+    {"id": "q_abs", "latex": "q_{\\mathrm{abs},\\perp}", "meaning": "transversely absorbed interface spin-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
+    {"id": "T_tr_G", "latex": "T_{\\mathrm{tr},G}", "meaning": "transport-derived Gilbert-source torque", "si_unit": "\\mathrm{s^{-1}}"}
   ],
   "sources": [
     {"id": "fem-m1-charge", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_charge", "responsibility": "Assemble and solve the bounded conforming H1/P1 charge equation for M1."},
@@ -79,6 +115,21 @@
     {"id": "fem-m2-descriptor", "path": "crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs", "symbol": "materialize_native_fem_steady_transport_request", "responsibility": "Fail closed on descriptor contradictions and map reciprocal material to the native request."},
     {"id": "fem-m2-ffi", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "solve_native_fem_steady_transport", "responsibility": "Select the explicit M1 or M2 ABI symbol and preserve constitutive provenance."},
     {"id": "fdm-transport-oracle", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "solve_coupled_module", "responsibility": "Provide the CPU FDM coupled charge/spin realization used by reference comparisons."},
+    {"id": "fdm-native-m1-charge-c-abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_cpu_charge_solve_v1", "responsibility": "Declare the append-only native M1 charge request, result, snapshot, and solve symbol."},
+    {"id": "fdm-native-m1-spin-c-abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_cpu_steady_spin_solve_v1", "responsibility": "Declare the append-only native M1 spin request, result, and solve symbol."},
+    {"id": "fdm-native-m1-record-extent-adapter", "path": "backends/fdm/api/cpu_transport_v1.cpp", "symbol": "input_records", "responsibility": "Check every public count-controlled record extent before dereference."},
+    {"id": "fdm-native-m1-observation-adapter", "path": "backends/fdm/api/cpu_transport_v1.cpp", "symbol": "unique_interface_observation", "responsibility": "Map each owner interface observation exactly once by full topology."},
+    {"id": "fdm-native-m1-charge-rust-ffi", "path": "crates/fullmag-fdm-sys/src/lib.rs", "symbol": "fullmag_fdm_cpu_charge_solve_v1", "responsibility": "Expose byte-exact Rust charge records and the native M1 charge symbol."},
+    {"id": "fdm-native-m1-spin-rust-ffi", "path": "crates/fullmag-fdm-sys/src/lib.rs", "symbol": "fullmag_fdm_cpu_steady_spin_solve_v1", "responsibility": "Expose byte-exact Rust spin records and the native M1 spin symbol."},
+    {"id": "fdm-native-m1-runner", "path": "crates/fullmag-runner/src/fdm/cpu/native_transport.rs", "symbol": "solve_native_m1_snapshot", "responsibility": "Validate complete native results fail closed and materialize canonical persistent transport snapshots."},
+    {"id": "fdm-native-m1-public-e2e", "path": "crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs", "symbol": "public_native_m1_v1_transparent_and_mixing_artifacts_match_reference_and_provenance", "responsibility": "Execute unchanged transparent and mixing public plans and compare persistent fields and honest provenance against the reference owner."},
+    {"id": "fdm-native-charge", "path": "backends/fdm/cpu/transport/charge_transport_v1.cpp", "symbol": "solve", "responsibility": "Solve the native matrix-free M1 charge problem, eliminate one-way interface traces, and publish an immutable accepted charge snapshot."},
+    {"id": "fdm-native-spin", "path": "backends/fdm/cpu/transport/spin_transport_v1.cpp", "symbol": "solve", "responsibility": "Consume the accepted charge snapshot and solve the native FP64 steady M1 spin balance with mixing-interface and torque observations."},
+    {"id": "fdm-native-spin-validation", "path": "backends/fdm/cpu/transport/spin_transport_validation_v1.cpp", "symbol": "evaluate_local_residual_gate", "responsibility": "Apply the cell-local FV residual acceptance gate and provide the independently testable direct-SHE contraction helper."},
+    {"id": "fdm-native-charge-test", "path": "backends/fdm/tests/cpu_charge_transport_contract.cpp", "symbol": "main", "responsibility": "Check oriented charge mixing traces, conservative current, accepted-snapshot publication, reversed orientation, and conductance-sum validation."},
+    {"id": "fdm-native-spin-test", "path": "backends/fdm/tests/cpu_spin_transport_contract.cpp", "symbol": "main", "responsibility": "Check independent M1 mixing algebra, both interface orientations, local FV rejection, six direct-SHE contractions, reaction channels, and torque scaling."},
+    {"id": "fdm-rust-parity-oracle", "path": "crates/fullmag-engine/examples/fdm_spin_oracle_v1.rs", "symbol": "main", "responsibility": "Produce the independent Rust M1 charge/spin fixture result including nonzero mixing-interface observations."},
+    {"id": "fdm-native-parity", "path": "backends/fdm/tests/cpu_spin_transport_parity.cpp", "symbol": "main", "responsibility": "Compare all native solved fields, reaction channels, torque, balance values, and public mixing-interface flux observations against the Rust oracle."},
     {"id": "m2-plan-test", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback", "responsibility": "Verify Python/IR/planner materialization of the bounded FEM M2 descriptor."},
     {"id": "m2-runtime-test", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "native_m2_solver_publishes_reciprocal_diagnostics", "responsibility": "Execute the managed native M2 solver and check reciprocal diagnostic identity."},
     {"id": "m2-abi-test", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "steady_transport_m2_request_keeps_v1_as_a_nested_prefix", "responsibility": "Freeze the append-only nested M1-prefix ABI layout."},
@@ -86,7 +137,18 @@
     {"id": "m2-mesh-convergence-oracle", "path": "backends/fem/tests/steady_transport_contract.cpp", "symbol": "reciprocal_m2_converges_on_three_mesh_resolutions", "responsibility": "Check finite-spin-flip reciprocal FEM midpoint convergence on three conforming tetrahedral mesh resolutions."},
     {"id": "m2-fdm-fem-common-limit-oracle", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles", "responsibility": "Compare matched reciprocal FDM cell-centred and FEM plane-averaged profiles on three z resolutions."},
     {"id": "fdm-m2-heterogeneous-interface-gate", "path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs", "symbol": "m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance", "responsibility": "Check anisotropic N/F balance and companion mixing/SML closure with explicit oriented interface and torque accounting."},
-    {"id": "m2-3d-she-ishe-ahe-common-limit-gate", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles", "responsibility": "Compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE."}
+    {"id": "m2-3d-she-ishe-ahe-common-limit-gate", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles", "responsibility": "Compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE."},
+    {"id": "fdm-gpu-m1-contract", "path": "docs/physics/0970-spin-hall-drift-diffusion-transport.md", "symbol": "DOC-ANCHOR:fdm-gpu-m1-fp64-contract", "responsibility": "Own the bounded FDM GPU FP64 charge realization and preserve the broader M1 qualification boundary.", "evidence_status": "planned_contract"},
+    {"id": "fdm-gpu-m1-abi", "path": "backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h", "symbol": "fullmag_fdm_gpu_transport_solve_charge_v1", "responsibility": "Declare append-only typed charge payloads, opaque handles, lifecycle, artifact, telemetry, and checkpoint records.", "evidence_status": "implemented_contract"},
+    {"id": "fdm-gpu-m1-charge-context", "path": "backends/fdm/gpu/cuda/transport/context.cu", "symbol": "validate_host_view", "responsibility": "Validate typed static host records before ownership transfer and prevent malformed payload publication.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-charge-solver", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "solve_device", "responsibility": "Assemble conservative harmonic finite-volume charge and execute deterministic FP64 device CG with strength-graph AMG.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-checkpoint-codec", "path": "backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp", "symbol": "build_checkpoint", "responsibility": "Encode canonical FMGPUTR1 charge sections 1--9/18/20 and bind runtime identity-dependent digests.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-rust-abi", "path": "crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs", "symbol": "fullmag_fdm_gpu_transport_solve_charge_v1", "responsibility": "Mirror the append-only C ABI records and symbols in Rust without claiming a public runner path.", "evidence_status": "layout_contract"},
+    {"id": "fdm-gpu-m1-uniform-test", "path": "backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp", "symbol": "main", "responsibility": "Check analytic uniform potential/current, AMG/cache audit, bounded transfers, and zero fallback on an actual GPU.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-layered-test", "path": "backends/fdm/tests/gpu_m1_charge_layered_v1_contract.cpp", "symbol": "main", "responsibility": "Check harmonic layered conduction against analytic and independent CPU FP64 oracles on an actual GPU.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-snapshot-test", "path": "backends/fdm/tests/gpu_m1_charge_snapshot_v1_contract.cpp", "symbol": "main", "responsibility": "Separate the frozen synthetic codec oracle from identity-dependent runtime export/import and prove bitwise no-resolve V/J readback.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-boundary-test", "path": "backends/fdm/tests/gpu_m1_charge_boundary_mutation_v1_contract.cpp", "symbol": "main", "responsibility": "Reject malformed typed boundary records without state publication and execute voltage, density, and insulating faces.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-abi-contract", "path": "docs/specs/spin-transport-runtime-contract-v1.md", "symbol": "DOC-ANCHOR:fdm-gpu-m1-abi-v1", "responsibility": "Specify the append-only opaque-handle ABI, canonical checkpoint grammar, ownership, state machine, and fail-closed errors.", "evidence_status": "planned_contract"}
   ],
   "public_api": {
     "parameters": [

@@ -95,7 +95,11 @@ export function restoreVisualizationAppliedBaseline({
 }): void {
   const isFdmBaseline =
     baseline.targets.length > 0 &&
-    (fdm || baseline.targets.every(({ target }) => target.kind === "fdm-domain"));
+    (fdm ||
+      baseline.targets.every(
+        ({ target }) =>
+          target.kind === "fdm-domain" || target.kind === "fdm-native-layer",
+      ));
 
   if (!isFdmBaseline) {
     const baselineTargets = baseline.targets.map((entry) => entry.target);
@@ -319,6 +323,21 @@ export function fieldMetaScopeQueryForVisualizationTarget(
       // FDM-domain is a viewport-local structured-grid target.  It has no
       // FEM VisualizationState scope and must never be serialized as one.
       return { scope_id: null, scope_kind: null };
+    case "fdm-native-layer": {
+      const encodedLayerId = target.id.startsWith("fdm-native-layer:")
+        ? target.id.slice("fdm-native-layer:".length)
+        : "";
+      let layerId = encodedLayerId;
+      try {
+        layerId = decodeURIComponent(encodedLayerId);
+      } catch {
+        // Keep the opaque target suffix when it is not valid URI encoding.
+      }
+      return {
+        scope_id: layerId || null,
+        scope_kind: layerId ? "layer" : null,
+      };
+    }
     case "region":
       if (carrier?.kind === "membership") {
         return {
@@ -344,7 +363,7 @@ export function fieldMetaScopeQueryForVisualizationTarget(
 export function isFdmVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
 ): boolean {
-  return target?.kind === "fdm-domain";
+  return target?.kind === "fdm-domain" || target?.kind === "fdm-native-layer";
 }
 
 export type ObjectVisualizationLane = "fdm" | "fem" | "unresolved";
@@ -385,6 +404,15 @@ export function resolveObjectVisualizationTargetForLane({
   ) {
     return selectionTarget?.kind === "region" ? selectionTarget : null;
   }
+  if (
+    lane === "fdm" &&
+    selection.ref?.type === "fdm-domain" &&
+    selection.ref.scope === "layer"
+  ) {
+    return selectionTarget?.kind === "fdm-native-layer"
+      ? selectionTarget
+      : null;
+  }
   if (lane === "fem") {
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
@@ -422,7 +450,11 @@ export function resolveObjectVisualizationResourceGates({
 }): { fdm: boolean; fem: boolean } {
   return {
     fdm: lane === "fdm" && target !== null,
-    fem: lane === "fem" && target !== null && target.kind !== "fdm-domain",
+    fem:
+      lane === "fem" &&
+      target !== null &&
+      target.kind !== "fdm-domain" &&
+      target.kind !== "fdm-native-layer",
   };
 }
 
@@ -720,7 +752,9 @@ export function resolveObjectVisualizationPanelTopologyFreshness({
   targetObjectId?: string | null;
   targetKind: VisualizationTargetKind;
 }): VisualizationTopologyFreshness | null {
-  if (targetKind === "fdm-domain") return null;
+  if (targetKind === "fdm-domain" || targetKind === "fdm-native-layer") {
+    return null;
+  }
   return scene && manifest
     ? resolveVisualizationTopologyFreshness(scene, manifest, { targetObjectId })
     : null;
@@ -757,6 +791,7 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   { value: "m", label: "Magnetization / m" },
   { value: "H_eff", label: "Effective field / H_eff" },
   { value: "H_demag", label: "Demag field / H_demag" },
+  { value: "H_ext", label: "Zeeman field / H_ext" },
   { value: "H_ex", label: "Exchange field / H_ex" },
   { value: "H_ani", label: "Anisotropy field / H_ani" },
   { value: "torque", label: "Torque / torque" },
@@ -1188,25 +1223,67 @@ export function geometryScopeVectorBudgetPatch({
 export function visualizationQuantityItems(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Array<{ label: string; value: string }> {
-  let baseItems = VISUALIZATION_QUANTITY_ITEMS;
+  const staticItemsByQuantityId = new Map(
+    VISUALIZATION_QUANTITY_ITEMS.map((item) => [
+      resolveCanonicalQuantityId(item.value),
+      item,
+    ]),
+  );
+  let baseItems = fieldCatalog
+    ? fieldCatalog.quantities
+        .filter((quantity) => quantity.available)
+        .map((quantity) => {
+          const canonicalQuantityId = resolveCanonicalQuantityId(
+            quantity.quantity_id,
+          );
+          const staticItem = staticItemsByQuantityId.get(canonicalQuantityId);
+          return {
+            label: quantity.label || staticItem?.label || quantity.quantity_id,
+            value: quantity.quantity_id,
+          };
+        })
+    : VISUALIZATION_QUANTITY_ITEMS;
   if (targetKind === "airbox") {
-    baseItems = VISUALIZATION_QUANTITY_ITEMS.filter(
+    baseItems = baseItems.filter(
       (item) => !isMagneticOnlyQuantityId(item.value),
     );
   }
 
   if (
     !activeQuantityId ||
-    baseItems.some((item) => item.value === activeQuantityId)
+    baseItems.some(
+      (item) =>
+        resolveCanonicalQuantityId(item.value) ===
+        resolveCanonicalQuantityId(activeQuantityId),
+    )
   ) {
     return baseItems;
   }
 
   return [
-    { value: activeQuantityId, label: activeQuantityId },
+    {
+      value: activeQuantityId,
+      label: fieldCatalog
+        ? `Unavailable / ${activeQuantityId}`
+        : activeQuantityId,
+    },
     ...baseItems,
   ];
+}
+
+export function fieldCatalogQuantityAvailable(
+  fieldCatalog: FieldCatalogResource | null | undefined,
+  quantityId: string,
+): boolean {
+  if (!fieldCatalog) return true;
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  return fieldCatalog.quantities.some(
+    (quantity) =>
+      quantity.available &&
+      resolveCanonicalQuantityId(quantity.quantity_id) === canonicalQuantityId,
+  );
 }
 
 export function quantitySourcePatch(

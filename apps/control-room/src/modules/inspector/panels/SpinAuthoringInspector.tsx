@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 
 import type {
+  SceneCurrentTransport,
   SceneOerstedField,
   SceneSpinTorque,
   TransportValidationRequest,
@@ -13,11 +14,13 @@ import {
   OERSTED_FIELDS_RESOURCE_KEY,
   SPIN_TORQUES_RESOURCE_KEY,
   invalidateSpinAuthoringResources,
+  useCurrentTransportsResource,
   useOerstedFieldsResource,
   useSpinTorquesResource,
 } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { isKnownCurrentTransport } from "@/shared/domain/physics/transportRecognition";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -27,10 +30,20 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import type { PhysicsInteractionId } from "./PhysicsInteractionPanelModel";
-import { isUnsupportedSpinAuthoringResource } from "./SpinAuthoringInspectorModel";
+import {
+  currentSourceOptions,
+  isUnsupportedSpinAuthoringResource,
+  torqueCurrentBindingPatch,
+  type TorqueCurrentBinding,
+} from "./SpinAuthoringInspectorModel";
 
 type Family = "spin_torque" | "oersted_field";
 type SpinResource = SceneSpinTorque | SceneOerstedField;
+
+interface SpinAuthoringInitialScope {
+  objectId: string;
+  regionId?: string | null;
+}
 
 interface TorqueDraft {
   beta: string;
@@ -45,7 +58,9 @@ interface TorqueDraft {
   freeLayerThickness: string;
   id: string;
   kind: "zhang_li" | "slonczewski" | "prescribed_sot";
+  landeG: string;
   lambdaAsymmetry: string;
+  operatorVersion: string;
   rawSpinPolarization: string;
   realization: string;
   schemaVersion: string;
@@ -77,11 +92,13 @@ const DEFAULT_TORQUE: TorqueDraft = {
   drive: JSON.stringify({ kind: "signed_scalar", current_density_Apm2: 0, sigma_hat: [0, 1, 0] }, null, 2),
   epsilonPrime: "0",
   fixedLayerPosition: "",
-  formulaVersion: "slonczewski.fullmag.v2",
+  formulaVersion: "zhang_li.legacy_fullmag.v0",
   freeLayerThickness: "",
   id: "spin-torque",
   kind: "zhang_li",
+  landeG: "",
   lambdaAsymmetry: "1",
+  operatorVersion: "",
   rawSpinPolarization: "",
   realization: "",
   schemaVersion: "",
@@ -140,9 +157,22 @@ function optionalVector(value: string, label: string): number[] | undefined {
   return value.trim() ? parseVector(value, label) : undefined;
 }
 
-function torqueDraft(value: SceneSpinTorque | null): TorqueDraft {
+function torqueDraft(
+  value: SceneSpinTorque | null,
+  initialTarget?: SpinAuthoringInitialScope | null,
+): TorqueDraft {
   const record = object(value);
-  if (!value || isUnsupportedSpinAuthoringResource("spin_torque", record)) return DEFAULT_TORQUE;
+  if (!value || isUnsupportedSpinAuthoringResource("spin_torque", record)) {
+    return {
+      ...DEFAULT_TORQUE,
+      target: initialTarget
+        ? jsonText({
+            object_id: initialTarget.objectId,
+            ...(initialTarget.regionId ? { region_id: initialTarget.regionId } : {}),
+          })
+        : DEFAULT_TORQUE.target,
+    };
+  }
   return {
     beta: text(record.beta),
     compatibilityOrigin: jsonText(record.compatibility_origin),
@@ -156,7 +186,9 @@ function torqueDraft(value: SceneSpinTorque | null): TorqueDraft {
     freeLayerThickness: text(record.free_layer_thickness_m),
     id: text(record.id),
     kind: record.kind as TorqueDraft["kind"],
+    landeG: text(record.lande_g),
     lambdaAsymmetry: text(record.lambda_asymmetry),
+    operatorVersion: text(record.operator_version),
     rawSpinPolarization: vectorText(record.raw_spin_polarization),
     realization: jsonText(record.realization),
     schemaVersion: text(record.schema_version),
@@ -168,9 +200,21 @@ function torqueDraft(value: SceneSpinTorque | null): TorqueDraft {
   };
 }
 
-function oerstedDraft(value: SceneOerstedField | null): OerstedDraft {
+function oerstedDraft(
+  value: SceneOerstedField | null,
+  initialSource?: string | null,
+): OerstedDraft {
   const record = object(value);
-  if (!value || isUnsupportedSpinAuthoringResource("oersted_field", record)) return DEFAULT_OERSTED;
+  if (!value || isUnsupportedSpinAuthoringResource("oersted_field", record)) {
+    return initialSource
+      ? {
+          ...DEFAULT_OERSTED,
+          id: `oersted:${initialSource}`,
+          kind: "oersted_field",
+          source: initialSource,
+        }
+      : { ...DEFAULT_OERSTED };
+  }
   return {
     axis: vectorText(record.axis),
     center: vectorText(record.center),
@@ -189,10 +233,15 @@ export function buildTorque(draft: TorqueDraft): SceneSpinTorque {
   if (draft.kind === "zhang_li") return {
     kind: draft.kind,
     id: draft.id,
+    formula_version: draft.formulaVersion as never,
+    schema_version: draft.schemaVersion.trim() || undefined,
+    operator_version: draft.operatorVersion.trim() ? draft.operatorVersion as never : undefined,
+    target: optionalJson(draft.target) as never,
     current_density: optionalVector(draft.currentDensity, "Current density"),
     current_source: draft.currentSource.trim() ? draft.currentSource : undefined,
     degree: finite(draft.degree, "Degree"),
     beta: finite(draft.beta, "Beta"),
+    lande_g: draft.landeG.trim() ? finite(draft.landeG, "Landé g factor") : undefined,
   };
   if (draft.kind === "slonczewski") return {
     kind: draft.kind,
@@ -248,21 +297,50 @@ function identity(value: SpinResource): string {
   return text(object(value).id);
 }
 
-export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
+export function resolveOerstedCurrentSource(
+  currents: readonly SceneCurrentTransport[],
+  scope: SpinAuthoringInitialScope | null,
+): string | null {
+  if (!scope) return null;
+  const matches = currents.flatMap((current) => {
+    if (!isKnownCurrentTransport(current)) return [];
+    const domain = current.domain ?? [];
+    const exactDomainMatch = domain.some((region) =>
+      region.object_id === scope.objectId
+      && (scope.regionId ? region.region_id === scope.regionId : true),
+    );
+    const legacyObjectMatch = !scope.regionId
+      && domain.length === 0
+      && current.solve_region === scope.objectId;
+    return exactDomainMatch || legacyObjectMatch ? [current.name.trim()] : [];
+  }).filter(Boolean);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export function SpinAuthoringInspector({ family, initialScope, resourceId, resourceIndex }: {
   family: Extract<PhysicsInteractionId, Family>;
+  initialScope?: SpinAuthoringInitialScope | null;
   resourceId?: string | null;
   resourceIndex?: number | null;
 }) {
   const { api, resources } = useKernel();
   const torques = useSpinTorquesResource({ enabled: family === "spin_torque" });
   const oersted = useOerstedFieldsResource({ enabled: family === "oersted_field" });
+  const currents = useCurrentTransportsResource({ enabled: true });
   const active = family === "spin_torque" ? torques : oersted;
   const items = useMemo(() => (active.data?.items ?? []) as SpinResource[], [active.data]);
   const [localSelectedId, setLocalSelectedId] = useState("");
   const selectedId = resourceId ?? localSelectedId;
   const selected = (resourceIndex !== undefined && resourceIndex !== null ? items[resourceIndex] : items.find((item) => identity(item) === selectedId)) ?? null;
   const readOnly = selected ? isUnsupportedSpinAuthoringResource(family, object(selected)) : false;
-  const baseDraft = family === "spin_torque" ? torqueDraft(selected as SceneSpinTorque | null) : oerstedDraft(selected as SceneOerstedField | null);
+  const baseDraft = family === "spin_torque"
+    ? torqueDraft(selected as SceneSpinTorque | null, selected ? null : initialScope)
+    : oerstedDraft(
+        selected as SceneOerstedField | null,
+        selected
+          ? null
+          : resolveOerstedCurrentSource(currents.data?.items ?? [], initialScope ?? null),
+      );
   const draftKey = `${family}:${resourceId ?? resourceIndex ?? localSelectedId}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState<{ key: string; value: TorqueDraft | OerstedDraft }>({ key: draftKey, value: baseDraft });
   const draft = draftState.key === draftKey ? draftState.value : baseDraft;
@@ -380,7 +458,7 @@ export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
 
   return <div className="fm-inspector-panel"><InspectorGroup title={family === "spin_torque" ? "Spin torque" : "Oersted field"}>
     {resourceId === undefined && resourceIndex === undefined ? <FormField label="Resource" type="select" value={localSelectedId} onChange={(event) => setLocalSelectedId(event.target.value)}><option value="">New resource</option>{items.map((item, index) => <option key={`${identity(item)}:${index}`} value={identity(item)}>{identity(item) || `Unknown ${index + 1}`}</option>)}</FormField> : null}
-    {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown authoring record is preserved losslessly and is read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected, null, 2)} /></> : family === "spin_torque" ? <TorqueFields draft={draft as TorqueDraft} identityReadOnly={Boolean(selected)} patch={patch} /> : <OerstedFields draft={draft as OerstedDraft} identityReadOnly={Boolean(selected)} patch={patch} />}
+    {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown authoring record is preserved losslessly and is read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected, null, 2)} /></> : family === "spin_torque" ? <TorqueFields currentTransports={currents.data?.items ?? []} draft={draft as TorqueDraft} identityReadOnly={Boolean(selected)} patch={patch} /> : <OerstedFields currentTransports={currents.data?.items ?? []} draft={draft as OerstedDraft} identityReadOnly={Boolean(selected)} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
     {!readOnly ? <Button disabled={pending || active.status !== "ready" || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void save()}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
@@ -388,13 +466,30 @@ export function SpinAuthoringInspector({ family, resourceId, resourceIndex }: {
   </InspectorGroup></div>;
 }
 
-function TorqueFields({ draft, identityReadOnly, patch }: { draft: TorqueDraft; identityReadOnly: boolean; patch: (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => void }) {
+function TorqueFields({ currentTransports, draft, identityReadOnly, patch }: { currentTransports: readonly SceneCurrentTransport[]; draft: TorqueDraft; identityReadOnly: boolean; patch: (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => void }) {
   const field = (key: keyof TorqueDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
+  const currentBinding: TorqueCurrentBinding = draft.currentSource.trim()
+    ? "current_transport"
+    : "prescribed_density";
+  const sourceOptions = currentSourceOptions(currentTransports, draft.currentSource);
   return <>
     <FormField label="Torque id" readOnly={identityReadOnly} value={draft.id} onChange={field("id")} />
-    <FormField label="Torque model" type="select" value={draft.kind} onChange={(event) => event.target.value === "prescribed_sot" ? patch({ kind: "prescribed_sot", formulaVersion: "prescribed_sot.fullmag.v1", schemaVersion: "prescribed_sot.v1", freeLayerThickness: draft.freeLayerThickness || "1e-9" }) : field("kind")(event)}><option value="zhang_li">Zhang-Li</option><option value="slonczewski">Slonczewski</option><option value="prescribed_sot">Prescribed SOT</option></FormField>
-    {draft.kind !== "prescribed_sot" ? <><FormField label="Current density" unit="A/m²" value={draft.currentDensity} onChange={field("currentDensity")} /><FormField label="Current source" value={draft.currentSource} onChange={field("currentSource")} /><FormField label="Polarization degree" value={draft.degree} onChange={field("degree")} /></> : null}
-    {draft.kind === "zhang_li" ? <FormField label="Non-adiabaticity beta" value={draft.beta} onChange={field("beta")} /> : null}
+    <FormField label="Torque model" type="select" value={draft.kind} onChange={(event) => patch(torqueModelPatch(draft, event.target.value as TorqueDraft["kind"]))}><option value="zhang_li">Zhang-Li</option><option value="slonczewski">Slonczewski</option><option value="prescribed_sot">Prescribed SOT</option></FormField>
+    {draft.kind !== "prescribed_sot" ? <>
+    <FormField label="Current binding" type="select" value={currentBinding} onChange={(event) => patch(torqueCurrentBindingPatch(draft, event.target.value as TorqueCurrentBinding, sourceOptions[0]?.value))}><option value="prescribed_density">Prescribed density</option><option value="current_transport">Current transport</option></FormField>
+      {currentBinding === "prescribed_density"
+        ? <FormField label="Current density" unit="A/m²" value={draft.currentDensity} onChange={field("currentDensity")} />
+        : <FormField label="Current source" type="select" value={draft.currentSource} onChange={field("currentSource")}><option value="">Select current transport</option>{sourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</FormField>}
+      <FormField label="Polarization degree" value={draft.degree} onChange={field("degree")} />
+    </> : null}
+    {draft.kind === "zhang_li" ? <>
+      <FormField label="Non-adiabaticity beta" value={draft.beta} onChange={field("beta")} />
+      <FormField label="Formula version" type="select" value={draft.formulaVersion} onChange={field("formulaVersion")}><option value="zhang_li.legacy_fullmag.v0">Legacy Fullmag</option><option value="zhang_li.fullmag.v1">Fullmag v1</option><option value="zhang_li.mumax3.v1">MuMax3-compatible v1</option></FormField>
+      <FormField label="Operator version" type="select" value={draft.operatorVersion} onChange={field("operatorVersion")}><option value="">Legacy/default</option><option value="zl_central_reference_v1">Central reference v1</option><option value="zl_mumax3_central_v1">MuMax3 central v1</option></FormField>
+      <FormField label="Landé g factor" value={draft.landeG} onChange={field("landeG")} />
+      <FormField label="Target region" type="textarea" value={draft.target} onChange={field("target")} />
+      <FormField label="Schema version" value={draft.schemaVersion} onChange={field("schemaVersion")} />
+    </> : null}
     {draft.kind === "slonczewski" ? <>
       <FormField label="Spin polarization orientation" value={draft.spinPolarization} onChange={field("spinPolarization")} />
       <FormField label="Epsilon prime" value={draft.epsilonPrime} onChange={field("epsilonPrime")} />
@@ -421,8 +516,24 @@ function TorqueFields({ draft, identityReadOnly, patch }: { draft: TorqueDraft; 
   </>;
 }
 
-function OerstedFields({ draft, identityReadOnly, patch }: { draft: OerstedDraft; identityReadOnly: boolean; patch: (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => void }) {
+export function torqueModelPatch(draft: TorqueDraft, kind: TorqueDraft["kind"]): Partial<TorqueDraft> {
+  if (kind === "zhang_li") {
+    return { kind, formulaVersion: "zhang_li.legacy_fullmag.v0", schemaVersion: "", operatorVersion: "", landeG: "" };
+  }
+  if (kind === "slonczewski") {
+    return { kind, formulaVersion: "slonczewski.fullmag.v2", schemaVersion: "" };
+  }
+  return {
+    kind,
+    formulaVersion: "prescribed_sot.fullmag.v1",
+    schemaVersion: "prescribed_sot.v1",
+    freeLayerThickness: draft.freeLayerThickness || "1e-9",
+  };
+}
+
+function OerstedFields({ currentTransports, draft, identityReadOnly, patch }: { currentTransports: readonly SceneCurrentTransport[]; draft: OerstedDraft; identityReadOnly: boolean; patch: (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => void }) {
   const field = (key: keyof OerstedDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
+  const sourceOptions = currentSourceOptions(currentTransports, draft.source);
   return <>
     <FormField label="Oersted field id" readOnly={identityReadOnly} value={draft.id} onChange={field("id")} />
     <FormField label="Oersted model" type="select" value={draft.kind} onChange={field("kind")}><option value="oersted_cylinder">Analytic cylinder</option><option value="oersted_field">From current solution</option></FormField>
@@ -433,7 +544,7 @@ function OerstedFields({ draft, identityReadOnly, patch }: { draft: OerstedDraft
       <FormField label="Current" unit="A" value={draft.current} onChange={field("current")} />
       <FormField label="Time dependence" type="textarea" rows={7} value={draft.timeDependence} onChange={field("timeDependence")} />
     </> : <>
-      <FormField label="Current solution source" value={draft.source} onChange={field("source")} />
+      <FormField label="Current solution source" type="select" value={draft.source} onChange={field("source")}><option value="">Select current solution</option>{sourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</FormField>
       <FormField label="Field model" value={draft.model} readOnly />
     </>}
   </>;
@@ -441,14 +552,25 @@ function OerstedFields({ draft, identityReadOnly, patch }: { draft: OerstedDraft
 
 export function SpinTorqueInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "spin-torque" ? selection.ref : null;
+  const selectedRegionId = selection.ref?.type === "scene-object"
+    ? selection.ref.regionId ?? null
+    : null;
+  const initialScope = ref === null && selection.objectId
+    ? { objectId: selection.objectId, regionId: selectedRegionId }
+    : null;
   return (
     <PhysicsInspectorOverview
       model={buildPhysicsInspectorOverviewModel({
         family: "spin_torque",
         scope: {
-          kind: selection.objectId ? "object" : "global",
+          kind: selectedRegionId ? "region" : selection.objectId ? "object" : "global",
           objectId: selection.objectId,
-          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId && selection.objectId
+            ? `region:${selection.objectId}:${selectedRegionId}`
+            : selection.objectId
+              ? `object:${selection.objectId}`
+              : "global:physics",
         },
         source: {
           id: ref?.spinTorqueId ?? "new",
@@ -457,21 +579,26 @@ export function SpinTorqueInspectorPanel({ selection }: InspectorPanelProps) {
         },
         status: "active",
       })}
-      primary={<SpinAuthoringInspector family="spin_torque" resourceId={ref?.spinTorqueId} resourceIndex={ref?.spinTorqueIndex} />}
+      primary={<SpinAuthoringInspector family="spin_torque" initialScope={initialScope} resourceId={ref?.spinTorqueId} resourceIndex={ref?.spinTorqueIndex} />}
     />
   );
 }
 
 export function OerstedFieldInspectorPanel({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "oersted-field" ? selection.ref : null;
+  const selectedRegionId = selection.ref?.type === "scene-object"
+    ? selection.ref.regionId ?? null
+    : null;
+  const initialScope = ref === null && selection.objectId
+    ? { objectId: selection.objectId, regionId: selectedRegionId }
+    : null;
   return (
     <PhysicsInspectorOverview
       model={buildPhysicsInspectorOverviewModel({
         family: "oersted_field",
         scope: {
-          kind: selection.objectId ? "object" : "global",
-          objectId: selection.objectId,
-          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+          kind: "global",
+          stableRef: "global:physics",
         },
         source: {
           id: ref?.oerstedFieldId ?? "new",
@@ -480,7 +607,7 @@ export function OerstedFieldInspectorPanel({ selection }: InspectorPanelProps) {
         },
         status: "active",
       })}
-      primary={<SpinAuthoringInspector family="oersted_field" resourceId={ref?.oerstedFieldId} resourceIndex={ref?.oerstedFieldIndex} />}
+      primary={<SpinAuthoringInspector family="oersted_field" initialScope={initialScope} resourceId={ref?.oerstedFieldId} resourceIndex={ref?.oerstedFieldIndex} />}
     />
   );
 }

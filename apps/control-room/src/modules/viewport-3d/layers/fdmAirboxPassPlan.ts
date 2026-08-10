@@ -3,29 +3,41 @@ import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectV
 export interface FdmAirboxPassPlan {
   hasAnyEffectivePass: boolean;
   needsExtentOverlay: boolean;
-  needsInactiveCellGeometry: false;
+  needsInactiveCellGeometry: boolean;
+  needsPointGeometry: boolean;
+  needsSurfaceInstances: boolean;
   needsVectorAnchors: boolean;
 }
 
 /**
  * The FDM Airbox is the universe extent outside magnetic support. Its
- * wireframe is an extent overlay, never a second dense cuboid-cell layer.
- * Vector anchors remain an independent sampled-data pass.
+ * mesh passes use the inactive cells selected from the current membership
+ * artifact. Bounds remain an independent contextual extent overlay.
  */
 export function resolveFdmAirboxPassPlan(
   settings: Pick<
     VisualizationTargetSettings,
-    "boundsVisible" | "vectorsVisible" | "visible" | "wireframeVisible"
+    | "boundsVisible"
+    | "pointsVisible"
+    | "vectorsVisible"
+    | "visible"
+    | "wireframeVisible"
   >,
 ): FdmAirboxPassPlan {
-  const needsExtentOverlay =
-    settings.visible && (settings.boundsVisible || settings.wireframeVisible);
+  const needsExtentOverlay = settings.visible && settings.boundsVisible;
+  const needsPointGeometry = settings.visible && settings.pointsVisible;
+  const needsSurfaceInstances =
+    settings.visible && settings.wireframeVisible;
   const needsVectorAnchors = settings.visible && settings.vectorsVisible;
+  const needsInactiveCellGeometry =
+    needsPointGeometry || needsSurfaceInstances || needsVectorAnchors;
 
   return {
-    hasAnyEffectivePass: needsExtentOverlay || needsVectorAnchors,
+    hasAnyEffectivePass: needsExtentOverlay || needsInactiveCellGeometry,
     needsExtentOverlay,
-    needsInactiveCellGeometry: false,
+    needsInactiveCellGeometry,
+    needsPointGeometry,
+    needsSurfaceInstances,
     needsVectorAnchors,
   };
 }

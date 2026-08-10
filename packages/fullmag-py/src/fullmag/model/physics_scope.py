@@ -160,7 +160,7 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         target = payload.get("target")
         domain = _regions((target,) if isinstance(target, Mapping) else ())
         activation = _dependency_activation(PhysicsActivation.ACTIVE, dependency, statuses) if dependency else PhysicsActivation.ACTIVE
-        add(_module(module_id, str(payload.get("kind") or "spin_torque"), domain, (dependency,) if dependency else (), activation, f"/spin_torques/{index}", payload))
+        add(_module(module_id, "spin_torque", domain, (dependency,) if dependency else (), activation, f"/spin_torques/{index}", payload))
         if dependency:
             edges.append(_edge("current_to_torque", dependency, module_id, activation))
 

@@ -29,6 +29,17 @@ function invokeFrameCallback(
 }
 
 describe("Viewport3DScene scale helpers", () => {
+  it("passes the requested FDM Airbox wireframe and points into the inactive-cell layer", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("const fdmAirboxMeshSettings =");
+    expect(source).toContain("settings={fdmAirboxMeshSettings}");
+    expect(source).not.toContain("pointsVisible: false,\n        shaderVisible: false,\n        wireframeVisible: false,");
+  });
+
   it("places the shared glyph-cache provider above the model stack that mounts VectorFieldLayer consumers", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),

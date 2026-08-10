@@ -52,6 +52,7 @@ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfile
 import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { ModuleProps } from "@/kernel/types";
 import {
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
   surfaceColorSourceToColorMode,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
@@ -121,7 +122,6 @@ import {
   type Viewport3DMeshCellSelectionRequest,
 } from "./viewport3dMeshCellSelection";
 import {
-  targetForFdmUniverseOutsideSupport,
   type HysteresisReplayGlyphModel,
   type HysteresisStepViewportTarget,
 } from "./model/viewport3DTargets";
@@ -685,15 +685,25 @@ function resolveViewport3DTargetColorbarLegend({
 }
 
 export function buildViewport3DColorbarTargetPlans({
+  availableQuantityIds,
   fdmSettings,
   parts,
 }: {
+  availableQuantityIds?: ReadonlySet<string> | null;
   fdmSettings?: VisualizationTargetSettings | null;
   parts: readonly Viewport3DColorbarTargetPart[];
 }): Viewport3DTargetRenderPlan[] {
   const targets: Viewport3DTargetRenderPlan[] = [];
   for (const part of parts) {
-    if (!isViewport3DColorbarTargetPartEligible(part)) continue;
+    if (
+      !isViewport3DColorbarTargetPartEligible(part) ||
+      !viewport3DColorbarQuantityAvailable(
+        part.settings.activeQuantityId,
+        availableQuantityIds,
+      )
+    ) {
+      continue;
+    }
     targets.push(
       buildViewport3DTargetRenderPlan({
         label: part.label,
@@ -704,7 +714,13 @@ export function buildViewport3DColorbarTargetPlans({
       }),
     );
   }
-  if (fdmSettings) {
+  if (
+    fdmSettings &&
+    viewport3DColorbarQuantityAvailable(
+      fdmSettings.activeQuantityId,
+      availableQuantityIds,
+    )
+  ) {
     targets.push(
       buildViewport3DTargetRenderPlan({
         label: "FDM domain",
@@ -716,6 +732,16 @@ export function buildViewport3DColorbarTargetPlans({
     );
   }
   return targets;
+}
+
+function viewport3DColorbarQuantityAvailable(
+  quantityId: string,
+  availableQuantityIds: ReadonlySet<string> | null | undefined,
+): boolean {
+  return (
+    availableQuantityIds == null ||
+    availableQuantityIds.has(resolveCanonicalQuantityId(quantityId))
+  );
 }
 
 function isViewport3DColorbarTargetPartEligible(
@@ -1361,7 +1387,7 @@ export default function Viewport3DModule({
   }, []);
   const changeFdmUniverseOverlayVisibility = useCallback(
     (visible: boolean) => {
-      kernel.visualization.patchTarget(targetForFdmUniverseOutsideSupport(), {
+      kernel.visualization.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
         visible,
       });
     },
@@ -1749,11 +1775,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       ...sceneProps.fdmTargetViews.map((view) => ({
         id: view.target.id,
         label: view.target.label ?? view.target.id,
-        objectScopeId:
-          view.target.kind === "object" ? view.target.id : view.ownerTarget.id,
+        objectScopeId: null,
         role: null,
         settings: view.settings,
-        targetKind: view.target.kind,
+        targetKind: "fdm-domain" as const,
       })),
     ],
     [
@@ -1772,6 +1797,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const colorbarTargetPlans = useMemo(
     () =>
       buildViewport3DColorbarTargetPlans({
+        availableQuantityIds: sceneProps.availableQuantityIds,
         fdmSettings:
           sceneProps.fdmDomain && sceneProps.fdmTargetViews.length === 0
             ? sceneProps.fdmSettings
@@ -1780,6 +1806,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       }),
     [
       colorbarParts,
+      sceneProps.availableQuantityIds,
       sceneProps.fdmDomain,
       sceneProps.fdmSettings,
       sceneProps.fdmTargetViews.length,

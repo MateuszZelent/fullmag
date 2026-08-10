@@ -498,6 +498,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_domain_meta),
         )
         .route(
+            "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+            get(handlers::data::get_fdm_multilayer_layout),
+        )
+        .route(
             "/v2/sessions/current/data/domain/topology",
             get(handlers::data::get_domain_topology),
         )

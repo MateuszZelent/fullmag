@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
+import { commitRegionalFieldDrive, regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
 
 describe("RegionalFieldDrivePanelModel", () => {
   it("derives only canonical object, region, and stable run-stage selectors", () => {
@@ -48,6 +48,77 @@ describe("RegionalFieldDrivePanelModel", () => {
     );
     expect(model.mode).toBe("found");
     expect(model.sceneRevision).toBe(7);
+  });
+
+  it("creates a unique global draft only for an explicit field-drive draft selection", () => {
+    const model = resolveRegionalFieldDrivePanelModel(
+      {
+        kind: "physics.field-drive",
+        label: "New field drive",
+        moduleSource: "ribbon",
+        nodeId: "model:physics:field-drive:draft",
+        objectId: null,
+        ref: {
+          draft: true,
+          kind: "physics.field-drive",
+          nodeId: "model:physics:field-drive:draft",
+          type: "physics-field-drive",
+        },
+      },
+      {
+        scene_revision: 11,
+        drives: [{
+          id: "field-drive",
+          name: "Existing",
+          kind: "regional",
+          enabled: true,
+          target: { kind: "global" },
+          amplitude_B_T: 1e-3,
+          direction: [0, 1, 0],
+          spatial_profile: { kind: "uniform" },
+          waveform: { kind: "constant" },
+          time_origin: "stage_local",
+          activation: { kind: "all_time_evolution" },
+        }],
+      },
+    );
+
+    expect(model.mode).toBe("create");
+    expect(model.sceneRevision).toBe(11);
+    expect(model.drive).toMatchObject({
+      id: "field-drive-2",
+      target: { kind: "global" },
+      kind: "regional",
+    });
+  });
+
+  it("uses POST for a create draft and PUT only for an existing field drive", async () => {
+    const createFieldDrive = vi.fn().mockResolvedValue({ scene_revision: 12 });
+    const replaceFieldDrive = vi.fn().mockResolvedValue({ scene_revision: 13 });
+    const api = { createFieldDrive, replaceFieldDrive };
+    const drive = {
+      id: "field-drive-2",
+      name: "Global field drive",
+      kind: "regional" as const,
+      enabled: true,
+      target: { kind: "global" as const },
+      amplitude_B_T: 1e-3,
+      direction: [0, 1, 0],
+      spatial_profile: { kind: "uniform" as const },
+      waveform: { kind: "constant" as const },
+      time_origin: "stage_local" as const,
+      activation: { kind: "all_time_evolution" as const },
+    };
+
+    await commitRegionalFieldDrive(api, "create", 11, drive);
+    expect(createFieldDrive).toHaveBeenCalledWith({ base_revision: 11, drive });
+    expect(replaceFieldDrive).not.toHaveBeenCalled();
+
+    await commitRegionalFieldDrive(api, "found", 12, drive);
+    expect(replaceFieldDrive).toHaveBeenCalledWith("field-drive-2", {
+      base_revision: 12,
+      drive,
+    });
   });
 
   it("derives t_sampling and active run duration from canonical scene study data", () => {

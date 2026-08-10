@@ -16,6 +16,300 @@ pub struct TransferBoundaryPolicy {
     pub periodic_axes: [bool; 3],
 }
 
+/// Geometry-only overlap stencil for a native-to-scratch transfer.
+///
+/// The stencil is independent of field values and can be built once per
+/// layer. `push_m` computes a volume-weighted average over active native
+/// cells; `pull_h_adjoint` is its exact transpose in the volume-weighted
+/// inner product.
+#[derive(Debug, Clone)]
+pub struct VolumeWeightedTransfer {
+    native_cells: [usize; 3],
+    scratch_cells: [usize; 3],
+    native_cell_size: [f64; 3],
+    scratch_cell_size: [f64; 3],
+    native_origin: [f64; 3],
+    scratch_origin: [f64; 3],
+    /// For every scratch cell, `(native_linear_index, overlap_volume)` pairs.
+    overlaps: Vec<Vec<(usize, f64)>>,
+    scratch_volume: f64,
+    native_volume: f64,
+    boundary_policy: TransferBoundaryPolicy,
+}
+
+impl VolumeWeightedTransfer {
+    /// Build an open-boundary overlap stencil. Periodic transfers are
+    /// rejected explicitly because wrapping changes the overlap topology and
+    /// needs a separate descriptor instead of an open-boundary transpose.
+    pub fn new(
+        native_cells: [usize; 3],
+        native_cell_size: [f64; 3],
+        native_origin: [f64; 3],
+        scratch_cells: [usize; 3],
+        scratch_cell_size: [f64; 3],
+        scratch_origin: [f64; 3],
+        boundary_policy: TransferBoundaryPolicy,
+    ) -> Result<Self, String> {
+        if boundary_policy
+            .periodic_axes
+            .iter()
+            .any(|periodic| *periodic)
+        {
+            return Err(
+                "volume-weighted transfer requires open boundaries; periodic overlap is unsupported"
+                    .to_string(),
+            );
+        }
+        if native_cells.contains(&0) || scratch_cells.contains(&0) {
+            return Err("native and scratch transfer grids must be non-empty".to_string());
+        }
+        if native_cell_size
+            .iter()
+            .chain(scratch_cell_size.iter())
+            .any(|value| !value.is_finite() || *value <= 0.0)
+            || native_origin
+                .iter()
+                .chain(scratch_origin.iter())
+                .any(|value| !value.is_finite())
+        {
+            return Err("transfer origins must be finite and cell sizes positive".to_string());
+        }
+
+        let native_volume = native_cell_size[0] * native_cell_size[1] * native_cell_size[2];
+        let scratch_volume = scratch_cell_size[0] * scratch_cell_size[1] * scratch_cell_size[2];
+        let scratch_count = scratch_cells[0] * scratch_cells[1] * scratch_cells[2];
+        let mut overlaps = vec![Vec::new(); scratch_count];
+
+        for sz in 0..scratch_cells[2] {
+            for sy in 0..scratch_cells[1] {
+                for sx in 0..scratch_cells[0] {
+                    let scratch_index =
+                        sz * scratch_cells[1] * scratch_cells[0] + sy * scratch_cells[0] + sx;
+                    let scratch_lo = [
+                        scratch_origin[0] + sx as f64 * scratch_cell_size[0],
+                        scratch_origin[1] + sy as f64 * scratch_cell_size[1],
+                        scratch_origin[2] + sz as f64 * scratch_cell_size[2],
+                    ];
+                    let scratch_hi = [
+                        scratch_lo[0] + scratch_cell_size[0],
+                        scratch_lo[1] + scratch_cell_size[1],
+                        scratch_lo[2] + scratch_cell_size[2],
+                    ];
+
+                    for nz in 0..native_cells[2] {
+                        for ny in 0..native_cells[1] {
+                            for nx in 0..native_cells[0] {
+                                let native_lo = [
+                                    native_origin[0] + nx as f64 * native_cell_size[0],
+                                    native_origin[1] + ny as f64 * native_cell_size[1],
+                                    native_origin[2] + nz as f64 * native_cell_size[2],
+                                ];
+                                let native_hi = [
+                                    native_lo[0] + native_cell_size[0],
+                                    native_lo[1] + native_cell_size[1],
+                                    native_lo[2] + native_cell_size[2],
+                                ];
+                                let overlap = overlap_length_open(
+                                    scratch_lo[0],
+                                    scratch_hi[0],
+                                    native_lo[0],
+                                    native_hi[0],
+                                ) * overlap_length_open(
+                                    scratch_lo[1],
+                                    scratch_hi[1],
+                                    native_lo[1],
+                                    native_hi[1],
+                                ) * overlap_length_open(
+                                    scratch_lo[2],
+                                    scratch_hi[2],
+                                    native_lo[2],
+                                    native_hi[2],
+                                );
+                                if overlap > 0.0 {
+                                    overlaps[scratch_index].push((
+                                        nz * native_cells[1] * native_cells[0]
+                                            + ny * native_cells[0]
+                                            + nx,
+                                        overlap,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Self {
+            native_cells,
+            scratch_cells,
+            native_cell_size,
+            scratch_cell_size,
+            native_origin,
+            scratch_origin,
+            overlaps,
+            scratch_volume,
+            native_volume,
+            boundary_policy,
+        })
+    }
+
+    pub fn native_cells(&self) -> [usize; 3] {
+        self.native_cells
+    }
+
+    pub fn scratch_cells(&self) -> [usize; 3] {
+        self.scratch_cells
+    }
+
+    pub fn native_cell_size(&self) -> [f64; 3] {
+        self.native_cell_size
+    }
+
+    pub fn scratch_cell_size(&self) -> [f64; 3] {
+        self.scratch_cell_size
+    }
+
+    pub fn native_origin(&self) -> [f64; 3] {
+        self.native_origin
+    }
+
+    pub fn scratch_origin(&self) -> [f64; 3] {
+        self.scratch_origin
+    }
+
+    pub fn boundary_policy(&self) -> TransferBoundaryPolicy {
+        self.boundary_policy
+    }
+
+    /// Push native magnetization to scratch cells by active-volume average.
+    pub fn push_m(
+        &self,
+        native_m: &[[f64; 3]],
+        active_mask: Option<&[bool]>,
+    ) -> Result<Vec<[f64; 3]>, String> {
+        self.validate_native_inputs(native_m.len(), active_mask)?;
+        let mut scratch_m = vec![[0.0; 3]; self.overlaps.len()];
+        for (scratch_index, overlaps) in self.overlaps.iter().enumerate() {
+            let mut covered_volume = 0.0;
+            let mut moment = [0.0; 3];
+            for &(native_index, overlap) in overlaps {
+                if active_mask.map(|mask| mask[native_index]).unwrap_or(true) {
+                    let m = native_m[native_index];
+                    covered_volume += overlap;
+                    for component in 0..3 {
+                        moment[component] += overlap * m[component];
+                    }
+                }
+            }
+            if covered_volume > 0.0 {
+                for component in 0..3 {
+                    scratch_m[scratch_index][component] = moment[component] / covered_volume;
+                }
+            }
+        }
+        Ok(scratch_m)
+    }
+
+    /// Pull scratch field through the exact volume-weighted transpose of
+    /// [`Self::push_m`]. Inactive native cells are always returned as zero.
+    pub fn pull_h_adjoint(
+        &self,
+        scratch_h: &[[f64; 3]],
+        active_mask: Option<&[bool]>,
+    ) -> Result<Vec<[f64; 3]>, String> {
+        self.validate_scratch_inputs(scratch_h.len(), active_mask)?;
+        let mut native_h = vec![[0.0; 3]; self.native_len()];
+        for (scratch_index, overlaps) in self.overlaps.iter().enumerate() {
+            let covered_volume = overlaps
+                .iter()
+                .filter(|(native_index, _)| {
+                    active_mask.map(|mask| mask[*native_index]).unwrap_or(true)
+                })
+                .map(|(_, overlap)| *overlap)
+                .sum::<f64>();
+            if covered_volume <= 0.0 {
+                continue;
+            }
+            let h = scratch_h[scratch_index];
+            for &(native_index, overlap) in overlaps {
+                if active_mask.map(|mask| mask[native_index]).unwrap_or(true) {
+                    let coefficient =
+                        self.scratch_volume * overlap / (covered_volume * self.native_volume);
+                    for component in 0..3 {
+                        native_h[native_index][component] += coefficient * h[component];
+                    }
+                }
+            }
+        }
+        Ok(native_h)
+    }
+
+    fn native_len(&self) -> usize {
+        self.native_cells[0] * self.native_cells[1] * self.native_cells[2]
+    }
+
+    fn scratch_len(&self) -> usize {
+        self.scratch_cells[0] * self.scratch_cells[1] * self.scratch_cells[2]
+    }
+
+    fn validate_native_inputs(
+        &self,
+        values_len: usize,
+        active_mask: Option<&[bool]>,
+    ) -> Result<(), String> {
+        if values_len != self.native_len() {
+            return Err(format!(
+                "native transfer field length {values_len} does not match {}",
+                self.native_len()
+            ));
+        }
+        self.validate_mask(active_mask)
+    }
+
+    fn validate_scratch_inputs(
+        &self,
+        values_len: usize,
+        active_mask: Option<&[bool]>,
+    ) -> Result<(), String> {
+        if values_len != self.scratch_len() {
+            return Err(format!(
+                "scratch transfer field length {values_len} does not match {}",
+                self.scratch_len()
+            ));
+        }
+        self.validate_mask(active_mask)
+    }
+
+    fn validate_mask(&self, active_mask: Option<&[bool]>) -> Result<(), String> {
+        if let Some(mask) = active_mask {
+            if mask.len() != self.native_len() {
+                return Err(format!(
+                    "active mask length {} does not match native cell count {}",
+                    mask.len(),
+                    self.native_len()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn overlap_length_open(a_lo: f64, a_hi: f64, b_lo: f64, b_hi: f64) -> f64 {
+    let raw = (a_hi.min(b_hi) - a_lo.max(b_lo)).max(0.0);
+    // Grid origins are represented in SI floating point, so two geometrically
+    // coincident faces can leave a sub-ulp positive sliver (for example when
+    // an Airbox is extended by one cell).  Treat that sliver as no overlap;
+    // otherwise the volume average normalizes it to a full magnetization and
+    // creates a spurious source plane at the boundary.
+    let scale = (a_hi - a_lo).abs().max((b_hi - b_lo).abs());
+    if raw <= 1.0e-12 * scale {
+        0.0
+    } else {
+        raw
+    }
+}
+
 impl TransferBoundaryPolicy {
     pub const OPEN: Self = Self {
         periodic_axes: [false; 3],
@@ -727,5 +1021,80 @@ mod tests {
             TransferBoundaryPolicy::from_periodic_axes([true, false, false]),
         );
         assert!((periodic[2][0] - 7.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn volume_weighted_transfer_preserves_2d_moment_through_z_average() {
+        let transfer = VolumeWeightedTransfer::new(
+            [1, 1, 2],
+            [1.0, 1.0, 0.5],
+            [0.0, 0.0, 0.0],
+            [1, 1, 1],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            TransferBoundaryPolicy::OPEN,
+        )
+        .expect("valid 2-D moment-preserving transfer");
+        let native = vec![[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let scratch = transfer.push_m(&native, None).expect("push succeeds");
+        assert!((scratch[0][0] - 2.0).abs() < 1e-14);
+
+        let native_moment = native.iter().map(|m| m[0] * 0.5).sum::<f64>();
+        let scratch_moment = scratch[0][0];
+        assert!((native_moment - scratch_moment).abs() < 1e-14);
+    }
+
+    #[test]
+    fn volume_weighted_transfer_is_adjoint_with_active_mask() {
+        let transfer = VolumeWeightedTransfer::new(
+            [2, 1, 2],
+            [0.5, 1.0, 0.5],
+            [0.0, 0.0, 0.0],
+            [1, 1, 1],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            TransferBoundaryPolicy::OPEN,
+        )
+        .expect("valid transfer");
+        let native = vec![
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+        ];
+        let scratch_test = vec![[0.75, 0.0, 0.0]];
+        let mask = [true, false, true, true];
+        let pushed = transfer
+            .push_m(&native, Some(&mask))
+            .expect("push succeeds");
+        let pulled = transfer
+            .pull_h_adjoint(&scratch_test, Some(&mask))
+            .expect("adjoint pull succeeds");
+        let native_volume = 0.5 * 1.0 * 0.5;
+        let lhs = pushed[0][0] * scratch_test[0][0];
+        let rhs = native
+            .iter()
+            .zip(pulled.iter())
+            .zip(mask.iter())
+            .filter(|(_, active)| **active)
+            .map(|((m, h), _)| native_volume * m[0] * h[0])
+            .sum::<f64>();
+        assert!((lhs - rhs).abs() < 1e-14, "lhs={lhs} rhs={rhs}");
+        assert_eq!(pulled[1], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn volume_weighted_transfer_rejects_periodic_boundary_until_descriptor_exists() {
+        let error = VolumeWeightedTransfer::new(
+            [1, 1, 1],
+            [1.0; 3],
+            [0.0; 3],
+            [1, 1, 1],
+            [1.0; 3],
+            [0.0; 3],
+            TransferBoundaryPolicy::from_periodic_axes([true, false, false]),
+        )
+        .expect_err("periodic transfer must fail closed");
+        assert!(error.contains("periodic"));
     }
 }

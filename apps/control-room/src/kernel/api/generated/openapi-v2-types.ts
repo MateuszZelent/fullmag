@@ -756,6 +756,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_fdm_multilayer_layout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/domain/meta": {
         parameters: {
             query?: never;
@@ -2388,6 +2404,29 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_oersted_fields_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/physics-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Return the semantic physics-module graph for the current authoring scene.
+         * @description This endpoint is intentionally thin: mesh topology, field samples and the
+         *     constitutive family records stay on their dedicated resources.  The graph
+         *     is normalized once by `fullmag-authoring` so the planner and Control Room
+         *     consume the same stable module identity, scope and dependency semantics.
+         */
+        get: operations["model_get_sessions_current_model_physics_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/planar-monitors": {
         parameters: {
             query?: never;
@@ -2430,22 +2469,6 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["model_post_sessions_current_model_planar_monitors_monitor_id_duplicate"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/sessions/current/model/physics-graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["model_get_sessions_current_model_physics_graph"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4149,6 +4172,32 @@ export interface components {
             revision: number;
             total: number;
         };
+        FdmCommonTransformLayoutResource: {
+            cell_size: number[];
+            fft_shape: number[];
+            is_physical_mesh: boolean;
+            origin: number[];
+            provenance: string;
+            shape: number[];
+        };
+        FdmLayerLayoutResource: {
+            /** Format: int64 */
+            active_cell_count: number;
+            active_mask_present: boolean;
+            convolution_cell_size: number[];
+            convolution_grid: number[];
+            /** Format: int64 */
+            inactive_cell_count: number;
+            layer_id: string;
+            magnet_name: string;
+            mask_provenance?: string | null;
+            native_cell_size: number[];
+            native_grid: number[];
+            native_grid_fingerprint?: string | null;
+            native_origin: number[];
+            object_id: string;
+            transfer_kind: string;
+        };
         /** @enum {string} */
         FdmMagneticSupportSemanticRole: "magnetic-support";
         FdmMagneticSupportSummaryResource: {
@@ -4165,6 +4214,52 @@ export interface components {
             /** Format: int64 */
             inactive_cell_count: number;
             semantic_role: components["schemas"]["FdmMagneticSupportSemanticRole"];
+        };
+        FdmMultilayerAirboxResource: {
+            carrier_available: boolean;
+            carrier_fingerprint?: string | null;
+            /** Format: int64 */
+            carrier_revision?: number | null;
+            cell_size_m?: number[] | null;
+            cells?: number[] | null;
+            h_demag_available: boolean;
+            h_eff_available: boolean;
+            h_eff_unavailable_reason?: string | null;
+            origin_m?: number[] | null;
+            /** Format: int64 */
+            sample_count?: number | null;
+            source_grid_fingerprints?: string[] | null;
+            source_policy?: string | null;
+            source_runtime_identity?: unknown;
+            target_only?: boolean | null;
+            unavailable_reason?: string | null;
+            /** Format: int64 */
+            value_count?: number | null;
+        };
+        /**
+         * @description Thin, revision-driven description of the native carriers used by an FDM
+         *     multilayer convolution.  The common transform layout is an FFT scratch
+         *     layout and must never be interpreted as a physical mesh.
+         */
+        FdmMultilayerLayoutResource: {
+            airbox: components["schemas"]["FdmMultilayerAirboxResource"];
+            available: boolean;
+            backend: string;
+            common_transform_layout?: null | components["schemas"]["FdmCommonTransformLayoutResource"];
+            domain_generation_id: string;
+            /** Format: int64 */
+            execution_revision: number;
+            layers: components["schemas"]["FdmLayerLayoutResource"][];
+            layout_fingerprint?: string | null;
+            /** Format: int64 */
+            layout_revision: number;
+            /** Format: int64 */
+            observation_revision: number;
+            requested_mode?: string | null;
+            resolved_mode?: string | null;
+            schema_version: string;
+            strategy?: string | null;
+            unavailable_reason?: string | null;
         };
         /**
          * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
@@ -5695,9 +5790,15 @@ export interface components {
             current_source?: string | null;
             /** Format: double */
             degree: number;
+            formula_version?: components["schemas"]["ZhangLiFormulaVersion"];
             id?: string;
             /** @enum {string} */
             kind: "zhang_li";
+            /** Format: double */
+            lande_g?: number | null;
+            operator_version?: null | components["schemas"]["ZhangLiOperatorVersion"];
+            schema_version?: string | null;
+            target?: null | components["schemas"]["SceneRegionRef"];
         } | {
             compatibility_origin?: null | components["schemas"]["SceneCompatibilityOrigin"];
             drive: components["schemas"]["ScenePrescribedSotDrive"];
@@ -6812,6 +6913,74 @@ export interface components {
         /** @enum {string} */
         PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
         /** @enum {string} */
+        PhysicsGraphActivationResource: "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved";
+        PhysicsGraphEdgeResource: {
+            kind: string;
+            source_id: string;
+            status: components["schemas"]["PhysicsGraphActivationResource"];
+            target_id: string;
+        };
+        PhysicsGraphModuleResource: {
+            activation: components["schemas"]["PhysicsGraphActivationResource"];
+            applies_to: components["schemas"]["PhysicsGraphScopeResource"][];
+            authored_state: string;
+            capability: string;
+            depends_on: string[];
+            id: string;
+            kind: string;
+            presentation: components["schemas"]["PhysicsGraphPresentationResource"];
+            solve_domain: components["schemas"]["SceneRegionRef"][];
+            source_path: string;
+        };
+        PhysicsGraphPresentationResource: {
+            family: string;
+            label: string;
+        };
+        PhysicsGraphProvenanceResource: {
+            normalizer: string;
+        };
+        PhysicsGraphResource: {
+            edges: components["schemas"]["PhysicsGraphEdgeResource"][];
+            modules: components["schemas"]["PhysicsGraphModuleResource"][];
+            provenance: components["schemas"]["PhysicsGraphProvenanceResource"];
+            /** Format: int64 */
+            scene_revision: number;
+            schema_version: string;
+        };
+        /**
+         * @description Stable scope reference used by the graph-driven model tree.
+         *
+         *     The graph endpoint intentionally exposes scope and dependency metadata,
+         *     while constitutive family payloads remain on the family resources.
+         */
+        PhysicsGraphScopeResource: {
+            /** @enum {string} */
+            kind: "global";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "interface";
+            side_a: components["schemas"]["SceneRegionRef"];
+            side_b: components["schemas"]["SceneRegionRef"];
+        } | {
+            /** @enum {string} */
+            kind: "cross_object";
+            object_ids: string[];
+        } | {
+            /** @enum {string} */
+            kind: "unresolved";
+            reason: string;
+            source_path: string;
+        };
+        /** @enum {string} */
         PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
         PlanarExtentSchema: {
             /** @enum {string} */
@@ -7104,55 +7273,6 @@ export interface components {
             resolution: components["schemas"]["PlanarResolutionPolicy"];
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
-        };
-        PhysicsGraphActivationResource: "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved";
-        PhysicsGraphEdgeResource: {
-            kind: string;
-            source_id: string;
-            status: components["schemas"]["PhysicsGraphActivationResource"];
-            target_id: string;
-        };
-        PhysicsGraphModuleResource: {
-            activation: components["schemas"]["PhysicsGraphActivationResource"];
-            applies_to: components["schemas"]["PhysicsGraphScopeResource"][];
-            authored_state: string;
-            capability: string;
-            depends_on: string[];
-            id: string;
-            kind: string;
-            solve_domain: components["schemas"]["SceneRegionRef"][];
-            source_path: string;
-        };
-        PhysicsGraphProvenanceResource: {
-            normalizer: string;
-        };
-        PhysicsGraphResource: {
-            edges: components["schemas"]["PhysicsGraphEdgeResource"][];
-            modules: components["schemas"]["PhysicsGraphModuleResource"][];
-            provenance: components["schemas"]["PhysicsGraphProvenanceResource"];
-            schema_version: string;
-            scene_revision: number;
-        };
-        PhysicsGraphScopeResource: {
-            kind: "global";
-        } | {
-            kind: "object";
-            object_id: string;
-        } | {
-            kind: "region";
-            object_id: string;
-            region_id: string;
-        } | {
-            kind: "interface";
-            side_a: components["schemas"]["SceneRegionRef"];
-            side_b: components["schemas"]["SceneRegionRef"];
-        } | {
-            kind: "cross_object";
-            object_ids: string[];
-        } | {
-            kind: "unresolved";
-            reason: string;
-            source_path: string;
         };
         PreparationClockAdjustment: {
             /** Format: int64 */
@@ -10092,6 +10212,10 @@ export interface components {
             left_dock?: string | null;
             right_dock?: string | null;
         };
+        /** @enum {string} */
+        ZhangLiFormulaVersion: "zhang_li.fullmag.v1" | "zhang_li.mumax3.v1" | "zhang_li.legacy_fullmag.v0";
+        /** @enum {string} */
+        ZhangLiOperatorVersion: "zl_central_reference_v1" | "zl_mumax3_central_v1";
     };
     responses: never;
     parameters: never;
@@ -11342,6 +11466,33 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_domain_fdm_multilayer_layout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FDM multilayer native and common transform layouts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FdmMultilayerLayoutResource"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_domain_meta: {
         parameters: {
             query?: never;
@@ -11719,7 +11870,7 @@ export interface operations {
                 component?: string | null;
                 /** @description Optional FEM or FDM scope used for statistics. */
                 scope_kind?: string | null;
-                /** @description Scope identifier for `object`, `region`, and `part` scopes. */
+                /** @description Scope identifier for `object`, `layer`, `region`, and `part` scopes. */
                 scope_id?: string | null;
                 /** @description Optional canonical owner of a `region` scope. */
                 owner_object_id?: string | null;
@@ -16338,6 +16489,40 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_physics_graph: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Normalized authored physics graph */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicsGraphResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The authored scene cannot be normalized into a graph */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_planar_monitors: {
         parameters: {
             query?: never;
@@ -16674,40 +16859,6 @@ export interface operations {
             };
             /** @description No active workspace or scene document */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    model_get_sessions_current_model_physics_graph: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Normalized authored physics graph */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PhysicsGraphResource"];
-                };
-            };
-            /** @description No active workspace or scene document */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The authored scene cannot be normalized into a graph */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

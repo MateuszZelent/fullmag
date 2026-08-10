@@ -3948,11 +3948,8 @@ mod tests {
             problem.dynamics.gyromagnetic_ratio,
             problem.material.saturation_magnetisation,
         );
-        let expected = normalized(add(
-            initial[0],
-            scale(add(rhs0, rhs1), 0.5 * dt),
-        ))
-        .expect("Heun candidate");
+        let expected =
+            normalized(add(initial[0], scale(add(rhs0, rhs1), 0.5 * dt))).expect("Heun candidate");
 
         let mut state = problem.new_state(initial).expect("initial FEM state");
         let report = problem.step(&mut state, dt).expect("FEM Slonczewski step");

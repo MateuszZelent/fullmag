@@ -771,27 +771,19 @@ fn attach_solver_trace_segment_to_payload(
     let Some(profile) = payload.solver_profile.as_mut() else {
         return;
     };
-    let Some(sample) = profile
-        .latest_samples
-        .iter_mut()
-        .rev()
-        .find(|sample| {
-            sample.step == step
-                && sample
-                    .trace
-                    .as_ref()
-                    .is_some_and(|trace| trace.trace_id.accepted_step == step)
-        })
-    else {
+    let Some(sample) = profile.latest_samples.iter_mut().rev().find(|sample| {
+        sample.step == step
+            && sample
+                .trace
+                .as_ref()
+                .is_some_and(|trace| trace.trace_id.accepted_step == step)
+    }) else {
         return;
     };
     let Some(trace) = sample.trace.as_mut() else {
         return;
     };
-    let _ = trace.insert_segment(fullmag_runner::SolverTraceSegment::new(
-        kind,
-        duration_ns,
-    ));
+    let _ = trace.insert_segment(fullmag_runner::SolverTraceSegment::new(kind, duration_ns));
 }
 
 fn record_live_publish_diagnostics(
@@ -1343,6 +1335,16 @@ fn scalar_payload_finished(payload: &CurrentLiveSnapshotPayload) -> bool {
 
 impl CurrentLivePublisher {
     pub fn spawn(session_id: &str) -> Self {
+        if !live_api_publish_enabled(api_port()) {
+            let sink: LivePublishSink = Arc::new(|_, _| Ok(()));
+            return Self::spawn_with_sinks(
+                session_id,
+                std::time::Duration::ZERO,
+                false,
+                Arc::clone(&sink),
+                sink,
+            );
+        }
         Self::spawn_with_sinks(
             session_id,
             std::time::Duration::ZERO,
@@ -1574,6 +1576,10 @@ impl CurrentLivePublisher {
     }
 }
 
+fn live_api_publish_enabled(port: u16) -> bool {
+    port != 0
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1581,7 +1587,7 @@ mod tests {
 
     use super::{
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
-        fem_mesh_payload_clone_count, ingest_preview_fields_from_update,
+        fem_mesh_payload_clone_count, ingest_preview_fields_from_update, live_api_publish_enabled,
         merge_detailed_mesh_workspace, merge_pending_publish_payload,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
         scalar_candidate_from_workspace_state, table_autosave_sample_due,
@@ -1598,6 +1604,12 @@ mod tests {
     };
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn headless_zero_api_port_disables_live_http_publication() {
+        assert!(!live_api_publish_enabled(0));
+        assert!(live_api_publish_enabled(8081));
+    }
 
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {
@@ -1793,6 +1805,78 @@ mod tests {
         assert_eq!(state.preview_cache_revision, 2);
     }
 
+    #[test]
+    fn incoming_preview_fields_inherit_step_provenance() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut update = preview_update(preview_field("h_eff", 1, 1.0));
+        update.stats.step = 27;
+
+        ingest_preview_fields_from_update(&mut state, &mut update);
+
+        let pending = state.pending_preview_fields.to_vec();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source_step, 27);
+        assert!(update.preview_field.is_none());
+    }
+
+    #[test]
+    fn full_grid_materialized_fields_promote_to_latest_without_preview_cache() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut field = preview_field("H_demag", 1, 2.0);
+        field.spatial_kind = "grid".to_string();
+        field.quantity_domain = "full_domain".to_string();
+        field.preview_grid = [2, 1, 1];
+        field.original_grid = [2, 1, 1];
+        field.vector_field_values = vec![0.0, 0.0, 2.0, 0.0, 0.0, 3.0];
+
+        let mut update = preview_update(field.clone());
+        update.grid = [2, 1, 1];
+        update.stats.step = 42;
+        update.preview_field = None;
+        update.cached_preview_fields = Some(vec![field]);
+
+        ingest_preview_fields_from_update(&mut state, &mut update);
+
+        assert!(state.pending_preview_fields.is_empty());
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["source_step"],
+            serde_json::json!(42)
+        );
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["layout"]["grid_cells"],
+            serde_json::json!([2, 1, 1])
+        );
+    }
+
+    #[test]
+    fn downscaled_preview_does_not_overwrite_full_latest_field() {
+        let workspace = workspace_with_domain_mesh();
+        workspace.update(|state| {
+            state.live_state.latest_step.step = 42;
+
+            let mut full = preview_field("H_demag", 1, 4.0);
+            full.spatial_kind = "grid".to_string();
+            full.preview_grid = [4, 1, 1];
+            full.original_grid = [4, 1, 1];
+            full.vector_field_values = (0..4).flat_map(|_| [0.0, 0.0, 4.0]).collect();
+            replace_cached_preview_fields(state, vec![full]);
+
+            let mut downscaled = preview_field("H_demag", 2, 2.0);
+            downscaled.spatial_kind = "grid".to_string();
+            downscaled.preview_grid = [2, 1, 1];
+            downscaled.original_grid = [4, 1, 1];
+            downscaled.vector_field_values = (0..2).flat_map(|_| [0.0, 0.0, 2.0]).collect();
+            downscaled.auto_downscaled = true;
+            replace_cached_preview_fields(state, vec![downscaled]);
+        });
+
+        let snapshot = workspace.snapshot();
+        assert_eq!(
+            snapshot.latest_fields.0["H_demag"]["values"],
+            serde_json::json!([0.0, 0.0, 4.0, 0.0, 0.0, 4.0, 0.0, 0.0, 4.0, 0.0, 0.0, 4.0])
+        );
+    }
+
     fn no_op_publisher() -> CurrentLivePublisher {
         CurrentLivePublisher::spawn_with_test_sink("no-op-test-publisher", |_, _| Ok(()))
     }
@@ -1888,10 +1972,12 @@ mod tests {
             ..fullmag_runner::SolverProfileConfig::default()
         });
 
-        assert!(workspace.record_solver_profile_step(&fullmag_runner::StepStats {
-            step: 3,
-            ..fullmag_runner::StepStats::default()
-        }));
+        assert!(
+            workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+                step: 3,
+                ..fullmag_runner::StepStats::default()
+            })
+        );
         assert!(workspace.attach_solver_profile_trace(3));
         assert!(workspace.attach_solver_profile_trace_segment(
             3,
@@ -4125,10 +4211,7 @@ pub(crate) fn set_latest_scalar_row_if_due(
         .and_then(|row| row.active_runtime_s)
         .unwrap_or(0.0);
     let active_runtime_s = previous_runtime_s + update.stats.wall_time_ns as f64 * 1.0e-9;
-    let mut row = scalar_row_from_stats_with_active_runtime(
-        &update.stats,
-        active_runtime_s,
-    );
+    let mut row = scalar_row_from_stats_with_active_runtime(&update.stats, active_runtime_s);
     row.table_expressions = state
         .metadata
         .as_ref()
@@ -4216,7 +4299,9 @@ pub(crate) fn replace_cached_preview_fields(
     );
     state.advance_preview_cache_revision();
     for field in &fields {
-        promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
+        if should_promote_preview_field_to_latest(field) {
+            promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
+        }
     }
     state.preview_fields.replace_all(fields.clone());
     state.pending_preview_fields.replace_all(fields);
@@ -4227,6 +4312,26 @@ fn align_preview_field_source_step(field: &mut fullmag_runner::LivePreviewField,
     if field.source_step == 0 && source_step > 0 {
         field.source_step = source_step;
     }
+    if field.source_revision == 0 && field.source_step > 0 {
+        field.source_revision = field.source_step;
+    }
+}
+
+fn is_full_grid_materialized_field(
+    field: &fullmag_runner::LivePreviewField,
+    grid: [u32; 3],
+) -> bool {
+    if field.spatial_kind != "grid" || field.preview_grid != grid || field.original_grid != grid {
+        return false;
+    }
+    let points = grid[0] as usize * grid[1] as usize * grid[2] as usize;
+    fullmag_runner::quantities::quantity_spec(&field.quantity)
+        .is_some_and(|spec| field.vector_field_values.len() == points * spec.n_comp as usize)
+}
+
+fn should_promote_preview_field_to_latest(field: &fullmag_runner::LivePreviewField) -> bool {
+    !(field.spatial_kind == "grid"
+        && (field.auto_downscaled || field.preview_grid != field.original_grid))
 }
 
 fn preview_field_source_key(field: &fullmag_runner::LivePreviewField) -> (u64, u64, u64) {
@@ -4299,7 +4404,9 @@ pub(crate) fn upsert_cached_preview_field(
     .find(|field| field.quantity == quantity)
     .expect("incoming preview field should remain represented");
     state.advance_preview_cache_revision();
-    promote_preview_field_to_latest_fields(&mut state.latest_fields, &newest);
+    if should_promote_preview_field_to_latest(&newest) {
+        promote_preview_field_to_latest_fields(&mut state.latest_fields, &newest);
+    }
     state.preview_fields.insert(newest.clone());
     state.pending_preview_fields.insert(newest);
 }
@@ -4318,14 +4425,25 @@ pub(crate) fn ingest_preview_fields_from_update(
     if cached_preview_fields.is_some() || preview_field.is_some() {
         state.advance_preview_cache_revision();
     }
+    let source_step = update.stats.step;
     if let Some(fields) = cached_preview_fields {
-        for field in fields {
+        for mut field in fields {
+            align_preview_field_source_step(&mut field, source_step);
+            if is_full_grid_materialized_field(&field, update.grid) {
+                promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
+                continue;
+            }
             if let Some(previous) = state.pending_preview_fields.insert_replacing(field) {
                 state.superseded_pending_preview_fields.push(previous);
             }
         }
     }
-    if let Some(field) = preview_field {
+    if let Some(mut field) = preview_field {
+        align_preview_field_source_step(&mut field, source_step);
+        if is_full_grid_materialized_field(&field, update.grid) {
+            promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
+            return;
+        }
         if let Some(previous) = state.pending_preview_fields.insert_replacing(field) {
             state.superseded_pending_preview_fields.push(previous);
         }

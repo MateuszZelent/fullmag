@@ -340,12 +340,14 @@ function useObjectVisualizationPanelState(
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
-    enabled: shouldLoadObjectVisualizationFieldCatalog({
-      requested: fieldCatalogRequested,
-      surfaceColorSource: settings?.surfaceColorSource,
-      targetActive: Boolean(resolvedTarget),
-      vectorsVisible: Boolean(settings?.vectorsVisible),
-    }),
+    enabled:
+      fdmTarget ||
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: fieldCatalogRequested,
+        surfaceColorSource: settings?.surfaceColorSource,
+        targetActive: Boolean(resolvedTarget),
+        vectorsVisible: Boolean(settings?.vectorsVisible),
+      }),
   });
   const topologyFreshness = resolvedTarget
     ? resolveObjectVisualizationPanelTopologyFreshness({
@@ -681,6 +683,7 @@ function useObjectVisualizationPanelState(
     displaySettings,
     effectiveSettings,
     feedback,
+    fdmTarget,
     fieldCatalog,
     childRegionOverrideCount,
     childRegionTargets,
@@ -778,6 +781,7 @@ function ObjectVisualizationPanelView({
     childRegionTargets,
     feedback,
     fdmNotice,
+    fdmTarget,
     fieldCatalog,
     hasTargetOverride,
     onFieldCatalogRequest,
@@ -832,6 +836,14 @@ function ObjectVisualizationPanelView({
     displaySettings.pointsVisible,
   ].filter(Boolean).length;
   const capabilities = visualizationTargetCapabilities(target);
+  const fieldCatalogLoading = fdmTarget && fieldCatalog.status !== "ready";
+  const fieldMetaTarget =
+    fdmTarget &&
+    target.kind !== "airbox" &&
+    target.kind !== "fdm-native-layer" &&
+    !isFdmUniverseOutsideSupportTarget(target)
+      ? { ...target, kind: "fdm-domain" as const }
+      : target;
   const meshState = renderResolution?.degradedReasons.length
     ? "Degraded"
     : "Ready";
@@ -859,6 +871,9 @@ function ObjectVisualizationPanelView({
         <FieldRow label="Kind" value={target.kind} />
         {target.kind === "fdm-domain" ? (
           <FieldRow label="Geometry" value="Structured grid cells" />
+        ) : null}
+        {target.kind === "fdm-native-layer" ? (
+          <FieldRow label="Geometry" value="Native layer grid cells" />
         ) : null}
         <FieldRow
           label="Override"
@@ -937,16 +952,18 @@ function ObjectVisualizationPanelView({
                   target.kind === "airbox" ||
                   isFdmUniverseOutsideSupportTarget(target)) ? (
                   <VisualizationQuantitySection
-              onFieldCatalogRequest={onFieldCatalogRequest}
-              patch={patch}
-              pending={pending}
-              settings={settings}
-              targetKind={
-                target.kind === "airbox" ||
-                isFdmUniverseOutsideSupportTarget(target)
-                  ? "airbox"
-                  : target.kind
-              }
+                    fieldCatalog={fieldCatalog.data}
+                    fieldCatalogLoading={fieldCatalogLoading}
+                    onFieldCatalogRequest={onFieldCatalogRequest}
+                    patch={patch}
+                    pending={pending}
+                    settings={settings}
+                    targetKind={
+                      target.kind === "airbox" ||
+                      isFdmUniverseOutsideSupportTarget(target)
+                        ? "airbox"
+                        : target.kind
+                    }
                   />
                 ) : null}
               </>
@@ -965,6 +982,8 @@ function ObjectVisualizationPanelView({
               pending={pending}
               sectionDisabled={sectionDisabled}
               fieldCatalog={fieldCatalog}
+              fieldCatalogLoading={fieldCatalogLoading}
+              fieldMetaTarget={fieldMetaTarget}
               onFieldCatalogRequest={onFieldCatalogRequest}
               regionCarrier={regionCarrier}
               settings={settings}
@@ -973,6 +992,9 @@ function ObjectVisualizationPanelView({
             )}
             vectors={capabilities.supportsVectors ? (
               <VisualizationVectorsSection
+              fieldCatalog={fieldCatalog}
+              fieldCatalogLoading={fieldCatalogLoading}
+              fieldMetaTarget={fieldMetaTarget}
               meshParts={vectorMeshParts}
               onTogglePartVectors={onTogglePartVectors}
               patch={patch}

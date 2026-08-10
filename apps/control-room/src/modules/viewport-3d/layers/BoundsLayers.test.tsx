@@ -154,16 +154,15 @@ it("routes generic FDM domain-frame opacity and Airbox wireframe color through t
   expect(source).not.toContain("color={colors.field}");
 });
 
-it("keeps a pending authored FDM Airbox as two extent boxes, not fake grid lines", () => {
+it("keeps FDM context bounds as extent boxes instead of a procedural volume grid", () => {
   const start = boundsLayersSource.indexOf(
     "export const FdmUniverseOutsideSupportLayer",
   );
   const end = boundsLayersSource.indexOf("export function AirboxLayerContent");
   const source = boundsLayersSource.slice(start, end);
 
-  expect(source).toContain("membershipRealized");
   expect(source).toContain("<BoundsBox");
-  expect(source).toContain("<BoundsVolumeWireframe");
+  expect(source).not.toContain("<BoundsVolumeWireframe");
 });
 
 it("maps an airbox surface triangle to its canonical cell identity", () => {
@@ -309,7 +308,7 @@ describe("AirboxLayer", () => {
       .toBe(visibleWireframeAirbox);
   });
 
-  it("strips stale Airbox shader and point passes at runtime", () => {
+  it("preserves Airbox points while stripping unsupported shader passes at runtime", () => {
     const settings = {
       ...visibleWireframeAirbox,
       pointsVisible: true,
@@ -318,8 +317,8 @@ describe("AirboxLayer", () => {
     };
 
     expect(resolveAirboxRuntimeVisualizationSettings(settings)).toMatchObject({
-      pointsVisible: false,
-      renderMode: "wireframe",
+      pointsVisible: true,
+      renderMode: "points",
       shaderVisible: false,
       surfaceColorSource: "solid",
       wireframeVisible: true,
@@ -406,11 +405,14 @@ describe("AirboxLayer", () => {
     expect(resolveAirboxWireframePrimitive(true, false, "full")).toBe("bounds");
   });
 
-  it("routes the airbox render branch through the parallel wireframe layers", () => {
+  it("uses bounds fallback only when real Airbox edge geometry is unavailable", () => {
     expect(boundsLayersSource).toContain(
       'renderPlan.wireframe.visible && (',
     );
     expect(boundsLayersSource).toContain(
+      '!edgeGeometry',
+    );
+    expect(boundsLayersSource).not.toContain(
       'geometryScope === "full" || !edgeGeometry',
     );
     expect(boundsLayersSource).not.toContain(

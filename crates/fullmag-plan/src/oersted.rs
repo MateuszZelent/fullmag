@@ -10,6 +10,9 @@ use fullmag_ir::{
 use crate::current_transport::ResolvedCurrentTransport;
 use crate::error::PlanError;
 use crate::geometry::{checked_fdm_grid_cost, FDM_GRID_ESTIMATED_BYTES_PER_CELL};
+use crate::physics_graph::{
+    physics_module_execution_enabled, physics_module_execution_enabled_at_sources,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedOerstedCylinder {
@@ -31,7 +34,9 @@ pub(crate) enum ResolvedOerstedTerm {
     Field(ResolvedOerstedField),
     /// The field is derived after the named Ohmic/M2 charge solve.  It must
     /// never be materialized from a prescribed current during planning.
-    SolvedCurrent { source: String },
+    SolvedCurrent {
+        source: String,
+    },
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -41,6 +46,9 @@ pub(crate) fn resolve_oersted_term(
     term: &EnergyTermIR,
     current_transports: &[ResolvedCurrentTransport],
 ) -> Result<Option<ResolvedOerstedCylinder>, PlanError> {
+    if !oersted_execution_enabled(problem, term_index)? {
+        return Ok(None);
+    }
     match term {
         EnergyTermIR::OerstedCylinder {
             current,
@@ -48,6 +56,7 @@ pub(crate) fn resolve_oersted_term(
             center,
             axis,
             time_dependence,
+            ..
         } => Ok(Some(ResolvedOerstedCylinder {
             current: *current,
             radius: *radius,
@@ -58,6 +67,7 @@ pub(crate) fn resolve_oersted_term(
         EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,
             source,
+            ..
         } => resolve_oersted_from_current_solution_cylinder(
             problem,
             term_index,
@@ -78,6 +88,9 @@ pub(crate) fn resolve_fem_oersted_term(
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[FemMeshPartIR],
 ) -> Result<Option<ResolvedOerstedTerm>, PlanError> {
+    if !oersted_execution_enabled(problem, term_index)? {
+        return Ok(None);
+    }
     match term {
         EnergyTermIR::OerstedCylinder {
             current,
@@ -85,6 +98,7 @@ pub(crate) fn resolve_fem_oersted_term(
             center,
             axis,
             time_dependence,
+            ..
         } => Ok(Some(ResolvedOerstedTerm::Cylinder(
             ResolvedOerstedCylinder {
                 current: *current,
@@ -97,13 +111,10 @@ pub(crate) fn resolve_fem_oersted_term(
         EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,
             source,
+            ..
         } => {
-            if let Some(dynamic) = resolve_solved_current_source(
-                problem,
-                term_index,
-                source,
-                true,
-            )? {
+            if let Some(dynamic) = resolve_solved_current_source(problem, term_index, source, true)?
+            {
                 return Ok(Some(dynamic));
             }
             resolve_fem_oersted_from_current_solution(
@@ -130,6 +141,9 @@ pub(crate) fn resolve_fdm_oersted_term(
     cell_size: [f64; 3],
     active_mask: Option<&[bool]>,
 ) -> Result<Option<ResolvedOerstedTerm>, PlanError> {
+    if !oersted_execution_enabled(problem, term_index)? {
+        return Ok(None);
+    }
     match term {
         EnergyTermIR::OerstedCylinder {
             current,
@@ -137,6 +151,7 @@ pub(crate) fn resolve_fdm_oersted_term(
             center,
             axis,
             time_dependence,
+            ..
         } => Ok(Some(ResolvedOerstedTerm::Cylinder(
             ResolvedOerstedCylinder {
                 current: *current,
@@ -149,13 +164,11 @@ pub(crate) fn resolve_fdm_oersted_term(
         EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,
             source,
+            ..
         } => {
-            if let Some(dynamic) = resolve_solved_current_source(
-                problem,
-                term_index,
-                source,
-                false,
-            )? {
+            if let Some(dynamic) =
+                resolve_solved_current_source(problem, term_index, source, false)?
+            {
                 return Ok(Some(dynamic));
             }
             resolve_fdm_oersted_from_current_solution(
@@ -170,6 +183,39 @@ pub(crate) fn resolve_fdm_oersted_term(
             .map(Some)
         }
         _ => Ok(None),
+    }
+}
+
+fn oersted_execution_enabled(problem: &ProblemIR, term_index: usize) -> Result<bool, PlanError> {
+    match problem.energy_terms.get(term_index) {
+        Some(EnergyTermIR::OerstedCylinder { id: Some(id), .. })
+        | Some(EnergyTermIR::OerstedField { id: Some(id), .. }) => {
+            return match physics_module_execution_enabled(problem, "oersted_field", id) {
+                Ok(Some(enabled)) => Ok(enabled),
+                Ok(None) => Ok(true),
+                Err(reasons) => Err(PlanError { reasons }),
+            };
+        }
+        Some(EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }) => {}
+        _ => return Ok(true),
+    }
+    let family_index = problem.energy_terms[..term_index]
+        .iter()
+        .filter(|term| {
+            matches!(
+                term,
+                EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
+            )
+        })
+        .count();
+    let source_paths = [
+        format!("/energy/{term_index}"),
+        format!("/oersted_fields/{family_index}"),
+    ];
+    match physics_module_execution_enabled_at_sources(problem, "oersted_field", &source_paths) {
+        Ok(Some(enabled)) => Ok(enabled),
+        Ok(None) => Ok(true),
+        Err(reasons) => Err(PlanError { reasons }),
     }
 }
 
@@ -227,13 +273,10 @@ fn resolve_solved_current_source(
         });
     }
 
-    if fem
-        && (spin_module.mode != SpinTransportModeIR::Steady
-            || coupling != TransportCouplingIR::OneWay)
-    {
+    if fem && spin_module.mode != SpinTransportModeIR::Steady {
         return Err(PlanError {
             reasons: vec![format!(
-                "energy_terms[{term_index}] oersted_field source '{source}' requires FEM steady one-way transport; reciprocal or transient FEM stage coupling is not implemented"
+                "energy_terms[{term_index}] oersted_field source '{source}' requires FEM steady transport; transient FEM stage coupling is not implemented"
             )],
         });
     }
@@ -971,6 +1014,39 @@ mod tests {
     use fullmag_ir::{FemMeshPartRole, RegionIR};
 
     #[test]
+    fn inactive_graph_module_filters_nonzero_oersted_payload() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.energy_terms.push(EnergyTermIR::OerstedCylinder {
+            id: Some("oe".into()),
+            current: 0.01,
+            radius: 10.0e-9,
+            center: [0.0, 0.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+            time_dependence: None,
+        });
+        let term_index = problem.energy_terms.len() - 1;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 1,
+            "modules": [{
+                "id": "oe",
+                "kind": "oersted_field",
+                "applies_to": [{"kind": "global"}],
+                "solve_domain": [],
+                "depends_on": [],
+                "activation": "inactive",
+                "source_path": "/energy/reordered-legacy-index"
+            }],
+            "edges": []
+        }));
+
+        let resolved =
+            resolve_oersted_term(&problem, term_index, &problem.energy_terms[term_index], &[])
+                .expect("inactive Oersted term is omitted");
+        assert!(resolved.is_none());
+    }
+
+    #[test]
     fn lowers_cylindrical_current_transport_to_oersted_cylinder() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.geometry.entries[0] = GeometryEntryIR::Translate {
@@ -988,6 +1064,7 @@ mod tests {
             geometry: "pillar".to_string(),
         }];
         problem.energy_terms = vec![EnergyTermIR::OerstedField {
+            id: None,
             model: OerstedFieldModelIR::FromCurrentSolution,
             source: "drive".to_string(),
         }];
@@ -1023,6 +1100,7 @@ mod tests {
             axis: [0.0, 0.0, 1.0],
         };
         problem.energy_terms = vec![EnergyTermIR::OerstedField {
+            id: None,
             model: OerstedFieldModelIR::FromCurrentSolution,
             source: "drive".to_string(),
         }];
@@ -1054,6 +1132,7 @@ mod tests {
             size: [2.0, 1.0, 1.0],
         };
         problem.energy_terms = vec![EnergyTermIR::OerstedField {
+            id: None,
             model: OerstedFieldModelIR::FromCurrentSolution,
             source: "drive".to_string(),
         }];
@@ -1131,6 +1210,7 @@ mod tests {
             geometry: "wire".to_string(),
         }];
         problem.energy_terms = vec![EnergyTermIR::OerstedField {
+            id: None,
             model: OerstedFieldModelIR::FromCurrentSolution,
             source: "drive".to_string(),
         }];

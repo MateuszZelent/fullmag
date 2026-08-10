@@ -56,6 +56,12 @@ export const RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND =
   "ribbon.selection.focus-airbox";
 export const RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND =
   "ribbon.physics.select-interaction";
+export const RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND =
+  "ribbon.physics.create-field-drive";
+export const RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND =
+  "ribbon.physics.create-spin-transport";
+export const RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND =
+  "ribbon.physics.create-spin-interface";
 export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
   "ribbon.cross-section.begin-draft";
 
@@ -204,6 +210,42 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     category: "View",
     scope: "workspace",
     run: beginCrossSectionDraftFromCommand,
+  },
+  {
+    id: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+    title: "Create Global Field Drive",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createFieldDriveFromCommand,
+  },
+  {
+    id: RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
+    title: "Create Spin Transport / SHE",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createSpinTransportFromCommand,
+  },
+  {
+    id: RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
+    title: "Create Spin Interface",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createSpinInterfaceFromCommand,
   },
   {
     id: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
@@ -465,7 +507,14 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
   }
 
   const current = context.selection?.get() as Selection | undefined;
-  const objectId = current?.objectId ?? null;
+  const selectedObjectId = current?.objectId ?? null;
+  if (spec.scope === "object_or_region" && !selectedObjectId) {
+    return {
+      message: `Select an object or region before adding '${spec.label}'.`,
+      status: "failed",
+    };
+  }
+  const objectId = spec.scope === "global" ? null : selectedObjectId;
   const regionId =
     current?.ref?.type === "scene-object" ? current.ref.regionId : undefined;
   const nodeId = objectId
@@ -488,6 +537,91 @@ function selectPhysicsInteractionFromCommand(context: CommandContext): CommandRe
             visualizationTargetId: `object:${objectId}`,
           }
         : null,
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function createFieldDriveFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const nodeId = "model:physics:field-drive:draft";
+  context.selection.set(
+    {
+      kind: "physics.field-drive",
+      label: "New field drive",
+      nodeId,
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.field-drive",
+        nodeId,
+        type: "physics-field-drive",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function createSpinTransportFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const current = context.selection.get() as Selection | null;
+  const objectId = current?.objectId ?? null;
+  const regionId = current?.ref && "regionId" in current.ref &&
+    typeof current.ref.regionId === "string"
+    ? current.ref.regionId
+    : null;
+  const nodeId = "model:physics:spin-transport:draft";
+  context.selection.set(
+    {
+      kind: "physics.spin-transport",
+      label: "New spin transport",
+      nodeId,
+      objectId,
+      ref: {
+        draft: true,
+        kind: "physics.spin-transport",
+        nodeId,
+        ...(objectId && regionId ? { regionId } : {}),
+        type: "spin-transport",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function createSpinInterfaceFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const nodeId = "model:physics:spin-interface:draft";
+  context.selection.set(
+    {
+      kind: "physics.spin-interface",
+      label: "New spin interface",
+      nodeId,
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.spin-interface",
+        nodeId,
+        type: "spin-interface",
+      },
     },
     context.source,
   );

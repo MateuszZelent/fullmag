@@ -3,6 +3,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   type VisualizationTargetRef,
+  FDM_NATIVE_LAYER_TARGET_PREFIX,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
@@ -71,6 +72,30 @@ export function targetForFdmDomain(
     kind: "fdm-domain",
     label: domainId,
   };
+}
+
+export function targetForFdmNativeLayer(
+  layerId: string,
+  label?: string | null,
+): VisualizationTargetRef {
+  return {
+    id: `${FDM_NATIVE_LAYER_TARGET_PREFIX}${encodeURIComponent(layerId)}`,
+    kind: "fdm-native-layer",
+    label: label ?? layerId,
+  };
+}
+
+export function fdmNativeLayerIdFromTargetId(
+  targetId: string,
+): string | null {
+  if (!targetId.startsWith(FDM_NATIVE_LAYER_TARGET_PREFIX)) return null;
+  const encoded = targetId.slice(FDM_NATIVE_LAYER_TARGET_PREFIX.length);
+  try {
+    const layerId = decodeURIComponent(encoded);
+    return layerId.length > 0 ? layerId : null;
+  } catch {
+    return null;
+  }
 }
 
 export function targetForFdmUniverseOutsideSupport(): VisualizationTargetRef {

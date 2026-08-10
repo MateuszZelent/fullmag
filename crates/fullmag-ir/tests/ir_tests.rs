@@ -770,8 +770,7 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
         ["density_of_states_per_spin_Jinv_m3"] = serde_json::json!(2.0);
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
-        ["capacitance_formula_version"] =
-            serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
+        ["capacitance_formula_version"] = serde_json::json!("dos_isotropic_nonmagnetic.fullmag.v1");
     let transient: ProblemIR =
         serde_json::from_value(transient_value.clone()).expect("transient M3 IR should decode");
     let mut transient = transient;
@@ -810,8 +809,9 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
         .any(|error| error.contains("unsupported capacitance_formula_version")));
 
     let mut unsupported_sml = transient.clone();
-    if let SpinInterfaceIR::MixingConductance { formula_version, .. } =
-        &mut unsupported_sml.spin_transport_modules[0].interfaces[0]
+    if let SpinInterfaceIR::MixingConductance {
+        formula_version, ..
+    } = &mut unsupported_sml.spin_transport_modules[0].interfaces[0]
     {
         *formula_version = "magnetoelectronic.fullmag.v1".to_string();
     }
@@ -1647,6 +1647,85 @@ fn fdm_demag_hints_reject_removed_single_grid_fallback_switch() {
     let error = serde_json::from_value::<FdmDemagHintsIR>(legacy)
         .expect_err("removed FDM demag fallback must not deserialize as a no-op");
     assert!(error.to_string().contains("allow_single_grid_fallback"));
+}
+
+#[test]
+fn fdm_demag_hints_reject_unknown_strategy_and_mode_on_deserialize() {
+    for (field, value) in [("strategy", "mystery"), ("mode", "mystery")] {
+        let mut payload = serde_json::json!({
+            "strategy": "auto",
+            "mode": "auto",
+        });
+        payload[field] = serde_json::json!(value);
+        let error = serde_json::from_value::<FdmDemagHintsIR>(payload)
+            .expect_err("unknown FDM demag wire values must fail closed");
+        assert!(error.to_string().contains(field), "{field}: {error}");
+    }
+}
+
+#[test]
+fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
+    let cases = [
+        (
+            FdmDemagHintsIR {
+                strategy: "auto".to_string(),
+                mode: "two_d_stack".to_string(),
+                common_cells: Some([4, 4, 1]),
+                common_cells_xy: None,
+            },
+            "common_cells",
+        ),
+        (
+            FdmDemagHintsIR {
+                strategy: "auto".to_string(),
+                mode: "three_d".to_string(),
+                common_cells: None,
+                common_cells_xy: Some([4, 4]),
+            },
+            "common_cells_xy",
+        ),
+        (
+            FdmDemagHintsIR {
+                strategy: "auto".to_string(),
+                mode: "auto".to_string(),
+                common_cells: Some([4, 4, 1]),
+                common_cells_xy: Some([4, 4]),
+            },
+            "mutually exclusive",
+        ),
+    ];
+
+    for (hints, expected) in cases {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("bootstrap example must provide FDM hints")
+            .demag = Some(hints);
+        let error = ir
+            .validate()
+            .expect_err("incompatible common grid hints must fail closed");
+        assert!(
+            error.iter().any(|reason| reason.contains(expected)),
+            "expected {expected:?} in {error:?}"
+        );
+    }
+}
+
+#[test]
+fn fdm_demag_hints_round_trip_preserves_known_wire_values() {
+    let hints = FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "two_d_stack".to_string(),
+        common_cells: None,
+        common_cells_xy: Some([16, 8]),
+    };
+    let encoded = serde_json::to_value(&hints).expect("serialize FDM demag hints");
+    let decoded: FdmDemagHintsIR =
+        serde_json::from_value(encoded.clone()).expect("deserialize known FDM demag hints");
+    assert_eq!(decoded, hints);
+    assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
 }
 
 #[test]
@@ -5825,9 +5904,9 @@ fn canonical_mumax3_zhang_li_requires_source_g_factor() {
     let errors = ir
         .validate()
         .expect_err("MuMax3-compatible Zhang-Li must reject non-source g");
-    assert!(errors.iter().any(|error| {
-        error.contains("zhang_li.mumax3.v1") && error.contains("lande_g=2.0")
-    }));
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("zhang_li.mumax3.v1") && error.contains("lande_g=2.0") }));
 }
 
 #[test]
@@ -6132,6 +6211,7 @@ fn prescribed_zeeman_mask_requires_field_and_object() {
 fn oersted_field_source_must_reference_current_transport() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms.push(EnergyTermIR::OerstedField {
+        id: None,
         model: OerstedFieldModelIR::FromCurrentSolution,
         source: "drive".to_string(),
     });
@@ -6142,6 +6222,48 @@ fn oersted_field_source_must_reference_current_transport() {
     assert!(errors.iter().any(|error| {
         error.contains("oersted_field source 'drive' must reference a current_transport module")
     }));
+}
+
+#[test]
+fn oersted_stable_identity_round_trips_and_rejects_empty_present_id() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.current_modules.push(CurrentModuleIR::CurrentTransport {
+        name: "drive".to_string(),
+        model: CurrentTransportModelIR::PrescribedDensity,
+        current_density: Some([0.0, 0.0, 5e10]),
+        solve_region: Some("box".to_string()),
+        conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        time_envelope: None,
+        definition: None,
+    });
+    ir.energy_terms.push(EnergyTermIR::OerstedField {
+        id: Some("oe:drive".to_string()),
+        model: OerstedFieldModelIR::FromCurrentSolution,
+        source: "drive".to_string(),
+    });
+
+    let encoded = serde_json::to_value(&ir).expect("serialize stable Oersted id");
+    assert_eq!(
+        encoded["energy_terms"]
+            .as_array()
+            .and_then(|terms| terms.last())
+            .and_then(|term| term.get("id")),
+        Some(&serde_json::json!("oe:drive"))
+    );
+    let decoded: ProblemIR =
+        serde_json::from_value(encoded).expect("deserialize stable Oersted id");
+    assert!(decoded.validate().is_ok());
+
+    let mut invalid = decoded;
+    if let Some(EnergyTermIR::OerstedField { id, .. }) = invalid.energy_terms.last_mut() {
+        *id = Some("  ".to_string());
+    }
+    assert!(invalid
+        .validate()
+        .expect_err("empty present Oersted id must fail")
+        .iter()
+        .any(|error| error.contains("oersted_field id must not be empty")));
 }
 
 #[test]
@@ -6159,6 +6281,7 @@ fn validation_rejects_multiple_oersted_terms() {
     });
     ir.energy_terms = vec![
         EnergyTermIR::OerstedCylinder {
+            id: None,
             current: 1.0,
             radius: 10e-9,
             center: [0.0, 0.0, 0.0],
@@ -6166,6 +6289,7 @@ fn validation_rejects_multiple_oersted_terms() {
             time_dependence: None,
         },
         EnergyTermIR::OerstedField {
+            id: None,
             model: OerstedFieldModelIR::FromCurrentSolution,
             source: "drive".to_string(),
         },

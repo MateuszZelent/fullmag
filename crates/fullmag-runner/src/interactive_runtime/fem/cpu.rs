@@ -206,6 +206,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 .map_err(|error| RunError {
                     message: format!("interactive FEM CPU step failed: {}", error),
                 })?;
+            artifacts.observe_physics_execution();
             let step_wall_us = wall_start.elapsed().as_micros();
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;

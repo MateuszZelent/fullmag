@@ -552,6 +552,18 @@ pub struct ResolvedChargeBoundaryFaceIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedSpecifiedCurrentFaceIR {
+    pub source_id: String,
+    pub axis: u8,
+    pub face_index: u64,
+    pub adjacent_cell: u64,
+    pub outward_normal_sign: i8,
+    pub area_m2: f64,
+    #[serde(rename = "outward_current_density_Apm2")]
+    pub outward_current_density_apm2: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolvedSpinBoundaryConditionIR {
     SpinInsulating,
@@ -611,9 +623,23 @@ pub struct ResolvedSpinReactionLengthsIR {
     pub dephasing_m: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FdmCpuTransportRealizationIR {
+    #[default]
+    RustReferenceV1,
+    NativeM1V1,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmSpinTransportIR {
     pub descriptor_schema: String,
+    #[serde(default)]
+    pub realization: FdmCpuTransportRealizationIR,
+    /// Global validation/execution profile enclosing this resolved module.
+    /// Missing legacy data defaults to `extended`, so strict native lanes fail closed.
+    #[serde(default = "default_transport_enclosing_execution_mode")]
+    pub enclosing_execution_mode: ExecutionMode,
     /// Authored dimensionless charge-source multiplier evaluated at each FDM
     /// transport stage.  `None` means the source is constant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,6 +648,8 @@ pub struct ResolvedFdmSpinTransportIR {
     #[serde(rename = "charge_conductivity_Spm")]
     pub charge_conductivity_spm: Vec<f64>,
     pub charge_boundaries: Vec<ResolvedChargeBoundaryFaceIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specified_current_faces: Vec<ResolvedSpecifiedCurrentFaceIR>,
     pub charge_gauge: ChargePotentialGaugeIR,
     pub charge_solver: ChargeSolverPolicyIR,
     pub spin_active_cells: Vec<bool>,
@@ -641,6 +669,10 @@ pub struct ResolvedFdmSpinTransportIR {
     pub spin_solver: SpinSolverPolicyIR,
     pub torque_formula_version: Option<String>,
     pub oersted_source_bound: bool,
+}
+
+fn default_transport_enclosing_execution_mode() -> ExecutionMode {
+    ExecutionMode::Extended
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

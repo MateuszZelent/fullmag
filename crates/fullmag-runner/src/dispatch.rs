@@ -2129,6 +2129,7 @@ pub(crate) fn execute_fem_in_mode<'a>(
         outputs,
         live,
         artifact_writer,
+        None,
         execution_mode,
     )
 }
@@ -2150,6 +2151,7 @@ pub(crate) fn execute_fem_with_context<'a>(
         outputs,
         live,
         artifact_writer,
+        None,
         ExecutionMode::Strict,
     )
 }
@@ -2162,16 +2164,20 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    physics_execution_context: Option<
+        &crate::physics_graph_execution::PhysicsGraphExecutionContext,
+    >,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
+    #[cfg(not(feature = "fem-gpu"))]
+    let _ = physics_execution_context;
     let mut normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
     #[cfg(feature = "fem-gpu")]
     let transport_artifact_writer = artifact_writer.clone();
     #[cfg(feature = "fem-gpu")]
-    let stage_oersted_callback_requested = crate::native_fem::plan_requests_stage_oersted_callback(
-        &normalized_plan,
-    );
+    let stage_oersted_callback_requested =
+        crate::native_fem::plan_requests_stage_oersted_callback(&normalized_plan);
     #[cfg(feature = "fem-gpu")]
     let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
         None
@@ -2330,6 +2336,9 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     let mut executed = executed;
     #[cfg(feature = "fem-gpu")]
     if let Some(mut bundle) = transport_bundle {
+        if let Some(context) = physics_execution_context {
+            context.observe_steady_transport(&mut executed.provenance);
+        }
         let mut next_revision = executed
             .field_snapshots
             .iter()
@@ -4958,6 +4967,15 @@ fn execute_cuda_fdm(
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
         timestep_policy,
+        executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
+            && (plan.zhang_li_formula_version.is_some()
+                || plan.slonczewski_formula_version.is_some()
+                || plan.sot_formula_version.is_some())
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -5609,6 +5627,7 @@ fn execute_native_fem(
 ) -> Result<ExecutedRun, RunError> {
     let stage_transport_callback_requested =
         crate::native_fem::plan_requests_stage_transport_callback(plan);
+    let coupled_stage_provider = crate::native_fem::StageM2CoupledProvider::from_plan(plan)?;
     let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -5635,7 +5654,9 @@ fn execute_native_fem(
 
     let mut backend =
         NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
-    if let Some(provider) = StageOerstedProvider::from_plan(plan)? {
+    if let Some(provider) =
+        StageOerstedProvider::from_plan_with_coupled(plan, coupled_stage_provider.clone())?
+    {
         if engine != FemEngine::CpuNative {
             return Err(RunError {
                 message: "native FEM stage Oersted callback is qualified only on the CPU lane; refusing GPU fallback".into(),
@@ -5643,7 +5664,10 @@ fn execute_native_fem(
         }
         backend.install_stage_oersted_provider(Box::new(provider))?;
     }
-    if let Some(provider) = crate::native_fem::StageTransportProvider::from_plan(plan)? {
+    if let Some(provider) = crate::native_fem::StageTransportProvider::from_plan_with_coupled(
+        plan,
+        coupled_stage_provider,
+    )? {
         if engine != FemEngine::CpuNative {
             return Err(RunError {
                 message: "native FEM stage transport callback is qualified only on the CPU lane; refusing GPU fallback".into(),
@@ -5745,6 +5769,16 @@ fn execute_native_fem(
             None
         },
         timestep_policy,
+        executed_physics_kinds: if crate::fem::relax::algorithm::native_step_control(
+            plan.relaxation.as_ref(),
+        )
+        .is_none()
+            && plan.spin_torque_contract.is_some()
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
         dt_policy: None,
         mfem_device: plan.mfem_device_string.clone(),
         demag_refresh_interval_s: plan
@@ -10809,8 +10843,10 @@ mod tests {
                 )
                 && source.contains("stats: live_stats,")
                 && source.contains("magnetization,")
-                && source.contains("let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,"),
+                && source.contains(
+                    "let action = (live.on_step)(StepUpdate {
+            coupled_checkpoint: None,"
+                ),
             "native FEM direct minimizer must publish live updates after accepted steps"
         );
     }

@@ -342,7 +342,7 @@ fn current_live_realtime_changes(
                 resource_id: None,
                 quantity_ids: Vec::new(),
                 broad: false,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
+                domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
                 recommended_fetch: Some(recommended_fetch.clone()),
             });
         }
@@ -443,7 +443,7 @@ fn current_live_realtime_changes(
             .cloned()
             .collect(),
         broad: true,
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
+        domain_generation_id: Some(realtime_state.revisions.domain_generation_id.clone()),
         recommended_fetch: None,
     });
     if realtime_state.revisions.mesh_revision > 0 {

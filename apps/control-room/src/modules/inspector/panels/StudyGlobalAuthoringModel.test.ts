@@ -211,8 +211,11 @@ describe("StudyGlobalAuthoringModel", () => {
     expect(request.kind).toBe("merge_patch");
     if (request.kind !== "merge_patch") throw new Error("expected merge patch");
     expect(request.merge_patch.study).toMatchObject({
-      demag_realization: "multilayer_convolution",
+      demag_realization: null,
       fem_demag_solver_policy: null,
+      fdm: {
+        demag: { strategy: "multilayer_convolution" },
+      },
     });
   });
 
@@ -258,7 +261,10 @@ describe("StudyGlobalAuthoringModel", () => {
     expect(request.kind).toBe("merge_patch");
     if (request.kind !== "merge_patch") throw new Error("expected merge patch");
     expect(request.merge_patch.study).toMatchObject({
-      demag_realization: "multilayer_convolution",
+      demag_realization: null,
+      fdm: {
+        demag: { strategy: "multilayer_convolution" },
+      },
     });
     expect(
       normalizeDemagRealizationForLane("single_grid", {
@@ -325,6 +331,62 @@ describe("StudyGlobalAuthoringModel", () => {
         relaxAlgorithm: "",
         timestepMode: "auto",
         torqueTolerance: "",
+      },
+    });
+  });
+
+  it("round-trips the complete FDM demag and boundary policy", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: {
+          default_cell: [2e-9, 2e-9, 1e-9],
+          per_magnet: {
+            free: { cell: [1e-9, 1e-9, 1e-9] },
+          },
+          demag: {
+            strategy: "multilayer_convolution",
+            mode: "two_d_stack",
+            common_cells_xy: [64, 32],
+            explain: false,
+          },
+          boundary_correction: "full",
+          boundary_phi_floor: 0.1,
+          boundary_delta_min: 0.2e-9,
+        },
+      },
+    });
+
+    expect(draft.fdm).toEqual({
+      boundaryCorrection: "full",
+      boundaryDeltaMin: "2e-10",
+      boundaryPhiFloor: "0.1",
+      commonCells: "",
+      commonCellsXy: "64, 32",
+      defaultCell: "2e-9, 2e-9, 1e-9",
+      demagExplain: false,
+      demagMode: "two_d_stack",
+      demagStrategy: "multilayer_convolution",
+      perMagnet: '{"free":{"cell":[1e-9,1e-9,1e-9]}}',
+    });
+
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      demag_realization: null,
+      fdm: {
+        default_cell: [2e-9, 2e-9, 1e-9],
+        per_magnet: { free: { cell: [1e-9, 1e-9, 1e-9] } },
+        demag: {
+          strategy: "multilayer_convolution",
+          mode: "two_d_stack",
+          common_cells_xy: [64, 32],
+          explain: false,
+        },
+        boundary_correction: "full",
+        boundary_phi_floor: 0.1,
+        boundary_delta_min: 0.2e-9,
       },
     });
   });

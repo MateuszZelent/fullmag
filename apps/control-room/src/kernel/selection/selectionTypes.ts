@@ -216,6 +216,13 @@ export type FdmCellMaskState = "inactive" | "active-unassigned" | "region";
 export type FdmDomainSelectionKind =
   | "mesh.grid"
   | "mesh.grid.descriptor"
+  | "mesh.grid.common"
+  | "mesh.grid.layers"
+  | "mesh.grid.layer"
+  | "mesh.grid.layer.native-grid"
+  | "mesh.grid.layer.mask"
+  | "mesh.grid.layer.transfer"
+  | "mesh.grid.layer.provenance"
   | "mesh.grid.magnetic-support"
   | "mesh.grid.active-unassigned"
   | "mesh.grid.mask"
@@ -226,6 +233,13 @@ export type FdmDomainSelectionKind =
 export type FdmDomainSelectionScope =
   | "domain"
   | "descriptor"
+  | "common"
+  | "layers"
+  | "layer"
+  | "layer-native-grid"
+  | "layer-mask"
+  | "layer-transfer"
+  | "layer-provenance"
   | "magnetic-support"
   | "active-unassigned"
   | "mask"
@@ -254,11 +268,13 @@ export type SelectionRef =
        * published a region id; new nodes must carry it when available.
        */
       objectId?: string;
+      layerId?: string;
       regionId?: string;
       scope: FdmDomainSelectionScope;
       type: "fdm-domain";
       visualizationTargetId:
         | "fdm-domain"
+        | `fdm-native-layer:${string}`
         | "fdm-universe-outside-support"
         | RegionVisualizationTargetId;
     }
@@ -302,7 +318,8 @@ export type SelectionRef =
         | "airbox.mesh.topology"
         | "airbox.mesh.build"
         | "airbox.visualization"
-        | "airbox.visualization.debug";
+        | "airbox.visualization.debug"
+        | "airbox.multilayer.target";
       nodeId: string;
       type: "airbox";
       visualizationTargetId: "airbox" | "fdm-universe-outside-support";
@@ -364,19 +381,22 @@ export type SelectionRef =
   | {
       currentTransportId?: string;
       currentTransportIndex?: number;
-      kind: "physics.current-transports" | "physics.current-transport";
+      kind: "physics.current-transport";
       nodeId: string;
       type: "current-transport";
     }
   | {
-      kind: "physics.spin-transports" | "physics.spin-transport";
+      draft?: boolean;
+      kind: "physics.spin-transport";
       nodeId: string;
+      regionId?: string;
       spinTransportId?: string;
       spinTransportIndex?: number;
       type: "spin-transport";
     }
   | {
-      kind: "physics.spin-interfaces" | "physics.spin-interface";
+      draft?: boolean;
+      kind: "physics.spin-interface";
       nodeId: string;
       spinInterfaceId?: string;
       spinInterfaceIndex?: number;
@@ -384,14 +404,14 @@ export type SelectionRef =
       type: "spin-interface";
     }
   | {
-      kind: "physics.spin-torques" | "physics.spin-torque";
+      kind: "physics.spin-torque";
       nodeId: string;
       spinTorqueId?: string;
       spinTorqueIndex?: number;
       type: "spin-torque";
     }
   | {
-      kind: "physics.oersted-fields" | "physics.oersted-field";
+      kind: "physics.oersted-field";
       nodeId: string;
       oerstedFieldId?: string;
       oerstedFieldIndex?: number;
@@ -409,7 +429,8 @@ export type SelectionRef =
       type: "physics-module";
     }
   | {
-      fieldDriveId: string;
+      draft?: boolean;
+      fieldDriveId?: string;
       kind: "physics.field-drives" | "physics.field-drive";
       nodeId: string;
       type: "physics-field-drive";
@@ -655,6 +676,7 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         nullableStringEquals(left.objectId, right.objectId) &&
+        nullableStringEquals(left.layerId, right.layerId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
         left.scope === right.scope &&
         left.visualizationTargetId === right.visualizationTargetId
@@ -770,8 +792,10 @@ export function selectionRefEquals(
     case "spin-transport":
       return (
         right.type === "spin-transport" &&
+        left.draft === right.draft &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        left.regionId === right.regionId &&
         left.spinTransportId === right.spinTransportId &&
         left.spinTransportIndex === right.spinTransportIndex
       );
@@ -786,6 +810,7 @@ export function selectionRefEquals(
     case "spin-interface":
       return (
         right.type === "spin-interface" &&
+        left.draft === right.draft &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.spinInterfaceId === right.spinInterfaceId &&

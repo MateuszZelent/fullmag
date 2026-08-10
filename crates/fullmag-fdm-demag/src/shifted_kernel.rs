@@ -6,7 +6,7 @@
 
 use crate::newell;
 use crate::self_kernel::fft_newell_to_kernel;
-use crate::types::{TensorDemagKernel, TensorDemagKernelF32};
+use crate::types::{KernelBuildError, TensorDemagKernel, TensorDemagKernelF32};
 
 /// Compute a shifted cross-layer demag kernel in FFT domain.
 ///
@@ -16,6 +16,15 @@ use crate::types::{TensorDemagKernel, TensorDemagKernelF32};
 ///
 /// For V1, source and destination cells must be axis-aligned rectangular
 /// prisms on the same common convolution grid.
+///
+/// # Current limitation
+///
+/// This builder accepts one `conv_cell_size` for both source and destination.
+/// Unequal source/destination cell sizes need a future oriented pair descriptor;
+/// independent cubature reciprocity tests do not qualify that production path.
+/// Far-field selection uses the physical separation after applying `z_shift`.
+/// A finite offset that cancels a large integer lag falls back to the exact
+/// stencil, including when that lag is outside the bounded precomputed window.
 ///
 /// # Arguments
 /// * `conv_cells` — common convolution grid dimensions
@@ -52,6 +61,71 @@ pub fn compute_shifted_kernel_f32(
     TensorDemagKernelF32::from(&compute_shifted_kernel(conv_cells, conv_cell_size, z_shift))
 }
 
+/// Checked source/destination pair builder for independent cell sizes and a
+/// full XYZ offset.
+///
+/// The pair is represented by one translational FFT kernel.  Therefore the
+/// source and destination pitches must agree on the axes that are sampled by
+/// the convolution grid; in `two_d_stack` (`conv_cells[2] == 1`) their z
+/// thicknesses may differ and are integrated independently according to
+/// Appendix A.  For an irregular 3-D *single pair* use
+/// [`crate::cell_pair_tensor`] rather than silently selecting a z pitch.
+pub fn try_compute_shifted_kernel_pair(
+    conv_cells: [usize; 3],
+    source_cell_size: [f64; 3],
+    destination_cell_size: [f64; 3],
+    offset: [f64; 3],
+) -> Result<TensorDemagKernel, KernelBuildError> {
+    let nk = newell::try_compute_newell_kernels_shifted_pair(
+        conv_cells[0],
+        conv_cells[1],
+        conv_cells[2],
+        source_cell_size,
+        destination_cell_size,
+        offset,
+    )?;
+    let px = nk.px;
+    let py = nk.py;
+    let pz = nk.pz;
+    Ok(fft_newell_to_kernel(nk, px, py, pz))
+}
+
+/// Descriptive checked alias for [`try_compute_shifted_kernel_pair`].
+pub fn compute_shifted_kernel_pair(
+    conv_cells: [usize; 3],
+    source_cell_size: [f64; 3],
+    destination_cell_size: [f64; 3],
+    offset: [f64; 3],
+) -> Result<TensorDemagKernel, KernelBuildError> {
+    try_compute_shifted_kernel_pair(conv_cells, source_cell_size, destination_cell_size, offset)
+}
+
+/// Alias matching the publication's "irregular shifted" terminology.
+pub fn compute_shifted_kernel_irregular(
+    conv_cells: [usize; 3],
+    source_cell_size: [f64; 3],
+    destination_cell_size: [f64; 3],
+    offset: [f64; 3],
+) -> Result<TensorDemagKernel, KernelBuildError> {
+    compute_shifted_kernel_pair(conv_cells, source_cell_size, destination_cell_size, offset)
+}
+
+/// `f32` conversion for the checked pair builder.  Geometry is still
+/// validated and generated in FP64 before storage conversion.
+pub fn compute_shifted_kernel_pair_f32(
+    conv_cells: [usize; 3],
+    source_cell_size: [f64; 3],
+    destination_cell_size: [f64; 3],
+    offset: [f64; 3],
+) -> Result<TensorDemagKernelF32, KernelBuildError> {
+    Ok(TensorDemagKernelF32::from(&compute_shifted_kernel_pair(
+        conv_cells,
+        source_cell_size,
+        destination_cell_size,
+        offset,
+    )?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,13 +140,21 @@ mod tests {
 
         // At zero shift, the shifted kernel must equal the self kernel
         assert_eq!(self_k.fft_shape, shifted_k.fft_shape);
-        for i in 0..self_k.len() {
-            assert!(
-                (self_k.k_xx[i] - shifted_k.k_xx[i]).norm() < 1e-10,
-                "k_xx mismatch at {i}: self={:?} shifted={:?}",
-                self_k.k_xx[i],
-                shifted_k.k_xx[i]
-            );
+        let components = [
+            ("xx", &self_k.k_xx, &shifted_k.k_xx),
+            ("yy", &self_k.k_yy, &shifted_k.k_yy),
+            ("zz", &self_k.k_zz, &shifted_k.k_zz),
+            ("xy", &self_k.k_xy, &shifted_k.k_xy),
+            ("xz", &self_k.k_xz, &shifted_k.k_xz),
+            ("yz", &self_k.k_yz, &shifted_k.k_yz),
+        ];
+        for (name, self_component, shifted_component) in components {
+            for i in 0..self_k.len() {
+                assert_eq!(
+                    self_component[i], shifted_component[i],
+                    "k_{name} mismatch at {i}"
+                );
+            }
         }
     }
 }

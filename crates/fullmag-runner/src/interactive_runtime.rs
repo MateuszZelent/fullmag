@@ -114,7 +114,7 @@ fn reject_non_llg_interactive_relaxation(
     Ok(())
 }
 
-fn build_cached_grid_preview_fields(
+pub(crate) fn build_cached_grid_preview_fields(
     display_state: &DisplaySelectionState,
     observables: &StateObservables,
     grid: [u32; 3],
@@ -144,6 +144,44 @@ fn build_cached_grid_preview_fields(
         ));
     }
     (!cached.is_empty()).then_some(cached)
+}
+
+pub(crate) fn build_full_grid_materialized_fields(
+    quantities: &[&str],
+    observables: &StateObservables,
+    grid: [u32; 3],
+    active_mask: Option<&[bool]>,
+    config_revision: u64,
+) -> Option<Vec<LivePreviewField>> {
+    let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
+    let mut fields = Vec::new();
+    for quantity in quantities {
+        let Ok(values) = select_observables(observables, quantity) else {
+            continue;
+        };
+        if values.len() != expected_len {
+            continue;
+        }
+        let request = LivePreviewRequest {
+            revision: config_revision,
+            quantity: (*quantity).to_string(),
+            component: "3D".to_string(),
+            layer: 0,
+            all_layers: true,
+            every_n: 1,
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            auto_scale_enabled: false,
+            max_points: 0,
+        };
+        fields.push(build_grid_preview_field(
+            &request,
+            values,
+            grid,
+            active_mask,
+        ));
+    }
+    (!fields.is_empty()).then_some(fields)
 }
 
 fn build_cached_mesh_preview_fields(
@@ -207,8 +245,8 @@ fn attach_fem_crossover_decision_to_provenance(
 mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
-        cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
-        normalize_runtime_context_signature, InteractiveFdmPreviewRuntime,
+        build_full_grid_materialized_fields, cached_display_refresh_due, cpu_execution_provenance,
+        display_refresh_due, normalize_runtime_context_signature, InteractiveFdmPreviewRuntime,
         InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
@@ -217,11 +255,12 @@ mod tests {
         reset_direct_field_assembly_calls, reset_observe_state_calls,
     };
     use crate::interactive::display::{DisplayKind, DisplaySelectionState};
-    use crate::types::{LivePreviewRequest, StepAction};
+    use crate::types::{LivePreviewRequest, StateObservables, StepAction};
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
         IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
     };
+    use std::collections::HashMap;
 
     #[test]
     fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
@@ -288,6 +327,66 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn full_grid_materialization_does_not_downscale_solver_fields() {
+        let grid = [32, 32, 16];
+        let count = grid[0] as usize * grid[1] as usize * grid[2] as usize;
+        let vectors = || vec![[1.0, 2.0, 3.0]; count];
+        let observables = StateObservables {
+            magnetization: vectors(),
+            torque_field: vectors(),
+            exchange_field: vectors(),
+            demag_field: vectors(),
+            external_field: vectors(),
+            antenna_field: vectors(),
+            drive_field: vectors(),
+            effective_field: vectors(),
+            anisotropy_field: vectors(),
+            dmi_field: vectors(),
+            magnetoelastic_field: vectors(),
+            cubic_anisotropy_field: vectors(),
+            bulk_dmi_field: vectors(),
+            oersted_field: vectors(),
+            thermal_field: vectors(),
+            exchange_energy: 0.0,
+            demag_energy: 0.0,
+            external_energy: 0.0,
+            drive_energy: 0.0,
+            anisotropy_energy: 0.0,
+            dmi_energy: 0.0,
+            total_energy: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            per_object_scalars: HashMap::new(),
+        };
+
+        let fields = build_full_grid_materialized_fields(
+            &["m", "H_demag", "H_eff"],
+            &observables,
+            grid,
+            None,
+            9,
+        )
+        .expect("full materialization should produce vector fields");
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m", "H_demag", "H_eff"]
+        );
+        for field in fields {
+            assert_eq!(field.preview_grid, grid);
+            assert_eq!(field.original_grid, grid);
+            assert_eq!(field.vector_field_values.len(), count * 3);
+            assert!(!field.auto_downscaled);
+            assert_eq!(field.source_revision, 9);
         }
     }
 
@@ -2118,6 +2217,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
+            artifacts.observe_physics_execution();
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;
             if let Some(next) = report.suggested_next_dt {
@@ -2895,6 +2995,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             local_stats.time -= base_time;
             current_local_stats = local_stats.clone();
             latest_local_stats = Some(local_stats.clone());
+            artifacts.observe_physics_execution();
             let display_state = (checkpoint.display_selection)();
             let preview_due = display_refresh_due(
                 checkpoint.last_preview_revision,
@@ -3587,6 +3688,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 .map_err(|error| RunError {
                     message: format!("interactive FEM CPU step failed: {}", error),
                 })?;
+            artifacts.observe_physics_execution();
             let step_wall_us = wall_start.elapsed().as_micros();
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;
@@ -3656,15 +3758,14 @@ impl CpuInteractiveFemPreviewRuntime {
                             step: local_stats.step,
                             time: local_stats.time,
                             solver_dt: report.dt_used,
-                           component_count: 3,
-                           component_order: "xyz".into(),
-                           location: "sample".into(),
-                           scope: "full".into(),
-                           revision: (local_stats.step as u64).saturating_add(1),
-                            values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(
-                                &observables,
-                                name,
-                            )?),
+                            component_count: 3,
+                            component_order: "xyz".into(),
+                            location: "sample".into(),
+                            scope: "full".into(),
+                            revision: (local_stats.step as u64).saturating_add(1),
+                            values: FieldSnapshot::flatten_vec3(
+                                select_output_field_values_from_observables(&observables, name)?,
+                            ),
                         })?;
                     }
                     advance_due_schedules(&mut field_schedules, local_stats.time);
@@ -4262,6 +4363,7 @@ impl GpuInteractiveFemPreviewRuntime {
             else {
                 continue;
             };
+            artifacts.observe_physics_execution();
             self.total_steps = total_stats.step;
             self.total_time = total_stats.time;
             if let Some(next) = total_stats.dt_suggested {
@@ -4493,7 +4595,10 @@ fn record_due_cpu_outputs(
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: step.saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(observables, &name)?),
+                values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(
+                    observables,
+                    &name,
+                )?),
             })?;
         }
         advance_due_schedules(field_schedules, time);
@@ -4550,7 +4655,10 @@ fn record_final_cpu_outputs(
             location: "sample".into(),
             scope: "full".into(),
             revision: step.saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(observables, &name)?),
+            values: FieldSnapshot::flatten_vec3(select_output_field_values_from_observables(
+                observables,
+                &name,
+            )?),
         })?;
     }
 
@@ -4622,12 +4730,14 @@ fn capture_initial_native_fem_runtime_fields(
             step: 0,
             time: 0.0,
             solver_dt: 0.0,
-           component_count: 3,
-           component_order: "xyz".into(),
-           location: "sample".into(),
-           scope: "full".into(),
-           revision: (0 as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(backend, node_count, &name)?),
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (0 as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(
+                backend, node_count, &name,
+            )?),
         })?;
     }
     advance_due_schedules(field_schedules, 0.0);
@@ -4664,12 +4774,14 @@ fn record_due_native_fem_runtime_outputs(
             step: stats.step,
             time: stats.time,
             solver_dt: stats.dt,
-           component_count: 3,
-           component_order: "xyz".into(),
-           location: "sample".into(),
-           scope: "full".into(),
-           revision: (stats.step as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(backend, node_count, &name)?),
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(
+                backend, node_count, &name,
+            )?),
         })?;
     }
     advance_due_schedules(field_schedules, stats.time);
@@ -4718,12 +4830,14 @@ fn record_final_native_fem_runtime_outputs(
             step: latest_stats.step,
             time: latest_stats.time,
             solver_dt: latest_stats.dt,
-           component_count: 3,
-           component_order: "xyz".into(),
-           location: "sample".into(),
-           scope: "full".into(),
-           revision: (latest_stats.step as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(backend, node_count, name)?),
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (latest_stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_native_fem_field_values(
+                backend, node_count, name,
+            )?),
         })?;
     }
     let _ = scalar_schedules;
@@ -4800,12 +4914,14 @@ fn capture_initial_cuda_runtime_fields(
             step: 0,
             time: 0.0,
             solver_dt: 0.0,
-           component_count: 3,
-           component_order: "xyz".into(),
-           location: "sample".into(),
-           scope: "full".into(),
-           revision: (0 as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, &name)?),
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (0 as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
+                backend, cell_count, &name,
+            )?),
         })?;
     }
     advance_due_schedules(field_schedules, 0.0);
@@ -4844,12 +4960,14 @@ fn record_due_cuda_runtime_outputs(
             step: stats.step,
             time: stats.time,
             solver_dt: stats.dt,
-           component_count: 3,
-           component_order: "xyz".into(),
-           location: "sample".into(),
-           scope: "full".into(),
-           revision: (stats.step as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, &name)?),
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (stats.step as u64).saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
+                backend, cell_count, &name,
+            )?),
         })?;
     }
     advance_due_schedules(field_schedules, stats.time);
@@ -4900,11 +5018,11 @@ fn record_final_cuda_runtime_outputs(
             step: latest_stats.step,
             time: latest_stats.time,
             solver_dt: latest_stats.dt,
-           component_count: 3,
-           component_order: "xyz".into(),
-           location: "sample".into(),
-           scope: "full".into(),
-           revision: (latest_stats.step as u64).saturating_add(1),
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: (latest_stats.step as u64).saturating_add(1),
             values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, name)?),
         })?;
     }
@@ -4981,6 +5099,16 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
 
     Ok(ExecutionProvenance {
         transport_modules: Vec::new(),
+        executed_physics_kinds: if timestep_policy.is_some()
+            && (plan.zhang_li_formula_version.is_some()
+                || plan.slonczewski_formula_version.is_some()
+                || plan.sot_formula_version.is_some())
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
+        executed_physics_module_ids: Vec::new(),
         execution_engine: "cpu_reference".to_string(),
         precision: "double".to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -5010,6 +5138,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         resolved_demag_realization: None,
         timestep_policy,
         fdm_multilayer_transfer_telemetry: None,
+        fdm_multilayer_stage_telemetry: None,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -5073,6 +5202,16 @@ fn cuda_execution_provenance(
         };
     Ok(ExecutionProvenance {
         transport_modules: Vec::new(),
+        executed_physics_kinds: if timestep_policy.is_some()
+            && (plan.zhang_li_formula_version.is_some()
+                || plan.slonczewski_formula_version.is_some()
+                || plan.sot_formula_version.is_some())
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
+        executed_physics_module_ids: Vec::new(),
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -5109,6 +5248,7 @@ fn cuda_execution_provenance(
         resolved_demag_realization: None,
         timestep_policy,
         fdm_multilayer_transfer_telemetry: None,
+        fdm_multilayer_stage_telemetry: None,
         dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
@@ -5185,6 +5325,13 @@ fn fem_gpu_execution_provenance(
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {
         transport_modules: Vec::new(),
+        executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
+        executed_physics_module_ids: Vec::new(),
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -5214,6 +5361,7 @@ fn fem_gpu_execution_provenance(
             .map(|realization| realization.provenance_name().to_string()),
         timestep_policy,
         fdm_multilayer_transfer_telemetry: None,
+        fdm_multilayer_stage_telemetry: None,
         dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {

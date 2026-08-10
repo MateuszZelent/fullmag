@@ -7,6 +7,7 @@ publish.workspace = true
 [features]
 default = []
 cuda = ["dep:fullmag-fdm-sys", "fullmag-fdm-sys/build-native"]
+fdm-native-cpu = ["dep:fullmag-fdm-sys", "fullmag-fdm-sys/build-native-cpu"]
 fem-gpu = ["dep:fullmag-fem-sys", "fullmag-fem-sys/build-native"]
 stage-autosave-hdf5 = ["dep:hdf5"]
 

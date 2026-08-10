@@ -95,6 +95,28 @@ import {
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
+
+describe("FDM Airbox mesh demand", () => {
+  it("builds the inactive-cell carrier for wireframe, points, or vectors", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "fdmAirboxPassPlan.needsInactiveCellGeometry",
+    );
+    expect(source).not.toContain(
+      "fdmAirboxPassPlan.needsVectorAnchors,\n  );",
+    );
+    expect(source).toContain('cellSelection: "inactive"');
+  });
+
+  it("changes the worker cache key when the requested field payload becomes ready", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      'field=${fdmAirboxFieldVector ? "ready" : "pending"}',
+    );
+  });
+});
 const visualizationStateResourceSourceUrl = new URL(
   "../../../kernel/visualization/useVisualizationStateResource.ts",
   import.meta.url,
@@ -231,6 +253,20 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("keeps FDM outside-support settings on the dedicated FDM target", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    expect(source).toContain(
+      "target: targetForFdmUniverseOutsideSupport(),\n      visualizationState: renderingState,",
+    );
+    expect(source).toContain(
+      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: renderingState,",
+    );
+    const fdmSettingsBlock = source.slice(
+      source.indexOf("const fdmUniverseOutsideSupportSettings = useMemo"),
+      source.indexOf("const fdmSingleGridAirboxSettings =", source.indexOf("const fdmUniverseOutsideSupportSettings = useMemo")),
+    );
+    expect(fdmSettingsBlock).not.toContain("AIRBOX_VISUALIZATION_TARGET");
+  });
   it("publishes the central FDM display sampling provenance in the HUD summary", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -3953,6 +3989,25 @@ describe("useViewport3DSceneModel", () => {
     expect(source).not.toContain("airboxSurfaceColorMode");
     expect(source).toContain("useViewport3DAirboxFieldVectors(");
     expect(source).not.toContain("ids.add(airboxSettings.activeQuantityId)");
+  });
+
+  it("gates FDM field demands and metadata on catalog availability", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "useFieldCatalogResource({ enabled: Boolean(fdmLaneActive) })",
+    );
+    expect(source).toContain(
+      "const availableQuantityIdsForPlanning = fdmLaneActive",
+    );
+    expect(source).toContain(
+      "availableQuantityIds: availableQuantityIdsForPlanning",
+    );
+    const metadataBlock = source.slice(
+      source.indexOf("const primaryFieldMetaEnabled ="),
+      source.indexOf("const primaryMagnitudeFieldMeta ="),
+    );
+    expect(metadataBlock).toContain("viewport3DFieldQuantityAvailable");
   });
 
   it("keeps cross-section draft previews separate from the canonical clip resource path", () => {

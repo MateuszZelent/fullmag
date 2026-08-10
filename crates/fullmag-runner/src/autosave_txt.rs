@@ -145,8 +145,7 @@ fn write_header(file: &mut File, quantities: &[String]) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     for quantity in quantities {
-        write!(file, "\t{}", txt_quantity_header(quantity))
-            .map_err(|error| error.to_string())?;
+        write!(file, "\t{}", txt_quantity_header(quantity)).map_err(|error| error.to_string())?;
     }
     writeln!(file).map_err(|error| error.to_string())
 }
@@ -161,7 +160,10 @@ fn txt_quantity_header(quantity: &str) -> String {
         "max_torque_T" => "T",
         _ if quantity.ends_with(".mx")
             || quantity.ends_with(".my")
-            || quantity.ends_with(".mz") => "1",
+            || quantity.ends_with(".mz") =>
+        {
+            "1"
+        }
         _ => return quantity.to_string(),
     };
     format!("{quantity}[{unit}]")

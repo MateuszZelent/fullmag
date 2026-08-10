@@ -945,8 +945,7 @@ fn materialize_fem_spin_torque_target_masks(
         }
         element_mask[start..end].fill(true);
     }
-    if !node_mask.iter().any(|selected| *selected)
-        || !element_mask.iter().any(|selected| *selected)
+    if !node_mask.iter().any(|selected| *selected) || !element_mask.iter().any(|selected| *selected)
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -962,7 +961,13 @@ fn materialize_fem_spin_torque_target_masks(
 mod spin_torque_target_tests {
     use super::*;
 
-    fn segment(object_id: &str, node_start: u32, node_count: u32, element_start: u32, element_count: u32) -> fullmag_ir::FemObjectSegmentIR {
+    fn segment(
+        object_id: &str,
+        node_start: u32,
+        node_count: u32,
+        element_start: u32,
+        element_count: u32,
+    ) -> fullmag_ir::FemObjectSegmentIR {
         fullmag_ir::FemObjectSegmentIR {
             object_id: object_id.to_string(),
             geometry_id: None,
@@ -983,16 +988,14 @@ mod spin_torque_target_tests {
         };
         let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
 
-        let (nodes, elements) = materialize_fem_spin_torque_target_masks(
-            &target,
-            8,
-            2,
-            &segments,
-            &[],
-        )
-        .expect("resolved FEM object target");
+        let (nodes, elements) =
+            materialize_fem_spin_torque_target_masks(&target, 8, 2, &segments, &[])
+                .expect("resolved FEM object target");
 
-        assert_eq!(nodes, vec![false, false, false, false, true, true, true, true]);
+        assert_eq!(
+            nodes,
+            vec![false, false, false, false, true, true, true, true]
+        );
         assert_eq!(elements, vec![false, true]);
     }
 
@@ -2699,23 +2702,24 @@ pub(crate) fn plan_fem(
         })
         .transpose()?;
     let spin_torque_contract = stt_contract.or_else(|| {
-        sot.formula_version.map(|formula_version| fullmag_ir::FemSpinTorquePlanIR {
-            formula_version: formula_version.to_string(),
-            operator_version: None,
-            realization_version: None,
-            target: sot.target.clone(),
-            stack_normal: None,
-            lande_g: None,
-            active_node_mask: sot_active_node_mask.clone(),
-            active_element_mask: None,
-            sot_current_density: sot.current_density,
-            sot_xi_dl: sot.xi_dl,
-            sot_xi_fl: sot.xi_fl,
-            sot_sigma: sot.sigma,
-            sot_thickness: sot.thickness,
-            sot_envelope: sot.envelope.clone(),
-            sot_drive: sot.drive.clone(),
-        })
+        sot.formula_version
+            .map(|formula_version| fullmag_ir::FemSpinTorquePlanIR {
+                formula_version: formula_version.to_string(),
+                operator_version: None,
+                realization_version: None,
+                target: sot.target.clone(),
+                stack_normal: None,
+                lande_g: None,
+                active_node_mask: sot_active_node_mask.clone(),
+                active_element_mask: None,
+                sot_current_density: sot.current_density,
+                sot_xi_dl: sot.xi_dl,
+                sot_xi_fl: sot.xi_fl,
+                sot_sigma: sot.sigma,
+                sot_thickness: sot.thickness,
+                sot_envelope: sot.envelope.clone(),
+                sot_drive: sot.drive.clone(),
+            })
     });
 
     if !problem.spin_transport_modules.is_empty() && ms_element_field.is_some() {

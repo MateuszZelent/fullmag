@@ -23,11 +23,14 @@ use super::spin_transport::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
-use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
+use crate::interactive_runtime::{
+    build_full_grid_materialized_fields, display_is_global_scalar, display_refresh_due,
+};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
 };
 use crate::quantities::normalized_quantity_name;
+use crate::quantities::{active_fdm_preview_quantities, field_materialization_quantity_ids};
 use crate::relaxation::{
     apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
@@ -873,6 +876,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut provenance = ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
         precision: "double".to_string(),
+        transport_modules: super::spin_transport::fdm_transport_execution_provenance(plan),
         demag_operator_kind: if plan.enable_demag {
             Some("tensor_fft_newell".to_string())
         } else {
@@ -885,6 +889,15 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         cuda_runtime_version: None,
         timestep_policy,
         random_seed: (problem.temperature > 0.0).then_some(problem.thermal_seed),
+        executed_physics_kinds: if !is_direct_minimization
+            && (plan.zhang_li_formula_version.is_some()
+                || plan.slonczewski_formula_version.is_some()
+                || plan.sot_formula_version.is_some())
+        {
+            vec!["spin_torque".to_string()]
+        } else {
+            Vec::new()
+        },
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
@@ -969,6 +982,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             }
             _ => unreachable!(),
         };
+        artifacts.observe_energy_evaluation();
 
         let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
 
@@ -1016,6 +1030,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         );
         direct_metrics.insert("rhs_evaluations".to_string(), result.rhs_evaluations as f64);
         direct_metrics.insert("accepted_steps".to_string(), result.steps_taken as f64);
+
         steps.push(final_stats);
         direct_minimizer_completion = Some(infer_direct_minimizer_completion(
             control,
@@ -1573,6 +1588,78 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         &mut artifacts,
     )?;
 
+    if !paused && !cancelled {
+        if let Some(live) = live.as_mut() {
+            if let Some(final_stats) = steps.last().cloned() {
+                let display_selection = live.display_selection.map(|get| get());
+                let observables = observe_state_with_antenna_field(
+                    &problem,
+                    &state,
+                    Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+                )?;
+                let materialization_quantities = field_materialization_quantity_ids();
+                let materialization_quantities = active_fdm_preview_quantities(
+                    crate::dispatch::FdmEngine::CpuReference,
+                    plan,
+                    &materialization_quantities,
+                );
+                let config_revision = display_selection
+                    .as_ref()
+                    .map(|selection| selection.revision)
+                    .unwrap_or(0);
+                let cached_preview_fields = build_full_grid_materialized_fields(
+                    &materialization_quantities,
+                    &observables,
+                    live.grid,
+                    plan.active_mask.as_deref(),
+                    config_revision,
+                );
+                let preview_field = if let Some(selection) = display_selection.as_ref() {
+                    let preview_field = if !display_is_global_scalar(selection) {
+                        let request = selection.preview_request();
+                        if let Some(field) = build_direct_preview_field_if_available(
+                            &problem,
+                            &state,
+                            &request,
+                            live.grid,
+                            plan.active_mask.as_deref(),
+                        )? {
+                            Some(field)
+                        } else {
+                            Some(build_grid_preview_field(
+                                &request,
+                                select_observables(&observables, &request.quantity)?,
+                                live.grid,
+                                plan.active_mask.as_deref(),
+                            ))
+                        }
+                    } else {
+                        None
+                    };
+                    preview_field
+                } else {
+                    None
+                };
+                let _ = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: final_coupled_checkpoint.clone(),
+                    stats: final_stats,
+                    scalar_row_due: true,
+                    grid: live.grid,
+                    fem_mesh_generation_id: None,
+                    magnetization: Some(flatten_vectors(state.magnetization())),
+                    preview_field,
+                    cached_preview_fields,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
+                    finished: false,
+                });
+            }
+        }
+    }
+
     let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut status = if paused {
@@ -2001,22 +2088,7 @@ fn observe_state_with_antenna_field(
         message: format!("Engine observables: {}", e),
     })?;
     let uniform_external = if let Some(field) = problem.terms.external_field {
-        state
-            .magnetization()
-            .iter()
-            .enumerate()
-            .map(|(index, _)| {
-                if problem
-                    .active_mask
-                    .as_ref()
-                    .is_some_and(|mask| !mask[index])
-                {
-                    [0.0, 0.0, 0.0]
-                } else {
-                    field
-                }
-            })
-            .collect()
+        state.magnetization().iter().map(|_| field).collect()
     } else {
         vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
     };
@@ -2045,6 +2117,16 @@ fn observe_state_with_antenna_field(
         total[0] += drive[0];
         total[1] += drive[1];
         total[2] += drive[2];
+    }
+    if let Some(active_mask) = problem.active_mask.as_deref() {
+        reconstruct_inactive_fdm_visual_effective_field(
+            &mut effective_field,
+            &observables.demag_field,
+            &uniform_external,
+            &oersted_field,
+            &antenna_field,
+            active_mask,
+        );
     }
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
 
@@ -2086,6 +2168,39 @@ fn observe_state_with_antenna_field(
         max_torque_Apm: max_torque_apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
+}
+
+fn reconstruct_inactive_fdm_visual_effective_field(
+    effective_field: &mut [Vector3],
+    demag_field: &[Vector3],
+    external_field: &[Vector3],
+    oersted_field: &[Vector3],
+    antenna_field: &[Vector3],
+    active_mask: &[bool],
+) {
+    for (index, total) in effective_field.iter_mut().enumerate() {
+        if active_mask.get(index).copied().unwrap_or(true) {
+            continue;
+        }
+        for component in 0..3 {
+            total[component] = demag_field
+                .get(index)
+                .map(|value| value[component])
+                .unwrap_or(0.0)
+                + external_field
+                    .get(index)
+                    .map(|value| value[component])
+                    .unwrap_or(0.0)
+                + oersted_field
+                    .get(index)
+                    .map(|value| value[component])
+                    .unwrap_or(0.0)
+                + antenna_field
+                    .get(index)
+                    .map(|value| value[component])
+                    .unwrap_or(0.0);
+        }
+    }
 }
 
 fn make_step_stats_from_report(
@@ -2349,15 +2464,13 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_ext" => {
                 if self.external_field.is_none() {
-                    self.external_field =
-                        Some(self.problem.external_field(self.state).map_err(|error| {
-                            RunError {
-                                message: format!(
-                                    "CPU FDM snapshot '{}': external field: {}",
-                                    name, error
-                                ),
-                            }
-                        })?);
+                    self.external_field = Some(vec![
+                        self.problem
+                            .terms
+                            .external_field
+                            .unwrap_or([0.0, 0.0, 0.0]);
+                        self.state.magnetization().len()
+                    ]);
                 }
                 Ok(self
                     .external_field
@@ -2409,13 +2522,26 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         if self.effective_field.is_none() {
             #[cfg(test)]
             increment_direct_h_eff_assembly_calls();
-            self.effective_field = Some(
-                self.problem
-                    .observable_effective_field(self.state)
-                    .map_err(|error| RunError {
-                        message: format!("CPU FDM snapshot '{}': effective field: {}", name, error),
-                    })?,
-            );
+            let mut effective_field = self
+                .problem
+                .observable_effective_field(self.state)
+                .map_err(|error| RunError {
+                    message: format!("CPU FDM snapshot '{}': effective field: {}", name, error),
+                })?;
+            if let Some(active_mask) = self.problem.active_mask.as_deref() {
+                let demag_field = self.base_values("H_demag", name)?.to_vec();
+                let external_field = self.base_values("H_ext", name)?.to_vec();
+                let oersted_field = self.base_values("H_OE", name)?.to_vec();
+                reconstruct_inactive_fdm_visual_effective_field(
+                    &mut effective_field,
+                    &demag_field,
+                    &external_field,
+                    &oersted_field,
+                    &[],
+                    active_mask,
+                );
+            }
+            self.effective_field = Some(effective_field);
         }
         Ok(self
             .effective_field
@@ -3172,6 +3298,74 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_h_ext_keeps_zeeman_field_in_inactive_fdm_cells() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = false;
+        plan.enable_exchange = false;
+        plan.external_field = Some([2.0, -3.0, 4.0]);
+        plan.active_mask = Some(
+            std::iter::once(true)
+                .chain(std::iter::repeat_n(false, 15))
+                .collect(),
+        );
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["H_ext"],
+            &LivePreviewRequest {
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("H_ext preview should build");
+        let field = fields.first().expect("H_ext preview should be present");
+
+        assert_eq!(field.quantity, "H_ext");
+        assert_eq!(&field.vector_field_values[3..6], &[2.0, -3.0, 4.0]);
+    }
+
+    #[test]
+    fn snapshot_h_eff_composes_full_domain_demag_and_zeeman_in_inactive_cells() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+        plan.enable_exchange = false;
+        plan.external_field = Some([2.0, -3.0, 4.0]);
+        plan.active_mask = Some(
+            std::iter::once(true)
+                .chain(std::iter::repeat_n(false, 15))
+                .collect(),
+        );
+        plan.initial_magnetization = std::iter::once([1.0, 0.0, 0.0])
+            .chain(std::iter::repeat_n([0.0, 0.0, 0.0], 15))
+            .collect();
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["H_demag", "H_eff"],
+            &LivePreviewRequest {
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("full-domain field previews should build");
+        let demag = fields
+            .iter()
+            .find(|field| field.quantity == "H_demag")
+            .expect("H_demag preview should be present");
+        let effective = fields
+            .iter()
+            .find(|field| field.quantity == "H_eff")
+            .expect("H_eff preview should be present");
+
+        for component in 0..3 {
+            assert_eq!(
+                effective.vector_field_values[3 + component],
+                demag.vector_field_values[3 + component] + [2.0, -3.0, 4.0][component],
+            );
+        }
+    }
+
+    #[test]
     fn snapshot_vector_fields_materializes_energy_density_quantities_for_frontend() {
         let plan = FdmPlanIR {
             enable_demag: true,
@@ -3485,6 +3679,9 @@ mod tests {
         let mut live_updates = 0usize;
         let mut on_step = |update: StepUpdate| -> StepAction {
             live_updates += 1;
+            if update.magnetization.is_some() {
+                return StepAction::Continue;
+            }
             assert!(update.magnetization.is_none());
             assert!(update.preview_field.is_none());
             assert!(update.cached_preview_fields.is_none());
@@ -3533,6 +3730,10 @@ mod tests {
         };
         let mut preview_updates = 0usize;
         let mut on_step = |update: StepUpdate| -> StepAction {
+            if update.magnetization.is_some() {
+                assert!(update.cached_preview_fields.is_some());
+                return StepAction::Continue;
+            }
             if update.preview_field.is_some() {
                 preview_updates += 1;
             }
@@ -3611,6 +3812,118 @@ mod tests {
             observe_calls <= 1,
             "live magnetization payload should read state directly instead of full observables per refresh; observe_state calls: {observe_calls}"
         );
+    }
+
+    #[test]
+    fn direct_minimizer_terminal_update_contains_final_state_and_cached_fields() {
+        let plan = FdmPlanIR {
+            enable_demag: true,
+            initial_magnetization: vec![[1.0, 0.1, 0.0]; 16],
+            relaxation: Some(direct_minimizer_test_control()),
+            ..make_test_plan()
+        };
+        let display_selection = || {
+            let mut state = crate::DisplaySelectionState::default();
+            state.selection.quantity = "m".to_string();
+            state.selection.every_n = 1;
+            state
+        };
+        let mut terminal_update = None;
+        let mut on_step = |update: StepUpdate| -> StepAction {
+            if update.magnetization.is_some() {
+                terminal_update = Some(update);
+            }
+            StepAction::Continue
+        };
+
+        execute_reference_fdm(
+            &plan,
+            1e-12,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: 1,
+                initial_snapshot: false,
+                display_selection: Some(&display_selection),
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("direct minimizer should emit a terminal live update");
+
+        let update = terminal_update.expect("terminal update should carry final magnetization");
+        assert_eq!(
+            update.magnetization.as_ref().map(Vec::len),
+            Some(plan.initial_magnetization.len() * 3)
+        );
+        let cached_quantities = update
+            .cached_preview_fields
+            .as_ref()
+            .expect("terminal update should materialize cached vector fields")
+            .iter()
+            .map(|field| field.quantity.as_str())
+            .collect::<Vec<_>>();
+        assert!(cached_quantities.contains(&"H_demag"));
+        assert!(cached_quantities.contains(&"H_eff"));
+        for field in update.cached_preview_fields.as_ref().unwrap() {
+            assert_eq!(field.preview_grid, plan.grid.cells);
+            assert_eq!(field.original_grid, plan.grid.cells);
+            assert_eq!(
+                field.vector_field_values.len(),
+                plan.initial_magnetization.len() * 3
+            );
+            assert!(!field.auto_downscaled);
+        }
+    }
+
+    #[test]
+    fn llg_terminal_update_contains_final_state_and_cached_fields() {
+        let plan = FdmPlanIR {
+            enable_demag: true,
+            ..make_test_plan()
+        };
+        let display_selection = || {
+            let mut state = crate::DisplaySelectionState::default();
+            state.selection.quantity = "m".to_string();
+            state.selection.every_n = 1;
+            state
+        };
+        let mut terminal_update = None;
+        let mut on_step = |update: StepUpdate| -> StepAction {
+            if update.cached_preview_fields.is_some() {
+                terminal_update = Some(update);
+            }
+            StepAction::Continue
+        };
+
+        execute_reference_fdm(
+            &plan,
+            2e-14,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: 1,
+                initial_snapshot: false,
+                display_selection: Some(&display_selection),
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("LLG should emit a terminal live update");
+
+        let update = terminal_update.expect("terminal update should materialize cached fields");
+        assert!(update.magnetization.is_some());
+        let cached_quantities = update
+            .cached_preview_fields
+            .as_ref()
+            .expect("terminal update should materialize cached vector fields")
+            .iter()
+            .map(|field| field.quantity.as_str())
+            .collect::<Vec<_>>();
+        assert!(cached_quantities.contains(&"H_demag"));
+        assert!(cached_quantities.contains(&"H_eff"));
     }
 
     #[test]

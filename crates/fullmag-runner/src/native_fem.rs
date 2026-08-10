@@ -16,13 +16,13 @@ mod plan;
 #[cfg(feature = "fem-gpu")]
 mod runtime_info;
 #[cfg(feature = "fem-gpu")]
-mod steady_transport;
+mod stage_coupled;
 #[cfg(feature = "fem-gpu")]
 mod stage_oersted;
 #[cfg(feature = "fem-gpu")]
 mod stage_transport;
-#[cfg(all(test, feature = "fem-gpu"))]
-pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
+#[cfg(feature = "fem-gpu")]
+mod steady_transport;
 #[allow(unused_imports)]
 pub(crate) use availability::{
     is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
@@ -60,26 +60,25 @@ pub(crate) use plan::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info,
-    DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    NativeFemGpuStateInfo,
 };
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_coupled::StageM2CoupledProvider;
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_oersted::{plan_requests_stage_oersted_callback, StageOerstedProvider};
+#[cfg(feature = "fem-gpu")]
+pub(crate) use stage_transport::{plan_requests_stage_transport_callback, StageTransportProvider};
+#[cfg(all(test, feature = "fem-gpu"))]
+pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
     solve_native_fem_steady_transport_rt0, NativeFemSteadyTransportBundle,
-    NativeFemSteadyTransportExecution,
-    NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
-    NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
-    NativeFemSteadyTransportRt0Result,
-};
-#[cfg(feature = "fem-gpu")]
-pub(crate) use stage_oersted::{
-    plan_requests_stage_oersted_callback, StageOerstedProvider,
-};
-#[cfg(feature = "fem-gpu")]
-pub(crate) use stage_transport::{
-    plan_requests_stage_transport_callback, StageTransportProvider,
+    NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
+    NativeFemSteadyTransportInterface, NativeFemSteadyTransportRequest,
+    NativeFemSteadyTransportResult, NativeFemSteadyTransportRt0Result,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -146,15 +145,11 @@ fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> 
 }
 
 #[cfg(feature = "fem-gpu")]
-fn copy_demag_diagnostics(
-    step_stats: &mut StepStats,
-    ffi_stats: &ffi::fullmag_fem_step_stats,
-) {
+fn copy_demag_diagnostics(step_stats: &mut StepStats, ffi_stats: &ffi::fullmag_fem_step_stats) {
     step_stats.demag_potential_order = ffi_stats.demag_potential_order;
     step_stats.demag_potential_true_dof_count = ffi_stats.demag_potential_true_dof_count;
     step_stats.demag_variational_energy_joules = ffi_stats.demag_variational_energy_joules;
-    step_stats.demag_recovered_field_energy_joules =
-        ffi_stats.demag_recovered_field_energy_joules;
+    step_stats.demag_recovered_field_energy_joules = ffi_stats.demag_recovered_field_energy_joules;
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -902,7 +897,8 @@ fn pack_native_sot_envelope(
             phase_rad,
             offset,
         } => {
-            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINUSOIDAL as u32;
+            descriptor.kind =
+                ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINUSOIDAL as u32;
             descriptor.amplitude = *amplitude;
             descriptor.frequency_hz = *frequency_hz;
             descriptor.phase_rad = *phase_rad;
@@ -919,7 +915,8 @@ fn pack_native_sot_envelope(
             descriptor.t_off_s = *t_off_s;
         }
         fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points: source } => {
-            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PIECEWISE_LINEAR as u32;
+            descriptor.kind =
+                ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PIECEWISE_LINEAR as u32;
             points = source
                 .iter()
                 .map(|point| ffi::fullmag_fem_time_point {
@@ -936,7 +933,8 @@ fn pack_native_sot_envelope(
             bandwidth_hz,
             offset,
         } => {
-            descriptor.kind = ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINC_PULSE as u32;
+            descriptor.kind =
+                ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINC_PULSE as u32;
             descriptor.amplitude = *amplitude;
             descriptor.center_s = *center_s;
             descriptor.bandwidth_hz = *bandwidth_hz;
@@ -2045,36 +2043,48 @@ impl NativeFemBackend {
             .filter(|contract| contract.formula_version == "prescribed_sot.fullmag.v1");
         let stt_active_node_mask = stt_contract
             .and_then(|contract| contract.active_node_mask.as_ref())
-            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .map(|mask| {
+                mask.iter()
+                    .map(|selected| u8::from(*selected))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let stt_active_element_mask = stt_contract
             .and_then(|contract| contract.active_element_mask.as_ref())
-            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .map(|mask| {
+                mask.iter()
+                    .map(|selected| u8::from(*selected))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        let stt_formula_version = match stt_contract.map(|contract| contract.formula_version.as_str()) {
+        let stt_formula_version = match stt_contract
+            .map(|contract| contract.formula_version.as_str())
+        {
             None | Some("slonczewski.legacy_fullmag.v0") | Some("zhang_li.legacy_fullmag.v0") => 0,
             Some("slonczewski.fullmag.v2") => 3,
             Some("zhang_li.fullmag.v1") => 2,
             Some(_) => u32::MAX,
         };
-        let stt_realization_version = match stt_contract
-            .and_then(|contract| contract.realization_version.as_deref())
-        {
-            None => 0,
-            Some("slonczewski_thin_layer_homogenized.v1") => 1,
-            Some("slonczewski_interface_flux.v1") => 2,
-            Some(_) => u32::MAX,
-        };
-        let stt_operator_version = match stt_contract
-            .and_then(|contract| contract.operator_version.as_deref())
-        {
-            None => 0,
-            Some("zl_central_reference_v1") => 1,
-            Some(_) => u32::MAX,
-        };
+        let stt_realization_version =
+            match stt_contract.and_then(|contract| contract.realization_version.as_deref()) {
+                None => 0,
+                Some("slonczewski_thin_layer_homogenized.v1") => 1,
+                Some("slonczewski_interface_flux.v1") => 2,
+                Some(_) => u32::MAX,
+            };
+        let stt_operator_version =
+            match stt_contract.and_then(|contract| contract.operator_version.as_deref()) {
+                None => 0,
+                Some("zl_central_reference_v1") => 1,
+                Some(_) => u32::MAX,
+            };
         let sot_active_node_mask = sot_contract
             .and_then(|contract| contract.active_node_mask.as_ref())
-            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .map(|mask| {
+                mask.iter()
+                    .map(|selected| u8::from(*selected))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let sot_envelope_value = sot_contract
             .and_then(|contract| contract.sot_envelope.as_ref())
@@ -2442,7 +2452,9 @@ impl NativeFemBackend {
             stt_stack_normal: stt_contract
                 .and_then(|contract| contract.stack_normal)
                 .unwrap_or([0.0, 0.0, 1.0]),
-            stt_lande_g: stt_contract.and_then(|contract| contract.lande_g).unwrap_or(0.0),
+            stt_lande_g: stt_contract
+                .and_then(|contract| contract.lande_g)
+                .unwrap_or(0.0),
             stt_active_node_mask: optional_slice_ptr(&stt_active_node_mask),
             stt_active_node_mask_len: stt_active_node_mask.len() as u64,
             stt_active_element_mask: optional_slice_ptr(&stt_active_element_mask),
@@ -2976,18 +2988,24 @@ impl NativeFemBackend {
             demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
-            rk_transaction_capture_host_wall_time_ns: stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns: stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns: stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns: stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns: stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns: stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
@@ -3361,18 +3379,24 @@ impl NativeFemBackend {
             demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
-            rk_transaction_capture_host_wall_time_ns: stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns: stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns: stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns: stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns: stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns: stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
@@ -3694,18 +3718,24 @@ impl NativeFemBackend {
             demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
-            rk_transaction_capture_host_wall_time_ns: stats.rk_transaction_capture_host_wall_time_ns,
-            rk_transaction_capture_device_elapsed_time_ns: stats.rk_transaction_capture_device_elapsed_time_ns,
+            rk_transaction_capture_host_wall_time_ns: stats
+                .rk_transaction_capture_host_wall_time_ns,
+            rk_transaction_capture_device_elapsed_time_ns: stats
+                .rk_transaction_capture_device_elapsed_time_ns,
             rk_transaction_capture_bytes: stats.rk_transaction_capture_bytes,
-            rk_transaction_restore_host_wall_time_ns: stats.rk_transaction_restore_host_wall_time_ns,
-            rk_transaction_restore_device_elapsed_time_ns: stats.rk_transaction_restore_device_elapsed_time_ns,
+            rk_transaction_restore_host_wall_time_ns: stats
+                .rk_transaction_restore_host_wall_time_ns,
+            rk_transaction_restore_device_elapsed_time_ns: stats
+                .rk_transaction_restore_device_elapsed_time_ns,
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
-            demag_hypre_wait_in_enqueue_wall_time_ns: stats.demag_hypre_wait_in_enqueue_wall_time_ns,
+            demag_hypre_wait_in_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
             demag_hypre_device_elapsed_time_ns: stats.demag_hypre_device_elapsed_time_ns,
-            demag_hypre_wait_out_enqueue_wall_time_ns: stats.demag_hypre_wait_out_enqueue_wall_time_ns,
+            demag_hypre_wait_out_enqueue_wall_time_ns: stats
+                .demag_hypre_wait_out_enqueue_wall_time_ns,
             demag_hypre_event_wait_count: stats.demag_hypre_event_wait_count,
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
@@ -4882,9 +4912,8 @@ mod tests {
 
     #[test]
     fn demag_diagnostics_mapping_preserves_each_ffi_field() {
-        let mut ffi_stats = unsafe {
-            std::mem::MaybeUninit::<ffi::fullmag_fem_step_stats>::zeroed().assume_init()
-        };
+        let mut ffi_stats =
+            unsafe { std::mem::MaybeUninit::<ffi::fullmag_fem_step_stats>::zeroed().assume_init() };
         ffi_stats.demag_potential_order = 3;
         ffi_stats.demag_potential_true_dof_count = 123_456;
         ffi_stats.demag_variational_energy_joules = -7.25;
@@ -6973,8 +7002,12 @@ mod tests {
                 bulk_dmi: None,
                 zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {
-                        formula: match stt_contract.map(|contract| contract.formula_version.as_str()) {
-                            Some("zhang_li.fullmag.v1") => fullmag_engine::ZhangLiFormula::FullmagV1,
+                        formula: match stt_contract
+                            .map(|contract| contract.formula_version.as_str())
+                        {
+                            Some("zhang_li.fullmag.v1") => {
+                                fullmag_engine::ZhangLiFormula::FullmagV1
+                            }
                             _ => fullmag_engine::ZhangLiFormula::LegacyFullmagV0,
                         },
                         current_density: plan.current_density.expect("current density"),
@@ -7173,15 +7206,20 @@ mod tests {
                     phase_rad,
                     offset,
                 } => {
-                    offset + amplitude *
-                        (2.0 * std::f64::consts::PI * frequency_hz * time_s + phase_rad).sin()
+                    offset
+                        + amplitude
+                            * (2.0 * std::f64::consts::PI * frequency_hz * time_s + phase_rad).sin()
                 }
                 fullmag_ir::TimeEnvelopeIR::Pulse {
                     amplitude,
                     t_on_s,
                     t_off_s,
                 } => {
-                    if time_s >= *t_on_s && time_s < *t_off_s { *amplitude } else { 0.0 }
+                    if time_s >= *t_on_s && time_s < *t_off_s {
+                        *amplitude
+                    } else {
+                        0.0
+                    }
                 }
                 fullmag_ir::TimeEnvelopeIR::PiecewiseLinear { points } => {
                     if points.is_empty() {
@@ -8984,7 +9022,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available() {
+    fn native_fem_prescribed_sot_step_matches_independent_si_reference_when_mfem_stack_is_available(
+    ) {
         if !is_cpu_available() {
             eprintln!("skipping native FEM prescribed-SOT parity test: MFEM stack unavailable");
             return;
@@ -9029,15 +9068,24 @@ mod tests {
             1e-9,
         );
 
-        let mut backend = NativeFemBackend::create(&plan).expect("native FEM prescribed-SOT create");
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("native FEM prescribed-SOT create");
         let stats = backend
             .step(plan.fixed_timestep.expect("fixed dt"))
             .expect("native prescribed-SOT FEM step");
         let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy SOT m");
-        let actual_h_eff = backend.copy_h_eff(plan.mesh.nodes.len()).expect("copy SOT H_eff");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy SOT H_eff");
 
         assert_vector_field_close("prescribed SOT m", &actual_m, &expected_m, 5e-8, 1e-10);
-        assert_vector_field_close("prescribed SOT H_eff", &actual_h_eff, &reference_h_eff, 5e-8, 1e-6);
+        assert_vector_field_close(
+            "prescribed SOT H_eff",
+            &actual_h_eff,
+            &reference_h_eff,
+            5e-8,
+            1e-6,
+        );
         assert_scalar_close(
             "prescribed SOT max_rhs_amplitude",
             stats.max_dm_dt,
@@ -9048,7 +9096,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available() {
+    fn native_fem_prescribed_sot_gpu_step_matches_independent_si_reference_when_mfem_stack_is_available(
+    ) {
         if !native_cpu_gpu_parity_available(false) {
             return;
         }
@@ -9077,18 +9126,25 @@ mod tests {
 
         let (expected_m, expected_max_rhs) = canonical_prescribed_sot_heun_reference(&plan);
         let (_, _, reference_h_eff, _) = cpu_reference_single_step(&plan);
-        let mut backend = NativeFemBackend::create(&plan).expect("native FEM GPU prescribed-SOT create");
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("native FEM GPU prescribed-SOT create");
         let device_name = backend.device_info().expect("GPU SOT device info").name;
         assert!(
-            device_name.contains("cuda") || device_name.contains("NVIDIA") ||
-                device_name.contains("GeForce") || device_name.contains("RTX"),
+            device_name.contains("cuda")
+                || device_name.contains("NVIDIA")
+                || device_name.contains("GeForce")
+                || device_name.contains("RTX"),
             "prescribed-SOT GPU test resolved unexpected device: {device_name}"
         );
         let stats = backend
             .step(plan.fixed_timestep.expect("fixed dt"))
             .expect("native prescribed-SOT GPU step");
-        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy GPU SOT m");
-        let actual_h_eff = backend.copy_h_eff(plan.mesh.nodes.len()).expect("copy GPU SOT H_eff");
+        let actual_m = backend
+            .copy_m(plan.mesh.nodes.len())
+            .expect("copy GPU SOT m");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy GPU SOT H_eff");
 
         assert_vector_field_close("prescribed SOT GPU m", &actual_m, &expected_m, 5e-7, 1e-10);
         assert_vector_field_close(
@@ -9428,7 +9484,9 @@ mod tests {
         fem_plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
         fem_plan.stt_lambda = Some(1.8);
         fem_plan.stt_epsilon_prime = Some(0.03);
-        let dt = fem_plan.fixed_timestep.expect("common-limit fixed timestep");
+        let dt = fem_plan
+            .fixed_timestep
+            .expect("common-limit fixed timestep");
 
         let mut fdm_plan = fullmag_ir::FdmPlanIR::default();
         fdm_plan.grid = fullmag_ir::GridDimensions { cells: [1, 1, 1] };
@@ -9478,14 +9536,9 @@ mod tests {
         fdm_plan.slonczewski_stack_normal = Some([0.0, 0.0, 1.0]);
         fdm_plan.slonczewski_active_mask = Some(vec![true]);
 
-        let fdm_run = crate::fdm::cpu::reference::execute_reference_fdm(
-            &fdm_plan,
-            dt,
-            &[],
-            None,
-            None,
-        )
-        .expect("FDM common-limit reference run");
+        let fdm_run =
+            crate::fdm::cpu::reference::execute_reference_fdm(&fdm_plan, dt, &[], None, None)
+                .expect("FDM common-limit reference run");
         assert_eq!(
             fdm_run.result.final_magnetization.len(),
             1,
@@ -9495,9 +9548,7 @@ mod tests {
 
         let mut fem_backend =
             NativeFemBackend::create(&fem_plan).expect("FEM common-limit native create");
-        fem_backend
-            .step(dt)
-            .expect("FEM common-limit native step");
+        fem_backend.step(dt).expect("FEM common-limit native step");
         let actual = fem_backend
             .copy_m(fem_plan.mesh.nodes.len())
             .expect("FEM common-limit magnetization");
@@ -9527,7 +9578,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available() {
+    fn native_fem_prescribed_sot_matches_fdm_reference_in_common_limit_when_mfem_stack_is_available(
+    ) {
         if !is_cpu_available() {
             eprintln!("skipping FEM SOT↔FDM common-limit test: MFEM stack unavailable");
             return;
@@ -9555,7 +9607,9 @@ mod tests {
             sot_envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
             sot_drive: None,
         });
-        let dt = fem_plan.fixed_timestep.expect("SOT common-limit fixed timestep");
+        let dt = fem_plan
+            .fixed_timestep
+            .expect("SOT common-limit fixed timestep");
 
         let mut fdm_plan = fullmag_ir::FdmPlanIR::default();
         fdm_plan.grid = fullmag_ir::GridDimensions { cells: [1, 1, 1] };
@@ -9613,14 +9667,9 @@ mod tests {
             envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 }),
         });
 
-        let fdm_run = crate::fdm::cpu::reference::execute_reference_fdm(
-            &fdm_plan,
-            dt,
-            &[],
-            None,
-            None,
-        )
-        .expect("FDM SOT common-limit reference run");
+        let fdm_run =
+            crate::fdm::cpu::reference::execute_reference_fdm(&fdm_plan, dt, &[], None, None)
+                .expect("FDM SOT common-limit reference run");
         assert_eq!(
             fdm_run.result.final_magnetization.len(),
             1,
@@ -9697,12 +9746,8 @@ mod tests {
         let mut gpu = NativeFemBackend::create(&gpu_plan).expect("native FEM SOT GPU create");
 
         for step in 1..=8 {
-            let cpu_stats = cpu
-                .step(dt)
-                .expect("native FEM SOT CPU trajectory step");
-            let gpu_stats = gpu
-                .step(dt)
-                .expect("native FEM SOT GPU trajectory step");
+            let cpu_stats = cpu.step(dt).expect("native FEM SOT CPU trajectory step");
+            let gpu_stats = gpu.step(dt).expect("native FEM SOT GPU trajectory step");
             let cpu_m = cpu
                 .copy_m(plan.mesh.nodes.len())
                 .expect("copy FEM SOT CPU trajectory m");
@@ -9771,10 +9816,12 @@ mod tests {
             let gpu_plan = native_plan_for_device(&plan, "cuda");
             assert_same_parity_mesh(&cpu_plan, &gpu_plan);
             let dt = plan.fixed_timestep.expect("fixed SOT integrator timestep");
-            let mut cpu = NativeFemBackend::create(&cpu_plan)
-                .unwrap_or_else(|error| panic!("native FEM SOT CPU {integrator:?} create: {error}"));
-            let mut gpu = NativeFemBackend::create(&gpu_plan)
-                .unwrap_or_else(|error| panic!("native FEM SOT GPU {integrator:?} create: {error}"));
+            let mut cpu = NativeFemBackend::create(&cpu_plan).unwrap_or_else(|error| {
+                panic!("native FEM SOT CPU {integrator:?} create: {error}")
+            });
+            let mut gpu = NativeFemBackend::create(&gpu_plan).unwrap_or_else(|error| {
+                panic!("native FEM SOT GPU {integrator:?} create: {error}")
+            });
             let cpu_stats = cpu
                 .step(dt)
                 .unwrap_or_else(|error| panic!("native FEM SOT CPU {integrator:?} step: {error}"));
@@ -9936,7 +9983,12 @@ mod tests {
 
             for (node, (m0, (((zero, half), one), double))) in initial
                 .iter()
-                .zip(zero.iter().zip(half.iter()).zip(one.iter()).zip(double.iter()))
+                .zip(
+                    zero.iter()
+                        .zip(half.iter())
+                        .zip(one.iter())
+                        .zip(double.iter()),
+                )
                 .enumerate()
             {
                 let project_tangent = |state: &[f64; 3], reference: &[f64; 3]| {
@@ -9978,6 +10030,409 @@ mod tests {
                     "{device} Slonczewski tangential 2x response is not 4x 0.5x at node {node}: half={t_half:?} double={t_double:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step() {
+        let plan = steady_transport::test_external_lead_stage_plan();
+        let provider = StageOerstedProvider::from_plan(&plan)
+            .expect("external-lead stage provider preflight")
+            .expect("external-lead plan must request a stage provider");
+        let mut backend = NativeFemBackend::create(&plan)
+            .expect("native FEM external-lead callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(provider))
+            .expect("install external-lead Oersted callback");
+        backend.begin_stage(0.0).expect("begin native FEM stage");
+
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed timestep"))
+            .expect("external-lead Oersted callback must advance one LLG step");
+        assert!(stats.time.is_finite() && stats.time > 0.0);
+        assert!(stats.max_torque_T.is_finite());
+        let magnetization = backend
+            .copy_m(plan.mesh.nodes.len())
+            .expect("copy post-step magnetization");
+        assert!(magnetization
+            .iter()
+            .flatten()
+            .all(|component| component.is_finite()));
+
+        let telemetry = backend
+            .stage_oersted_telemetry()
+            .expect("installed callback telemetry");
+        assert_eq!(telemetry["policy"], "fem_stage_oersted_callback.v1");
+        assert!(telemetry["begin_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1));
+        assert!(telemetry["commit_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1));
+        assert!(telemetry["evaluate_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 1));
+        assert!(telemetry["accepted_observation"]["field_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
+
+    #[test]
+    fn native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted() {
+        let plan = steady_transport::test_reciprocal_m2_oersted_stage_plan();
+        let coupled = StageM2CoupledProvider::from_plan(&plan)
+            .expect("combined FEM M2 provider preflight")
+            .expect("combined FEM M2 plan must request the shared provider");
+        let oersted = StageOerstedProvider::from_plan_with_coupled(&plan, Some(coupled.clone()))
+            .expect("combined Oersted provider preflight")
+            .expect("combined plan must request Oersted callback");
+        let transport = StageTransportProvider::from_plan_with_coupled(&plan, Some(coupled))
+            .expect("combined transport provider preflight")
+            .expect("combined plan must request transport callback");
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("combined FEM M2 callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(oersted))
+            .expect("install combined Oersted callback");
+        backend
+            .install_stage_transport_provider(Box::new(transport))
+            .expect("install combined transport callback");
+        backend
+            .begin_stage(0.0)
+            .expect("begin combined FEM M2 stage");
+
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed timestep"))
+            .expect("combined torque/Oersted callback must advance one LLG step");
+        assert!(stats.time.is_finite() && stats.time > 0.0);
+        assert!(stats.max_torque_T.is_finite());
+
+        let oersted = backend
+            .stage_oersted_telemetry()
+            .expect("combined Oersted telemetry");
+        let transport = backend
+            .stage_transport_telemetry()
+            .expect("combined transport telemetry");
+        assert_eq!(oersted["policy"], "fem_stage_transport_oersted_callback.v1");
+        assert_eq!(transport["policy"], oersted["policy"]);
+        assert_eq!(
+            transport["accepted_observation"]["source_state_revision"],
+            oersted["accepted_observation"]["source_state_revision"]
+        );
+        assert_eq!(
+            transport["accepted_observation"]["source_state_digest"],
+            oersted["accepted_observation"]["source_view_identity_digest"]
+        );
+        let solve_count = oersted["shared_evaluator"]["solve_count"]
+            .as_u64()
+            .expect("shared solve count");
+        let cache_hits = oersted["shared_evaluator"]["cache_hit_count"]
+            .as_u64()
+            .expect("shared cache-hit count");
+        let stage_evaluations = oersted["evaluate_count"]
+            .as_u64()
+            .expect("Oersted evaluate count");
+        assert!(solve_count >= 1);
+        assert_eq!(solve_count, stage_evaluations);
+        assert!(cache_hits >= stage_evaluations);
+        assert_eq!(transport["shared_evaluator"], oersted["shared_evaluator"]);
+        assert!(transport["accepted_observation"]["torque_l2_per_s"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0));
+        assert!(oersted["accepted_observation"]["field_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
+
+    #[test]
+    fn native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry() {
+        let mut plan = steady_transport::test_reciprocal_m2_oersted_stage_plan();
+        plan.integrator = Some(IntegratorChoice::Rk23);
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+            atol: 1.0e-10,
+            rtol: 1.0e-8,
+            dt_initial: Some(1.0e-8),
+            dt_min: 1.0e-16,
+            dt_max: Some(1.0e-8),
+            safety: 0.8,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: Some(1.0e-12),
+            norm_tolerance: Some(1.0e-8),
+        });
+        let coupled = StageM2CoupledProvider::from_plan(&plan)
+            .expect("adaptive combined FEM M2 provider preflight")
+            .expect("adaptive combined plan must request the shared provider");
+        let oersted = StageOerstedProvider::from_plan_with_coupled(&plan, Some(coupled.clone()))
+            .expect("adaptive combined Oersted provider preflight")
+            .expect("adaptive combined plan must request Oersted callback");
+        let transport = StageTransportProvider::from_plan_with_coupled(&plan, Some(coupled))
+            .expect("adaptive combined transport provider preflight")
+            .expect("adaptive combined plan must request transport callback");
+        let mut backend = NativeFemBackend::create(&plan)
+            .expect("adaptive combined FEM M2 callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(oersted))
+            .expect("install adaptive combined Oersted callback");
+        backend
+            .install_stage_transport_provider(Box::new(transport))
+            .expect("install adaptive combined transport callback");
+        backend
+            .begin_stage(0.0)
+            .expect("begin adaptive combined FEM M2 stage");
+
+        let stats = backend
+            .step(1.0e-8)
+            .expect("adaptive combined step must reject and then accept");
+        assert!(stats.rejected_attempts >= 1, "{stats:?}");
+        let oersted = backend
+            .stage_oersted_telemetry()
+            .expect("adaptive combined Oersted telemetry");
+        let transport = backend
+            .stage_transport_telemetry()
+            .expect("adaptive combined transport telemetry");
+        let rejected = u64::from(stats.rejected_attempts);
+        assert_eq!(oersted["rollback_count"], rejected);
+        assert_eq!(transport["rollback_count"], rejected);
+        assert_eq!(oersted["commit_count"], 1);
+        assert_eq!(transport["commit_count"], 1);
+        assert_eq!(oersted["begin_count"], rejected + 1);
+        assert_eq!(transport["begin_count"], rejected + 1);
+        assert_eq!(
+            transport["accepted_observation"]["source_state_revision"],
+            oersted["accepted_observation"]["source_state_revision"]
+        );
+        assert_eq!(
+            transport["accepted_observation"]["source_state_digest"],
+            oersted["accepted_observation"]["source_view_identity_digest"]
+        );
+        let solve_count = oersted["shared_evaluator"]["solve_count"]
+            .as_u64()
+            .expect("adaptive shared solve count");
+        let cache_hits = oersted["shared_evaluator"]["cache_hit_count"]
+            .as_u64()
+            .expect("adaptive shared cache-hit count");
+        let oersted_evaluations = oersted["evaluate_count"]
+            .as_u64()
+            .expect("adaptive Oersted evaluate count");
+        assert_eq!(solve_count, oersted_evaluations);
+        assert!(cache_hits >= oersted_evaluations);
+        assert_eq!(transport["shared_evaluator"], oersted["shared_evaluator"]);
+    }
+
+    #[test]
+    fn native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators() {
+        for (integrator, adaptive) in [
+            (IntegratorChoice::Heun, false),
+            (IntegratorChoice::Rk4, false),
+            (IntegratorChoice::Rk23, true),
+            (IntegratorChoice::Rk45, true),
+        ] {
+            let mut plan = steady_transport::test_reciprocal_m2_oersted_stage_plan();
+            plan.integrator = Some(integrator);
+            if adaptive {
+                plan.fixed_timestep = None;
+                plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+                    atol: 1.0e-8,
+                    rtol: 1.0e-5,
+                    dt_initial: Some(1.0e-13),
+                    dt_min: 1.0e-16,
+                    dt_max: Some(1.0e-12),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.5,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            let coupled = StageM2CoupledProvider::from_plan(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} shared preflight: {error:?}"))
+                .unwrap_or_else(|| panic!("{integrator:?} did not request shared provider"));
+            let oersted =
+                StageOerstedProvider::from_plan_with_coupled(&plan, Some(coupled.clone()))
+                    .unwrap_or_else(|error| panic!("{integrator:?} Oersted preflight: {error:?}"))
+                    .unwrap_or_else(|| panic!("{integrator:?} did not request Oersted callback"));
+            let transport = StageTransportProvider::from_plan_with_coupled(&plan, Some(coupled))
+                .unwrap_or_else(|error| panic!("{integrator:?} transport preflight: {error:?}"))
+                .unwrap_or_else(|| panic!("{integrator:?} did not request transport callback"));
+            let mut backend = NativeFemBackend::create(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} backend create: {error:?}"));
+            backend
+                .install_stage_oersted_provider(Box::new(oersted))
+                .unwrap_or_else(|error| panic!("{integrator:?} install Oersted: {error:?}"));
+            backend
+                .install_stage_transport_provider(Box::new(transport))
+                .unwrap_or_else(|error| panic!("{integrator:?} install transport: {error:?}"));
+            backend
+                .begin_stage(0.0)
+                .unwrap_or_else(|error| panic!("{integrator:?} begin stage: {error:?}"));
+
+            let mut previous_time = 0.0;
+            for step_index in 0..3 {
+                let stats = backend.step(1.0e-13).unwrap_or_else(|error| {
+                    panic!("{integrator:?} shared trajectory step {step_index}: {error:?}")
+                });
+                assert!(
+                    stats.time.is_finite() && stats.time > previous_time,
+                    "{integrator:?} step {step_index}: {stats:?}"
+                );
+                previous_time = stats.time;
+            }
+            let oersted = backend
+                .stage_oersted_telemetry()
+                .unwrap_or_else(|| panic!("{integrator:?} Oersted telemetry"));
+            let transport = backend
+                .stage_transport_telemetry()
+                .unwrap_or_else(|| panic!("{integrator:?} transport telemetry"));
+            assert_eq!(oersted["begin_count"], 3, "{integrator:?}");
+            assert_eq!(oersted["commit_count"], 3, "{integrator:?}");
+            assert_eq!(transport["begin_count"], 3, "{integrator:?}");
+            assert_eq!(transport["commit_count"], 3, "{integrator:?}");
+            assert_eq!(
+                transport["accepted_observation"]["source_state_revision"],
+                oersted["accepted_observation"]["source_state_revision"],
+                "{integrator:?}"
+            );
+            assert_eq!(
+                transport["accepted_observation"]["source_state_digest"],
+                oersted["accepted_observation"]["source_view_identity_digest"],
+                "{integrator:?}"
+            );
+            let solve_count = oersted["shared_evaluator"]["solve_count"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{integrator:?} solve count"));
+            let cache_hits = oersted["shared_evaluator"]["cache_hit_count"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{integrator:?} cache-hit count"));
+            let evaluations = oersted["evaluate_count"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{integrator:?} Oersted evaluate count"));
+            assert_eq!(solve_count, evaluations, "{integrator:?}");
+            assert!(cache_hits >= evaluations, "{integrator:?}");
+            assert_eq!(
+                transport["shared_evaluator"], oersted["shared_evaluator"],
+                "{integrator:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt() {
+        let mut plan = steady_transport::test_external_lead_stage_plan();
+        plan.integrator = Some(IntegratorChoice::Rk23);
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+            atol: 1.0e-10,
+            rtol: 1.0e-8,
+            dt_initial: Some(1.0e-8),
+            dt_min: 1.0e-16,
+            dt_max: Some(1.0e-8),
+            safety: 0.8,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: Some(1.0e-12),
+            norm_tolerance: Some(1.0e-8),
+        });
+        let provider = StageOerstedProvider::from_plan(&plan)
+            .expect("adaptive external-lead stage provider preflight")
+            .expect("adaptive external-lead plan must request a stage provider");
+        let mut backend = NativeFemBackend::create(&plan)
+            .expect("adaptive native FEM external-lead callback backend create");
+        backend
+            .install_stage_oersted_provider(Box::new(provider))
+            .expect("install adaptive external-lead Oersted callback");
+        backend.begin_stage(0.0).expect("begin adaptive FEM stage");
+
+        let stats = backend
+            .step(1.0e-8)
+            .expect("adaptive external-lead step must reject and then accept");
+        assert!(stats.rejected_attempts >= 1, "{stats:?}");
+        let telemetry = backend
+            .stage_oersted_telemetry()
+            .expect("adaptive callback telemetry");
+        let rollbacks = telemetry["rollback_count"]
+            .as_u64()
+            .expect("rollback counter");
+        assert_eq!(rollbacks, u64::from(stats.rejected_attempts));
+        assert_eq!(telemetry["commit_count"], 1);
+        assert!(telemetry["evaluate_count"]
+            .as_u64()
+            .is_some_and(|count| count > rollbacks));
+        assert!(telemetry["accepted_observation"]["field_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
+    }
+
+    #[test]
+    fn native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators() {
+        for (integrator, adaptive) in [
+            (IntegratorChoice::Heun, false),
+            (IntegratorChoice::Rk4, false),
+            (IntegratorChoice::Rk23, true),
+            (IntegratorChoice::Rk45, true),
+        ] {
+            let mut plan = steady_transport::test_external_lead_stage_plan();
+            plan.integrator = Some(integrator);
+            if adaptive {
+                plan.fixed_timestep = None;
+                plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+                    atol: 1.0e-8,
+                    rtol: 1.0e-5,
+                    dt_initial: Some(1.0e-13),
+                    dt_min: 1.0e-16,
+                    dt_max: Some(1.0e-12),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.5,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            let provider = StageOerstedProvider::from_plan(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} provider preflight: {error:?}"))
+                .unwrap_or_else(|| panic!("{integrator:?} plan did not request a provider"));
+            let mut backend = NativeFemBackend::create(&plan)
+                .unwrap_or_else(|error| panic!("{integrator:?} backend create: {error:?}"));
+            backend
+                .install_stage_oersted_provider(Box::new(provider))
+                .unwrap_or_else(|error| panic!("{integrator:?} callback install: {error:?}"));
+            backend
+                .begin_stage(0.0)
+                .unwrap_or_else(|error| panic!("{integrator:?} begin stage: {error:?}"));
+
+            let mut previous_time = 0.0;
+            for step_index in 0..3 {
+                let stats = backend.step(1.0e-13).unwrap_or_else(|error| {
+                    panic!("{integrator:?} trajectory step {step_index}: {error:?}")
+                });
+                assert!(
+                    stats.time.is_finite() && stats.time > previous_time,
+                    "{integrator:?} step {step_index}: {stats:?}"
+                );
+                previous_time = stats.time;
+            }
+            let telemetry = backend
+                .stage_oersted_telemetry()
+                .unwrap_or_else(|| panic!("{integrator:?} callback telemetry"));
+            assert_eq!(telemetry["begin_count"], 3, "{integrator:?}");
+            assert_eq!(telemetry["commit_count"], 3, "{integrator:?}");
+            assert!(
+                telemetry["evaluate_count"]
+                    .as_u64()
+                    .is_some_and(|count| count >= 6),
+                "{integrator:?}: {telemetry}"
+            );
+            assert!(
+                telemetry["accepted_observation"]["field_sha256"]
+                    .as_str()
+                    .is_some_and(|digest| digest.starts_with("sha256:")),
+                "{integrator:?}: {telemetry}"
+            );
         }
     }
 }

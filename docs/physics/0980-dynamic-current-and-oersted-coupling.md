@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-09
+- Last updated: 2026-08-10
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula version: `current_transport.fullmag.v1`
@@ -19,6 +19,10 @@
   `oersted_fem_vector_potential.v1`
 - Stage-provider policies: `fem_stage_oersted_callback.v1`,
   `fem_stage_transport_callback.v1`
+- FDM direct-oracle version:
+  `oersted_direct_surface_potential_long_double.v1`
+- FDM independent spot-check policy:
+  `oersted_surface_adaptive_spot_check.v1`
 
 Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
 formula/operator/realization identifiers. Section 8.1 of the runtime contract
@@ -237,20 +241,24 @@ to the RHS state they describe.
 
 The current FEM invariant-source gate is deliberately weaker than this full
 stage contract. It remains a compatibility policy for manually constructed
-descriptor fixtures. For a public one-way `closed_geometry` plan with a
-validated RT0 view, the planner now resolves
+descriptor fixtures. For a public one-way `closed_geometry` or complete
+`external_lead` plan with a validated RT0 view, the planner now resolves
 `fem_stage_oersted_callback.v1`; the native CPU runner installs a provider that
 solves RT0/OE-F1 or RT0/OE-F2 for each callback stage and records the accepted
 stage observation. The one-way charge model is still independent of
 `m_stage`, so this is not reciprocal M2 and does not publish `torque_stt` into
-the LLG RHS. Envelope re-evaluation, external leads, device-resident execution
-and production qualification remain separate gates.
+the LLG RHS. The bounded managed external-lead path now reaches one accepted
+native CPU Heun step, an adaptive RK23 rejection/rollback/retry and three-step
+callback trajectories for Heun, RK4, RK23 and RK45. ABM3 is not a supported
+native FEM integrator and fails closed. Public Python-fixture execution,
+device-resident execution and production qualification remain separate gates.
 
 The native CPU path exposes an append-only stage-provider hook outside the
 legacy plan ABI. Its evaluator receives the exact `m_stage`, `t_stage`, and a
 deterministic `stage_identity`, and must return a complete nodal `H_oe [A/m]`
 buffer plus a source-state revision. The public planner binds this hook only
-for one-way closed-geometry plans carrying the immutable RT0 descriptor; the
+for one-way plans carrying a complete immutable RT0 descriptor (`closed_geometry`
+or `external_lead`); the
 Rust provider reuses the resolved request shape, updates the stage identity,
 and calls the same RT0/OE-F1 or RT0/OE-F2 adapter used by the steady path.
 Optional `begin_attempt`, `commit_attempt`, and `rollback_attempt` hooks
@@ -307,11 +315,15 @@ The append-only policy `fem_stage_transport_callback.v1` transports
 the native ABI. `begin_attempt`, `commit_attempt` and `rollback_attempt` are
 transactional: a rejected RK attempt cannot publish a torque observation or
 leave a tentative source revision as accepted. This bounded implementation is
-CPU/double only. A reciprocal M2 request that also asks for Oersted is rejected
-until a combined field-plus-torque callback exists; the current FDM coupled
-lane remains the only executable combined M2 route. GPU/device-resident,
-external-lead, full public end-to-end and production qualification are still
-open gates.
+CPU/double only. If the same reciprocal M2 source also drives Oersted, policy
+`fem_stage_transport_oersted_callback.v1` gives the torque and field adapters a
+shared exact-stage evaluator. The first adapter invocation performs one
+charge--spin solve; the second consumes the cache entry keyed by
+`m_stage`, `t_stage`, `stage_identity` and envelope multiplier. The Oersted
+field is reconstructed from that solve's H1/P1 nodal current, so both RHS
+contributions carry the same source revision and digest. Closure-aware
+RT0/external-lead reciprocal M2, GPU/device-resident, full public end-to-end
+and production qualification remain open gates.
 
 (symbols-and-si-units)=
 ### 2.7 Symbols and SI units
@@ -326,7 +338,7 @@ open gates.
 | `mu_s` | spin accumulation potential | V |
 | `m_stage` | normalized magnetization at an RK stage | 1 |
 | `tau_tr` | direct reciprocal transport contribution to `dm/dt` | s^-1 |
-| `H_oe` | Oersted field | A/m |
+| $H_{\mathrm{oe}}$ | Oersted field | $\mathrm{A\,m^{-1}}$ |
 | `B_oe` | magnetic flux density | T |
 | `A` | magnetic vector potential | T m |
 | `p_gauge` | gauge multiplier in the chosen weak form | A/m |
@@ -341,7 +353,81 @@ open gates.
 | `frequency_hz`, `bandwidth_hz` | cyclic frequency and bandwidth | Hz |
 | `phase_rad` | sinusoidal phase | rad (dimensionless) |
 | `center`, `t_on`, `t_off`, `t_i` | envelope times | s |
-| `r` | target-source displacement | m |
+| $r$ | target-source displacement | $\mathrm{m}$ |
+| $o$ | physical union-grid origin | $\mathrm{m}$ |
+| $J_c^{\mathrm{cell}}$ | reconstructed cell-centred conventional current density | $\mathrm{A\,m^{-2}}$ |
+| $J_c^{\mathrm{face}}$ | signed, globally oriented finite-volume face-current density | $\mathrm{A\,m^{-2}}$ |
+| $\chi_c$ | conductor-source cell mask | $1$ (Boolean) |
+| $\chi_m$ | magnetic-target cell mask | $1$ (Boolean) |
+| $i$ | target or active-cell multi-index, according to context | $1$ |
+| $j$ | source-cell multi-index | $1$ |
+| $a$ | Cartesian axis selector | $1$ |
+| $e_a$ | unit lattice-index vector along axis $a$ | $1$ |
+| $\{x,y,z\}$ | ordered Cartesian component set | $1$ |
+| $h_a$ | FDM cell size along axis $a\in\{x,y,z\}$ | $\mathrm{m}$, strictly positive |
+| $C_j$ | rectangular source cell centred at $x_j$ | $\mathrm{m^3}$ (integration domain) |
+| $x_i$ | target-cell centre on the union grid | $\mathrm{m}$ |
+| $x_j$ | source-cell centre on the union grid | $\mathrm{m}$ |
+| $x'$ | source integration point | $\mathrm{m}$ |
+| $\pi$ | circle constant | $1$ |
+| $\lVert\cdot\rVert_2$ | Euclidean norm; its value inherits the operand's SI unit | $1$ (operator) |
+| $dV'$ | source-volume integration measure | $\mathrm{m^3}$ |
+| $\sum_j$ | discrete sum over all source cells indexed by $j$ | $1$ (operator) |
+| $K$ | antisymmetric source-cell-integrated Oersted tensor | $\mathrm{m}$ |
+| $+0_{3\times3}$ | exact IEEE-754 positive-zero self tensor | $\mathrm{m}$ |
+| $k_a$ | scalar component of the source-cell-integrated kernel | $\mathrm{m}$ |
+| $\widehat{J}_{c,a}$ | unnormalised forward R2C transform of current component $a$ | $\mathrm{A\,m^{-2}}$ |
+| $\widehat{k}_a$ | unnormalised forward R2C transform of kernel component $a$ | $\mathrm{m}$ |
+| $\widehat{H}_{\mathrm{oe},a}$ | unnormalised spectral Oersted-field component $a$ | $\mathrm{A\,m^{-1}}$ |
+| $N_a$ | physical union-grid size along axis $a$ | $1$ (integer) |
+| $P_a$ | padded convolution-grid size along axis $a$ | $1$ (integer) |
+| $q_a$ | padded grid index along axis $a$ | $1$ (integer) |
+| $d_a$ | signed lattice displacement along axis $a$ | $1$ (integer) |
+| $f$ | scalar or Cartesian component sampled at cell centres for an independent diagnostic | $\mathrm{A\,m^{-2}}$ for current or $\mathrm{A\,m^{-1}}$ for field (`A/m^2 or A/m`) |
+| $\delta_a^0$ | radius-one centred-difference operator along axis $a$ | $\mathrm{m^{-1}}$ |
+| $D_h$ | independent cell-centred divergence operator | $\mathrm{m^{-1}}$ |
+| $C_h$ | independent cell-centred curl operator | $\mathrm{m^{-1}}$ |
+| $\mathcal I_2$ | diagnostic cell-index set after removal of the open-boundary band | $1$ |
+| $b_{\mathrm{open}}$ | excluded open-boundary-band width in cells | $1$ (integer) |
+| $V_h$ | Cartesian cell volume $h_xh_yh_z$ | $\mathrm{m^3}$ |
+| $\sum_{i\in\mathcal I_2}$ | discrete sum over the diagnostic cell-index set | $1$ (operator) |
+| $\lVert\cdot\rVert_{2,h,\mathcal I_2}$ | volume-weighted RMS norm on the diagnostic set | $1$ (operator; result inherits operand unit) |
+| $S_J$ | reconstructed-current RMS diagnostic scale | $\mathrm{A\,m^{-2}}$ |
+| $S_A$ | Ampere residual diagnostic scale | $\mathrm{A\,m^{-2}}$ |
+| $h_{\min}$ | smallest FDM cell dimension | $\mathrm{m}$ |
+| $h_{\max}$ | largest FDM cell dimension | $\mathrm{m}$ |
+| $\rho_{\mathrm{div}J}$ | normalized post-reconstruction current-divergence residual | $1$ |
+| $\rho_{\mathrm{div}H}$ | normalized Oersted-field divergence residual | $1$ |
+| $\rho_{\mathrm A}$ | normalized discrete Ampere residual | $1$ |
+| $\rho$ | one of the three normalized diagnostic residuals in a refinement rule | $1$ |
+| $p$ | observed spatial convergence order | $1$ |
+| $p_{\min}$ | minimum accepted spatial convergence order | $1$ |
+| $h$ | common refinement-spacing scale | $\mathrm{m}$ |
+| $\epsilon_{\mathrm{FP64}}$ | IEEE-754 binary64 machine epsilon | $1$ |
+| $k_a^{\mathrm{prod}}$ | production scalar kernel component | $\mathrm{m}$ |
+| $\widehat{k}_a^{\mathrm{prod}}$ | production spectral scalar-kernel component | $\mathrm{m}$ |
+| $k_a^{\mathrm{ref}}$ | independently integrated reference scalar kernel component | $\mathrm{m}$ |
+| $B_a$ | mixed absolute-plus-relative kernel acceptance budget | $\mathrm{m}$ |
+| $a_K$ | dimensionless absolute-scale kernel tolerance | $1$ |
+| $r_K$ | dimensionless relative kernel tolerance | $1$ |
+| $F_a^+$ | positive source-cell face normal to axis a | $\mathrm{m^2}$ |
+| $F_a^-$ | negative source-cell face normal to axis a | $\mathrm{m^2}$ |
+| $dS'$ | source-face integration measure | $\mathrm{m^2}$ |
+| $A_a^{(L)}$ | independent adaptive surface-quadrature spot value at level L | $\mathrm{m}$ |
+| $A_a^{(L-1)}$ | previous adaptive surface-quadrature spot value | $\mathrm{m}$ |
+| $E_a^{\mathrm{spot}}$ | successive-level adaptive spot-check difference | $\mathrm{m}$ |
+| $B_a^{\mathrm{spot}}$ | independent adaptive spot-check budget | $\mathrm{m}$ |
+| $a_S$ | dimensionless absolute-scale spot-check tolerance | $1$ |
+| $r_S$ | dimensionless relative spot-check tolerance | $1$ |
+| $q$ | padded R2C spectral-bin multi-index | $1$ (integer multi-index) |
+| $\mathcal Z_{\mathrm{real}}$ | real-space exact-zero index pairs selected by self geometry or parity | $1$ (set) |
+| $\mathcal Z_{\mathrm{spec}}$ | spectral exact-zero index pairs selected by DC or full self-conjugacy | $1$ (set) |
+| $+0$ | IEEE-754 binary64 positive-zero scalar kernel value | $\mathrm{m}$ |
+| $\max$ | maximum-value operator | $1$ (operator; result inherits operand unit) |
+| $\min$ | minimum-value operator | $1$ (operator; result inherits operand unit) |
+| $\log_2$ | base-two logarithm operator | $1$ (operator) |
+| $|\cdot|$ | scalar absolute-value operator | $1$ (operator; result inherits operand unit) |
+| $S_{H,i}$ | absolute field-error scale at target cell $i$ | $\mathrm{A\,m^{-1}}$ |
 | `V_e` | active tetrahedron volume | m^3 |
 | `r_reg` | equivalent-sphere self regularization radius of the bounded midpoint slice | m |
 | `mu_0` | vacuum permeability used only when converting H to B or evaluating Zeeman energy | H/m |
@@ -360,41 +446,446 @@ outside the regime fail closed rather than selecting a plausible fallback.
 
 ### 3.1 FDM current reconstruction and Oersted convolution
 
-Finite-volume charge produces globally oriented face flux. The only current
-map consumed by Oersted and published as `J_charge` is
+#### 3.1.1 Union grid, masks, and exact face-current reconstruction
 
-```text
-J_K,x=0.5(J_x,K-1/2+J_x,K+1/2),
+The operator owns one Cartesian **union grid** that contains the complete
+volumetric conductor, including every return segment, and every magnetic target.
+It has cell counts $N=(N_x,N_y,N_z)$, strictly positive cell sizes
+$h=(h_x,h_y,h_z)$, and lower-corner origin $o$. Cell centre $i=(i_x,i_y,i_z)$
+is $x_i=o+((i_x+1/2)h_x,(i_y+1/2)h_y,(i_z+1/2)h_z)$. Source and target grids
+that cannot be represented by integer offsets on this same grid are rejected;
+interpolation is not part of v1. The conductor mask $\chi_c$ and magnetic
+target mask $\chi_m$ are independent. The convolution source is zero where
+$\chi_c=0$; crop/publication uses $\chi_m$ and must not erase conductor cells
+before convolution.
+
+Finite-volume charge publishes globally positive-oriented face arrays of exact
+sizes $(N_x+1)N_yN_z$, $N_x(N_y+1)N_z$, and $N_xN_y(N_z+1)$. For each active
+source cell, `fdm_face_to_cell_current.v1` is exactly
+
+```{math}
+:label: fdm-oersted-face-to-cell-current
+(J_c^{\mathrm{cell}})_{i,a}
+=\frac{\chi_{c,i}}{2}\left[
+(J_c^{\mathrm{face}})_{i-\frac12 e_a,a}
++(J_c^{\mathrm{face}})_{i+\frac12 e_a,a}\right],
+\qquad a\in\{x,y,z\}.
 ```
 
-and analogously for `y,z`, under `fdm_face_to_cell_current.v1`. A future
-non-Cartesian source requires a conservative least-squares reconstruction with
-a new version. Oersted must not recompute `sigma E`.
+The two values are signed face current densities in $\mathrm{A\,m^{-2}}$, not
+unsigned flux magnitudes. Boundary faces are real entries, not replicated ghost
+values. Array-length mismatch, non-finite input, ambiguous orientation, or an
+inactive face carrying current unsupported by the authored conductor topology
+is rejected. Oersted consumes this exact accepted face field and its cell
+reconstruction; it must never recompute `sigma E`, because that would discard
+constitutive additions such as reciprocal iSHE. Multiplying the reconstructed
+cell field by a mask is not a replacement for the face-based continuity and
+closure certificate.
 
-Production open-boundary FDM uses a cell-integrated antisymmetric kernel:
+The arithmetic face mean is a reconstruction rule, not a mimetic projection.
+In particular, v1 **does not assert or require a commuting identity** between
+that mean and either the finite-volume face divergence or the cell-centred
+curl used for field validation. Charge continuity is certified on the original
+face field. The following post-reconstruction diagnostics are assembled
+independently from the published $J_c^{\mathrm{cell}}$ and $H_{\mathrm{oe}}$;
+they cannot reuse the charge residual, the FFT kernel generator, or a value
+cached by either owner.
 
-```text
-K(r) = [ 0    k_z -k_y
-        -k_z  0    k_x
-         k_y -k_x  0 ],
-k_a=1/(4 pi) integral_source_cell r_a/|r|^3 dV',
-K(0)=0.
+For a cell-centred scalar or Cartesian component $f$, the diagnostic derivative
+is the radius-one centred difference
+
+```{math}
+:label: fdm-oersted-post-reconstruction-differential-operators
+\begin{gathered}
+(\delta_a^0 f)_i=\frac{f_{i+e_a}-f_{i-e_a}}{2h_a},
+\qquad a\in\{x,y,z\},\\
+D_hJ_c^{\mathrm{cell}}
+=\delta_x^0(J_c^{\mathrm{cell}})_x
+ +\delta_y^0(J_c^{\mathrm{cell}})_y
+ +\delta_z^0(J_c^{\mathrm{cell}})_z,\\
+C_hH_{\mathrm{oe}}=
+\begin{bmatrix}
+\delta_y^0H_{\mathrm{oe},z}-\delta_z^0H_{\mathrm{oe},y}\\
+\delta_z^0H_{\mathrm{oe},x}-\delta_x^0H_{\mathrm{oe},z}\\
+\delta_x^0H_{\mathrm{oe},y}-\delta_y^0H_{\mathrm{oe},x}
+\end{bmatrix}.
+\end{gathered}
 ```
 
-Near field uses the cell integral; far field may use a controlled approximation.
-The source mask is the conductor, independent of the magnetic mask. FFT uses
-zero padding to at least `2N` in every nonperiodic axis, versioned crop,
-normalization, R2C layout, near/far cutoff, and kernel precision. PBC is rejected
-without a dedicated periodic/Ewald kernel. `nz=1` and other singleton axes have
-independent oracles. Plans/buffers are persistent, never rebuilt per RHS.
+Diagnostics use only the interior set $\mathcal I_2$: every retained cell is
+at least $b_{\mathrm{open}}=2$ cells from each open outer face of the union
+grid. The excluded two-cell open-boundary band is a validation mask; it does
+not alter the source, kernel, FFT, crop, or published field. The norm, scales
+and three dimensionless residuals are exactly
 
-Cache identity includes cell size, shape, origin, conductor/magnet union grid,
-mask and source revisions, closure, cutoff, layout, method, and precision.
-The resolved operator is `fdm_oersted_cell_integrated_open.v1` and the
-realization is `oersted_fdm_fft_open.v1`. CPU double engine
-`fdm_oersted_fft_open_v1` is the reference/production baseline; CUDA engine
-`fdm_oersted_cufft_open_v1` must preserve kernel/layout/crop semantics with no
-strict hot-loop vector transfers.
+```{math}
+:label: fdm-oersted-post-reconstruction-residuals
+\begin{gathered}
+V_h=h_xh_yh_z,\qquad
+\lVert f\rVert_{2,h,\mathcal I_2}
+=\left[
+\frac{\sum_{i\in\mathcal I_2}V_h\lVert f_i\rVert_2^2}
+{\sum_{i\in\mathcal I_2}V_h}
+\right]^{1/2},\\
+S_J=\lVert J_c^{\mathrm{cell}}\rVert_{2,h,\mathcal I_2},\qquad
+S_A=\max\!\left(
+\lVert C_hH_{\mathrm{oe}}\rVert_{2,h,\mathcal I_2},S_J
+\right),\qquad
+h_{\min}=\min(h_x,h_y,h_z),\\
+\rho_{\mathrm{div}J}
+=\frac{\lVert D_hJ_c^{\mathrm{cell}}\rVert_{2,h,\mathcal I_2}}
+{S_J/h_{\min}},\qquad
+\rho_{\mathrm{div}H}
+=\frac{\lVert D_hH_{\mathrm{oe}}\rVert_{2,h,\mathcal I_2}}{S_A},\\
+\rho_{\mathrm A}
+=\frac{\lVert C_hH_{\mathrm{oe}}-J_c^{\mathrm{cell}}
+\rVert_{2,h,\mathcal I_2}}{S_A}.
+\end{gathered}
+```
+
+Every quantitative fixture is nonzero and must have $S_J>0$ and $S_A>0$;
+zero scales fail the fixture rather than receiving a dimensioned numerical
+floor.
+
+The diagnostic owner evaluates these operators on the complete physical
+low-index union-grid field produced by the inverse FFT **before** applying
+$\chi_m$. Only the separately published field is cropped to the target mask.
+Consequently a sparse target mask and an all-target mask for the same immutable
+source snapshot must produce bit-identical diagnostic scalars, while cells
+outside the sparse target remain exact zero in the published field.
+
+The standalone native CPU gate uses the same physical smooth, compactly supported
+closed-current fixture on three uniform grids $h$, $h/2$, and $h/4$. On the
+finest grid it applies the complete acceptance rule
+
+```{math}
+:label: fdm-oersted-post-reconstruction-refinement
+\begin{gathered}
+\rho_{\mathrm{div}J}(h/4)\le2\times10^{-2},\qquad
+\rho_{\mathrm{div}H}(h/4)\le2\times10^{-2},\qquad
+\rho_{\mathrm A}(h/4)\le5\times10^{-2},\\
+p=\log_2\!\frac{\rho(h/2)}{\rho(h/4)}\ge p_{\min}=1.5
+\quad\text{when }\rho(h/2),\rho(h/4)>64\epsilon_{\mathrm{FP64}},\\
+\rho(h/4)\le
+\max\!\left[64\epsilon_{\mathrm{FP64}},
+\rho(h/2)+4\epsilon_{\mathrm{FP64}}\right]
+\quad\text{otherwise}.
+\end{gathered}
+```
+
+A residual is roundoff-classified exactly when
+$\rho\le64\epsilon_{\mathrm{FP64}}$; no backend may replace this branch by a
+different floor.
+The separate `closed_face_loop_exact.v1` fixture is also mandatory in that
+standalone native gate: it supplies explicitly oriented face arrays, a complete
+return path and source cut, and independently different conductor and target
+masks. It exercises closure, reconstruction, signs, low-corner packing, crop,
+and an oriented Ampere contour, but its sharp corners are not substituted for
+the smooth fixture in the refinement-order measurement.
+
+#### 3.1.2 Global closed-current certificate
+
+Before kernel allocation or FFT planning, v1 requires
+`global_closed_current_certificate.v1`. The certificate binds the union-grid
+geometry/digest, conductor mask revision/digest, exact face-current
+revision/digest, connected-component labels, closure kind, and the tolerances
+and measured values for all of the following:
+
+1. oriented discrete divergence in every active conductor cell;
+2. pairwise cancellation of every shared internal face;
+3. zero signed and zero leakage-bounded normal current on the exterior of the
+   complete union-grid conductor;
+4. zero exterior flux for each connected component, not only after cancellation
+   between unrelated components;
+5. a globally contained return path for every nonzero driven component.
+
+A solved nonzero closed geometry carries exactly one typed `source_cut` record
+for every driven connected conductor component. Each record contains its
+component label, stable cut ID, ordered internal face IDs and normals, drive ID,
+drive kind/value and SI unit, face-current revision, and digest. V1 accepts the
+drive type `impressed_potential_jump.v1` in volts. Each cut trace is encoded as
+an even sequence of pairs: both entries in a pair name the same globally
+oriented, nonzero internal face; both adjacent cells are active and have the
+declared component label; and the pair normals are exactly opposite. Stable cut
+IDs, drive IDs and driven-component coverage are unique. A dummy zero-current
+face, an inactive face, an unpaired trace, a stale revision, an unsupported
+drive type/unit, or a missing/duplicate driven component fails closure.
+
+The cut represents an impressed potential jump or electromotive circulation;
+it does not inject charge. The accepted face current is single-valued across
+the paired cut traces and their oriented fluxes cancel exactly. A certified
+import may instead name its external certification method and immutable field
+digest, but it must pass the same global divergence, exterior-flux, component,
+and return-path gates. Unknown closure enum values are rejected even for an
+otherwise zero-current snapshot. An open two-terminal strip, a locally small
+residual, or forcing the spectral DC value to zero cannot manufacture this
+certificate.
+
+Any missing/stale digest, open terminal, incomplete return, failed component
+gate, or unsupported periodic axis must fail closed before allocation or FFT
+planning. PBC is not silently converted to open boundaries: a periodic/Ewald
+operator requires a different version.
+
+#### 3.1.3 Frozen cell-integrated tensor
+
+For source cell $C_j$ and target-cell centre $x_i$, define
+$r=x_i-x'$. The v1 operator is the **source-cell volume integral evaluated at
+the target-cell center**:
+
+```{math}
+:label: fdm-oersted-cell-integrated-kernel
+\begin{aligned}
+k_a(x_i-x_j)
+  &=\frac{1}{4\pi}\int_{C_j}
+    \frac{(x_i-x')_a}{\lVert x_i-x'\rVert_2^3}\,dV',\\
+K(r)&=
+\begin{bmatrix}
+0&k_z&-k_y\\
+-k_z&0&k_x\\
+k_y&-k_x&0
+\end{bmatrix},
+\qquad
+H_{\mathrm{oe},i}&=\sum_j K(x_i-x_j)(J_c^{\mathrm{cell}})_j,\\
+K(-r)&=-K(r),\qquad K(0)=+0_{3\times3}.
+\end{aligned}
+```
+
+Thus $K$ has unit $\mathrm m$, $J_c$ has unit
+$\mathrm{A\,m^{-2}}$, and $H_{\mathrm{oe}}$ has unit
+$\mathrm{A\,m^{-1}}$. There is no $\mu_0$ in this operator. The matrix is the
+signed $J_c\times r$ map: $H_x=J_y k_z-J_z k_y$,
+$H_y=-J_x k_z+J_z k_x$, and $H_z=J_x k_y-J_y k_x$.
+The last line freezes odd parity and the self class. For $i=j$, inversion
+symmetry of the centred rectangular source cell gives $K(0)=+0_{3\times3}$
+**exactly**; v1 writes three IEEE-754 binary64 positive-zero values and does
+not evaluate a singular formula or use a sphere regularisation.
+
+The target is a point at the target-cell centre. No target-cell volume integral
+or target-cell average is performed. In particular, the cell-averaged
+source--target tensor used by some comparative solvers is not this operator;
+**target-cell averaging defines a different operator version**.
+
+The frozen kernel policy is `exact_cell_integral_all_offsets.v1`: every
+non-self lattice offset uses the same rectangular source-cell volume integral
+in FP64. V1 has `near_far_cutoff=none` and does not replace far entries by a
+midpoint/dipole approximation. An implementation may use a stable closed form,
+but its entries must meet the independent direct-oracle error budget. Any
+near/far approximation, different quadrature rule, or target averaging needs a
+new operator or realization version and a separately keyed cache.
+
+#### 3.1.4 Exact open-boundary R2C embedding
+
+Let the physical union-grid size be $N_a$. The padded size is exactly
+`P_a=2N_a` for every axis, **also when $N_a=1$**; v1 never optimises a singleton
+axis to length one. Arrays use x-fastest logical indexing
+`((q_z*P_y)+q_y)*P_x+q_x`. Physical current is packed into
+$0\le q_a<N_a$ and every other source entry is exact zero. The signed kernel
+displacement is
+
+```text
+d_a(q_a) = q_a           for 0 <= q_a < N_a,
+           0             for q_a = N_a,
+           q_a - P_a     for N_a < q_a < P_a.
+```
+
+The `q_a=N_a` kernel slab is exact zero because displacement magnitude $N_a$
+does not occur in the required linear convolution. This rule also makes the
+second slot zero for a singleton axis. Negative offsets occupy the high end of
+the padded array; no `fftshift` is applied. After one circular convolution on
+the padded grid, v1 crops exactly the low-index box
+$0\le q_a<N_a$ and then selects $\chi_m$ targets.
+
+The logical R2C spectrum has shape
+`[P_z][P_y][P_x/2+1]`, with x as the reduced contiguous axis. Forward transforms
+are unnormalised. A C2R inverse is multiplied exactly once by
+$1/(P_xP_yP_z)$; a library-specific normalised inverse must not receive a
+second factor. For the three scalar spectra, the pointwise operation is
+
+```{math}
+:label: fdm-oersted-fft-convolution
+\begin{bmatrix}
+\widehat{H}_{\mathrm{oe},x}\\
+\widehat{H}_{\mathrm{oe},y}\\
+\widehat{H}_{\mathrm{oe},z}
+\end{bmatrix}
+=
+\begin{bmatrix}
+0&\widehat{k}_z&-\widehat{k}_y\\
+-\widehat{k}_z&0&\widehat{k}_x\\
+\widehat{k}_y&-\widehat{k}_x&0
+\end{bmatrix}
+\begin{bmatrix}
+\widehat{J}_{c,x}\\
+\widehat{J}_{c,y}\\
+\widehat{J}_{c,z}
+\end{bmatrix}.
+```
+
+The real-space kernel is jointly odd, so its transform is purely imaginary in
+exact arithmetic. The DC bin is exactly zero for all three kernel components.
+Because every $P_a$ is even, bins for which every coordinate is either zero or
+its axis Nyquist index are self-conjugate spectral bins and are also exactly
+zero. No complete Nyquist plane is zeroed: points on an x-, y-, or z-Nyquist
+plane whose other coordinates are not self-conjugate retain their computed
+Hermitian-paired values. The implementation must reject a spectrum that violates
+finite-value or Hermitian-consistency gates; zeroing DC is not a closure repair.
+
+#### 3.1.5 Cache, provenance, direct oracle, and promotion boundary
+
+The published resolved-field cache key is a canonical byte serialization of:
+formula/operator/realization versions; FP64 cell sizes; $N$, $P$, origin and
+axis order; union-grid digest; `conductor_mask_revision` and digest;
+`target_mask_revision` and digest; face-current revision/digest;
+`global_closed_current_certificate.v1` revision/digest and `source_cut`
+identity; source/envelope/stage/time identity; kernel policy
+`exact_cell_integral_all_offsets.v1`; `near_far_cutoff=none`; x-fastest pack,
+crop, R2C and inverse-normalisation versions; scalar precision; and engine
+identity. Floating-point values are hashed by canonical IEEE-754 binary64 bits,
+not locale-dependent text. The artifact publishes this key digest plus every
+constituent identity. A narrower reusable kernel/plan cache may omit dynamic
+source/time fields, but it must retain all geometry, layout, operator and
+precision fields and can never be reported as a resolved-field cache hit.
+
+The standalone owner additionally exposes a zero-allocation trusted fast path.
+It is legal only for the same `Problem` object address and the same nonzero
+`trusted_snapshot_revision`/`trusted_snapshot_digest` that passed the complete
+preflight previously. The caller thereby promises that the accepted object is
+immutable for the duration of reuse; modifying it in place is outside this
+contract. Every different object, even with equal declared digests, takes the
+slow path and recomputes canonical geometry, masks, face current, certificate
+and trusted-snapshot digests before cache lookup. Candidate and failure results
+are separate from the last accepted payload: any validation or numerical
+failure returns an empty failure payload without erasing the accepted field,
+so a subsequent trusted hit returns the complete accepted solution. The
+`last_invalidation_reason` field describes only the current solve and is empty
+on a hit.
+
+Accepted provenance records every cache constituent, including geometry,
+conductor/target masks, face current, certificate, trusted snapshot,
+source/envelope, stage/time/multiplier, closure kind, every complete source-cut
+record, and certified-import method/field digest when applicable. A cache-key
+hash without these human-inspectable constituents is not sufficient
+provenance.
+
+The primary independent oracle is
+`oersted_direct_surface_potential_long_double.v1`. It is not allowed to call
+the production kernel generator, FFT code, cache, or its closed-form helper.
+For each nonzero component it applies the divergence theorem to the source
+cell and evaluates the two rectangular-face potential integrals using a
+separate `long double` primitive:
+
+```{math}
+:label: fdm-oersted-direct-oracle-surface-reduction
+k_a^{\mathrm{ref}}
+=\frac{1}{4\pi}\left[
+\int_{F_a^+}\frac{dS'}{\lVert x_i-x'\rVert_2}
+-\int_{F_a^-}\frac{dS'}{\lVert x_i-x'\rVert_2}
+\right].
+```
+
+This is validation policy, not an operator change; the production operator
+remains `fdm_oersted_cell_integrated_open.v1`. The oracle has no tolerance
+arguments and never reports convergence merely because two identical calls
+returned the same bits. It must cover exact self zero, axial/edge/corner
+neighbours, anisotropic cells, odd parity, all tensor signs, signed-current
+reversal, singleton axes, shifted union grids and random certified closed
+loops.
+
+For every nonzero scalar kernel component, the sole production--oracle gate is
+the mixed bound
+
+```{math}
+:label: fdm-oersted-direct-oracle-mixed-bound
+\begin{gathered}
+h_{\max}=\max_{a\in\{x,y,z\}}h_a,\qquad
+B_a=a_Kh_{\max}+r_K|k_a^{\mathrm{ref}}|,\\
+|k_a^{\mathrm{prod}}-k_a^{\mathrm{ref}}|\le B_a,\qquad
+a_K=2\times10^{-13},\qquad r_K=2\times10^{-11}.
+\end{gathered}
+```
+
+Thus `atol(scale)` is $a_Kh_{\max}$ and is added to, not ANDed with,
+the relative term. The analytic oracle is independently checked by
+`oersted_surface_adaptive_spot_check.v1`: a bounded high-order adaptive
+surface quadrature, sharing neither the analytic primitive nor production
+kernel code, is refined through two successive accepted levels. For the named
+axial, edge, corner, anisotropic and cancellation-dominated spot fixtures,
+
+```{math}
+:label: fdm-oersted-direct-oracle-spot-check
+\begin{gathered}
+E_a^{\mathrm{spot}}=|A_a^{(L)}-A_a^{(L-1)}|,\qquad
+B_a^{\mathrm{spot}}=a_Sh_{\max}+r_S|A_a^{(L)}|,\\
+E_a^{\mathrm{spot}}\le B_a^{\mathrm{spot}},\qquad
+|k_a^{\mathrm{ref}}-A_a^{(L)}|\le4B_a^{\mathrm{spot}},\\
+a_S=2\times10^{-14},\qquad r_S=2\times10^{-13}.
+\end{gathered}
+```
+
+The spot checker has a versioned subdivision/evaluation cap. Exhausting it,
+missing finite-value gates, or failing either inequality rejects the fixture.
+Its v1 realization uses independently coded tensor-product Gauss--Legendre
+order 16 on uniformly subdivided rectangular faces, compensated `long double`
+accumulation, levels $1,2,4,8,16,32,64$ per tangential axis, and accepts only
+when two successive levels meet the displayed bound. The cancellation fixture
+propagates the sum of the absolute per-contribution spot budgets; cancellation
+may not shrink the error allowance artificially.
+The production--oracle mixed bound remains the sole acceptance criterion for
+every production kernel component; the stricter spot policy validates that
+the independent analytic reference is not self-confirming.
+
+`exact_zero_by_symmetry.v1` defines two typed sets that must not be merged.
+$\mathcal Z_{\mathrm{real}}$ contains real-space pairs $(r,a)$ selected by
+self geometry or component parity. $\mathcal Z_{\mathrm{spec}}$ contains
+spectral pairs $(q,a)$ selected by the DC rule or full self-conjugacy of the
+padded R2C bin $q$. The real-space rule applies before quadrature; the spectral
+rule applies after transformation and before spectral multiplication. They
+require, respectively,
+
+```{math}
+:label: fdm-oersted-direct-oracle-exact-zero
+\begin{gathered}
+(r,a)\in\mathcal Z_{\mathrm{real}}
+\quad\Longrightarrow\quad k_a^{\mathrm{prod}}(r)=+0,\\
+(q,a)\in\mathcal Z_{\mathrm{spec}}
+\quad\Longrightarrow\quad \widehat{k}_a^{\mathrm{prod}}(q)=+0,\\
+K(-r)=-K(r),\qquad K(0)=+0_{3\times3}.
+\end{gathered}
+```
+
+The real-space and spectral zeros are IEEE-754 binary64 positive zero. A small
+magnitude never changes either typed class to exact zero, and the mixed bound
+is never used to excuse a wrong sign bit or a nonzero value in either class.
+Membership in one set does not imply membership in the other. The parity
+equality applies to nonzero mirrored entries as an exact sign involution.
+
+The oracle gate includes a **normal-magnitude positive fixture**, a
+**cancellation-dominated positive fixture** whose reference field component is
+small compared with the sum of its signed source contributions, and an
+**over-bound negative fixture** formed by perturbing an otherwise accepted
+component to the first representable value strictly beyond its mixed bound.
+The first two must pass the same sum-of-absolute-and-relative budget; the last
+must fail. FFT is then compared componentwise against the independent direct
+$O(N^2)$ sum with field scale
+$S_{H,i}=\sum_j\lVert K_{ij}\rVert_\infty
+\lVert J_j\rVert_\infty$, absolute coefficient $1024\epsilon_{\mathrm{FP64}}$
+and relative coefficient $5\times10^{-12}$ in the same mixed form. Separate
+promotion gates must cover the long-wire and cylinder limits, energy/work
+identity and named continuum studies. The present standalone gate covers the
+independently assembled Ampere/curl and divergence diagnostics above, a
+literal oriented Ampere contour around one leg of a closed rectangular loop,
+translation, grid refinement, and exact rejection of PBC/open circuits.
+
+The resolved operator remains `fdm_oersted_cell_integrated_open.v1`, with
+realization `oersted_fdm_fft_open.v1`. Both FDM CPU and FDM GPU claims remain
+`semantic_only`. The names `fdm_oersted_fft_open_v1` and
+`fdm_oersted_cufft_open_v1` are engine identities. The former now has the
+standalone native CPU/FP64 owner and managed contract described here; the
+latter remains reserved without an implementation. Neither name alone is
+capability evidence. Promotion requires an independently reviewed public C
+ABI/planner/runner path, managed runtime evidence and named
+physical/convergence workloads; GPU additionally requires device identity and
+CPU/GPU parity evidence with no strict hot-loop host transfers.
 
 `analytic_cylinder` resolves to `oersted_analytic_cylinder.v1`; it is a special
 geometry oracle and must support an arbitrary declared axis by a covariant
@@ -1157,7 +1648,11 @@ assert oersted.model == "from_current_solution"
 Dla ograniczonego FEM CPU/double `ohmic_poisson` można przekazać już
 zaakceptowany, zamknięty snapshot RT0. Wszystkie identyfikatory i rekordy są
 obowiązkowe; brak descriptoru pozostawia ścieżkę H1/P1 jako jawny reference
-lane, a `external_lead` i sprzężenie etapowe są odrzucane przez planner.
+lane. `external_lead` jest przyjmowany tylko jako kompletny descriptor z
+walidacją mesh/ID/interface/electrode; do czasu managed runtime i testu
+ilościowego pozostaje niekwalifikowany wykonawczo.
+Wariant `closed_geometry` wymaga wersji operatora
+`fem_closed_current_geometry.v1`, zgodnej z natywną walidacją MFEM.
 
 ```python
 view = ConservativeCurrentView(
@@ -1166,7 +1661,7 @@ view = ConservativeCurrentView(
     identity=ConservativeCurrentIdentity(..., stage_identity=1),
     pins=ConservativeCurrentPins(...),
     closure=ConservativeCurrentClosedGeometry(
-        "fem_charge_rt0.v1", "closure-1", "sha256:...", source_cuts=[...]
+        "fem_closed_current_geometry.v1", "closure-1", "sha256:...", source_cuts=[...]
     ),
     algebraic_relative_tolerance=1e-10,
     physical_relative_gate=1e-8,
@@ -1181,15 +1676,79 @@ drive = CurrentTransport(
 | Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `CurrentTransport.model` | `Literal['prescribed_density','ohmic_poisson','magnetoresistive_poisson']` | `prescribed_density` | `1` | `The bounded FEM solved-current slice requires ohmic_poisson, one_way coupling, steady mode, strict execution and double precision.` | `charge solve producing the source current` | `FEM CPU bounded reference; other lanes remain capability-scoped` | `current_modules[].model` |
-| `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` (`a(t)=1`) | `1` (multiplier); time fields `s`, frequency `Hz` | `All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.` | `dimensionless source multiplier evaluated at the exact stage time` | `Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU/external-lead remain open` | `current_modules[].time_envelope` |
+| `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` (`a(t)=1`) | `1` (multiplier); time fields `s`, frequency `Hz` | `All ordinates and times finite; pulse interval ordered; tabulated source requires a resolvable artifact; unsupported runtime lanes fail closed.` | `dimensionless source multiplier evaluated at the exact stage time` | `Python/IR/UI round-trip; one-way FEM/FDM CPU stage gate; M2/GPU and external-lead public-fixture qualification remain open` | `current_modules[].time_envelope` |
 | `SpinDriftDiffusion.id`, `.current_source_id`, `.domain`, `.mode` | `str`, `str`, `Sequence[RegionRef]`, `Literal['steady','transient']` | `required`, `required`, `required`, `steady` | `1`, `1`, `1`, `1` | `IDs and domain are non-empty; transient mode requires a physical spin capacitance/DOS contract.` | `named spin solve, charge-source binding, solved region set and temporal regime` | `Python/IR/UI authoring; runtime lane remains planner-scoped` | `spin_transport_modules[].id/current_source_id/domain/mode` |
 | `SpinDriftDiffusion.materials`, `.interfaces`, `.boundaries` | `Sequence[SpinTransportMaterialAssignment]`, `Sequence[...Interface]`, `Sequence[...Boundary]` | `required`, `[]`, `[]` | `sigma: S/m`, `lambda: m`, conductances `S/m²`, flux `A/m²`, potential `V` | `Material/interface/boundary variants validate finite SI values, normalized normals and explicit external-boundary policy.` | `constitutive coefficients and trace conditions for charge-coupled spin accumulation` | `Python/IR/UI round-trip; FEM M2 bounded CPU/double for the qualified subset` | `spin_transport_modules[].materials/interfaces/boundaries` |
 | `SpinDriftDiffusion.requested_execution` | `TransportExecution` | `fdm/cpu/double/strict` | `1` | `Discretization, device, precision and mode are explicit; unsupported resolutions fail closed.` | `requested numerical realization and execution policy` | `Planner-visible; FEM GPU remains unqualified` | `spin_transport_modules[].requested_execution` |
 | `SpinDriftDiffusion.solver.operator_version` | `str` | `backend-specific, explicit` | `1` | FDM M2 wymaga fdm_coupled_charge_spin_fv_block_gmres.v1; ograniczony FEM M2 wymaga fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1; operator ładunku i spinu muszą być identyczne. | `versioned charge--spin operator identity` | `FDM CPU/double reference lub FEM CPU/double bounded callback; GPU remains fail-closed` | `spin_transport_modules[].solver.operator_version` |
 | `DriftDiffusionSpinTorque.id`, `.solve_id`, `.target` | `str`, `str`, `RegionRef` | `required` | `1` | `Torque must reference an existing `SpinDriftDiffusion`; its RHS contribution is angular rate in `s^-1`, not an H-field.` | `explicit transport-to-LLG torque binding` | `FEM CPU/double callback bounded; other lanes fail closed or remain semantic-only` | `spin_torque_modules[]` |
+| `OerstedCylinder.id`, `OerstedField.id` | `str`, `str \| None` | `oersted:cylinder`, `oersted:{source}` | `1` | `Bieżący authoring wymaga niepustej, stabilnej tożsamości; brak pola jest akceptowany wyłącznie przy odczycie historycznego IR.` | `stable module identity independent of energy-term ordering` | `Python/ProblemIR/SceneDocument/script/planner; numerical execution remains capability-scoped` | `energy_terms[].id` |
 | `OerstedField.source` | `str` | `required` | `1` | `Must name exactly one CurrentTransport module; the runtime consumes its solved field, not a copied current density.` | `current-source identity` | `FEM/FDM authoring; executable status is planner-scoped` | `energy_terms[].source` |
 | `OerstedField.model` | `Literal['from_current_solution']` | `from_current_solution` | `1` | `No alternate implicit model is accepted by the canonical IR.` | `bind Oersted to the named solved current` | `FEM/FDM according to capability matrix` | `energy_terms[].model` |
-| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closed source-cut and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry; invariant-source cache is bounded and exact-key; external lead and magnetization-dependent stage coupling remain fail-closed` | `current_modules[].conservative_current_view` (flattened charge definition) |
+| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` (legacy H1 reference) | `stable IDs: 1`, flux: `A`, drop: `V`, gates: SI | `For FEM CPU/double one-way Ohmic only; exact boundary-face ownership, identity/pins, non-empty closure and finite positive gates; no hidden defaults.` | `accepted RT0/H(div) source view for OE-T0/OE-F1` | `FEM CPU/double closed_geometry or explicitly complete external_lead; planner and stage callback reject incomplete descriptors; managed public-adapter external-lead solve is contract-tested, while full Python-to-LLG qualification remains open` | `current_modules[].conservative_current_view` (flattened charge definition) |
+| `ConservativeCurrentExternalLead` | `typed closure descriptor` | `required when closure.kind=external_lead` | `mesh coordinates: m; conductivity: S/m; potential drop: V; IDs: 1` | `Exact fem_closed_current_extension.v1 operator; tet4 lead mesh with tri3 boundary; positive per-element conductivity; unique device/lead IDs; complete unique interface pairs; non-empty disjoint minus/plus outer electrodes; non-zero finite potential drop.` | `volumetric external lead joined to the device by conservative interface flux continuity` | `Python/SceneDocument/script/planner preflight, one-way CPU stage callback and managed Rust-adapter -> C ABI -> MFEM coupled volumetric solve; convergence, Python fixture -> LLG and production qualification remain open` | `current_modules[].conservative_current_view.closure` |
+| `ConservativeCurrentLeadInterfacePair` | `tuple[face_vertex_ids, face_vertex_ids]` | `required per interface` | `1` | `Exactly two canonical Tri3 faces with strictly positive, distinct, ascending stable IDs; each device face has closure_interface role and each lead face is a lead boundary face.` | `oriented device/lead trace pairing used for conservative current transfer` | `Python/SceneDocument/script/planner preflight` | `current_modules[].conservative_current_view.closure.interface_pairs` |
+
+`ConservativeCurrentExternalLead` jest drugim, jawnym wariantem zamknięcia.
+Nie jest to przewód analityczny ani korekta końcówki: obiekt zawiera pełny
+tetraedryczny `lead_mesh`, przewodność dla każdego tet4, stabilne identyfikatory
+wierzchołków, pary ściana urządzenia--ściana leadu, dwie rozłączne elektrody
+zewnętrzne oraz digest przewodności. `ConservativeCurrentLeadInterfacePair`
+kanonizuje obie ściany do rosnących trójek ID. Konstruktor i dekoder odrzucają
+operator różny od `fem_closed_current_extension.v1`, zerowy spadek napięcia,
+niepełny mesh, niezgodne długości przewodności, duplikaty par i niepoprawne
+elektrody. Planner wykonuje dodatkowo walidację względem rzeczywistej siatki
+urządzenia i utrzymuje pełny descriptor w `ProblemIR`; brak świeżego managed
+solve'u prowadzi do jawnego `fail-closed`, bez fallbacku do drutu lub
+`closed_geometry`.
+
+```python
+import fullmag as fm
+
+# external-lead descriptor is explicit authoring data; it is not an implicit return path
+lead_mesh_ir = {
+    "mesh_name": "external_lead",
+    "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    "cells": {
+        "types": ["tet4"],
+        "offsets": [0, 4],
+        "nodes": [0, 1, 2, 3],
+        "global_ordinals": [0],
+    },
+    "element_markers": [1],
+    "facets": {
+        "types": ["tri3", "tri3", "tri3", "tri3"],
+        "roles": ["closure_interface", "exterior", "exterior", "exterior"],
+        "offsets": [0, 3, 6, 9, 12],
+        "nodes": [0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3],
+        "global_ordinals": [0, 1, 2, 3],
+    },
+    "boundary_markers": [10, 11, 12, 13],
+}
+
+lead = fm.ConservativeCurrentExternalLead(
+    operator_version="fem_closed_current_extension.v1",
+    revision="lead-r1",
+    digest="sha256:lead",
+    drive_id="drive",
+    outer_electrode_potential_drop_v=0.1,
+    lead_mesh=lead_mesh_ir,
+    lead_conductivity_spm_per_element=[5.8e7],
+    lead_stable_vertex_ids=[101, 102, 103, 104],
+    interface_pairs=[
+        fm.ConservativeCurrentLeadInterfacePair(
+            [10, 20, 30], [101, 102, 103]
+        )
+    ],
+    minus_outer_electrode_face_vertex_ids=[[101, 102, 104]],
+    plus_outer_electrode_face_vertex_ids=[[101, 103, 104]],
+    lead_conductivity_digest="sha256:sigma",
+)
+```
+
+W powyższym fragmencie `lead_mesh_ir` jest canonicalnym `MeshIR` z komórkami
+`tet4` i ścianami `tri3`; przykład opisuje obiektowy payload authoringu, a nie
+deklaruje jeszcze kwalifikacji runtime.
 
 (round-trip-and-failure-semantics)=
 #### 4.1.1 Requested intent, resolved execution and failures
@@ -1247,8 +1806,12 @@ production convergence remain open. Separately, a reciprocal FEM descriptor
 with an explicit drift-diffusion torque target resolves
 `fem_stage_transport_callback.v1`; this callback performs one M2 charge--spin
 solve for the supplied `m_stage` and returns the direct `tau_tr [1/s]` RHS.
-Combined reciprocal Oersted is rejected until a single callback can publish
-both the field and torque from the same solve.
+When Oersted is bound to the same reciprocal source, the planner instead
+selects `fem_stage_transport_oersted_callback.v1`. A shared provider performs
+one solve per exact stage and exposes both `tau_tr` and the midpoint
+Biot--Savart `H_oe` with identical source identity. This bounded realization is
+limited to descriptor-free H1/P1 current on FEM CPU/double; a conservative
+RT0/external-lead view remains fail-closed for reciprocal M2.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -1316,8 +1879,8 @@ for `OerstedField(model=from_current_solution)` on FEM.  It is legal only for
 strict, double-precision, steady, one-way `OhmicPoisson` transport on the
 native FEM CPU lane.  The planner records the binding in
 `ResolvedFemSpinTransportIR.oersted_source_bound`; a reciprocal FEM M2 request
-with the same Oersted source is rejected because the existing one-shot FEM
-transport solve is not stage-consistent with `J_c(m_stage)`.
+with the same Oersted source is not routed through this one-shot injection; it
+must resolve the exact-stage shared callback described in §4.6.5.
 When a complete `closed_geometry` RT0 descriptor is present, the newer public
 stage-provider path in §4.6.3 supersedes this midpoint injection; this section
 describes the descriptor-free legacy/reference lane only.
@@ -1396,10 +1959,11 @@ aktywna wyłącznie wtedy, gdy resolved plan dostarczy kompletny descriptor
 `conservative_current_view`; brak tego descriptoru zachowuje jawny
 `solved_current_h1_nodal_midpoint_reference`. Sama obecność nowego symbolu nie
 promuje jeszcze ogólnej capability FEM dynamic-Oersted. Planner akceptuje
-wyłącznie jawnie dostarczony `closed_geometry` i dla one-way Oersted wiąże go z
-`fem_stage_oersted_callback.v1`; callback nie tworzy jednak reciprocal
-magnetization-dependent transportu ani torque RHS. Pełne M2, torque RHS,
-tabulowane envelope'y, external-lead i GPU pozostają otwarte.
+wyłącznie jawnie dostarczony `closed_geometry` albo kompletny `external_lead` i
+dla one-way Oersted wiąże oba warianty z `fem_stage_oersted_callback.v1`;
+callback nie tworzy jednak reciprocal magnetization-dependent transportu ani
+torque RHS. Pełne M2, torque RHS, tabulowane envelope'y, publiczny fixture
+Python external-lead i GPU pozostają otwarte.
 Managed testy operatorów i nowy natywny kontrakt
 RT0→OE-F1 są dowodem wykonania kontrolowanej ścieżki CPU/double, nie dowodem
 kwalifikacji produkcyjnego łańcucha.
@@ -1531,12 +2095,12 @@ Po pomyślnym solve runner dodaje ten nodalny wektor do planu pola przed
 utworzeniem natywnego backendu LLG. Artefakt transportu oznacza realizację
 `fem_vector_potential_hcurl_h1`, źródło
 `fem_conservative_current_rt0_vector_potential.v1` i zachowuje digest pola
-oraz widoku. Ścieżka dotyczy obecnie wyłącznie jednokierunkowego,
-`closed_geometry`, FEM CPU/double. W publicznym runtime jest wywoływana przez
+oraz widoku. Ścieżka dotyczy obecnie wyłącznie jednokierunkowego FEM CPU/double
+z kompletnym `closed_geometry` albo `external_lead`. W publicznym runtime jest wywoływana przez
 callback `fem_stage_oersted_callback.v1` dla RK/FSAL/rollback, ale charge solve
 pozostaje one-way i nie jest to reciprocal `J_c(m_stage)` ani torque callback.
 Nie zapewnia jeszcze GPU/device-resident,
-`external_lead`, airbox-sequence, porównania FEM↔FDM ani kwalifikacji
+airbox-sequence, porównania FEM↔FDM ani kwalifikacji
 produkcyjnej.
 
 Świeże dowody wykonania:
@@ -1558,7 +2122,8 @@ produkcyjną.
 
 Planner ustawia `fem_stage_oersted_callback.v1` tylko wtedy, gdy jedyny
 transport FEM jest one-way, źródło Oersteda jest nazwane, a descriptor
-`ConservativeCurrentView` ma zamkniętą geometrię RT0. `StageOerstedProvider`
+`ConservativeCurrentView` zawiera kompletne `closed_geometry` albo
+`external_lead` RT0. `StageOerstedProvider`
 tworzy ten sam request transportu, aktualizuje `evaluation_time_s` i
 `stage_identity`, a następnie wywołuje `solve_native_fem_steady_transport_rt0`
 na immutable view. `FemVectorPotential` wybiera OE-F2 z projekcją H1/P1; inne
@@ -1571,10 +2136,12 @@ przed zwolnieniem providera. Hooki `begin_attempt`, `commit_attempt` i
 `rollback_attempt` są mapowane jeden-do-jednego na transakcję RK; telemetryczny
 artefakt `transport/fem_stage_oersted_callback.v1.json` przechowuje liczniki,
 ostatnią zaakceptowaną obserwację, `source_view_identity_digest` i hash pola.
-Przy żądaniu GPU, reciprocal M2, `external_lead` albo transportowego
-`torque_stt` planner/runtime kończy się fail-closed. Callback zwraca wyłącznie
-`H_oe`; `torque_stt` pozostaje opublikowanym wynikiem transportu i nie jest
-jeszcze składnikiem RHS LLG.
+Przy żądaniu GPU albo reciprocal M2 z closure-aware RT0/external-lead
+planner/runtime kończy się fail-closed. Kompletny one-way `external_lead` jest
+obsługiwany przez ten sam CPU callback, lecz bez publicznego managed artefaktu
+nie ma jeszcze statusu kwalifikacji. Ten callback zwraca wyłącznie `H_oe`;
+reciprocal torque korzysta z osobnej polityki transportowej albo wspólnej
+polityki M2/Oersted z §4.6.5 i jest bezpośrednim składnikiem RHS LLG.
 
 ### 4.6.4. Stage-time envelope dla one-way FEM/FDM CPU
 
@@ -1582,8 +2149,11 @@ jeszcze składnikiem RHS LLG.
 `a(t)`. Python, SceneDocument, `ProblemIR` i planner przechowują ten sam
 tagged union; brak envelope'u oznacza `a(t)=1`. W ograniczonej ścieżce FEM
 CPU/double `StageOerstedProvider` ewaluje `a(t_stage)` przed solve'em. Dla
-`closed_geometry` skaluje wyłącznie bazowe source-cut `potential_drop_v`, a
-nie wartości referencyjne Dirichleta używane do wyboru gauge'u. Solver zwraca
+`closed_geometry` skaluje wyłącznie bazowe source-cut `potential_drop_v`, a dla
+`external_lead` skaluje `outer_electrode_potential_drop_v`; nie zmienia wartości
+referencyjnych Dirichleta używanych do wyboru gauge'u. Przy `a(t_stage)=0`
+callback publikuje jawnie zerowe `H_oe` bez wywołania zewnętrznego solve'u,
+ponieważ descriptor natywny wymaga niezerowego bazowego napędu. Solver zwraca
 więc `J_c(t_stage)=a(t_stage)J_c^0`, a operator OE-F1/OE-F2 liczy
 `H_oe(t_stage)` z tego samego zamkniętego widoku. To zachowuje SI, konserwację
 RT0 i tożsamość źródła; każde stage ma nowy digest rewizji.
@@ -1606,8 +2176,8 @@ stare zapisane plany zachowują semantykę `a(t)=1`.
 
 Planner normalizuje sinusoidę/puls do istniejącego kontraktu czasowego dla
 cylindrycznych, jawnych źródeł Oersteda. Dynamiczne PWL/Sinc/Tabulated w tym
-obniżeniu, non-cylindrical static midpoint, `external_lead`, połączone
-Oersted+torque FEM, FEM GPU i FDM GPU pozostają fail-closed. Torque-only FEM
+obniżeniu, non-cylindrical static midpoint, publiczny fixture `external_lead`,
+połączone Oersted+torque FEM, FEM GPU i FDM GPU pozostają fail-closed. Torque-only FEM
 M2 ma osobną bounded ścieżkę CPU/double opisaną w §4.6.5. Ta implementacja jest
 wykonywalną bramą one-way, reciprocal M2 FDM CPU i bounded reciprocal FEM
 torque, nie kwalifikacją produkcyjnego STT/SOT/SHE.
@@ -1649,11 +2219,15 @@ obserwacji.
 Kontrakt zarządzany `fem_rk_explicit_contract` potwierdza niezależną referencję
 RK4, próbki wszystkich stage i endpointu, rollback adaptacyjnych RK23,
 rollback awarii natywnej oraz jawne odrzucenie ścieżki GPU. Testy planera
-potwierdzają wybór polityki dla reciprocal M2 torque i odrzucenie kombinacji
-reciprocal Oersted bez kwalifikowanego callbacku łączonego. To jest
+potwierdzają wybór osobnej polityki dla reciprocal M2 torque oraz wspólnej
+polityki dla reciprocal M2 torque+Oersted. Zarządzany test natywnego kroku
+potwierdza identyczną rewizję/digest źródła i dokładnie jeden solve na etap,
+z drugim callbackiem obsłużonym przez cache. Osobny adaptacyjny RK23 wymusza
+co najmniej jedno odrzucenie, wymaga rollbacku obu adapterów przed retry i
+jednego commita wspólnej zaakceptowanej rewizji. To jest
 **bounded CPU/double implementation**, nie awans do capability produkcyjnej:
-pozostają publiczny fixture end-to-end, `external_lead`, wspólny Oersted plus
-torque, GPU/device-resident, h/p/airbox/energia oraz ilościowa walidacja
+pozostają publiczny fixture end-to-end, reciprocal `external_lead`,
+GPU/device-resident, h/p/airbox/energia oraz ilościowa walidacja
 FEM↔FDM i względem solverów zewnętrznych.
 
 (validation)=
@@ -1688,6 +2262,16 @@ MFEM Example 34 is a useful SubMesh/ND/RT transfer reference but explicitly
 warns that its demonstration current need not be divergence-free; therefore it
 cannot satisfy OE-T0 without the conservative reconstruction and range check.
 
+For `fdm_oersted_cell_integrated_open.v1`, the primary direct oracle uses the
+versioned independent `long double` surface-potential reduction. The distinct
+adaptive surface spot checker validates axial, edge, corner, anisotropic and
+cancellation-dominated references against its stricter versioned budget.
+Section 3.1.5 owns the sole production mixed absolute-plus-relative kernel and
+field budgets, the independent spot-check acceptance and the analytic
+exact-zero classification. An implementation must not reinterpret those sums
+as two simultaneous inequalities, replace the declared scale by the measured
+error, or enlarge the budget because a fixture is near a cancellation point.
+
 ### 5.3 Regression and quantitative gates
 
 Tests cover OE-F2 preconditioner-scaled first-block and `B^T a` constraint
@@ -1706,9 +2290,20 @@ at least nominal minus `0.25` in the asymptotic range.
 - [x] Bounded FEM steady one-way solved-current midpoint reference slice (not OE-T0/F1/F2)
 - [x] Python current/Oersted model and complete envelope export (`closed_geometry`
   descriptor round-trip plus one-way CPU stage evaluation)
+- [x] Typed `external_lead` authoring, SceneDocument/script round-trip,
+  executable public Python fixture lowering and planner preflight
+  (`fem_closed_current_extension.v1`; managed execution of that public fixture
+  remains an open runtime gate)
 - [ ] ProblemIR, planner, migration, and scoped capabilities
+- [x] Frozen documentation contract for `fdm_oersted_cell_integrated_open.v1`
+  (source-cell integral at target centre, closure/source-cut, exact 2N R2C
+  layout, cache/provenance and direct-oracle gates; both FDM lanes remain
+  `semantic_only`)
 - [ ] Conservative FDM charge and face-to-cell publication
-- [ ] FDM direct oracle and cell-integrated CPU/CUDA FFT
+- [x] FDM standalone CPU/double direct oracle and cell-integrated open FFT
+  owner with managed contract gate; no public runtime binding or capability
+  promotion is implied
+- [ ] FDM CUDA/cuFFT realization and public planner/runner binding
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
 - [x] OE-T0 immutable conservative RT0 view with revision/digest certificate (native CPU contract; planner/stage promotion remains open)
 - [x] OE-F1 cutoff-free direct tetrahedral CPU-double oracle (native CPU contract; h-refinement and balance gates for RT0/OE-F1 are covered; p, cross-backend and production gates remain open)
@@ -1716,6 +2311,17 @@ at least nominal minus `0.25` in the asymptotic range.
 - [x] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate (bounded CPU/double solver and nodal LLG bridge; GPU, p/airbox and production gates remain open)
 - [x] Invariant-source cache gate for one-way closed_geometry (exact-key RHS reuse and changed-identity rejection)
 - [x] Native CPU stage-provider cadence, FSAL, rollback, and accepted observation
+- [x] Managed public-adapter RT0 external-lead solve with two coincident joins,
+  electrode balance and closure-interface certificate
+- [x] Managed external-lead stage callback from RT0 through OE-F1 field
+  reconstruction, rollback without accepted-state mutation and deterministic
+  retry/commit
+- [x] One native FEM CPU Heun step with the external-lead Oersted callback
+  installed and driven by the real RK cadence
+- [x] Native adaptive FEM CPU RK23 rejection, callback rollback and accepted
+  retry with rollback count equal to the integrator rejection count
+- [x] Three-step native external-lead callback trajectories for all supported
+  explicit FEM RK integrators: Heun, RK4, RK23 and RK45
 - [x] One-way CPU FEM/FDM stage-time envelope evaluation and multiplier provenance
 - [ ] Magnetization-dependent/reciprocal `J_c(m_stage)` and torque RHS
 - [ ] Correct external/nonvariational energy semantics
@@ -1738,6 +2344,14 @@ evidence that the approximation is accurate.
 
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `scripts/test_dynamic_current_oersted_contract_docs.py` | `test_fdm_oersted_open_v1_is_fully_frozen_and_semantic_only` | documentation-only regression for the frozen FDM open-boundary operator; not runtime evidence |
+| `backends/fdm/include/fullmag/fdm/cpu/oersted_fft_open_v1.hpp` | `class Solver` | standalone versioned CPU/FP64 owner contract; no public runtime binding |
+| `backends/fdm/cpu/interactions/oersted/cell_integrated_kernel_v1.cpp` | `cell_integrated_kernel_m` | exact source-cell integral at the target centre, SI sign and exact real-space zeros |
+| `backends/fdm/cpu/interactions/oersted/fft_open_v1.cpp` | `class Solver::Impl` | closure-aware exact-2N open convolution, accepted/candidate/failure state, trusted fast cache, full-field diagnostics and provenance |
+| `backends/fdm/tests/oersted_direct_oracle_v1.cpp` | `OracleKernelResult integrate_source_cell_at_target_center` | independent `long double` surface-potential oracle |
+| `backends/fdm/tests/oersted_direct_oracle_v1.cpp` | `adaptive_surface_spot_check` | independent compensated GL16 adaptive surface spot checker |
+| `backends/fdm/tests/cpu_oersted_fft_open_contract.cpp` | `main` | managed standalone CPU physics/numerics/cache/fail-closed contract |
+| `justfile` | `verify-fdm-cpu-oersted-open-fft-native-contract` | container-backed CPU-only gate using `/mnt/fullmag-zfn2-native/fdm-cpu-oersted-open-fft` |
 | `crates/fullmag-plan/src/oersted.rs` | `resolve_oersted_term` | bind Oersted source |
 | `crates/fullmag-plan/src/oersted.rs` | `resolve_solved_current_source` | solved-current binding |
 | `crates/fullmag-plan/src/spin_transport.rs` | `resolve_m1_fem_spin_transport` | FEM transport descriptor |
@@ -1756,27 +2370,47 @@ evidence that the approximation is accurate.
 | `backends/fem/cpu/mfem/interactions/oersted.cpp` | `materialize_oersted_stage_field` | native stage callback evaluation and transaction ownership |
 | `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `materialize_transport_stage_rhs` | validate and add reciprocal transport torque RHS in 1/s |
 | `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp` | `solve_rt0` | immutable RT0 view and OE-F1/OE-F2 adapters |
-| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closed-geometry RT0 identity/closure descriptor |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentView` | public closure-aware RT0 identity/closure descriptor |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentExternalLead` | typed volumetric lead mesh, interface pairs, electrodes and conductivity digest |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ConservativeCurrentLeadInterfacePair` | canonical device/lead boundary-face pairing |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | public current source and canonical time-envelope owner |
 | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class ChargeSolverPolicy` | versioned FDM/FEM charge-operator and residual validation |
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | preserve FDM M2 nonlinear policy versus bounded FEM M2 linear operator identity |
 | `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `class SpinDriftDiffusion` | canonical spin transport materials, interfaces, boundaries, solver and execution request |
 | `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `class DriftDiffusionSpinTorque` | explicit transport-to-LLG torque binding and angular-rate contract |
-| `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation and fail-closed preservation of the explicit descriptor |
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class OerstedCylinder` | stable authored identity for the analytic cylinder Oersted term |
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class OerstedField` | stable authored identity and binding to a named solved-current source |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_oersted_entry` | canonical Python export preserving the explicit Oersted identity |
+| `crates/fullmag-ir/src/validation.rs` | `validate_oersted_energy_terms` | reject present-but-empty IDs while retaining read compatibility for historical ID-less IR |
+| `crates/fullmag-authoring/src/validation.rs` | `validate_scene_conservative_current_view` | SceneDocument/API shape validation for closed_geometry and complete external_lead descriptors; full public runtime qualification remains open |
 | `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspectorModel.ts` | `buildCurrentTransport` | Control Room descriptor JSON round-trip without dropping closure parameters |
-| `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/closure validation and fail-closed boundary |
-| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary |
+| `crates/fullmag-plan/src/spin_transport.rs` | `validate_conservative_current_view` | planner mesh/identity/interface/electrode validation for external_lead and stage-callback selection; incomplete and unsupported combinations remain fail-closed |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `solve_native_fem_steady_transport_rt0` | RT0/OE-F1 FFI and provenance boundary; sizes output buffers for the combined device-plus-lead RT0 space |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit` | managed Rust-adapter -> append-only C ABI -> MFEM regression for a device joined to two volumetric leads |
+| `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `external_lead_stage_callback_solves_oersted_and_commits_observation` | managed RT0 -> OE-F1 -> stage callback regression with finite non-zero field, accepted-state-preserving rollback and bitwise-identical retry/commit |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step` | managed native CPU Heun step that installs the provider, lets the real RK cadence evaluate RT0/OE-F1, commits the observation and publishes finite post-step magnetization |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt` | managed adaptive RK23 regression that forces at least one rejected native attempt and proves callback rollback count equals the integrator rejection count before an accepted retry |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators` | managed three-step callback-trajectory regression for fixed Heun/RK4 and adaptive RK23/RK45 with persistent provider state and one commit per step |
 | `backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp` | `project_compatible_h_to_nodes` | bounded RT0-compatible H to H1/P1 nodal projection and residual |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `SteadySourceCache::reuse` | exact-key invariant-source cache and fail-closed identity guard |
 | `crates/fullmag-runner/src/native_fem/steady_transport/stage_cache.rs` | `begin_attempt` | checkpoint/rollback coordinator for accepted and rejected source stages |
-| `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `from_plan` | public CPU stage binding to the RT0/OE-F1/OE-F2 adapter, exact stage identity and fail-closed transaction callbacks |
+| `crates/fullmag-runner/src/native_fem/stage_oersted.rs` | `from_plan` | public CPU stage binding for closed_geometry/external_lead to the RT0/OE-F1/OE-F2 adapter, envelope/zero-drive handling, exact stage identity and transactional callbacks |
 | `crates/fullmag-runner/src/native_fem/stage_transport.rs` | `StageTransportProvider::evaluate` | public CPU reciprocal M2 stage solve, envelope scaling, torque digest and exact stage identity |
+| `crates/fullmag-runner/src/native_fem/stage_coupled.rs` | `StageM2CoupledProvider::evaluate` | one exact-stage reciprocal M2 solve shared by direct torque and descriptor-free H1/P1 solved-current Oersted with common source identity |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted` | managed native CPU LLG regression proving one solve per stage, cache reuse and identical accepted source identity for both callbacks |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry` | managed adaptive RK23 regression proving matched rollback/commit counts and one shared accepted source identity after rejected attempts |
+| `crates/fullmag-runner/src/native_fem.rs` | `native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators` | managed three-step shared-source trajectories for fixed Heun/RK4 and adaptive RK23/RK45 |
 | `crates/fullmag-runner/src/time_envelope.rs` | `evaluate_time_envelope` | shared exact-stage evaluation of source envelopes; unresolved tabulated artifacts fail closed |
 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `source_envelope_multiplier` | FDM CPU one-way source scaling and accepted multiplier provenance |
 | `packages/fullmag-py/src/fullmag/world.py` | `spin_transport` | flat/study registration of canonical spin transport into ProblemIR |
 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_spin_transports` | canonical Python export of spin transport and torque parameters |
 | `packages/fullmag-py/src/fullmag/runtime/scene_document.py` | `_canonical_spin_transports` | preserve validated spin-transport payload across UI scene round-trip |
 | `packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py` | `test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script` | Python, SceneDocument and flat-script regression |
+| `packages/fullmag-py/tests/test_external_lead_roundtrip.py` | `ExternalLeadRoundTripTests` | typed external-lead serialization, script/SceneDocument round-trip and invalid-input rejection |
+| `packages/fullmag-py/tests/test_external_lead_roundtrip.py` | `test_public_external_lead_example_lowers_complete_stage_contract` | load the public fixture with its imported device mesh and prove complete current/spin/Oersted plus external-lead stage lowering |
+| `examples/fem_external_lead_oersted_public.py` | `cube_parts` | bounded public Python fixture for an imported tet4 device joined to two volumetric external leads and a dynamic Oersted LLG stage |
+| `scripts/validate_fem_external_lead_oersted_runtime.py` | `validate_runtime_log` | fail-closed public-runtime artifact gate for strict FEM CPU/double provenance, external-lead callback commits/digests and finite changed magnetization |
+| `scripts/test_validate_fem_external_lead_oersted_runtime.py` | `test_accepts_complete_external_lead_callback_artifacts` | synthetic positive and negative tests for missing callback, uncommitted observation, execution mismatch and unchanged state |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `stage_transport_telemetry` | persist reciprocal stage-transport callback telemetry artifact |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | append-only callback provenance artifact with accepted/last stage observation and field digest |
 | `backends/fem/tests/steady_transport_rt0_contract.cpp` | `main` | managed RT0/OE-F1 contract |

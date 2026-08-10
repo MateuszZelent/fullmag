@@ -769,6 +769,7 @@ fn execute_reference_fem_impl(
             &plan.mesh_parts,
             &problem.topology.magnetic_node_volumes,
         );
+        artifacts.record_solver_step(&current_stats);
 
         if !default_scalar_trace || !field_schedules.is_empty() {
             let ant = antenna_field_at(&problem, state.magnetization().len());

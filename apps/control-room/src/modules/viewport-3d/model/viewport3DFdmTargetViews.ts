@@ -92,7 +92,7 @@ export function buildViewport3DFdmTargetViews({
   if (!membership || !model || !realizedRegionIds) {
     return incompatible("membership-or-model-unavailable");
   }
-  if (membership.freshness.trim().toLowerCase() !== "current") {
+  if (!hasCurrentMembershipFreshness(membership)) {
     return incompatible("membership-not-current");
   }
   if (
@@ -348,7 +348,7 @@ export function buildViewport3DFdmTargetDefinitions(
   if (!membership) {
     return { definitions: [], reason: "membership-unavailable", status: "incompatible" };
   }
-  if (membership.freshness.trim().toLowerCase() !== "current") {
+  if (!hasCurrentMembershipFreshness(membership)) {
     return { definitions: [], reason: "membership-not-current", status: "incompatible" };
   }
 
@@ -409,6 +409,15 @@ export function buildViewport3DFdmTargetDefinitions(
 
 function incompatible(reason: string): Viewport3DFdmTargetViewsResult {
   return { reason, status: "incompatible", views: [] };
+}
+
+function hasCurrentMembershipFreshness(
+  membership: FdmRegionMembershipResource,
+): boolean {
+  return (
+    typeof membership.freshness === "string" &&
+    membership.freshness.trim().toLowerCase() === "current"
+  );
 }
 
 function normalizeMembershipObjectId(value: string): string | null {

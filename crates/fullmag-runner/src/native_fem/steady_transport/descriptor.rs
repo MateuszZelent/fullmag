@@ -13,6 +13,8 @@ use std::collections::BTreeSet;
 
 const STEADY_SOURCE_CACHE_POLICY: &str = "steady_source_invariant.v1";
 const STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
+const STAGE_TRANSPORT_CALLBACK_POLICY: &str = "fem_stage_transport_callback.v1";
+const STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY: &str = "fem_stage_transport_oersted_callback.v1";
 
 pub(crate) struct PreparedTransportPlan<'a> {
     pub resolved: &'a ResolvedSpinTransportPlanIR,
@@ -82,7 +84,10 @@ pub(crate) fn preflight_transport_plans(
                 )
             })
         {
-            native_preflight_request.mesh.periodic_boundary_pairs.clear();
+            native_preflight_request
+                .mesh
+                .periodic_boundary_pairs
+                .clear();
             native_preflight_request.mesh.periodic_node_pairs.clear();
         }
         super::preflight(&native_preflight_request)?;
@@ -112,11 +117,7 @@ pub(super) fn validate_conservative_current_view_descriptor(
 ) -> Result<(), RunError> {
     if view.stable_vertex_ids.len() != mesh.nodes.len()
         || view.stable_vertex_ids.iter().any(|id| *id == 0)
-        || view
-            .stable_vertex_ids
-            .iter()
-            .collect::<BTreeSet<_>>()
-            .len()
+        || view.stable_vertex_ids.iter().collect::<BTreeSet<_>>().len()
             != view.stable_vertex_ids.len()
     {
         return Err(RunError {
@@ -133,8 +134,7 @@ pub(super) fn validate_conservative_current_view_descriptor(
         .filter(|role| {
             matches!(
                 role,
-                fullmag_ir::FemFacetRoleIR::Exterior
-                    | fullmag_ir::FemFacetRoleIR::PeriodicSeam
+                fullmag_ir::FemFacetRoleIR::Exterior | fullmag_ir::FemFacetRoleIR::PeriodicSeam
             )
         })
         .count();
@@ -184,7 +184,10 @@ pub(super) fn validate_conservative_current_view_descriptor(
     }
     for (label, value) in [
         ("source_module_id", &view.identity.source_module_id),
-        ("source_state_revision", &view.identity.source_state_revision),
+        (
+            "source_state_revision",
+            &view.identity.source_state_revision,
+        ),
         ("source_field_digest", &view.identity.source_field_digest),
         ("conductivity_digest", &view.identity.conductivity_digest),
         ("mesh_revision", &view.identity.mesh_revision),
@@ -241,9 +244,10 @@ pub(super) fn validate_conservative_current_view_descriptor(
                         || !cut.potential_drop_v.is_finite()
                         || cut.translation_m.iter().any(|value| !value.is_finite())
                         || cut.translation_m.iter().all(|value| *value == 0.0)
-                        || cut.face_pairs.iter().any(|pair| {
-                            pair.minus_face_vertex_ids == pair.plus_face_vertex_ids
-                        })
+                        || cut
+                            .face_pairs
+                            .iter()
+                            .any(|pair| pair.minus_face_vertex_ids == pair.plus_face_vertex_ids)
                 })
             {
                 return Err(RunError {
@@ -273,7 +277,10 @@ pub(super) fn validate_conservative_current_view_descriptor(
                 ("external-lead revision", revision),
                 ("external-lead digest", digest),
                 ("external-lead drive_id", drive_id),
-                ("external-lead conductivity_digest", lead_conductivity_digest),
+                (
+                    "external-lead conductivity_digest",
+                    lead_conductivity_digest,
+                ),
             ] {
                 require_rt0_text(value, label)?;
             }
@@ -305,9 +312,8 @@ mod rt0_descriptor_tests {
     use super::*;
     use fullmag_ir::{
         ConservativeCurrentBoundaryFaceIR, ConservativeCurrentIdentityIR,
-        ConservativeCurrentPinsIR,
-        ConservativeCurrentSourceCutFacePairIR, ConservativeCurrentSourceCutIR,
-        FemFacetRoleIR, MeshIR,
+        ConservativeCurrentPinsIR, ConservativeCurrentSourceCutFacePairIR,
+        ConservativeCurrentSourceCutIR, FemFacetRoleIR, MeshIR,
     };
 
     fn mesh() -> MeshIR {
@@ -332,19 +338,14 @@ mod rt0_descriptor_tests {
     fn valid_view() -> ResolvedFemConservativeCurrentViewIR {
         ResolvedFemConservativeCurrentViewIR {
             stable_vertex_ids: vec![10, 20, 30, 40],
-            boundary_faces: vec![
-                [10, 20, 30],
-                [10, 20, 40],
-                [10, 30, 40],
-                [20, 30, 40],
-            ]
-            .into_iter()
-            .map(|face_vertex_ids| ConservativeCurrentBoundaryFaceIR {
-                face_vertex_ids,
-                role: ConservativeCurrentBoundaryRoleIR::InsulatingOuter,
-                circuit_id: None,
-            })
-            .collect(),
+            boundary_faces: vec![[10, 20, 30], [10, 20, 40], [10, 30, 40], [20, 30, 40]]
+                .into_iter()
+                .map(|face_vertex_ids| ConservativeCurrentBoundaryFaceIR {
+                    face_vertex_ids,
+                    role: ConservativeCurrentBoundaryRoleIR::InsulatingOuter,
+                    circuit_id: None,
+                })
+                .collect(),
             identity: ConservativeCurrentIdentityIR {
                 source_module_id: "charge".into(),
                 source_state_revision: "state-1".into(),
@@ -428,6 +429,7 @@ pub(super) fn validate_bound_current_source_modules(
                 conductivity_s_per_m,
                 coupling,
                 definition,
+                ..
             } if name == &resolved.current_source_id => Some((
                 model,
                 current_density,
@@ -533,8 +535,8 @@ pub(super) fn materialize_native_fem_steady_transport_request(
         magnetization: initial_magnetization.to_vec(),
         sigma_s_spm: descriptor.sigma_s_spm,
         sigma_parallel_spm: reciprocal_material.map(|material| material.sigma_parallel_spm),
-        sigma_perpendicular_spm:
-            reciprocal_material.map(|material| material.sigma_perpendicular_spm),
+        sigma_perpendicular_spm: reciprocal_material
+            .map(|material| material.sigma_perpendicular_spm),
         sigma_ahe_spm: reciprocal_material.map(|material| material.sigma_ahe_spm),
         polarization_p: descriptor.polarization_p,
         theta_sh: descriptor.theta_sh,
@@ -595,18 +597,30 @@ fn resolved_fem_descriptor_contradiction(
     };
     let expected_charge_engine = if reciprocal { "gmres" } else { "cg" };
     let expected_charge_solver_engine = if reciprocal {
-        matches!(descriptor.charge_solver.engine.as_str(), "auto" | "block_gmres")
+        matches!(
+            descriptor.charge_solver.engine.as_str(),
+            "auto" | "block_gmres"
+        )
     } else {
         matches!(descriptor.charge_solver.engine.as_str(), "auto" | "cg")
     };
-    let closed_geometry_view = descriptor
-        .conservative_current_view
-        .as_ref()
-        .is_some_and(|view| matches!(view.closure, ConservativeCurrentClosureIR::ClosedGeometry { .. }));
-    let stage_coupling_valid = if !reciprocal
-        && descriptor.oersted_source_bound
-        && closed_geometry_view
-    {
+    let conservative_current_view =
+        descriptor
+            .conservative_current_view
+            .as_ref()
+            .is_some_and(|view| {
+                matches!(
+                    view.closure,
+                    ConservativeCurrentClosureIR::ClosedGeometry { .. }
+                        | ConservativeCurrentClosureIR::ExternalLead { .. }
+                )
+            });
+    let stage_coupling_valid = if reciprocal && descriptor.oersted_source_bound {
+        descriptor.stage_coupling == STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY
+            && !conservative_current_view
+    } else if reciprocal && descriptor.torque_target.is_some() {
+        descriptor.stage_coupling == STAGE_TRANSPORT_CALLBACK_POLICY
+    } else if !reciprocal && descriptor.oersted_source_bound && conservative_current_view {
         matches!(
             descriptor.stage_coupling.as_str(),
             STEADY_SOURCE_CACHE_POLICY | STAGE_OERSTED_CALLBACK_POLICY
@@ -627,7 +641,9 @@ fn resolved_fem_descriptor_contradiction(
                 && material.sigma_perpendicular_spm.is_finite()
                 && material.sigma_perpendicular_spm > 0.0
                 && material.sigma_ahe_spm.is_finite()
-                && material.sigma_parallel_spm.min(material.sigma_perpendicular_spm)
+                && material
+                    .sigma_parallel_spm
+                    .min(material.sigma_perpendicular_spm)
                     * material.sigma_spin_spm
                     - material.polarization_p.powi(2) * material.sigma_spm.powi(2)
                     > 0.0

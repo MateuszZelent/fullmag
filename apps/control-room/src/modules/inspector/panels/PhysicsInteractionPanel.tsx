@@ -58,8 +58,11 @@ import {
   type PhysicsInteractionDraft,
   type PhysicsInteractionId,
 } from "./PhysicsInteractionPanelModel";
-import { SpinAuthoringInspector } from "./SpinAuthoringInspector";
-import { TransportAuthoringInspector } from "./TransportAuthoringInspector";
+import {
+  OerstedFieldInspectorPanel,
+  SpinTorqueInspectorPanel,
+} from "./SpinAuthoringInspector";
+import { CurrentTransportInspectorPanel } from "./TransportAuthoringInspector";
 
 interface DraftState {
   draft: PhysicsInteractionDraft;
@@ -368,13 +371,13 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   }
 
   if (interactionId === "current_transport") {
-    return <TransportAuthoringInspector family="current_transport" />;
+    return <CurrentTransportInspectorPanel selection={selection} />;
   }
-  if (
-    interactionId === "spin_torque" ||
-    interactionId === "oersted_field"
-  ) {
-    return <SpinAuthoringInspector key={interactionId} family={interactionId} />;
+  if (interactionId === "spin_torque") {
+    return <SpinTorqueInspectorPanel selection={selection} />;
+  }
+  if (interactionId === "oersted_field") {
+    return <OerstedFieldInspectorPanel selection={selection} />;
   }
 
   const physicsStatus = !activeLaneOperation.enabled

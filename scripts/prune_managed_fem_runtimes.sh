@@ -49,9 +49,9 @@ declare -A FAMILY_COUNTS=()
 mark_process_reference() {
   local raw_path="${1:-}"
   [ -n "${raw_path}" ] || return 0
-  local resolved_path
-  resolved_path="$(readlink -f -- "${raw_path}" 2>/dev/null || true)"
-  [ -n "${resolved_path}" ] || resolved_path="${raw_path}"
+  # Procfs exe/cwd links already expose the process target. Do not canonicalize
+  # arbitrary paths here: a target may live on an unresponsive filesystem.
+  local resolved_path="${raw_path}"
   local relative variant_root
   case "${resolved_path}" in
     "${VARIANTS_ROOT}"/*)
@@ -71,7 +71,9 @@ mark_process_reference() {
 for process_dir in "${PROC_ROOT}"/[0-9]*; do
   [ -d "${process_dir}" ] || continue
   for process_link in exe cwd; do
-    mark_process_reference "$(readlink -f -- "${process_dir}/${process_link}" 2>/dev/null || true)"
+    # Read the procfs link text without canonicalizing its target. `readlink -f`
+    # can block forever when a process cwd is on an unresponsive filesystem.
+    mark_process_reference "$(readlink -- "${process_dir}/${process_link}" 2>/dev/null || true)"
   done
   if [ -r "${process_dir}/cmdline" ]; then
     while IFS= read -r -d '' argument; do

@@ -30,6 +30,8 @@ import {
   buildCurrentTransport,
   buildSpinTransport,
   currentTransportDraft,
+  currentTransportModelPatch,
+  currentTransportSupportsPrescribedDensity,
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
@@ -39,6 +41,7 @@ import {
   transportSelectionKey,
   type CurrentTransportDraft,
   type SpinTransportDraft,
+  type TransportAuthoringInitialScope,
 } from "./TransportAuthoringInspectorModel";
 
 type Family = "current_transport" | "spin_transport";
@@ -66,10 +69,12 @@ function requestedCapability(
 
 export function TransportAuthoringInspector({
   family,
+  initialScope,
   resourceId,
   resourceIndex,
 }: {
   family: Family;
+  initialScope?: TransportAuthoringInitialScope | null;
   resourceId?: string | null;
   resourceIndex?: number | null;
 }) {
@@ -94,8 +99,14 @@ export function TransportAuthoringInspector({
       : isKnownSpinTransport(selected as SceneSpinTransport)
     : true;
   const baseDraft = family === "current_transport"
-    ? currentTransportDraft(selected && known ? selected as Parameters<typeof currentTransportDraft>[0] : null)
-    : spinTransportDraft(selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null);
+    ? currentTransportDraft(
+        selected && known ? selected as Parameters<typeof currentTransportDraft>[0] : null,
+        selected ? null : initialScope,
+      )
+    : spinTransportDraft(
+        selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null,
+        selected ? null : initialScope,
+      );
   const draftKey = `${family}:${resourceId ?? resourceIndex ?? localSelectionKey}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState<{ draft: Draft; key: string }>({
     draft: baseDraft,
@@ -310,14 +321,25 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
   const resourceIndex = selection.ref?.type === "spin-transport"
     ? selection.ref.spinTransportIndex
     : null;
+  const selectedRegionId = selection.ref?.type === "spin-transport"
+    ? selection.ref.regionId ?? null
+    : null;
+  const initialScope = resourceId == null && selection.objectId
+    ? { objectId: selection.objectId, regionId: selectedRegionId }
+    : null;
   return (
     <PhysicsInspectorOverview
       model={buildPhysicsInspectorOverviewModel({
         family: "spin_transport",
         scope: {
-          kind: selection.objectId ? "object" : "global",
+          kind: selectedRegionId ? "region" : selection.objectId ? "object" : "global",
           objectId: selection.objectId,
-          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId && selection.objectId
+            ? `region:${selection.objectId}:${selectedRegionId}`
+            : selection.objectId
+              ? `object:${selection.objectId}`
+              : "global:physics",
         },
         source: {
           id: resourceId ?? "new",
@@ -326,7 +348,14 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
         },
         status: "active",
       })}
-      primary={<TransportAuthoringInspector family="spin_transport" resourceId={resourceId} resourceIndex={resourceIndex} />}
+      primary={(
+        <TransportAuthoringInspector
+          family="spin_transport"
+          initialScope={initialScope}
+          resourceId={resourceId}
+          resourceIndex={resourceIndex}
+        />
+      )}
     />
   );
 }
@@ -338,14 +367,25 @@ export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProp
   const resourceIndex = selection.ref?.type === "current-transport"
     ? selection.ref.currentTransportIndex
     : null;
+  const selectedRegionId = selection.ref?.type === "scene-object"
+    ? selection.ref.regionId ?? null
+    : null;
+  const initialScope = resourceId === null && selection.objectId
+    ? { objectId: selection.objectId, regionId: selectedRegionId }
+    : null;
   return (
     <PhysicsInspectorOverview
       model={buildPhysicsInspectorOverviewModel({
         family: "current_transport",
         scope: {
-          kind: selection.objectId ? "object" : "global",
+          kind: selectedRegionId ? "region" : selection.objectId ? "object" : "global",
           objectId: selection.objectId,
-          stableRef: selection.objectId ? `object:${selection.objectId}` : "global:physics",
+          regionId: selectedRegionId,
+          stableRef: selectedRegionId && selection.objectId
+            ? `region:${selection.objectId}:${selectedRegionId}`
+            : selection.objectId
+              ? `object:${selection.objectId}`
+              : "global:physics",
         },
         source: {
           id: resourceId ?? "new",
@@ -354,7 +394,14 @@ export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProp
         },
         status: "active",
       })}
-      primary={<TransportAuthoringInspector family="current_transport" resourceId={resourceId} resourceIndex={resourceIndex} />}
+      primary={(
+        <TransportAuthoringInspector
+          family="current_transport"
+          initialScope={initialScope}
+          resourceId={resourceId}
+          resourceIndex={resourceIndex}
+        />
+      )}
     />
   );
 }
@@ -363,7 +410,7 @@ function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTrans
   const field = (key: keyof CurrentTransportDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
   return <>
     <FormField label="Name" readOnly={identityReadOnly} value={draft.name} onChange={field("name")} />
-    <FormField label="Model" type="select" value={draft.model} onChange={field("model")}><option value="prescribed_density">Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
+    <FormField label="Model" type="select" value={draft.model} onChange={(event) => patch(currentTransportModelPatch(draft, event.target.value as CurrentTransportDraft["model"]))}><option value="prescribed_density" disabled={!currentTransportSupportsPrescribedDensity(draft)}>Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option><option value="magnetoresistive_poisson">Magnetoresistive Poisson (M2)</option></FormField>
     <FormField label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
     <FormField label="Conservative RT0 current view (JSON; closed_geometry)" rows={12} type="textarea" value={draft.conservativeCurrentView} onChange={field("conservativeCurrentView")} />
     {draft.model === "prescribed_density" ? <FormField label="Current density vector" unit="A/m²" type="textarea" value={draft.currentDensity} onChange={field("currentDensity")} /> : <>

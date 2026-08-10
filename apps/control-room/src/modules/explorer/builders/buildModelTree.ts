@@ -7,7 +7,11 @@ import type {
   ModelTreeCouplingSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
-import type { DomainMetaResource } from "@/kernel/api/apiTypes";
+import type {
+  DomainMetaResource,
+  FdmMultilayerLayoutResource,
+} from "@/kernel/api/apiTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
@@ -47,6 +51,7 @@ import {
   isFdmDomain,
   isFemDomain,
 } from "@/shared/domain/mesh/domainPresentation";
+import { resolveFdmMultilayerAirboxTarget } from "@/shared/domain/mesh/fdmMultilayerAirboxTarget";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -1051,6 +1056,8 @@ function fdmMeshPolicyNodes(
   presentation: FdmDomainPresentation | null,
   domainMeta: DomainMetaResource | null | undefined,
   presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",
+  multilayerLayout: FdmMultilayerLayoutResource | null | undefined = null,
+  multilayerLayoutStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"] = "idle",
 ): ExplorerNode {
   const fallbackShape = (domainMeta?.grid?.shape ?? [0, 0, 0]) as [number, number, number];
   const fallbackOrigin = (domainMeta?.grid?.origin ?? [0, 0, 0]) as [number, number, number];
@@ -1164,6 +1171,11 @@ function fdmMeshPolicyNodes(
       status: "ready",
     },
   ];
+  const multilayerDetails = fdmMultilayerLayoutNodes(
+    domainMeshId,
+    multilayerLayout,
+    multilayerLayoutStatus,
+  );
   return {
     id: "model:mesh",
     // Mesh is the shared product-level summary for both FEM and FDM.  The
@@ -1185,7 +1197,7 @@ function fdmMeshPolicyNodes(
         badge: `structured grid · ${grid.shape.join(" × ")} / ${cellCount} cells`,
         icon: "mesh",
         status,
-        children: structuredGridDetails,
+        children: [...structuredGridDetails, ...multilayerDetails],
       },
       {
         id: "model:mesh:builds",
@@ -1232,6 +1244,136 @@ function fdmMeshPolicyNodes(
   };
 }
 
+function fdmMultilayerLayoutNodes(
+  parentId: string,
+  layout: FdmMultilayerLayoutResource | null | undefined,
+  resourceStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"],
+): ExplorerNode[] {
+  if (!layout?.available) return [];
+  const tuple3 = (values: readonly number[]): [number, number, number] => [
+    values[0] ?? 0,
+    values[1] ?? 0,
+    values[2] ?? 0,
+  ];
+  const status: ExplorerNodeStatus =
+    resourceStatus === "error"
+      ? "degraded"
+      : resourceStatus === "loading" || resourceStatus === "stale"
+        ? "mesh-building"
+        : "ready";
+  const common = layout.common_transform_layout;
+  const commonNode: ExplorerNode = {
+    id: `${parentId}:common-convolution-grid`,
+    kind: "mesh.grid.common",
+    label: "Common Convolution Grid",
+    parentId,
+    badge: common ? `${common.shape.join(" × ")} · diagnostic` : "not published",
+    icon: "mesh",
+    status: common ? status : "degraded",
+    selectable: true,
+    visualizationTargetId: "fdm-domain",
+    nativeGrid: common ? tuple3(common.shape) : undefined,
+    nativeCellSize: common ? tuple3(common.cell_size) : undefined,
+    nativeOrigin: common ? tuple3(common.origin) : undefined,
+  };
+  const layerNodes: ExplorerNode[] = layout.layers.map((layer): ExplorerNode => {
+    const layerParentId = `${parentId}:native-layers:${encodeURIComponent(layer.layer_id)}`;
+    return {
+      id: layerParentId,
+      kind: "mesh.grid.layer" as const,
+      label: layer.magnet_name,
+      parentId: `${parentId}:native-layers`,
+      layerId: layer.layer_id,
+      objectId: layer.object_id,
+      badge: `${layer.native_grid.join(" × ")} · ${layer.transfer_kind}`,
+      icon: "layers" as const,
+      status,
+      visualizationTargetId: "fdm-domain",
+      nativeGrid: tuple3(layer.native_grid),
+      nativeCellSize: tuple3(layer.native_cell_size),
+      nativeOrigin: tuple3(layer.native_origin),
+      gridFingerprint: layer.native_grid_fingerprint,
+      transferKind: layer.transfer_kind,
+      activeMaskPresent: layer.active_mask_present,
+      activeCellCount: layer.active_cell_count,
+      inactiveCellCount: layer.inactive_cell_count,
+      children: [
+        {
+          id: `${layerParentId}:native-grid`,
+          kind: "mesh.grid.layer.native-grid" as const,
+          label: "Native Grid",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: `${layer.native_grid.join(" × ")} · ${layer.native_grid_fingerprint ?? "no fingerprint"}`,
+          icon: "mesh" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          nativeGrid: tuple3(layer.native_grid),
+          nativeCellSize: tuple3(layer.native_cell_size),
+          nativeOrigin: tuple3(layer.native_origin),
+          gridFingerprint: layer.native_grid_fingerprint,
+        },
+        {
+          id: `${layerParentId}:active-mask`,
+          kind: "mesh.grid.layer.mask" as const,
+          label: "Active Mask",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: layer.active_mask_present ? `${layer.active_cell_count} active` : "dense / implicit",
+          icon: "shield" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          activeMaskPresent: layer.active_mask_present,
+          activeCellCount: layer.active_cell_count,
+          inactiveCellCount: layer.inactive_cell_count,
+        },
+        {
+          id: `${layerParentId}:transfer`,
+          kind: "mesh.grid.layer.transfer" as const,
+          label: "Transfer",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: layer.transfer_kind,
+          icon: "activity" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          transferKind: layer.transfer_kind,
+        },
+        {
+          id: `${layerParentId}:provenance`,
+          kind: "mesh.grid.layer.provenance" as const,
+          label: "Provenance",
+          parentId: layerParentId,
+          layerId: layer.layer_id,
+          objectId: layer.object_id,
+          badge: layout.layout_fingerprint ?? "unfingerprinted",
+          icon: "activity" as const,
+          status,
+          visualizationTargetId: "fdm-domain",
+          gridFingerprint: layer.native_grid_fingerprint,
+        },
+      ],
+    };
+  });
+  return [
+    commonNode,
+    {
+      id: `${parentId}:native-layers`,
+      kind: "mesh.grid.layers",
+      label: "Native Layers",
+      parentId,
+      badge: `${layout.layers.length}`,
+      icon: "layers",
+      status,
+      selectable: false,
+      children: layerNodes,
+    },
+  ];
+}
+
 /**
  * FDM exposes the same product-level Airbox entry as FEM when the declared
  * universe contains cells outside the realized magnetic support.  The mesh
@@ -1242,6 +1384,8 @@ function fdmMeshPolicyNodes(
 function fdmAirboxNode(
   presentation: FdmDomainPresentation,
   presentationStatus: ModelTreeSnapshot["domainPresentationStatus"] = "idle",
+  multilayerLayout: FdmMultilayerLayoutResource | null | undefined = null,
+  multilayerLayoutStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"] = "idle",
 ): ExplorerNode | null {
   if (!presentation.universeOutsideMagneticSupport) return null;
   const grid = presentation.fdmGrid;
@@ -1258,6 +1402,13 @@ function fdmAirboxNode(
             ? "degraded"
             : "mesh-ready";
   const cellCount = grid.totalCells;
+  const multilayerTarget = resolveFdmMultilayerAirboxTarget(multilayerLayout);
+  const multilayerTargetStatus: ExplorerNodeStatus =
+    multilayerLayoutStatus === "loading" || multilayerLayoutStatus === "stale"
+      ? "stale"
+      : multilayerLayoutStatus === "error"
+        ? "degraded"
+        : "ready";
   return {
     id: "model:airbox",
     kind: "airbox.root",
@@ -1354,6 +1505,21 @@ function fdmAirboxNode(
           },
         ],
       },
+      ...(multilayerTarget ? [{
+        id: "model:airbox:multilayer-target",
+        kind: "airbox.multilayer.target" as const,
+        label: "Multilayer H_demag target",
+        parentId: "model:airbox",
+        badge: `${multilayerTarget.cells.join(" × ")} · H_demag`,
+        icon: "activity" as const,
+        status: multilayerTargetStatus,
+        visualizationTargetId: "airbox",
+        nativeGrid: multilayerTarget.cells,
+        nativeCellSize: multilayerTarget.cellSize,
+        nativeOrigin: multilayerTarget.origin,
+        gridFingerprint: multilayerTarget.carrierFingerprint,
+        contextCommands: ["workspace.focus-selection"],
+      }] : []),
     ],
   };
 }
@@ -1413,111 +1579,6 @@ function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): Explore
         "couplings.disable",
         "couplings.delete",
       ],
-    })),
-  };
-}
-
-function spinTransportNodes(transports: NonNullable<ModelTreeSnapshot["spinTransports"]>): ExplorerNode {
-  return {
-    id: "model:physics:spin-transports",
-    kind: "physics.spin-transports",
-    label: "Spin Transport",
-    parentId: "model:session",
-    badge: `${transports.length}`,
-    icon: "activity",
-    status: "ready",
-    children: transports.map((transport) => ({
-      id: transport.id === null
-        ? `model:physics:spin-transports:position:${transport.index}`
-        : `model:physics:spin-transports:id:${encodeURIComponent(transport.id)}`,
-      kind: "physics.spin-transport" as const,
-      label: transport.label,
-      parentId: "model:physics:spin-transports",
-      badge: transport.supported ? `${transport.mode ?? "typed"} · ${transport.currentSourceId ?? "no source"}` : "read-only",
-      icon: "activity" as const,
-      ...(transport.id === null
-        ? { spinTransportIndex: transport.index }
-        : { spinTransportId: transport.id }),
-      status: transport.supported ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
-function currentTransportNodes(transports: NonNullable<ModelTreeSnapshot["currentTransports"]>): ExplorerNode {
-  return {
-    id: "model:physics:current-transports",
-    kind: "physics.current-transports",
-    label: "Current Transport",
-    parentId: "model:session",
-    badge: `${transports.length}`,
-    icon: "activity",
-    status: "ready",
-    children: transports.map((transport) => ({
-      id: transport.id === null
-        ? `model:physics:current-transports:position:${transport.index}`
-        : `model:physics:current-transports:id:${encodeURIComponent(transport.id)}`,
-      kind: "physics.current-transport" as const,
-      label: transport.label,
-      parentId: "model:physics:current-transports",
-      badge: transport.supported ? transport.model ?? "typed" : "read-only",
-      icon: "activity" as const,
-      ...(transport.id === null
-        ? { currentTransportIndex: transport.index }
-        : { currentTransportId: transport.id }),
-      status: transport.supported ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
-function spinInterfaceNodes(interfaces: NonNullable<ModelTreeSnapshot["spinInterfaces"]>): ExplorerNode {
-  return {
-    id: "model:physics:spin-interfaces",
-    kind: "physics.spin-interfaces",
-    label: "Spin Interfaces",
-    parentId: "model:session",
-    badge: `${interfaces.length}`,
-    icon: "activity",
-    status: "ready",
-    children: interfaces.map((item) => ({
-      id: `model:physics:spin-interfaces:${encodeURIComponent(item.ownerId)}:position:${item.index}`,
-      kind: "physics.spin-interface" as const,
-      label: item.id ?? `Unknown interface ${item.index + 1}`,
-      parentId: "model:physics:spin-interfaces",
-      badge: `${item.ownerId} · ${item.known ? "typed" : "read-only"}`,
-      icon: "activity" as const,
-      spinInterfaceId: item.id ?? undefined,
-      spinInterfaceIndex: item.index,
-      spinInterfaceOwnerId: item.ownerId,
-      status: item.known ? "ready" as const : "unsupported" as const,
-    })),
-  };
-}
-
-function authoredSourceNodes(
-  family: "spin-torques" | "oersted-fields",
-  items: NonNullable<ModelTreeSnapshot["spinTorques"]>,
-): ExplorerNode {
-  const torque = family === "spin-torques";
-  const root = `model:physics:${family}`;
-  return {
-    id: root,
-    kind: torque ? "physics.spin-torques" : "physics.oersted-fields",
-    label: torque ? "Spin Torques" : "Oersted Fields",
-    parentId: "model:session",
-    badge: `${items.length}`,
-    icon: "activity",
-    status: "ready",
-    children: items.map((item) => ({
-      id: `${root}:position:${item.index}`,
-      kind: torque ? "physics.spin-torque" as const : "physics.oersted-field" as const,
-      label: item.id ?? `Unknown ${torque ? "spin torque" : "Oersted field"} ${item.index + 1}`,
-      parentId: root,
-      badge: item.supported ? item.kind ?? "typed" : "read-only",
-      icon: "activity" as const,
-      ...(torque
-        ? { spinTorqueId: item.id ?? undefined, spinTorqueIndex: item.index }
-        : { oerstedFieldId: item.id ?? undefined, oerstedFieldIndex: item.index }),
-      status: item.supported ? "ready" as const : "unsupported" as const,
     })),
   };
 }
@@ -1589,8 +1650,10 @@ export function buildModelTree(
       : snapshot?.airbox?.resolvedTarget
         ? "resolved"
         : "legacy carrier";
-  const physicsGraphMode =
+  const physicsGraphDataPresent =
     snapshot?.physicsGraph !== undefined && snapshot?.physicsGraph !== null;
+  const physicsGraphStatus = snapshot?.physicsGraphStatus;
+  const physicsGraphMode = physicsGraphStatus === "ready" && physicsGraphDataPresent;
   const physicsGraphNodes = physicsGraphMode
     ? buildPhysicsGraphTree({
         graph: snapshot?.physicsGraph,
@@ -1628,7 +1691,12 @@ export function buildModelTree(
       status: "ready",
       children: fdmDomain ? [
         ...(fdmPresentation
-          ? [fdmAirboxNode(fdmPresentation, snapshot?.domainPresentationStatus)].filter(
+          ? [fdmAirboxNode(
+              fdmPresentation,
+              snapshot?.domainPresentationStatus,
+              snapshot?.fdmMultilayerLayout,
+              snapshot?.fdmMultilayerLayoutStatus,
+            )].filter(
               (node): node is ExplorerNode => node !== null,
             )
           : []),
@@ -1738,7 +1806,11 @@ export function buildModelTree(
       selectable: false,
       status: "ready",
       children: objects.map((object) =>
-        objectNodes(object, resources, snapshot?.physicsGraph),
+        objectNodes(
+          object,
+          resources,
+          physicsGraphMode ? snapshot?.physicsGraph : null,
+        ),
       ),
     },
   ];
@@ -1757,16 +1829,18 @@ export function buildModelTree(
   if (physicsGraphMode) {
     sessionChildren.push(...sessionPhysicsGraphNodes);
   } else {
-    sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
-    sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
-    sessionChildren.push(spinInterfaceNodes(snapshot?.spinInterfaces ?? []));
-    sessionChildren.push(authoredSourceNodes("spin-torques", snapshot?.spinTorques ?? []));
-    sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
+    sessionChildren.push(physicsGraphUnavailableNode(physicsGraphStatus ?? "idle"));
   }
 
   sessionChildren.push(
     domainLane === "fdm"
-      ? fdmMeshPolicyNodes(fdmPresentation, snapshot?.domainMeta, snapshot?.domainPresentationStatus)
+      ? fdmMeshPolicyNodes(
+          fdmPresentation,
+          snapshot?.domainMeta,
+          snapshot?.domainPresentationStatus,
+          snapshot?.fdmMultilayerLayout,
+          snapshot?.fdmMultilayerLayoutStatus,
+        )
       : domainLane === "fem"
         ? meshPolicyNodes(snapshot?.mesh ?? null)
         : unresolvedMeshPolicyNodes(snapshot?.domainPresentationStatus),
@@ -1787,6 +1861,26 @@ export function buildModelTree(
       children: sessionChildren,
     },
   ];
+}
+
+function physicsGraphUnavailableNode(status: ResourceStatus): ExplorerNode {
+  const presentation = {
+    idle: { label: "Physics graph unavailable", nodeStatus: "unavailable" as const },
+    loading: { label: "Loading physics graph", nodeStatus: "queued" as const },
+    stale: { label: "Physics graph stale", nodeStatus: "stale" as const },
+    ready: { label: "Physics graph unavailable", nodeStatus: "unavailable" as const },
+    error: { label: "Physics graph unavailable", nodeStatus: "failed" as const },
+  }[status];
+  return {
+    id: "model:physics:unresolved",
+    kind: "physics.scope.unresolved",
+    label: presentation.label,
+    parentId: "model:session",
+    badge: "graph resource",
+    icon: "activity",
+    selectable: false,
+    status: presentation.nodeStatus,
+  };
 }
 
 function branch(id: string, label: string, kind: ExplorerNode["kind"], status: ExplorerNodeStatus = "ready"): ExplorerNode {

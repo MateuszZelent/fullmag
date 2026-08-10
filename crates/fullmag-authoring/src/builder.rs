@@ -780,6 +780,61 @@ pub struct ScriptBuilderExcitationAnalysisState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ScriptBuilderFdmGridState {
+    pub cell: [f64; 3],
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ScriptBuilderFdmDemagState {
+    #[serde(default = "default_fdm_demag_strategy")]
+    pub strategy: String,
+    #[serde(default = "default_fdm_demag_mode")]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_cells: Option<[u32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_cells_xy: Option<[u32; 2]>,
+    #[serde(default = "default_true")]
+    pub explain: bool,
+}
+
+impl Default for ScriptBuilderFdmDemagState {
+    fn default() -> Self {
+        Self {
+            strategy: default_fdm_demag_strategy(),
+            mode: default_fdm_demag_mode(),
+            common_cells: None,
+            common_cells_xy: None,
+            explain: default_true(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct ScriptBuilderFdmState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_cell: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub per_magnet: BTreeMap<String, ScriptBuilderFdmGridState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag: Option<ScriptBuilderFdmDemagState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_correction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_phi_floor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_delta_min: Option<f64>,
+}
+
+fn default_fdm_demag_strategy() -> String {
+    "auto".to_string()
+}
+
+fn default_fdm_demag_mode() -> String {
+    "auto".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderState {
     pub revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -796,6 +851,8 @@ pub struct ScriptBuilderState {
     pub demag_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm: Option<ScriptBuilderFdmState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
     pub solver: ScriptBuilderSolverState,

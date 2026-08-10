@@ -26,12 +26,26 @@ export interface StudyGlobalDraft {
   externalField: string;
   exchangeEnabled: boolean;
   femDemagSolverPolicy: string;
+  fdm?: StudyFdmDraft;
   requestedBackend: string;
   requestedCpuThreads: string;
   requestedDevice: string;
   requestedMode: string;
   requestedPrecision: string;
   solver: StudySolverDraft;
+}
+
+export interface StudyFdmDraft {
+  boundaryCorrection: string;
+  boundaryDeltaMin: string;
+  boundaryPhiFloor: string;
+  commonCells: string;
+  commonCellsXy: string;
+  defaultCell: string;
+  demagExplain: boolean;
+  demagMode: string;
+  demagStrategy: string;
+  perMagnet: string;
 }
 
 export interface StudyAdaptiveTimestepDraft {
@@ -111,11 +125,20 @@ const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
 
 export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
   const study = asRecord(asRecord(scene)?.study);
+  const requestedBackend = stringValue(
+    study?.requested_backend,
+    DEFAULT_STUDY_GLOBAL_DRAFT.requestedBackend,
+  );
+  const legacyDemagRealization = stringValue(
+    study?.demag_realization,
+    DEFAULT_STUDY_GLOBAL_DRAFT.demagRealization,
+  );
+  const fdm = asRecord(study?.fdm);
   return {
     demagEnabled: booleanValue(study?.demag_enabled, true),
     demagRealization: stringValue(
-      study?.demag_realization,
-      DEFAULT_STUDY_GLOBAL_DRAFT.demagRealization,
+      asRecord(fdm?.demag)?.strategy,
+      legacyDemagRealization,
     ),
     externalField: vectorText(
       study?.external_field,
@@ -123,10 +146,10 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
     ),
     exchangeEnabled: booleanValue(study?.exchange_enabled, true),
     femDemagSolverPolicy: objectText(study?.fem_demag_solver_policy),
-    requestedBackend: stringValue(
-      study?.requested_backend,
-      DEFAULT_STUDY_GLOBAL_DRAFT.requestedBackend,
-    ),
+    ...(normalizeDiscretization(requestedBackend) === "fdm"
+      ? { fdm: createFdmDraft(fdm, legacyDemagRealization) }
+      : {}),
+    requestedBackend,
     requestedCpuThreads: scalarText(study?.requested_cpu_threads, ""),
     requestedDevice: stringValue(
       study?.requested_device,
@@ -210,17 +233,7 @@ export function validateStudyGlobalDraft(
     sessionDiscretization: capabilities?.sessionDiscretization,
   });
   if (explicitFdm) {
-    if (
-      !FDM_DEMAG_REALIZATIONS.includes(
-        normalizeDemagRealization(draft.demagRealization) as (typeof FDM_DEMAG_REALIZATIONS)[number],
-      )
-    ) {
-      issues.push({
-        message:
-          "FDM demag realization must be auto, single_grid, or multilayer_convolution.",
-        severity: "error",
-      });
-    }
+    validateFdmDraft(issues, draft.fdm, draft.demagRealization);
   } else {
     validateOptionalJsonObject(
       issues,
@@ -241,18 +254,24 @@ export function buildStudyGlobalMergePatch(
     sessionDiscretization: context.sessionDiscretization,
   } satisfies StudyExecutionDiscretizationContext;
   const explicitFdm = isExplicitFdmStudy(laneContext);
+  const normalizedDemagRealization = normalizeDemagRealizationForLane(
+    draft.demagRealization,
+    laneContext,
+  );
   const study: JsonObject = {
     demag_enabled: draft.demagEnabled,
-    demag_realization: normalizeDemagRealizationForLane(
-      draft.demagRealization,
-      laneContext,
-    ),
+    demag_realization: explicitFdm ? null : normalizedDemagRealization,
     exchange_enabled: draft.exchangeEnabled,
     requested_backend: requiredText(draft.requestedBackend, "auto"),
     requested_device: requiredText(draft.requestedDevice, "auto"),
     requested_mode: requiredText(draft.requestedMode, "strict"),
     requested_precision: requiredText(draft.requestedPrecision, "double"),
   };
+  if (explicitFdm) {
+    study.fdm = fdmDraftToScene(
+      draft.fdm ?? createFdmDraft(null, normalizedDemagRealization),
+    );
+  }
   study.external_field = optionalVector3(draft.externalField);
   study.fem_demag_solver_policy = explicitFdm
     ? null
@@ -361,6 +380,141 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
       : null;
   }
   return solver;
+}
+
+function createFdmDraft(
+  value: JsonRecord | null,
+  legacyStrategy: string,
+): StudyFdmDraft {
+  const fdm = value;
+  const demag = asRecord(fdm?.demag);
+  return {
+    boundaryCorrection: stringValue(fdm?.boundary_correction, ""),
+    boundaryDeltaMin: scalarText(fdm?.boundary_delta_min, ""),
+    boundaryPhiFloor: scalarText(fdm?.boundary_phi_floor, ""),
+    commonCells: vectorTextOfLength(demag?.common_cells, 3),
+    commonCellsXy: vectorTextOfLength(demag?.common_cells_xy, 2),
+    defaultCell: vectorText(fdm?.default_cell, ""),
+    demagExplain: booleanValue(demag?.explain, true),
+    demagMode: stringValue(demag?.mode, "auto"),
+    demagStrategy: stringValue(demag?.strategy, legacyStrategy || "auto"),
+    perMagnet: objectText(fdm?.per_magnet ?? fdm?.per_object_grid),
+  };
+}
+
+function fdmDraftToScene(draft: StudyFdmDraft): JsonObject {
+  const demag: JsonObject = {
+    strategy: normalizeDemagStrategy(draft.demagStrategy),
+    mode: normalizeDemagMode(draft.demagMode),
+    common_cells: optionalPositiveIntegerVector(draft.commonCells, 3),
+    common_cells_xy: optionalPositiveIntegerVector(draft.commonCellsXy, 2),
+    explain: draft.demagExplain,
+  };
+  return {
+    default_cell: optionalVector3(draft.defaultCell),
+    per_magnet: optionalJsonObject(draft.perMagnet),
+    demag,
+    boundary_correction: draft.boundaryCorrection.trim() || null,
+    boundary_phi_floor: optionalNumber(draft.boundaryPhiFloor),
+    boundary_delta_min: optionalNumber(draft.boundaryDeltaMin),
+  };
+}
+
+function validateFdmDraft(
+  issues: StudyGlobalDraftValidation[],
+  draft: StudyFdmDraft | undefined,
+  legacyStrategy: string,
+): void {
+  const effective = draft ?? createFdmDraft(null, legacyStrategy);
+  const strategy = normalizeDemagStrategy(
+    effective.demagStrategy === "auto" ? legacyStrategy : effective.demagStrategy,
+  );
+  const strategyValid = FDM_DEMAG_REALIZATIONS.includes(
+    strategy as (typeof FDM_DEMAG_REALIZATIONS)[number],
+  );
+  if (!strategyValid) {
+    issues.push({
+      message:
+        "FDM demag realization must be auto, single_grid, or multilayer_convolution.",
+      severity: "error",
+    });
+  }
+  const mode = normalizeDemagMode(effective.demagMode);
+  if (!(mode === "auto" || mode === "two_d_stack" || mode === "three_d")) {
+    issues.push({
+      message: "FDM demag mode must be auto, two_d_stack, or three_d.",
+      severity: "error",
+    });
+  }
+  const commonCells = optionalPositiveIntegerVector(effective.commonCells, 3);
+  const commonCellsXy = optionalPositiveIntegerVector(effective.commonCellsXy, 2);
+  if (effective.commonCells.trim() && !commonCells) {
+    issues.push({
+      message: "FDM common_cells must contain three positive integers.",
+      severity: "error",
+    });
+  }
+  if (effective.commonCellsXy.trim() && !commonCellsXy) {
+    issues.push({
+      message: "FDM common_cells_xy must contain two positive integers.",
+      severity: "error",
+    });
+  }
+  if (commonCells && commonCellsXy) {
+    issues.push({
+      message: "FDM common_cells and common_cells_xy are mutually exclusive.",
+      severity: "error",
+    });
+  }
+  if (mode === "two_d_stack" && commonCells) {
+    issues.push({
+      message: "FDM common_cells is incompatible with two_d_stack mode.",
+      severity: "error",
+    });
+  }
+  if (mode === "three_d" && commonCellsXy) {
+    issues.push({
+      message: "FDM common_cells_xy is incompatible with three_d mode.",
+      severity: "error",
+    });
+  }
+  if (effective.boundaryCorrection.trim() && !["none", "volume", "full"].includes(effective.boundaryCorrection.trim())) {
+    issues.push({
+      message: "FDM boundary correction must be none, volume, or full.",
+      severity: "error",
+    });
+  }
+  if (effective.boundaryPhiFloor.trim()) {
+    const value = Number(effective.boundaryPhiFloor);
+    if (!Number.isFinite(value) || value <= 0 || value >= 1) {
+      issues.push({
+        message: "FDM boundary phi floor must be between zero and one.",
+        severity: "error",
+      });
+    }
+  }
+  if (effective.boundaryDeltaMin.trim()) {
+    const value = Number(effective.boundaryDeltaMin);
+    if (!Number.isFinite(value) || value < 0) {
+      issues.push({
+        message: "FDM boundary delta minimum must be finite and nonnegative.",
+        severity: "error",
+      });
+    }
+  }
+  if (effective.defaultCell.trim() && !optionalVector3(effective.defaultCell)) {
+    issues.push({
+      message: "FDM default cell must contain three finite numbers.",
+      severity: "error",
+    });
+  }
+  validateOptionalJsonObject(issues, effective.perMagnet, "FDM per-magnet grids");
+  if (strategyValid && !effective.defaultCell.trim() && !effective.perMagnet.trim()) {
+    issues.push({
+      message: "FDM requires a default cell or per-magnet grid specification.",
+      severity: "error",
+    });
+  }
 }
 
 function validateSolverDraft(
@@ -550,6 +704,10 @@ function vectorText(value: unknown, fallback: string): string {
     : scalarText(value, fallback);
 }
 
+function vectorTextOfLength(value: unknown, length: number): string {
+  return Array.isArray(value) && value.length === length ? value.join(", ") : "";
+}
+
 function requiredText(value: string, fallback: string): string {
   return value.trim() || fallback;
 }
@@ -561,6 +719,14 @@ function normalizeDiscretization(value: string | null | undefined): string | nul
 
 function normalizeDemagRealization(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function normalizeDemagStrategy(value: string): string {
+  return normalizeDemagRealization(value) || "auto";
+}
+
+function normalizeDemagMode(value: string): string {
+  return normalizeDemagRealization(value) || "auto";
 }
 
 /**
@@ -596,6 +762,18 @@ function optionalVector3(value: string): number[] | null {
     values.push(Number(entry));
   }
   return values.length === 3 && values.every(Number.isFinite) ? values : null;
+}
+
+function optionalPositiveIntegerVector(value: string, length: number): number[] | null {
+  const values: number[] = [];
+  for (const token of value.split(/[,\s]+/)) {
+    const entry = token.trim();
+    if (!entry) continue;
+    const parsed = Number(entry);
+    if (!Number.isInteger(parsed) || parsed <= 0) return null;
+    values.push(parsed);
+  }
+  return values.length === length ? values : null;
 }
 
 function optionalJsonObject(value: string): JsonObject | null {

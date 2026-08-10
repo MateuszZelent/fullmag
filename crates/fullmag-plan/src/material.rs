@@ -335,7 +335,9 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
         let mut resolved_values = Vec::with_capacity(points.len());
         for &point in points {
             let mut active_at_point = Vec::new();
-            for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in &overrides {
+            for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
+                &overrides
+            {
                 let weight = if let Some(region) = region_opt {
                     let coords = match frame {
                         RegionFrameIR::World => point,
@@ -457,7 +459,11 @@ fn universe_bounds(problem: &ProblemIR) -> Option<[f64; 6]> {
         .as_object()?;
     let size = universe.get("size")?.as_array()?;
     let center = universe.get("center")?.as_array()?;
-    let size = [size.first()?.as_f64()?, size.get(1)?.as_f64()?, size.get(2)?.as_f64()?];
+    let size = [
+        size.first()?.as_f64()?,
+        size.get(1)?.as_f64()?,
+        size.get(2)?.as_f64()?,
+    ];
     let center = [
         center.first()?.as_f64()?,
         center.get(1)?.as_f64()?,
@@ -562,7 +568,9 @@ fn apply_absorbing_boundary_layer(
             let bounds = universe_bounds(problem)
                 .or_else(|| bounds_from_points(points))
                 .ok_or_else(|| {
-                    format!("absorbing boundary for '{owner_object_id}' requires at least one point")
+                    format!(
+                        "absorbing boundary for '{owner_object_id}' requires at least one point"
+                    )
                 })?;
             (points.to_vec(), bounds)
         }
@@ -734,7 +742,10 @@ mod tests {
     fn absorbing_boundary_combines_faces_by_maximum() {
         let mut problem = ProblemIR::bootstrap_example();
         let mut config = layer(AbsorbingBoundaryProfileIR::Linear);
-        config.faces = vec![AbsorbingBoundaryFaceIR::XPlus, AbsorbingBoundaryFaceIR::YPlus];
+        config.faces = vec![
+            AbsorbingBoundaryFaceIR::XPlus,
+            AbsorbingBoundaryFaceIR::YPlus,
+        ];
         problem.magnets[0].absorbing_boundary = Some(config);
         let points = vec![[4.0, 4.0, 0.0]];
         let values = resolve_spatial_parameter(

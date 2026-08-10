@@ -169,6 +169,21 @@ describe("viewport3dSelection", () => {
 
   it("maps an Airbox carrier pick to the canonical Airbox Explorer node", () => {
     expect(
+      viewportSelectionForFdmTarget({
+        id: "airbox",
+        kind: "airbox",
+        label: "Multilayer Airbox",
+      }),
+    ).toMatchObject({
+      kind: "airbox.root",
+      label: "Multilayer Airbox",
+      nodeId: "model:airbox",
+      ref: {
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+    expect(
       viewportSelectionForMeshPart(
         {
           carrierIds: ["part:__air__"],

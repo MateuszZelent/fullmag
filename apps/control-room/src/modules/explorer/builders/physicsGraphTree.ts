@@ -38,6 +38,10 @@ interface PhysicsGraphTreeModule {
   activation?: string;
   capability?: string;
   authored_state?: string;
+  presentation?: {
+    family: string;
+    label: string;
+  };
   family_payload?: Record<string, unknown>;
 }
 
@@ -58,13 +62,6 @@ interface GroupedPhysicsModule {
   placement: ScopePlacement;
 }
 
-const DEPENDENT_KINDS = new Set([
-  "spin_transport",
-  "spin_interface",
-  "spin_torque",
-  "oersted_field",
-]);
-
 const SCOPE_KIND_ALIASES: Record<string, ScopePlacement["kind"]> = {
   cross_object: "cross-object",
   cross_object_interface: "cross-object",
@@ -82,14 +79,12 @@ export function buildPhysicsGraphTree({
   const graph = normalizeGraph(input);
   if (!graph || graph.modules.length === 0) return [];
 
-  // A graph without a current source is a valid empty electrical setup.  It
-  // must not manufacture dependent spin/Oersted rows from stale family data.
-  const hasCurrentSource = graph.modules.some(
-    (module) => module.kind === "current_transport",
+  // The canonical graph already owns presence and activation. Preserve even
+  // blocked dependent modules so the user can inspect and repair a missing
+  // source instead of making the authored module disappear from the tree.
+  const modules = [...graph.modules].sort((left, right) =>
+    left.id.localeCompare(right.id),
   );
-  const modules = graph.modules
-    .filter((module) => hasCurrentSource || !DEPENDENT_KINDS.has(module.kind))
-    .sort((left, right) => left.id.localeCompare(right.id));
   if (modules.length === 0) return [];
 
   const grouped = new Map<
@@ -149,6 +144,14 @@ function normalizeGraph(value: unknown): PhysicsGraphTreeGraph | null {
     const familyPayload = isRecord(candidate.family_payload)
       ? candidate.family_payload
       : undefined;
+    const presentation = isRecord(candidate.presentation) &&
+      typeof candidate.presentation.family === "string" &&
+      typeof candidate.presentation.label === "string"
+      ? {
+          family: candidate.presentation.family,
+          label: candidate.presentation.label,
+        }
+      : undefined;
     return [{
       id: candidate.id,
       kind: candidate.kind,
@@ -168,6 +171,7 @@ function normalizeGraph(value: unknown): PhysicsGraphTreeGraph | null {
       ...(typeof candidate.authored_state === "string"
         ? { authored_state: candidate.authored_state }
         : {}),
+      ...(presentation ? { presentation } : {}),
       ...(familyPayload ? { family_payload: familyPayload } : {}),
     } satisfies PhysicsGraphTreeModule];
   });
@@ -396,13 +400,15 @@ function buildModuleNode(
   return {
     id: `${parentId}:module:${encodeURIComponent(module.id)}`,
     kind: "physics.module",
-    label: module.label ?? module.name ?? `${labelForKind(module.kind)} · ${module.id}`,
+    label: module.presentation?.label ?? module.label ?? module.name ?? `${labelForKind(module.kind)} · ${module.id}`,
     parentId,
     badge: [activation, module.capability ?? "unknown"].join(" · "),
     icon: iconForKind(module.kind),
     physicsActivation: activation,
+    ...(module.depends_on ? { physicsDependencyIds: module.depends_on } : {}),
     physicsModuleId: module.id,
     physicsModuleKind: module.kind,
+    ...(module.presentation ? { physicsModuleFamily: module.presentation.family } : {}),
     physicsScopeKind: placement.kind,
     ...(placement.kind === "object" ? { objectId: placement.objectId } : {}),
     ...(placement.kind === "object" && placement.regionId
@@ -424,7 +430,7 @@ function statusForActivation(
   if (activation === "unsupported" || capability === "unsupported") return "unsupported";
   if (activation === "unresolved") return "unavailable";
   if (activation === "inactive") return "degraded";
-  if (capability === "semantic_only") return "ready";
+  if (capability === "semantic_only") return "unavailable";
   return "ready";
 }
 

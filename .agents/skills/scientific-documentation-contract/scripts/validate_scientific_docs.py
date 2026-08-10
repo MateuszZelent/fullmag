@@ -76,6 +76,10 @@ def _table_row(page: str, values: list[str]) -> bool:
 
 def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
     """Return declaration-like lines for a stable path + symbol identity."""
+    if symbol.startswith("DOC-ANCHOR:"):
+        anchor = re.escape(symbol.removeprefix("DOC-ANCHOR:"))
+        pattern = re.compile(rf"^\({anchor}\)=\s*$", re.MULTILINE)
+        return pattern.findall(text)
     escaped = re.escape(symbol)
     if symbol.startswith("class "):
         class_name = re.escape(symbol.removeprefix("class ").rstrip(":"))
@@ -155,7 +159,12 @@ def validate_page(repo_root: Path, manifest: object, rendered_html: Path | None 
                 if not declarations:
                     errors.append(f"{label} declaration not found in {path}: {symbol}")
                 elif len(declarations) != 1:
-                    errors.append(f"{label} declaration is not unique in {path}: {symbol}")
+                    if symbol.startswith("DOC-ANCHOR:"):
+                        errors.append(f"{label} DOC-ANCHOR is not unique in {path}: {symbol}")
+                    else:
+                        errors.append(f"{label} declaration is not unique in {path}: {symbol}")
+                elif symbol.startswith("DOC-ANCHOR:") and source.get("evidence_status") != "planned_contract":
+                    errors.append(f"{label} DOC-ANCHOR requires evidence_status=planned_contract")
 
     symbols = _objects(manifest.get("symbols"), "symbols", errors)
     symbol_ids: set[str] = set()

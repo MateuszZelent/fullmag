@@ -9,7 +9,7 @@ RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
 VARIANTS_ROOT=""
 STAGING_ROOT=""
-RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"
+RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"
 docker_build_ref=""
 docker_compatibility_ref="fullmag/fem-gpu:local"
 docker_build_ref_marker=""
@@ -26,10 +26,12 @@ source_identity_owned=0
 source_provenance_owned="${FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_OWNED:-0}"
 source_snapshot_owned=0
 mkdir -p "${RUNTIME_PARENT}"
-exec 9>"${RUNTIME_LOCK}"
-if ! flock -n 9; then
-  echo "[export_fem_gpu_runtime] waiting for existing runtime export to finish"
-  flock 9
+if [ "${FULLMAG_RUNTIME_EXPORT_LOCK_HELD:-0}" != "1" ]; then
+  if ! flock -n --close "${RUNTIME_LOCK}" true; then
+    echo "[export_fem_gpu_runtime] waiting for existing runtime export to finish"
+  fi
+  export FULLMAG_RUNTIME_EXPORT_LOCK_HELD=1
+  exec flock --close "${RUNTIME_LOCK}" bash "$0" "$@"
 fi
 
 is_canonical_source_snapshot_path() {
@@ -279,9 +281,7 @@ bootstrap_new_source_snapshot() {
   export FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT="${SOURCE_SNAPSHOT_ROOT}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_FILE="${source_provenance_json}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_OWNED="${source_provenance_owned}"
-  flock -u 9
-  exec 9>&-
-  exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"
+  return 0
 }
 
 resolve_source_snapshot_bootstrap() {

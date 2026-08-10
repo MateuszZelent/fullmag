@@ -14,8 +14,7 @@ use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squa
 use crate::{
     EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig,
     RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula, Vector3,
-    VectorFieldSoA,
-    ZhangLiFormula, ZhangLiSttConfig, MU0,
+    VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig, MU0,
 };
 
 #[cfg(feature = "parallel")]
@@ -42,11 +41,7 @@ fn slonczewski_prefactor(
         SlonczewskiFormula::FullmagV1 | SlonczewskiFormula::LegacyFullmagV0 => 2.0,
     };
     current_sign * (current_density_magnitude * HBAR * gamma0)
-        / (omega_denominator_factor
-            * charge
-            * MU0_CONST
-            * saturation_magnetisation
-            * thickness)
+        / (omega_denominator_factor * charge * MU0_CONST * saturation_magnetisation * thickness)
 }
 
 fn gilbert_slonczewski_scales(
@@ -105,15 +100,10 @@ pub(crate) fn slonczewski_torque_from_config(
     let m_dot_p = dot(magnetization, [px, py, pz]);
     let lambda_squared = cfg.lambda * cfg.lambda;
     let degree = if cfg.degree > 0.0 { cfg.degree } else { 1.0 };
-    let epsilon = (degree * lambda_squared)
-        / ((lambda_squared + 1.0) + (lambda_squared - 1.0) * m_dot_p);
-    let (damping_like, field_like) = gilbert_slonczewski_scales(
-        cfg.formula,
-        prefactor,
-        epsilon,
-        cfg.epsilon_prime,
-        alpha,
-    );
+    let epsilon =
+        (degree * lambda_squared) / ((lambda_squared + 1.0) + (lambda_squared - 1.0) * m_dot_p);
+    let (damping_like, field_like) =
+        gilbert_slonczewski_scales(cfg.formula, prefactor, epsilon, cfg.epsilon_prime, alpha);
     let m_cross_p = cross(magnetization, [px, py, pz]);
     let m_cross_m_cross_p = cross(magnetization, m_cross_p);
     add(
@@ -3100,7 +3090,11 @@ impl ExchangeLlgProblem {
                 continue;
             }
             let torque = prescribed_sot_torque_from_config(
-                [magnetization.x[flat], magnetization.y[flat], magnetization.z[flat]],
+                [
+                    magnetization.x[flat],
+                    magnetization.y[flat],
+                    magnetization.z[flat],
+                ],
                 cfg,
                 self.material.saturation_magnetisation,
                 self.dynamics.gyromagnetic_ratio,
@@ -4073,23 +4067,21 @@ mod stt_tests {
         let signed_current = cfg.current_sign * cfg.current_density_magnitude;
         let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
         let omega = gamma_e * HBAR * signed_current
-            / (EXACT_E_CHARGE
-                * problem.material.saturation_magnetisation
-                * cfg.thickness);
+            / (EXACT_E_CHARGE * problem.material.saturation_magnetisation * cfg.thickness);
         let lambda_sq = cfg.lambda * cfg.lambda;
         let c = dot(m, cfg.spin_polarization_axis);
-        let epsilon = cfg.degree * lambda_sq
-            / ((lambda_sq + 1.0) + (lambda_sq - 1.0) * c);
+        let epsilon = cfg.degree * lambda_sq / ((lambda_sq + 1.0) + (lambda_sq - 1.0) * c);
         let cross_mp = cross(m, cfg.spin_polarization_axis);
         let double_cross = cross(m, cross_mp);
         let inv_gilbert = 1.0 / (1.0 + problem.material.damping.powi(2));
-        let damping_like = omega
-            * (epsilon + problem.material.damping * cfg.epsilon_prime)
-            * inv_gilbert;
-        let field_like = omega
-            * (cfg.epsilon_prime - problem.material.damping * epsilon)
-            * inv_gilbert;
-        add(scale(double_cross, damping_like), scale(cross_mp, field_like))
+        let damping_like =
+            omega * (epsilon + problem.material.damping * cfg.epsilon_prime) * inv_gilbert;
+        let field_like =
+            omega * (cfg.epsilon_prime - problem.material.damping * epsilon) * inv_gilbert;
+        add(
+            scale(double_cross, damping_like),
+            scale(cross_mp, field_like),
+        )
     }
 
     #[test]
@@ -4175,11 +4167,7 @@ mod stt_tests {
         let saturation_magnetisation = 8.0e5;
         let thickness = 1.5e-9;
         let historical = current_sign * (current_density_magnitude * HBAR * gamma0)
-            / (2.0
-                * LEGACY_E_CHARGE
-                * MU0_CONST
-                * saturation_magnetisation
-                * thickness);
+            / (2.0 * LEGACY_E_CHARGE * MU0_CONST * saturation_magnetisation * thickness);
         let versioned = slonczewski_prefactor(
             SlonczewskiFormula::LegacyFullmagV0,
             current_sign,
@@ -4210,11 +4198,7 @@ mod stt_tests {
             thickness,
         );
         let standard = current_sign * (current_density_magnitude * HBAR * gamma0)
-            / (2.0
-                * EXACT_E_CHARGE
-                * MU0_CONST
-                * saturation_magnetisation
-                * thickness);
+            / (2.0 * EXACT_E_CHARGE * MU0_CONST * saturation_magnetisation * thickness);
         check_close(omega_v2 * 0.5, standard, standard.abs() * 1.0e-15);
 
         let omega_v1 = slonczewski_prefactor(
@@ -4358,8 +4342,8 @@ mod stt_tests {
 
         const HBAR: f64 = 1.054571817e-34;
         const E_CHARGE: f64 = 1.602176634e-19;
-        let field_amplitude = cfg.current_density * HBAR
-            / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
+        let field_amplitude =
+            cfg.current_density * HBAR / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
         let alpha = problem.material.damping;
         let denominator = 1.0 + alpha * alpha;
         let omega_dl = field_amplitude * problem.dynamics.gyromagnetic_ratio * cfg.xi_dl;

@@ -56,11 +56,8 @@ pub async fn get_mesh_region_membership(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
 
-    let owner_object_id = resolve_mesh_region_owner(
-        scene,
-        &region_id,
-        query.owner_object_id.as_deref(),
-    )?;
+    let owner_object_id =
+        resolve_mesh_region_owner(scene, &region_id, query.owner_object_id.as_deref())?;
     build_mesh_region_membership_for_owner(
         scene,
         mesh,

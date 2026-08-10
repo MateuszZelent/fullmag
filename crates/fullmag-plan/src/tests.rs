@@ -1,7 +1,7 @@
 use super::*;
 use crate::geometry::{
-    cell_for_magnet, contains_cylinder, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
-    shape_local_bounds, voxelize_shape,
+    cell_for_magnet, contains_cylinder, fdm_default_cell, ir_to_shape, shape_local_bounds,
+    voxelize_shape,
 };
 use std::collections::BTreeMap;
 
@@ -5942,8 +5942,7 @@ fn fem_prescribed_sot_gpu_plan_materializes_constant_envelope() {
         .expect("versioned FEM GPU SOT contract");
     assert_eq!(contract.formula_version, "prescribed_sot.fullmag.v1");
     assert_eq!(
-        contract.sot_envelope,
-        None,
+        contract.sot_envelope, None,
         "an omitted envelope is the canonical unit constant"
     );
 }
@@ -5983,17 +5982,21 @@ fn fem_stage_time_prescribed_sot_plans_and_fdm_rejects_it() {
         panic!("expected FEM plan");
     };
     assert!(matches!(
-        fem.spin_torque_contract.and_then(|contract| contract.sot_envelope),
+        fem.spin_torque_contract
+            .and_then(|contract| contract.sot_envelope),
         Some(fullmag_ir::TimeEnvelopeIR::Sinusoidal { .. })
     ));
 
     let mut fdm_ir = fem_ir;
     fdm_ir.backend_policy.requested_backend = BackendTarget::Fdm;
     let error = plan(&fdm_ir).expect_err("FDM must remain fail-closed for stage-time SOT");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("non-constant TimeEnvelope")
-            && reason.contains("stage_time_execution")
-    }), "unexpected FDM stage-time SOT reasons: {:?}", error.reasons);
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("non-constant TimeEnvelope") && reason.contains("stage_time_execution")
+        }),
+        "unexpected FDM stage-time SOT reasons: {:?}",
+        error.reasons
+    );
 }
 
 #[test]
@@ -6126,6 +6129,7 @@ fn relaxation_rejects_time_dependent_and_unpaired_oersted_sources() {
         sampling: ir.study.sampling().clone(),
     };
     ir.energy_terms.push(EnergyTermIR::OerstedCylinder {
+        id: None,
         current: 1.0,
         radius: 5e-9,
         center: [0.0, 0.0, 0.0],
@@ -6667,6 +6671,142 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
 }
 
 #[test]
+fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap example must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "auto".to_string(),
+        common_cells: None,
+        common_cells_xy: None,
+    });
+
+    let planned = plan(&ir).expect("explicit multilayer strategy must be executable for L=1");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("explicit multilayer strategy must lower through FdmMultilayerPlanIR");
+    };
+    assert_eq!(multilayer.layers.len(), 1);
+    assert_eq!(
+        multilayer.planner_summary.requested_strategy,
+        "multilayer_convolution"
+    );
+}
+
+#[test]
+fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode() {
+    let mut common_cells_auto = stacked_two_body_multilayer_problem();
+    let fdm = common_cells_auto
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "auto".to_string(),
+        common_cells: Some([20, 10, 1]),
+        common_cells_xy: None,
+    });
+    let planned = plan(&common_cells_auto).expect("common_cells auto mode should resolve");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.requested_mode, "auto");
+    assert_eq!(multilayer.planner_summary.resolved_mode, "three_d");
+    assert_eq!(multilayer.mode, "three_d");
+
+    let mut common_cells_xy_auto = stacked_two_body_multilayer_problem();
+    let fdm = common_cells_xy_auto
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "auto".to_string(),
+        common_cells: None,
+        common_cells_xy: Some([20, 10]),
+    });
+    let planned = plan(&common_cells_xy_auto).expect("common_cells_xy auto mode should resolve");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.requested_mode, "auto");
+    assert_eq!(multilayer.planner_summary.resolved_mode, "two_d_stack");
+    assert_eq!(multilayer.common_cells[2], 1);
+
+    let mut conflict = stacked_two_body_multilayer_problem();
+    let fdm = conflict
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "two_d_stack".to_string(),
+        common_cells: Some([20, 10, 1]),
+        common_cells_xy: None,
+    });
+    let error = plan(&conflict).expect_err("common_cells must reject explicit two_d_stack");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("common_cells") && reason.contains("two_d_stack")));
+}
+
+#[test]
+fn multilayer_planner_records_stable_layer_identity_and_transfer_kind() {
+    let planned =
+        plan(&stacked_two_body_multilayer_problem()).expect("stacked fixture should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(multilayer.layers[0].layer_id, "layer:free");
+    assert_eq!(multilayer.layers[0].object_id, "free");
+    assert_eq!(multilayer.layers[1].layer_id, "layer:ref");
+    assert_eq!(multilayer.layers[1].object_id, "ref");
+    for layer in &multilayer.layers {
+        assert!(matches!(
+            layer.transfer_kind.as_str(),
+            "identity" | "push_pull" | "unsupported"
+        ));
+        assert_eq!(layer.native_grid[2], 1);
+        assert_eq!(layer.convolution_grid[2], 1);
+    }
+}
+
+#[test]
+fn two_d_stack_fails_closed_for_native_thickness_without_moment_preserving_average() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.default_cell = Some([2e-9, 2e-9, 1e-9]);
+    fdm.cell = [2e-9, 2e-9, 1e-9];
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "two_d_stack".to_string(),
+        common_cells: None,
+        common_cells_xy: Some([20, 10]),
+    });
+    let error = plan(&ir).expect_err("2D mode must not copy a native z slice");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("moment_preserving") || reason.contains("two_d_stack") }));
+}
+
+#[test]
 fn staged_multilayer_reaches_rk4_and_rejects_rk45() {
     let mut cpu = stacked_two_body_multilayer_problem();
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut cpu.study else {
@@ -7034,6 +7174,7 @@ fn multilayer_planner_rejects_legacy_stt_until_rhs_coverage_exists() {
 fn multilayer_planner_rejects_oersted_until_rhs_coverage_exists() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.energy_terms.push(EnergyTermIR::OerstedCylinder {
+        id: None,
         current: 1.5e-3,
         radius: 20e-9,
         center: [20e-9, 10e-9, 0.0],
@@ -7248,6 +7389,28 @@ fn multilayer_planner_rejects_xy_offset() {
         .reasons
         .iter()
         .any(|reason| reason.contains("share the same XY center")));
+}
+
+#[test]
+fn multilayer_planner_lowers_distinct_xy_extents_and_centers() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let GeometryEntryIR::Translate { base, by, .. } = &mut ir.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    *size = [20e-9, 10e-9, 2e-9];
+    *by = [10e-9, 5e-9, 4e-9];
+
+    let planned = plan(&ir).expect(
+        "planner must lower distinct XY extents/centers into a multilayer descriptor before runtime qualification",
+    );
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected FDM multilayer plan");
+    };
+    assert_ne!(multilayer.layers[0].native_grid, multilayer.layers[1].native_grid);
+    assert_ne!(multilayer.layers[0].native_origin, multilayer.layers[1].native_origin);
 }
 
 #[test]
@@ -10579,7 +10742,9 @@ fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
         by: translation,
     }];
     ir.regions[0].geometry = "shifted_asset".to_string();
-    let asset_origin = [-2e-9, -2e-9, -1e-9];
+    // FdmGridAssetIR origins are Cartesian/world-space coordinates.  The
+    // translated geometry is already materialized before planner lowering.
+    let asset_origin = [28e-9, -12e-9, 3e-9];
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
         fdm_grid_assets: vec![fullmag_ir::FdmGridAssetIR {
             geometry_name: "shifted_asset".to_string(),
@@ -10596,10 +10761,7 @@ fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
     let BackendPlanIR::Fdm(single) = planned.backend_plan else {
         panic!("expected single-grid FDM plan");
     };
-    let placed = extract_multilayer_geometry(&ir.geometry.entries[0])
-        .expect("the same geometry must lower for multilayer");
-    let expected_origin = std::array::from_fn(|axis| asset_origin[axis] + placed.translation[axis]);
-    assert_eq!(single.origin_m, expected_origin);
+    assert_eq!(single.origin_m, asset_origin);
     let first_active_cell: [f64; 3] =
         std::array::from_fn(|axis| single.origin_m[axis] + 0.5 * single.cell_size[axis]);
     for (actual, expected) in first_active_cell.into_iter().zip([29e-9, -11e-9, 4e-9]) {
@@ -11074,6 +11236,7 @@ fn fdm_cuda_general_oersted_field_plans() {
         definition: None,
     });
     ir.energy_terms.push(EnergyTermIR::OerstedField {
+        id: None,
         model: OerstedFieldModelIR::FromCurrentSolution,
         source: "drive".to_string(),
     });

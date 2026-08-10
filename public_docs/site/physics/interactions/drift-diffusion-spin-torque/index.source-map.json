@@ -2,95 +2,1099 @@
   "document": {
     "path": "public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md",
     "title": "Spin Hall drift-diffusion transport",
-    "interaction": "solved spin Hall and spin-transfer transport"
+    "interaction": "solved M1 and M2 charge-coupled spin transport"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference_executable", "reason": "The bounded M1 one-way and M3 transient reference workflows are implemented in the CPU runner; this does not promote all SHE/iSHE combinations."},
-    {"solver": "FDM", "device": "GPU", "status": "semantic_only", "reason": "The transport IR and planning vocabulary exist, but no qualified CUDA transport solve is recorded."},
-    {"solver": "FEM", "device": "CPU", "status": "reference_executable", "reason": "A strict-double conforming H1/P1 transparent-interface M1 native path exists; mixing, specified flux, periodic spin, and coupled LLG remain outside the bounded lane."},
-    {"solver": "FEM", "device": "GPU", "status": "semantic_only", "reason": "No qualified FEM GPU spin-transport operator or executed-device parity evidence is recorded."}
-  ],
-  "sources": [
-    {"id": "python-solve", "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py", "symbol": "class SpinDriftDiffusion", "responsibility": "Public transport solve constructor and canonical IR lowering."},
-    {"id": "python-torque", "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py", "symbol": "class DriftDiffusionSpinTorque", "responsibility": "Named solve reference and magnetic target."},
-    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py", "symbol": "class SpinTransportMaterial", "responsibility": "Conductivity, polarization, SHE, reaction lengths, and capacitance contract."},
-    {"id": "python-policy", "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py", "symbol": "class SpinSolverPolicy", "responsibility": "Linear solver tolerances, iteration cap, operator identity, and external-boundary policy."},
-    {"id": "ir-module", "path": "crates/fullmag-ir/src/spin_transport.rs", "symbol": "resolved_spin_capacitance_as_per_v_m3", "responsibility": "Canonical transport module schema and resolved-capacitance normalization."},
-    {"id": "planner-resolution", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolve_spin_transport", "responsibility": "Coupling, capability, execution-lane, and descriptor resolution."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "materialize_fem_descriptor", "responsibility": "FEM masks, boundary markers, interface laws, and torque target."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "materialize_fdm_descriptor", "responsibility": "Finite-volume transport descriptor and reaction/source realization."},
-    {"id": "fdm-m1", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "solve_one_way_snapshot", "responsibility": "FDM CPU M1 one-way charge/spin snapshot solve."},
-    {"id": "fdm-m3", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "solve_transient_module", "responsibility": "FDM CPU M3 transient stage candidate and rollback-safe solve."},
-    {"id": "fem-runtime", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "solve_native_fem_steady_transport", "responsibility": "Native FEM CPU strict-double steady transport ABI and result recovery."}
-  ],
-  "symbols": [
-    {"id": "V", "latex": "$V$", "meaning": "electric potential", "si_unit": "$\\mathrm V$"},
-    {"id": "E", "latex": "$\\mathbf E$", "meaning": "electric field $-\\nabla V$", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
-    {"id": "mu_s", "latex": "$\\boldsymbol\\mu_s$", "meaning": "full spin potential splitting", "si_unit": "$\\mathrm V$"},
-    {"id": "G", "latex": "$G_{ia}$", "meaning": "spin-potential gradient", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
-    {"id": "Jc", "latex": "$J_{c,i}$", "meaning": "conventional charge-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "Q", "latex": "$Q_{ia}$", "meaning": "charge-equivalent spin-current tensor", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "Js", "latex": "$\\mathcal J^s_{ia}$", "meaning": "angular-momentum spin flux", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "sigma", "latex": "$\\sigma$, $\\sigma_s$", "meaning": "charge and spin conductivities", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
-    {"id": "sigma_aniso", "latex": "$\\sigma_\\parallel$, $\\sigma_\\perp$, $\\sigma_{\\mathrm{AHE}}$", "meaning": "magnetoresistive conductivity coefficients", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
-    {"id": "P", "latex": "$P$", "meaning": "charge-spin polarization", "si_unit": "$1$"},
-    {"id": "thetaSH", "latex": "$\\theta_{\\mathrm{SH}}$", "meaning": "spin Hall angle", "si_unit": "$1$"},
-    {"id": "Cs", "latex": "$C_s$", "meaning": "spin capacitance", "si_unit": "$\\mathrm{A\\,s\\,V^{-1}\\,m^{-3}}$"},
-    {"id": "lambda", "latex": "$\\lambda_{\\mathrm{sf}}$, $\\lambda_J$, $\\lambda_\\phi$", "meaning": "spin-flip, exchange, and dephasing lengths", "si_unit": "$\\mathrm m$"},
-    {"id": "R", "latex": "$R_{\\mathrm{sf}}$, $R_J$, $R_\\phi$", "meaning": "volumetric reaction terms", "si_unit": "$\\mathrm{A\\,m^{-3}}$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "gammae", "latex": "$\\gamma_e$", "meaning": "angular gyromagnetic magnitude", "si_unit": "$\\mathrm{s^{-1}\\,T^{-1}}$"},
-    {"id": "ehbar", "latex": "$e$, $\\hbar$", "meaning": "positive elementary charge and reduced Planck constant", "si_unit": "$\\mathrm C$, $\\mathrm{J\\,s}$"},
-    {"id": "N0", "latex": "$N_0$", "meaning": "per-spin density of states", "si_unit": "$\\mathrm{J^{-1}\\,m^{-3}}$"},
-    {"id": "g", "latex": "$g_\\uparrow$, $g_\\downarrow$, $g_r$, $g_i$", "meaning": "interface conductances", "si_unit": "$\\mathrm{S\\,m^{-2}}$"},
-    {"id": "Ttr", "latex": "$\\mathbf T_{\\mathrm{tr},G}$", "meaning": "transport-derived Gilbert torque", "si_unit": "$\\mathrm{s^{-1}}$"}
+    {"solver": "FDM", "device": "CPU", "status": "reference_executable", "reason": "Strict FP64 structured-grid M1 and M2 reference implementations exist. The current native M1 worktree implements the requested exact-provenance and per-quantity oracle fixes and received final5 independent review APPROVE, no Critical/Important; evidence remains bounded, semantic_only/executable/unvalidated, and not production-qualified."},
+    {"solver": "FDM", "device": "GPU", "status": "semantic_only", "reason": "IR and requested-lane vocabulary exist, but no qualified CUDA charge-spin solve or strict residency proof exists."},
+    {"solver": "FEM", "device": "CPU", "status": "reference_executable", "reason": "M1 conforming H1/P1 and a narrower uniform full-domain reciprocal M2 FP64 reference slice are executable."},
+    {"solver": "FEM", "device": "GPU", "status": "semantic_only", "reason": "No executable or qualified device-resident FEM spin-transport operator exists; strict GPU requests fail closed."}
   ],
   "equations": [
-    {"id": "eq-ddst-fields", "symbols": ["V", "E", "mu_s", "G", "Js", "Q"], "sources": ["planner-resolution", "planner-fdm", "planner-fem"]},
-    {"id": "eq-ddst-m1-constitutive", "symbols": ["Jc", "sigma", "G", "Q", "sigma_aniso", "sigma", "sigma", "P", "E", "m", "thetaSH"], "sources": ["planner-fdm", "planner-fem"]},
-    {"id": "eq-ddst-m2-constitutive", "symbols": ["Jc", "Q", "sigma", "P", "m", "G", "E", "thetaSH"], "sources": ["planner-resolution", "planner-fdm"]},
-    {"id": "eq-ddst-mr-current", "symbols": ["Jc", "E", "sigma_aniso", "m"], "sources": ["planner-fdm"]},
-    {"id": "eq-ddst-spin-balance", "symbols": ["Cs", "mu_s", "Q", "R"], "sources": ["fdm-m3", "planner-fdm", "fem-runtime"]},
-    {"id": "eq-ddst-reaction", "symbols": ["R", "sigma", "lambda", "mu_s", "m"], "sources": ["planner-fdm", "planner-fem"]},
-    {"id": "eq-ddst-transport-torque", "symbols": ["Ttr", "gammae", "Ms", "ehbar", "R"], "sources": ["fdm-m1", "planner-fdm", "fem-runtime"]},
-    {"id": "eq-ddst-capacitance", "symbols": ["Cs", "ehbar", "N0"], "sources": ["python-material", "fdm-m3"]},
-    {"id": "eq-ddst-transparent-interface", "symbols": ["V", "mu_s", "Jc", "Q"], "sources": ["python-solve", "planner-fem", "fem-runtime"]}
+    {"id": "eq-ddst-gradients", "symbols": ["E", "V", "G", "mu_s"], "sources": ["fdm-m1-flux", "fem-constitutive"]},
+    {"id": "eq-ddst-m1", "symbols": ["Jc", "sigma", "E", "Q", "sigma_s", "G", "P", "m", "theta_sh", "epsilon"], "sources": ["fdm-m1-flux", "fem-constitutive"]},
+    {"id": "eq-ddst-jmr", "symbols": ["Jmr", "sigma_parallel", "sigma_perp", "sigma_ahe", "E", "m"], "sources": ["fdm-m2-constitutive", "fem-constitutive"]},
+    {"id": "eq-ddst-m2", "symbols": ["Jc", "Jmr", "P", "sigma", "m", "G", "theta_sh", "Q", "sigma_s", "E", "epsilon"], "sources": ["fdm-m2-constitutive", "fem-constitutive"]},
+    {"id": "eq-ddst-schur", "symbols": ["sigma_parallel", "sigma_perp", "sigma_s", "P", "sigma"], "sources": ["fdm-m2-constitutive", "fem-constitutive"]},
+    {"id": "eq-ddst-reactions", "symbols": ["R_sf", "R_j", "R_phi", "sigma_s", "lambda_sf", "lambda_j", "lambda_phi", "mu_s", "m"], "sources": ["fdm-reactions", "fem-reactions"]},
+    {"id": "eq-ddst-balance-torque", "symbols": ["Q", "R_sf", "R_j", "R_phi", "T_tr", "gamma_e", "Ms", "hbar", "e"], "sources": ["fdm-torque", "fem-torque", "fem-stage"]}
+  ],
+  "symbols": [
+    {"id": "V", "latex": "$V$", "meaning": "charge electrochemical potential", "si_unit": "$\\mathrm{V}$"},
+    {"id": "mu_s", "latex": "$\\boldsymbol\\mu_s$", "meaning": "full spin-channel splitting", "si_unit": "$\\mathrm{V}$"},
+    {"id": "E", "latex": "$E_i$", "meaning": "electric field", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
+    {"id": "G", "latex": "$G_{ia}$", "meaning": "negative half-gradient of spin voltage", "si_unit": "$\\mathrm{V\\,m^{-1}}$"},
+    {"id": "Jc", "latex": "$J_{c,i}$", "meaning": "conventional charge-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "Q", "latex": "$Q_{ia}$", "meaning": "charge-equivalent spin-current tensor", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "sigma", "latex": "$\\sigma$", "meaning": "reciprocal scalar charge conductivity", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "sigma_s", "latex": "$\\sigma_s$", "meaning": "spin conductivity", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "sigma_parallel", "latex": "$\\sigma_{\\parallel}$", "meaning": "charge conductivity parallel to magnetization", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "sigma_perp", "latex": "$\\sigma_{\\perp}$", "meaning": "charge conductivity transverse to magnetization", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "sigma_ahe", "latex": "$\\sigma_{\\mathrm{AHE}}$", "meaning": "anomalous-Hall antisymmetric conductivity", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "P", "latex": "$P$", "meaning": "signed charge--spin polarization", "si_unit": "$1$"},
+    {"id": "theta_sh", "latex": "$\\theta_{\\mathrm{SH}}$", "meaning": "signed spin-Hall angle", "si_unit": "$1$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Jmr", "latex": "$\\mathbf J_{\\mathrm{mr}}$", "meaning": "magnetoresistive charge current", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "lambda_sf", "latex": "$\\lambda_{\\mathrm{sf}}$", "meaning": "spin-flip diffusion length", "si_unit": "$\\mathrm{m}$"},
+    {"id": "lambda_j", "latex": "$\\lambda_J$", "meaning": "transverse exchange length", "si_unit": "$\\mathrm{m}$"},
+    {"id": "lambda_phi", "latex": "$\\lambda_\\phi$", "meaning": "transverse dephasing length", "si_unit": "$\\mathrm{m}$"},
+    {"id": "R_sf", "latex": "$\\mathbf R_{\\mathrm{sf}}$", "meaning": "spin-flip reaction density", "si_unit": "$\\mathrm{A\\,m^{-3}}$"},
+    {"id": "R_j", "latex": "$\\mathbf R_J$", "meaning": "transverse exchange reaction density", "si_unit": "$\\mathrm{A\\,m^{-3}}$"},
+    {"id": "R_phi", "latex": "$\\mathbf R_\\phi$", "meaning": "transverse dephasing reaction density", "si_unit": "$\\mathrm{A\\,m^{-3}}$"},
+    {"id": "gamma_e", "latex": "$\\gamma_e$", "meaning": "positive angular gyromagnetic magnitude", "si_unit": "$\\mathrm{s^{-1}\\,T^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "target saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "hbar", "latex": "$\\hbar$", "meaning": "reduced Planck constant", "si_unit": "$\\mathrm{J\\,s}$"},
+    {"id": "e", "latex": "$e$", "meaning": "positive elementary charge", "si_unit": "$\\mathrm{C}$"},
+    {"id": "T_tr", "latex": "$\\mathbf T_{\\mathrm{tr},G}$", "meaning": "transport Gilbert-source torque", "si_unit": "$\\mathrm{s^{-1}}$"}
+    ,{"id": "epsilon", "latex": "$\\epsilon_{ijk}$", "meaning": "right-handed Levi--Civita symbol", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {
+      "id": "python-spin",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinDriftDiffusion",
+      "responsibility": "Validate and lower the canonical M1 or M2 spin solve.",
+      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "test_symbol": "test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "python-torque",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class DriftDiffusionSpinTorque",
+      "responsibility": "Bind a solved transport to a magnetic target without duplicating source data.",
+      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "test_symbol": "test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "python-execution",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class TransportExecution",
+      "responsibility": "Preserve requested discretization, device, precision, and execution mode.",
+      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "test_symbol": "test_spin_transport_round_trip_preserves_full_boundary_and_solver_policy",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "python-solver",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinSolverPolicy",
+      "responsibility": "Preserve linear, operator, residual, and default-boundary policy.",
+      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "test_symbol": "test_spin_transport_round_trip_preserves_full_boundary_and_solver_policy",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "python-current",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class CurrentTransport",
+      "responsibility": "Own current model, coupling, charge definition, and time envelope.",
+      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "test_symbol": "test_full_builder_scene_rewrite_loader_pipeline_preserves_physics_ir",
+      "lane": "API/IR",
+      "evidence_status": "source mapped; focused public round-trip",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-plan",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_spin_transport",
+      "responsibility": "Resolve FDM CPU M1/M2 descriptors and reject unsupported lanes.",
+      "test_path": "crates/fullmag-plan/src/spin_transport.rs",
+      "test_symbol": "resolves_bidirectional_m2_to_separate_reciprocal_descriptor",
+      "lane": "FDM CPU planner",
+      "evidence_status": "source mapped; focused planner contract",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_transport.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_transport.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fem-plan",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_m1_fem_spin_transport",
+      "responsibility": "Resolve bounded FEM CPU M1/M2 descriptors and fail-closed limits.",
+      "test_path": "crates/fullmag-plan/src/spin_transport.rs",
+      "test_symbol": "resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback",
+      "lane": "FEM CPU planner",
+      "evidence_status": "source mapped; focused planner contract",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_transport.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_transport.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-run",
+      "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
+      "symbol": "solve_coupled_module",
+      "responsibility": "Execute the FDM CPU coupled charge-spin reference solve.",
+      "test_path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs",
+      "test_symbol": "m2_phe_and_ahe_manufactured_current_has_full_3d_components",
+      "lane": "FDM CPU",
+      "evidence_status": "bounded CPU oracle/contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/fdm/cpu/spin_transport.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-native-m1-charge-c-abi",
+      "path": "native/include/fullmag_fdm.h",
+      "symbol": "fullmag_fdm_cpu_charge_solve_v1",
+      "responsibility": "Declare append-only native M1 requests, results, snapshot ownership, and symbols.",
+      "test_path": "backends/fdm/tests/cpu_transport_abi_v1_contract.cpp",
+      "test_symbol": "main",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-spin-c-abi",
+      "path": "native/include/fullmag_fdm.h",
+      "symbol": "fullmag_fdm_cpu_steady_spin_solve_v1",
+      "responsibility": "Declare the append-only native M1 spin request, result, and solve symbol.",
+      "test_path": "backends/fdm/tests/cpu_transport_abi_v1_contract.cpp",
+      "test_symbol": "main",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-record-extent-adapter",
+      "path": "backends/fdm/api/cpu_transport_v1.cpp",
+      "symbol": "input_records",
+      "responsibility": "Check public record extents and map owner observations by exact topology.",
+      "test_path": "backends/fdm/tests/cpu_transport_abi_v1_contract.cpp",
+      "test_symbol": "main",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-observation-adapter",
+      "path": "backends/fdm/api/cpu_transport_v1.cpp",
+      "symbol": "unique_interface_observation",
+      "responsibility": "Check public spin record extents and map owner observations by exact topology.",
+      "test_path": "backends/fdm/tests/cpu_transport_abi_v1_contract.cpp",
+      "test_symbol": "main",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-charge-rust-ffi",
+      "path": "crates/fullmag-fdm-sys/src/lib.rs",
+      "symbol": "fullmag_fdm_cpu_charge_solve_v1",
+      "responsibility": "Expose byte-exact Rust FFI records and native symbols.",
+      "test_path": "crates/fullmag-fdm-sys/src/lib.rs",
+      "test_symbol": "cpu_transport_abi_layout_manifest_matches_every_rust_record_field",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed layout contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-spin-rust-ffi",
+      "path": "crates/fullmag-fdm-sys/src/lib.rs",
+      "symbol": "fullmag_fdm_cpu_steady_spin_solve_v1",
+      "responsibility": "Expose the byte-exact Rust spin result record and native symbol.",
+      "test_path": "crates/fullmag-fdm-sys/src/lib.rs",
+      "test_symbol": "cpu_transport_abi_layout_manifest_matches_every_rust_record_field",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed layout contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-runner",
+      "path": "crates/fullmag-runner/src/fdm/cpu/native_transport.rs",
+      "symbol": "solve_native_m1_snapshot",
+      "responsibility": "Validate complete native results fail closed and materialize canonical persistent snapshots.",
+      "test_path": "crates/fullmag-runner/src/fdm/cpu/native_transport.rs",
+      "test_symbol": "native_m1_v1_charge_validator_rejects_every_owned_result_contract_mutation",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed adapter contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fdm-native-m1-public-e2e",
+      "path": "crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs",
+      "symbol": "public_native_m1_v1_transparent_and_mixing_artifacts_match_reference_and_provenance",
+      "responsibility": "Compare persistent transparent and mixing artifacts and provenance against the reference owner.",
+      "test_path": "crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs",
+      "test_symbol": "public_native_m1_v1_transparent_and_mixing_artifacts_match_reference_and_provenance",
+      "lane": "FDM CPU opt-in",
+      "evidence_status": "managed public-path contract; unvalidated and not production qualification",
+      "immutable_url": null,
+      "test_immutable_url": null,
+      "source_anchor_status": "worktree_uncommitted",
+      "test_anchor_status": "worktree_uncommitted"
+    },
+    {
+      "id": "fem-run",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_steady_transport",
+      "responsibility": "Dispatch bounded native FEM M1/M2 solves.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "native_m2_solver_publishes_reciprocal_diagnostics",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-m1-flux",
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion.rs",
+      "symbol": "face_fluxes",
+      "responsibility": "Evaluate oriented M1 charge and spin face fluxes.",
+      "test_path": "crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion_tests.rs",
+      "test_symbol": "she_1d_film_v1_has_positive_y_accumulation_gradient_and_expected_profile",
+      "lane": "FDM CPU",
+      "evidence_status": "bounded CPU oracle/contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion_tests.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-m2-constitutive",
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs",
+      "symbol": "evaluate",
+      "owner": "ReciprocalConstitutiveMaterial",
+      "responsibility": "Evaluate the full AMR/PHE/AHE and reciprocal charge-spin M2 block.",
+      "test_path": "crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs",
+      "test_symbol": "m2_onsager_oracle_freezes_reciprocal_and_she_signs",
+      "lane": "FDM CPU",
+      "evidence_status": "bounded CPU oracle/contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-reactions",
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs",
+      "symbol": "reaction",
+      "responsibility": "Evaluate spin-flip, exchange-rotation, and dephasing reaction channels.",
+      "test_path": "crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion_tests.rs",
+      "test_symbol": "spin_relaxation_modes_v1_have_correct_signs_and_torque_partition",
+      "lane": "FDM CPU",
+      "evidence_status": "bounded CPU oracle/contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion_tests.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fdm-torque",
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs",
+      "symbol": "transport_gilbert_torque",
+      "owner": "CoupledChargeSpinProblem",
+      "responsibility": "Convert exchange/dephasing reactions to the transport Gilbert-source torque.",
+      "test_path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs",
+      "test_symbol": "m2_transport_torque_is_dimensionally_converted_and_gated_by_outer_lte",
+      "lane": "FDM CPU",
+      "evidence_status": "bounded CPU oracle/contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fem-constitutive",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "symbol": "class CoupledTransportGradientIntegrator",
+      "owner": "SteadyTransportOracle::Impl::constitutive_response",
+      "responsibility": "Assemble and evaluate the native FEM M2 constitutive response, including AMR/PHE/AHE and reciprocal blocks.",
+      "test_path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "test_symbol": "reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fem-reactions",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "symbol": "class ReactionMatrixCoefficient",
+      "responsibility": "Assemble the native FEM spin reaction matrix.",
+      "test_path": "backends/fem/tests/steady_transport_contract.cpp",
+      "test_symbol": "direct_she_sign_and_torque_projection_are_canonical",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/tests/steady_transport_contract.cpp",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fem-torque",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "symbol": "class TorqueCoefficient",
+      "owner": "SteadyTransportOracle::Impl::project_torque",
+      "responsibility": "Evaluate and project exchange/dephasing angular-momentum transfer to the native FEM torque field.",
+      "test_path": "backends/fem/tests/steady_transport_contract.cpp",
+      "test_symbol": "direct_she_sign_and_torque_projection_are_canonical",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/tests/steady_transport_contract.cpp",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
+      "id": "fem-stage",
+      "path": "crates/fullmag-runner/src/native_fem/stage_transport.rs",
+      "symbol": "evaluate",
+      "owner": "StageTransportProvider",
+      "responsibility": "Evaluate exact-stage reciprocal M2 torque in the bounded CPU callback.",
+      "test_path": "crates/fullmag-runner/src/native_fem.rs",
+      "test_symbol": "native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted",
+      "lane": "FEM CPU",
+      "evidence_status": "bounded native CPU contract; not production qualification; test worktree-uncommitted; immutable test anchor unavailable",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/native_fem/stage_transport.rs",
+      "test_immutable_url": null,
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "worktree_uncommitted"
+    }
+  ],
+  "evidence_tests": [
+    {
+      "path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
+      "symbol": "test_canonical_fem_spin_transport_and_torque_round_trip_through_flat_script",
+      "claims": [
+        "python-spin",
+        "python-torque",
+        "python-current"
+      ]
+    },
+    {
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion_tests.rs",
+      "symbol": "she_1d_film_v1_has_positive_y_accumulation_gradient_and_expected_profile",
+      "claims": [
+        "fdm-m1-flux"
+      ]
+    },
+    {
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/reciprocal_constitutive.rs",
+      "symbol": "m2_onsager_oracle_freezes_reciprocal_and_she_signs",
+      "claims": [
+        "fdm-m2-constitutive"
+      ]
+    },
+    {
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/spin_drift_diffusion_tests.rs",
+      "symbol": "spin_relaxation_modes_v1_have_correct_signs_and_torque_partition",
+      "claims": [
+        "fdm-reactions"
+      ]
+    },
+    {
+      "path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs",
+      "symbol": "m2_transport_torque_is_dimensionally_converted_and_gated_by_outer_lte",
+      "claims": [
+        "fdm-torque"
+      ]
+    },
+    {
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles",
+      "claims": [
+        "fem-constitutive"
+      ]
+    },
+    {
+      "path": "backends/fem/tests/steady_transport_contract.cpp",
+      "symbol": "direct_she_sign_and_torque_projection_are_canonical",
+      "claims": [
+        "fem-reactions",
+        "fem-torque"
+      ]
+    },
+    {
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "native_m2_solver_publishes_reciprocal_diagnostics",
+      "claims": [
+        "fem-run"
+      ]
+    },
+    {
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted",
+      "claims": [
+        "fem-stage"
+      ]
+    }
   ],
   "public_api": {
-    "constructors": ["SpinDriftDiffusion", "SpinTransportMaterial", "SpinSolverPolicy", "TransportExecution", "DriftDiffusionSpinTorque"],
     "parameters": [
-      {"python": "SpinDriftDiffusion.id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "solve identity", "backend_support": "all authoring lanes", "problem_ir": "spin_transport_modules[].id"},
-      {"python": "SpinDriftDiffusion.current_source_id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty reference", "meaning": "owner of charge drive/coupling", "backend_support": "planner-resolved", "problem_ir": "spin_transport_modules[].current_source_id"},
-      {"python": "SpinDriftDiffusion.domain", "type": "Sequence[RegionRef]", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "solved regions", "backend_support": "FDM/FEM descriptors", "problem_ir": "spin_transport_modules[].domain"},
-      {"python": "SpinDriftDiffusion.materials", "type": "Sequence[SpinTransportMaterialAssignment]", "default": "required", "si_unit": "mixed SI", "validation": "non-empty and complete", "meaning": "region material map", "backend_support": "FDM/FEM descriptors", "problem_ir": "spin_transport_modules[].materials"},
-      {"python": "SpinDriftDiffusion.interfaces", "type": "Sequence[TransparentSpinInterface or MixingConductanceSpinInterface]", "default": "()", "si_unit": "mixed SI", "validation": "oriented references", "meaning": "internal spin interface laws", "backend_support": "transparent bounded; mixing gated", "problem_ir": "spin_transport_modules[].interfaces"},
-      {"python": "SpinDriftDiffusion.boundaries", "type": "Sequence[...]", "default": "()", "si_unit": "mixed SI", "validation": "exact surface ownership", "meaning": "spin boundary conditions", "backend_support": "bounded by lane", "problem_ir": "spin_transport_modules[].boundaries"},
-      {"python": "SpinDriftDiffusion.solver", "type": "SpinSolverPolicy or None", "default": "SpinSolverPolicy()", "si_unit": "mixed SI", "validation": "positive tolerances, iterations", "meaning": "solver/operator policy", "backend_support": "FDM/FEM planner", "problem_ir": "spin_transport_modules[].solver"},
-      {"python": "SpinDriftDiffusion.requested_execution", "type": "TransportExecution or None", "default": "TransportExecution()", "si_unit": "$1$", "validation": "enum values", "meaning": "requested solver/device/precision/mode", "backend_support": "provenance", "problem_ir": "spin_transport_modules[].requested_execution"},
-      {"python": "SpinDriftDiffusion.mode", "type": "`str`", "default": "`steady`", "si_unit": "$1$", "validation": "`steady` or `transient`", "meaning": "M1/M2 versus M3", "backend_support": "FDM transient reference; other lanes gated", "problem_ir": "spin_transport_modules[].mode"},
-      {"python": "SpinTransportMaterial.sigma_s_Spm", "type": "float", "default": "required", "si_unit": "$\\mathrm{S\\,m^{-1}}$", "validation": "positive", "meaning": "spin conductivity", "backend_support": "FDM/FEM descriptor", "problem_ir": "materials[].material.sigma_s_Spm"},
-      {"python": "SpinTransportMaterial.polarization_p", "type": "float", "default": "required", "si_unit": "$1$", "validation": "$-1\\leq P\\leq1$", "meaning": "polarization", "backend_support": "FDM/FEM descriptor", "problem_ir": "materials[].material.polarization_p"},
-      {"python": "SpinTransportMaterial.theta_sh", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite, signed", "meaning": "spin Hall angle", "backend_support": "direct SHE contract", "problem_ir": "materials[].material.theta_sh"},
-      {"python": "SpinTransportMaterial.lambda_sf_m", "type": "float", "default": "required", "si_unit": "$\\mathrm m$", "validation": "positive", "meaning": "spin-flip length", "backend_support": "FDM/FEM descriptor", "problem_ir": "materials[].material.lambda_sf_m"},
-      {"python": "SpinTransportMaterial.lambda_j_m", "type": "float or None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "positive when supplied", "meaning": "exchange-transfer length", "backend_support": "torque-capable regions", "problem_ir": "materials[].material.lambda_j_m"},
-      {"python": "SpinTransportMaterial.lambda_phi_m", "type": "float or None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "positive when supplied", "meaning": "dephasing length", "backend_support": "torque-capable regions", "problem_ir": "materials[].material.lambda_phi_m"},
-      {"python": "SpinTransportMaterial.spin_capacitance_As_per_V_m3", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{A\\,s\\,V^{-1}\\,m^{-3}}$", "validation": "positive with formula version", "meaning": "transient capacitance", "backend_support": "FDM M3 reference", "problem_ir": "materials[].material.spin_capacitance_As_per_V_m3"},
-      {"python": "SpinTransportMaterial.density_of_states_per_spin_Jinv_m3", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{J^{-1}\\,m^{-3}}$", "validation": "positive with formula version", "meaning": "DOS adapter for $C_s$", "backend_support": "FDM M3 reference", "problem_ir": "materials[].material.density_of_states_per_spin_Jinv_m3"},
-      {"python": "SpinTransportMaterial.capacitance_formula_version", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "exact `dos_isotropic_nonmagnetic.fullmag.v1` when used", "meaning": "capacitance normalization identity", "backend_support": "planner validation", "problem_ir": "materials[].material.capacitance_formula_version"},
-      {"python": "SpinSolverPolicy.engine", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "non-empty", "meaning": "linear solver engine", "backend_support": "lane-dependent", "problem_ir": "solver.engine"},
-      {"python": "SpinSolverPolicy.relative_tolerance", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "positive", "meaning": "relative residual tolerance", "backend_support": "FDM/FEM policy", "problem_ir": "solver.linear.relative_tolerance"},
-      {"python": "SpinSolverPolicy.absolute_tolerance", "type": "float", "default": "0.0", "si_unit": "$1$", "validation": "finite and non-negative", "meaning": "absolute residual tolerance", "backend_support": "FDM/FEM policy", "problem_ir": "solver.linear.absolute_tolerance"},
-      {"python": "SpinSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "positive", "meaning": "iteration cap", "backend_support": "FDM/FEM policy", "problem_ir": "solver.linear.max_iterations"},
-      {"python": "SpinSolverPolicy.operator_version", "type": "str", "default": "fv_spin_upwind_v1", "si_unit": "$1$", "validation": "non-empty", "meaning": "discretization identity", "backend_support": "provenance", "problem_ir": "solver.operator_version"},
-      {"python": "SpinSolverPolicy.default_external_boundary", "type": "str", "default": "spin_insulating", "si_unit": "$1$", "validation": "`spin_insulating` or `reject_unassigned`", "meaning": "external-face default", "backend_support": "planner boundary gate", "problem_ir": "solver.default_external_boundary"},
-      {"python": "TransportExecution.discretization", "type": "str", "default": "fdm", "si_unit": "$1$", "validation": "`fdm`, `fem`, or `auto`", "meaning": "requested solver family", "backend_support": "planner", "problem_ir": "requested_execution.discretization"},
-      {"python": "TransportExecution.device", "type": "str", "default": "cpu", "si_unit": "$1$", "validation": "`cpu`, `gpu`, or `auto`", "meaning": "requested device", "backend_support": "planner", "problem_ir": "requested_execution.device"},
-      {"python": "TransportExecution.precision", "type": "str", "default": "double", "si_unit": "$1$", "validation": "`single` or `double`", "meaning": "requested precision", "backend_support": "qualification", "problem_ir": "requested_execution.precision"},
-      {"python": "TransportExecution.execution_mode", "type": "str", "default": "strict", "si_unit": "$1$", "validation": "`strict` or `extended`", "meaning": "fallback policy", "backend_support": "planner", "problem_ir": "requested_execution.execution_mode"},
-      {"python": "DriftDiffusionSpinTorque.id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "torque identity", "backend_support": "IR reference", "problem_ir": "spin_torque_modules[].id"},
-      {"python": "DriftDiffusionSpinTorque.solve_id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty solve reference", "meaning": "transport result consumed", "backend_support": "IR reference", "problem_ir": "spin_torque_modules[].solve_id"},
-      {"python": "DriftDiffusionSpinTorque.target", "type": "RegionRef", "default": "required", "si_unit": "$1$", "validation": "valid region", "meaning": "magnetic target", "backend_support": "IR reference", "problem_ir": "spin_torque_modules[].target"}
+      {
+        "python": "SpinDriftDiffusion.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "stable spin-solve identity",
+        "backend_support": "all authoring lanes; execution is capability-gated",
+        "problem_ir": "spin_transport_modules[].id"
+      },
+      {
+        "python": "SpinDriftDiffusion.current_source_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "names one compatible `CurrentTransport`",
+        "meaning": "charge-source binding",
+        "backend_support": "CPU M1/M2 reference slices",
+        "problem_ir": "spin_transport_modules[].current_source_id"
+      },
+      {
+        "python": "SpinDriftDiffusion.domain",
+        "type": "Sequence[RegionRef]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and resolvable",
+        "meaning": "solved spin domain",
+        "backend_support": "lane-specific mesh/interface limits",
+        "problem_ir": "spin_transport_modules[].domain"
+      },
+      {
+        "python": "SpinDriftDiffusion.materials",
+        "type": "Sequence[SpinTransportMaterialAssignment]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty typed assignments with complete positive dissipative coefficients",
+        "meaning": "spin constitutive-data assignments",
+        "backend_support": "CPU reference slices; GPU semantic-only",
+        "problem_ir": "spin_transport_modules[].materials"
+      },
+      {
+        "python": "SpinDriftDiffusion.interfaces",
+        "type": "Sequence[SpinInterface]",
+        "default": "()",
+        "si_unit": "$\\mathrm{S\\,m^{-2}}$ for conductances",
+        "validation": "oriented and non-overlapping; unsupported laws fail closed",
+        "meaning": "transparent or mixing interface contract",
+        "backend_support": "FDM CPU broader reference; bounded FEM accepts transparent/no internal interface only",
+        "problem_ir": "spin_transport_modules[].interfaces"
+      },
+      {
+        "python": "SpinDriftDiffusion.boundaries",
+        "type": "Sequence[SpinBoundary]",
+        "default": "()",
+        "si_unit": "$\\mathrm{V}$ or $\\mathrm{A\\,m^{-2}}$ by variant",
+        "validation": "exact external-face ownership; unassigned policy is explicit",
+        "meaning": "spin boundary conditions",
+        "backend_support": "CPU reference slices with lane-specific variants",
+        "problem_ir": "spin_transport_modules[].boundaries"
+      },
+      {
+        "python": "SpinDriftDiffusion.solver",
+        "type": "SpinSolverPolicy",
+        "default": "SpinSolverPolicy()",
+        "si_unit": "$1$",
+        "validation": "positive iteration/tolerance data and compatible operator",
+        "meaning": "spatial spin solve policy",
+        "backend_support": "M1/M2 CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver"
+      },
+      {
+        "python": "SpinDriftDiffusion.requested_execution",
+        "type": "TransportExecution",
+        "default": "fdm/cpu/double/strict",
+        "si_unit": "$1$",
+        "validation": "enumerated discretization, device, precision, and mode",
+        "meaning": "requested lane",
+        "backend_support": "GPU and unsupported combinations fail closed",
+        "problem_ir": "spin_transport_modules[].requested_execution"
+      },
+      {
+        "python": "SpinDriftDiffusion.mode",
+        "type": "steady or transient",
+        "default": "steady",
+        "si_unit": "$1$",
+        "validation": "transient requires physical capacitance/DOS on every material",
+        "meaning": "temporal transport regime",
+        "backend_support": "this page's M1/M2 are steady",
+        "problem_ir": "spin_transport_modules[].mode"
+      },
+      {
+        "python": "DriftDiffusionSpinTorque.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "torque-module identity",
+        "backend_support": "bounded CPU M2 workflows; general capability remains semantic-only",
+        "problem_ir": "spin_torque_modules[].id"
+      },
+      {
+        "python": "DriftDiffusionSpinTorque.solve_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "references an existing `SpinDriftDiffusion`",
+        "meaning": "solved-transport binding",
+        "backend_support": "bounded CPU M2 workflows",
+        "problem_ir": "spin_torque_modules[].solve_id"
+      },
+      {
+        "python": "DriftDiffusionSpinTorque.target",
+        "type": "RegionRef",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "resolvable magnetic target",
+        "meaning": "torque recipient",
+        "backend_support": "bounded CPU M2 workflows",
+        "problem_ir": "spin_torque_modules[].target"
+      },
+      {
+        "python": "CurrentTransport.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "charge-module identity",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "current_modules[].name"
+      },
+      {
+        "python": "CurrentTransport.model",
+        "type": "str",
+        "default": "prescribed_density",
+        "si_unit": "$1$",
+        "validation": "`prescribed_density` or `ohmic_poisson`; bidirectional lowers to magnetoresistive Poisson",
+        "meaning": "charge model",
+        "backend_support": "M1/M2 CPU reference slices",
+        "problem_ir": "current_modules[].model"
+      },
+      {
+        "python": "CurrentTransport.current_density",
+        "type": "Sequence[float] or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{A\\,m^{-2}}$",
+        "validation": "three finite components; required only for prescribed density",
+        "meaning": "prescribed current vector",
+        "backend_support": "prescribed-source lanes, not solved M2",
+        "problem_ir": "current_modules[].current_density"
+      },
+      {
+        "python": "CurrentTransport.solve_region",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty when supplied",
+        "meaning": "legacy prescribed-source region",
+        "backend_support": "prescribed-source lanes",
+        "problem_ir": "current_modules[].solve_region"
+      },
+      {
+        "python": "CurrentTransport.conductivity_s_per_m",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "finite and positive when supplied",
+        "meaning": "legacy scalar conductivity",
+        "backend_support": "prescribed-source metadata",
+        "problem_ir": "current_modules[].conductivity_s_per_m"
+      },
+      {
+        "python": "CurrentTransport.coupling",
+        "type": "str",
+        "default": "one_way",
+        "si_unit": "$1$",
+        "validation": "one_way or bidirectional",
+        "meaning": "selects M1 or reciprocal M2",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].coupling"
+      },
+      {
+        "python": "CurrentTransport.domain",
+        "type": "Sequence[RegionRef]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "non-empty for solved transport",
+        "meaning": "charge solve domain",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].domain"
+      },
+      {
+        "python": "CurrentTransport.materials",
+        "type": "Sequence[ChargeTransportMaterialAssignment]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "complete typed assignment coverage",
+        "meaning": "charge constitutive assignments",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].materials"
+      },
+      {
+        "python": "CurrentTransport.boundaries",
+        "type": "Sequence[ChargeBoundary]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "typed non-overlapping surface ownership",
+        "meaning": "charge boundary set",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].boundaries"
+      },
+      {
+        "python": "CurrentTransport.gauge",
+        "type": "ChargePotentialGauge or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "mandatory for solved transport",
+        "meaning": "potential null-space policy",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].gauge"
+      },
+      {
+        "python": "CurrentTransport.solver",
+        "type": "ChargeSolverPolicy or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "operator and engine must match coupling",
+        "meaning": "charge linear/block policy",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver"
+      },
+      {
+        "python": "CurrentTransport.time_envelope",
+        "type": "TimeEnvelope or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "canonical finite envelope",
+        "meaning": "stage-time source multiplier",
+        "backend_support": "lane-specific",
+        "problem_ir": "current_modules[].time_envelope"
+      },
+      {
+        "python": "CurrentTransport.conservative_current_view",
+        "type": "ConservativeCurrentView or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "typed immutable RT0 request",
+        "meaning": "optional conservative current view",
+        "backend_support": "bounded FEM CPU only",
+        "problem_ir": "current_modules[].conservative_current_view"
+      },
+      {
+        "python": "ChargeTransportMaterialAssignment.region",
+        "type": "RegionRef",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "resolvable charge region",
+        "meaning": "assignment target",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].materials[].region"
+      },
+      {
+        "python": "ChargeTransportMaterialAssignment.material",
+        "type": "ChargeTransportMaterial",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed material",
+        "meaning": "assigned charge tensor",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].materials[].material"
+      },
+      {
+        "python": "ChargeTransportMaterial.sigma_Spm",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "finite and positive",
+        "meaning": "reciprocal scalar conductivity $\\sigma$",
+        "backend_support": "M1/M2 CPU reference slices",
+        "problem_ir": "current_modules[].materials[].material.sigma_Spm"
+      },
+      {
+        "python": "ChargeTransportMaterial.sigma_parallel_Spm",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "positive; authored with both other tensor fields",
+        "meaning": "$\\sigma_\\parallel$",
+        "backend_support": "reciprocal M2 CPU reference slices",
+        "problem_ir": "current_modules[].materials[].material.sigma_parallel_Spm"
+      },
+      {
+        "python": "ChargeTransportMaterial.sigma_perpendicular_Spm",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "positive; authored with both other tensor fields",
+        "meaning": "$\\sigma_\\perp$",
+        "backend_support": "reciprocal M2 CPU reference slices",
+        "problem_ir": "current_modules[].materials[].material.sigma_perpendicular_Spm"
+      },
+      {
+        "python": "ChargeTransportMaterial.sigma_AHE_Spm",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "finite and signed; authored with both tensor diagonals",
+        "meaning": "$\\sigma_\\mathrm{AHE}$",
+        "backend_support": "reciprocal M2 CPU reference slices",
+        "problem_ir": "current_modules[].materials[].material.sigma_AHE_Spm"
+      },
+      {
+        "python": "VoltageElectrode.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "electrode identity",
+        "backend_support": "solved CPU lanes",
+        "problem_ir": "current_modules[].boundaries[].id"
+      },
+      {
+        "python": "VoltageElectrode.surfaces",
+        "type": "Sequence[SurfaceRef]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty typed surfaces",
+        "meaning": "Dirichlet support",
+        "backend_support": "solved CPU lanes",
+        "problem_ir": "current_modules[].boundaries[].surfaces"
+      },
+      {
+        "python": "VoltageElectrode.potential_V",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{V}$",
+        "validation": "finite",
+        "meaning": "prescribed potential",
+        "backend_support": "solved CPU lanes",
+        "problem_ir": "current_modules[].boundaries[].potential_V"
+      },
+      {
+        "python": "ChargeInsulating.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty and unique",
+        "meaning": "insulating-boundary identity",
+        "backend_support": "solved CPU lanes",
+        "problem_ir": "current_modules[].boundaries[].id"
+      },
+      {
+        "python": "ChargeInsulating.surfaces",
+        "type": "Sequence[SurfaceRef]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty typed surfaces",
+        "meaning": "zero-normal-current support",
+        "backend_support": "solved CPU lanes",
+        "problem_ir": "current_modules[].boundaries[].surfaces"
+      },
+      {
+        "python": "ChargePotentialGauge.kind",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "`dirichlet_reference` or `zero_mean`",
+        "meaning": "charge-potential gauge",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].gauge"
+      },
+      {
+        "python": "ChargeSolverPolicy.engine",
+        "type": "str",
+        "default": "cg",
+        "si_unit": "$1$",
+        "validation": "`cg` or `block_gmres`; must match operator",
+        "meaning": "linear/block engine",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver.engine"
+      },
+      {
+        "python": "ChargeSolverPolicy.relative_tolerance",
+        "type": "float",
+        "default": "1e-10",
+        "si_unit": "$1$",
+        "validation": "finite and positive",
+        "meaning": "relative linear tolerance",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver.linear.relative_tolerance"
+      },
+      {
+        "python": "ChargeSolverPolicy.absolute_tolerance",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$1$",
+        "validation": "finite and non-negative",
+        "meaning": "absolute linear tolerance",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver.linear.absolute_tolerance"
+      },
+      {
+        "python": "ChargeSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "10000",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "iteration cap",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver.linear.max_iterations"
+      },
+      {
+        "python": "ChargeSolverPolicy.physical_residual_version",
+        "type": "str",
+        "default": "charge_balance_integrated_l2.v1",
+        "si_unit": "$1$",
+        "validation": "exact version compatible with engine/operator",
+        "meaning": "physical residual contract",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver.physical_residual_version"
+      },
+      {
+        "python": "ChargeSolverPolicy.operator_version",
+        "type": "str",
+        "default": "fv_charge_harmonic_v1",
+        "si_unit": "$1$",
+        "validation": "exact supported operator; M2 requires reciprocal version",
+        "meaning": "discrete charge/block operator",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "current_modules[].solver.operator_version"
+      },
+      {
+        "python": "SpinTransportMaterialAssignment.region",
+        "type": "RegionRef",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "resolvable spin region",
+        "meaning": "assignment target",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].region"
+      },
+      {
+        "python": "SpinTransportMaterialAssignment.material",
+        "type": "SpinTransportMaterial",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "typed material",
+        "meaning": "assigned spin coefficients",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material"
+      },
+      {
+        "python": "SpinTransportMaterial.sigma_s_Spm",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "finite and positive",
+        "meaning": "spin conductivity $\\sigma_s$",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material.sigma_s_Spm"
+      },
+      {
+        "python": "SpinTransportMaterial.polarization_p",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite in $[-1,1]$",
+        "meaning": "signed $P$",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material.polarization_p"
+      },
+      {
+        "python": "SpinTransportMaterial.theta_sh",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite and signed",
+        "meaning": "spin-Hall angle",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material.theta_sh"
+      },
+      {
+        "python": "SpinTransportMaterial.lambda_sf_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite and positive",
+        "meaning": "spin-flip length",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material.lambda_sf_m"
+      },
+      {
+        "python": "SpinTransportMaterial.lambda_j_m",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive when enabled; None lowers to disabled",
+        "meaning": "exchange-rotation length",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material.lambda_j_m"
+      },
+      {
+        "python": "SpinTransportMaterial.lambda_phi_m",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive when enabled; None lowers to disabled",
+        "meaning": "transverse-dephasing length",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].materials[].material.lambda_phi_m"
+      },
+      {
+        "python": "SpinSolverPolicy.engine",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "non-empty; M2 bounded slice requires compatible GMRES policy",
+        "meaning": "spin/block engine",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver.engine"
+      },
+      {
+        "python": "SpinSolverPolicy.relative_tolerance",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "$1$",
+        "validation": "finite and positive",
+        "meaning": "relative tolerance",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver.linear.relative_tolerance"
+      },
+      {
+        "python": "SpinSolverPolicy.absolute_tolerance",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$1$",
+        "validation": "finite and non-negative",
+        "meaning": "absolute tolerance",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver.linear.absolute_tolerance"
+      },
+      {
+        "python": "SpinSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "$1$",
+        "validation": "positive integer",
+        "meaning": "iteration cap",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver.linear.max_iterations"
+      },
+      {
+        "python": "SpinSolverPolicy.operator_version",
+        "type": "str",
+        "default": "fv_spin_upwind_v1",
+        "si_unit": "$1$",
+        "validation": "exact lane-compatible version",
+        "meaning": "spin or coupled operator",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver.operator_version"
+      },
+      {
+        "python": "SpinSolverPolicy.default_external_boundary",
+        "type": "str",
+        "default": "spin_insulating",
+        "si_unit": "$1$",
+        "validation": "spin_insulating` or `reject_unassigned",
+        "meaning": "unassigned-face policy",
+        "backend_support": "CPU reference slices",
+        "problem_ir": "spin_transport_modules[].solver.default_external_boundary"
+      },
+      {
+        "python": "SpinSolverPolicy.reciprocal_nonlinear",
+        "type": "ReciprocalNonlinearSolverPolicy or None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "typed policy when present",
+        "meaning": "optional nonlinear M2 outer solve",
+        "backend_support": "FDM CPU reference scope",
+        "problem_ir": "spin_transport_modules[].solver.reciprocal_nonlinear"
+      },
+      {
+        "python": "TransportExecution.discretization",
+        "type": "str",
+        "default": "fdm",
+        "si_unit": "$1$",
+        "validation": "fdm`, `fem`, or `auto",
+        "meaning": "requested discretization",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "spin_transport_modules[].requested_execution.discretization"
+      },
+      {
+        "python": "TransportExecution.device",
+        "type": "str",
+        "default": "cpu",
+        "si_unit": "$1$",
+        "validation": "cpu`, `gpu`, or `auto",
+        "meaning": "requested device",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "spin_transport_modules[].requested_execution.device"
+      },
+      {
+        "python": "TransportExecution.precision",
+        "type": "str",
+        "default": "double",
+        "si_unit": "$1$",
+        "validation": "`single` or `double`; bounded M2 is double only",
+        "meaning": "requested precision",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "spin_transport_modules[].requested_execution.precision"
+      },
+      {
+        "python": "TransportExecution.execution_mode",
+        "type": "str",
+        "default": "strict",
+        "si_unit": "$1$",
+        "validation": "strict` or `extended",
+        "meaning": "fallback/extension policy",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "spin_transport_modules[].requested_execution.execution_mode"
+      }
     ]
   }
 }

@@ -156,8 +156,10 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const { api, resources } = useKernel();
   const projected = useSpinInterfacesResource();
   const transports = useSpinTransportsResource();
-  const ref = selection.ref?.type === "spin-interface" && selection.ref.spinInterfaceIndex !== undefined
-    ? selection.ref
+  const interfaceRef = selection.ref?.type === "spin-interface" ? selection.ref : null;
+  const ref = interfaceRef &&
+    (interfaceRef.spinInterfaceIndex !== undefined || Boolean(interfaceRef.spinInterfaceId))
+    ? interfaceRef
     : null;
   const [localOwnerId, setLocalOwnerId] = useState("");
   const [localInterfaceId, setLocalInterfaceId] = useState("");
@@ -165,8 +167,21 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const selected = useMemo(() => {
     const items = projected.data?.items ?? [];
     if (ref?.spinInterfaceIndex !== undefined) return items[ref.spinInterfaceIndex] ?? null;
+    if (ref?.spinInterfaceId) {
+      return items.find((item) =>
+        item.interface_id === ref.spinInterfaceId &&
+        (!ref.spinInterfaceOwnerId || item.owner_spin_transport_id === ref.spinInterfaceOwnerId)
+      ) ?? null;
+    }
     return items.find((item) => item.owner_spin_transport_id === ownerId && item.interface_id === localInterfaceId) ?? null;
-  }, [localInterfaceId, ownerId, projected.data?.items, ref?.spinInterfaceIndex]);
+  }, [
+    localInterfaceId,
+    ownerId,
+    projected.data?.items,
+    ref?.spinInterfaceId,
+    ref?.spinInterfaceIndex,
+    ref?.spinInterfaceOwnerId,
+  ]);
   const baseDraft = interfaceDraft(selected?.interface);
   const draftKey = `${ownerId}:${selected?.interface_id ?? "new"}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState({ key: draftKey, value: baseDraft });

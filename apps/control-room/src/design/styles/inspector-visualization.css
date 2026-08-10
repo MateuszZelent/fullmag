@@ -638,6 +638,21 @@
   box-shadow: var(--fm-shadow-sm);
 }
 
+/* The overview frame is shared by Visualization and Physics.  Container
+   breakpoints therefore belong to the shared frame rather than either
+   family wrapper. */
+@container (max-width: 420px) {
+  .fm-inspector-overview-frame .fm-inspector-metric-strip[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 260px) {
+  .fm-inspector-overview-frame .fm-inspector-metric-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Action bar buttons: crisp press feel */
 .fm-inspector__action-btn:active:not(:disabled) {
   transform: scale(0.96) translateY(1px);

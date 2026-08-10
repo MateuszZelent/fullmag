@@ -7,6 +7,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_DOMAIN_META_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -48,6 +49,7 @@ import {
 } from "../api/apiPaths";
 import type {
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
   GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryValidationResource,
@@ -115,11 +117,27 @@ export {
 } from "../visualization/useVisualizationStateResource";
 
 import { useResource } from "./useResource";
-import type { ResourceResult } from "./resourceTypes";
+import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 
 interface ResourceHookOptions {
   enabled?: boolean;
   revision?: ResourceRevision | null;
+}
+
+/** Single-grid membership is incompatible with a resolved FDM multilayer plan. */
+export function shouldLoadSingleGridFdmResources(
+  fdmLaneActive: boolean,
+  multilayerLayoutStatus: ResourceStatus,
+  multilayerLayout:
+    | Pick<FdmMultilayerLayoutResource, "available">
+    | null
+    | undefined,
+): boolean {
+  return (
+    fdmLaneActive &&
+    (multilayerLayoutStatus === "ready" || multilayerLayoutStatus === "error") &&
+    multilayerLayout?.available !== true
+  );
 }
 
 interface FdmMembershipBinaryResourceOptions extends ResourceHookOptions {
@@ -1017,6 +1035,9 @@ export function useFdmRegionMembershipResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const multilayerLayout = useFdmMultilayerLayoutResource({
+    enabled: options.enabled,
+  });
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.data.fdmRegionMemberships({ signal }),
@@ -1024,7 +1045,11 @@ export function useFdmRegionMembershipResource(
   );
 
   const resource = useResource<PendingJsonResourceResult<FdmRegionMembershipResource>>({
-    enabled: options.enabled,
+    enabled: shouldLoadSingleGridFdmResources(
+      options.enabled === true,
+      multilayerLayout.status,
+      multilayerLayout.data,
+    ),
     load,
     resolveRevision: (result) =>
       result.status === "ready"
@@ -1102,6 +1127,31 @@ export function useDomainMetaResource(options: ResourceHookOptions = {}) {
     load,
     resolveRevision: resolveDomainMetaRevision,
     resourceKey: DATA_DOMAIN_META_PATH,
+  });
+}
+
+function resolveFdmMultilayerLayoutRevision(
+  layout: FdmMultilayerLayoutResource | null,
+): ResourceRevision | null {
+  if (!layout) return null;
+  return `${layout.layout_revision}:${layout.layout_fingerprint ?? "unfingerprinted"}`;
+}
+
+/** Native per-layer carriers and the common FFT scratch layout. */
+export function useFdmMultilayerLayoutResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.domain.fdmMultilayerLayout({ signal }),
+    [api],
+  );
+  return useResource<FdmMultilayerLayoutResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveFdmMultilayerLayoutRevision,
+    resourceKey: DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   });
 }
 

@@ -10,11 +10,11 @@ source_of_truth: docs/physics/0421-fdm-multilayer-convolution-demag.md
 (public-docs-physics-interactions-demagnetization-multilayer-convolution)=
 # FDM multilayer demagnetizing-field convolution
 
-Ta strona opisuje fizykę, dyskretyzację i publiczny kontrakt konfiguracji
+This page describes the physics, discretization, and public configuration contract for
 `multilayer_convolution`. The method computes the demagnetizing field of disconnected
-magnetycznych warstw lub obiektów na osobnych siatkach FDM. Nie jest to model
-FEM Poissona ani BEM; wybór tej strategii zmienia realizację numeryczną, ale nie
-does not change the physical definition of the demagnetizing field.
+magnetic layers or objects on separate FDM grids. It is not a FEM Poisson or BEM model;
+choosing this strategy changes the numerical realization but does not change the physical
+definition of the demagnetizing field.
 
 Each magnetic object owns a native FDM grid. The common convolution grid is an FFT supercell used
 for pair kernels and transfers; it is neither a material mesh nor a FEM universe mesh. Geometry
@@ -22,31 +22,29 @@ translations determine layer offsets, including the signed $z$ offsets used by t
 public FDM multilayer script therefore needs `study.fdm(..., per_magnet=..., demag=FDMDemag(...))`
 and named geometry, but no `study.universe.mesh(...)` dependency.
 
-Status `partial` jest zamierzony. FDM CPU FP64 ma wykonane lokalne dowody pola,
-energii, reciprocity i transferu dla opisanych klas przypadków. Źródła CUDA i
-kontrakt ABI są zaimplementowane, ale bez świeżego, pełnego porównania na
-urządzeniu nie wolno nazywać lane'u GPU production-qualified.
+The `partial` status is intentional. FDM CPU FP64 has local field, energy, reciprocity,
+and transfer evidence for the stated case classes. CUDA sources and the ABI contract are
+implemented, but without a fresh, complete device comparison the GPU lane must not be
+called production-qualified.
 
 (multilayer-convolution-problem-statement)=
 ## 1. Problem fizyczny
 
-Rozważamy $L$ rozłącznych obiektów ferromagnetycznych. Indeks $s$ oznacza
-warstwę źródłową, a $d$ warstwę docelową. Każda warstwa ma własną regularną
-siatkę `native_grid`, rozmiar komórki $\mathbf h_s$, początek $\mathbf o_s$,
-aktywną maskę i pole magnetyzacji $\mathbf M_s$. Jedyna dopuszczalna konwencja
-przesunięcia pary brzmi
+Consider $L$ disconnected ferromagnetic objects. Index $s$ denotes a source layer and
+$d$ a destination layer. Each layer has its own regular `native_grid`, cell size
+$\mathbf h_s$, origin $\mathbf o_s$, active mask, and magnetization field $\mathbf M_s$.
+The only permitted pair-offset convention is
 $\boldsymbol\delta_{d,s}=\mathbf o_d-\mathbf o_s$.
 
-Pole w warstwie docelowej jest sumą wkładu własnego i wszystkich wkładów
-międzywarstwowych. Konwolucja FFT przyspiesza tę sumę; nie zastępuje tensora
-magnetostatycznego przybliżeniem lokalnym. Siatka robocza `scratch_grid` jest
-narzędziem numerycznym. Fizyczne położenie, rozmiar komórki źródłowej i rozmiar
-komórki docelowej pozostają częścią kernela.
+The field in a destination layer is the sum of its self contribution and all inter-layer
+contributions. FFT convolution accelerates this sum; it does not replace the magnetostatic
+tensor with a local approximation. The `scratch_grid` is a computational tool. Physical
+position, source-cell size, and destination-cell size remain part of the kernel.
 
 (multilayer-convolution-governing-equations)=
-## 2. Równania rządzące
+## 2. Governing equations
 
-### 2.1. Model ciągły i dyskretna suma par
+### 2.1. Continuous model and discrete pair sum
 
 Pole magnetostatyczne jest zdefiniowane przez
 
@@ -57,8 +55,8 @@ Pole magnetostatyczne jest zdefiniowane przez
 \mathbf M(\mathbf r')\,\mathrm dV'.
 ```
 
-Implementowany kontrakt FDM jest dyskretną, kierunkowaną sumą par źródło–cel,
-odpowiadającą równaniu (3) Lepadatu (2019):
+The implemented FDM contract is a directed source-to-destination pair sum corresponding
+to equation (3) of Lepadatu (2019):
 
 ```{math}
 :label: eq-multilayer-public-discrete-field
@@ -69,14 +67,15 @@ odpowiadającą równaniu (3) Lepadatu (2019):
 \right)\mathbf M(\mathbf r_{s,j}).
 ```
 
-Tensor $\mathsf N$ ma sześć niezależnych składowych:
+The tensor $\mathsf N$ has six independent components:
 $N_{xx}$, $N_{yy}$, $N_{zz}$, $N_{xy}$, $N_{xz}$ i $N_{yz}$. Znak minus
-należy do definicji pola. Mnożenie tensor–wektor w domenie FFT akumuluje
-produkt bez tego znaku, a etap pola stosuje negację dokładnie raz.
+The minus sign belongs to the field definition. Tensor-vector multiplication in the FFT
+domain accumulates the product without that sign, and the field stage applies the negation
+exactly once.
 
 ### 2.2. Reciprocity i energia
 
-Dla różnych objętości komórek reciprocity jest ważone objętością:
+For different cell volumes, reciprocity is volume-weighted:
 
 ```{math}
 :label: eq-multilayer-public-reciprocity
@@ -84,8 +83,8 @@ V_d\,\mathsf N_{d\leftarrow s}(\mathbf q)
 =V_s\,\mathsf N_{s\leftarrow d}^{\mathsf T}(-\mathbf q).
 ```
 
-Prosta równość dwóch kierunków jest poprawna tylko wtedy, gdy $V_d=V_s$.
-Energia demagnetyzacyjna na aktywnych komórkach wszystkich warstw wynosi
+Simple equality of the two directions is valid only when $V_d=V_s$. The demagnetization
+energy over active cells in all layers is
 
 ```{math}
 :label: eq-multilayer-public-energy
@@ -95,14 +94,13 @@ E_{\mathrm d}
 \mathbf M_{d,c}\mathbin\cdot\mathbf H_{d,c}.
 ```
 
-Czynnik $1/2$ usuwa podwójne liczenie energii par. Pole, aktywna maska,
-objętości i precyzja użyte w redukcji energii muszą być zgodne z torem pola.
+The factor $1/2$ removes double counting of pair energy. The field, active mask, volumes,
+and precision used by the energy reduction must match the field path.
 
 ### 2.3. Konwolucja FFT
 
-Dla każdej warstwy źródłowej wykonywana jest transformata magnetyzacji, dla
-każdej zorientowanej pary następuje akumulacja sześcioskładnikowego tensora,
-a dla każdego celu jedna transformata odwrotna:
+Each source layer is transformed once, each ordered pair accumulates a six-component
+tensor product, and each destination receives one inverse transform:
 
 ```{math}
 :label: eq-multilayer-public-fft
@@ -114,22 +112,20 @@ a dla każdego celu jedna transformata odwrotna:
 \mathbf H_d=\mathcal F^{-1}\!\left[\widehat{\mathbf H}_d\right].
 ```
 
-W jednym odświeżeniu pełnego operatora dla $L$ warstw oczekuje się $L$
-transformacji forward, $L$ transformacji inverse i $L^2$ akumulacji par.
-Te liczniki opisują operator demagnetyzacyjny, a nie automatycznie całą
-rezydencję czasowego integratora.
+One complete operator refresh for $L$ layers therefore has $L$ forward transforms, $L$
+inverse transforms, and $L^2$ pair accumulations. These counters describe the demagnetization
+operator, not automatically the residency of the complete time integrator.
 
-### 2.4. Transfer między `native_grid` i `scratch_grid`
+### 2.4. Transfer between `native_grid` and `scratch_grid`
 
-Jeżeli siatka natywna i robocza nie są identyczne, magnetyzacja jest
-przenoszona operatorem $P$:
+When native and scratch grids differ, magnetization is transferred by operator $P$:
 
 ```{math}
 :label: eq-multilayer-public-transfer
 \mathbf M(\mathbf r')=\sum_{i\in\mathcal P}w_i\mathbf M(\mathbf r_i).
 ```
 
-Wagi z równań (4)–(5) Lepadatu są
+The weights from equations (4)-(5) of Lepadatu are
 
 ```{math}
 :label: eq-multilayer-public-transfer-weights
@@ -142,7 +138,7 @@ w_i=\frac{\widetilde d_i\delta_i}{\widetilde d_T},
 -\lvert\mathbf r'-\mathbf r_i\rvert.
 ```
 
-Powrót pola do siatki natywnej musi używać sprzężenia objętościowego $P^*$:
+Returning the field to a native grid must use the volume-adjoint $P^*$:
 
 ```{math}
 :label: eq-multilayer-public-transfer-adjoint
@@ -150,13 +146,13 @@ Powrót pola do siatki natywnej musi używać sprzężenia objętościowego $P^*
 =\left\langle\mathbf M,P^*\mathbf H_c\right\rangle_{V_n}.
 ```
 
-Ta tożsamość jest warunkiem zachowania pracy i energii. Sama interpolacja
-punktowa pola nie wystarcza do wykazania poprawności transferu.
+This identity is the work and energy conservation condition. Pointwise field interpolation
+alone is not sufficient evidence of a correct transfer.
 
-### 2.5. Nieregularny tensor Newella dla różnej grubości Z
+### 2.5. Irregular Newell tensor for unequal Z thickness
 
-Dla wspólnych $h_x,h_y$ i różnych $h_{s,z},h_{d,z}$ Appendix A publikacji
-definiuje
+For common $h_x,h_y$ and different $h_{s,z},h_{d,z}$, Appendix A of the publication
+defines
 
 ```{math}
 :label: eq-multilayer-public-newell-a1
@@ -212,9 +208,9 @@ g(x,y,z)&=-\frac{xyR}{3}
 \end{aligned}
 ```
 
-Pozostałe składowe powstają przez permutacje osi zgodne z symetrią tensora
-Newella. Appendix A obejmuje różnicę grubości w Z przy wspólnym rozmiarze
-komórki XY; nie uzasadnia dowolnego offsetu XY ani dowolnych różnych siatek XY.
+The remaining components follow by axis permutations consistent with Newell-tensor
+symmetry. Appendix A covers unequal Z thickness with a common XY cell size; it does not
+justify arbitrary XY offsets or arbitrary, different XY grids.
 
 (multilayer-convolution-symbols-and-si-units)=
 ## 3. Symbole i jednostki SI

@@ -14,6 +14,7 @@ import {
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
+  targetForFdmNativeLayer,
   targetForFdmUniverseOutsideSupport,
   targetForMeshPart,
   type FdmSelectionGrid,
@@ -33,6 +34,14 @@ describe("viewport3DTargets", () => {
       id: "fdm-domain",
       kind: "fdm-domain",
       label: "current",
+    });
+  });
+
+  it("keeps each FDM native layer on an encoded client-local target", () => {
+    expect(targetForFdmNativeLayer("layer:bottom", "Bottom layer")).toEqual({
+      id: "fdm-native-layer:layer%3Abottom",
+      kind: "fdm-native-layer",
+      label: "Bottom layer",
     });
   });
 

@@ -567,6 +567,10 @@ pub enum EnergyTermIR {
     /// for I = 1 A, then scaled by `current * time_dependence(t)` at each
     /// RHS evaluation.
     OerstedCylinder {
+        /// Stable authored module identity. Historical IR may omit it, but
+        /// every current authoring surface must publish it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         /// DC current amplitude [A].  Sign determines field chirality.
         current: f64,
         /// Cylinder radius [m].
@@ -583,6 +587,9 @@ pub enum EnergyTermIR {
         time_dependence: Option<TimeDependenceIR>,
     },
     OerstedField {
+        /// Stable authored module identity shared with PhysicsGraphIR.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         model: OerstedFieldModelIR,
         source: String,
     },

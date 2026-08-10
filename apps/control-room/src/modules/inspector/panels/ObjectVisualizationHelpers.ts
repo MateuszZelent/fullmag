@@ -56,6 +56,7 @@ export const OBJECT_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind
   // target registry can resolve its controls, while the serialization bridge
   // fail-closes and never emits an FEM VisualizationState scope for it.
   "fdm-domain",
+  "fdm-native-layer",
   "object",
   "part",
   "region",

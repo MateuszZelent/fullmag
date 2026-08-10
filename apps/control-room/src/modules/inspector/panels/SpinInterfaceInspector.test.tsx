@@ -21,15 +21,42 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
 }));
 vi.mock("@/kernel/resources/useSessionStatus", () => ({ useSessionStatusSelector: (selector: (value: unknown) => unknown) => selector({ data: { capabilities: { transport_authoring: { m1_one_way_steady: { authoring_allowed: true, reason: "M1", status: "semantic_only" } } } } }) }));
 
-const kernel = { api: { model: {} }, resources: { invalidate: vi.fn() } } as unknown as KernelApi;
+const validateTransport = vi.fn();
+const replaceSpinTransport = vi.fn();
+const kernel = {
+  api: { model: { replaceSpinTransport, validateTransport } },
+  resources: { invalidate: vi.fn() },
+} as unknown as KernelApi;
 function selection(index: number, id: string): Selection { return { kind: "physics.spin-interface", label: id, moduleSource: "explorer", nodeId: id, objectId: null, ref: { kind: "physics.spin-interface", nodeId: id, spinInterfaceId: id, spinInterfaceIndex: index, spinInterfaceOwnerId: "spin", type: "spin-interface" } }; }
 
 describe("SpinInterfaceInspectorPanel", () => {
-  it("renders owner selection for the interface collection root", () => {
-    const root: Selection = { kind: "physics.spin-interfaces", label: "Spin Interfaces", moduleSource: "explorer", nodeId: "model:physics:spin-interfaces", objectId: null, ref: { kind: "physics.spin-interfaces", nodeId: "model:physics:spin-interfaces", type: "spin-interface" } };
-    const html = renderToStaticMarkup(<KernelContext.Provider value={kernel}><SpinInterfaceInspectorPanel selection={root} /></KernelContext.Provider>);
+  it("keeps a new interface draft fail-closed until an owner is selected", () => {
+    validateTransport.mockClear();
+    replaceSpinTransport.mockClear();
+    const draft: Selection = {
+      kind: "physics.spin-interface",
+      label: "New spin interface",
+      moduleSource: "ribbon",
+      nodeId: "model:physics:spin-interface:draft",
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.spin-interface",
+        nodeId: "model:physics:spin-interface:draft",
+        type: "spin-interface",
+      } as Selection["ref"],
+    };
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SpinInterfaceInspectorPanel selection={draft} />
+      </KernelContext.Provider>,
+    );
+
     expect(html).toContain("Owning spin transport");
-    expect(html).toContain("spin");
+    expect(html).toContain("Owner: not selected");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Create<\/button>/);
+    expect(validateTransport).not.toHaveBeenCalled();
+    expect(replaceSpinTransport).not.toHaveBeenCalled();
   });
 
   it("renders a known mixing interface as model-specific typed SI fields", () => {
@@ -39,6 +66,26 @@ describe("SpinInterfaceInspectorPanel", () => {
     expect(html).toContain("S/m²");
     expect(html).toContain("magnetoelectronic.fullmag.v2");
     expect(html).toContain("0, 0, 1");
+  });
+
+  it("resolves a graph-routed interface by stable owner and interface ids", () => {
+    const graphSelection: Selection = {
+      kind: "physics.spin-interface",
+      label: "nf",
+      moduleSource: "explorer",
+      nodeId: "graph:nf",
+      objectId: null,
+      ref: {
+        kind: "physics.spin-interface",
+        nodeId: "graph:nf",
+        spinInterfaceId: "nf",
+        spinInterfaceOwnerId: "spin",
+        type: "spin-interface",
+      },
+    };
+    const html = renderToStaticMarkup(<KernelContext.Provider value={kernel}><SpinInterfaceInspectorPanel selection={graphSelection} /></KernelContext.Provider>);
+    expect(html).toContain("magnetoelectronic.fullmag.v2");
+    expect(html).toContain("Normal-metal object");
   });
 
   it("renders an unknown interface losslessly without mutation controls", () => {

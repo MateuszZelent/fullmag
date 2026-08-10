@@ -9991,3 +9991,2530 @@ Python/IR → planner → rzeczywisty FEM M2 solve z finalnym provenance,
 `external_lead`, wspólnym Oersted+torque, GPU/device-resident hot loop,
 FDM GPU, airbox/energia/p, zbieżnością h/p oraz ilościową walidacją FEM↔FDM i
 zewnętrznymi solverami.
+
+## 32.115. Typed `external_lead`: publiczny kontrakt i planner preflight (2026-08-09)
+
+Ten etap usuwa konkretny drift między istniejącym natywnym descriptor'em
+`fem_closed_current_extension.v1` (oraz zamkniętą geometrią
+`fem_closed_current_geometry.v1`) a publicznym authoringiem. Wcześniej native
+runner i `ProblemIR` miały wariant `ExternalLead`, ale Python, dekoder
+SceneDocument i eksporter skryptu nie potrafiły go odtworzyć, a planner
+odrzucał każdy descriptor bez rozróżnienia kompletności. Zmiana nie udaje
+wykonania fizycznego: dopuszcza wyłącznie kompletny, jawny descriptor do
+preflightu; świeży managed solve pozostaje osobną bramą.
+
+### 32.115.1. Kontrakt fizyczny i publiczne typy
+
+Dodano do `packages/fullmag-py/src/fullmag/model/current_transport.py`:
+
+- `ConservativeCurrentLeadInterfacePair` — kanonizuje parę trójkątnych ścian
+  urządzenia i leadu do rosnących, dodatnich stable IDs;
+- `ConservativeCurrentExternalLead` — przechowuje wersję operatora, revision,
+  digest, `drive_id`, niezerowy spadek potencjału elektrod zewnętrznych, pełny
+  tetraedryczny `lead_mesh`, przewodność per tet4, stable IDs leadu, kompletne
+  pary interfejsów, obie rozłączne elektrody oraz digest przewodności;
+- `ConservativeCurrentView.closure` — jawny tagged union
+  `ConservativeCurrentClosedGeometry | ConservativeCurrentExternalLead`.
+
+Walidacja Python odrzuca: operator inny niż
+`fem_closed_current_extension.v1`, zerowy spadek napięcia, brak tet4 lub
+niezgodne offsety/connectivity, niezgodną liczbę przewodności, duplikaty lub
+niekształtne pary interfejsu i puste elektrody. `SceneDocument` i canonicalny
+script builder przenoszą ten sam payload bez zamiany na drut, endpoint
+correction albo domyślne `closed_geometry`.
+
+### 32.115.2. Authoring, IR i planner
+
+`crates/fullmag-authoring/src/validation.rs` wykonuje strukturalny preflight
+external leadu: deserializuje `MeshIR`, wymaga tet4/tri3, sprawdza długości i
+rozłączność stable IDs, przewodność, mapowanie każdej ściany
+`closure_interface` oraz rozłączne ściany elektrod zewnętrznych.
+`crates/fullmag-plan/src/spin_transport.rs` wykonuje drugi, mesh-aware
+preflight na resolved FEM mesh i akceptuje tylko kompletny descriptor. Nadal:
+
+- planner nie tworzy automatycznie leadu ani nie zgaduje interfejsów;
+- runtime ma teraz kodową ścieżkę one-way stage Oersted dla kompletnego
+  `external_lead`, ale nie ma jeszcze świeżego managed volumetric lead solve'u;
+- wspólny Oersted+torque, stage `J_c(m_stage)`, GPU i device-resident hot loop
+  pozostają fail-closed;
+- macierz capability nie jest awansowana do `production_executable`.
+
+### 32.115.3. Dowody i bramy
+
+Świeże dowody lokalne i zarządzane:
+
+```text
+Python current/external-lead/M2/spin/parity tests              48 passed
+fullmag-authoring external-lead focused test                  1 passed
+fullmag-authoring full library                               71 passed
+fullmag-plan spin_transport tests                            24 passed
+Python compileall changed modules                             PASS
+scientific-doc validator + contract tests                     20 passed; source-map PASS
+```
+
+Pełne testy `fullmag-authoring` i `fullmag-plan` wykonano w zarządzanym
+kontenerze `fem-cpu`, z izolowanym `CARGO_TARGET_DIR`; oba zakończyły się
+`exit 0`. To zamyka bramę kontraktu authoring/SceneDocument/planner, ale nie
+jest dowodem wykonania native FEM external-lead. `/mnt/fullmag-zfn2-native`
+pozostaje obecnie `ro`, a `/tmp` ma około `1.1 GiB` wolnego miejsca, więc
+rzeczywisty fixture runtime musi użyć zarządzanej ścieżki kontenerowej z
+artefaktami pod `/zfn2/mateuszz/git/fullmag` (nie CIFS). Nie usuwano cache'u i
+nie ingerowano w proces trzymający lock.
+
+### 32.115.4. Następne bramy — bez zmiany statusu produkcyjnego
+
+1. przeprowadzić managed test authoringu Rust i fixture Python/IR → planner →
+   native FEM z rzeczywistym lead mesh;
+2. wykonać bilans prądu na interfejsie, znak, zbieżność h/p i porównanie z
+   `closed_geometry` oraz niezależnym FEM/FDM oracle;
+3. dodać wspólny stage callback Oersted+torque z `J_c(m_stage)`;
+4. dopiero potem kwalifikować GPU/device-resident, airbox, energię, MuMax,
+   BORIS/NeuralMag i aktualizować capability matrix.
+
+Najwyższy uczciwy status tego etapu: **typed authoring + SceneDocument/script
+round-trip + planner preflight implemented; native external-lead execution
+not qualified**. Globalny cel STT/SOT/SHE/Oersted pozostaje częściową
+implementacją i nie jest produkcyjnie zamknięty.
+
+## 32.116. One-way stage Oersted dla `external_lead` (2026-08-09)
+
+Ten etap usuwał nieuzasadnione rozróżnienie w runtime: native adapter
+`fem_closed_current_extension.v1` potrafił już materializować volumetryczny
+lead, ale planner i provider stage odrzucały go przed wykonaniem. Zmieniono
+wyłącznie ścieżkę one-way Oersted; nie promuje to reciprocal M2 ani wspólnego
+Oersted+torque.
+
+### 32.116.1. Zmiana fizyczna i numeryczna
+
+- planner rozpoznaje `closed_geometry` i kompletny `external_lead` jako
+  konserwatywne zamknięcie dla `fem_stage_oersted_callback.v1`;
+- runner skaluje przy każdym dokładnym czasie RK bazowy
+  `outer_electrode_potential_drop_v` leadu tym samym bezwymiarowym
+  `a(t_stage)`, którym skaluje source-cut w geometrii zamkniętej;
+- gdy `a(t_stage)=0`, provider publikuje jawne zerowe `H_oe` i nie wywołuje
+  native solve'u, ponieważ descriptor external-lead wymaga niezerowego napędu;
+- identyfikacja etapu, rewizja źródła, digest pola i transakcja
+  begin/commit/rollback pozostają wspólne z dotychczasowym callbackiem.
+
+### 32.116.2. Dowody
+
+```text
+managed fullmag-plan spin_transport tests                         24 passed
+managed fullmag-runner stage_oersted external-lead test             1 passed
+managed fullmag-authoring full library                             71 passed
+Python external-lead/M2 focused tests                              48 passed
+scientific-documentation-contract tests                            20 passed
+```
+
+Test runnera wykonano z `--features fem-gpu`, aby moduł `stage_oersted` był
+rzeczywiście skompilowany; wcześniejszy test bez tej flagi uruchamiał zero
+testów tego modułu i nie stanowił dowodu. Test jest kontraktem skalowania
+descriptoru, nie pełnym solve'em na dwóch geometrycznie stykających się
+meshes.
+
+### 32.116.3. Granica kwalifikacji
+
+Pozostają wymagane: fixture Python/IR → planner → native z geometrycznie
+coincident interface, bilans przepływu po interfejsie, znak i jednostki,
+zbieżność `h/p`, porównanie `external_lead` z `closed_geometry` oraz niezależny
+FEM/FDM oracle. Dopiero po tych bramach można aktualizować capability matrix.
+Status etapu: **one-way external-lead stage callback implemented and contract-
+tested; managed end-to-end external-lead solve not qualified**.
+
+## 32.117. Audyt Explorera i ścieżki UI dla modułów prądowych (2026-08-09)
+
+Audyt objął aktualny `master` oraz współdzielony dirty worktree. Sprawdzono
+łańcuch Python/SceneDocument → `ProblemIR` → planner/provenance → API v2 →
+resource hooks → Explorer → selection → Inspector, osobno dla FDM i FEM.
+Pełne ustalenia zapisano w:
+`docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/AUDYT_UI_EXPLORER_FIZYKI_PRADOWEJ_2026-08-09.md`.
+
+### 32.117.1. Co było już poprawne
+
+- Po pomyślnym odczycie `GET /v2/sessions/current/model/physics-graph`
+  Explorer buduje moduły z canonicalnego graphu, a nie z rodzinnych list.
+- Pusty, poprawnie załadowany graph jest autorytatywny: brak
+  `current_transport` nie pokazuje zależnych modułów spin/interface/torque/
+  Oersted.
+- Scope jest grupowany zgodnie z rozdziałem `applies_to` i `solve_domain`:
+  current lokalny trafia pod obiekt/region, cross-object pod interfejsy, a
+  Oersted pozostaje w `Global Physics`, zachowując `depends_on` do źródła.
+  Globalny `applies_to` Oersteda jest fizycznie poprawny i nie może być
+  zastępowany scope'em lokalnego źródła.
+- CRUD authoringu ma typed API, rewizję bazową, walidację i fail-closed dla
+  nieznanych wariantów. Istnieją dedykowane panele dla current transport,
+  spin transport/interface, spin torque i Oersted.
+- `j=0` pozostawia jawnie authored moduł jako `inactive`; brak modułu nie jest
+  syntetyzowany przez zerowy napęd.
+
+### 32.117.2. Luki znalezione w audycie
+
+1. **Fallback Explorera naruszał invariant obecności.**
+   `ExplorerModule.tsx` przekazywał `physicsGraph.data ?? undefined`, a
+   `buildModelTree.ts` w stanie bez danych graphu dodawał pięć niezależnych
+   legacy roots. W pierwszym `loading`, 404/409 lub błędzie mogły więc pojawić
+   się moduły prądowe bez potwierdzenia w canonicalnym graphie. Recenzja
+   doprecyzowała, że po wcześniejszym sukcesie resource zachowuje dane jako
+   `stale`; problem dotyczy przede wszystkim stanu bez pierwszych danych.
+2. **Status `semantic_only` był prezentowany jako `ready`.** To miesza stan
+   authoringu z wykonaniem i walidacją runtime. `requested`, `resolved`,
+   `executed` i `validated` muszą pochodzić z planu/provenance, nie z samego
+   graph resource.
+3. **Graph nie ma cienkich metadanych prezentacyjnych wariantu.** Wszystkie
+   torque są obecnie `kind=spin_torque`, więc UI nie rozróżnia Slonczewski STT,
+   Zhang–Li STT, prescribed SOT ani deklarowanego wariantu SHE. Nie wolno
+   kopiować pełnego `family_payload`; potrzebne są kanoniczne metadata
+   `family/label` wyliczane w normalizerze.
+4. **Graphowy `physics.module` trafia do ogólnego overview.**
+   `PhysicsGraphModuleInspectorPanel` nie deleguje do istniejącego rodzinnego
+   authoringu, a bez payloadu pokazuje komunikat o braku edytowalnego modułu.
+5. **Ścieżka Python → Rust/API/UI nie zachowuje pełnego Zhang–Li.** Pythonowy
+   wariant serializuje `target`, wersje operatora/formuły i `lande_g`, lecz
+   typowany Rust `SceneDocument`, API i formularz Control Room ich nie
+   reprezentują. Analogicznie legacy `CurrentTransport.solve_region` nie jest
+   tłumaczony do graph scope; należy go jawnie zmapować do `SceneRegionRef` albo
+   odrzucić jako nierozwiązywalny.
+6. **Planner nie używa graphu jako filtra rodzinnych payloadów.** Graph jest
+   autorytatywny dla walidacji/provenance, ale backend planowany jest nadal z
+   list `ProblemIR`. Wymagany jest test: niezerowy payload + `activation=inactive`
+   musi zostać odrzucony albo jawnie pominięty zgodnie z docelowym kontraktem.
+7. **Ribbon ma mylące akcje.** `physics-oersted`, `physics-spin-torque` i
+   `physics-global` są statycznie disabled, mimo że menu `Physics →
+   Interactions` ma ścieżkę capability-gated. Należy je podłączyć do tych
+   samych Inspectorów albo usunąć; obecny test pokrywa tylko część tych akcji.
+8. **Wspólny Inspector template ma ograniczony zakres.**
+   `InspectorOverviewFrame` jest wspólny dla Visualization/Physics oraz
+   paneli prądowych przez `PhysicsInspectorOverview`, ale Object/Geometry/
+   Material używają tylko wspólnych prymitywów. Visualization nadal ma
+   czterokolumnowy metric strip bez odpowiedniej reguły <=420 px, z
+   `ellipsis/overflow`.
+9. **Distinct detail view nie jest globalnie zamknięty.** Wybieralny
+   `results.field_quantity` wpada do wildcardowego `PlaceholderPanel`; sam
+   współdzielony komponent listy/item transportu nie jest problemem, jeśli
+   selection prowadzi do innej treści.
+10. **Delete źródła nie jest cascade.** Usunięcie używanego current source ma
+    kontrakt HTTP 422 i zachowuje rewizję/scenę. Browser gate musi dowodzić
+    fail-closed 422, nie oczekiwać zniknięcia zależnych rows bez decyzji o
+    cascade delete.
+
+### 32.117.3. Wprowadzona poprawka graph-authoritative
+
+W aktualnym dirty worktree zaimplementowano wąską korektę pierwszej luki:
+
+- `ModelTreeSnapshot` i `ModelTreeResourceInputs` mają jawny
+  `physicsGraphStatus: ResourceStatus`;
+- `ExplorerModule` przekazuje `physicsGraph.data` oraz status bez zamiany
+  `null` na `undefined`;
+- gdy status jest `idle`, `loading`, `stale` albo `error`, `buildModelTree`
+  nie emituje żadnego legacy current/spin/interface/torque/Oersted root;
+- zamiast tego pojawia się dokładnie jeden nieinteraktywny
+  `physics.scope.unresolved` pod `Session Model`, ze statusem odpowiednio
+  `unavailable`, `queued`, `stale` albo `failed`;
+- `ready` z pustym graphiem nadal ukrywa wszystkie rodziny;
+- kompatybilność starszych bezpośrednich wywołań buildera jest zachowana tylko
+  wtedy, gdy status jest całkowicie nieprzekazany (`undefined`). Nie jest to
+  ścieżka produkcyjnego resource hooka.
+- Przy `stale` dane zachowane przez `useResource` nie są przekazywane do
+  `objectNodes`; dzięki temu stare object-scoped `physics.scope`/`physics.module`
+  również nie pojawiają się poza stanem `ready`.
+
+Dowód implementacji:
+
+```text
+buildModelTree.test.ts + physicsGraphTree.test.ts    2 pliki, 82 testy PASS
+Control Room typecheck                                 PASS (w chwili patcha)
+git diff --check dla pięciu plików UI                   PASS
+```
+
+Świeży rerun typechecku na bieżącym współdzielonym worktree zatrzymuje się na
+trzech wcześniejszych błędach `TransportAuthoringInspectorModel(.test)`
+związanych z typem `conservative_current_view: Record<string, never>` w
+zmodyfikowanym generated OpenAPI. Nie są to błędy pięciu plików poprawki
+graph-authoritative; do czasu ujednolicenia tego niezależnego kontraktu pełny
+typecheck pozostaje blockerem kwalifikacji UI.
+
+Nie wykonano jeszcze browser smoke ani HTTP→resource→Explorer end-to-end;
+poprawka nie awansuje UI do `production-qualified`. Pozostałe luki z §32.117.2
+pozostają otwartymi bramami planu.
+
+### 32.117.4. Granica fizyki i produktu
+
+Obecny UI potrafi złożyć MTJ jako kompozycję current + spin transport +
+Slonczewski + interface N/F oraz racetrack jako current + Zhang–Li/torque,
+ale nie ma jeszcze dedykowanego workflow `MTJ`/`racetrack`, scenariusza
+kwalifikacyjnego ani produkcyjnego testu ruchu skyrmionu/ściany i kąta Halla.
+Tożsamość modułu w Explorerze nie jest dowodem wykonania STT/SOT/SHE,
+Oersteda, FDM ani FEM. Przed zamknięciem celu wymagane są osobne bramy:
+authoring round-trip, planner activation filter, browser scope/Inspector,
+managed runtime oraz ilościowa walidacja z external solvers.
+
+## 32.118. Domknięcie typu `conservative_current_view` w OpenAPI i UI (2026-08-09)
+
+Usunięto blocker pełnego typechecku opisany w §32.117.3. Pole
+`KnownSceneCurrentTransport.conservative_current_view` jest celowo elastyczną
+mapą JSON na granicy SceneDocument: authoring zachowuje komplet descriptoru,
+a walidator i planner wykonują ścisłą walidację jego wersji, topologii i
+zamknięcia. Adnotacja `value_type = Object` nadpisywała jednak inferencję
+`BTreeMap<String, serde_json::Value>` w `utoipa` i generowała obiekt bez
+`additionalProperties`. `openapi-typescript` interpretował go prawidłowo, lecz
+bezużytecznie, jako `Record<string, never>`.
+
+Zastosowano istniejący wzorzec kontraktu API:
+
+- źródłowy schemat używa `#[schema(additional_properties, nullable)]` bez
+  nadpisania typu mapy;
+- dodano test dokumentu OpenAPI wymagający
+  `KnownSceneCurrentTransport.properties.conservative_current_view.additionalProperties
+  == true`;
+- wygenerowany typ klienta ma teraz `{ [key: string]: unknown } | null`, więc
+  pełny descriptor przechodzi przez Inspector bez ręcznego castu lub
+  zawężenia danych;
+- pliki OpenAPI i klienta odtworzono ze źródła, bez ręcznej edycji artefaktów
+  generowanych.
+
+Świeże dowody:
+
+```text
+fullmag-api focused OpenAPI contract test                 1 passed
+Control Room API generation                              PASS
+Control Room typecheck                                   PASS
+TransportAuthoringInspectorModel                         21 passed
+Control Room architecture hygiene                        PASS
+git diff --check                                         PASS
+```
+
+Kompilację Rust przeprowadzono z `CARGO_TARGET_DIR` w zarządzanym widoku
+artefaktów pod `/tmp/fullmag-zfn2-build/cargo-targets/`, fizycznie utrzymywanym
+pod `/zfn2/mateuszz/git/fullmag`; nie utworzono ciężkiego `target/` w
+workspace. Zmiana zamyka wyłącznie spójność authoring/OpenAPI/UI dla jawnego
+descriptoru. Nie jest dowodem native FEM solve'u, poprawności fizycznej
+wyniku ani kwalifikacji produkcyjnej M2.
+
+## 32.119. Kanoniczna tożsamość wariantu w physics graph (2026-08-09)
+
+Usunięto luki 2 i 3 z §32.117.2 bez wprowadzania drugiego modelu fizyki w UI.
+Nota `docs/physics/0995-physics-module-scope-and-activation.md` definiuje teraz
+cienki kontrakt `presentation.family`/`presentation.label`. Normalizer
+`SceneDocument` wylicza go z typowanego wariantu rodzinnego, więc Explorer nie
+zgaduje modelu z ID ani z tekstu nazwy. Dla torque rozróżniane są co najmniej:
+`slonczewski`, `zhang_li` i `prescribed_sot`; analogiczna identyfikacja
+obejmuje modele current transport, tryb spin transport, typ interfejsu,
+Oersted i napędy pola.
+
+API v2 publikuje metadata w `PhysicsGraphModuleResource`, ale nadal nie
+publikuje `family_payload`. Wygenerowane typy klienta wymagają
+`PhysicsGraphPresentationResource`. Explorer używa etykiety wariantu oraz
+zachowuje maszynowe `physicsModuleFamily`; ogólny Inspector pokazuje rodzinę z
+canonicalnego graphu. `capability=semantic_only` nie jest już oznaczane jako
+`ready`, lecz jako `unavailable`, przy zachowaniu wybieralności modułu i badge
+z jawną capability.
+
+Świeże dowody:
+
+```text
+fullmag-authoring physics_graph_contract                     10 passed
+fullmag-api physics-graph endpoint                            1 passed
+Control Room physicsGraphTree + buildModelTree               82 passed
+Control Room selected Inspector/Explorer tests               84 passed
+Control Room typecheck                                       PASS
+Control Room API generation                                  PASS
+Control Room architecture hygiene                            PASS
+scientific page source-map validator                         PASS
+scientific-documentation-contract unit tests                 20 passed
+git diff --check                                             PASS
+```
+
+To domyka prawdziwą identyfikację wariantu i uczciwy stan semantyczny w
+Explorerze, ale jeszcze nie deleguje graphowego wyboru do edytowalnego
+rodzinnego Inspectora. Nie zmienia także planera, capability matrix ani statusu
+wykonawczego backendów.
+
+## 32.120. Routing graphu do rodzinnych Inspectorów (2026-08-09)
+
+Usunięto lukę 4 z §32.117.2. Węzeł `physics.module` pozostaje kanoniczną
+tożsamością Explorera, lecz warstwa selection mapuje znane `kind` po stabilnym
+`module.id` do istniejącego panelu rodzinnego:
+
+- `current_transport` → Current Transport Inspector;
+- `spin_transport` → Spin Transport Inspector;
+- `spin_interface` → Spin Interface Inspector z owner ID pochodzącym z
+  `depends_on`;
+- `spin_torque` → Spin Torque Inspector, zachowujący konkretny wariant z
+  resource payload;
+- `oersted_field` → Oersted Field Inspector;
+- `regional_field_drive` → Field Drive Inspector.
+
+Nie skopiowano formularzy ani payloadów do graphu. Nieznany `kind` nadal
+trafia do read-only `PhysicsGraphModuleInspectorPanel`. Spin Interface
+Inspector potrafi teraz rozwiązać element po parze stabilnych
+`owner_spin_transport_id`/`interface_id`, bez kruchego indeksu listy; root
+kolekcji nadal otwiera tryb tworzenia z wyborem właściciela.
+
+Świeże dowody:
+
+```text
+Explorer selection + rodzinne Inspectory                    84 passed
+Spin Interface graph-id selection regression                 PASS
+Control Room typecheck                                       PASS
+```
+
+Zmiana domyka nawigację Explorer → edytowalny Inspector, ale nie stanowi
+browser smoke i nie dowodzi powodzenia mutacji HTTP na żywej sesji.
+
+## 32.121. Bezstratny kontrakt authoringu Zhang–Li (2026-08-09)
+
+Domknięto utratę parametrów fizycznych między Python/SceneDocument, Rust,
+OpenAPI i Inspectorem. Kanoniczny rekord `zhang_li` zachowuje teraz jawnie:
+
+- `schema_version = zhang_li_torque.v1`;
+- `formula_version` rozróżniające legacy, Fullmag v1 i wariant zgodny z
+  konwencją MuMax3;
+- `operator_version` rozróżniające operator referencyjny Fullmag i MuMax3;
+- `target` jako typowane odwołanie do regionu sceny;
+- współczynnik Landégo `lande_g`.
+
+Walidator wymaga spójnej kombinacji schematu, formuły i operatora. Wariant
+MuMax3 wymaga `lande_g = 2`, a wariant legacy odrzuca pola kanoniczne zamiast
+pozornie je przyjmować i ignorować. Eksport skryptu usuwa identyfikator tylko
+dla rzeczywistego wariantu legacy; pełny rekord zachowuje swoją fizyczną
+tożsamość. OpenAPI publikuje typowane enumy wersji, a Inspector odczytuje i
+zapisuje komplet pól. Zmiana modelu torque resetuje również formułę, schemat i
+operator do wartości właściwych nowemu wariantowi, aby UI nie tworzyło
+hybrydowego, niewalidowalnego rekordu.
+
+Nota `docs/physics/0960-spin-torque-sign-units-and-prescribed-sot.md` oraz jej
+source map otrzymały kompletne wiersze tabeli parametrów i mapowania źródeł.
+
+Świeże dowody:
+
+```text
+fullmag-authoring pełny zestaw testów                       83 passed
+fullmag-api typed spin authoring OpenAPI                    1 passed
+Control Room wybrane Inspectory/Explorer                   85 passed
+Control Room regresja zmiany modelu torque                  PASS
+Control Room typecheck                                      PASS
+Control Room architecture hygiene                           PASS
+scientific page validators 0960 i 0995                      PASS
+scientific-documentation-contract unit tests               20 passed
+```
+
+Jest to kwalifikacja bezstratnego kontraktu authoringowego, nie dowód
+wykonania operatora Zhang–Li przez FDM/FEM ani zgodności ilościowej z MuMax3.
+Te bramy pozostają osobną częścią kwalifikacji runtime i benchmarków.
+
+## 32.122. Jednoznaczny zakres legacy `solve_region` (2026-08-09)
+
+Usunięto błąd semantyczny, przez który `prescribed_density` z historycznym
+`solve_region="film"` i pustym `domain` pojawiał się w physics graph jako
+moduł globalny. Normalizer mapuje teraz dokładny, zwalidowany `object_id` na
+`SceneRegionRef { object_id, region_id: None }`, a następnie używa wspólnej
+ścieżki `validate_domain`. Jawne `domain` ma pierwszeństwo i nie jest
+nadpisywane przez pole legacy. Nie wprowadzono dopasowania etykiet, nazw
+regionów ani indeksów, więc błędna referencja nadal zamyka się bezpiecznie.
+
+Świeże dowody:
+
+```text
+physics_graph_contract                                    11 passed
+regresja legacy solve_region -> object scope               PASS
+scientific page 0995 source-map validator                  PASS
+```
+
+Zmiana kwalifikuje semantyczne przypisanie w graphie i Explorerze. Nie dowodzi
+jeszcze, że planner filtruje rodzinne payloady wyłącznie według aktywnego
+podgrafu ani że backend materializuje tę maskę w wykonanym solve.
+
+## 32.123. Capability-gated ribbon dla Oersteda i spin torque (2026-08-09)
+
+Usunięto statycznie wyłączone, dublujące przyciski `Oersted` i `Spin Torque`.
+Obie akcje używają teraz tej samej komendy
+`RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND` i tych samych identyfikatorów
+interakcji co menu `Physics → Interactions`. `buildPhysicsTabContent` rozwiązuje
+`interaction.oersted_field` i `interaction.spin_torque` z
+`capabilities.active_lane.operations`; obsługiwany wariant otwiera właściwy
+Inspector, a nieobsługiwany pozostaje disabled z przyczyną capability w
+tooltipie. Nie powstała druga ścieżka authoringu ani backendowe zgadywanie.
+
+`Global Physics` pozostaje świadomie disabled, ponieważ nie ma jeszcze
+kanonicznego, edytowalnego zasobu global-physics. Podpięcie go do formularza
+obiektu byłoby błędnym scope'em, a samo przekierowanie do Zeemana nie
+rozwiązywałoby authoringu globalnego pola.
+
+Świeże dowody:
+
+```text
+Control Room ribbonStructure                              87 passed
+direct action capability regression                        PASS
+Control Room typecheck                                     PASS
+```
+
+To domyka lukę ribbonu dla dwóch istniejących rodzin. Nie jest dowodem
+browser smoke ani poprawnego wykonania solvera.
+
+## 32.124. Physics graph jako filtr wykonania planera (2026-08-09)
+
+Domknięto lukę 6 z §32.117.2 dla rodzin current transport, spin torque/SOT i
+Oersted. Gdy `ProblemIR.physics_graph` jest obecny, rodzinny payload może
+zostać obniżony do operatora wyłącznie wtedy, gdy odpowiadający moduł ma stan
+`active` albo `configured`. Stany `inactive`, `blocked`, `unsupported` i
+`unresolved` pozostają widoczne w graphie oraz proweniencji, lecz są pomijane
+przez plan wykonawczy. Brak odpowiadającej tożsamości kończy planowanie
+fail-closed; graph nie jest już wyłącznie dekoracyjnym opisem obok list IR.
+
+Szczegóły wiązania:
+
+- current transport używa dokładnej pary `kind=current_transport` oraz
+  stabilnego `name`/module ID;
+- torque wymaga stabilnego ID przy obecnym graphie; nieidentyfikowalne warianty
+  legacy nie mogą wejść tylną ścieżką;
+- brak aktywnego torque przy obecnym graphie zeruje również kompatybilnościowe
+  top-level STT fields, więc legacy fallback nie reaktywuje modułu;
+- historyczny `EnergyTermIR` Oersteda nie ma jeszcze pola ID, dlatego planner
+  używa dokładnego, kanonicznego `source_path`: `/energy/{i}` dla Python IR lub
+  `/oersted_fields/{i}` dla SceneDocument. Wymagane jest dokładnie jedno
+  dopasowanie; zero albo wiele dopasowań jest błędem.
+- brak `physics_graph` zachowuje dotychczasową kompatybilność starego
+  `ProblemIR`.
+
+Testy regresyjne używają celowo niezerowych payloadów oznaczonych jako
+`inactive`, aby nie mylić filtracji z fizycznie zerowym napędem.
+
+Świeże dowody:
+
+```text
+fullmag-plan unit tests                                   317 passed
+fullmag-plan physics_graph_resolution                     10 passed
+inactive nonzero current/torque/Oersted regressions         PASS
+scientific page 0995 source-map validator                   PASS
+rustfmt + git diff --check                                  PASS
+```
+
+Filtr kwalifikuje decyzję planera, ale nie jest jeszcze dowodem browserowym ani
+ilościową kwalifikacją operatorów backendowych. Docelowa następna rewizja
+`EnergyTermIR` powinna przenieść stabilne ID Oersteda bez bridge'u
+`source_path`; obecny bridge jest fail-closed i zachowuje oba istniejące
+kanoniczne wejścia authoringu.
+
+## 32.125. Domknięcie szablonu Inspectora i aktualny stan kwalifikacji UI (2026-08-09)
+
+Po recenzji refaktoryzacji Explorera usunięto dwie pozostałe luki warstwy
+prezentacji. Responsywność podsumowania nie należy już do pojedynczego panelu
+Physics: wspólny `InspectorOverviewFrame`, używany również przez
+Visualization, przełącza cztery metryki na dwie kolumny przy szerokości
+kontenera `420 px`, a przy `260 px` na jedną kolumnę. Dzięki temu panele nie
+kopiują lokalnych wyjątków CSS i zachowują ten sam kontrakt przy zmianie
+szerokości docka.
+
+Semantyczny węzeł `results.field_quantity` otrzymał dedykowany
+`FieldQuantityInspectorPanel` zamiast generycznego placeholdera. Panel pobiera
+kanoniczny zasób metadanych pola i pokazuje komponenty, lokalizację, stan
+materializacji, jednostkę, statystyki, rewizję i proweniencję. Zachowuje to
+inwariant „jeden rodzaj węzła semantycznego → jeden właściwy Inspector”.
+
+Świeże dowody kodowe:
+
+```text
+Explorer + Inspector + Ribbon focused suites             362 passed
+Control Room typecheck                                      PASS
+pełny Control Room Vitest                       4835/4837 passed
+```
+
+Dwa błędy pełnego Vitest są poza tym refaktorem:
+
+1. `ChartLegend.rowsBinary.integration.test.tsx` obserwuje trzy wywołania
+   `rowsBinary` zamiast jednego;
+2. `apiHygieneScript.test.ts` wykrywa ręcznie zapisany endpoint v2 w
+   `DataPreviewDialog.test.tsx`.
+
+Nie wolno zatem oznaczyć całego frontendu jako zielonego na podstawie focused
+suites. Próba świeżego smoke przez kontroler przeglądarki zakończyła się przed
+otwarciem strony błędem infrastruktury
+`sandboxCwd is not a local file URI: file:///home/kkingstoun/git/fullmag/fullmag`.
+Nie jest to błąd aplikacji, ale oznacza brak dowodu DOM/viewport dla aktualnego
+bundla. Browser smoke pozostaje otwartą bramą.
+
+Audyt wykazał, że wcześniejsza diagnoza o całkowitym braku kanonicznego
+authoringu globalnego była zbyt szeroka. Exchange, Demag i Zeeman mają już
+study-level kontrakt, a `RegionalFieldDrive` ma typowany target `global` oraz
+CRUD API. Brakowało natomiast jednoznacznego wejścia w Ribbonie i osobnego
+widoku zakresu globalnego. Nie wolno podłączać tych operacji do Inspectora
+materiału ani tworzyć pustego węzła, gdy problem nie zawiera modułu.
+
+Równoległa próba publicznego managed FEM fixture M2 z jednoczesnym Oerstedem i
+torque również nie dostarczyła świeżego wyniku. Recepta poprawnie wykryła
+nieaktualny runtime, lecz odbudowa czekała na istniejącą blokadę
+`.fem-gpu-host.export.v2.lock`; jej właściciel prowadził wcześniejsze
+`just rebuild-fem-runtime` od około 17 godzin. Audyt host-level wykazał, że nie
+wykonuje już kompilacji: jego pruner utknął w `readlink -f` na niedostępnym
+`/mnt/storage_5/scratch/pl0095-01/`. Aktualny
+`scripts/prune_managed_fem_runtimes.sh` nie kanonizuje już arbitralnych targetów
+`/proc/*/{exe,cwd}` i jego testy przechodzą `4/4`, ale osierocony proces działa
+ze starszego snapshotu źródeł i nadal trzyma flock. Przerwano wyłącznie nowy
+proces oczekujący i nie naruszono współdzielonego właściciela blokady. Z tego
+powodu fixture ma status **zaimplementowany, lecz świeżo niewykonany**, a nie
+`PASS`.
+
+## 32.126. Produkcyjne wejście Ribbon → Global Physics (2026-08-09)
+
+Akcja `Global Physics` nie jest już martwym, statycznie wyłączonym elementem.
+Buduje capability-aware menu z istniejącego kanonicznego katalogu interakcji,
+ale filtruje je do pozycji o `scope=global`:
+
+- Exchange;
+- Demagnetization;
+- Zeeman field.
+
+Każda pozycja używa tej samej komendy
+`RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND` co główne menu Interactions. Nie
+powstał drugi formularz ani alternatywny payload. `current_transport` nie jest
+automatycznie oferowany w tym menu, ponieważ ma zakres `global_or_region` i
+powinien być dodawany ze świadomie wybranego kontekstu, a nie przypadkowo jako
+pole globalne. Globalne `RegionalFieldDrive` pozostaje dostępne przez swój
+typowany zasób i węzeł graphu; osobne tworzenie nowego drive z tej akcji wymaga
+dedykowanego trybu create w `RegionalFieldDrivePanel` i pozostaje następną
+bramą UI.
+
+Explorer nadal nie pokazuje pustego `Global Physics`. Węzeł powstaje wyłącznie
+z rzeczywistego globalnego modułu w `physics_graph`; Ribbon służy authoringowi,
+a Explorer prezentuje stan kanoniczny po zatwierdzonej mutacji.
+
+Świeże dowody:
+
+```text
+Control Room ribbonStructure                               88 passed
+Global Physics scope-filter regression                      PASS
+Control Room typecheck                                      PASS
+```
+
+Nie jest to jeszcze browser smoke ani dowód mutacji HTTP na żywej sesji.
+
+## 32.127. Wspólna tożsamość i telemetry FEM M2 Oersted + torque (2026-08-09)
+
+Wspólny provider FEM M2 zwraca oba wkłady z jednego rozwiązania dla dokładnej
+czwórki `(m_stage, t_stage, stage_identity, envelope)`: torque w `1/s` oraz
+`H_oe` w `A/m`. Adapter torque i adapter Oersteda współdzielą ten sam bounded
+cache przez `Arc`; pierwsze wywołanie wykonuje solve, a drugie dla identycznego
+klucza odczytuje dokładnie ten sam stan źródłowy.
+
+Uzupełniono proweniencję tak, aby ten fakt był audytowalny, a nie jedynie
+wynikał ze struktury kodu:
+
+- oba callbacki publikują rzeczywistą politykę
+  `fem_stage_transport_oersted_callback.v1`, gdy korzystają ze wspólnego
+  providera;
+- obserwacja torque otrzymuje wspólny `source_state_digest`, obok
+  `source_state_revision` i `torque_sha256`;
+- obserwacja Oersteda publikuje ten sam digest jako
+  `source_view_identity_digest` oraz hash pola pochodzący bezpośrednio ze
+  wspólnej ewaluacji;
+- telemetry obu adapterów zawiera `shared_evaluator` z `solve_count` i
+  `cache_hit_count`, co pozwala odrzucić runtime wykonujący dwa niezależne
+  solve'y dla tego samego etapu.
+
+Świeży dowód kompilacyjny:
+
+```text
+fullmag-runner cargo check --features fem-gpu                  PASS
+rustfmt + git diff --check                                     PASS
+```
+
+Check użył targetu na szybkim wolumenie `/zfn2` i zastanego artefaktu ABI
+wyłącznie jako diagnostycznej ścieżki link-discovery. Nie zastępuje managed
+runtime proof. Publiczny fixture Python zawiera już jednocześnie torque i
+`OerstedField(source=charge.name)`, ale jego świeże wykonanie pozostaje
+zablokowane przez opisaną w §32.125 współdzieloną blokadę eksportu runtime.
+
+## 32.128. Stabilne ID Oersteda w kanonicznym EnergyTermIR (2026-08-09)
+
+Usunięto zależność bieżącego authoringu od indeksu listy Oersteda. Oba warianty
+`EnergyTermIR::OerstedCylinder` i `EnergyTermIR::OerstedField` przenoszą teraz
+opcjonalne `id`. `Option` jest świadomym adapterem odczytu historycznego IR:
+stary dokument bez pola nadal się deserializuje, natomiast wszystkie bieżące
+powierzchnie authoringu emitują stabilną tożsamość:
+
+- domyślny cylinder: `oersted:cylinder`;
+- pole związane ze źródłem `drive`: `oersted:drive`;
+- jawne `id` użytkownika jest zachowywane bezstratnie.
+
+Python DSL waliduje niepuste ID i zapisuje je do IR. SceneDocument nie usuwa
+już ID podczas projekcji buildera ani eksportu skryptu. Renderer generuje
+jawny argument `id=...`, więc Python → Scene → Python zachowuje tę samą
+tożsamość. `ProblemIR` odrzuca obecne, ale puste ID; brak pola pozostaje
+dozwolony wyłącznie dla kompatybilności historycznej.
+
+Planner najpierw wiąże Oersteda przez dokładną parę
+`kind=oersted_field`/`module.id`. Test regresyjny celowo używa niezgodnego
+`source_path`, a mimo to poprawnie filtruje moduł po ID. Dopiero rekord legacy
+z `id=None` korzysta z ograniczonego bridge'u `/energy/{i}` lub
+`/oersted_fields/{i}`. Tym samym zmiana kolejności listy nie zmienia już
+tożsamości nowych problemów.
+
+Świeże dowody:
+
+```text
+fullmag-ir + fullmag-authoring + fullmag-plan             675 passed
+Python Oersted/current/script/M2 focused             101 + 73 subtests passed
+stable-ID planner regression                               PASS
+scientific page 0995 + contract tests                  PASS + 20
+rustfmt + git diff --check                                  PASS
+```
+
+Nie jest to awans numerycznej kwalifikacji operatora Oersteda. Zamyka
+tożsamość publicznego kontraktu i usuwa indeks listy z bieżącej ścieżki
+wykonania; bridge pozostaje jedynie jako czytnik dokumentów historycznych.
+
+## 32.129. Publikacyjny kontrakt stabilnego ID i ponowny audyt blokady FEM (2026-08-09)
+
+Główna publikacja dynamicznego prądu i Oersteda została uzupełniona po zmianie
+`EnergyTermIR`. Tabela publicznych parametrów opisuje teraz
+`OerstedCylinder.id` i `OerstedField.id`, ich deterministyczne wartości
+domyślne, walidację oraz mapowanie do `energy_terms[].id`. Indeks źródeł i
+maszynowo walidowana mapa wskazują klasy Python, eksporter skryptu oraz
+walidator `ProblemIR`. Dzięki temu stabilna tożsamość nie jest wyłącznie
+zachowaniem kodu ani wpisem w addendum planu, lecz częścią kanonicznej
+publikacji fizycznej.
+
+Świeże dowody:
+
+```text
+scientific page 0980 source-map validator                  PASS
+scientific-documentation validator tests                    8/8
+jq + git diff --check                                      PASS
+```
+
+Ponowiono również publiczną receptę:
+
+```text
+just fem-managed-headless cpu examples/fem_reciprocal_m2_public.py \
+  .fullmag/reports/fem-m2-stage-coupled-public
+```
+
+Recepta poprawnie uznała bundle za niezgodny z bieżącym snapshotem i weszła w
+zarządzaną odbudowę, lecz ponownie zatrzymała się na istniejącym flocku.
+Odczytowy audyt hosta potwierdził, że właściciel z §32.125 nadal żyje:
+`just rebuild-fem-runtime` oraz jego `flock` działają od około 18 godzin, a
+potomek starego prunera pozostaje w `request_wait_answer` dla
+`readlink -f -- /mnt/storage_5/scratch/pl0095-01/`. Zatrzymano wyłącznie nowy
+proces oczekujący. Bez zgody właściciela współdzielonego środowiska nie
+zakończono obcego procesu, dlatego publiczny fixture nadal ma status
+**zaimplementowany, świeżo niewykonany**, a nie `PASS`.
+
+## 32.130. Zakres zaznaczenia Ribbon → Current Transport Inspector (2026-08-09)
+
+Domknięto lukę authoringu, której nie wykrywała sama obecność poprawnych
+węzłów w Explorerze. Komenda Ribbon zachowywała `objectId` i opcjonalny
+`regionId`, lecz `PhysicsInteractionPanel` otwierał
+`TransportAuthoringInspector` bez przekazania tego kontekstu. Nowy zasób
+prądowy zaczynał więc jako globalny draft, mimo że użytkownik wybrał konkretny
+ferromagnetyk lub region.
+
+Aktualny kontrakt jest jednoznaczny:
+
+- zaznaczony obiekt inicjalizuje `prescribed_density` z
+  `solve_region=object_id`; draft zachowuje równolegle kanoniczny
+  `domain=[{object_id}]`, aby przełączenie na solve Poissona nie zgubiło
+  zakresu;
+- zaznaczony region inicjalizuje `ohmic_poisson` z dokładnym
+  `domain=[{object_id, region_id}]`; nie używa historycznego `solve_region`,
+  ponieważ rozszerzyłoby ono napęd na cały obiekt;
+- przełączenie z prescribed na Poisson usuwa legacy `solve_region` i
+  `conductivity_s_per_m`, które są dla pełnego kontraktu Poissona
+  niedozwolone;
+- wariant `prescribed_density` jest niedostępny dla draftu o zakresie
+  regionalnym lub wielodomenowym, którego obecny format legacy nie potrafi
+  reprezentować bezstratnie;
+- edycja istniejącego zasobu ignoruje kontekst zaznaczenia i zachowuje zakres
+  zapisany w samym zasobie.
+
+Ścieżka Ribbon nie renderuje już nagich formularzy current transport, torque
+ani Oersteda. Wszystkie trzy używają tych samych rodzinnych paneli
+`PhysicsInspectorOverview` co selekcja węzła Explorera, dzięki czemu zachowują
+wspólny responsywny szablon, sekcję scope, status, lane i diagnostykę.
+`CurrentTransportInspectorPanel` rozróżnia dodatkowo scope `object` i `region`
+oraz przekazuje dokładny kontekst wyłącznie podczas tworzenia nowego zasobu.
+
+Świeże dowody:
+
+```text
+Transport/Spin/Inspector-template focused suites           111/111
+Explorer + Inspector + Ribbon aggregate                    409/409
+Control Room typecheck                                        PASS
+object-scope and exact-region regressions                      PASS
+scientific pages 0995/0980 source-map validators               PASS
+scientific-documentation validator tests                        8/8
+```
+
+Testy użyły `TMPDIR` na ext4-backed szybkim wolumenie pod `/zfn2`, ponieważ
+system plików root osiągnął 100% zajętości. Nie usunięto żadnego
+współdzielonego cache'u ani artefaktu innego procesu. Zmiana kwalifikuje
+authoring i bezstratne przekazanie scope'u, ale nie zastępuje browser smoke ani
+wykonania solvera dla obu modeli transportu.
+
+## 32.131. Dokładny target torque i globalna zależność Oersteda w UI (2026-08-09)
+
+Domknięto pozostałą utratę kontekstu w ścieżce Ribbon → rodzinny Inspector.
+Nowy torque otrzymuje dokładny target zaznaczonego obiektu lub regionu;
+istniejący rekord nie jest nadpisywany chwilowym zaznaczeniem. Widok scope'u
+rozróżnia `object` i `region` oraz pokazuje ten sam stabilny ref, który trafia
+do payloadu mutacji.
+
+Skorygowano równocześnie prezentację Oersteda. Moduł pola ma scope globalny,
+natomiast lokalny current transport jest jego zależnością. Inspector Oersteda
+zawsze pokazuje zatem `global:physics`. Gdy użytkownik uruchamia authoring z
+obiektu lub regionu, resolver przegląda kanoniczne zasoby current transport:
+
+- dokładny `domain` jest dopasowywany po `object_id` i opcjonalnym
+  `region_id`;
+- legacy `solve_region` może dopasować tylko scope obiektu, nigdy region;
+- dokładnie jeden kandydat inicjalizuje
+  `OerstedField(kind=oersted_field, id=oersted:{source}, source=...)`;
+- zero albo wiele kandydatów pozostawia wybór jawny i nie zgaduje źródła.
+
+Świeże dowody:
+
+```text
+SpinAuthoringInspector target/source regressions             10/10
+Control Room typecheck                                        PASS
+scientific page 0995 source-map validator                     PASS
+```
+
+Jest to kwalifikacja authoringu, scope'u i zależności UI. Nie jest dowodem
+wykonania pola Oersteda ani torque przez backend i nie zastępuje browser smoke.
+
+## 32.132. Typowany wybór źródła prądu dla STT i Oersteda (2026-08-09)
+
+Usunięto ostatni swobodny tekst z authoringu zależności prądowych. Pola
+`SpinTorque.current_source` oraz `OerstedField.source` są teraz selektorami
+budowanymi z rzeczywistych, rozpoznanych zasobów `CurrentTransport`. Dzięki
+temu UI nie może utworzyć literówki udającej poprawną krawędź grafu, a ta sama
+stabilna nazwa modułu przechodzi do payloadu mutacji.
+
+Kontrakt zachowuje rozdzielenie dwóch sposobów wymuszania torque:
+
+- pusta wartość `current_source` oznacza użycie jawnego
+  `current_density [A/m^2]`;
+- wybrany `CurrentTransport.name` wiąże torque z rozwiązanym źródłem;
+- `OerstedField(model=from_current_solution)` oferuje te same istniejące
+  źródła i nie zgaduje przy braku jednoznacznego dopasowania scope'u;
+- edycja historycznego rekordu wskazującego usunięte źródło pozostaje
+  bezstratna: identyfikator jest widoczny jako `unavailable`, a UI nie usuwa go
+  ani nie wybiera automatycznie pierwszego dostępnego modułu.
+
+Świeży dowód TDD:
+
+```text
+SpinAuthoringInspector current-binding regressions            13/13 PASS
+Explorer + Inspector + Ribbon aggregate                     412/412 PASS
+Control Room typecheck                                           PASS
+scientific page 0995 source-map validator                         PASS
+React Doctor changed scope                         87/100, 48 -> 46 warnings
+```
+
+Publikacja `0995` oraz jej mapa źródeł obejmują teraz tę regułę. Jest to
+domknięcie authoringu zależności i integralności identyfikatorów; nie awansuje
+ono kwalifikacji numerycznej STT ani Oersteda.
+
+Pierwsza wersja selektora zachowywała równocześnie domyślne
+`current_density=[0,0,0]` i wybrane `current_source`, przez co kanoniczna
+walidacja słusznie odrzucała payload. Jawny `Current binding` usuwa tę
+sprzeczność: zmiana na `Current transport` czyści gęstość, a zmiana na
+`Prescribed density` czyści źródło i odtwarza wektor domyślny tylko wtedy, gdy
+nie ma zachowanej wartości.
+
+Czyste helpery `currentSourceOptions` i `torqueCurrentBindingPatch` zostały
+umieszczone w `SpinAuthoringInspectorModel.ts`, a nie w pliku komponentu.
+Powtórny `react-doctor --scope changed` utrzymał wynik `87/100` i zmniejszył
+liczbę ostrzeżeń z 48 do 46; pozostałe ostrzeżenia są wcześniejsze albo dotyczą
+innych zmienianych równolegle powierzchni i nie były naprawiane przy okazji.
+
+## 32.133. Zachowanie targetu Zhang–Li w kanonicznym PhysicsGraphIR (2026-08-09)
+
+Audyt zależności źródła prądu wykrył rozjazd pomiędzy UI/Python a rustowym
+normalizatorem sceny. `ZhangLiSTT.target` był obecny w payloadzie authoringu i
+`ProblemIR`, lecz `torque_scope_and_source` oznaczał każdy znany Zhang–Li jako
+`Global`. W rezultacie Explorer oraz certyfikat realizacji graphu mogły
+prezentować szerszy zakres niż operator fizyczny.
+
+Normalizator używa teraz dla Zhang–Li tej samej reguły co pozostałe znane
+rodziny torque:
+
+- `target={object_id}` → `PhysicsScopeRef::Object`;
+- `target={object_id, region_id}` → `PhysicsScopeRef::Region`;
+- wyłącznie historyczny brak targetu pozostaje `Global`.
+
+Dodano regresję `zhang_li_target_is_preserved_as_exact_graph_scope`, która
+sprawdza równocześnie `applies_to` oraz `solve_domain`. Jej świeże wykonanie
+jest obecnie zablokowane przed dojściem do testu przez niezależne błędy
+kompilacji w równolegle zmienianym `crates/fullmag-ir/src/mesh_hints.rs`:
+jedną niedozwoloną konwersję `serde_json::Error` i dwa konflikty borrow
+`E0502`. Nie zmieniano tej cudzej ścieżki ani nie przedstawiono blokady jako
+zielonego testu.
+
+Zmiana naprawia kanoniczną semantykę zakresu graphu, lecz nie jest dowodem
+numerycznej kwalifikacji operatora Zhang–Li.
+
+## 32.134. Produkcyjny Ribbon → create Global Field Drive (2026-08-09)
+
+Domknięto otwartą bramę z §32.126. Menu `Global Physics` zawiera teraz
+`Field Drive`, które nie tworzy pustego węzła Explorera ani fikcyjnego modułu
+graphu. Dedykowana komenda ustawia typowaną selekcję draftu
+`physics.field-drive` z `draft=true`; `RegionalFieldDrivePanel` materializuje
+lokalny kanoniczny payload:
+
+- `kind=regional`, `target.kind=global`;
+- domyślne `B=1 mT`, kierunek `(0,1,0)` i stały waveform;
+- `activation=all_time_evolution` oraz `time_origin=stage_local`;
+- stabilne ID `field-drive`, z deterministycznym najmniejszym wolnym sufiksem
+  względem aktualnej listy zasobów.
+
+ID jest edytowalne tylko przed utworzeniem. Zapis draftu używa
+`createFieldDrive` (`POST`), natomiast istniejący moduł nadal używa
+`replaceFieldDrive` (`PUT`). Po udanym POST panel invaliduje typowany zasób z
+nową `scene_revision` i przełącza selekcję na rzeczywisty
+`physics-field-drive` z zapisanym ID, dzięki czemu kolejne Apply nie może
+nieumyślnie powtórzyć create. Explorer pokaże moduł dopiero po odświeżeniu
+kanonicznego graphu.
+
+Świeże dowody TDD:
+
+```text
+RegionalFieldDrive create model/render + Ribbon              95/95 PASS
+POST create / PUT replace exact mutation regression                  PASS
+Explorer + Inspector + Ribbon aggregate                    423/423 PASS
+Control Room typecheck                                               PASS
+scientific page 0995 source-map validator                            PASS
+React Doctor changed scope                                  87/100, 47 warnings
+```
+
+Jest to domknięcie authoringu globalnego napędu pola. Nie jest to browser
+smoke ani kwalifikacja numeryczna waveformu w FDM/FEM.
+
+React Doctor utrzymał wynik `87/100`. Jedno dodatkowo raportowane ostrzeżenie
+wynika z objęcia skanem istniejącego `RegionalFieldDrivePanelModel.ts`
+(`Array.includes` we wcześniejszym wyszukiwaniu etapu), nie z nowej ścieżki
+create; nie wykonywano niezwiązanego refaktoru przy okazji.
+
+Próba świeżego smoke w Control Room zakończyła się przed połączeniem z kartą
+`/workspace` błędem mostu
+`sandboxCwd is not a local file URI: file:///home/kkingstoun/git/fullmag/fullmag`.
+Nie jest to dowód błędu menu ani panelu, ale oznacza brak świeżego dowodu
+DOM/kliknięcia/POST dla aktualnego bundla; browser smoke pozostaje otwarty.
+
+## 32.135. Mechaniczna kwalifikacja pełnych artefaktów FDM SP5 (2026-08-09)
+
+Audyt kryteriów z §32.34 i raportu SP5 wykazał, że repo miało pełne artefakty
+CPU/CUDA oraz opis ich porównania, ale nie miało wersjonowanej bramy, która
+mechanicznie rozdziela parytet wewnętrzny od zgodności z MuMax3. Dodano
+`scripts/validate_fdm_sp5_runtime.py` wraz z testem jednostkowym i receptami
+`just verify-fdm-sp5-validator` oraz `just verify-fdm-sp5-artifacts`.
+
+Walidator fail-closed sprawdza problem, publiczne żądanie backendu/urządzenia,
+resolved execution engine, FP64, brak fallbacku, literalną siatkę i komórkę
+SP5, stałą politykę czasu, `10000` accepted steps, końcowy czas `1 ns`, pełne
+pole 4096 wektorów oraz identyczność harmonogramów CPU/CUDA. Dopiero potem
+oblicza pełnopolowy błąd CPU--CUDA i błąd średniej magnetyzacji względem
+referencji MuMax3. Nie odczytuje `qualification.json.status` jako dowodu,
+ponieważ plik generowany przez zwykły run słusznie ma `not_evaluated`.
+
+Świeże dowody:
+
+```text
+just verify-fdm-sp5-validator                              2/2 PASS
+Zhang-Li exact graph target regression                     1/1 PASS
+CPU--CUDA accepted schedule                                  equal
+CPU--CUDA max component field error          6.9388939039e-16 PASS
+MuMax3 max mean-component error              2.2795424643e-4 FAIL
+final qualification_status                         not_qualified
+```
+
+Raport:
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-qualification-v1-20260809-just.json`.
+Recepta artefaktowa kończy się kodem `1`, ponieważ próg zewnętrzny wynosi
+`1e-4`. Jest to oczekiwany i pożądany wynik: nowa infrastruktura zamyka lukę
+reprodukowalności, ale nie awansuje niezgodnej trajektorii.
+
+Przy okazji ponowiono regresję zachowania targetu Zhang--Li w
+`PhysicsGraphIR`. Wcześniejsza wersja testu wskazywała niedeklarowany region
+`film/free` i była poprawnie odrzucana przez walidację. Fixture używa teraz
+istniejącego scope'u obiektu `film`, który nadal odróżnia naprawione zachowanie
+od dawnego błędnego `Global`; test przechodzi na aktualnym drzewie.
+
+System plików root był pełny i nie przyjmował nawet małego patcha. Zamiast
+kasować dane przeniesiono nieaktywny cache kompilacji
+`/tmp/fullmag-review-runner-target` do
+`/zfn2/mateuszz/git/fullmag/build-archive/root-tmp-20260809/`, odzyskując około
+4,5 GB dostępnych bloków. Aktywny ext4-backed mount
+`/tmp/fullmag-zfn2-build` pozostał nietknięty. Próba przeniesienia większego
+cache'u została przerwana przed usunięciem źródła; źródło zachowano, a
+częściową kopię na `/zfn2` należy traktować wyłącznie jako niekwalifikowane
+archiwum do późniejszego uporządkowania.
+
+## 32.136. Jednoznaczny authoring fizyki prądowej w UI (2026-08-09)
+
+Ponowny audyt Explorera, Ribbonu i Inspectorów wykrył trzy ostatnie rozjazdy
+między zaakceptowanym kontraktem scope graph a bieżącą prezentacją UI.
+Wprowadzono następujące korekty:
+
+1. Explorer nie filtruje już modułów obecnych w autorytatywnym
+   `physics_graph` na podstawie lokalnej heurystyki „czy istnieje
+   `current_transport`”. Niekompletny `spin_transport`, `spin_torque` albo
+   `oersted_field` pozostaje widoczny jako `blocked`/`validation-blocked`, aby
+   użytkownik mógł zobaczyć i naprawić brakującą zależność. Brak modułu w
+   grafie nadal oznacza brak węzła w Explorerze.
+2. Komenda `ribbon.physics.select-interaction` respektuje typ zakresu
+   interakcji. `object_or_region` wymaga zaznaczonego obiektu lub regionu;
+   interakcja `global` ignoruje przypadkowe zaznaczenie obiektu i otwiera
+   globalny draft. Current Transport i Oersted zachowują jawny kontrakt
+   `global_or_object_or_region`.
+3. Usunięto konkurencyjne bezpośrednie przyciski Oersted i Spin Torque z
+   osobnej grupy `Drive / STT`. Jedynym wejściem ribbonowym jest teraz
+   capability-gated `Add Physics`; wszystkie rodziny przechodzą przez tę samą
+   komendę, wybór scope i właściwy rodzinny Inspector. Explorer pozostaje
+   prezentacją już zmaterializowanego kanonicznego grafu, a nie paletą
+   fikcyjnych modułów.
+
+Świeże dowody:
+
+```text
+Explorer + Inspector + Ribbon focused suite                 247/247 PASS
+Control Room typecheck                                               PASS
+Control Room architecture hygiene                                    PASS
+```
+
+Zmiana domyka kontrakt statyczny i komponentowy UI dla FDM/FEM. Nie stanowi
+jeszcze kwalifikacji interaktywnej: nadal wymagany jest browser smoke
+obejmujący zaznaczenie obiektu, `Add Physics -> Electric Current`, utworzenie
+STT/Oersteda, odświeżenie `physics_graph`, usunięcie źródła oraz pustą
+symulację bez fizyki prądowej. Każdy scenariusz musi zostać wykonany osobno dla
+FDM i FEM, z dowodem DOM, mutacji zasobu oraz zaktualizowanego Explorera.
+
+## 32.137. Obserwowane wykonanie modułów physics graph (2026-08-09)
+
+Dotychczasowy artefakt `physics_graph_provenance.v1.json` rozróżniał
+`resolved` i `executed`, ale runtime nie przekazywał obserwacji operatora STT.
+W rezultacie poprawnie zmaterializowany i faktycznie użyty Zhang--Li pozostawał
+oznaczony tylko jako `resolved`. Nie wolno naprawiać tego przez awansowanie
+wszystkich modułów obecnych w planie.
+
+`ExecutionProvenance` zawiera teraz `executed_physics_kinds`, wypełniane w
+punktach wykonawczych FDM CPU, FDM CUDA i native FEM tylko dla przebiegu
+czasowego, w którym operator torque jest rzeczywiście skonfigurowany. Direct
+minimization nie emituje takiej obserwacji. Warstwa artefaktów mapuje
+obserwowany rodzaj wyłącznie na aktywne moduły kanonicznego grafu; moduły
+`inactive` i `blocked` nie mogą zostać awansowane.
+
+Mapowanie samego rodzaju jest dodatkowo **fail-closed**: dokładnie jeden
+aktywny moduł danego rodzaju może zostać awansowany na `executed`. Jeżeli graf
+zawiera dwa aktywne moduły tego samego rodzaju, obserwacja rodzaju nie wybiera
+żadnego z nich. Pełna obsługa wielu równoległych instancji będzie wymagała
+przeniesienia stabilnego `module_id` aż do obserwacji backendu; nie wolno
+zastępować tej tożsamości heurystyką.
+
+Walidator SP5 wymaga teraz równocześnie:
+
+- `executed_module_ids=["sp5_zhang_li"]`;
+- stanu `executed` dla tego modułu;
+- `realized_cell_count=4096`;
+- liczby kroków wyprowadzonej z rzeczywistego stałego `dt`, dzięki czemu ta
+  sama brama obsługuje `1e-13 s`, `5e-14 s` i dalszy sweep zbieżności.
+
+Świeże dowody:
+
+```text
+fullmag-runner observed-kind regression                         1/1 PASS
+fullmag-runner ambiguous-kind fail-closed regression             1/1 PASS
+fullmag-runner physics_graph_runtime                             1/1 PASS
+SP5 artifact-validator unit tests                                3/3 PASS
+FDM CUDA SP5, dt=1e-13 s                                  run completed
+CUDA graph state                              sp5_zhang_li=executed
+CUDA realized_cell_count                                         4096
+```
+
+Artefakt CUDA:
+`/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-executed-graph-dt1e-13-20260809-v1`.
+Świeży zoptymalizowany przebieg CPU ukończono z `FULLMAG_CPU_THREADS=4`; jawna
+polityka czterech wątków zmniejszyła koszt kroku małej siatki z około
+`300--400 ms` do `7--9 ms`, bez zmiany liczby kroków ani wyniku.
+
+Wspólna brama dla `dt=1e-13 s` potwierdziła identyczny accepted schedule,
+pełnopolowy błąd CPU--CUDA `6.9388939039e-16` i wykonanie graphu na obu
+backendach. Brama kończy się oczekiwanym kodem `1`, ponieważ błąd względem
+MuMax3 `2.2795424643e-4` przekracza `1e-4`.
+
+Powtórzenie CPU i CUDA dla `dt=5e-14 s` dało 20000 kroków dynamicznych,
+pełnopolowy błąd między backendami `7.4940054162e-16` oraz błąd względem MuMax3
+`2.2793991698e-4`. Zmiana pełnego pola CPU między `dt` i `dt/2` ma maksimum
+`1.7869704683e-7` i RMS `1.7570575141e-8`. Rozjazd z MuMax3 nie jest zatem
+dominowany przez błąd czasowy tego kroku; SP5 pozostaje `not_qualified`, a
+następna diagnostyka dotyczy stanu relaksacji, demag i dokładnego stencil/BC.
+
+## 32.138. SP5: rozdzielenie relaksacji, demag i operatora Zhang--Li (2026-08-09)
+
+Dodano fail-closed komparator pełnych pól
+`scripts/compare_fdm_sp5_mumax_fields.py` oraz trzy testy jednostkowe. Brama
+czyta OVF2 Binary4, sprawdza topologię i porównuje 4096 wektorów dla stanu po
+relaksacji, trajektorii `J=0`, trajektorii napędzanej oraz różnicy odpowiedzi
+prądowej. Trzy testy komparatora przechodzą.
+
+Świeże kontrolowane przebiegi używają wspólnego pola początkowego MuMax3,
+Heuna, `dt=1e-13 s` i `t_end=1 ns`. Raport:
+
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-full-field-diagnostic-20260809-v2.json`.
+
+Wyniki:
+
+| przekrój | RMS komponentu | maksimum komponentu |
+|---|---:|---:|
+| natywna relaksacja Fullmag vs MuMax3 | `4.1698e-5` | `1.8525e-4` |
+| wspólny stan, `J=0` | `4.1866e-5` | `1.8544e-4` |
+| wspólny stan, `J=1e12 A/m^2` | `2.6945e-4` | `2.6553e-3` |
+| odpowiedź prądowa po obustronnym odjęciu `J=0` | `2.7246e-4` | `2.6507e-3` |
+
+Dodatkowa trajektoria torque-only, bez exchange i demag, daje RMS
+`3.4779e-5` przy sygnale RMS `6.8018e-1`, czyli względnie około `5.1e-5`.
+Wniosek jest zawężony, ale mocny: nie wolno zmieniać prefaktora ani znaku
+Zhang--Li na podstawie obecnego błędu SP5. Izolowany operator jest zgodny;
+dominująca otwarta bramka dotyczy zgodności bazowego pola demagnetyzacji/RHS
+LLG i jego nieliniowego sprzężenia z torque.
+
+Zamrożony wykonawczy build MuMax3 ma SHA-256
+`1763c7a1f9ed779abdd8ee755a6d2af771b76dc8ab2e2212efe74e0a44f5f600`, ale
+nie publikuje commita, dlatego nowe porównanie pozostaje diagnostyczne.
+Aktualne lokalne binarium o SHA-256
+`84bd3b230aaff3f059d7ab5586f9dafe1c051acf6f1b3a4e8921b028b5869802`
+utknęło przed pierwszym kernelem CUDA i zostało przerwane bez użycia wyniku.
+SP5 pozostaje `not_qualified`; następną bramą jest bezpośrednie porównanie
+`H_demag` oraz RHS LLG na identycznym polu, nie kolejny arbitralny tuning STT.
+
+## 32.139. SP5: oracle `H_demag`/`H_ex` i kwalifikacja zbieżniejszej referencji (2026-08-09)
+
+Bezpośrednia brama pól na identycznym OVF rozstrzygnęła otwarty punkt z
+§32.138. MuMax3 zapisuje `B_demag`/`B_exch`, Fullmag `H_demag`/`H_ex`; nowy
+`scripts/compare_fdm_sp5_mumax_effective_fields.py` wymusza konwersję
+$H=B/\mu_0$, siatkę `32x32x4`, jeden snapshot i zgodną liczbę wektorów.
+
+Raport
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-effective-field-diagnostic-20260809-v2.json`
+zawiera:
+
+| operator/referencja | względny RMS | maksimum `A/m` |
+|---|---:|---:|
+| exchange | `4.5025e-6` | `2.1649` |
+| demag, MuMax3 accuracy 6 | `1.1728e-3` | `521.7590` |
+| demag, MuMax3 accuracy 12 | `4.9233e-4` | `209.5525` |
+| demag, MuMax3 accuracy 24 | `2.2833e-4` | `103.5996` |
+
+Źródło `external_solvers/3/mag/demagkernel.go` buduje kernel MuMax3 przez
+adaptacyjną kwadraturę powierzchnia--objętość sterowaną `DemagAccuracy`.
+Fullmag używa analitycznego tensora Newella. Monotoniczna zbieżność 6→12→24
+do pola Fullmaga oznacza, że nie wolno zastępować produkcyjnego kernela
+Fullmaga mniej dokładną aproksymacją tylko dla odtworzenia literalnego golden.
+Próbę accuracy 48 przerwano po osiągnięciu 2%, ponieważ koszt pięciowymiarowej
+kwadratury był nieproporcjonalny, a trend został już rozstrzygnięty.
+
+Pełny SP5 MuMax3 z `DemagAccuracy=24` przechodzi względem Fullmaga:
+
+```text
+dt=1e-13: full-field RMS 9.7093e-6, max 4.3982e-5
+dt=5e-14: full-field RMS 9.7045e-6, max 4.3967e-5
+CPU--CUDA max: 6.9389e-16 / 7.4940e-16
+```
+
+Walidator `scripts/validate_fdm_sp5_runtime.py` obsługuje teraz jawny wybór
+`qualification_reference=literal|converged_demag`, ale zawsze zachowuje wynik
+obu referencji. Literalny default pozostaje `fail=2.2795e-4`; pełnopolowa
+referencja `DemagAccuracy=24` ma `pass` przy progu `1e-4`. Dwa fail-closed
+raporty mają status `qualified` wyłącznie dla wybranego workloadu
+`converged_demag`:
+
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-converged-demag-qualification-dt1e-13-20260809-v2.json`;
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-converged-demag-qualification-dt5e-14-20260809-v1.json`.
+
+To kwalifikuje FDM CPU/CUDA FP64 fixed-step SP5 dla jawnej zbieżniejszej
+referencji i dwóch kroków czasowych. Nie kwalifikuje adaptive RK45, FP32, FEM
+ani całej rodziny STT/SOT/SHE. Następna brama całego planu pozostaje szersza
+niż SP5.
+
+Macierz capability i kanoniczna nota fizyczna zostały zsynchronizowane z tym
+ograniczonym wynikiem: CPU ma `reference_executable`, natywny CUDA
+`production_executable`, a `validated_workloads` wskazuje wyłącznie receptę
+`just verify-fdm-sp5-converged-demag-artifacts`. Świeży rerun tej recepty na
+zachowanych artefaktach ponownie zwrócił `qualification_status=qualified`,
+RMS `9.7093e-6`, maksimum `4.3982e-5` i CPU--CUDA
+`6.9389e-16`; osobny literalny wynik pozostał `fail=2.2795e-4`.
+`just verify-fdm-sp5-validator` przechodzi `11/11` testów.
+
+Szeroki `backend_source_layout_contract` nie jest zielony: `15/43` testów
+przechodzi, a `28/43` ujawnia wcześniejszy dług architektury runnera (między
+innymi monolity `lib.rs`, `artifacts.rs`, `native_fem.rs`, funkcje wykonawcze
+w `dispatch.rs` oraz asercje starych ścieżek `native/backends`). Nie jest to
+porażka numerycznej bramy SP5 ani podstawa do cofnięcia jej ograniczonego
+statusu, ale cały branch nie może używać tej suite jako zielonego dowodu
+masterplanu backendu przed osobnym domknięciem refaktoru źródeł.
+
+## 32.140. Audyt końcowego kontraktu UI i graph-authoritative execution (2026-08-09)
+
+Ponowny audyt bieżącego worktree skorygował nieaktualne wnioski z pierwszej
+wersji przeglądu UI. Aktualny kod ma już pełne typowane przejście
+`physics.module -> selection -> rodzinny Inspector` dla:
+
+- `current_transport`;
+- `spin_transport`;
+- `spin_interface`;
+- `spin_torque` z prezentacją `Zhang--Li STT`, `Slonczewski STT` albo
+  `Prescribed SOT`;
+- `oersted_field`;
+- `regional_field_drive`.
+
+Graphowy węzeł nie kończy zatem w ogólnym, nieedytowalnym overview, jeżeli jego
+rodzina jest rozpoznana. `explorerSelection` zachowuje stabilne ID zasobu i
+deleguje do istniejącego Inspectora CRUD. Ogólny
+`PhysicsGraphModuleInspectorPanel` pozostaje wyłącznie fail-closed fallbackiem
+dla rodzaju nierozpoznanego przez bieżący klient.
+
+Widoczność w Explorerze jest wyłącznie graph-authoritative w produkcyjnej
+ścieżce zasobu. Statusy `idle`, `loading`, `stale` i `error` nie uruchamiają już
+pięciu legacy collections ani nie zachowują starych object-scoped nodes;
+pokazywany jest jeden niewybieralny węzeł diagnostyczny. `ready` z pustym
+grafem oznacza brak modułów prądowych. Wartość `j=0` nie usuwa authored module:
+pozostaje on jawnie `inactive`, co odróżnia brak modułu od zerowego wymuszenia.
+
+Kontrakt sceny i prezentacji obejmuje obecnie także `target`, wersje formuły i
+operatora oraz `lande_g` dla Zhang--Li. Legacy `solve_region` jest
+normalizowany do scope źródła; pole Oersteda zachowuje globalne `applies_to`,
+ale jego dependency wskazuje lokalny current source. `semantic_only` ma w
+Explorerze status niedostępny wykonawczo, a nie `ready`.
+
+Planner nie traktuje grafu wyłącznie jako provenance. Dla current transport,
+spin torque i Oersteda rodzinny payload jest filtrowany przez dokładny moduł
+grafu albo jednoznaczny `source_path`; `inactive`, `blocked`, `unsupported` i
+`unresolved` nie mogą wykonać niezerowego payloadu. Brak oczekiwanego modułu
+lub niejednoznaczne dopasowanie kończy się błędem. Obserwacja runtime samego
+rodzaju również nie awansuje żadnego modułu, jeżeli w grafie istnieje więcej
+niż jeden aktywny kandydat.
+
+Świeże dowody:
+
+```text
+Explorer/Ribbon/Inspector focused tests                    315/315 PASS
+graph selection + Inspector registry tests                 121/121 PASS
+malformed FDM resource fail-closed regressions              114/114 PASS
+Control Room typecheck                                               PASS
+Control Room production audit build                                  PASS
+transport authoring UI smoke (FDM, Chromium/CDP)                      PASS
+transport authoring UI smoke (FEM, Chromium/CDP)                      PASS
+physics_graph_resolution integration tests                  11/11 PASS
+ambiguous runtime kind observation fail-closed                1/1 PASS
+git diff --check dla badanego zakresu                               PASS
+```
+
+Świeży smoke uruchomiono na produkcyjnym buildzie Next.js 16 przez lokalny
+fixture API i headless Chromium/CDP. Scenariusz potwierdził graph-authoritative
+drzewo, routing rozpoznanych rodzin do edytowalnych Inspectorów, read-only dla
+nieobsługiwanych rekordów, zapis current/spin/interface/torque/Oersted, export,
+object-scoped placement current/spin/torque, global placement Oersteda oraz
+fail-closed HTTP 422 przy usuwaniu używanego źródła. Uruchomienie solvera nie
+jest częścią tego smoke authoringu i wymaga osobnej bramki runtime.
+Scenariusz przechodzi również rzeczywistą ścieżkę
+`Film -> Physics -> Add Physics -> Electric current -> Create`: przed akcją
+węzeł `added-current` jest nieobecny, POST zachowuje `solve_region="film"`, a
+po odświeżeniu grafu nowy moduł pojawia się pod `Physics · Film`.
+Drugi przebieg rozpoczyna tę samą operację z zaznaczonego regionu `free`.
+Tworzony `region-current` zachowuje scope `{object_id: "film", region_id:
+"free"}` w `solve_region` i po odświeżeniu pozostaje w gałęzi fizyki
+obiektu, zamiast tworzyć pozorny moduł globalny. Oba warianty przeszły w
+lane FDM i FEM.
+Ten sam smoke przełącza viewport przeglądarki na 320, 390 i 420 px oraz mierzy
+rzeczywiste `scrollWidth/clientWidth` Inspectora. Pierwszy przebieg ujawnił
+overflow `249/218 px` przy 320 px, którego źródłem był czterokolumnowy action
+bar. W narrow container action bar przechodzi obecnie na układ 2 x 2; ponowny
+smoke przeszedł dla wszystkich trzech szerokości bez poziomego overflow.
+Podczas pierwszego przebiegu ujawniono rzeczywisty błąd integracyjny:
+`selection.ref.kind` był rodzinny, ale nadrzędny `selection.kind` pozostawał
+`physics.module`, dlatego wybór graphowego current/spin node otwierał ogólny
+Inspector. Dodano regresję i rozszerzono propagację rodzinnego kind na current,
+spin, interface, torque, Oersted, field drive oraz fallback physics module.
+
+Fixture został też zaktualizowany z legacy collections na jawny
+`physics_graph.v1`, poprawne FDM DomainMeta/membership/multilayer-layout oraz
+monotoniczną `scene_revision`. Niepełne resource payloads są od tej rewizji
+odrzucane fail-closed zamiast wywracać Explorer lub viewport przez
+`undefined.trim`/`undefined.min`.
+
+Ten sam scenariusz jest parametryzowany lane `fdm|fem`. Oba przebiegi na tym
+samym świeżym produkcyjnym bundlu przeszły. FEM używa jawnego DomainMeta
+`tet4` i nie dziedziczy structured-grid resource'ów FDM; dowód dotyczy
+authoringu i routingu UI, nie wykonania natywnego solvera FEM.
+Każdy przebieg startuje od `physics_graph.v1` z `modules=[]`, potwierdza brak
+jakiegokolwiek graphowego module node, następnie aktywuje graf, zwiększa
+`scene_revision` i przeładowuje workspace. W ten sposób brak modułu jest
+sprawdzony interaktywnie, a nie wywnioskowany z testu jednostkowego.
+
+Smoke tworzy następnie przez ten sam `Add Physics` nowy Zhang--Li torque i
+nowy Oersted `From current solution`. Oba zapisują dokładnie
+`current_source/source="added-current"`; odświeżony graf umieszcza torque pod
+`Physics · Film`, a Oersteda pod `Global Physics`, z dependency do tego samego
+źródła. Pierwszy przebieg ujawnił dwie luki UI: nowy torque nie mógł przejść z
+`Prescribed density` na `Current transport`, gdy `currentSource` był pusty,
+oraz Oersted występował w menu pod niejednoznaczną nazwą `Regional field
+source`. Przełącznik wybiera obecnie pierwszy kwalifikowany current source, a
+kanoniczna etykieta menu brzmi `Oersted field`; regresje komponentowe i oba
+browser lane'y są zielone.
+
+Osobna akcja `Global Physics -> Field Drive` nie jest już wyłącznie wejściem
+do pustego albo edycyjnego panelu. Otwiera draft z unikalnym ID i globalnym
+targetem, a wspólny action bar wykonuje `POST /model/field-drives`. Rozszerzony
+smoke tworzy `added-field-drive`, sprawdza nazwę, `target.kind=global`, rewizję
+zasobu oraz obecność `regional_field_drive` wyłącznie pod `Global Physics`.
+Przepływ przeszedł dla fixture FDM i FEM; wcześniejsza otwarta uwaga z
+§32.126 o braku trybu create jest tym samym zastąpiona.
+
+Przed pełnym zamknięciem bramki UI pozostaje osobny smoke dla FDM i FEM:
+
+1. pusty `physics_graph` nie pokazuje current/spin/STT/SOT/SHE/Oersted —
+   **PASS dla fixture FDM i FEM**;
+2. zaznaczenie obiektu i `Add Physics -> Electric Current` otwiera draft z
+   object scope, a zaznaczenie regionu otwiera draft z region scope i zachowuje
+   oba identyfikatory w zapisie — **PASS dla fixture FDM i FEM**;
+3. utworzenie torque i Oersteda wiąże dokładne ID current source — **PASS dla
+   fixture FDM i FEM**;
+4. odświeżony graph umieszcza source i torque pod obiektem, a globalne pole
+   Oersteda pod `Global Physics` z widoczną zależnością — **PASS dla fixture
+   FDM i FEM**;
+5. wybór każdego węzła otwiera właściwy edytowalny Inspector — **PASS dla
+   fixture FDM i FEM**;
+6. próba usunięcia używanego source kończy się fail-closed HTTP 422 i nie
+   zmienia rewizji — **PASS dla fixture FDM i FEM**;
+7. Inspector nie ma poziomego scrolla przy szerokości 320, 390 i 420 px —
+   **PASS dla bieżącego transport Inspectora w Chromium**.
+8. `Global Physics -> Field Drive -> Create` zapisuje globalny, kanoniczny
+   `RegionalFieldDrive` i materializuje jego węzeł graphu — **PASS dla fixture
+   FDM i FEM**.
+
+Ten punkt domyka statyczny, komponentowy oraz ograniczony interaktywny kontrakt
+FDM/FEM UI/Planner, włącznie z responsive transport Inspectorem. Nie awansuje
+wykonania solvera FEM/FDM do statusu produkcyjnego.
+
+## 32.141. Zarządzany solve RT0 z objętościowymi przewodami zewnętrznymi (2026-08-09)
+
+Wcześniejszy stan z §32.116.3 i §32.117 obejmował walidację, lowering,
+descriptor oraz testy preflight dla `external-lead`, ale nie wykonywał przez
+publiczny adapter Rust rzeczywistego sprzężonego solve'u MFEM na domenie
+urządzenie + przewody. Ta luka została zamknięta dla referencyjnego toru
+FEM CPU/double.
+
+Dodano test
+`external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit`, który
+buduje jawny układ:
+
+- sześcioelementową tetraedryczną domenę urządzenia;
+- dwa rozłączne, objętościowe przewody tetraedryczne, łącznie dwanaście
+  elementów;
+- cztery pary pokrywających się ścian urządzenie--przewód;
+- po dwie ściany elektrody zewnętrznej po stronie minus i plus;
+- stabilne identyfikatory wierzchołków urządzenia i obu przewodów;
+- spadek potencjału pomiędzy elektrodami i przewodność elementową w SI.
+
+Test przechodzi przez publiczne
+`solve_native_fem_steady_transport_rt0`, append-only C ABI oraz natywny
+operator MFEM. Sprawdza skończony i niepusty wektor stopni swobody RT0,
+obecność kanonicznych rekordów ścian należących do przewodów, bilans elektrod,
+zgodność strumienia na interfejsach, wersję operatora oraz jednostkę strumienia
+`A`.
+
+Pierwsze zarządzane uruchomienie wykryło błąd produkcyjnego wrappera:
+pojemność buforów wynikowych była szacowana wyłącznie z liczby tetraedrów
+urządzenia, podczas gdy przestrzeń RT0 jest budowana na połączonej siatce
+urządzenie + przewody. Natywny adapter poprawnie przerwał wykonanie komunikatem,
+że pojemność wyjścia jest mniejsza od wymiaru przestrzeni RT0. Wrapper oblicza
+teraz górne ograniczenie `4 * (N_device_tet + N_lead_tet)` dla closure
+`ExternalLead`; dla `ClosedGeometry` zachowuje liczbę komórek urządzenia.
+Współczynnik cztery jest bezpiecznym górnym ograniczeniem liczby ścian dla
+siatki tet4, a ściany współdzielone tylko zmniejszają rzeczywisty wymiar.
+
+Dodano zarządzaną receptę:
+
+```text
+just verify-fem-steady-transport-external-lead-cpu-contract
+```
+
+Recepta buduje `fullmag_fem` w obowiązującym kontenerze FEM i uruchamia test
+Rust z `FULLMAG_FEM_LIB_DIR` oraz właściwym `LD_LIBRARY_PATH`. Ciężki
+`CARGO_HOME` i `CARGO_TARGET_DIR` znajdują się pod montowanym widokiem
+`/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead`, fizycznie
+utrzymywanym na szybkim magazynie `/zfn2/mateuszz/git/fullmag`. Jawne
+`cargo +nightly` wybiera preinstalowany toolchain obrazu zamiast powodować
+instalację toolchainu `stable` wskazanego przez repozytorium.
+
+Świeży wynik po poprawce:
+
+```text
+external_lead_public_rt0_adapter_solves_one_coupled_volumetric_circuit
+1 passed; 0 failed; 1001 filtered out
+```
+
+Dowód zamyka publiczną ścieżkę
+`Rust adapter -> C ABI -> MFEM -> RT0 result` dla jednego sprzężonego obwodu z
+objętościowymi przewodami. Zastępuje starsze stwierdzenie o całkowitym braku
+zarządzanego solve'u `external-lead`, lecz nie kwalifikuje jeszcze:
+
+- pełnego przebiegu Python DSL -> ProblemIR -> planner -> stage runtime -> LLG;
+- zbieżności h/p i porównania z niezależnym solverem;
+- rekonstrukcji pola Oersteda OE-F1/OE-F2 z tego konkretnego rozwiązania;
+- wykonania tego operatora na GPU;
+- całej funkcjonalności FEM transport jako produkcyjnej.
+
+## 32.142. External-lead RT0 -> OE-F1 -> transakcja callbacku etapowego (2026-08-09)
+
+Po zamknięciu publicznego adaptera RT0 z §32.141 następna bramka przesuwa
+dowód do granicy prawej strony LLG. Dodano zarządzany test
+`external_lead_stage_callback_solves_oersted_and_commits_observation`, który
+wykorzystuje dokładnie ten sam układ urządzenie + dwa objętościowe przewody,
+ale uruchamia go przez `StageOerstedProvider`.
+
+Przebieg testu jest następujący:
+
+1. `begin_attempt` otwiera transakcję kroku;
+2. callback otrzymuje magnetyzację, dokładny czas i `stage_identity`;
+3. publiczny adapter wykonuje sprzężony solve RT0 na domenie
+   urządzenie + przewody;
+4. OE-F1 rekonstruuje pole Oersteda w węzłach domeny magnetycznej;
+5. callback publikuje skończone, niezerowe `H_oe`, rewizję źródła oraz digest;
+6. `commit_attempt` awansuje obserwację pending do accepted;
+7. telemetria potwierdza liczniki `(begin, commit, rollback, evaluate) =
+   (1, 1, 0, 1)` oraz zaakceptowaną tożsamość etapu.
+
+Dodano receptę:
+
+```text
+just verify-fem-stage-oersted-external-lead-cpu-contract
+```
+
+Recepta korzysta z tego samego kontenera FEM i magazynu
+`/mnt/fullmag-zfn2-native/fem-steady-transport-external-lead` co §32.141.
+Świeży wynik:
+
+```text
+external_lead_stage_callback_solves_oersted_and_commits_observation
+1 passed; 0 failed; 1002 filtered out
+```
+
+Ten dowód zamyka wykonanie
+`external-lead RT0 -> OE-F1 -> StageOerstedProvider -> accepted observation`
+dla FEM CPU/double. Nie jest jeszcze pełnym przebiegiem natywnego integratora:
+callback został wykonany z tym samym ABI i transakcją, które instaluje backend,
+ale test nie uruchamia całej trajektorii LLG ani odrzuconego kroku. Nadal
+otwarte pozostają:
+
+- publiczny fixture Python DSL -> ProblemIR -> planner -> runtime;
+- instalacja callbacku w backendzie i przynajmniej jeden pełny krok RK z tym
+  `external-lead`;
+- rollback/retry tego konkretnego solve'u po odrzuconej próbie;
+- OE-F2, zbieżność h/p, niezależny oracle i GPU;
+- kwalifikacja produkcyjna.
+
+## 32.143. Pełny krok natywnego LLG z external-lead Oersted (2026-08-09)
+
+Brak wskazany w §32.142 dotyczący instalacji callbacku w backendzie i pełnego
+kroku RK został zamknięty dla jednego kroku Heuna na FEM CPU/double. Dodano
+test
+`native_fem_external_lead_oersted_callback_advances_one_cpu_llg_step` oraz
+zarządzaną receptę:
+
+```text
+just verify-fem-llg-external-lead-oersted-cpu-contract
+```
+
+Fixture buduje kanoniczny `FemPlanIR` z tym samym urządzeniem i dwoma
+objętościowymi przewodami co §32.141--§32.142. Następnie:
+
+1. `StageOerstedProvider::from_plan` przeprowadza pełny preflight descriptoru;
+2. `NativeFemBackend` instaluje callback przez append-only ABI;
+3. `begin_stage(0)` rozpoczyna etap;
+4. rzeczywisty integrator Heuna wywołuje callback w swojej kadencji RK;
+5. każdy callback wykonuje solve RT0 urządzenie + przewody i OE-F1;
+6. backend wykonuje jeden pełny krok LLG;
+7. test sprawdza dodatni czas, skończony maksymalny torque, skończoną
+   magnetyzację po kroku oraz zaakceptowaną obserwację callbacku z digestem
+   pola.
+
+Pierwsze wykonanie pełnego preflightu ujawniło, że kilka trójek stabilnych ID
+w fixture §32.141 było geometrycznie równoważnych, lecz nie zapisanych w
+kanonicznej kolejności rosnącej. Bezpośredni adapter nie wymagał tej warstwy,
+natomiast planner poprawnie odrzucił descriptor. Wszystkie device faces,
+interface pairs i outer-electrode faces zostały zapisane kanonicznie bez
+zmiany geometrii ani orientacji fizycznego obwodu. Po korekcie powtórzono
+wszystkie trzy poziomy dowodu.
+
+Świeże wyniki:
+
+```text
+public Rust adapter -> C ABI -> MFEM RT0                         1 passed
+RT0 -> OE-F1 -> direct stage callback commit                    1 passed
+native FEM CPU Heun -> installed callback -> accepted LLG step  1 passed
+```
+
+Test pełnego kroku raportuje rzeczywisty runtime CPU z `mesh_nodes=8` i
+`elements=6`; kończy się w około `0.20 s` po uruchomieniu binarium testowego.
+Ciężkie artefakty pozostają pod `/zfn2` przez montowany katalog opisany w
+§32.141.
+
+Dowód zamyka ograniczony łańcuch planu Rust
+`FemPlanIR -> preflight -> provider -> native backend -> Heun RHS -> accepted
+state` dla external-lead OE-F1 CPU/double. Nie zamyka nadal:
+
+- wejścia z rzeczywistego publicznego skryptu Python i pełnego lowering
+  ProblemIR/plannera na tym fixture;
+- rollback/retry po faktycznie odrzuconym kroku tego obwodu;
+- trajektorii wielokrokowej oraz innych integratorów;
+- zbieżności h/p, niezależnego porównania, OE-F2 i GPU;
+- kwalifikacji produkcyjnej lub awansu capability matrix.
+
+## 32.144. Transakcyjny rollback i deterministyczny retry external-lead (2026-08-09)
+
+Rozszerzono managed test callbacku z §32.142 o faktyczny solve kandydata,
+rollback i ponowienie. Po pierwszym zaakceptowanym etapie test:
+
+1. rozpoczyna drugą próbę i wykonuje pełne RT0 + OE-F1 dla external-lead;
+2. wywołuje `rollback_attempt`;
+3. potwierdza, że poprzednia `accepted_observation` nie zmieniła się;
+4. rozpoczyna retry z tą samą magnetyzacją, czasem i `stage_identity`;
+5. ponownie wykonuje solve oraz commit;
+6. wymaga bitowej równości wektora `H_oe` i identycznej rewizji źródła pomiędzy
+   odrzuconym kandydatem i retry.
+
+Świeży managed wynik pozostaje:
+
+```text
+external_lead_stage_callback_solves_oersted_and_commits_observation
+1 passed; 0 failed; 1003 filtered out
+```
+
+Końcowe liczniki testu wynoszą `(begin, commit, rollback, evaluate) =
+(3, 2, 1, 3)`. Zamyka to transactional safety samego provider/solve dla tego
+obwodu. Nie jest to jeszcze dowód, że adaptacyjny integrator sam wywołał
+rollback po odrzuceniu kroku; wymuszony rejected-step na granicy natywnego RK
+pozostaje osobną bramką.
+
+## 32.145. Wymuszony rejected-step natywnego RK23 z external-lead (2026-08-09)
+
+Ostatnia granica §32.144 została zamknięta dla adaptacyjnego integratora RK23.
+Dodano test
+`native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt`
+oraz zarządzaną receptę:
+
+```text
+just verify-fem-adaptive-retry-external-lead-oersted-cpu-contract
+```
+
+Test wykorzystuje kompletny `FemPlanIR` external-lead, instaluje provider w
+natywnym backendzie i uruchamia RK23 z dużym początkowym krokiem oraz ścisłym
+ograniczeniem obrotu spinu. Akceptacja nie jest sterowana przez testowy mock:
+decyzję retry podejmuje produkcyjny `adaptive_pi_step` po obliczeniu etapów RK.
+Natywny `rk_explicit_step` przywraca magnetyzację i cache próby, wywołuje
+`rollback_oersted_stage_attempt`, zmniejsza krok, a następnie ponawia wszystkie
+etapy z nową tożsamością próby.
+
+Assercje wymagają:
+
+- `StepStats.rejected_attempts >= 1`;
+- dokładnej równości `provider.rollback_count == rejected_attempts`;
+- dokładnie jednego commita zaakceptowanego kroku;
+- większej liczby ewaluacji od liczby rollbacków;
+- zaakceptowanej obserwacji z digestem pola po retry.
+
+Świeży managed wynik:
+
+```text
+native_fem_external_lead_oersted_callback_rolls_back_rejected_adaptive_attempt
+1 passed; 0 failed; 1004 filtered out; 1.41 s
+```
+
+Dowód zamyka natywną transakcję
+`adaptive RK23 reject -> state/cache restore -> Oersted callback rollback ->
+retry -> commit` dla external-lead OE-F1 FEM CPU/double. Nadal nie jest to
+kwalifikacja wszystkich integratorów ani przebieg publicznego skryptu Python;
+RK45, trajektoria wielokrokowa, publiczny lowering, zbieżność, OE-F2 i GPU
+pozostają otwarte.
+
+## 32.146. External-lead callback dla pełnej rodziny jawnych RK (2026-08-09)
+
+Pokrycie integratorów zostało rozszerzone poza pojedynczy Heun i adaptacyjny
+RK23. Dodano test
+`native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators`
+oraz receptę:
+
+```text
+just verify-fem-rk-family-external-lead-oersted-cpu-contract
+```
+
+Test tworzy odrębny backend i provider dla każdego wspieranego jawnego
+integratora:
+
+- Heun z krokiem stałym;
+- RK4 z krokiem stałym;
+- RK23 z adaptacją;
+- RK45 z adaptacją.
+
+Każdy wariant przechodzi preflight, instaluje callback external-lead, uruchamia
+trzy kolejne kroki rzeczywistej kadencji etapów natywnego integratora, wykonuje
+co najmniej sześć ewaluacji RT0/OE-F1, commit każdego kroku i publikuje accepted
+field digest przy zachowaniu tego samego providera między krokami.
+Nie jest to test samej tabeli Butchera ani wywołanie providera z Rust poza
+backendem.
+
+Świeży managed wynik:
+
+```text
+native_fem_external_lead_oersted_callback_covers_all_explicit_rk_integrators
+1 passed; 0 failed; 1005 filtered out; 3.51 s
+runtime instances: 4 x CPU, mesh_nodes=8, elements=6
+```
+
+Brama zamyka trzyetapową callback trajectory dla pełnej wspieranej jawnej
+rodziny RK FEM CPU/double. ABM3 nie jest obsługiwany przez natywny FEM;
+tworzenie takiego planu kończy się fail-closed zamiast ukrytego fallbacku.
+Nadal otwarte pozostają publiczny Python fixture, długoczasowa walidacja,
+zbieżność h/p, OE-F2, GPU i niezależny oracle.
+
+## 32.147. Publiczny fixture Python external-lead i granica managed runtime (2026-08-09)
+
+Dodano publiczny przykład
+`examples/fem_external_lead_oersted_public.py` oraz wersjonowany importowany
+mesh urządzenia `examples/assets/fem_external_lead_device.mesh.json`.
+Fixture nie rekonstruuje stabilnych ID po automatycznym meshowaniu. Jawny mesh
+tet4 urządzenia jest połączony z dwoma objętościowymi przewodami tet4 przez
+cztery kanoniczne pary ścian interfejsowych. Zewnętrzne elektrody, spadek
+potencjału, przewodności per element, klasyfikacja granic, rewizje i digesty są
+częścią `ConservativeCurrentView`; nie istnieje ukryty wire/lumped fallback.
+
+Pierwszy rzeczywisty przebieg loadera ujawnił, że pierwotny szkic przykładu
+używał niekanonicznego skrótu `elements/boundary_faces` dla lead mesh. Został
+zastąpiony pełnym MeshIR `cells/facets` z typami `tet4/tri3`, offsetami,
+spłaszczoną connectivity i globalnymi ordinalami. Dodano także jawny
+izolacyjny kontrakt brzegowy skalarnego solve'u ładunku; napięcie obwodu RT0
+pozostaje własnością closure external-lead, a nie fikcyjnych elektrod domeny
+magnetycznej.
+
+Regresja
+`test_public_external_lead_example_lowers_complete_stage_contract` ładuje
+rzeczywisty publiczny plik wraz z assetem i wymaga:
+
+- jednego current transport, jednego spin transport i jednego Oersteda;
+- closure `external_lead` z dwunastoma elementami tet4;
+- czterech par device/lead interface;
+- jednego zadeklarowanego dynamicznego stage'u.
+
+Świeży wynik:
+
+```text
+packages/fullmag-py/tests/test_external_lead_roundtrip.py     4/4 PASS
+git diff --check dla fixture/asset/testu                         PASS
+```
+
+Uruchomiono następnie kanoniczną receptę
+`just fem-managed-headless cpu` z katalogiem wynikowym pod
+`/zfn2/mateuszz/git/fullmag/reports/fem-external-lead-oersted-public/cpu`.
+Recepta poprawnie odrzuciła nieaktualny bundle i zażądała odbudowy, ale eksport
+runtime pozostał w oczekiwaniu na istniejącą współdzieloną blokadę
+`.fem-gpu-host.export.lock`. Po kilku minutach zatrzymano wyłącznie własne
+oczekujące polecenie; nie usunięto blokady i nie zatrzymano jej właściciela.
+
+Status tej bramki jest zatem precyzyjnie rozdzielony:
+
+- publiczny Python -> workspace/stage -> ProblemIR: **PASS**;
+- typowany external-lead MeshIR i pełna tożsamość obwodu: **PASS**;
+- wcześniejszy managed Rust adapter -> C ABI -> MFEM oraz natywne RK:
+  **PASS** (§32.141--§32.146);
+- ten sam publiczny skrypt -> planner -> aktualny managed runtime -> artefakty
+  LLG/Oersted: **NIEWYKONANE**, oczekuje na bezpieczne zwolnienie blokady i
+  świeżą odbudowę bundle.
+
+Nie wolno awansować capability matrix ani nazywać fixture produkcyjnie
+wykonanym przed ostatnim przebiegiem i walidacją jego artefaktów.
+
+## 32.148. Wspólny exact-stage solve reciprocal FEM M2 torque + Oersted (2026-08-09)
+
+Audyt aktualnego kodu wykazał, że wcześniejsze fragmenty dokumentacji były
+nieaktualne: planner i runner zawierają już politykę
+`fem_stage_transport_oersted_callback.v1` oraz współdzielony
+`StageM2CoupledProvider`, ale brakowało zarządzanego dowodu na poziomie
+natywnego kroku LLG. Sama obecność cache'u nie dowodziła, że dwa callbacki
+otrzymują identyczny klucz etapu ani że torque i pole pochodzą z jednego solve.
+
+Dodano fixture planu z jednym tet4, dwoma różnymi markerami napięciowymi,
+anisotropowym reciprocal M2, jawnym torque targetem i Oerstedem związanym z tym
+samym current source. Test
+`native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted`:
+
+1. materializuje jeden współdzielony provider;
+2. instaluje osobne append-only ABI callbacki torque i Oersteda;
+3. wykonuje rzeczywisty natywny krok Heuna;
+4. wymaga tego samego `source_state_revision` i digestu dla obu zaakceptowanych
+   obserwacji;
+5. wymaga `solve_count == liczba etapów Oersteda` oraz co najmniej jednego
+   cache hitu na etap od callbacku torque;
+6. wymaga skończonego, niezerowego `torque_l2_per_s` i digestu pola Oersteda.
+
+Zarządzana recepta używa kontenera MFEM/HYPRE i trwałego cache'u pod `/zfn2`:
+
+```text
+just verify-fem-reciprocal-m2-oersted-shared-stage-cpu-contract
+native_fem_reciprocal_m2_shares_one_stage_solve_for_torque_and_oersted
+1 passed; 0 failed; 1006 filtered out; CPU mesh_nodes=4; elements=1
+```
+
+Brama kwalifikuje ograniczoną spójność źródła oraz kadencję wspólnego solve'u
+dla descriptor-free H1/P1 FEM CPU/double. Nie jest to zbieżność Oersteda,
+kwalifikacja energii, publiczny Python managed run, reciprocal external-lead,
+GPU ani status produkcyjny. Capability matrix pozostaje bez awansu.
+
+## 32.149. Adaptacyjny rollback obu callbacków reciprocal M2/Oersted (2026-08-09)
+
+Jednokrokowy Heun z §32.148 nie sprawdzał transakcji po odrzuceniu kroku.
+Dodano test
+`native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry`,
+który używa tego samego anisotropowego M2 fixture, ale przełącza natywny
+integrator na RK23 i wymusza co najmniej jedno odrzucenie przez ścisły limit
+obrotu spinu.
+
+Test wymaga dla obu append-only adapterów:
+
+- `rollback_count == StepStats.rejected_attempts`;
+- dokładnie jednego commita zaakceptowanego retry;
+- `begin_count == rejected_attempts + 1`;
+- identycznej zaakceptowanej rewizji i digestu źródła torque/Oersted;
+- jednego wspólnego M2 solve na każdą ewaluację etapu Oersteda i co najmniej
+  jednego cache hitu od callbacku torque na etap.
+
+Świeży zarządzany wynik z kontenera MFEM/HYPRE i cache'u `/zfn2`:
+
+```text
+just verify-fem-reciprocal-m2-oersted-adaptive-retry-cpu-contract
+native_fem_reciprocal_m2_rolls_back_both_callbacks_before_shared_retry
+1 passed; 0 failed; 1007 filtered out; CPU mesh_nodes=4; elements=1
+```
+
+Brama zamyka ograniczony ciąg
+`adaptive reject -> rollback torque + rollback Oersted -> shared retry ->
+single accepted identity` dla FEM CPU/double. Nadal nie obejmuje publicznego
+managed skryptu, reciprocal external-lead, długiej trajektorii, zbieżności ani
+GPU.
+
+## 32.150. Trzyetapowa rodzina RK dla wspólnego reciprocal M2/Oersted (2026-08-09)
+
+Pokrycie wspólnego solve'u rozszerzono na wszystkie jawne integratory wspierane
+przez natywny FEM. Test
+`native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators`
+uruchamia po trzy zaakceptowane kroki dla:
+
+- Heun i RK4 z krokiem stałym;
+- RK23 i RK45 z adaptacją.
+
+Każdy wariant zachowuje ten sam provider pomiędzy krokami i wymaga trzech
+begin/commitów obu adapterów, zgodnej końcowej rewizji/digestu torque/Oersted,
+jednego M2 solve na każdą exact-stage ewaluację pola oraz co najmniej jednego
+cache hitu od bliźniaczego callbacku na etap. Test nie zastępuje integratora
+syntetycznym wywołaniem providera.
+
+Świeży zarządzany wynik:
+
+```text
+just verify-fem-reciprocal-m2-oersted-rk-family-cpu-contract
+native_fem_reciprocal_m2_shares_source_across_all_explicit_rk_integrators
+1 passed; 0 failed; 1008 filtered out; 4 x CPU mesh_nodes=4; elements=1
+```
+
+Brama zamyka ograniczoną trzyetapową kadencję całej jawnej rodziny RK dla
+descriptor-free reciprocal M2/Oersted FEM CPU/double. Nie jest długoczasową
+walidacją, badaniem rzędu, publicznym managed runem, reciprocal external-lead
+ani kwalifikacją GPU/produkcyjną.
+
+## 32.151. Fail-closed walidator publicznego runtime external-lead (2026-08-09)
+
+Przed ponowieniem publicznego managed runu z §32.147 dodano trwałą bramkę
+artefaktową, aby kod wyjścia procesu nie był mylony z dowodem wykonania
+fizyki. `scripts/validate_fem_external_lead_oersted_runtime.py` parsuje
+końcowy raport CLI i wymaga równocześnie:
+
+- statusu `completed`, strict FEM CPU/double i `fallback_policy=forbidden` w
+  raporcie oraz `metadata.json`;
+- resolved engine `fem_cpu_native`, braku lossy fallback i planu z
+  `fem_stage_oersted_callback.v1` plus closure `external_lead`;
+- co najmniej jednego zaakceptowanego kroku i dokładnego końcowego czasu
+  `3e-13 s`;
+- artefaktu `transport/fem_stage_oersted_callback.v1.json`, zgodnego schematu,
+  CPU lane, co najmniej jednego commita, bilansu
+  `begin=commit+rollback`, wieloetapowej kadencji oraz kanonicznych digestów;
+- skończonej, znormalizowanej magnetyzacji początkowej i końcowej oraz
+  niezerowej zmiany stanu.
+
+Testy negatywne odrzucają brak callbacku, brak commita, rozjazd requested
+execution i niezmienioną magnetyzację:
+
+```text
+scripts/test_validate_fem_external_lead_oersted_runtime.py     3/3 PASS
+```
+
+Dodano receptę `just verify-fem-external-lead-oersted-public-cpu-runtime`.
+Każdy przebieg otrzymuje unikalny trwały katalog
+`/zfn2/mateuszz/git/fullmag/reports/fem-external-lead-oersted-public/run.*`,
+log i `qualification.json`; recepta nie usuwa poprzednich wyników. Sama bramka
+jest gotowa, ale jej rzeczywiste wykonanie nadal oczekuje na bezpieczne
+zwolnienie współdzielonej blokady eksportu managed runtime.
+
+## 32.152. Pełny authoring Spin Transport/SHE i Spin Interface z pustego graphu (2026-08-09)
+
+Ponowny audyt §32.140 wykazał, że wcześniejszy smoke domykał current transport,
+torque, Oersted i global field drive, lecz nie dowodził odkrywalnej ścieżki
+utworzenia `spin_transport` ani `spin_interface` przy pustym
+`physics_graph`. Dedykowane Inspectory istniały, ale były osiągalne głównie po
+wcześniejszym zmaterializowaniu zasobu. Określenie „końcowy kontrakt UI” było
+więc za szerokie.
+
+Uzupełniono jedyną kanoniczną paletę `Physics -> Add Physics` o:
+
+- `Spin Transport / SHE`, otwierający typed draft
+  `physics.spin-transport` dla FEM i FDM;
+- `Spin Interface`, otwierający typed draft `physics.spin-interface` bez
+  syntetycznego ownera.
+
+Nie dodano tych pozycji do backendowego `ObjectInteractionKind` ani nie
+utworzono fikcyjnych `interaction.spin_transport`/
+`interaction.spin_interface` capability IDs. Są to istniejące authoring
+resources API v2; ich semantyczną i wykonawczą dopuszczalność nadal rozstrzyga
+walidacja transportu oraz aktywna lane. Explorer pozostał graph-authoritative:
+draft nie tworzy pustego korzenia ani modułu, a węzeł pojawia się dopiero po
+udanej mutacji i odświeżeniu `physics_graph`.
+
+Spin Transport zachowuje dokładny początkowy scope zaznaczenia:
+`domain=[{object_id}]` dla obiektu oraz
+`domain=[{object_id, region_id}]` dla regionu. Domain pozostaje edytowalny,
+ponieważ transport może obejmować wiele domen. Spin Interface wymaga jawnego
+wyboru istniejącego `owner_spin_transport_id`; bez ownera przycisk `Create`
+jest wyłączony, a test potwierdza zero wywołań walidacji i mutacji.
+
+Proces TDD i niezależna recenzja:
+
+```text
+RED: focused Vitest                         5 expected failures; 157 passed
+GREEN: ribbon/registry/transport/interface  163/163 PASS
+Control Room typecheck                               PASS
+Control Room architecture hygiene                    PASS
+scoped git diff --check                              PASS
+task review                         Spec PASS; Quality APPROVED
+```
+
+Zmiana domyka komponentową ścieżkę tworzenia
+`current -> spin transport/SHE -> spin interface -> torque/Oersted` dla
+wspólnego UI FEM/FDM.
+
+Świeżą bramę przeglądarkową wykonano na izolowanym produkcyjnym bundle Next.js
+16.2.6. Artefakt powstał przez kernel-mounted widok ext4
+`/mnt/fullmag-zfn2-native/control-room-builds/spin-authoring-20260809`, którego
+trwały backing image znajduje się pod kanonicznym rootem
+`/zfn2/mateuszz/git/fullmag/build-volumes/`.
+Fixture CDP utrzymuje rzeczywisty stan zasobów po POST/PATCH i regeneruje z
+niego `physics_graph`; test nie wstrzykuje gotowych węzłów Explorera. Dla obu
+lane wykonano ten sam przepływ:
+
+1. brak authored modułów w pustym grafie;
+2. utworzenie obiektowego `added-current`;
+3. utworzenie `added-spin` z dokładnym
+   `domain=[{object_id: "film"}]` i źródłem `added-current`;
+4. potwierdzenie węzła pod `Physics · Film` dopiero po mutacji i wzroście
+   `scene_revision`;
+5. utworzenie `added-interface` przez PATCH właściciela `added-spin`, ze
+   stronami `film/free -> lead` i orientacją `[1,0,0]`;
+6. potwierdzenie interfejsu pod `Cross-object Interfaces` i braku legacy
+   korzeni elektrycznych;
+7. zachowanie wcześniejszych ścieżek regionowego current, torque, Oersted i
+   global field drive oraz kontrola dokładnych payloadów mutacji.
+
+Fixture jest fail-closed dla niezaimplementowanych POST/PATCH/DELETE i jawnie
+odrzuca fikcyjny osobny endpoint `model/spin-interfaces`; interfejs może zostać
+zapisany wyłącznie przez PATCH właściciela. Kontrola pustego grafu neguje także
+legacy roots `spin-transports` i `spin-interfaces`. Metadane requested/resolved
+execution, capabilities i domain są lane-sensitive, więc przebieg FEM nie
+dziedziczy już semantyki structured-grid FDM.
+
+```text
+FULLMAG_NEXT_DIST_DIR=.next-audit-target-smoke-spin-authoring-20260809 \
+NEXT_PUBLIC_AUDIT_BUILD=1 pnpm build                         PASS
+CONTROL_ROOM_TRANSPORT_FIXTURE_LANE=fdm \
+pnpm run smoke:transport-authoring-ui                       PASS
+CONTROL_ROOM_TRANSPORT_FIXTURE_LANE=fem \
+pnpm run smoke:transport-authoring-ui                       PASS
+```
+
+Pierwszy przebieg na efemerycznym, utraconym bundle `/dev/shm` zgłaszał
+`undefined.find` w Inspectorze. Nie reprodukuje się on na świeżym trwałym
+bundle ani w lane FDM, ani FEM; nie wprowadzono więc maskującej zmiany w
+kontrakcie `InspectorDescriptor`. Brama kwalifikuje odkrywalność, mutacje API,
+scope i placement UI obu lane. Nie jest dowodem wykonania solvera transportu
+ani fizyczną kwalifikacją STT/SOT/SHE/Oersteda.
+
+## 32.153. Usunięcie ostatniego pipeline'u legacy z Explorera (2026-08-09)
+
+Niezależna recenzja §32.152 wykazała, że zachowanie Explorera było już
+graph-authoritative, lecz karta Model nadal wykonywała pięć zbędnych odczytów
+list rodzinnych: current transport, spin transport, spin interface, spin
+torque i Oersted. Dane były następnie normalizowane przez prywatny adapter do
+nieużywanych pól snapshotu. Nie tworzyły już węzłów, ale pozostawiały drugą,
+martwą ścieżkę semantyczną i niepotrzebny ruch API.
+
+Usunięto cały ten łańcuch z `ExplorerModule`, `sceneModelTreeAdapter`,
+`ModelTreeSnapshot`, typów `ExplorerNode` oraz testów dawnego fallbacku.
+Obecność modułu elektrycznego lub spinowego rozstrzyga obecnie wyłącznie
+`physics_graph` w stanie `ready`. Status `ready` z pustą listą `modules`
+oznacza brak modułów prądowych. Statusy `idle`, `loading`, `stale`, `error`,
+brak statusu albo brak graphu tworzą tylko jeden niewybieralny węzeł
+diagnostyczny. Jawnie dodany moduł z `J_c = 0` pozostaje widoczny jako
+`inactive`; zero wymuszenia nie jest utożsamiane z brakiem modułu.
+
+Zachowano rzeczywistą ścieżkę `physics.module -> rodzinna selekcja ->
+dedykowany Inspector`. Nie jest ona fallbackiem: jej producentem jest
+kanoniczny graph, a konsumentami są edytowalne Inspectory current transport,
+spin transport/SHE, spin interface, torque/SOT i Oersted. Końcowy audyt nie
+znalazł żadnego produkcyjnego ani publicznego producenta dawnych pluralnych
+rodzajów selekcji. Usunięto je z `SelectionRef`, rejestru Inspectora i testów
+pozytywnych; pozostały wyłącznie celowe negatywne asercje fixture. Singularny
+routing graphowy pozostał bez zmian.
+
+Proces TDD i niezależna ponowna recenzja:
+
+```text
+RED: adapter zachowywał 1 rekord legacy current transport       EXPECTED FAIL
+Explorer focused builder + selection tests                         140/140 PASS
+Explorer complete module tests                                     171/171 PASS
+Control Room typecheck                                                   PASS
+scoped git diff --check                                                 PASS
+registry + Inspector + Explorer tests                         206/206 PASS
+final task re-review                    brak Critical/Important/Minor; ACCEPT
+```
+
+Zmiana domyka statyczny i komponentowy kontrakt widoczności modułów dla FDM i
+FEM oraz usuwa zbędne requesty. Ponieważ modyfikowała kod ładowania i budowy
+drzewa po wcześniej wykonanym smoke, końcowa bramka UI wymaga jeszcze świeżego
+produkcyjnego buildu i powtórzenia browser smoke dla obu lane na aktualnym
+diffie. Nie jest to dowód wykonania ani kwalifikacji numerycznej solvera.
+
+## 32.154. Końcowa bramka authoringu UI po usunięciu legacy (2026-08-09)
+
+Końcowy smoke został powtórzony na świeżym produkcyjnym buildzie po pełnym
+cleanupie §32.153. Fixture nie ma już generycznego sukcesu dla nieznanych
+zasobów: każdy nieobsłużony `GET`, `POST`, `PATCH` lub `DELETE` kończy się
+fail-closed, a osobny test negatywny wymaga HTTP 404 dla nieznanego zasobu.
+Jawnie pokryto rzeczywiste kontrakty `RegionListResource`, material fields,
+region diagnostics, couplings, object metrics, field catalog oraz opcjonalne
+zasoby analizy używane przez workspace.
+
+Naprawiono także rzeczywisty błąd invalidacji: po utworzeniu globalnego Field
+Drive frontend odświeża zarówno listę field drives, jak i
+`model.physics-graph`. Smoke potwierdza canonical graph node najpierw bez
+reloadu, a następnie ponownie po reloadzie, rozdzielając dowód bieżącej
+invalidacji od trwałości zasobu.
+
+Oracle przeglądarkowy jest fail-closed. Nie ignoruje komunikatów WebSocket;
+przy `disableRealtime=true` każda próba lub awaria realtime jest regresją.
+`browserErrors` i `unhandledRequests` są niezależnymi bezwarunkowymi bramkami
+failure, a deduplikacja nie usuwa unikalnych błędów. Sterowanie elementami
+`select` używa rzeczywistych zdarzeń klawiatury CDP i czeka na pojawienie się
+opcji zamiast nadpisywać kontrolowany przez React DOM.
+
+Świeże dowody na finalnym kodzie:
+
+```text
+production Next.js build                                      PASS
+transport authoring browser smoke — FDM                       PASS
+transport authoring browser smoke — FEM                       PASS
+focused Vitest                                              58/58 PASS
+fixture/keyboard/fail-closed/browser-oracle node:test         5/5 PASS
+Control Room typecheck                                         PASS
+node --check + scoped git diff --check                          PASS
+independent final task review                              APPROVED
+```
+
+Oba lane'y przechodzą od pustego graphu przez object- i region-scoped current,
+Spin Transport/SHE, owning Spin Interface, torque, Oersted i global Field
+Drive. Kontrolowane są dokładne payloady, monotoniczny `scene_revision`,
+placement graphu, brak legacy roots, odrzucenie używanego źródła HTTP 422 oraz
+eksport. Regionowy current zapisuje kanoniczne
+`domain=[{object_id, region_id}]`, a nie legacy `solve_region`.
+
+Brama domyka authoring, resource invalidation, Explorer/Inspector routing i
+responsywność wspólnego UI FDM/FEM. Nie uruchamia solvera i nie stanowi
+kwalifikacji fizycznej ani numerycznej STT/SOT/SHE/Oersteda.
+
+## 32.155. Natywny FDM CPU/FP64 M1 — konserwatywny etap ładunkowy (2026-08-09)
+
+Rozpoczęto przenoszenie M1 z Rustowego reference lane do docelowego właściciela
+backendowego. Pod `backends/fdm/cpu/transport` dodano wersjonowany natywny
+subsystem charge, niezależny od CUDA i bez fallbacku do Rustowego solve.
+Implementacja obejmuje cell-centred `V [V]`, jeden konserwatywny flux twarzy
+`J_c [A/m^2]`, harmoniczne uśrednianie `sigma`, maskę aktywnych komórek,
+jawne voltage i total-current electrodes, izolację, gauge per odłączona
+składowa oraz matrix-free CG.
+
+Wersje są zgodne z kanonicznym IR:
+
+- operator: `fv_charge_harmonic_v1`;
+- residual: `charge_balance_integrated_l2.v1`.
+
+FDM nie dziedziczy FEM-only domyślnego insulating BC: każdy `unset`, zarówno
+częściowy, jak i kompletny, kończy się fail-closed. Zgodność total-current jest
+sprawdzana lokalnie per odłączona składowa przed projekcją gauge. Końcowa brama
+używa osobnych lokalnych skal: boundary-current L1, integrated-L2 oraz
+per-component tolerance, dlatego duży prąd w jednej składowej nie maskuje
+błędu pA w drugiej. Rekurencyjny residual CG nie jest jedynym kryterium:
+niezależnie przeliczone residual algebraiczny i fizyczny bilans są bramkami
+akceptacji.
+
+Testy obejmują liniowy przewodnik, barierę `sigma=0`, zmianę znaku elektrod,
+conservation, trzy rozdzielczości ze zbieżnością około drugiego rzędu, dwa
+odłączone floating components, odrzucenie luźnego CG oraz rzeczywisty wspólny
+heterogeniczny fixture serializowany przez Rust i porównywany w C++ dla `V`,
+fluxów x/y/z i prądów brzegowych. Comparator odrzuca NaN/Inf i używa osobnych,
+wymiarowo poprawnych tolerancji dla V, A/m2 i A.
+
+```text
+just verify-fdm-cpu-m1-charge-native-contract       exit 0
+native CPU-only CTest                                  3/3 PASS
+Rust/native macro + small-current parity               2/2 PASS
+C++ warnings-as-errors                                      PASS
+git diff --check                                            PASS
+independent review                                       APPROVE
+```
+
+Recepta używa CPU-only `fem-cpu` z CUDA, FEM GPU, MFEM i SLEPc wyłączonymi;
+artefakty ciężkie pozostają na trwałym storage pod `/zfn2` przez zarządzany
+mount. Etap jest implementacyjnie executable i zwalidowany w opisanym wąskim
+milestone, ale nie jest jeszcze publicznym production solverem: brakuje C ABI,
+runner binding, steady spin/SHE, interfejsów, torque, GPU, AMG/HPC i pełnych
+bram continuum/external-solver. Capability matrix nie została awansowana.
+
+## 32.156. Synchronizacja publicznej dokumentacji SOT, M1/M2 i Oersteda (2026-08-09)
+
+Trzy publiczne strony zostały zsynchronizowane z kanonicznymi notami 0960,
+0970 i 0980 oraz bieżącym API. Strona M2 zawiera pełny człon
+magnetorezystywny `J_mr` z AMR/PHE/AHE i jawne reakcje `R_sf`, `R_J`,
+`R_phi`. Oersted rozdziela osiem pasów OE-F1/OE-F2 od odrębnego FDM FFT i
+publikuje kompletną closed-geometry API table. Wszystkie trzy przykłady
+pokazują pełny, rzeczywiście serializowany canonical no-asset `ProblemIR`, a
+nie ręcznie skrócony fragment, oraz przechodzą script -> IR -> script/IR
+round-trip.
+
+Mapy źródłowe wskazują właścicieli równań i testy, nie tylko planner lub
+dispatcher. Końcowy source/evidence index zawiera odpowiedzialność, lane,
+status, dokładny test oraz źródło dla każdego rekordu. Dla torque FDM
+właścicielem jest `CoupledChargeSpinProblem::transport_gilbert_torque`.
+
+Audyt immutable anchors nie fabrykuje dowodów:
+
+- 74 anchory zweryfikowano przez `git cat-file`, `git show SHA:path` i dokładny
+  symbol;
+- 18 anchorów w 14 wierszach dotyczy wyłącznie bieżącego niecommitowanego
+  worktree, dlatego ma `URL=null`, status `worktree_uncommitted` i jawny
+  publication block.
+
+```text
+source-map validators                                      3/3 PASS
+exact full ProblemIR captures                              3/3 PASS
+round-trip tests                                           6/6 PASS
+scientific documentation contract tests                  20/20 PASS
+public example guard                                           PASS
+strict Sphinx -E -a -W -n                                      PASS
+rendered HTML validators                                   3/3 PASS
+immutable source/test audit                                    PASS
+git diff --check                                               PASS
+independent scientific review                                  PASS
+```
+
+Zmiana naprawia dokumentację i jej dowody, lecz nie awansuje capability ani
+kwalifikacji solvera. Publikacja 14 oznaczonych wierszy pozostaje zablokowana
+do kontrolowanego commita zawierającego wskazane źródła i testy; po commicie
+należy utworzyć drugi, audytowalny update anchorów do rzeczywistego SHA.
+
+## 32.157. Audyt gotowości natywnego FDM CPU Oersted open-boundary FFT (2026-08-09)
+
+Audyt bieżącego kodu, kanonicznej noty 0980 oraz lokalnych implementacji
+NeuralMag i BORIS potwierdził, że `field.oersted.fdm_fft.fullmag.v1` musi
+pozostać `semantic_only`. Specyfikacja jest gotowa do rozpoczęcia TDD, ale
+sam docelowy milestone wykonano jedynie w około 22%: istnieje konserwatywny
+prąd ścianowy native charge i infrastrukturalne wzorce FFT demagu, lecz brak
+natywnego antysymetrycznego kernela Oersteda, cell-integrated oracle,
+face-to-cell reconstruction, cache, publicznego runtime bindingu oraz
+fizycznych bram kwalifikacyjnych.
+
+Najważniejszą bramką wejściową jest globalne zamknięcie obwodu. Mały lokalny
+residual ładunku w otwartym pasku pomiędzy dwiema elektrodami nie stanowi
+certyfikatu źródła Biota--Savarta. Solver musi przyjąć jedno z następujących
+źródeł: pełną geometrię z przewodem powrotnym i `source_cut`, kompletne
+rozszerzenie wyprowadzeń albo importowany prąd z jawnym certyfikatem
+ciągłości i zamknięcia. Zero-padding i wyzerowanie składowej `k=0` nie mogą
+maskować otwartego obwodu.
+
+Zamrożono kolejność realizacji CPU reference:
+
+1. doprecyzować w nocie 0980 operator source-cell integral obserwowany w
+   środku komórki docelowej oraz padding `2N`, także dla osi singletonowej;
+2. dodać kontrakt closure/source-cut i rekonstrukcję dokładnego face `J_c` do
+   cell-centred `J_charge`, bez ponownego liczenia `sigma E`;
+3. napisać niezależny bezpośredni FP64 oracle całki po komórce z near/self,
+   anizotropią i antysymetrią;
+4. dopiero potem zrealizować open-boundary FFT, persistent plany/bufory,
+   revisioned cache oraz fail-closed dla PBC;
+5. porównać FFT z direct oracle dla losowych zamkniętych pętli i przejść
+   Ampere, curl/div, translację, energię/pracę i refinement;
+6. związać dokładnie `ProblemIR -> planner -> native runtime -> artefakt` i
+   dopiero wtedy rozważyć ograniczoną promocję CPU/double.
+
+Demag FFT może dostarczyć wyłącznie neutralnych wzorców zarządzania planami i
+buforami. Nie jest realizacją Oersteda: używa innego źródła, jednostek,
+symetrii kernela, maski, znaku, cache key i kryteriów kwalifikacji. Ciężka
+bramka `just verify-fdm-cpu-m1-oersted-native-contract` ma korzystać z
+zarządzanej ścieżki kontenerowej oraz backing store pod `/zfn2`; dotychczasowa
+legacy bramka cylindra/CUDA nie jest dowodem tego milestone'u.
+
+## 32.158. Dokładna proweniencja faktycznie wykonanych modułów (2026-08-09)
+
+Runtime przestał wyznaczać `executed_module_ids` przez kopiowanie planu albo
+końcowe wnioskowanie z oczekiwanego workflow. Identyfikatory są obserwowane
+przez właściciela dopiero po zaakceptowanej ewaluacji fizyki, kumulowane
+przez retry i hysteresis oraz na końcu wyłącznie walidowane i deduplikowane.
+Anulowanie przed pierwszą ewaluacją pozostawia listę pustą; anulowanie lub
+pauza po wykonanej próbie zachowuje zgromadzony dowód.
+
+Direct minimizery są klasyfikowane semantycznie przez `control.algorithm`, a
+nie tylko przez wariant etapu. `Minimize` oraz legalny
+`Relax(projected_gradient_bb|nonlinear_cg|tangent_plane_implicit)` obserwują
+wyłącznie wykonane owner modules energii/pola. Nie publikują torque ani
+transportu, których direct objective nie wywołał. Zwykłe workflow dynamiczne
+obserwuje osobno drive, torque, steady transport i pozostałe rzeczywiście
+uruchomione moduły.
+
+Każda zakończona próba `retry_with_smaller_dt` scala exact provenance przed
+decyzją o kolejnym retry. Dzięki temu wykonana próba zakończona np.
+`MaxSteps`, po której następna próba zostanie anulowana bez ewaluacji, nie
+traci dowodu. Podstawowy `run_planned_problem` tworzy i przekazuje wspólny
+physics execution context do obu wrapperów FEM, dlatego wykonany steady
+transport publikuje exact IDs niezależnie od opcjonalnego writera artefaktu i
+również w kontekście hysteresis.
+
+Dowody końcowe:
+
+```text
+public physics-graph runtime integration                       4/4 PASS
+focused direct-minimizer/retry/hysteresis/FEM invariants           PASS
+cargo check -p fullmag-runner --features fem-gpu              exit 0
+rustfmt + scoped git diff --check                                  PASS
+independent final review                                        APPROVE
+```
+
+Zmiana kwalifikuje kontrakt proweniencji, nie sam solver. Wcześniejszy
+managed FEM `exit 130` pozostaje luką wykonawczą i musi zostać zastąpiony
+świeżym dowodem zarządzanego runtime przed promocją odpowiednich capability.
+
+## 32.159. Zamrożenie kontraktu FDM Oersted open-boundary FFT (2026-08-10)
+
+Przed rozpoczęciem implementacji zamrożono docs-first operator
+`fdm_oersted_cell_integrated_open.v1`. Źródłem jest dokładny, zorientowany
+face `J_c`; rekonstrukcja cell-centred, odd kernel `J cross r`, source-cell
+integral obserwowany w środku komórki docelowej, self-zero, union grid,
+niezależne maski conductor/target, padding `2N`, R2C, crop, normalizacja,
+DC/Nyquist oraz cache/proweniencja mają jedną wersjonowaną semantykę.
+
+Kontrakt nie utożsamia parytetu FFT/direct z zachowaniem prądu. Osobne
+operatory diagnostyczne `D_h`, `C_h` i bramka Ampere'a mierzą błąd po
+rekonstrukcji face-to-cell na zamkniętej pętli, z ustalonym pasem brzegowym,
+skalą, tolerancją i minimalnym rzędem refinement. Oracle kernela używa
+mieszanego ograniczenia absolutno-względnego oraz niezależnej zbieżności dwóch
+poziomów kwadratury. Klasy dokładnego zera są typowane osobno jako real-space
+`Z_real` i spectral `Z_spec`; nie wolno ich scalać.
+
+Test dokumentacyjny obejmuje dokładny pierwotny zestaw pięciu mutacji
+semantycznych oraz piętnaście dodatkowych. Końcowy niezależny review
+potwierdził:
+
+```text
+focused contract tests                                      3/3 PASS
+original required mutation negatives                        5/5 PASS
+additional mutation negatives                             15/15 PASS
+scientific documentation contract                         20/20 PASS
+source-map + rendered-page validators                         PASS
+strict Sphinx -E -a -W -n                                     PASS
+independent final review                                    APPROVE
+```
+
+Jest to zamrożenie fizyki i numeryki, nie dowód solvera. FDM CPU i GPU
+pozostają `semantic_only`; dopiero natywny direct oracle, FFT, managed runtime
+i fizyczne fixtures mogą uzasadnić późniejszą ograniczoną promocję.
+
+## 32.160. Natywny FDM CPU/FP64 M1 charge + steady spin/SHE (2026-08-10)
+
+Etap §32.155 rozszerzono do kompletnego, ograniczonego ownera native M1.
+Charge rozwiązuje konserwatywny face `J_c`, harmoniczny bulk flux, elektrody,
+gauge per komponent oraz one-way interfejs szeregowy z oporami półkomórek i
+`1/(G_up+G_down)`. Spin przyjmuje wyłącznie niemutowalny zaakceptowany
+snapshot charge z maską domeny, potencjałami, jednym zorientowanym `J_c`,
+dwoma śladami interfejsowymi i dokładną tożsamością deskryptorów.
+
+Owner spin obejmuje steady `mu_s [V]`, dyfuzję FV, podpisany upwind `P`, direct
+SHE z rekonstrukcją dokładnego face `J_c/sigma`, reakcje `R_sf`, `R_J`,
+`R_phi`, transparent i pełny one-way mixing `G_up/G_down/G_r/G_i`, moment
+objętościowy i powierzchniowy oraz matrix-free restarted block GMRES. Legalny
+jest również transverse-only przypadek `G_up=G_down=0`: interfejs pozostaje
+izolatorem charge z `J_c=0`, nie łączy komponentów gauge, ale `G_r/G_i`
+absorbuje poprzeczny spin.
+
+Walidacja wymusza zgodność snapshotu i problemu spin 1:1, aktywność domeny i
+końców interfejsów, lokalną bramkę FV w normie maksimum składowych,
+niezależny residual i globalny bilans. Testy obejmują heterogeniczny oracle
+rozróżniający `J_c/sigma` od `grad(V)`, wszystkie sześć kontrakcji
+Levi-Civity, analityczne znaki/skale mixing, reakcji i torque, negatywne
+przypadki domeny/snapshotu oraz pełne piętnaście składowych obserwacji
+interfejsowych w Rust/native parity.
+
+```text
+just verify-fdm-cpu-m1-charge-native-contract       exit 0; CTest 3/3; parity 2/2
+just verify-fdm-cpu-m1-spin-native-contract         exit 0; CTest 2/2; parity PASS
+scientific documentation validator                  PASS; tests 20/20
+capability companion/consistency tests              PASS; tests 12/12
+scoped rustfmt + JSON + diff-check                   PASS
+independent final review                             APPROVE
+```
+
+Granica kwalifikacji pozostaje jawna. Istniejąca publiczna ścieżka Rust
+steady/direct-SHE zachowuje ograniczony status `reference_executable`. Nowy
+standalone C++ owner jest implemented/executable/validated w powyższym
+milestone, ale nie ma jeszcze C ABI/runner bindingu; publiczne mixing pozostaje
+`semantic_only`. Publiczny `NormalCurrentElectrode [A/m2]` nie jest mapowany
+na odmienną natywną elektrodę total-current `[A]` i wymaga osobnego BC w
+milestone integracji. Nie awansowano GPU, M2/M3, SML ani kwalifikacji
+produkcyjnej.
+
+## 32.161. FDM GPU/FP64 M1 docs-first contract freeze (2026-08-10)
+
+Audyt gotowości PR-15 potwierdził, że wspólna fizyka M1, znaki, SI, exact
+density-face BC, face-current reconstruction, sześć kontrakcji direct SHE,
+mixing i torque są wystarczająco precyzyjne do zamrożenia realizacji GPU, ale
+sam transport CUDA nie istnieje. Charge GPU, steady spin/SHE GPU, accepted
+device snapshot, opaque GPU ABI, strict residency i kwalifikacja mają nadal
+zero wykonywalnego dowodu. Capability pozostaje `semantic_only`, a dla FDM GPU
+obowiązuje `implementation_state=absent`, `validation_state=unvalidated` i
+`validated_workloads=[]`.
+
+CPU/FP64 pozostaje oraclem fizycznym. Natywny owner i opt-in C ABI/runner
+prototype są wykonywalne w skupionych managed gates, lecz review bindingu ma
+wynik `REQUEST_CHANGES` z jednym Critical i dziesięcioma Important. Nie jest to
+accepted/stable/public-qualified ani production binding. Publiczny
+`NormalCurrentElectrode [A/m2]` jest materializowany jako dokładne ściany
+zewnętrzne z polem powierzchni i znakiem outward-normal; nie wolno utożsamiać
+go z osobną implementacyjną elektrodą total-current `[A]`. GPU ABI pozostaje
+deferred.
+
+Zamrożony milestone PR-15 ma następującą granicę:
+
+1. wyłączny owner `backends/fdm/gpu/cuda/transport/**` i osobny opaque
+   `GpuTransportContext`; bez transport state w LLG `Context`,
+   `mfem_bridge.cpp`, Rust engine lub runnerze;
+2. FP64-only, wymuszone `fdm/gpu/double/strict`, FP32 fail-closed i brak CPU
+   lub precision fallbacku;
+3. niezmienny accepted device snapshot z $V$, jednym globalnie zorientowanym
+   face $J_c$, maskami/revisions, exact density faces, zorientowanymi
+   interfejsami, dwoma śladami charge, observations i generation identity;
+4. spin konsumuje snapshot i device `m_stage` bez host reconstruction lub
+   wektorowego D2H/H2D w etapie;
+5. charge CG z gauge per komponent i device AMG oraz restarted spin GMRES z
+   component AMG/block-Jacobi; prototyp słabszego preconditionera musi mieć
+   osobne ID i nie może publikować produkcyjnego engine ID;
+6. exact $E_n=J_{c,f}/\sigma_f$, sześć signed Levi-Civita contractions,
+   positive/negative/zero upwind, transparent i full one-way mixing, w tym
+   legalny transverse-only, oraz volume+surface torque balance;
+7. append-only ABI z `abi_version`, `struct_version`, `struct_size`,
+   `reserved_flags`, jawnym pointer space, opaque context/snapshot handles,
+   size/alignment/layout gates i typowanym modelem błędów;
+8. rejected-attempt rollback, immutable snapshots, kompletne cache keys,
+   deterministyczny restart i wersjonowana telemetria każdego transferu oraz
+   synchronizacji;
+9. pełna drabina TDD: layout/ABI, charge, snapshot, spin/SHE, mixing/torque,
+   CPU-GPU FP64 parity, strict residency, determinism/restart, public
+   ProblemIR-planner-runner-artifacts i convergence/performance.
+
+Pierwszy ograniczony executable slice ma obejmować jeden structured single-grid
+domain na jednym GPU, statyczne materiały, exact external density/voltage/
+insulating faces, component gauge, bounded spin BC, transparent lub jedną
+rodzinę zorientowanego mixing, jeden accepted charge snapshot i jedno steady
+spin/torque evaluation dla device `m_stage`. Periodic, multi-device/MPI,
+M2/iSHE/AMR/PHE/AHE, M3, SML, FP32, dynamic Oersted i production-scale
+performance pozostają osobnymi etapami.
+
+Status tego wpisu to **spec-ready**. Nie jest executable ani validated. Kod
+CUDA, C header, Rust binding, runner path, zarządzane device gates i artifacts
+muszą powstać w późniejszych zmianach TDD. Dopiero świeże niepominięte runy na
+zidentyfikowanym GPU, CPU-GPU FP64 parity, convergence, balance, zero-transfer
+audit, restart/determinism i osobny review mogą otworzyć kwalifikacyjny PR
+zmieniający capability.
+
+## 32.162. Closure review kontraktu FDM GPU/FP64 M1 (2026-08-10)
+
+Review docs-first wykrył dwie luki blokujące implementowalność ABI i trzy
+braki wymagane w kontrakcie kwalifikacji. Closure nie zmienia statusu lane:
+FDM/GPU/double/strict pozostaje `semantic_only`,
+`implementation_state=absent`, `validation_state=unvalidated` i
+`validated_workloads=[]`.
+
+Zamrożono następujące korekty:
+
+1. Publiczne typy handle to osobne
+   `fullmag_fdm_gpu_transport_context_handle_v1` i
+   `fullmag_fdm_gpu_charge_snapshot_handle_v1`; wersjonowany rekord informacji
+   ma odrębną nazwę `fullmag_fdm_gpu_charge_snapshot_info_v1`.
+2. Handle jest nie-pointerowym tokenem `registry_cookie/slot/generation/type_tag`.
+   Bounded registry utrzymuje retired tombstone, nie dereferencjonuje zwolnionej
+   pamięci, wykrywa double destroy i stale generation, a generation exhaustion
+   nigdy nie zawija licznika.
+3. `struct_version=1` dopuszcza tylko opcjonalny append-only tail z
+   `struct_size>=MIN_SIZE_V1`; nowy wymagany field/semantyka zwiększa wersję.
+   Nieznany `struct_version`, wymagany feature bit, zbyt krótki prefix lub
+   niezerowe reserved data odrzucają request przed alokacją/dereference.
+4. Restart używa pełnego
+   `fullmag.fdm_gpu_transport_checkpoint.v1`: `checkpoint_query_size`, export i
+   import, little-endian `FMGPUTR1`, section/payload SHA-256, kompletne accepted
+   charge/spin arrays, interface/torque observations i Krylov warm starts.
+   Restore działa provisional i atomowo, zachowuje lineage/accepted sequence/
+   content digest, ale tworzy nowy lokalny handle token. Nie ma re-solve ani
+   cross-device fallbacku.
+5. Backend-neutral upwind wybiera negative-axis cell dla $P_fJ_{c,f}>0$,
+   positive-axis cell dla wartości ujemnej, a dla exact zero wybiera
+   negative-axis cell i mnoży przez dokładne `+0.0`; epsilon i signbit nie
+   zmieniają tie rule.
+6. Macierz kwalifikacji ma dokładnie 17 gate IDs. Każdy wiersz zawiera stabilny
+   fixture ID z parametrami, niezależny oracle ID i oczekiwane wartości,
+   liczbową tolerancję/budżet oraz niepomijany managed artifact z GPU UUID.
+   Convergence i performance są osobnymi bramkami.
+7. Test kontraktowy parsuje dokładny zbiór gate IDs i pięć kolumn, odrzuca
+   usunięcie dowolnego wiersza, regresję handle/checkpoint/restart/upwind,
+   awans implementation state lub status executable, nieobecne
+   `absent/unvalidated` oraz
+   niepuste `validated_workloads`.
+
+Jest to closure kontraktu, nie closure milestone'u wykonawczego. Żaden symbol
+CUDA ani GPU ABI nie istnieje, nie wykonano managed GPU workloadu i capability
+nie może zostać promowane na podstawie tej zmiany dokumentacyjnej.
+
+## 32.163. Final2 closure ABI/checkpoint/audit FDM GPU M1 (2026-08-10)
+
+Drugi finalny review wskazał, że poprzedni closure nadal nie zamrażał
+implementowalnego layoutu bajtowego ani kilku niezależnych oracli. Niniejszy
+wpis zamyka te luki bez produkcyjnego kodu CUDA i bez promocji capability:
+
+1. Każdy rekord ABI v1 ma exact field order, fixed-width type, offset,
+   `alignas(8)`, `MIN_SIZE_V1`, per-record `KNOWN_FEATURES_V1` i wspólny
+   32-bajtowy prefix z `required_features` na offset 16. Reguły old/new v1 i
+   v1/v2 są fail-closed i objęte mutacjami layout/feature mask.
+2. `FMGPUTR1` ma dokładny 320-bajtowy header, 96-bajtowe deskryptory sekcji,
+   zamrożone ID 1--20, 64-bajtowe wyrównanie, zerowy padding, little-endian
+   typy, kanoniczne subrekordy i osobne, precyzyjne domeny SHA-256.
+   Niezależny 640-bajtowy codec golden ma ordinary SHA-256
+   `6a3c3bbac5c865aec507999db8e35c2d1f5b3bcea91c99a0ad93923b32d08efb`.
+3. `scientific_continuation_digest` obejmuje wyłącznie accepted scientific i
+   deterministic continuation state. `operation_audit_digest` jest
+   append-only łańcuchem wszystkich operacji, transferów i synchronizacji,
+   także failed import po H2D. Pełny strumień telemetry nie jest porównywany
+   między runem ciągłym i restartowanym.
+4. Fixture gauge ma rzeczywiście swobodny komponent bez voltage datum;
+   strict-residency zamraża `artifact D2H=512 bytes` i
+   `checkpoint D2H=640 bytes`; mixing ma analityczny oracle na siatkach
+   `2x16x1/2x32x1/2x64x1`; performance używa bezwzględnych limitów czasu i
+   pamięci, a nie przyszłego baseline'u.
+5. Test kontraktowy ma niezależny encoder/decoder golden oraz mutacje
+   truncation, corruption, unknown-required-section, padding, ABI offsets,
+   feature masks, digest lanes i konkretnych fixture values/budgets.
+
+Status pozostaje **spec-ready**, ale nie executable, validated ani
+production-qualified. `fdm/gpu/double/strict` nadal ma
+`semantic_only`, `implementation_state=absent`,
+`validation_state=unvalidated` i `validated_workloads=[]`. CUDA/runtime/device
+proof jest obowiązkiem późniejszej implementacji i osobnego review.
+
+## 32.164. Final3 closure numeric ABI i dwóch checkpoint oracles (2026-08-10)
+
+Final3 wykazał, że §32.163 nie zamknął jeszcze spec-ready: brakowało exact
+wartości enum/ID, a 640-bajtowy golden łamał własny subrecord codec i nie mógł
+być legalnym runtime checkpointem. Ten wpis zastępuje tamte szczegóły:
+
+1. Zamrożono closed `u32` registries dla bool, element/pointer/component,
+   precision/stream, charge/spin solver, gauge, convergence, telemetry,
+   artifact, checkpoint restore, error status i 18 `record_id`. Każdy ma exact
+   zero/sentinel, unknown handling; event flags i inclusion mask mają exact
+   bity oraz `LEGAL_MASK_V1=0x0000003f`.
+2. Codec-only golden ma pełny, parsowalny section-1 `charge_meta` subrecord i
+   section-2 `V`; ma 1600 bajtów i SHA-256
+   `ad8d00c7c4d3c349ee203946145b9d02f8e34f331ee9687645c9c981bb33b803`.
+   Jest byte-codec oraclem, ale nie jest runtime exportem ani wejściem restore.
+3. Osobny charge-only restore golden zawiera kompletne wymagane ID
+   1--9, 18 i 20, ma 4352 bajty i SHA-256
+   `ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5`.
+   Tylko ten payload obsługuje snapshot export/import, residency transfer i
+   determinism/restart gates.
+4. Niezależny test parsuje każdy descriptor i subrecord: presence/flags,
+   element tuple, header/`record_bytes`, field IDs/types/counts, zero padding,
+   digest domains, required section set, array shapes, accepted sequence,
+   snapshot content i scientific continuation digest. Mutacje tuple,
+   `record_bytes`, field type, missing section, corruption i padding są RED.
+5. Exact residency oracle to nadal `artifact D2H=512 bytes`, ale checkpoint
+   transfer wynosi teraz `checkpoint D2H=4352 bytes`, wyprowadzony z kompletnego
+   restore-valid payloadu.
+
+Po tej korekcie kontrakt ponownie ma status **spec-ready**, lecz nadal nie jest
+executable, validated ani production-qualified. Capability pozostaje
+`semantic_only`, `implementation_state=absent`,
+`validation_state=unvalidated`, `validated_workloads=[]`; nie ma kodu CUDA ani
+managed device proof.
+
+## 32.165. Final4 closure minimalnego canonical paddingu (2026-08-10)
+
+Final4 zaakceptował numeric ABI, rozdzielenie dwóch goldenów, restore-valid
+checkpoint i digest/audit, ale wykazał jedną ostatnią niekanoniczność decodera:
+po przeliczeniu wszystkich hashy przyjmował dodatkowy zerowy blok końcowy lub
+większą, nadal wyrównaną szczelinę przed field data.
+
+Closure wymusza dokładne równości:
+
+1. każdy field `data_offset == align_up(previous_end,8)`;
+2. subrecord `record_bytes == align_up(last_field_end,8)`;
+3. każdy section `file_offset == align_up(previous_section_end,64)`;
+4. `len(file) == header.total_size == align_up(last_section_end,64)`;
+5. wyłącznie padding konieczny do tych równości może istnieć i musi być zero.
+
+Adversarial mutations przeliczają section, descriptor-table, ordered-data,
+snapshot-content i whole-file hashe, a mimo to muszą zostać odrzucone dla:
+
+- dodatkowych 64 końcowych bajtów;
+- dodatkowej 8-bajtowej szczeliny przed pierwszym field data;
+- dodatkowego 64-bajtowego bloku między sekcjami.
+
+Canonical golden bytes i SHA pozostają bez zmian: codec-only 1600 B
+`ad8d00c7c4d3c349ee203946145b9d02f8e34f331ee9687645c9c981bb33b803`
+oraz restore-valid 4352 B
+`ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5`.
+Status to **spec-ready**, nie executable/validated/production-qualified;
+capability nadal ma `semantic_only`, `implementation_state=absent`,
+`validation_state=unvalidated`, `validated_workloads=[]`.
+
+## 32.166. Implementacja ograniczonego FDM GPU/FP64 M1 charge (2026-08-10)
+
+Ten etap zmienia stan implementacji, ale nie promuje capability. Ograniczony
+charge-only slice istnieje w `backends/fdm/gpu/cuda/transport/charge/**`, więc
+agregat FDM GPU M1 ma teraz `implementation_state=partial`. Publiczna ścieżka
+pozostaje `semantic_only`, walidacja `validation_state=unvalidated`, a
+`validated_workloads=[]`.
+
+Zamknięty zakres:
+
+1. Append-only C ABI i Rust sys mirror mają typed cell/material/face/formula
+   payloads, zamknięte ID oraz zgodne C/C11/Rust layout gates.
+2. `context.cu` posiada GPU context, immutable static state, provisional solve,
+   atomic accepted snapshot, bounded artifact readback, telemetry i charge-only
+   checkpoint import/export.
+3. `charge/device_solver.cu` realizuje konserwatywny harmoniczny FV, raw
+   face-current reconstruction, deterministic fixed-tree FP64 CG oraz prawdziwy
+   dwupoziomowy strength-graph AMG z jawnym $A_c=RAP$, cache i invalidation.
+4. Walidacja host/device odrzuca internal, inactive, duplicate, nonfinite,
+   wrong-area, wrong-outward-sign i malformed typed records przed publikacją.
+5. Managed actual-device gate obejmuje uniform, layered, snapshot i 13 boundary
+   mutations. Na UUID `fcb9fbf1828437c7af5b76bcbf2d2937` oraz build
+   `700e798c56bdde3029759e3460a39762e325d5108401e5907819a7b064a9ca3d`
+   wszystkie cztery workloady zakończyły się kodem 0 i
+   `host_fallback_count=0`.
+6. Snapshot proof ma dwa rozłączne tory. A to frozen syntetyczny oracle kodeka
+   4352 B/SHA `ae8d3c...f6d5`, który actual runtime musi odrzucić przez mismatch
+   tożsamości. B to identity-dependent runtime export 4352 B/sequence 7; w tym
+   buildzie SHA wynosi `d2b25960...123f9`, a fresh exact-matching context
+   odtwarza bitowo $V/J_c$ bez re-solve.
+
+Otwarte, blokujące kroki przed szerszym M1 lub promocją:
+
+- zaimplementować i przetestować zero-mean gauge dla zgodnego swobodnego
+  komponentu Neumannowskiego;
+- użyć odtworzonego charge iterate jako persistent Krylov warm start następnego
+  solve i zamknąć pełny `determinism_restart_v1`;
+- podłączyć jawny publiczny `ProblemIR`--planner--runner--artifact path bez
+  fallbacku i bez fabrykowania provenance;
+- zaimplementować CUDA steady spin, direct SHE, mixing i torque;
+- wykonać osobne strict-residency, convergence, performance, FP32, periodic i
+  cross-backend qualification gates;
+- przeprowadzić osobny review/promocję capability. Aktualne managed runy są
+  contract evidence, nie `validated_workloads` i nie kwalifikacją produkcyjną.
+
+## 32.167. Closure poprawek FDM GPU/FP64 M1 charge (2026-08-10)
+
+Fala po review zamyka trzy znalezione defekty bounded charge-only slice bez
+promocji całego M1. Accepted snapshot ma teraz jedną content-derived identity
+od accept przez query/export/restore, rekonstrukcja BC voltage i exact-density
+działa na osiach X/Y/Z, a bounded strict-residency audit obejmuje rzeczywiste
+transfery i synchronizacje static upload, solve, artifact i checkpoint
+export/import, w tym odrzucony import.
+
+Finalny rerun wykrył dodatkowo i zamknął dwa problemy integracyjne:
+
+1. `artifact_request_v1` ma exact required-feature mask
+   `M1 charge | artifact_readback = 0x44`. Maska `0`, samo
+   `artifact_readback=0x40` i unknown bits są fail-closed; C/C11/Rust layout,
+   fixture'y oraz normatywna tabela ABI są zgodne.
+2. Static descriptor bez modułu M1 nie jest przymuszany do charge boundary
+   validation. Device-side pełna walidacja BC uruchamia się tylko dla
+   descriptoru wymagającego `M1_CHARGE`, więc brak modułu prądowego nadal
+   oznacza brak grafu prądowego.
+
+Świeże managed evidence z jednego zamrożonego źródła:
+
+- GPU charge: pięć workloadów PASS na RTX 4080 SUPER/UUID
+  `fcb9fbf1828437c7af5b76bcbf2d2937`, CC 8.9, build
+  `355a6f99d6df4b7dd3b96414576074ce868ee5b26d56fb851976bdcd9c8240a3`;
+  uniform, layered, snapshot, 14 boundary mutations i exact transfer audit,
+  `host_fallback_count=0`;
+- layout ABI: Rust 4/4 i CTest 4/4, 5952 checkpoint mutations, record 11
+  `features=68`, actual GPU i fallback 0;
+- CPU charge regression: CTest 3/3 oraz normalny i small-current Rust/native
+  artifact parity PASS;
+- focused docs 12/12, scientific validator i jego testy 21/21, source-map JSON
+  oraz scoped diff check PASS.
+
+Pierwszy niezależny review tego closure zwrócił `REQUEST_CHANGES` z trzema
+findingami Important. Fala napraw dodała następnie:
+
+1. transakcyjny audit 22/22 granic CUDA dla upload/solve/artifact/export/import;
+   realne błędy memcpy, synchronizacji, materializacji i digestu zachowują
+   wykonane bytes/count oraz publikują exact `FAILED`; test rekonstruuje pełny
+   parent-chain SHA-256 niezależnie;
+2. rzeczywisty descriptor bez M1 z sześcioma niedereferencjonowalnymi sentinel
+   pointers; upload/teardown przechodzą bez charge state i telemetry, a charge
+   solve/artifact/checkpoint failują przed dereferencją lub launch;
+3. atomowe preflighty `provisional_generation` i `telemetry_sequence` przy
+   `UINT64_MAX-1`, bez publikacji bufora, mutacji identity ani sequence zero.
+
+Po tych zmianach ponowiono pełny GPU charge gate, layout/lifecycle i CPU charge
+regression na świeżym źródle; wszystkie zakończyły się kodem 0. Jest to dowód
+naprawy, nie zastępstwo ponownego niezależnego review.
+
+Drugi niezależny review wykrył dwa dalsze findingi Important. Fault injection
+był wykonywany post-hoc po udanej operacji CUDA, przez co mógł fabrykować stan
+`SUCCESS...FAILED`, a rejected checkpoint import nie propagował wyczerpania
+sekwencji audit. Poprawka przenosi jednorazowe hooki przed rzeczywiste
+`cudaMemcpyAsync`, synchronizację, materializację lub digest, także wewnątrz
+device solvera; raportuje wyłącznie ukończone bytes/count, przerywa dalsze
+operacje i wycofuje świeży cache solve. Test rejected import obejmuje przejście
+`UINT64_MAX-1 -> UINT64_MAX -> OUT_OF_RESOURCES` bez sequence zero ani mutacji
+stanu i digestu. Po tej korekcie wszystkie trzy managed gates ponownie przeszły;
+świeży trzeci niezależny whole-change review pozostaje wymagany.
+
+Trzeci, świeży niezależny whole-change review zakończył się werdyktem
+**APPROVE: 0 Critical, 0 Important**. Bounded FDM GPU/FP64 M1 charge closure
+jest zaakceptowane; nie oznacza to awansu capability ani kwalifikacji całego M1.
+Stan agregatu pozostaje `semantic_only`, `implementation_state=partial`,
+`validation_state=unvalidated`, `validated_workloads=[]`. Free-component
+zero-mean gauge, persistent next-solve warm start, publiczny GPU runner,
+spin/SHE/mixing/torque, convergence/performance i produkcyjna kwalifikacja
+pozostają kolejnymi etapami.

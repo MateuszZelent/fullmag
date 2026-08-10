@@ -524,8 +524,8 @@ impl CoupledChargeSpinProblem {
             };
             if !ratio.is_finite() || ratio > 1.0 {
                 return Err(EngineError::new(format!(
-                        "M2 transport solve rejected by outer LTE gate without committing state: dt*dT={induced:.6e}, eta*LTE={allowed:.6e}"
-                    )));
+                    "M2 transport solve rejected by outer LTE gate without committing state: dt*dT={induced:.6e}, eta*LTE={allowed:.6e}"
+                )));
             }
             (Some(delta), Some(ratio))
         } else {
@@ -1727,7 +1727,7 @@ fn validate_boundaries(boundary: CoupledChargeSpinBoundaryConditions) -> Result<
             | SpinBoundaryCondition::SpecifiedFlux(v)
                 if v.iter().any(|x| !x.is_finite()) =>
             {
-                return Err(EngineError::new("M2 spin BC values must be finite"))
+                return Err(EngineError::new("M2 spin BC values must be finite"));
             }
             _ => {}
         }

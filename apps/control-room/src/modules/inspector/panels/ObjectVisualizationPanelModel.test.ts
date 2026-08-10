@@ -62,6 +62,7 @@ import {
   VISUALIZATION_QUANTITY_ITEMS,
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
+  fieldCatalogQuantityAvailable,
   visualizationResetActionLabel,
   fdmGridCellCount,
   fdmVisualizationResourceNotice,
@@ -945,6 +946,7 @@ describe("ObjectVisualizationPanelModel", () => {
       "m",
       "H_eff",
       "H_demag",
+      "H_ext",
       "H_ex",
       "H_ani",
       "torque",
@@ -971,6 +973,7 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(airboxItems.map((item) => item.value)).toEqual([
       "H_eff",
       "H_demag",
+      "H_ext",
     ]);
   });
 
@@ -978,9 +981,38 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(visualizationQuantityItems("H_demag", "airbox").map((item) => item.value)).toEqual([
       "H_eff",
       "H_demag",
+      "H_ext",
     ]);
   });
 
+  it("filters quantity options by the realized field catalog", () => {
+    const catalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        {
+          available: true,
+          quantity_id: "m",
+          label: "Magnetization",
+        },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+
+    expect(
+      visualizationQuantityItems("m", "object", catalog).map(
+        (item) => item.value,
+      ),
+    ).toEqual(["m"]);
+    expect(
+      visualizationQuantityItems("H_demag", "object", catalog),
+    ).toEqual([
+      { label: "Unavailable / H_demag", value: "H_demag" },
+      { label: "Magnetization", value: "m" },
+    ]);
+    expect(fieldCatalogQuantityAvailable(catalog, "m")).toBe(true);
+    expect(fieldCatalogQuantityAvailable(catalog, "H_demag")).toBe(false);
+    expect(fieldCatalogQuantityAvailable(null, "H_demag")).toBe(true);
+  });
 
   it("switches scalar material quantities to colormap surface coloring", () => {
     expect(
@@ -1111,6 +1143,16 @@ describe("ObjectVisualizationPanelModel", () => {
         label: "FDM domain",
       }),
     ).toEqual({ scope_id: null, scope_kind: null });
+    // The Explorer identity is stable (`layer_id`) and may differ from the
+    // runtime magnet name.  The API resolves this opaque layer scope against
+    // the native multilayer layout; the UI must not substitute the label.
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget({
+        id: "fdm-native-layer:layer%3Abottom",
+        kind: "fdm-native-layer",
+        label: "bottom",
+      }),
+    ).toEqual({ scope_id: "layer:bottom", scope_kind: "layer" });
     expect(
       fieldMetaScopeQueryForVisualizationTarget({
         id: "region-a",
@@ -1745,7 +1787,7 @@ describe("ObjectVisualizationPanelModel", () => {
       });
   });
 
-  it("exposes only quantity and vector controls for the FDM Airbox target", () => {
+  it("exposes points, wireframe, quantity, and vector controls for the FDM Airbox target", () => {
     const sections = buildVisualizationPanelSections({
       effectiveSettings: resolveEffectiveVisualizationSettings(
         DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
@@ -1760,6 +1802,7 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(sections.map((section) => section.id)).toEqual([
       "display-passes",
       "quantity-source",
+      "points",
       "wireframe",
       "vectors",
       "overrides",

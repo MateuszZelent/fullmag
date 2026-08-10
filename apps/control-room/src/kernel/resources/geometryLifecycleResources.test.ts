@@ -53,6 +53,7 @@ import {
   resolveFdmRegionMembershipDescriptorResult,
   resolveFdmRegionMembershipBinaryResult,
   resolveFdmRegionMembershipRevision,
+  shouldLoadSingleGridFdmResources,
   resolveDomainPresentationRevision,
   resolveMeshHistogramBinElementsResourceKey,
   meshRegionMembershipResourceKey,
@@ -75,6 +76,30 @@ import {
 } from "./geometryLifecycleResources";
 
 describe("geometry lifecycle resources", () => {
+  it("does not request single-grid FDM membership while multilayer layout is active or unresolved", () => {
+    expect(
+      shouldLoadSingleGridFdmResources(true, "loading", null),
+    ).toBe(false);
+    expect(
+      shouldLoadSingleGridFdmResources(true, "ready", {
+        available: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadSingleGridFdmResources(true, "ready", {
+        available: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadSingleGridFdmResources(true, "error", null),
+    ).toBe(true);
+    expect(
+      shouldLoadSingleGridFdmResources(false, "ready", {
+        available: false,
+      }),
+    ).toBe(false);
+  });
+
   it("allows object FEM resources to be disabled for the explicit FDM lane", () => {
     const source = readFileSync(
       new URL("./geometryLifecycleResources.ts", import.meta.url),

@@ -24,17 +24,24 @@ fn magnetic_support_summary<'a>(
     grid_fingerprint: &'a str,
 ) -> Result<FdmMagneticSupportSummary<'a>, String> {
     let expected_cells = usize::try_from(
-        counts.into_iter().try_fold(1u64, |product, count| {
-            product.checked_mul(u64::from(count))
-        }).ok_or_else(|| "FDM region membership cell count overflows u64".to_string())?,
+        counts
+            .into_iter()
+            .try_fold(1u64, |product, count| product.checked_mul(u64::from(count)))
+            .ok_or_else(|| "FDM region membership cell count overflows u64".to_string())?,
     )
     .map_err(|_| "FDM region membership cell count is not addressable".to_string())?;
-    if region_mask.len() != expected_cells || active_mask.is_some_and(|mask| mask.len() != expected_cells) {
+    if region_mask.len() != expected_cells
+        || active_mask.is_some_and(|mask| mask.len() != expected_cells)
+    {
         return Err("FDM magnetic-support mask length disagrees with grid cell count".to_string());
     }
-    let nx = usize::try_from(counts[0]).map_err(|_| "FDM grid x cell count is not addressable".to_string())?;
-    let ny = usize::try_from(counts[1]).map_err(|_| "FDM grid y cell count is not addressable".to_string())?;
-    let plane_stride = nx.checked_mul(ny).ok_or_else(|| "FDM grid xy plane size overflows usize".to_string())?;
+    let nx = usize::try_from(counts[0])
+        .map_err(|_| "FDM grid x cell count is not addressable".to_string())?;
+    let ny = usize::try_from(counts[1])
+        .map_err(|_| "FDM grid y cell count is not addressable".to_string())?;
+    let plane_stride = nx
+        .checked_mul(ny)
+        .ok_or_else(|| "FDM grid xy plane size overflows usize".to_string())?;
     let mut support_min = [u32::MAX; 3];
     let mut support_max_exclusive = [0u32; 3];
     let mut active_cell_count = 0u64;
@@ -42,21 +49,33 @@ fn magnetic_support_summary<'a>(
     let mut active_unassigned_cell_count = 0u64;
     for (index, region_id) in region_mask.iter().enumerate() {
         if active_mask.is_some_and(|mask| !mask[index]) {
-            inactive_cell_count = inactive_cell_count.checked_add(1).ok_or_else(|| "FDM inactive cell count overflows u64".to_string())?;
+            inactive_cell_count = inactive_cell_count
+                .checked_add(1)
+                .ok_or_else(|| "FDM inactive cell count overflows u64".to_string())?;
             continue;
         }
-        active_cell_count = active_cell_count.checked_add(1).ok_or_else(|| "FDM active cell count overflows u64".to_string())?;
+        active_cell_count = active_cell_count
+            .checked_add(1)
+            .ok_or_else(|| "FDM active cell count overflows u64".to_string())?;
         if *region_id == 0 {
-            active_unassigned_cell_count = active_unassigned_cell_count.checked_add(1).ok_or_else(|| "FDM active-unassigned cell count overflows u64".to_string())?;
+            active_unassigned_cell_count = active_unassigned_cell_count
+                .checked_add(1)
+                .ok_or_else(|| "FDM active-unassigned cell count overflows u64".to_string())?;
         }
         let coordinates = [
             u32::try_from(index % nx).map_err(|_| "FDM support x index exceeds u32".to_string())?,
-            u32::try_from((index / nx) % ny).map_err(|_| "FDM support y index exceeds u32".to_string())?,
-            u32::try_from(index / plane_stride).map_err(|_| "FDM support z index exceeds u32".to_string())?,
+            u32::try_from((index / nx) % ny)
+                .map_err(|_| "FDM support y index exceeds u32".to_string())?,
+            u32::try_from(index / plane_stride)
+                .map_err(|_| "FDM support z index exceeds u32".to_string())?,
         ];
         for (axis, coordinate) in coordinates.into_iter().enumerate() {
             support_min[axis] = support_min[axis].min(coordinate);
-            support_max_exclusive[axis] = support_max_exclusive[axis].max(coordinate.checked_add(1).ok_or_else(|| "FDM support cell-edge index exceeds u32".to_string())?);
+            support_max_exclusive[axis] = support_max_exclusive[axis].max(
+                coordinate
+                    .checked_add(1)
+                    .ok_or_else(|| "FDM support cell-edge index exceeds u32".to_string())?,
+            );
         }
     }
     if active_cell_count == 0 {
@@ -65,8 +84,12 @@ fn magnetic_support_summary<'a>(
     Ok(FdmMagneticSupportSummary {
         semantic_role: "magnetic-support",
         grid_fingerprint,
-        bounds_min_m: std::array::from_fn(|axis| origin_m[axis] + f64::from(support_min[axis]) * cell_m[axis]),
-        bounds_max_m: std::array::from_fn(|axis| origin_m[axis] + f64::from(support_max_exclusive[axis]) * cell_m[axis]),
+        bounds_min_m: std::array::from_fn(|axis| {
+            origin_m[axis] + f64::from(support_min[axis]) * cell_m[axis]
+        }),
+        bounds_max_m: std::array::from_fn(|axis| {
+            origin_m[axis] + f64::from(support_max_exclusive[axis]) * cell_m[axis]
+        }),
         active_cell_count,
         inactive_cell_count,
         active_unassigned_cell_count,

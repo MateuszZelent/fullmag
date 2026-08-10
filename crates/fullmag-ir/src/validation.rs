@@ -744,6 +744,7 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
     for (index, term) in problem.energy_terms.iter().enumerate() {
         match term {
             EnergyTermIR::OerstedCylinder {
+                id,
                 current,
                 radius,
                 center,
@@ -751,6 +752,11 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
                 ..
             } => {
                 oersted_term_count += 1;
+                if id.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_cylinder id must not be empty when present"
+                    ));
+                }
                 if !current.is_finite() {
                     errors.push(format!(
                         "energy_terms[{index}] oersted_cylinder current must be finite"
@@ -779,8 +785,13 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
                     }
                 }
             }
-            EnergyTermIR::OerstedField { source, .. } => {
+            EnergyTermIR::OerstedField { id, source, .. } => {
                 oersted_term_count += 1;
+                if id.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                    errors.push(format!(
+                        "energy_terms[{index}] oersted_field id must not be empty when present"
+                    ));
+                }
                 if source.trim().is_empty() {
                     errors.push(format!(
                         "energy_terms[{index}] oersted_field source must not be empty"
@@ -1183,8 +1194,7 @@ fn validate_charge_transport_definition(
     let supported_solver = if reciprocal {
         let supported_operator = match requested_backend {
             crate::BackendTarget::Fem => {
-                solver.operator_version
-                    == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+                solver.operator_version == "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
             }
             crate::BackendTarget::Auto => matches!(
                 solver.operator_version.as_str(),
@@ -2128,8 +2138,7 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                     "fdm_coupled_charge_spin_fv_block_gmres.v1"
                         | "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
                 ),
-                _ => module.solver.operator_version
-                    == "fdm_coupled_charge_spin_fv_block_gmres.v1",
+                _ => module.solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1",
             }
         } else {
             match module.requested_execution.discretization {

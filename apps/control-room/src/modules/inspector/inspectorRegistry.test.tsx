@@ -17,6 +17,7 @@ import {
   AirboxMeshTopologyLanePanel,
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
+import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
@@ -156,17 +157,29 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "physics.coupling" })?.id).toBe(
       "physics-coupling",
     );
-    expect(resolveInspectorPanel({ kind: "physics.current-transports" })?.id).toBe(
-      "physics-current-transport",
-    );
+    for (const legacyKind of [
+      "physics.current-transports",
+      "physics.spin-transports",
+      "physics.spin-interfaces",
+      "physics.spin-torques",
+      "physics.oersted-fields",
+    ]) {
+      expect(resolveInspectorPanel({ kind: legacyKind } as never)?.id).toBe("placeholder");
+    }
     expect(resolveInspectorPanel({ kind: "physics.current-transport" })?.id).toBe(
       "physics-current-transport",
     );
-    expect(resolveInspectorPanel({ kind: "physics.spin-transports" })?.id).toBe(
-      "physics-spin-transport",
-    );
     expect(resolveInspectorPanel({ kind: "physics.spin-transport" })?.id).toBe(
       "physics-spin-transport",
+    );
+    expect(resolveInspectorPanel({ kind: "physics.spin-interface" })?.id).toBe(
+      "physics-spin-interface",
+    );
+    expect(resolveInspectorPanel({ kind: "physics.spin-torque" })?.id).toBe(
+      "physics-spin-torque",
+    );
+    expect(resolveInspectorPanel({ kind: "physics.oersted-field" })?.id).toBe(
+      "physics-oersted-field",
     );
   });
 
@@ -307,9 +320,9 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("falls back to the placeholder panel for known but unsupported selections", () => {
+  it("routes field quantities to a dedicated scientific inspector", () => {
     expect(resolveInspectorPanel({ kind: "results.field_quantity" })?.id).toBe(
-      "placeholder",
+      "field-quantity",
     );
   });
 
@@ -323,6 +336,12 @@ describe("inspectorRegistry", () => {
       expect(panel?.component).toBe(ObjectVisualizationPanel);
       expect(panel?.component).not.toBe(VisualizationDebugPanel);
     }
+  });
+
+  it("gives the multilayer Airbox target its own inspector", () => {
+    const panel = resolveInspectorPanel({ kind: "airbox.multilayer.target" });
+    expect(panel?.id).toBe("fdm-multilayer-airbox-target");
+    expect(panel?.component).toBe(FdmMultilayerAirboxTargetPanel);
   });
 
   it("gives every Airbox mesh branch a distinct single-purpose panel", () => {

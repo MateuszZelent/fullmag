@@ -49,6 +49,12 @@ pub enum PhysicsActivation {
     Unresolved,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhysicsModulePresentation {
+    pub family: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhysicsModuleIR {
     pub id: String,
@@ -60,6 +66,7 @@ pub struct PhysicsModuleIR {
     pub authored_state: String,
     pub capability: String,
     pub source_path: String,
+    pub presentation: PhysicsModulePresentation,
     pub family_payload: Value,
 }
 
@@ -129,8 +136,9 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
         match record {
             SceneCurrentTransport::Known(current) => {
                 let id = current.name.clone();
+                let solve_domain = current_solve_domain(current);
                 let solve_domain =
-                    validate_domain(&current.domain, &object_ids, scene, &source_path)?;
+                    validate_domain(&solve_domain, &object_ids, scene, &source_path)?;
                 let applies_to = scope_from_domain(&solve_domain);
                 let activation = current_activation(current.current_density, current.model);
                 push_module(
@@ -145,6 +153,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                         authored_state: "authored".to_string(),
                         capability: "semantic_only".to_string(),
                         source_path,
+                        presentation: current_presentation(current.model),
                         family_payload: serde_json::to_value(current).expect("current payload"),
                     },
                 )?;
@@ -183,6 +192,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                         authored_state: "authored".to_string(),
                         capability: "semantic_only".to_string(),
                         source_path: source_path.clone(),
+                        presentation: spin_transport_presentation(spin.mode),
                         family_payload: serde_json::to_value(spin).expect("spin payload"),
                     },
                 )?;
@@ -211,6 +221,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                             authored_state: "authored".to_string(),
                             capability: "semantic_only".to_string(),
                             source_path: interface_path,
+                            presentation: interface_presentation(interface),
                             family_payload: serde_json::to_value(interface)
                                 .expect("interface payload"),
                         },
@@ -253,6 +264,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                         authored_state: "authored".to_string(),
                         capability: "semantic_only".to_string(),
                         source_path,
+                        presentation: torque_presentation(torque),
                         family_payload: serde_json::to_value(torque).expect("torque payload"),
                     },
                 )?;
@@ -289,6 +301,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                         authored_state: "preserved".to_string(),
                         capability: "semantic_only".to_string(),
                         source_path,
+                        presentation: unsupported_presentation(),
                         family_payload: Value::Object(record.payload.clone().into_iter().collect()),
                     },
                 )?;
@@ -321,6 +334,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                         authored_state: "authored".to_string(),
                         capability: "semantic_only".to_string(),
                         source_path,
+                        presentation: oersted_presentation(field),
                         family_payload: payload,
                     },
                 )?;
@@ -365,6 +379,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                 authored_state: "authored".to_string(),
                 capability: "semantic_only".to_string(),
                 source_path,
+                presentation: presentation("regional_field_drive", "Regional field drive"),
                 family_payload: serde_json::to_value(drive).expect("field drive payload"),
             },
         )?;
@@ -388,6 +403,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                 authored_state: "authored".to_string(),
                 capability: "semantic_only".to_string(),
                 source_path: "/study/external_field".to_string(),
+                presentation: presentation("external_field", "External magnetic field"),
                 family_payload: serde_json::json!({"field_B_T": field}),
             },
         )?;
@@ -407,6 +423,22 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
         modules,
         edges,
     })
+}
+
+fn current_solve_domain(current: &crate::KnownSceneCurrentTransport) -> Vec<SceneRegionRef> {
+    if !current.domain.is_empty() {
+        return current.domain.clone();
+    }
+    current
+        .solve_region
+        .as_ref()
+        .map(|object_id| {
+            vec![SceneRegionRef {
+                object_id: object_id.clone(),
+                region_id: None,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 fn push_module(
@@ -470,6 +502,74 @@ fn current_activation(
             Some(_) => PhysicsActivation::Active,
             None => PhysicsActivation::Configured,
         },
+    }
+}
+
+fn presentation(family: &str, label: &str) -> PhysicsModulePresentation {
+    PhysicsModulePresentation {
+        family: family.to_string(),
+        label: label.to_string(),
+    }
+}
+
+fn unsupported_presentation() -> PhysicsModulePresentation {
+    presentation("unsupported", "Unsupported physics record")
+}
+
+fn current_presentation(model: crate::CurrentTransportModel) -> PhysicsModulePresentation {
+    match model {
+        crate::CurrentTransportModel::PrescribedDensity => {
+            presentation("prescribed_density", "Prescribed current density")
+        }
+        crate::CurrentTransportModel::OhmicPoisson => {
+            presentation("ohmic_poisson", "Ohmic current transport")
+        }
+        crate::CurrentTransportModel::MagnetoresistivePoisson => presentation(
+            "magnetoresistive_poisson",
+            "Magnetoresistive current transport",
+        ),
+    }
+}
+
+fn spin_transport_presentation(mode: crate::SceneSpinTransportMode) -> PhysicsModulePresentation {
+    match mode {
+        crate::SceneSpinTransportMode::Steady => presentation("steady", "Steady spin transport"),
+        crate::SceneSpinTransportMode::Transient => {
+            presentation("transient", "Transient spin transport")
+        }
+    }
+}
+
+fn interface_presentation(interface: &SceneSpinInterface) -> PhysicsModulePresentation {
+    match interface {
+        SceneSpinInterface::Transparent { .. } => {
+            presentation("transparent", "Transparent spin interface")
+        }
+        SceneSpinInterface::MixingConductance { .. } => {
+            presentation("mixing_conductance", "Spin-mixing interface")
+        }
+    }
+}
+
+fn torque_presentation(torque: &KnownSceneSpinTorque) -> PhysicsModulePresentation {
+    match torque {
+        KnownSceneSpinTorque::Slonczewski { .. } => presentation("slonczewski", "Slonczewski STT"),
+        KnownSceneSpinTorque::ZhangLi { .. } => presentation("zhang_li", "Zhang–Li STT"),
+        KnownSceneSpinTorque::PrescribedSot { .. } => {
+            presentation("prescribed_sot", "Prescribed SOT")
+        }
+    }
+}
+
+fn oersted_presentation(field: &KnownSceneOerstedField) -> PhysicsModulePresentation {
+    match field {
+        KnownSceneOerstedField::OerstedCylinder { .. } => {
+            presentation("analytic_cylinder", "Analytic cylindrical Oersted field")
+        }
+        KnownSceneOerstedField::OerstedField { .. } => presentation(
+            "from_current_solution",
+            "Oersted field from current solution",
+        ),
     }
 }
 
@@ -643,9 +743,17 @@ fn torque_scope_and_source(torque: &KnownSceneSpinTorque) -> (PhysicsScopeRef, O
                 .unwrap_or(PhysicsScopeRef::Global),
             current_source.clone(),
         ),
-        KnownSceneSpinTorque::ZhangLi { current_source, .. } => {
-            (PhysicsScopeRef::Global, current_source.clone())
-        }
+        KnownSceneSpinTorque::ZhangLi {
+            target,
+            current_source,
+            ..
+        } => (
+            target
+                .as_ref()
+                .map(region_scope)
+                .unwrap_or(PhysicsScopeRef::Global),
+            current_source.clone(),
+        ),
         KnownSceneSpinTorque::PrescribedSot { target, drive, .. } => {
             let source = match drive {
                 crate::ScenePrescribedSotDrive::VectorCurrentSource {
@@ -727,6 +835,7 @@ fn unsupported_module(
         authored_state: "preserved".to_string(),
         capability: "semantic_only".to_string(),
         source_path,
+        presentation: unsupported_presentation(),
         family_payload: Value::Object(payload.clone().into_iter().collect()),
     }
 }

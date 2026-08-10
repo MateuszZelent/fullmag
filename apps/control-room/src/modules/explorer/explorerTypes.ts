@@ -1,6 +1,8 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type {
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
   HysteresisExecutionTreeResource,
 } from "@/kernel/api/apiTypes";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -65,10 +67,18 @@ type ExplorerNodeKind =
   | "airbox.mesh.build"
   | "airbox.visualization"
   | "airbox.visualization.debug"
+  | "airbox.multilayer.target"
   | "boundary-faces.root"
   | "mesh.root"
   | "mesh.grid"
   | "mesh.grid.descriptor"
+  | "mesh.grid.common"
+  | "mesh.grid.layers"
+  | "mesh.grid.layer"
+  | "mesh.grid.layer.native-grid"
+  | "mesh.grid.layer.mask"
+  | "mesh.grid.layer.transfer"
+  | "mesh.grid.layer.provenance"
   | "mesh.grid.magnetic-support"
   | "mesh.grid.active-unassigned"
   | "mesh.grid.mask"
@@ -89,16 +99,6 @@ type ExplorerNodeKind =
   | "visualizations-2d.plot"
   | "physics.couplings"
   | "physics.coupling"
-  | "physics.current-transports"
-  | "physics.current-transport"
-  | "physics.spin-transports"
-  | "physics.spin-transport"
-  | "physics.spin-interfaces"
-  | "physics.spin-interface"
-  | "physics.spin-torques"
-  | "physics.spin-torque"
-  | "physics.oersted-fields"
-  | "physics.oersted-field"
   | "physics.module"
   | "physics.scope.global"
   | "physics.scope.cross-object"
@@ -296,6 +296,14 @@ export interface ExplorerNode {
   cellMaskState?: "inactive" | "active-unassigned" | "region";
   numericRegionId?: number | null;
   gridFingerprint?: string | null;
+  layerId?: string;
+  transferKind?: string;
+  nativeGrid?: readonly [number, number, number];
+  nativeCellSize?: readonly [number, number, number];
+  nativeOrigin?: readonly [number, number, number];
+  activeMaskPresent?: boolean;
+  activeCellCount?: number;
+  inactiveCellCount?: number;
   membershipRevision?: string | null;
   fmrPeakIndex?: number;
   frequencyIndex?: number;
@@ -316,22 +324,13 @@ export interface ExplorerNode {
   objectId?: string;
   observableId?: string;
   couplingId?: string;
-  currentTransportId?: string;
-  currentTransportIndex?: number;
-  spinTransportId?: string;
-  spinTransportIndex?: number;
-  spinInterfaceId?: string;
-  spinInterfaceIndex?: number;
-  spinInterfaceOwnerId?: string;
-  spinTorqueId?: string;
-  spinTorqueIndex?: number;
-  oerstedFieldId?: string;
-  oerstedFieldIndex?: number;
   physicsModuleId?: string;
   physicsModuleKind?: string;
+  physicsModuleFamily?: string;
   physicsScopeKind?: string;
   physicsScopeObjectIds?: readonly string[];
   physicsActivation?: string;
+  physicsDependencyIds?: readonly string[];
   regionId?: string;
   resourceRef?: string;
   displayUnits?: Record<string, string>;
@@ -455,6 +454,8 @@ export interface ModelTreeSnapshot {
   domainDiscretization?: "fdm" | "fem" | null;
   domainPresentationStatus?: "idle" | "loading" | "ready" | "stale" | "error";
   domainPresentation?: DomainPresentation | null;
+  fdmMultilayerLayout?: FdmMultilayerLayoutResource | null;
+  fdmMultilayerLayoutStatus?: ResourceStatus;
   couplings?: readonly ModelTreeCouplingSnapshot[];
   fieldDrives?: readonly ModelTreeFieldDriveSnapshot[];
   crossSections?: ModelTreeCrossSectionSnapshot | null;
@@ -477,43 +478,9 @@ export interface ModelTreeSnapshot {
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
   /** Canonical physics_graph.v1 resource when the API has resolved it. */
   physicsGraph?: unknown | null;
+  /** Resource lifecycle for the canonical physics graph. */
+  physicsGraphStatus?: ResourceStatus;
   study?: ModelTreeStudySnapshot | null;
-  currentTransports?: readonly ModelTreeCurrentTransportSnapshot[];
-  spinTransports?: readonly ModelTreeSpinTransportSnapshot[];
-  spinInterfaces?: readonly ModelTreeSpinInterfaceSnapshot[];
-  spinTorques?: readonly ModelTreeAuthoredSourceSnapshot[];
-  oerstedFields?: readonly ModelTreeAuthoredSourceSnapshot[];
-}
-
-export interface ModelTreeCurrentTransportSnapshot {
-  id: string | null;
-  index: number;
-  label: string;
-  model: string | null;
-  supported: boolean;
-}
-
-export interface ModelTreeSpinTransportSnapshot {
-  currentSourceId: string | null;
-  id: string | null;
-  index: number;
-  label: string;
-  mode: string | null;
-  supported: boolean;
-}
-
-export interface ModelTreeSpinInterfaceSnapshot {
-  id: string | null;
-  index: number;
-  known: boolean;
-  ownerId: string;
-}
-
-export interface ModelTreeAuthoredSourceSnapshot {
-  id: string | null;
-  index: number;
-  kind: string | null;
-  supported: boolean;
 }
 
 export interface ModelTreeCrossSectionSnapshot {

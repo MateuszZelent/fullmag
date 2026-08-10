@@ -18,6 +18,7 @@ import {
 export type VisualizationTargetKind =
   | "airbox"
   | "fdm-domain"
+  | "fdm-native-layer"
   | "object"
   | "part"
   | "region";
@@ -198,20 +199,20 @@ const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities
 };
 
 const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
-  primaryRenderModes: ["wireframe"],
+  primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: true,
   supportsFieldData: true,
-  supportsPoints: false,
+  supportsPoints: true,
   supportsVectors: true,
 };
 
 const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
-  primaryRenderModes: ["wireframe"],
+  primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: false,
   supportsFieldData: true,
-  supportsPoints: false,
+  supportsPoints: true,
   supportsVectors: true,
 };
 
@@ -241,6 +242,9 @@ const FDM_UNIVERSE_OUTSIDE_SUPPORT_PATCH_FIELDS = new Set<
   "activeQuantityId",
   "boundsOpacityPercent",
   "boundsVisible",
+  "pointColor",
+  "pointOpacityPercent",
+  "pointsVisible",
   "renderMode",
   "vectorAlphaPercent",
   "vectorBudget",
@@ -264,9 +268,6 @@ export function visualizationTargetUnsupportedPatchFields(
     target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target);
   if (!isAirboxTarget) return [];
   const unsupportedAirboxFields = new Set<keyof VisualizationTargetPatch>([
-    "pointColor",
-    "pointOpacityPercent",
-    "pointsVisible",
     "shaderColorMode",
     "shaderMonoColor",
     "shaderVisible",
@@ -282,7 +283,8 @@ export function visualizationTargetUnsupportedPatchFields(
     if (
       patch.renderMode !== undefined &&
       patch.renderMode !== "off" &&
-      patch.renderMode !== "wireframe"
+      patch.renderMode !== "wireframe" &&
+      patch.renderMode !== "points"
     ) {
       unsupported.push("renderMode");
     }
@@ -313,9 +315,6 @@ export function visualizationTargetSupportedPatch(
         ([field, value]) =>
           value !== undefined &&
           ![
-            "pointColor",
-            "pointOpacityPercent",
-            "pointsVisible",
             "shaderColorMode",
             "shaderMonoColor",
             "shaderVisible",
@@ -330,6 +329,7 @@ export function visualizationTargetSupportedPatch(
       const renderMode = supported.renderMode;
       delete supported.renderMode;
       supported.wireframeVisible = renderMode === "wireframe";
+      supported.pointsVisible = renderMode === "points";
     }
     return supported;
   }
@@ -346,7 +346,8 @@ export function visualizationTargetSupportedPatch(
   if (
     supported.renderMode !== undefined &&
     supported.renderMode !== "off" &&
-    supported.renderMode !== "wireframe"
+    supported.renderMode !== "wireframe" &&
+    supported.renderMode !== "points"
   ) {
     supported.renderMode = "wireframe";
   }
@@ -354,6 +355,7 @@ export function visualizationTargetSupportedPatch(
     const renderMode = supported.renderMode;
     delete supported.renderMode;
     supported.wireframeVisible = renderMode === "wireframe";
+    supported.pointsVisible = renderMode === "points";
   }
   return supported;
 }
@@ -412,16 +414,36 @@ export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTa
   wireframeVisible: true,
 };
 
+/**
+ * Native multilayer carriers are viewport-local targets.  They intentionally
+ * never enter the persisted VisualizationState registry because their
+ * geometry and field identity come from the FDM layout resource.
+ */
+export const FDM_NATIVE_LAYER_TARGET_PREFIX = "fdm-native-layer:";
+
+export function isFdmNativeLayerTarget(
+  target: VisualizationTargetRef,
+): boolean {
+  return (
+    target.kind === "fdm-native-layer" &&
+    target.id.startsWith(FDM_NATIVE_LAYER_TARGET_PREFIX)
+  );
+}
+
 function normalizeFdmUniverseOutsideSupportVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
   const wireframeVisible = settings.wireframeVisible || settings.shaderVisible;
+  const pointsVisible = settings.pointsVisible;
   return normalizeVisualizationSettings({
     ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
     activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
     boundsOpacityPercent: settings.boundsOpacityPercent,
     boundsVisible: settings.boundsVisible,
-    renderMode: wireframeVisible ? "wireframe" : "off",
+    pointColor: settings.pointColor,
+    pointOpacityPercent: settings.pointOpacityPercent,
+    pointsVisible,
+    renderMode: pointsVisible ? "points" : wireframeVisible ? "wireframe" : "off",
     visible: settings.visible,
     vectorAlphaPercent: settings.vectorAlphaPercent,
     vectorBudget: settings.vectorBudget,
@@ -764,7 +786,7 @@ function defaultVisualizationSettings(
   targetId?: string,
 ): VisualizationTargetSettings {
   if (kind === "airbox") return DEFAULT_AIRBOX_VISUALIZATION;
-  if (kind === "fdm-domain") {
+  if (kind === "fdm-domain" || kind === "fdm-native-layer") {
     return targetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
       ? DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION
       : DEFAULT_FDM_DOMAIN_VISUALIZATION;
@@ -851,12 +873,13 @@ function normalizeAirboxVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
   const wireframeVisible = settings.wireframeVisible;
+  const pointsVisible = settings.pointsVisible;
   return normalizeVisualizationSettings({
     ...DEFAULT_AIRBOX_VISUALIZATION,
     ...settings,
     activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
-    pointsVisible: false,
-    renderMode: wireframeVisible ? "wireframe" : "off",
+    pointsVisible,
+    renderMode: pointsVisible ? "points" : wireframeVisible ? "wireframe" : "off",
     shaderVisible: false,
     surfaceColorSource: "solid",
     viewportColorbarVisible: false,
@@ -1034,7 +1057,12 @@ export function resolveEffectiveTargetRegistryEntry(
   target: VisualizationTargetRef,
 ): EffectiveTargetRegistryEntry | null {
   const registry = state?.targets;
-  if (!registry || target.kind === "region" || target.kind === "fdm-domain") {
+  if (
+    !registry ||
+    target.kind === "region" ||
+    target.kind === "fdm-domain" ||
+    target.kind === "fdm-native-layer"
+  ) {
     return null;
   }
 
@@ -1059,7 +1087,9 @@ function resolveVisualizationStateTargetOverride(
 ): VisualizationStoredTargetPatch | null {
   // FDM is a client-side structured-grid target. It has no FEM/object scope
   // in the persisted visualization registry, so never serialize it as one.
-  if (target.kind === "fdm-domain") return null;
+  if (target.kind === "fdm-domain" || target.kind === "fdm-native-layer") {
+    return null;
+  }
   const override = state?.overrides?.find((entry) =>
     visualizationStateOverrideMatchesTarget(entry, target),
   );
@@ -1179,7 +1209,9 @@ export function visualizationStateOverrideFromTargetPatch(
   // It is deliberately not a backend VisualizationState scope (the API only
   // accepts full/magnetic/airbox/object/part/region/selection).  Callers that
   // patch it must therefore fail closed instead of emitting invalid FEM data.
-  if (target.kind === "fdm-domain") return null;
+  if (target.kind === "fdm-domain" || target.kind === "fdm-native-layer") {
+    return null;
+  }
   const normalized = normalizePatch(patch);
   const display = {
     ...(normalized.geometryScope === undefined
@@ -2069,10 +2101,26 @@ export function resolveVisualizationTargetFromSelection(
     selection.ref?.type === "fdm-cell" ||
     selection.ref?.type === "fdm-domain"
   ) {
+    if (
+      selection.ref.type === "fdm-domain" &&
+      selection.ref.kind === "mesh.grid.common"
+    ) {
+      // The common convolution grid is an FFT scratch layout, not a
+      // physical carrier.  It remains selectable for its Inspector, but it
+      // must not mutate any viewport target settings.
+      return null;
+    }
     const targetId =
       selection.ref.type === "fdm-domain"
         ? selection.ref.visualizationTargetId
         : "fdm-domain";
+    if (targetId.startsWith(FDM_NATIVE_LAYER_TARGET_PREFIX)) {
+      return {
+        id: targetId,
+        kind: "fdm-native-layer",
+        label: selection.label,
+      };
+    }
     if (targetId.startsWith("region:")) {
       return {
         id: targetId,
@@ -2090,9 +2138,19 @@ export function resolveVisualizationTargetFromSelection(
     };
   }
 
-  // FDM reuses the Airbox Explorer subtree, but its display state is still a
-  // structured-grid target.  Preserve that identity when the common Airbox
-  // visualization panel receives an FDM Airbox selection.
+  // Canonical Airbox refs include the target-only FDM multilayer leaf and
+  // viewport-generated Airbox-root selections.  They are not the legacy
+  // outside-support structured-grid target.
+  if (
+    selection.ref?.type === "airbox" &&
+    selection.ref.visualizationTargetId === AIRBOX_VISUALIZATION_TARGET.id &&
+    (selection.kind === "airbox.multilayer.target" ||
+      selection.kind === "airbox.root" ||
+      selection.ref.kind === "airbox.multilayer.target")
+  ) {
+    return AIRBOX_VISUALIZATION_TARGET;
+  }
+
   if (
     selection.ref?.type === "airbox" &&
     selection.ref.visualizationTargetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id

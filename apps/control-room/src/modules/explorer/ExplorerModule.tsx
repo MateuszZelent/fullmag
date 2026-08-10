@@ -21,6 +21,7 @@ import {
   useMeshSharedDomainRealizedSizeFieldsResource,
   useMeshSummaryResource,
   useDomainMetaResource,
+  useFdmMultilayerLayoutResource,
   useFdmRegionMembershipResource,
   useModelCouplingsResource,
   useModelMaterialFieldsResource,
@@ -48,13 +49,6 @@ import {
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
-import {
-  useCurrentTransportsResource,
-  useOerstedFieldsResource,
-  useSpinInterfacesResource,
-  useSpinTorquesResource,
-  useSpinTransportsResource,
-} from "@/kernel/resources/spinAuthoringResources";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
@@ -247,6 +241,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const domainMeta = useDomainMetaResource({ enabled: modelTabActive });
+  const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
+    enabled:
+      modelTabActive &&
+      sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
+  });
   const universeMeshPolicy = useUniverseMeshPolicyResource({
     enabled:
       modelTabActive &&
@@ -268,11 +267,6 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: modelTabActive,
   });
   const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
-  const spinTransports = useSpinTransportsResource({ enabled: modelTabActive });
-  const currentTransports = useCurrentTransportsResource({ enabled: modelTabActive });
-  const spinInterfaces = useSpinInterfacesResource({ enabled: modelTabActive });
-  const spinTorques = useSpinTorquesResource({ enabled: modelTabActive });
-  const oerstedFields = useOerstedFieldsResource({ enabled: modelTabActive });
   const physicsGraph = usePhysicsGraphResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
@@ -370,17 +364,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
-          currentTransports: currentTransports.data,
-          spinInterfaces: spinInterfaces.data,
-          spinTorques: spinTorques.data,
-          oerstedFields: oerstedFields.data,
-          // Keep legacy family rows only while the canonical graph is still
-          // unresolved. An explicitly loaded empty graph means no electrical
-          // module and therefore no dependent spin/Oersted rows.
-          physicsGraph: physicsGraph.data ?? undefined,
-          spinTransports: spinTransports.data,
+          // The graph resource is authoritative for electrical module
+          // presence. While it is unresolved, the builder shows one
+          // diagnostic node and never falls back to family list rows.
+          physicsGraph: physicsGraph.data,
+          physicsGraphStatus: physicsGraph.status,
           meshManifest: manifest.data,
           domainMeta: domainMeta.data,
+          fdmMultilayerLayout: fdmMultilayerLayout.data,
+          fdmMultilayerLayoutStatus: fdmMultilayerLayout.status,
           domainDiscretization:
             sessionStatusData?.domain.discretization.toLowerCase() === "fdm"
               ? "fdm"
@@ -513,6 +505,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelResource.status,
     domainMeta.data,
     domainMeta.status,
+    fdmMultilayerLayout.data,
+    fdmMultilayerLayout.status,
     universeMeshPolicy.data,
     universeMeshPolicy.status,
     sessionStatusData?.domain.discretization,
@@ -524,12 +518,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelRegions.data,
     planarMonitorDraft,
     planarMonitors.data,
-    currentTransports.data,
-    spinInterfaces.data,
-    spinTorques.data,
-    oerstedFields.data,
     physicsGraph.data,
-    spinTransports.data,
+    physicsGraph.status,
     regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,

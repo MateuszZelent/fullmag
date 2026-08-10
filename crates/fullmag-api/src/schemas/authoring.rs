@@ -546,6 +546,12 @@ pub enum PhysicsGraphActivationResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PhysicsGraphPresentationResource {
+    pub family: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PhysicsGraphModuleResource {
     pub id: String,
     pub kind: String,
@@ -556,6 +562,7 @@ pub struct PhysicsGraphModuleResource {
     pub authored_state: String,
     pub capability: String,
     pub source_path: String,
+    pub presentation: PhysicsGraphPresentationResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -618,6 +625,10 @@ impl From<fullmag_authoring::PhysicsModuleIR> for PhysicsGraphModuleResource {
             authored_state: module.authored_state,
             capability: module.capability,
             source_path: module.source_path,
+            presentation: PhysicsGraphPresentationResource {
+                family: module.presentation.family,
+                label: module.presentation.label,
+            },
         }
     }
 }

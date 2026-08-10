@@ -1,18 +1,17 @@
 use crate::{
     CurrentTransportModel, KnownSceneCurrentTransport, KnownSceneOerstedField,
     KnownSceneSpinTorque, PrescribedSotFormulaVersion, SceneChargeBoundary,
-    SceneChargePotentialGauge, SceneDocument, SceneOerstedField, SceneOerstedTimeDependence,
-    ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef, SceneSpinBoundary,
-    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSpinTransportMode,
-    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling, SlonczewskiFormulaVersion,
-    StudyPipelineDocument,
-    StudyPipelineNode,
+    SceneChargePotentialGauge, SceneDocument, SceneFdmDiscretizationState, SceneOerstedField,
+    SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef,
+    SceneSpinBoundary, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
+    SceneSpinTransportMode, SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling,
+    SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
     ExchangeCouplingModeIR, FieldSpatialProfileIR, FieldTargetIR, MaterialParameterAssignmentIR,
-    MaterialParameterFieldIR, MaterialParameterNameIR, MaterialTransitionSpecIR, MonitorTargetIR,
-    ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
+    MaterialParameterFieldIR, MaterialParameterNameIR, MaterialTransitionSpecIR, MeshIR,
+    MonitorTargetIR, ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +58,18 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
         )));
     }
     validate_solver_state(&scene.study.solver, false, "study.solver")?;
+    validate_fdm_discretization(scene.study.fdm.as_ref())?;
+    let fdm_lane = scene.study.requested_backend.eq_ignore_ascii_case("fdm")
+        || scene
+            .study
+            .backend
+            .as_deref()
+            .is_some_and(|backend| backend.eq_ignore_ascii_case("fdm"));
+    if fdm_lane && scene.study.demag_realization.is_some() {
+        return Err(SceneDocumentValidationError::new(
+            "FDM demag strategy must be stored under study.fdm.demag, not demag_realization",
+        ));
+    }
     for (index, stage) in scene.study.stages.iter().enumerate() {
         validate_stage_solver_state(stage, index)?;
     }
@@ -165,6 +176,103 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     validate_scene_field_drives(scene, &object_ids)?;
     validate_scene_planar_monitors(scene, &object_ids)?;
 
+    Ok(())
+}
+
+fn validate_fdm_discretization(
+    fdm: Option<&SceneFdmDiscretizationState>,
+) -> Result<(), SceneDocumentValidationError> {
+    let Some(fdm) = fdm else {
+        return Ok(());
+    };
+    if let Some(cell) = fdm.default_cell {
+        if cell.iter().any(|value| !value.is_finite() || *value <= 0.0) {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.default_cell values must be finite and positive",
+            ));
+        }
+    }
+    for (object_id, grid) in &fdm.per_object_grid {
+        if grid
+            .cell
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "study.fdm.per_object_grid['{object_id}'].cell values must be finite and positive"
+            )));
+        }
+    }
+    if let Some(demag) = &fdm.demag {
+        if !matches!(
+            demag.strategy.as_str(),
+            "auto" | "single_grid" | "multilayer_convolution"
+        ) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "study.fdm.demag.strategy '{}' is unsupported",
+                demag.strategy
+            )));
+        }
+        if !matches!(demag.mode.as_str(), "auto" | "two_d_stack" | "three_d") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "study.fdm.demag.mode '{}' is unsupported",
+                demag.mode
+            )));
+        }
+        if demag.common_cells.is_some() && demag.common_cells_xy.is_some() {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.demag.common_cells and common_cells_xy are mutually exclusive",
+            ));
+        }
+        if demag
+            .common_cells
+            .is_some_and(|cells| cells.iter().any(|value| *value == 0))
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.demag.common_cells values must be positive",
+            ));
+        }
+        if demag
+            .common_cells_xy
+            .is_some_and(|cells| cells.iter().any(|value| *value == 0))
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.demag.common_cells_xy values must be positive",
+            ));
+        }
+        if demag.mode == "two_d_stack" && demag.common_cells.is_some() {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.demag.common_cells is incompatible with two_d_stack",
+            ));
+        }
+        if demag.mode == "three_d" && demag.common_cells_xy.is_some() {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.demag.common_cells_xy is incompatible with three_d",
+            ));
+        }
+    }
+    if let Some(correction) = &fdm.boundary_correction {
+        if !matches!(correction.as_str(), "none" | "volume" | "full") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "study.fdm.boundary_correction '{}' is unsupported",
+                correction
+            )));
+        }
+    }
+    if let Some(phi_floor) = fdm.boundary_phi_floor {
+        if !phi_floor.is_finite() || !(0.0..1.0).contains(&phi_floor) {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.boundary_phi_floor must be finite and in (0, 1)",
+            ));
+        }
+    }
+    if let Some(delta_min) = fdm.boundary_delta_min {
+        if !delta_min.is_finite() || delta_min < 0.0 {
+            return Err(SceneDocumentValidationError::new(
+                "study.fdm.boundary_delta_min must be finite and nonnegative",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -633,7 +741,6 @@ fn collect_stage_ids(nodes: &[StudyPipelineNode], ids: &mut BTreeSet<String>) {
     }
 }
 
-
 fn validate_scene_field_drives(
     scene: &SceneDocument,
     object_ids: &BTreeSet<String>,
@@ -722,7 +829,6 @@ fn validate_scene_field_drives(
     }
     Ok(())
 }
-
 
 fn validate_spin_authoring(
     scene: &SceneDocument,
@@ -1362,6 +1468,7 @@ fn validate_scene_conservative_current_view(
     }
     let mut boundary_ids = BTreeSet::new();
     let mut source_cut_faces = BTreeSet::new();
+    let mut boundary_roles = BTreeMap::new();
     for (position, value) in boundary_faces.iter().enumerate() {
         let path = format!("{prefix}.boundary_faces[{position}]");
         let face = value.as_object().ok_or_else(|| {
@@ -1376,13 +1483,13 @@ fn validate_scene_conservative_current_view(
                 "{path}.face_vertex_ids duplicates another boundary face"
             )));
         }
-        let role = face
-            .get("role")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                SceneDocumentValidationError::new(format!("{path}.role must be a string"))
-            })?;
-        if !matches!(role, "insulating_outer" | "source_cut" | "closure_interface") {
+        let role = face.get("role").and_then(Value::as_str).ok_or_else(|| {
+            SceneDocumentValidationError::new(format!("{path}.role must be a string"))
+        })?;
+        if !matches!(
+            role,
+            "insulating_outer" | "source_cut" | "closure_interface"
+        ) {
             return Err(SceneDocumentValidationError::new(format!(
                 "{path}.role is unsupported"
             )));
@@ -1407,6 +1514,7 @@ fn validate_scene_conservative_current_view(
         if role == "source_cut" {
             source_cut_faces.insert(ids);
         }
+        boundary_roles.insert(ids, role.to_string());
     }
 
     let identity = required_scene_object(object.get("identity"), &format!("{prefix}.identity"))?;
@@ -1453,7 +1561,8 @@ fn validate_scene_conservative_current_view(
         ("required_mesh_revision", "mesh_revision"),
         ("required_topology_revision", "topology_revision"),
     ] {
-        if pins.get(pin).and_then(Value::as_str) != identity.get(identity_field).and_then(Value::as_str)
+        if pins.get(pin).and_then(Value::as_str)
+            != identity.get(identity_field).and_then(Value::as_str)
         {
             return Err(SceneDocumentValidationError::new(format!(
                 "{prefix}.pins.{pin} must match identity.{identity_field}"
@@ -1462,98 +1571,295 @@ fn validate_scene_conservative_current_view(
     }
 
     let closure = required_scene_object(object.get("closure"), &format!("{prefix}.closure"))?;
-    let closure_kind = require_scene_string(
-        closure.get("kind"),
-        &format!("{prefix}.closure.kind"),
-    )?;
-    if closure_kind != "closed_geometry" {
-        return Err(SceneDocumentValidationError::new(format!(
-            "{prefix}.closure.kind '{closure_kind}' is not executable; external_lead remains fail-closed"
-        )));
-    }
-    for field in ["operator_version", "revision", "digest"] {
-        require_scene_string(closure.get(field), &format!("{prefix}.closure.{field}"))?;
-    }
-    let source_cuts = closure
-        .get("source_cuts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            SceneDocumentValidationError::new(format!(
-                "{prefix}.closure.source_cuts must be a non-empty array"
-            ))
-        })?;
-    if source_cuts.is_empty() {
-        return Err(SceneDocumentValidationError::new(format!(
-            "{prefix}.closure.source_cuts must be a non-empty array"
-        )));
-    }
-    let mut source_cut_ids = BTreeSet::new();
-    for (position, value) in source_cuts.iter().enumerate() {
-        let path = format!("{prefix}.closure.source_cuts[{position}]");
-        let cut = required_scene_object(Some(value), &path)?;
-        let id = require_scene_string(cut.get("id"), &format!("{path}.id"))?;
-        if !source_cut_ids.insert(id) {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{path}.id duplicates another source cut"
-            )));
+    let closure_kind =
+        require_scene_string(closure.get("kind"), &format!("{prefix}.closure.kind"))?;
+    if closure_kind == "external_lead" {
+        for field in [
+            "operator_version",
+            "revision",
+            "digest",
+            "drive_id",
+            "lead_conductivity_digest",
+        ] {
+            require_scene_string(closure.get(field), &format!("{prefix}.closure.{field}"))?;
         }
-        let translation = cut
-            .get("translation_m")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                SceneDocumentValidationError::new(format!(
-                    "{path}.translation_m must contain three finite values"
-                ))
-            })?;
-        if translation.len() != 3
-            || translation
-                .iter()
-                .any(|value| value.as_f64().is_none_or(|component| !component.is_finite()))
-            || translation
-                .iter()
-                .all(|value| value.as_f64().is_some_and(|component| component == 0.0))
+        if closure.get("operator_version").and_then(Value::as_str)
+            != Some("fem_closed_current_extension.v1")
         {
             return Err(SceneDocumentValidationError::new(format!(
-                "{path}.translation_m must contain a finite nonzero vector"
+                "{prefix}.closure.operator_version must be fem_closed_current_extension.v1"
             )));
         }
-        require_scene_finite_number(
-            cut.get("potential_drop_v"),
-            &format!("{path}.potential_drop_v"),
+        let drive = require_scene_finite_number(
+            closure.get("outer_electrode_potential_drop_v"),
+            &format!("{prefix}.closure.outer_electrode_potential_drop_v"),
         )?;
-        let pairs = cut
-            .get("face_pairs")
+        if drive == 0.0 {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.outer_electrode_potential_drop_v must be non-zero"
+            )));
+        }
+        let lead_mesh_value = closure.get("lead_mesh").ok_or_else(|| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.lead_mesh must be a complete MeshIR payload"
+            ))
+        })?;
+        let lead_mesh: MeshIR =
+            serde_json::from_value(lead_mesh_value.clone()).map_err(|error| {
+                SceneDocumentValidationError::new(format!(
+                    "{prefix}.closure.lead_mesh is not a valid MeshIR: {error}"
+                ))
+            })?;
+        let lead_elements = lead_mesh.require_tet4_elements().map_err(|error| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.lead_mesh requires tet4 cells: {error}"
+            ))
+        })?;
+        let lead_faces = lead_mesh.require_tri3_boundary_faces().map_err(|error| {
+            SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.lead_mesh requires tri3 boundary faces: {error}"
+            ))
+        })?;
+        let lead_ids = closure
+            .get("lead_stable_vertex_ids")
             .and_then(Value::as_array)
             .ok_or_else(|| {
                 SceneDocumentValidationError::new(format!(
-                    "{path}.face_pairs must be a non-empty array"
+                    "{prefix}.closure.lead_stable_vertex_ids must be a non-empty array"
                 ))
             })?;
-        if pairs.is_empty() {
+        if lead_ids.len() != lead_mesh.nodes.len()
+            || lead_ids.is_empty()
+            || lead_ids
+                .iter()
+                .any(|value| value.as_u64().is_none_or(|id| id == 0))
+        {
             return Err(SceneDocumentValidationError::new(format!(
-                "{path}.face_pairs must be a non-empty array"
+                "{prefix}.closure.lead_stable_vertex_ids must identify every lead node"
             )));
         }
-        for (pair_position, pair_value) in pairs.iter().enumerate() {
-            let pair_path = format!("{path}.face_pairs[{pair_position}]");
-            let pair = required_scene_object(Some(pair_value), &pair_path)?;
-            let mut pair_faces = Vec::with_capacity(2);
-            for field in ["minus_face_vertex_ids", "plus_face_vertex_ids"] {
-                let ids = parse_scene_face_vertex_ids(
-                    pair.get(field),
-                    &format!("{pair_path}.{field}"),
+        let lead_ids = lead_ids
+            .iter()
+            .map(|value| value.as_u64().expect("checked above"))
+            .collect::<Vec<_>>();
+        if lead_ids.iter().collect::<BTreeSet<_>>().len() != lead_ids.len()
+            || lead_ids
+                .iter()
+                .any(|id| stable_vertex_ids.iter().any(|device_id| device_id == id))
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure lead stable IDs must be unique and disjoint from device IDs"
+            )));
+        }
+        let conductivity = closure
+            .get("lead_conductivity_spm_per_element")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "{prefix}.closure.lead_conductivity_spm_per_element must be an array"
+                ))
+            })?;
+        if conductivity.len() != lead_elements.len()
+            || conductivity.iter().any(|value| {
+                value
+                    .as_f64()
+                    .is_none_or(|sigma| !sigma.is_finite() || sigma <= 0.0)
+            })
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.lead_conductivity_spm_per_element must contain one positive finite value per tet4"
+            )));
+        }
+        let mut lead_boundary_keys = BTreeSet::new();
+        for face in lead_faces {
+            let mut key = [0_u64; 3];
+            for (slot, local) in face.iter().enumerate() {
+                key[slot] = lead_ids.get(*local as usize).copied().ok_or_else(|| {
+                    SceneDocumentValidationError::new(format!(
+                        "{prefix}.closure lead boundary face references an unknown node"
+                    ))
+                })?;
+            }
+            key.sort_unstable();
+            lead_boundary_keys.insert(key);
+        }
+        let interface_pairs = closure
+            .get("interface_pairs")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "{prefix}.closure.interface_pairs must be a non-empty array"
+                ))
+            })?;
+        if interface_pairs.is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.interface_pairs must be a non-empty array"
+            )));
+        }
+        let mut used_device = BTreeSet::new();
+        let mut used_lead = BTreeSet::new();
+        for (position, value) in interface_pairs.iter().enumerate() {
+            let path = format!("{prefix}.closure.interface_pairs[{position}]");
+            let pair = value.as_array().ok_or_else(|| {
+                SceneDocumentValidationError::new(format!("{path} must contain two face arrays"))
+            })?;
+            if pair.len() != 2 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path} must contain two face arrays"
+                )));
+            }
+            let device_face = parse_scene_face_vertex_ids(pair.first(), &format!("{path}[0]"))?;
+            let lead_face = parse_scene_face_vertex_ids(pair.get(1), &format!("{path}[1]"))?;
+            if !boundary_roles
+                .get(&device_face)
+                .is_some_and(|role| role == "closure_interface")
+                || !lead_boundary_keys.contains(&lead_face)
+                || !used_device.insert(device_face)
+                || !used_lead.insert(lead_face)
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path} must map unique closure-interface and lead boundary faces"
+                )));
+            }
+        }
+        if boundary_roles
+            .iter()
+            .any(|(face, role)| role == "closure_interface" && !used_device.contains(face))
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.interface_pairs must cover every closure_interface face"
+            )));
+        }
+        let mut electrode_faces = BTreeSet::new();
+        for field in [
+            "minus_outer_electrode_face_vertex_ids",
+            "plus_outer_electrode_face_vertex_ids",
+        ] {
+            let faces = closure
+                .get(field)
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    SceneDocumentValidationError::new(format!(
+                        "{prefix}.closure.{field} must be a non-empty array"
+                    ))
+                })?;
+            if faces.is_empty() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{prefix}.closure.{field} must be a non-empty array"
+                )));
+            }
+            for (position, value) in faces.iter().enumerate() {
+                let face = parse_scene_face_vertex_ids(
+                    Some(value),
+                    &format!("{prefix}.closure.{field}[{position}]"),
                 )?;
-                pair_faces.push(ids);
-                if !source_cut_faces.contains(&ids) {
+                if !lead_boundary_keys.contains(&face)
+                    || used_lead.contains(&face)
+                    || !electrode_faces.insert(face)
+                {
                     return Err(SceneDocumentValidationError::new(format!(
-                        "{pair_path}.{field} must reference a boundary face with role source_cut"
+                        "{prefix}.closure.{field}[{position}] is invalid, duplicated, or paired at the interface"
                     )));
                 }
             }
-            if pair_faces[0] == pair_faces[1] {
+        }
+        if closure.get("source_cuts").is_some() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.source_cuts is forbidden for external_lead"
+            )));
+        }
+    } else if closure_kind != "closed_geometry" {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.closure.kind '{closure_kind}' is unsupported"
+        )));
+    }
+    if closure_kind == "closed_geometry" {
+        for field in ["operator_version", "revision", "digest"] {
+            require_scene_string(closure.get(field), &format!("{prefix}.closure.{field}"))?;
+        }
+        let source_cuts = closure
+            .get("source_cuts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SceneDocumentValidationError::new(format!(
+                    "{prefix}.closure.source_cuts must be a non-empty array"
+                ))
+            })?;
+        if source_cuts.is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.closure.source_cuts must be a non-empty array"
+            )));
+        }
+        let mut source_cut_ids = BTreeSet::new();
+        for (position, value) in source_cuts.iter().enumerate() {
+            let path = format!("{prefix}.closure.source_cuts[{position}]");
+            let cut = required_scene_object(Some(value), &path)?;
+            let id = require_scene_string(cut.get("id"), &format!("{path}.id"))?;
+            if !source_cut_ids.insert(id) {
                 return Err(SceneDocumentValidationError::new(format!(
-                    "{pair_path} must pair distinct minus and plus faces"
+                    "{path}.id duplicates another source cut"
                 )));
+            }
+            let translation = cut
+                .get("translation_m")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    SceneDocumentValidationError::new(format!(
+                        "{path}.translation_m must contain three finite values"
+                    ))
+                })?;
+            if translation.len() != 3
+                || translation.iter().any(|value| {
+                    value
+                        .as_f64()
+                        .is_none_or(|component| !component.is_finite())
+                })
+                || translation
+                    .iter()
+                    .all(|value| value.as_f64().is_some_and(|component| component == 0.0))
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.translation_m must contain a finite nonzero vector"
+                )));
+            }
+            require_scene_finite_number(
+                cut.get("potential_drop_v"),
+                &format!("{path}.potential_drop_v"),
+            )?;
+            let pairs = cut
+                .get("face_pairs")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    SceneDocumentValidationError::new(format!(
+                        "{path}.face_pairs must be a non-empty array"
+                    ))
+                })?;
+            if pairs.is_empty() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.face_pairs must be a non-empty array"
+                )));
+            }
+            for (pair_position, pair_value) in pairs.iter().enumerate() {
+                let pair_path = format!("{path}.face_pairs[{pair_position}]");
+                let pair = required_scene_object(Some(pair_value), &pair_path)?;
+                let mut pair_faces = Vec::with_capacity(2);
+                for field in ["minus_face_vertex_ids", "plus_face_vertex_ids"] {
+                    let ids = parse_scene_face_vertex_ids(
+                        pair.get(field),
+                        &format!("{pair_path}.{field}"),
+                    )?;
+                    pair_faces.push(ids);
+                    if !source_cut_faces.contains(&ids) {
+                        return Err(SceneDocumentValidationError::new(format!(
+                        "{pair_path}.{field} must reference a boundary face with role source_cut"
+                    )));
+                    }
+                }
+                if pair_faces[0] == pair_faces[1] {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{pair_path} must pair distinct minus and plus faces"
+                    )));
+                }
             }
         }
     }
@@ -1620,9 +1926,12 @@ fn require_scene_positive_integer(
     value: Option<&Value>,
     path: &str,
 ) -> Result<u64, SceneDocumentValidationError> {
-    let value = value.and_then(Value::as_u64).filter(|value| *value > 0).ok_or_else(|| {
-        SceneDocumentValidationError::new(format!("{path} must be a positive integer"))
-    })?;
+    let value = value
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            SceneDocumentValidationError::new(format!("{path} must be a positive integer"))
+        })?;
     Ok(value)
 }
 
@@ -1867,10 +2176,15 @@ fn validate_spin_torque(
     };
     match torque {
         KnownSceneSpinTorque::ZhangLi {
+            schema_version,
+            formula_version,
+            operator_version,
+            target,
             current_density,
             current_source,
             degree,
             beta,
+            lande_g,
             ..
         } => {
             validate_current_binding(
@@ -1881,6 +2195,54 @@ fn validate_spin_torque(
             )?;
             unit_interval_open(*degree, &format!("spin_torques[{index}].degree"))?;
             nonnegative(*beta, &format!("spin_torques[{index}].beta"))?;
+            match formula_version {
+                crate::ZhangLiFormulaVersion::FullmagV1 => {
+                    if schema_version.as_deref() != Some("zhang_li_torque.v1")
+                        || !matches!(
+                            operator_version,
+                            Some(crate::ZhangLiOperatorVersion::CentralReferenceV1)
+                        )
+                    {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] canonical Zhang-Li fullmag contract is incomplete"
+                        )));
+                    }
+                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                    positive(
+                        lande_g.ok_or_else(|| {
+                            SceneDocumentValidationError::new(format!(
+                                "spin_torques[{index}].lande_g is required"
+                            ))
+                        })?,
+                        &format!("spin_torques[{index}].lande_g"),
+                    )?;
+                }
+                crate::ZhangLiFormulaVersion::Mumax3V1 => {
+                    if schema_version.as_deref() != Some("zhang_li_torque.v1")
+                        || !matches!(
+                            operator_version,
+                            Some(crate::ZhangLiOperatorVersion::Mumax3CentralV1)
+                        )
+                        || *lande_g != Some(2.0)
+                    {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] canonical MuMax3-compatible Zhang-Li requires zl_mumax3_central_v1 and lande_g=2"
+                        )));
+                    }
+                    validate_region_ref(index, target.as_ref(), object_ids)?;
+                }
+                crate::ZhangLiFormulaVersion::LegacyFullmagV0 => {
+                    if schema_version.is_some()
+                        || operator_version.is_some()
+                        || target.is_some()
+                        || lande_g.is_some()
+                    {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_torques[{index}] legacy Zhang-Li must not define canonical identity or operator fields"
+                        )));
+                    }
+                }
+            }
         }
         KnownSceneSpinTorque::Slonczewski {
             formula_version,
@@ -2789,7 +3151,7 @@ mod tests {
             },
             "closure": {
                 "kind": "closed_geometry",
-                "operator_version": "fem_rt0_closed_current.v1",
+                "operator_version": "fem_closed_current_geometry.v1",
                 "revision": "closure-1",
                 "digest": "closure-digest",
                 "source_cuts": [{
@@ -3094,6 +3456,33 @@ mod tests {
     }
 
     #[test]
+    fn scene_document_validation_preserves_canonical_zhang_li_contract() {
+        let mut scene = region_owned_scene();
+        let object_id = scene.objects[0].id.clone();
+        scene.spin_torques = serde_json::from_value(serde_json::json!([{
+            "id": "zl-canonical",
+            "kind": "zhang_li",
+            "schema_version": "zhang_li_torque.v1",
+            "formula_version": "zhang_li.fullmag.v1",
+            "operator_version": "zl_central_reference_v1",
+            "target": {"object_id": object_id},
+            "current_density": [1.0e11, 0.0, 0.0],
+            "degree": 0.4,
+            "beta": 0.02,
+            "lande_g": 2.1
+        }]))
+        .expect("canonical Zhang-Li scene payload");
+
+        validate_scene_document(&scene).expect("canonical Zhang-Li must validate");
+        let encoded = serde_json::to_value(&scene.spin_torques[0]).unwrap();
+        assert_eq!(encoded["schema_version"], "zhang_li_torque.v1");
+        assert_eq!(encoded["formula_version"], "zhang_li.fullmag.v1");
+        assert_eq!(encoded["operator_version"], "zl_central_reference_v1");
+        assert_eq!(encoded["lande_g"], 2.1);
+        assert_eq!(encoded["target"]["object_id"], scene.objects[0].id);
+    }
+
+    #[test]
     fn scene_document_validation_accepts_current_transport_time_envelope() {
         let mut scene = region_owned_scene();
         scene.current_transports = serde_json::from_value(serde_json::json!([{
@@ -3251,7 +3640,12 @@ mod tests {
         scene.spin_transports = serde_json::from_value(serde_json::json!([inconsistent])).unwrap();
         let error = validate_scene_document(&scene)
             .expect_err("inconsistent explicit capacitance and DOS must fail");
-        assert!(error.message.contains("must equal e^2 times density_of_states"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("must equal e^2 times density_of_states"),
+            "{error}"
+        );
 
         let mut unsupported = transient.clone();
         unsupported["materials"][0]["material"]["capacitance_formula_version"] =
@@ -3355,7 +3749,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_document_validation_rejects_unsupported_current_view_closure() {
+    fn scene_document_validation_accepts_external_lead_current_view_shape() {
         let mut scene = region_owned_scene();
         scene.current_transports = serde_json::from_value(serde_json::json!([{
             "kind": "current_transport",
@@ -3375,7 +3769,81 @@ mod tests {
             error.message
         );
 
-        let descriptor = valid_closed_current_view_value();
+        let mut descriptor = valid_closed_current_view_value();
+        let descriptor_object = descriptor.as_object_mut().expect("descriptor object");
+        let boundary_faces = descriptor_object
+            .get_mut("boundary_faces")
+            .and_then(Value::as_array_mut)
+            .expect("boundary faces");
+        for face in boundary_faces.iter_mut().take(2) {
+            let face = face.as_object_mut().expect("boundary face object");
+            face.insert(
+                "role".to_string(),
+                Value::String("closure_interface".to_string()),
+            );
+            face.insert(
+                "circuit_id".to_string(),
+                Value::String("lead-iface".to_string()),
+            );
+        }
+        let closure = descriptor_object
+            .get_mut("closure")
+            .and_then(Value::as_object_mut)
+            .expect("closure object");
+        closure.insert(
+            "kind".to_string(),
+            Value::String("external_lead".to_string()),
+        );
+        closure.insert(
+            "operator_version".to_string(),
+            Value::String("fem_closed_current_extension.v1".to_string()),
+        );
+        closure.insert("drive_id".to_string(), Value::String("charge".to_string()));
+        closure.insert(
+            "outer_electrode_potential_drop_v".to_string(),
+            serde_json::json!(0.1),
+        );
+        closure.insert(
+            "lead_conductivity_digest".to_string(),
+            Value::String("lead-sigma".to_string()),
+        );
+        closure.insert(
+            "lead_mesh".to_string(),
+            serde_json::json!({
+                "mesh_name": "external-lead",
+                "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                "cells": {"types": ["tet4"], "offsets": [0, 4], "nodes": [0, 1, 2, 3]},
+                "element_markers": [1],
+                "facets": {
+                    "types": ["tri3", "tri3", "tri3", "tri3"],
+                    "roles": ["exterior", "exterior", "exterior", "exterior"],
+                    "offsets": [0, 3, 6, 9, 12],
+                    "nodes": [0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3]
+                },
+                "boundary_markers": [1, 1, 1, 1]
+            }),
+        );
+        closure.insert(
+            "lead_conductivity_spm_per_element".to_string(),
+            serde_json::json!([5.8e7]),
+        );
+        closure.insert(
+            "lead_stable_vertex_ids".to_string(),
+            serde_json::json!([101, 102, 103, 104]),
+        );
+        closure.insert(
+            "interface_pairs".to_string(),
+            serde_json::json!([[[1, 2, 3], [101, 102, 103]], [[1, 2, 4], [101, 102, 104]]]),
+        );
+        closure.insert(
+            "minus_outer_electrode_face_vertex_ids".to_string(),
+            serde_json::json!([[101, 103, 104]]),
+        );
+        closure.insert(
+            "plus_outer_electrode_face_vertex_ids".to_string(),
+            serde_json::json!([[102, 103, 104]]),
+        );
+        closure.remove("source_cuts");
         let mut scene = region_owned_scene();
         scene.current_transports = serde_json::from_value(serde_json::json!([{
             "kind": "current_transport",
@@ -3403,19 +3871,7 @@ mod tests {
             "conservative_current_view": descriptor
         }]))
         .unwrap();
-        let view = scene.current_transports[0]
-            .known_mut()
-            .expect("known transport")
-            .conservative_current_view
-            .as_mut()
-            .expect("descriptor");
-        view.get_mut("closure")
-            .and_then(Value::as_object_mut)
-            .expect("closure object")
-            .insert("kind".to_string(), Value::String("external_lead".to_string()));
-        let error = validate_scene_document(&scene)
-            .expect_err("external-lead closure must remain fail-closed at authoring boundary");
-        assert!(error.message.contains("external_lead remains fail-closed"), "{error}");
+        validate_scene_document(&scene).expect("complete external-lead shape must validate");
     }
 
     #[test]

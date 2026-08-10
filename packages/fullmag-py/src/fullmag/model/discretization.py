@@ -95,17 +95,18 @@ class FDMDemag:
             if len(self.common_cells) != 3:
                 raise ValueError("common_cells must have exactly 3 elements")
             for v in self.common_cells:
-                if not isinstance(v, int) or v <= 0:
+                if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
                     raise ValueError("common_cells values must be positive ints")
-            if self.mode == "two_d_stack" and self.common_cells[2] != 1:
+            if self.mode == "two_d_stack":
                 raise ValueError(
-                    "common_cells with mode='two_d_stack' must have exactly one Z cell"
+                    "common_cells is incompatible with mode='two_d_stack'; "
+                    "use mode='three_d' or mode='auto'"
                 )
         if self.common_cells_xy is not None:
             if len(self.common_cells_xy) != 2:
                 raise ValueError("common_cells_xy must have exactly 2 elements")
             for v in self.common_cells_xy:
-                if not isinstance(v, int) or v <= 0:
+                if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
                     raise ValueError("common_cells_xy values must be positive ints")
             if self.mode not in ("auto", "two_d_stack"):
                 raise ValueError(
@@ -233,7 +234,7 @@ class FDM:
 
         if per_magnet is not None:
             for name, grid in per_magnet.items():
-                if not isinstance(name, str) or not name:
+                if not isinstance(name, str) or not name.strip():
                     raise ValueError("per_magnet keys must be non-empty strings")
                 if not isinstance(grid, FDMGrid):
                     raise TypeError("per_magnet values must be FDMGrid instances")

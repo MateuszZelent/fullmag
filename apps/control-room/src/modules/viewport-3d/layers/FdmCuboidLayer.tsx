@@ -95,6 +95,7 @@ import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 
 export {
   buildFdmCuboidInstanceModel,
+  buildFdmDenseNativeLayerInstanceModel,
   buildFdmPointPositions,
   buildFdmVectorSampledCellIndices,
   resolveFdmVectorGlyphScale,

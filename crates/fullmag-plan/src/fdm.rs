@@ -22,7 +22,10 @@ use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
-use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, MU0, PLACEMENT_TOLERANCE};
+use crate::util::{
+    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
+    PLACEMENT_TOLERANCE,
+};
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
@@ -65,6 +68,85 @@ fn grid_sample_points(
         }
     }
     points
+}
+
+/// Restrict a precomputed geometry asset to the smallest Cartesian grid that
+/// contains its active support.  A study-universe asset may intentionally be
+/// expanded to the full target-only Airbox; that grid is not the native
+/// magnetization grid used by the multilayer convolution planner.
+fn crop_fdm_asset_to_active_support(
+    asset: &fullmag_ir::FdmGridAssetIR,
+    errors: &mut Vec<String>,
+) -> Option<([f64; 3], Vec<bool>, [u32; 3], [f64; 3])> {
+    let [nx, ny, nz] = asset.cells;
+    let expected = (nx as usize)
+        .checked_mul(ny as usize)
+        .and_then(|value| value.checked_mul(nz as usize));
+    if expected != Some(asset.active_mask.len()) {
+        errors.push(format!(
+            "fdm multilayer asset '{}' active_mask length {} does not match cells {:?}",
+            asset.geometry_name,
+            asset.active_mask.len(),
+            asset.cells
+        ));
+        return None;
+    }
+
+    let mut min_xyz = [nx, ny, nz];
+    let mut max_xyz = [0_u32; 3];
+    let mut found_active = false;
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let index = x as usize + nx as usize * (y as usize + ny as usize * z as usize);
+                if !asset.active_mask[index] {
+                    continue;
+                }
+                found_active = true;
+                min_xyz[0] = min_xyz[0].min(x);
+                min_xyz[1] = min_xyz[1].min(y);
+                min_xyz[2] = min_xyz[2].min(z);
+                max_xyz[0] = max_xyz[0].max(x);
+                max_xyz[1] = max_xyz[1].max(y);
+                max_xyz[2] = max_xyz[2].max(z);
+            }
+        }
+    }
+    if !found_active {
+        errors.push(format!(
+            "fdm multilayer asset '{}' has no active cells",
+            asset.geometry_name
+        ));
+        return None;
+    }
+
+    let cells = [
+        max_xyz[0] - min_xyz[0] + 1,
+        max_xyz[1] - min_xyz[1] + 1,
+        max_xyz[2] - min_xyz[2] + 1,
+    ];
+    let mut active_mask = vec![false; cells[0] as usize * cells[1] as usize * cells[2] as usize];
+    for z in min_xyz[2]..=max_xyz[2] {
+        for y in min_xyz[1]..=max_xyz[1] {
+            for x in min_xyz[0]..=max_xyz[0] {
+                let source_index =
+                    x as usize + nx as usize * (y as usize + ny as usize * z as usize);
+                let target_x = x - min_xyz[0];
+                let target_y = y - min_xyz[1];
+                let target_z = z - min_xyz[2];
+                let target_index = target_x as usize
+                    + cells[0] as usize
+                        * (target_y as usize + cells[1] as usize * target_z as usize);
+                active_mask[target_index] = asset.active_mask[source_index];
+            }
+        }
+    }
+
+    let origin = std::array::from_fn(|axis| {
+        asset.origin[axis] + min_xyz[axis] as f64 * asset.cell_size[axis]
+    });
+    let bounding_size = std::array::from_fn(|axis| cells[axis] as f64 * asset.cell_size[axis]);
+    Some((bounding_size, active_mask, cells, origin))
 }
 
 fn point_in_region_shape(point: [f64; 3], shape: &RegionShapeIR) -> Result<bool, String> {
@@ -717,9 +799,9 @@ pub(crate) fn plan_fdm(
             return Err(PlanError { reasons: errors });
         }
     };
-    // Keep the asset-origin path aligned with multilayer lowering: an asset
-    // stores coordinates in the untransformed geometry frame, while a
-    // top-level Translate moves the realized grid in world space.
+    // Geometry assets carry a Cartesian/world-space origin.  A top-level
+    // Translate is already materialized by the Python asset pipeline; it is
+    // only used below when sampling the object's local texture coordinates.
     let top_level_translation = match extract_multilayer_geometry(geometry) {
         Ok(placed) => placed.translation,
         Err(e) => {
@@ -820,8 +902,7 @@ pub(crate) fn plan_fdm(
     let (bounding_size, active_mask, grid_cells, native_origin, used_precomputed_asset) =
         if let Some(asset) = provided_grid_asset {
             validate_grid_asset_cell_size(asset, cell_size, &mut errors);
-            let origin =
-                std::array::from_fn(|axis| asset.origin[axis] + top_level_translation[axis]);
+            let origin = asset.origin;
             (
                 [
                     asset.cells[0] as f64 * asset.cell_size[0],
@@ -1259,6 +1340,7 @@ pub(crate) fn plan_fdm(
     let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
         owner_names: &owner_names,
         grid_cells,
+        cell_size_m: cell_size,
         active_mask: active_mask.as_deref(),
         region_mask: &region_mask,
         region_index_by_id: &region_index_by_id,
@@ -1896,6 +1978,11 @@ pub(crate) fn plan_fdm_multilayer(
         }
     };
     let demag_hints = fdm_hints.demag.as_ref();
+    if let Some(policy) = demag_hints {
+        if let Err(reasons) = policy.validate() {
+            errors.extend(reasons);
+        }
+    }
     let requested_strategy = demag_hints
         .map(|policy| policy.strategy.as_str())
         .unwrap_or("auto");
@@ -2119,16 +2206,12 @@ pub(crate) fn plan_fdm_multilayer(
         let (bounding_size, active_mask, grid_cells, native_origin) =
             if let Some(asset) = provided_grid_asset {
                 validate_grid_asset_cell_size(asset, cell_size, &mut errors);
-                let bbox = [
-                    asset.cells[0] as f64 * asset.cell_size[0],
-                    asset.cells[1] as f64 * asset.cell_size[1],
-                    asset.cells[2] as f64 * asset.cell_size[2],
-                ];
-                let mut origin = asset.origin;
-                for axis in 0..3 {
-                    origin[axis] += placed.translation[axis];
-                }
-                (bbox, Some(asset.active_mask.clone()), asset.cells, origin)
+                let Some((bbox, active_mask, grid_cells, origin)) =
+                    crop_fdm_asset_to_active_support(asset, &mut errors)
+                else {
+                    continue;
+                };
+                (bbox, Some(active_mask), grid_cells, origin)
             } else {
                 let (bbox, mask, cells, local_origin) =
                     voxelize_shape(&placed.shape, cell_size, &mut errors);
@@ -2290,44 +2373,32 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
-    let reference_xy = [
-        lowered_bodies[0].bounding_size[0],
-        lowered_bodies[0].bounding_size[1],
-    ];
-    let reference_center_xy = [
-        lowered_bodies[0].native_origin[0] + lowered_bodies[0].bounding_size[0] * 0.5,
-        lowered_bodies[0].native_origin[1] + lowered_bodies[0].bounding_size[1] * 0.5,
-    ];
-    for body in lowered_bodies.iter().skip(1) {
-        let center_xy = [
-            body.native_origin[0] + body.bounding_size[0] * 0.5,
-            body.native_origin[1] + body.bounding_size[1] * 0.5,
-        ];
+    // Native layers may have different lateral extents and centers.  Build a
+    // common *computational* scratch envelope from the union of their native
+    // XY bounds; it is not a physical mesh and does not erase each layer's
+    // native origin.  The descriptor/runtime lane still decides whether the
+    // resulting native-to-scratch transfer is executable.
+    let mut common_xy_min = [f64::INFINITY; 2];
+    let mut common_xy_max = [f64::NEG_INFINITY; 2];
+    for body in &lowered_bodies {
         for axis in 0..2 {
-            if (body.bounding_size[axis] - reference_xy[axis]).abs()
-                > PLACEMENT_TOLERANCE * reference_xy[axis].max(1.0)
-            {
-                errors.push(format!(
-                    "multilayer_convolution currently requires identical XY extents; magnet '{}' realizes to [{:.6e}, {:.6e}] m while the reference layer uses [{:.6e}, {:.6e}] m",
-                    body.magnet_name,
-                    body.bounding_size[0],
-                    body.bounding_size[1],
-                    reference_xy[0],
-                    reference_xy[1]
-                ));
-                break;
-            }
-            if (center_xy[axis] - reference_center_xy[axis]).abs()
-                > PLACEMENT_TOLERANCE * reference_xy[axis].max(1.0)
-            {
-                errors.push(format!(
-                    "multilayer_convolution currently requires all bodies to share the same XY center; magnet '{}' is offset in {}",
-                    body.magnet_name,
-                    ["x", "y"][axis]
-                ));
-                break;
-            }
+            let upper = body.native_origin[axis] + body.bounding_size[axis];
+            common_xy_min[axis] = common_xy_min[axis].min(body.native_origin[axis]);
+            common_xy_max[axis] = common_xy_max[axis].max(upper);
         }
+    }
+    let common_xy_extent = [
+        common_xy_max[0] - common_xy_min[0],
+        common_xy_max[1] - common_xy_min[1],
+    ];
+    if common_xy_extent
+        .iter()
+        .any(|extent| !extent.is_finite() || *extent <= 0.0)
+    {
+        errors.push(
+            "multilayer_convolution cannot resolve a finite, positive common XY scratch extent"
+                .to_string(),
+        );
     }
 
     let mut z_intervals = lowered_bodies
@@ -2352,15 +2423,35 @@ pub(crate) fn plan_fdm_multilayer(
         }
     }
 
-    let mut selected_mode = demag_hints
+    let requested_mode = demag_hints
         .map(|policy| policy.mode.clone())
         .unwrap_or_else(|| "auto".to_string());
-    if selected_mode == "auto" {
-        selected_mode = if lowered_bodies.iter().all(|body| body.native_grid[2] == 1) {
-            "two_d_stack".to_string()
-        } else {
-            "three_d".to_string()
-        };
+    let native_z_cells = lowered_bodies
+        .iter()
+        .map(|body| body.native_grid[2])
+        .collect::<Vec<_>>();
+    let selected_mode = match demag_hints {
+        Some(policy) => match policy.resolve_mode(&native_z_cells) {
+            Ok(mode) => mode,
+            Err(reasons) => {
+                errors.extend(reasons);
+                "three_d".to_string()
+            }
+        },
+        None => {
+            if native_z_cells.iter().all(|cells| *cells == 1) {
+                "two_d_stack".to_string()
+            } else {
+                "three_d".to_string()
+            }
+        }
+    };
+    if selected_mode == "two_d_stack" && lowered_bodies.iter().any(|body| body.native_grid[2] != 1)
+    {
+        errors.push(
+            "multilayer_convolution mode='two_d_stack' requires one native Z cell per layer or an explicit moment_preserving average; refusing to copy a native Z slice"
+                .to_string(),
+        );
     }
 
     let max_native_z_cells = lowered_bodies
@@ -2376,38 +2467,87 @@ pub(crate) fn plan_fdm_multilayer(
         if let Some(cells) = policy.common_cells {
             cells
         } else if let Some(cells_xy) = policy.common_cells_xy {
-            [cells_xy[0], cells_xy[1], max_native_z_cells.max(1)]
+            [cells_xy[0], cells_xy[1], 1]
         } else {
             match fdm_default_cell(fdm_hints) {
                 Ok(base_cell) => [
-                    (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
-                    (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
-                    (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
+                    (common_xy_extent[0] / base_cell[0]).round().max(1.0) as u32,
+                    (common_xy_extent[1] / base_cell[1]).round().max(1.0) as u32,
+                    if selected_mode == "two_d_stack" {
+                        1
+                    } else {
+                        (max_native_z_size / base_cell[2]).round().max(1.0) as u32
+                    },
                 ],
                 Err(reason) => {
                     errors.push(reason);
-                    [1, 1, max_native_z_cells.max(1)]
+                    [
+                        1,
+                        1,
+                        if selected_mode == "two_d_stack" {
+                            1
+                        } else {
+                            max_native_z_cells.max(1)
+                        },
+                    ]
                 }
             }
         }
     } else {
         match fdm_default_cell(fdm_hints) {
             Ok(base_cell) => [
-                (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
-                (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
-                (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
+                (common_xy_extent[0] / base_cell[0]).round().max(1.0) as u32,
+                (common_xy_extent[1] / base_cell[1]).round().max(1.0) as u32,
+                if selected_mode == "two_d_stack" {
+                    1
+                } else {
+                    (max_native_z_size / base_cell[2]).round().max(1.0) as u32
+                },
             ],
             Err(reason) => {
                 errors.push(reason);
-                [1, 1, max_native_z_cells.max(1)]
+                [
+                    1,
+                    1,
+                    if selected_mode == "two_d_stack" {
+                        1
+                    } else {
+                        max_native_z_cells.max(1)
+                    },
+                ]
             }
         }
     };
     let convolution_cell_size = [
-        reference_xy[0] / common_cells[0] as f64,
-        reference_xy[1] / common_cells[1] as f64,
+        common_xy_extent[0] / common_cells[0] as f64,
+        common_xy_extent[1] / common_cells[1] as f64,
         max_native_z_size / common_cells[2] as f64,
     ];
+
+    // Record the native-to-scratch placement that a descriptor-aware runtime
+    // must use.  The current CPU/CUDA runners accept only a common scratch
+    // shape/spacing and therefore remain fail-closed for any later runtime
+    // path that cannot consume these non-zero windows.
+    for body in &lowered_bodies {
+        for axis in 0..2 {
+            let offset_cells =
+                (body.native_origin[axis] - common_xy_min[axis]) / convolution_cell_size[axis];
+            let native_extent_cells = body.bounding_size[axis] / convolution_cell_size[axis];
+            let upper_cells = offset_cells + native_extent_cells;
+            if !offset_cells.is_finite()
+                || !native_extent_cells.is_finite()
+                || offset_cells < -GRID_TOLERANCE
+                || upper_cells > common_cells[axis] as f64 + GRID_TOLERANCE
+            {
+                errors.push(format!(
+                    "multilayer_convolution layer '{}' native {}-window does not fit the common scratch envelope: offset_cells={offset_cells:.6e} extent_cells={native_extent_cells:.6e} common_cells={}",
+                    body.magnet_name,
+                    ["x", "y"][axis],
+                    common_cells[axis]
+                ));
+            }
+        }
+    }
 
     let mut unique_shifts = BTreeSet::new();
     for dst in &lowered_bodies {
@@ -2485,27 +2625,47 @@ pub(crate) fn plan_fdm_multilayer(
         });
     let layers = lowered_bodies
         .into_iter()
-        .map(|body| FdmLayerPlanIR {
-            magnet_name: body.magnet_name,
-            native_grid: body.native_grid,
-            native_cell_size: body.native_cell_size,
-            native_origin: body.native_origin,
-            native_active_mask: body.native_active_mask,
-            initial_magnetization: body.initial_magnetization,
-            material: body.material,
-            convolution_grid: common_cells,
-            convolution_cell_size,
-            convolution_origin: body.native_origin,
-            transfer_kind: if body.native_grid == common_cells
+        .map(|body| {
+            let layer_id = format!("layer:{}", body.magnet_name);
+            let object_id = body.magnet_name.clone();
+            // Keep each layer's physical Z placement (the shifted kernel
+            // convention is based on native/scratch Z origins), while sharing
+            // the union-derived computational XY scratch origin.  A layer is
+            // identity only when its native geometry is exactly that scratch
+            // geometry; distinct extents/centers become explicit push/pull
+            // transfers instead of being rejected or silently reinterpreted
+            // as one physical mesh.
+            let convolution_origin = [
+                common_xy_min[0],
+                common_xy_min[1],
+                body.native_origin[2],
+            ];
+            let native_matches_scratch = body.native_grid == common_cells
                 && body.native_cell_size == convolution_cell_size
-            {
-                "identity".to_string()
-            } else {
-                "push_pull".to_string()
-            },
+                && body.native_origin == convolution_origin;
+            FdmLayerPlanIR {
+                magnet_name: body.magnet_name,
+                layer_id,
+                object_id,
+                native_grid: body.native_grid,
+                native_cell_size: body.native_cell_size,
+                native_origin: body.native_origin,
+                native_active_mask: body.native_active_mask,
+                initial_magnetization: body.initial_magnetization,
+                material: body.material,
+                convolution_grid: common_cells,
+                convolution_cell_size,
+                convolution_origin,
+                transfer_kind: if native_matches_scratch {
+                    "identity".to_string()
+                } else {
+                    "push_pull".to_string()
+                },
+            }
         })
         .collect::<Vec<_>>();
-    let multilayer_topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&layers);
+    let multilayer_topology_tokens =
+        fullmag_ir::fdm_multilayer_topology_tokens(&selected_mode, &layers);
     let native_cuda_lane =
         runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
@@ -2577,6 +2737,8 @@ pub(crate) fn plan_fdm_multilayer(
         planner_summary: FdmMultilayerSummaryIR {
             requested_strategy: requested_strategy.to_string(),
             selected_strategy: "multilayer_convolution".to_string(),
+            requested_mode,
+            resolved_mode: selected_mode.clone(),
             eligibility: "eligible".to_string(),
             estimated_pair_kernels,
             estimated_unique_kernels,

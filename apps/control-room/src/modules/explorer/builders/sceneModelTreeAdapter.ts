@@ -1,6 +1,5 @@
 import type {
   CouplingListResource,
-  CurrentTransportListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
   MeshSharedDomainManifestResource,
@@ -8,26 +7,18 @@ import type {
   RegionListResource,
   SceneResource,
   StageExecutionResource,
-  SpinTransportListResource,
-  SpinInterfaceListResource,
-  SpinTorqueListResource,
-  OerstedFieldListResource,
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
   isVisualizationAirboxIdentity,
 } from "@/kernel/selection/selectionTypes";
-import {
-  isKnownCurrentTransport,
-  isKnownSpinTransport,
-  transportIdentity,
-} from "@/shared/domain/physics/transportRecognition";
-import { isUnsupportedSpinAuthoringResource } from "@/shared/domain/physics/spinAuthoringRecognition";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
 import type {
   ExplorerNodeStatus,
@@ -58,22 +49,20 @@ type SceneMaterialParameterAssignment = NonNullable<
   SceneObjectResource["material_parameter_fields"]
 >[number];
 
-interface ModelTreeResourceInputs {
+export interface ModelTreeResourceInputs {
   domainMeta?: DomainMetaResource | null;
+  fdmMultilayerLayout?: FdmMultilayerLayoutResource | null;
+  fdmMultilayerLayoutStatus?: ResourceStatus;
   domainDiscretization?: "fdm" | "fem" | null;
   domainPresentationStatus?: "idle" | "loading" | "ready" | "stale" | "error";
   domainPresentation?: DomainPresentation | null;
   couplings?: CouplingListResource | null;
-  currentTransports?: CurrentTransportListResource | null;
   meshManifest?: MeshSharedDomainManifestResource | null;
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
   regionMemberships?: readonly MeshRegionMembershipResource[] | null;
-  spinTransports?: SpinTransportListResource | null;
-  spinInterfaces?: SpinInterfaceListResource | null;
-  spinTorques?: SpinTorqueListResource | null;
-  oerstedFields?: OerstedFieldListResource | null;
   physicsGraph?: unknown | null;
+  physicsGraphStatus?: ResourceStatus;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -109,6 +98,10 @@ export function modelTreeSnapshotFromScene(
         ? "fem"
         : null),
     domainPresentation: resources.domainPresentation ?? null,
+    fdmMultilayerLayout: resources.fdmMultilayerLayout ?? null,
+    ...(resources.fdmMultilayerLayoutStatus !== undefined
+      ? { fdmMultilayerLayoutStatus: resources.fdmMultilayerLayoutStatus }
+      : {}),
     couplings: couplingSnapshots(resources.couplings, scene),
     fieldDrives: fieldDriveSnapshots(scene?.field_drives),
     materials,
@@ -134,45 +127,9 @@ export function modelTreeSnapshotFromScene(
     ...(resources.physicsGraph !== undefined
       ? { physicsGraph: resources.physicsGraph }
       : {}),
-    currentTransports: (resources.currentTransports?.items ?? []).map((item, index) => {
-      const id = transportIdentity("current_transport", item);
-      return {
-        id,
-        index,
-        label: id ?? `Unknown current transport ${index + 1}`,
-        model: "model" in item && typeof item.model === "string" ? item.model : null,
-        supported: isKnownCurrentTransport(item),
-      };
-    }),
-    spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => {
-      const id = transportIdentity("spin_transport", item);
-      return {
-      currentSourceId: "current_source_id" in item && typeof item.current_source_id === "string" ? item.current_source_id : null,
-      id,
-      index,
-      label: id ?? `Unknown spin transport ${index + 1}`,
-      mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
-      supported: isKnownSpinTransport(item),
-      };
-    }),
-    spinInterfaces: (resources.spinInterfaces?.items ?? []).map((item, index) => ({
-      id: item.interface_id ?? null,
-      index,
-      known: item.known,
-      ownerId: item.owner_spin_transport_id,
-    })),
-    spinTorques: (resources.spinTorques?.items ?? []).map((item, index) => ({
-      id: "id" in item && typeof item.id === "string" && item.id.trim() ? item.id : null,
-      index,
-      kind: "kind" in item && typeof item.kind === "string" ? item.kind : null,
-      supported: !isUnsupportedSpinAuthoringResource("spin_torque", item),
-    })),
-    oerstedFields: (resources.oerstedFields?.items ?? []).map((item, index) => ({
-      id: "id" in item && typeof item.id === "string" && item.id.trim() ? item.id : null,
-      index,
-      kind: "kind" in item && typeof item.kind === "string" ? item.kind : null,
-      supported: !isUnsupportedSpinAuthoringResource("oersted_field", item),
-    })),
+    ...(resources.physicsGraphStatus !== undefined
+      ? { physicsGraphStatus: resources.physicsGraphStatus }
+      : {}),
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
@@ -1043,7 +1000,14 @@ function fdmMembershipOwnsObject(
     return false;
   }
   const membership = presentation.fdmGrid.membership;
-  if (membership?.freshness.trim().toLowerCase() !== "current") return false;
+  if (
+    !membership ||
+    typeof membership.freshness !== "string" ||
+    membership.freshness.trim().toLowerCase() !== "current" ||
+    !Array.isArray(membership.region_legend)
+  ) {
+    return false;
+  }
   const canonicalObjectId = canonicalVisualizationSceneObjectId(objectId);
   const owners = [
     ...(membership?.object_ids ?? []),

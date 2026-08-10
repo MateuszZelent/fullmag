@@ -8,7 +8,9 @@ from typing import Any
 from fullmag.model.current_transport import (
     ConservativeCurrentBoundaryFace,
     ConservativeCurrentClosedGeometry,
+    ConservativeCurrentExternalLead,
     ConservativeCurrentIdentity,
+    ConservativeCurrentLeadInterfacePair,
     ConservativeCurrentPins,
     ConservativeCurrentSourceCut,
     ConservativeCurrentSourceCutFacePair,
@@ -398,6 +400,78 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
     )
 
     closure_value = _mapping(entry.get("closure"), "current_transport.conservative_current_view.closure")
+    if closure_value.get("kind") == "external_lead":
+        lead_mesh = _mapping(
+            closure_value.get("lead_mesh"),
+            "conservative_current_view.closure.lead_mesh",
+        )
+        conductivity = closure_value.get("lead_conductivity_spm_per_element")
+        stable_lead_ids = closure_value.get("lead_stable_vertex_ids")
+        interface_value = closure_value.get("interface_pairs")
+        minus_value = closure_value.get("minus_outer_electrode_face_vertex_ids")
+        plus_value = closure_value.get("plus_outer_electrode_face_vertex_ids")
+        if not isinstance(conductivity, list):
+            raise ValueError("external lead conductivity must be a list")
+        if not isinstance(stable_lead_ids, list):
+            raise ValueError("external lead stable_vertex_ids must be a list")
+        if not isinstance(interface_value, list):
+            raise ValueError("external lead interface_pairs must be a list")
+        if not isinstance(minus_value, list) or not isinstance(plus_value, list):
+            raise ValueError("external lead outer electrode faces must be lists")
+        interface_pairs = []
+        for index, raw_pair in enumerate(interface_value):
+            pair = raw_pair if isinstance(raw_pair, list) else None
+            if pair is None or len(pair) != 2 or not isinstance(pair[0], list) or not isinstance(pair[1], list):
+                raise ValueError(
+                    f"external lead interface_pairs[{index}] must contain two face ID lists"
+                )
+            interface_pairs.append(ConservativeCurrentLeadInterfacePair(pair[0], pair[1]))
+        closure = ConservativeCurrentExternalLead(
+            operator_version=_nonempty_string(
+                closure_value.get("operator_version"),
+                "conservative_current_view.closure.operator_version",
+            ),
+            revision=_nonempty_string(
+                closure_value.get("revision"),
+                "conservative_current_view.closure.revision",
+            ),
+            digest=_nonempty_string(
+                closure_value.get("digest"),
+                "conservative_current_view.closure.digest",
+            ),
+            drive_id=_nonempty_string(
+                closure_value.get("drive_id"),
+                "conservative_current_view.closure.drive_id",
+            ),
+            outer_electrode_potential_drop_v=_finite_number(
+                closure_value.get("outer_electrode_potential_drop_v"),
+                "conservative_current_view.closure.outer_electrode_potential_drop_v",
+            ),
+            lead_mesh=lead_mesh,
+            lead_conductivity_spm_per_element=conductivity,
+            lead_stable_vertex_ids=stable_lead_ids,
+            interface_pairs=interface_pairs,
+            minus_outer_electrode_face_vertex_ids=minus_value,
+            plus_outer_electrode_face_vertex_ids=plus_value,
+            lead_conductivity_digest=_nonempty_string(
+                closure_value.get("lead_conductivity_digest"),
+                "conservative_current_view.closure.lead_conductivity_digest",
+            ),
+        )
+        reference_mpi = entry.get("reference_mpi_gather_broadcast", False)
+        if not isinstance(reference_mpi, bool):
+            raise ValueError("conservative_current_view.reference_mpi_gather_broadcast must be boolean")
+        return ConservativeCurrentView(
+            stable_vertex_ids=stable_ids,
+            boundary_faces=boundary_faces,
+            identity=identity,
+            pins=pins,
+            closure=closure,
+            algebraic_relative_tolerance=_finite_number(entry.get("algebraic_relative_tolerance"), "conservative_current_view.algebraic_relative_tolerance"),
+            physical_relative_gate=_finite_number(entry.get("physical_relative_gate"), "conservative_current_view.physical_relative_gate"),
+            physical_absolute_gate_a=_finite_number(entry.get("physical_absolute_gate_a"), "conservative_current_view.physical_absolute_gate_a"),
+            reference_mpi_gather_broadcast=reference_mpi,
+        )
     if closure_value.get("kind") != "closed_geometry":
         raise ValueError(
             "current_transport.conservative_current_view currently supports only closed_geometry closure"
@@ -690,12 +764,13 @@ def _decode_oersted_time_dependence(value: object) -> object:
 
 def _decode_oersted_field(value: object) -> OerstedCylinder | OerstedField:
     entry = _mapping(value, "oersted_field")
-    entry.pop("id", None)
     kind = entry.get("kind")
     if kind == "oersted_field":
+        source = _nonempty_string(entry.get("source"), "oersted_field.source")
         return OerstedField(
-            source=_nonempty_string(entry.get("source"), "oersted_field.source"),
+            source=source,
             model=_nonempty_string(entry.get("model"), "oersted_field.model"),
+            id=_nonempty_string(entry.get("id", f"oersted:{source}"), "oersted_field.id"),
         )
     if kind == "oersted_cylinder":
         time_dependence = entry.get("time_dependence")
@@ -707,6 +782,7 @@ def _decode_oersted_field(value: object) -> OerstedCylinder | OerstedField:
             time_dependence=(
                 _decode_oersted_time_dependence(time_dependence) if time_dependence is not None else None
             ),  # type: ignore[arg-type]
+            id=_nonempty_string(entry.get("id", "oersted:cylinder"), "oersted_cylinder.id"),
         )
     raise ValueError(f"unsupported Oersted field kind {kind!r}")
 
@@ -1079,6 +1155,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    if "fdm" in builder:
+        document["study"]["fdm"] = copy.deepcopy(builder.get("fdm"))
     if "spin_torques" in builder:
         document["spin_torques"] = _canonical_spin_torques(
             builder["spin_torques"], scene_ids=True
@@ -1219,6 +1297,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": current_modules.get("excitation_analysis"),
     }
+    if "fdm" in study:
+        builder["fdm"] = copy.deepcopy(study.get("fdm"))
     field_drives = scene.get("field_drives")
     if isinstance(field_drives, Mapping):
         drives = field_drives.get("drives")
@@ -1405,6 +1485,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_torques")
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
+    if "fdm" in builder:
+        overrides["fdm"] = copy.deepcopy(builder.get("fdm"))
     return overrides
 
 

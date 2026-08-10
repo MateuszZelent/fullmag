@@ -189,7 +189,17 @@ function snapshotCell(
 
 function selectionScope(selection: Selection): FdmGridSelectionScope {
   if (selection.ref?.type === "fdm-cell") return "cell";
-  return selection.ref?.type === "fdm-domain" ? selection.ref.scope : "domain";
+  if (selection.ref?.type !== "fdm-domain") return "domain";
+  const scope = selection.ref.scope;
+  return scope === "common" ||
+    scope === "layers" ||
+    scope === "layer" ||
+    scope === "layer-native-grid" ||
+    scope === "layer-mask" ||
+    scope === "layer-transfer" ||
+    scope === "layer-provenance"
+    ? "domain"
+    : scope;
 }
 
 function staleSelection(

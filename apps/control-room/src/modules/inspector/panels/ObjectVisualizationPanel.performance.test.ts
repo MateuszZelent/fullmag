@@ -93,6 +93,25 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
 
+  it("gates FDM quantity changes on the realized field catalog", () => {
+    expect(panelSource).toContain("fdmTarget ||");
+    expect(panelSource).toContain("fieldCatalogLoading");
+    expect(panelSource).toContain(
+      "disabled={pending || !settings.visible || fieldCatalogLoading}",
+    );
+    expect(panelSource).toContain(
+      "visualizationQuantityItems(\n        settings.activeQuantityId,\n        targetKind,\n        fieldCatalog,",
+    );
+  });
+
+  it("uses the FDM domain scope and catalog gate for inspector field metadata", () => {
+    expect(panelSource).toContain("fieldMetaTarget");
+    expect(panelSource).toContain("fieldMetaTarget={fieldMetaTarget}");
+    expect(panelSource).toContain("fieldCatalogQuantityAvailable");
+    expect(panelSource).toContain("fieldMetaQuantityAvailable");
+    expect(panelSource).toContain("fieldCatalogLoading");
+  });
+
   it("keeps target controls from patching the active analysis overlay", () => {
     expect(panelSource).not.toContain("settingsWithAnalysisField");
     expect(panelSource).not.toContain("analysisFieldOverlay.update");

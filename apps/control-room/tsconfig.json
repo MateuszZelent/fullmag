@@ -36,7 +36,9 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts",
     ".next-audit/types/**/*.ts",
-    ".next-audit/dev/types/**/*.ts"
+    ".next-audit/dev/types/**/*.ts",
+    ".next-audit-target-smoke-fdm-multilayer-20260810/types/**/*.ts",
+    ".next-audit-target-smoke-fdm-multilayer-20260810/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

@@ -785,4 +785,56 @@ describe("viewport3DFieldDataPlan", () => {
     expect(emptyAirbox.demands).toEqual([]);
     expect(emptyAirbox.requests.size).toBe(0);
   });
+
+  it("does not request an unavailable FDM airbox quantity", () => {
+    const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "part:airbox" }],
+      fieldQuery: { component: "full", scope_kind: "full" },
+      quantityId: "H_demag",
+      vectorBudget: 1200,
+      vectorsVisible: true,
+      availableQuantityIds: new Set(["m"]),
+    });
+
+    expect(plan.demands).toEqual([]);
+    expect(plan.requests).toEqual(new Map());
+  });
+
+  it("does not request unavailable quantities for FDM target views", () => {
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["m"]),
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_demag",
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: {
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        visible: true,
+      },
+      fdmTargetSettings: [
+        {
+          label: "FDM target",
+          settings: {
+            ...DEFAULT_OBJECT_VISUALIZATION,
+            activeQuantityId: "H_eff",
+            shaderVisible: true,
+            visible: true,
+          },
+          targetId: "fdm-target",
+        },
+      ],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 1200,
+      primaryFieldQuantityId: "m",
+    });
+
+    expect(plan.demands).toEqual([]);
+    expect(plan.requests).toEqual(new Map());
+  });
 });

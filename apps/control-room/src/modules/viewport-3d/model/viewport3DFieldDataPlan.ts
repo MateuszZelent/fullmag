@@ -149,6 +149,7 @@ export interface Viewport3DPlanPartModel {
 }
 
 export interface Viewport3DTargetQuantityFieldRequestsOptions {
+  availableQuantityIds?: ReadonlySet<string> | null;
   fdmAirboxSettings?: VisualizationTargetSettings | null;
   fdmSettings: VisualizationTargetSettings | null;
   fdmTargetSettings?: readonly Viewport3DFdmTargetSettingsForPlanning[];
@@ -549,6 +550,7 @@ export function resolveViewport3DPrimaryFieldDemandPlan({
 
 export function resolveViewport3DAirboxFieldVectorDemandPlan({
   airboxParts,
+  availableQuantityIds,
   fieldQuery = { component: "full", scope_kind: "full" },
   quantityId,
   replayQuery = null,
@@ -556,6 +558,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   vectorsVisible = Boolean(fieldQuery.max_samples != null),
 }: {
   airboxParts: readonly { id: string; label?: string | null }[];
+  availableQuantityIds?: ReadonlySet<string> | null;
   fieldQuery?: FieldVectorQuery;
   quantityId: string;
   replayQuery?: FieldVectorQuery | null;
@@ -564,7 +567,10 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   vectorBudget?: number;
   vectorsVisible?: boolean;
 }): Viewport3DAirboxFieldVectorDemandPlan {
-  if (isMagneticOnlyQuantityId(quantityId)) {
+  if (
+    isMagneticOnlyQuantityId(quantityId) ||
+    !isViewport3DQuantityAvailable(quantityId, availableQuantityIds)
+  ) {
     return {
       demands: [],
       requests: new Map(),
@@ -633,6 +639,16 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
       ),
     ),
   };
+}
+
+function isViewport3DQuantityAvailable(
+  quantityId: string,
+  availableQuantityIds: ReadonlySet<string> | null | undefined,
+): boolean {
+  return (
+    availableQuantityIds == null ||
+    availableQuantityIds.has(resolveCanonicalQuantityId(quantityId))
+  );
 }
 
 export function resolveViewport3DScopedPartVectorFieldDemandPlan({
@@ -726,6 +742,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
 }
 
 export function resolveViewport3DTargetQuantityFieldDemandPlan({
+  availableQuantityIds,
   fdmAirboxSettings,
   fdmSettings,
   fdmTargetSettings = [],
@@ -743,6 +760,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     const settings = getPartSettings(partModel.part);
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
     if (
+      !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
       sameViewport3DQuantityIdForPlanning(quantityId, primaryFieldQuantityId) ||
       !settings.visible ||
       (!settings.shaderVisible && !settings.vectorsVisible)
@@ -783,6 +801,9 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
       continue;
     }
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
+    if (!isViewport3DQuantityAvailable(quantityId, availableQuantityIds)) {
+      continue;
+    }
     demands.push(
       ...buildViewport3DPassDemands(
         buildViewport3DTargetRenderPlan({
@@ -830,6 +851,9 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
       continue;
     }
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
+    if (!isViewport3DQuantityAvailable(quantityId, availableQuantityIds)) {
+      continue;
+    }
     demands.push(
       ...buildViewport3DPassDemands(
         buildViewport3DTargetRenderPlan({

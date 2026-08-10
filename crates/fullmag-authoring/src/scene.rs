@@ -1,9 +1,10 @@
 use crate::{
     SceneCurrentTransport, SceneOerstedField, SceneSpinTorque, SceneSpinTransport,
     ScriptBuilderCurrentModuleState, ScriptBuilderExcitationAnalysisState,
-    ScriptBuilderInitialState, ScriptBuilderMagneticInteractionEntry, ScriptBuilderMaterialState,
-    ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState,
-    ScriptBuilderStageState, ScriptBuilderUniverseState, StudyPipelineDocument,
+    ScriptBuilderFdmDemagState, ScriptBuilderFdmGridState, ScriptBuilderInitialState,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMaterialState, ScriptBuilderMeshState,
+    ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, ScriptBuilderStageState,
+    ScriptBuilderUniverseState, StudyPipelineDocument,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -304,6 +305,8 @@ pub struct SceneStudyState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm: Option<SceneFdmDiscretizationState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
     #[serde(default = "default_solver")]
     pub solver: ScriptBuilderSolverState,
@@ -321,6 +324,26 @@ pub struct SceneStudyState {
     pub study_pipeline: Option<StudyPipelineDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct SceneFdmDiscretizationState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_cell: Option<[f64; 3]>,
+    #[serde(
+        default,
+        alias = "per_magnet",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub per_object_grid: BTreeMap<String, ScriptBuilderFdmGridState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag: Option<ScriptBuilderFdmDemagState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_correction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_phi_floor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_delta_min: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

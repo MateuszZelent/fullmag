@@ -47,6 +47,8 @@ import type {
 import { buildLineIndexGeometry } from "../viewport3dSurfaceEdges";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
+import type { FdmMultilayerAirboxRenderView } from "../viewport3dDomainAdapter";
+import { resolveFdmMultilayerAirboxBoundsOverlay } from "../model/viewport3DFdmMultilayerAirboxOverlay";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -156,7 +158,7 @@ function BoundsPoints({
   );
 }
 
-function BoundsVolumeWireframe({
+export function BoundsVolumeWireframe({
   bounds,
   color,
   opacity,
@@ -469,7 +471,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
                 />
               </lineSegments>
             )}
-            {(renderSettings.geometryScope === "full" || !edgeGeometry) && (
+            {!edgeGeometry && (
               <AirboxWireframeFallback
                 bounds={resolveMeshPartBounds(part)}
                 color={wireframeColorFromSettings(renderSettings, colors.wire)}
@@ -566,7 +568,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
               />
             </lineSegments>
           )}
-          {(renderSettings.geometryScope === "full" || !edgeGeometry) && (
+          {!edgeGeometry && (
             <AirboxWireframeFallback
               bounds={resolveMeshPartBounds(part)}
               color={wireframeColorFromSettings(renderSettings, colors.wire)}
@@ -871,19 +873,22 @@ export function resolveAirboxTopologyVisualizationSettings(
 export function resolveAirboxRuntimeVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
+  const renderMode = settings.pointsVisible
+    ? "points"
+    : settings.wireframeVisible
+      ? "wireframe"
+      : "off";
   if (
     !settings.shaderVisible &&
-    !settings.pointsVisible &&
     settings.surfaceColorSource === "solid" &&
     !settings.viewportColorbarVisible &&
-    settings.renderMode === (settings.wireframeVisible ? "wireframe" : "off")
+    settings.renderMode === renderMode
   ) {
     return settings;
   }
   return {
     ...settings,
-    pointsVisible: false,
-    renderMode: settings.wireframeVisible ? "wireframe" : "off",
+    renderMode,
     shaderVisible: false,
     surfaceColorSource: "solid",
     viewportColorbarVisible: false,
@@ -1053,7 +1058,6 @@ export const FdmUniverseOutsideSupportLayer = memo(
     model,
     onSelect,
     settings,
-    tracker,
   }: {
     colors: Viewport3DColors;
     model: FdmUniverseOutsideSupportOverlayModel | null;
@@ -1069,8 +1073,6 @@ export const FdmUniverseOutsideSupportLayer = memo(
       settings.wireframeOpacityPercent,
     );
     const wireframeColor = wireframeColorFromSettings(settings, colors.accent);
-    const membershipRealized =
-      model.activeCellCount !== null && model.inactiveCellCount !== null;
     return (
       <group
         name={model.target.id}
@@ -1081,40 +1083,20 @@ export const FdmUniverseOutsideSupportLayer = memo(
         }}
       >
         {settings.boundsVisible ? (
-          membershipRealized ? (
-            <BoundsVolumeWireframe
-              bounds={model.universeBounds}
-              color={wireframeColor}
-              opacity={universeBoundsOpacity}
-              policySemantic="hiddenEdges"
-              tracker={tracker}
-            />
-          ) : (
-            <BoundsBox
-              bounds={model.universeBounds}
-              color={wireframeColor}
-              opacity={universeBoundsOpacity}
-              policySemantic="hiddenEdges"
-            />
-          )
+          <BoundsBox
+            bounds={model.universeBounds}
+            color={wireframeColor}
+            opacity={universeBoundsOpacity}
+            policySemantic="hiddenEdges"
+          />
         ) : null}
         {settings.wireframeVisible ? (
-          membershipRealized ? (
-            <BoundsVolumeWireframe
-              bounds={model.magneticSupportBounds}
-              color={wireframeColor}
-              opacity={magneticSupportWireframeOpacity}
-              policySemantic="featureEdges"
-              tracker={tracker}
-            />
-          ) : (
-            <BoundsBox
-              bounds={model.magneticSupportBounds}
-              color={wireframeColor}
-              opacity={magneticSupportWireframeOpacity}
-              policySemantic="featureEdges"
-            />
-          )
+          <BoundsBox
+            bounds={model.magneticSupportBounds}
+            color={wireframeColor}
+            opacity={magneticSupportWireframeOpacity}
+            policySemantic="featureEdges"
+          />
         ) : null}
       </group>
     );
@@ -1181,6 +1163,59 @@ export function AirboxLayerContent({
 }
 
 export const AirboxLayer = memo(AirboxLayerContent);
+
+/**
+ * Target-only FDM multilayer Airbox extent.  This is deliberately separate
+ * from the structured-universe overlay: both the bounds and the full hidden-
+ * edge volume grid come exclusively from the published target carrier.
+ */
+export const FdmMultilayerAirboxBoundsLayer = memo(
+  function FdmMultilayerAirboxBoundsLayer({
+    colors,
+    onSelect,
+    tracker,
+    view,
+  }: {
+    colors: Viewport3DColors;
+    onSelect: () => void;
+    tracker: Viewport3DResourceTracker;
+    view: FdmMultilayerAirboxRenderView | null;
+  }) {
+    const overlay = resolveFdmMultilayerAirboxBoundsOverlay(view);
+    if (!overlay) return null;
+    const settings = view?.settings;
+    if (!settings) return null;
+    const wireframeColor = wireframeColorFromSettings(settings, colors.accent);
+    return (
+      <group
+        name={overlay.targetId}
+        userData={{ semanticRole: "fdm-multilayer-airbox-target" }}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        {overlay.boundsVisible ? (
+          <BoundsBox
+            bounds={overlay.bounds}
+            color={wireframeColor}
+            opacity={percentToUnit(settings.boundsOpacityPercent)}
+            policySemantic="hiddenEdges"
+          />
+        ) : null}
+        {overlay.fullWireframeVisible ? (
+          <BoundsVolumeWireframe
+            bounds={overlay.bounds}
+            color={wireframeColor}
+            opacity={percentToUnit(settings.wireframeOpacityPercent)}
+            policySemantic="hiddenEdges"
+            tracker={tracker}
+          />
+        ) : null}
+      </group>
+    );
+  },
+);
 
 export function SelectionHighlightLayerContent({
   bounds,

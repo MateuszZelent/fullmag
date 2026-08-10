@@ -51,10 +51,41 @@ pub struct OrientedFaceFluxes {
     pub z: Vec<f64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StructuredChargeFace {
+    pub axis: usize,
+    pub negative_cell: usize,
+    pub positive_cell: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrientedChargeMixingInterface {
+    pub face: StructuredChargeFace,
+    pub from_cell: usize,
+    pub to_cell: usize,
+    pub g_up_s_per_m2: f64,
+    pub g_down_s_per_m2: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChargeInterfaceFluxObservation {
+    pub face: StructuredChargeFace,
+    pub from_cell: usize,
+    pub to_cell: usize,
+    pub g_up_s_per_m2: f64,
+    pub g_down_s_per_m2: f64,
+    pub from_potential_trace_v: f64,
+    pub to_potential_trace_v: f64,
+    pub delta_potential_trace_v: f64,
+    pub from_to_current_density_a_per_m2: f64,
+    pub global_face_current_density_a_per_m2: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChargeSolution {
     pub potential_volts: Vec<f64>,
     pub current_density: OrientedFaceFluxes,
+    pub interface_fluxes: Vec<ChargeInterfaceFluxObservation>,
     pub iterations: usize,
     pub residual_l2: f64,
     pub balance: ChargeBalanceDiagnostics,
@@ -77,6 +108,7 @@ pub struct StructuredChargeProblem {
     pub conductivity_s_per_m: Vec<f64>,
     pub active_cells: Vec<bool>,
     pub boundary: ChargeBoundaryConditions,
+    pub interfaces: Vec<OrientedChargeMixingInterface>,
 }
 
 impl StructuredChargeProblem {
@@ -146,7 +178,54 @@ impl StructuredChargeProblem {
             conductivity_s_per_m,
             active_cells,
             boundary,
+            interfaces: Vec::new(),
         })
+    }
+
+    pub fn with_interfaces(
+        mut self,
+        interfaces: Vec<OrientedChargeMixingInterface>,
+    ) -> Result<Self> {
+        for (index, interface) in interfaces.iter().enumerate() {
+            self.validate_structured_face(interface.face)?;
+            if !((interface.from_cell == interface.face.negative_cell
+                && interface.to_cell == interface.face.positive_cell)
+                || (interface.from_cell == interface.face.positive_cell
+                    && interface.to_cell == interface.face.negative_cell))
+            {
+                return Err(EngineError::new(
+                    "charge mixing interface orientation must use the two face cells",
+                ));
+            }
+            if !self.active_cells[interface.face.negative_cell]
+                || !self.active_cells[interface.face.positive_cell]
+            {
+                return Err(EngineError::new(
+                    "charge mixing interface requires two active cells",
+                ));
+            }
+            let conductance = interface.g_up_s_per_m2 + interface.g_down_s_per_m2;
+            if !interface.g_up_s_per_m2.is_finite()
+                || !interface.g_down_s_per_m2.is_finite()
+                || interface.g_up_s_per_m2 < 0.0
+                || interface.g_down_s_per_m2 < 0.0
+                || !conductance.is_finite()
+            {
+                return Err(EngineError::new(
+                    "charge mixing G_up/G_down must be finite and non-negative",
+                ));
+            }
+            if interfaces[..index]
+                .iter()
+                .any(|existing| existing.face == interface.face)
+            {
+                return Err(EngineError::new(
+                    "a charge face may have only one mixing-interface owner",
+                ));
+            }
+        }
+        self.interfaces = interfaces;
+        Ok(self)
     }
 
     pub fn face_fluxes(&self, potential_volts: &[f64]) -> Result<OrientedFaceFluxes> {
@@ -364,11 +443,13 @@ impl StructuredChargeProblem {
             )));
         }
         let current_density = self.face_fluxes(&potential)?;
+        let interface_fluxes = self.interface_observations(&potential, &current_density);
         let physical_residual = self.charge_residual(&potential)?;
         let balance = self.balance_diagnostics(&current_density)?;
         Ok(ChargeSolution {
             potential_volts: potential,
             current_density,
+            interface_fluxes,
             iterations,
             residual_l2: l2_norm_active(&physical_residual, &self.active_cells),
             balance,
@@ -543,6 +624,18 @@ impl StructuredChargeProblem {
         if !self.active_cells[left] || !self.active_cells[right] {
             return 0.0;
         }
+        if let Some(interface) = self.interfaces.iter().find(|interface| {
+            interface.face.negative_cell == left && interface.face.positive_cell == right
+        }) {
+            let interface_conductance = interface.g_up_s_per_m2 + interface.g_down_s_per_m2;
+            if interface_conductance == 0.0 {
+                return 0.0;
+            }
+            let resistance = 0.5 * distance / self.conductivity_s_per_m[left]
+                + 1.0 / interface_conductance
+                + 0.5 * distance / self.conductivity_s_per_m[right];
+            return -(potential[right] - potential[left]) / resistance;
+        }
         let conductivity = harmonic_mean(
             self.conductivity_s_per_m[left],
             self.conductivity_s_per_m[right],
@@ -587,6 +680,96 @@ impl StructuredChargeProblem {
             .zip(affine_offset)
             .map(|(value, offset)| value - offset)
             .collect())
+    }
+
+    fn validate_structured_face(&self, face: StructuredChargeFace) -> Result<()> {
+        let count = self.grid.cell_count();
+        if face.axis > 2 || face.negative_cell >= count || face.positive_cell >= count {
+            return Err(EngineError::new(
+                "charge mixing interface must name an internal structured face",
+            ));
+        }
+        let coordinates = |cell: usize| {
+            let x = cell % self.grid.nx;
+            let yz = cell / self.grid.nx;
+            (x, yz % self.grid.ny, yz / self.grid.ny)
+        };
+        let negative = coordinates(face.negative_cell);
+        let positive = coordinates(face.positive_cell);
+        let adjacent = match face.axis {
+            0 => {
+                positive.0 == negative.0 + 1 && positive.1 == negative.1 && positive.2 == negative.2
+            }
+            1 => {
+                positive.1 == negative.1 + 1 && positive.0 == negative.0 && positive.2 == negative.2
+            }
+            2 => {
+                positive.2 == negative.2 + 1 && positive.0 == negative.0 && positive.1 == negative.1
+            }
+            _ => false,
+        };
+        if !adjacent {
+            return Err(EngineError::new(
+                "charge mixing interface must name adjacent negative/positive cells",
+            ));
+        }
+        Ok(())
+    }
+
+    fn interface_observations(
+        &self,
+        potential: &[f64],
+        fluxes: &OrientedFaceFluxes,
+    ) -> Vec<ChargeInterfaceFluxObservation> {
+        self.interfaces
+            .iter()
+            .map(|interface| {
+                let negative = interface.face.negative_cell;
+                let x = negative % self.grid.nx;
+                let yz = negative / self.grid.nx;
+                let y = yz % self.grid.ny;
+                let z = yz / self.grid.ny;
+                let (global_current, spacing) = match interface.face.axis {
+                    0 => (
+                        fluxes.x[x + 1 + (self.grid.nx + 1) * (y + self.grid.ny * z)],
+                        self.cell_size.dx,
+                    ),
+                    1 => (
+                        fluxes.y[x + self.grid.nx * (y + 1 + (self.grid.ny + 1) * z)],
+                        self.cell_size.dy,
+                    ),
+                    2 => (
+                        fluxes.z[x + self.grid.nx * (y + self.grid.ny * (z + 1))],
+                        self.cell_size.dz,
+                    ),
+                    _ => unreachable!(),
+                };
+                let from_is_negative = interface.from_cell == negative;
+                let from_to_current = if from_is_negative {
+                    global_current
+                } else {
+                    -global_current
+                };
+                let from_trace = potential[interface.from_cell]
+                    - from_to_current * 0.5 * spacing
+                        / self.conductivity_s_per_m[interface.from_cell];
+                let to_trace = potential[interface.to_cell]
+                    + from_to_current * 0.5 * spacing
+                        / self.conductivity_s_per_m[interface.to_cell];
+                ChargeInterfaceFluxObservation {
+                    face: interface.face,
+                    from_cell: interface.from_cell,
+                    to_cell: interface.to_cell,
+                    g_up_s_per_m2: interface.g_up_s_per_m2,
+                    g_down_s_per_m2: interface.g_down_s_per_m2,
+                    from_potential_trace_v: from_trace,
+                    to_potential_trace_v: to_trace,
+                    delta_potential_trace_v: from_trace - to_trace,
+                    from_to_current_density_a_per_m2: from_to_current,
+                    global_face_current_density_a_per_m2: global_current,
+                }
+            })
+            .collect()
     }
 }
 

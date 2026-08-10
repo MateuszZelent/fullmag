@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
-import { buildFdmCuboidInstanceModel } from "./fdmCuboidBuildModel";
+import {
+  buildFdmCuboidInstanceModel,
+  buildFdmDenseNativeLayerInstanceModel,
+} from "./fdmCuboidBuildModel";
 
 function allActiveMembership(cellCount: number): Uint32Array {
   return new Uint32Array(cellCount);
@@ -28,6 +31,23 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("builds a bounded native layer display without accepting an FMRM mask", () => {
+    const model = buildFdmDenseNativeLayerInstanceModel({
+      bounds: null,
+      displayCellBudget: 2,
+      displayCellCount: 2,
+      kind: "fdm-grid",
+      origin: [0, 0, -1],
+      shape: [2, 1, 1],
+      spacing: [1, 1, 2],
+      stride: 1,
+      totalCells: 2,
+    });
+
+    expect(model?.cellIndices).toEqual(new Uint32Array([0, 1]));
+    expect(model?.regionIds).toEqual(new Uint32Array([0, 0]));
+  });
+
   it("fails closed for an all-cell pass without an exact FMRM mask", () => {
     const domain = {
       bounds: null,

@@ -460,13 +460,7 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
         inverse = build_builder_from_scene_document(scene)
         overrides = builder_overrides_from_scene_document(scene)
         self.assertEqual(scene["spin_torques"], spin_torques)
-        self.assertEqual(
-            [
-                {key: value for key, value in entry.items() if key != "id"}
-                for entry in scene["oersted_fields"]
-            ],
-            oersted_terms,
-        )
+        self.assertEqual(scene["oersted_fields"], oersted_terms)
         self.assertNotIn("oersted_terms", scene)
         self.assertEqual(inverse["spin_torques"], spin_torques)
         self.assertEqual(inverse["oersted_terms"], oersted_terms)

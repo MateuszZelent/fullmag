@@ -153,6 +153,68 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
     }
 }
 
+pub(crate) fn physics_module_execution_enabled(
+    problem: &ProblemIR,
+    kind: &str,
+    module_id: &str,
+) -> Result<Option<bool>, Vec<String>> {
+    let Some(graph) = resolve_physics_graph(problem)? else {
+        return Ok(None);
+    };
+    let modules = graph
+        .get("modules")
+        .and_then(Value::as_array)
+        .expect("validated physics graph modules");
+    let module = modules.iter().find(|module| {
+        module.get("kind").and_then(Value::as_str) == Some(kind)
+            && module.get("id").and_then(Value::as_str) == Some(module_id)
+    });
+    let Some(module) = module else {
+        return Err(vec![format!(
+            "physics_graph is authoritative but has no {kind} module '{module_id}'"
+        )]);
+    };
+    Ok(Some(matches!(
+        module.get("activation").and_then(Value::as_str),
+        Some("active" | "configured")
+    )))
+}
+
+pub(crate) fn physics_module_execution_enabled_at_sources(
+    problem: &ProblemIR,
+    kind: &str,
+    source_paths: &[String],
+) -> Result<Option<bool>, Vec<String>> {
+    let Some(graph) = resolve_physics_graph(problem)? else {
+        return Ok(None);
+    };
+    let modules = graph
+        .get("modules")
+        .and_then(Value::as_array)
+        .expect("validated physics graph modules");
+    let matches = modules
+        .iter()
+        .filter(|module| {
+            module.get("kind").and_then(Value::as_str) == Some(kind)
+                && module
+                    .get("source_path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| source_paths.iter().any(|candidate| candidate == path))
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(vec![format!(
+            "physics_graph is authoritative but {kind} source paths [{}] matched {} modules",
+            source_paths.join(", "),
+            matches.len()
+        )]);
+    }
+    Ok(Some(matches!(
+        matches[0].get("activation").and_then(Value::as_str),
+        Some("active" | "configured")
+    )))
+}
+
 /// Resolve the validated graph into lane-neutral semantic markers.
 ///
 /// This function never infers scope from list position. It is usable before a
@@ -862,8 +924,11 @@ fn fdm_scope_mask(
                     .map(|entry| entry.numeric_id)
                     .collect::<BTreeSet<_>>();
                 if matches.is_empty()
-                    && certificate.object_ids.len() == 1
-                    && certificate.object_ids[0] == object
+                    && certificate.region_legend.is_empty()
+                    && certificate
+                        .object_ids
+                        .iter()
+                        .any(|candidate| candidate == &object)
                 {
                     selected.extend(region_ids.iter().copied());
                 } else if matches.is_empty() {
@@ -1021,7 +1086,7 @@ fn mesh_revision(backend_plan: &BackendPlanIR) -> Result<u64, Vec<String>> {
             "backend": "fdm_multilayer",
             "common_cells": plan.common_cells,
             "grid_fingerprint": plan.grid_certificate.as_ref().map(|certificate| &certificate.grid_fingerprint),
-            "topology_tokens": fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers),
+            "topology_tokens": fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers),
         }),
         BackendPlanIR::Fem(plan) => serde_json::json!({
             "backend": "fem",
@@ -1166,6 +1231,8 @@ mod tests {
     ) -> fullmag_ir::FdmLayerPlanIR {
         fullmag_ir::FdmLayerPlanIR {
             magnet_name: "layer".to_string(),
+            layer_id: "layer:layer".to_string(),
+            object_id: "layer".to_string(),
             native_grid: [2, 1, 1],
             native_cell_size: [1.0, 1.0, 1.0],
             native_origin: origin,
@@ -1180,7 +1247,7 @@ mod tests {
     }
 
     fn multilayer_plan(layers: Vec<fullmag_ir::FdmLayerPlanIR>) -> fullmag_ir::FdmMultilayerPlanIR {
-        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&layers);
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens("two_d_stack", &layers);
         let certificate = fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
             [0.0; 3],
             [2, 1, 1],
@@ -1192,7 +1259,7 @@ mod tests {
         )
         .expect("test certificate");
         fullmag_ir::FdmMultilayerPlanIR {
-            mode: "multilayer_convolution".to_string(),
+            mode: "two_d_stack".to_string(),
             common_cells: [2, 1, 1],
             grid_certificate: Some(certificate),
             layers,
@@ -1213,6 +1280,8 @@ mod tests {
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),
                 selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "two_d_stack".to_string(),
+                resolved_mode: "two_d_stack".to_string(),
                 eligibility: "test".to_string(),
                 estimated_pair_kernels: 1,
                 estimated_unique_kernels: 1,

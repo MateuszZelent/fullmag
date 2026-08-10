@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-04
+- Last updated: 2026-08-10
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -10,7 +10,11 @@
   `magnetoelectronic.fullmag.v2`,
   `sml_reservoir.fullmag.v2`,
   `dos_isotropic_nonmagnetic.fullmag.v1`
-- Operator versions: `fv_spin_upwind_v1`, `structured_cross_gradient_v1`,
+- Operator versions: `fv_charge_harmonic_v1`,
+  `fv_charge_mixing_series_trace.v1`,
+  `fv_spin_upwind_v1`, `structured_cross_gradient_v1`,
+  `fdm_exact_face_current_electric_reconstruction.v1`,
+  `fdm_transport_torque_cell_surface_balance.v1`,
   `fem_charge_spin_broken_h1_mortar.v1`,
   `fem_charge_spin_conforming_h1_p1.transparent.v1`,
   `fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1`
@@ -159,10 +163,31 @@ prevents replacing this expression by the entire flux divergence.
 
 ### 2.4 Boundary conditions and charge gauge
 
-Charge BCs are `VoltageElectrode`, `Ground`, `TotalCurrentElectrode`,
+Charge BCs are `VoltageElectrode`, `Ground`, `NormalCurrentElectrode`,
 `Insulating`, and explicit periodic potential drop. A reference potential or
-zero-mean constraint is mandatory. A total-current electrode has constant
-unknown electrode potential plus the prescribed integrated flux.
+zero-mean constraint is mandatory. The public `NormalCurrentElectrode`
+prescribes a uniform outward-normal current density in `A/m^2` on each selected
+surface. The native FDM CPU binding now materializes that public density
+boundary as exact selected external structured faces, each with area,
+outward-normal sign, adjacent active cell, and density in `A/m^2`. Every face
+selected by the authored surface scope must border an active charge conductor;
+one inactive adjacent cell rejects the complete source with its source ID, face
+index, and adjacent-cell index. The planner never silently intersects or clips
+the authored electrode scope to the active domain. It is an
+opt-in executable development prototype behind managed contract gates. The
+current worktree implements fixes for ABI extent checks, per-face interface
+identity, order-independent owner observations, fail-closed artifact mapping,
+full-result validation, exact persistent E2E provenance, per-quantity oracle
+tolerances, build invalidation, and warning-clean ABI compilation. A fresh
+independent review of this exact worktree reached `final5 independent review APPROVE, no Critical/Important`.
+The approved review scope does not make the
+lane stable, public-qualified, validated, or production-qualified: its
+canonical capability remains `semantic_only`, with
+`implementation_state=executable` and `validation_state=unvalidated`. The separate
+implementation-local total-current electrode in `A`, with one unknown
+equipotential per coordinate boundary, remains a distinct API and must not be
+used as an implicit density conversion. The FDM GPU ABI and binding remain
+deferred to the contract frozen below.
 When no charge boundary is authored, the FEM reference slice may insert natural
 zero normal charge flux on every external face only with a compatible zero-mean
 gauge; that inserted default is mandatory provenance. Once any charge boundary
@@ -201,6 +226,24 @@ q_s,parallel = [(G_up-G_down) Delta V
 q_abs,perp = G_r m x (Delta mu_s x m)
              +G_i(Delta mu_s x m).
 ```
+
+The one-way M1 reduction keeps the charge law independent of spin while
+retaining complete longitudinal spin injection and backflow:
+
+```text
+j_c,n^(M1) = (G_up+G_down) Delta V_Gamma,
+q_s,parallel^(M1) = [(G_up-G_down) Delta V_Gamma
+        +0.5(G_up+G_down) m dot Delta mu_s]m.
+```
+
+Here `Delta V_Gamma` is the difference of the two accepted charge-interface
+traces, not an arbitrary difference of cell-centred values. M2 alone adds
+`0.5(G_up-G_down) m dot Delta mu_s` to `j_c,n`; omitting that reciprocal term
+in M1 does not permit omitting the spin-independent charge-interface law.
+Every M1 mixing solve therefore consumes one accepted charge snapshot that
+binds the oriented interface descriptor, both charge traces, and the single
+conservative face `J_c`. Independently supplied arrays of `V` and `J_c` are
+not an admissible M1 mixing input.
 
 All interface conductances have `S/m^2`. In `full_absorption`, the old
 `q_SML=G_SML Delta mu_s` wire law is rejected: it does not identify a
@@ -374,6 +417,22 @@ The machine-readable symbol contract used by the source map is:
 | R_sf | R_{\mathrm{sf}} | spin-flip reaction density | \mathrm{A\,m^{-3}} |
 | R_J | R_J | transverse exchange reaction density | \mathrm{A\,m^{-3}} |
 | R_phi | R_\phi | transverse dephasing reaction density | \mathrm{A\,m^{-3}} |
+| G_up | G_{\uparrow} | majority-spin interface conductance per area | \mathrm{S\,m^{-2}} |
+| G_down | G_{\downarrow} | minority-spin interface conductance per area | \mathrm{S\,m^{-2}} |
+| G_r | G_r | real spin-mixing conductance per area | \mathrm{S\,m^{-2}} |
+| G_i | G_i | imaginary spin-mixing conductance per area | \mathrm{S\,m^{-2}} |
+| delta_V_Gamma | \Delta V_{\Gamma} | accepted oriented interface potential-trace jump | \mathrm{V} |
+| r_K | r_{K,a} | component-wise local finite-volume spin-balance residual | \mathrm{A\,m^{-3}} |
+| S_K | S_K | local finite-volume spin-flux and reaction scale | \mathrm{A\,m^{-3}} |
+| S_Gamma | S_{\Gamma,K} | one-sided mixing-interface correction scale | \mathrm{A\,m^{-3}} |
+| tau_abs | \tau_{\mathrm{abs}} | absolute local spin-balance tolerance | \mathrm{A\,m^{-3}} |
+| tau_rel | \tau_{\mathrm{rel}} | relative local spin-balance tolerance | $1$ |
+| gamma_e | \gamma_e | positive electron gyromagnetic ratio magnitude | \mathrm{s^{-1}\,T^{-1}} |
+| M_s | M_s | saturation magnetization | \mathrm{A\,m^{-1}} |
+| hbar | \hbar | reduced Planck constant | \mathrm{J\,s} |
+| e | e | positive elementary charge | \mathrm{C} |
+| q_abs | q_{\mathrm{abs},\perp} | transversely absorbed interface spin-current density | \mathrm{A\,m^{-2}} |
+| T_tr_G | T_{\mathrm{tr},G} | transport-derived Gilbert-source torque | \mathrm{s^{-1}} |
 
 ```{math}
 :label: m1-constitutive-block
@@ -409,6 +468,57 @@ R_{\mathrm{sf}}=\frac{\sigma_s}{2\lambda_{\mathrm{sf}}^2}\mu_s,
 R_J=\frac{\sigma_s}{2\lambda_J^2}(\mu_s\times m),
 \quad
 R_\phi=\frac{\sigma_s}{2\lambda_\phi^2}m\times(\mu_s\times m).
+```
+
+```{math}
+:label: m1-mixing-interface-reduction
+\begin{aligned}
+j_{c,n}^{(\mathrm{M1})}
+  &=\begin{cases}
+    (G_{\uparrow}+G_{\downarrow})\Delta V_{\Gamma},
+      &G_{\uparrow}+G_{\downarrow}>0,\\
+    0,&G_{\uparrow}=G_{\downarrow}=0,
+  \end{cases}\\
+q_{s,\parallel}^{(\mathrm{M1})}
+  &=\left[(G_{\uparrow}-G_{\downarrow})\Delta V_{\Gamma}
+    +\frac{G_{\uparrow}+G_{\downarrow}}{2}
+      m\cdot\Delta\mu_s\right]m,\\
+q_{\mathrm{abs},\perp}
+  &=G_r m\times(\Delta\mu_s\times m)
+    +G_i(\Delta\mu_s\times m).
+\end{aligned}
+```
+
+The zero-longitudinal-conductance branch is a charge-insulating interface: it
+does not connect charge components, its accepted traces are the two adjacent
+cell potentials, and its charge observation is exactly zero. Non-negative
+finite `G_up` and `G_down` with zero sum are legal; a negative or non-finite
+entry and a non-finite sum fail closed. Nonzero finite `G_r` and `G_i` remain
+legal in this branch and contribute only to transverse spin absorption.
+
+```{math}
+:label: fdm-exact-face-current-electric-reconstruction
+E_{K,x}=\frac{J_{c,x-}+J_{c,x+}}{2\sigma_K},\qquad
+E_{K,y}=\frac{J_{c,y-}+J_{c,y+}}{2\sigma_K},\qquad
+E_{K,z}=\frac{J_{c,z-}+J_{c,z+}}{2\sigma_K}.
+```
+
+```{math}
+:label: fdm-local-fv-balance-and-torque
+\begin{aligned}
+r_{K,a}&=\left[
+\frac{1}{|K|}\sum_{f\subset\partial K}|f|Q_f\cdot n_{Kf}
++R_{\mathrm{sf},K}+R_{J,K}+R_{\phi,K}
+\right]_a,\\
+S_K&=\frac{1}{|K|}\sum_{f\subset\partial K}|f|\lVert Q_f\rVert_2
++\lVert R_{\mathrm{sf},K}\rVert_2+\lVert R_{J,K}\rVert_2
++\lVert R_{\phi,K}\rVert_2+S_{\Gamma,K},\\
+\max_a|r_{K,a}|&\le \tau_{\mathrm{abs}}+\tau_{\mathrm{rel}}S_K,
+\end{aligned}
+\qquad
+T_{\mathrm{tr},G,K}=-\frac{\gamma_e}{M_{s,K}}\frac{\hbar}{2e}
+\left(R_{J,K}+R_{\phi,K}
++\frac{1}{|K|}\sum_{f\in\Gamma_K}|f|q_{\mathrm{abs},\perp,f}\right).
 ```
 
 (assumptions-and-validity)=
@@ -447,6 +557,34 @@ Q_diff,f,a dot n_Kf = -0.5 sigma_s,f
   (mu_s,L,a-mu_s,K,a)/d_KL.
 ```
 
+For an oriented finite-conductance charge interface `N -> F`, the FDM M1
+operator `fv_charge_mixing_series_trace.v1` eliminates the two interface
+traces through the series resistance
+
+```text
+R_f = d_N/(2 sigma_N) + 1/(G_up+G_down) + d_F/(2 sigma_F),
+j_c,n = (V_N-V_F)/R_f,
+V_N,Gamma = V_N-j_c,n d_N/(2 sigma_N),
+V_F,Gamma = V_F+j_c,n d_F/(2 sigma_F).
+```
+
+When `G_up=G_down=0`, the series-resistance expression is not evaluated:
+`j_c,n=0`, `V_N,Gamma=V_N`, and `V_F,Gamma=V_F`. This charge-insulating face
+does not connect the two charge components. It still publishes the oriented
+descriptor, two accepted traces, and the zero charge-flux observation required
+by the spin owner; nonzero `G_r/G_i` may therefore realize transverse-only
+mixing.
+
+The stored globally oriented face current is `j_c,n` or `-j_c,n` according to
+whether `N -> F` agrees with the positive coordinate direction. The two cell
+balances consume that one value with opposite signs. Gauge, BC, component
+balance, and local charge residual checks use the same operator. A successful
+charge solve alone constructs the immutable accepted snapshot containing the
+grid, immutable charge-active mask, material identity, face-current arrays,
+interface descriptors, traces,
+and observations; the spin owner validates and consumes that snapshot rather
+than accepting forgeable parallel arrays.
+
 Inside one material, `fv_spin_upwind_v1` uses
 
 ```text
@@ -462,6 +600,23 @@ from averaged central cell gradients (9-point in 2-D, 27-point in 3-D), with
 BC-consistent one-sided reconstruction. Direct SHE and polarized contributions
 are summed before one face flux is inserted with opposite cell signs.
 Material interfaces use the explicit interface law, never arithmetic averaging.
+
+The bounded native FDM CPU M1 owner instead uses the separately named
+`fdm_exact_face_current_electric_reconstruction.v1`. It reconstructs the
+electric field exclusively from the accepted conservative face current:
+
+```text
+E_K,k^J = (J_c,k,- + J_c,k,+)/(2 sigma_K),
+E_f,i^J = J_c,f/sigma_f,
+E_f,k!=i^J = 0.5(E_K,k^J+E_L,k^J).
+```
+
+At an external face the sole adjacent cell supplies tangential components.
+The normal component is the exact oriented `J_c,f/sigma`; direct SHE is then
+`theta_SH,f sigma_f n_i epsilon_ika E_f,k^J`. This operator does not read
+cell-centred `V` when no mixing interface is present. It is therefore invariant
+under changes to otherwise unused `V`, including heterogeneous `sigma`, and
+MUST NOT publish `structured_cross_gradient_v1` provenance.
 
 For the CPU-double structured oracle, `SpecifiedSpinFlux` is always the
 outward-normal quantity `n_i Q_ia`; storage in the globally positive face
@@ -481,6 +636,32 @@ GMRES for spin; M2 uses block GMRES because Hall/iSHE make the system
 nonsymmetric. Residual and charge/spin balance are independently recomputed.
 CUDA engines keep operators and state resident; FP64 parity and transfer audit
 precede separate FP32 high-contrast/thin-layer qualification.
+
+The bounded owner implemented by
+`fdm_spin_block_gmres_matrix_free_reference_v1` is an unpreconditioned,
+restarted, matrix-free FP64 reference engine. It is not the production
+`fdm_spin_block_gmres_csr_v1` engine and makes no AMG/ILU or scaling claim.
+`fdm_transport_torque_cell_surface_balance.v1` maps independently recomputed
+volumetric `R_J+R_phi` and surface transverse absorption to the authored
+magnetic target using `-gamma_e hbar/(2eM_s)`.
+
+The accepted local FV residual gate is component-wise and dimensionally
+explicit. For cell `K`, let `r_K,a [A/m^3]` be the independently recomputed
+flux divergence plus reaction and let
+
+```text
+s_K = sum_f A_f ||Q_f||_2/|K|
+    + ||R_sf,K||_2 + ||R_J,K||_2 + ||R_phi,K||_2 + S_Gamma,K  [A/m^3],
+t_K = local_abs_tol_Apm3 + local_rel_tol s_K.       [A/m^3]
+```
+
+Here `S_Gamma,K` is zero except on the positive cell of an oriented mixing
+interface, where it is the norm of the difference between its two one-sided
+spin fluxes divided by the face-normal cell spacing. This is the same explicit
+interface correction used in the recomputed local residual.
+
+Every cell must satisfy `max_a |r_K,a|<=t_K`; global closure and integrated L2
+remain additional gates and cannot hide equal-and-opposite local defects.
 
 For the FDM M2 block, GMRES stopping is defined in the block-preconditioned
 dimensionless norm. If `b_p = P b`, the relative stopping scale is
@@ -513,6 +694,298 @@ nontrivial axes; otherwise the zero state remains the safe fallback. The source
 map is `coupled_charge_spin.rs::initial_state_guess`,
 `coupled_charge_spin.rs::line_preconditioners`, and
 `coupled_block_linear.rs::BlockLinePreconditioner`.
+
+(fdm-gpu-m1-fp64-contract)=
+### 3.1.1 FDM GPU/FP64 M1 realization contract (PR-15; bounded charge implementation)
+
+This section freezes the first native CUDA milestone for one-way M1 charge,
+steady spin/direct-SHE, interface mixing, and transport torque. It is a
+realization contract for the common equations above, not a second physical
+model. CPU and GPU use the same signs, SI units, formula and operator IDs,
+face orientation, interface observations, and balance identities. They do not
+share mutable solver state or implementation workspaces.
+
+Capability pozostaje `semantic_only`, ponieważ publiczna ścieżka
+`ProblemIR`--planner--runner nie uruchamia tego ABI. Agregat FDM GPU M1 ma
+`implementation_state=partial`: zaimplementowany jest wyłącznie ograniczony
+charge-only FP64 slice, natomiast steady spin, direct SHE, mixing i torque z
+tego kontraktu nadal nie mają realizacji CUDA. Stan walidacji pozostaje
+`validation_state=unvalidated`, z `validated_workloads=[]`. Świeży managed
+device proof poniżej jest dowodem wykonania testów kontraktowych, nie promocją
+capability ani kwalifikacją produkcyjną.
+
+#### Stan ograniczonej implementacji M1 charge z 2026-08-10
+
+Właściciel `backends/fdm/gpu/cuda/transport/charge/**` realizuje rzeczywisty
+FP64 charge solve na urządzeniu: konserwatywny operator FV z harmoniczną
+przewodnością ścian, device CG, fixed-tree redukcje oraz dwupoziomowy device AMG.
+Agregaty AMG powstają deterministycznie z grafu siły operatora, mają ograniczony
+rozmiar i jawny coarse operator $A_c=RAP$; nie jest to Jacobi nazwane AMG.
+Typed cell/material/face/formula payloads są walidowane fail-closed przed
+publikacją. Voltage, exact-density i insulating external faces mają jeden
+globalnie zorientowany prąd ścianowy, a odrzucony descriptor lub solve nie
+publikuje accepted state. Snapshot posiada własne bufory device dla $V$ i
+$J_x/J_y/J_z$; artefakty oraz checkpoint wymagają jawnej cadence.
+
+```{math}
+:label: fdm-gpu-m1-charge-fv
+\begin{aligned}
+g_{KL}&=\frac{|f|}{d_K/\sigma_K+d_L/\sigma_L},
+&g_{Kf}^{V}&=\frac{2\sigma_K|f|}{h_f},\\
+(A V)_K&=\sum_{L\sim K}g_{KL}(V_K-V_L)
+ +\sum_{f\subset\Gamma_V\cap\partial K}g_{Kf}^{V}V_K,
+&b_K&=\sum_{f\subset\Gamma_V\cap\partial K}g_{Kf}^{V}V_f
+ -\sum_{f\subset\Gamma_J\cap\partial K}|f|J_{n,f}.
+\end{aligned}
+```
+
+Tutaj $J_{n,f}$ jest prądem zadanym dodatnio na zewnątrz komórki. Ściana
+insulating nie wnosi składnika do $A$ ani $b$, a komórki nieaktywne nie tworzą
+połączeń przewodzących. To równanie opisuje wyłącznie ograniczony slice charge;
+nie obejmuje strumienia spinowego $Q$, SHE, mixing ani torque.
+
+Zarządzana bramka
+`just verify-fdm-gpu-m1-charge-native-contract` zakończyła się kodem 0 na GPU
+o UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, dla build digest
+`700e798c56bdde3029759e3460a39762e325d5108401e5907819a7b064a9ca3d`.
+`charge_uniform_v1` użył 45 iteracji, osiągnął residual algebraiczny
+$4.696365845897086\times10^{-15}$, residual fizyczny i bilans komponentu
+$2.911545681350832\times10^{-16}$ oraz bilans elektrod
+$1.7294921875001357\times10^{-13}$. Hierarchia miała poziomy $512\to64$,
+jeden build, jedno trafienie cache i 90 zastosowań AMG. `charge_layered_v1`
+osiągnął residual algebraiczny $5.931538386041357\times10^{-15}$, residual
+fizyczny $2.2775813048401056\times10^{-16}$ i względny skok strumienia na
+interfejsie $2.08984375\times10^{-14}$. Oba workloady oraz snapshot/mutation
+gate raportują `host_fallback_count=0`.
+
+Checkpoint ma dwa rozłączne tory dowodowe. **Tor A** jest syntetycznym,
+zamrożonym oraclem kodeka: ma 4352 bajty, sequence 7, payload SHA-256
+`ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5`
+i embedded file hash
+`bc3bcc1b51314fe46e0bbd2f71e94f1517f8e438943853e33b8e79b1495c7b60`.
+Validator musi go zaakceptować, lecz jego syntetyczna tożsamość device/build/
+static descriptor musi zostać odrzucona przez rzeczywisty exact-identity import
+jako `checkpoint_incompatible`. **Tor B** eksportuje 4352-bajtowy sequence-7
+checkpoint z aktualnego runtime; jego identity-dependent SHA-256 w powyższym
+buildzie wyniosło
+`d2b25960eb31376b1b2fe6aa8ba07944ba69a695125a381a398da46f891123f9`.
+Świeży kontekst o tej samej tożsamości importuje go bez ponownego solve, a
+odczytane $V$ i $J_c$ są bitowo równe stanowi przed eksportem. SHA toru B nie
+jest stałym oraclem między buildami i nie może być utożsamiane z SHA toru A.
+
+Otwarte granice są blokujące dla szerszego M1: nie ma jeszcze swobodnego,
+zgodnego Neumannowskiego komponentu z narzuconą zerową średnią; bieżące
+workloady charge są zakotwiczone przez voltage BC. Zaimportowany iterate jest
+odtwarzany jako accepted snapshot, ale następny solve nie konsumuje jeszcze
+tego stanu jako persistent Krylov warm start. Nie ma publicznego runnera,
+ProblemIR stage ani stabilnych artefaktów/proweniencji tego slice'u. Nie ma też
+CUDA steady spin, SHE, mixing, torque, FP32, periodic, multi-device, konwergencji
+siatkowej ani kwalifikacji wydajnościowej. Wiersze `component_gauge_v1`,
+`determinism_restart_v1`, `public_path_v1`, spin/SHE/mixing/torque,
+`convergence_v1` i `performance_v1` pozostają niezamknięte.
+
+#### Ownership, lifecycle, and immutable charge state
+
+The sole implementation owner is `backends/fdm/gpu/cuda/transport/**`. It owns
+an opaque `GpuTransportContext` with device identity, compute stream and
+events, allocator/pool, immutable geometry/material/operator revisions,
+separate persistent charge and spin Krylov workspaces, snapshot generation,
+transfer audit, and convergence telemetry. Transport must not extend the LLG
+`Context`, add transport physics to `mfem_bridge.cpp`, or place operator/solver
+work in Rust engine or runner code. Rust may materialize descriptors, invoke
+the append-only ABI, publish artifacts, and preserve provenance only.
+
+The lifecycle is:
+
+1. create the context for one explicit CUDA device and FP64 precision;
+2. upload and validate one immutable static descriptor;
+3. solve charge entirely on that device;
+4. atomically accept an immutable device snapshot;
+5. solve steady spin against that snapshot and device `m_stage`;
+6. compute torque device-to-device for the LLG RHS;
+7. read back bounded scalar telemetry and configured artifacts only;
+8. destroy snapshots, workspaces, and context with explicit ownership checks.
+
+An accepted charge state is an **immutable device snapshot**, not a host object
+with borrowed device pointers. It contains at least:
+
+- `V[N]` in FP64;
+- exactly one globally positive oriented face-current family:
+  `Jx[(nx+1)ny nz]`, `Jy[nx(ny+1)nz]`, and `Jz[nx ny(nz+1)]` in FP64;
+- charge-active/conductor masks and the immutable conductivity/operator
+  revision used to interpret them;
+- every oriented mixing descriptor, its two accepted charge traces, and its
+  single conservative charge observation;
+- every exact-density external face selected by
+  `NormalCurrentElectrode [A/m2]`, including axis, face index, adjacent active
+  cell, outward-normal sign, area, and density;
+- context, source, operator, snapshot-generation, and convergence identities.
+
+Spin accepts only the snapshot handle plus its generation. It may not accept
+parallel host arrays for $V$, $J_c$, traces, or reconstructed $E$. A new charge
+acceptance creates a new generation; it never mutates a snapshot already
+visible to spin. Context mismatch, source/operator revision mismatch, a stale
+generation, pre-acceptance consumption, or use after destroy fails before any
+spin kernel launch.
+
+#### Discrete operator invariants
+
+The GPU charge operator is the same conservative finite-volume map as the CPU
+oracle: harmonic bulk conductivity, one globally oriented current per face,
+equal-and-opposite cell balance, explicit component gauge, and one-way series
+trace elimination. The public density boundary is applied to the exact face
+list; total current, a whole-plane mask, or a host-side redistribution is not
+an equivalent input. Host and device validation both reject an internal,
+inactive, duplicate, nonfinite, wrong-area, or outward-sign-inconsistent face.
+
+The spin operator uses
+`fdm_exact_face_current_electric_reconstruction.v1`. Its normal electric
+component is the exact accepted $J_{c,f}/\sigma_f$; cell and tangential
+components are reconstructed from the same accepted face currents. Reading
+cell-centred $V$ to form another electric field is forbidden. Direct SHE must
+exercise all six signed Levi-Civita contractions separately:
+
+| Nonzero contraction | Sign |
+|---|---:|
+| $\epsilon_{xyz}$ | $+1$ |
+| $\epsilon_{yzx}$ | $+1$ |
+| $\epsilon_{zxy}$ | $+1$ |
+| $\epsilon_{xzy}$ | $-1$ |
+| $\epsilon_{zyx}$ | $-1$ |
+| $\epsilon_{yxz}$ | $-1$ |
+
+For one face globally oriented from its negative-axis cell $K^-$ to its
+positive-axis cell $K^+$, define
+$q_p=P_fJ_{c,f}$ with $P_f=(P_{K^-}+P_{K^+})/2$. The backend-neutral
+`fv_spin_upwind_v1` rule is exact: $q_p>0$ selects $m_{K^-}$, $q_p<0$ selects
+$m_{K^+}$, and exact zero selects the negative-axis cell and multiplies it by
+exact zero, so the polarized contribution is exactly zero in every component.
+No epsilon, signbit, previous-flow direction, thread order, or
+central average may break the zero tie. This is the frozen rule implemented by
+the CPU oracle, not an implementation-dependent referral to it. Transparent
+faces preserve one charge and one spin flux. Full one-way mixing preserves longitudinal injection/backflow and
+the transverse absorption
+$G_r m\times(\Delta\mu_s\times m)+G_i(\Delta\mu_s\times m)$.
+The `transverse-only` case $G_{\uparrow}=G_{\downarrow}=0$ with nonzero
+$G_r$ or $G_i$ is legal: charge is insulating and does not join gauge
+components, but transverse spin and torque remain active. No kernel may divide
+by $G_{\uparrow}+G_{\downarrow}$ in that branch.
+
+Volumetric $R_J+R_\phi$ and absorbed surface flux feed exactly one magnetic
+owner through `fdm_transport_torque_cell_surface_balance.v1`. Longitudinal
+spin-flip is reported as a nonmagnetic sink and is never counted again as
+torque. Cell-local FV residual, global spin balance, interface balance, and
+integrated volume-plus-surface torque closure are independent acceptance
+checks; the Krylov residual cannot substitute for them.
+
+#### Solver policy and bounded first executable slice
+
+Charge uses `fdm_charge_cg_cuda_v1`: device CG, component-wise gauge handling,
+fixed-tree FP64 reductions, and device AMG. Spin uses
+`fdm_spin_block_gmres_cuda_v1`: restarted device GMRES with component
+AMG/block-Jacobi, a bounded restart/memory budget, and device convergence
+reductions. A Jacobi-only charge prototype must publish a distinct prototype
+engine identity; it cannot claim the production AMG engine. Likewise, a local
+$3\times3$ reaction inverse may be a named prototype preconditioner but cannot
+silently replace the frozen component AMG/block-Jacobi policy.
+
+The first executable slice is intentionally bounded to one structured
+single-grid domain on one CUDA device, FP64-only, explicit static materials,
+axis-aligned external density/voltage/insulating charge faces, component
+gauge, insulating/sink/specified-potential spin boundaries, transparent faces
+or one oriented N-to-F mixing family, one accepted charge snapshot, and one
+steady spin/torque evaluation for a supplied device `m_stage`. It includes the
+six direct-SHE signs and the legal transverse-only branch. Periodic transport,
+M2/iSHE/AMR/PHE/AHE, M3, SML reservoir, multiple devices, MPI, FP32, dynamic
+Oersted, and production-scale performance remain later milestones. FP32
+remains fail-closed and `auto` cannot select it.
+
+#### Strict residency, determinism, failure, and provenance
+
+Strict execution permits zero vector transfers per stage outside explicitly
+configured output/checkpoint cadence. It permits bounded scalar reductions and
+status readback, but every transfer and synchronization has versioned transfer
+telemetry and provenance: direction, byte count, reason, count, stage,
+iteration scope, stream/event identity, and whether it was allowed by cadence.
+There is no CPU fallback, CPU operator/preconditioner, host convergence loop,
+or host reconstruction of $E$, $J_c$, $\mu_s$, $Q$, or torque. A violation
+returns `strict_gpu_residency_violation` and aborts the run.
+
+Deterministic mode owns each face and interface torque exactly once and uses a
+fixed launch geometry and reduction tree. Provenance records GPU name/UUID,
+compute capability, driver/runtime, build identity and compiler flags including
+FMA/fast-math policy. The promise is bitwise repetition on the same
+device/runtime/build; CPU-to-GPU comparisons use the physical tolerances below.
+
+Every solve is provisional until all algebraic and physical gates pass. A
+rejected attempt appends its reason but cannot advance accepted revisions,
+publish fields, replace warm starts, or mutate immutable accepted snapshots.
+The cache key includes normalized descriptor, grid/material/operator/source
+revisions, precision, device identity, formula/operator/engine/residual IDs,
+and snapshot generation. Restart uses the versioned
+`fullmag.fdm_gpu_transport_checkpoint.v1` export/import contract, not an
+identity-only record and not a deterministic re-solve. Its committed payload
+contains bitwise FP64 $V$, face $J_c$, traces and observations; accepted
+$\mu_s$, face $Q$, reactions, interface observations and torque when present;
+charge/spin Krylov warm starts; lineage, accepted sequence, revisions,
+deterministic policy, work budgets and telemetry cursor. SHA-256 section and
+payload digests, little-endian layout, exact device/runtime/build/operator
+identity and an atomic provisional restore are mandatory. A successful restore
+creates a fresh process-local token while preserving the lineage, accepted
+sequence and content digest. Any incompatibility or partial payload restores
+nothing; there is no cross-device migration, partial commit or re-solve
+fallback.
+
+Restart uses two deliberately separate digest lanes. The
+`scientific_continuation_digest` covers accepted arrays and deterministic
+solver continuation state; it excludes export/import/readback operations. The
+append-only `operation_audit_digest` covers every actual transfer,
+synchronization, and explicitly classified rejected attempt, including a
+failed import after H2D. Pure handle/state calls without CUDA activity do not
+invent zero-byte transfer records. Consequently the
+full telemetry stream is not compared between uninterrupted and restarted
+runs. Qualification compares the next deterministic compute and scientific
+continuation digests exactly, then verifies the expected checkpoint events and
+their audit parent chain separately.
+
+Successful telemetry/provenance includes requested and resolved
+`fdm/gpu/double/strict`, formula/operator/engine/residual IDs, iteration and
+convergence reasons, algebraic plus physical residuals, charge/electrode/spin/
+interface/torque balances, snapshot/cache identity, transfer/synchronization
+audit, `host_fallback_count=0`, peak device/workspace bytes,
+`row_major_Q_ia`, and face/interface orientation.
+
+#### TDD and qualification matrix
+
+Each row requires a non-skipped managed CUDA run on an identified physical
+device. Compilation, host emulation, and source inspection are not device
+evidence.
+
+| Gate ID | Fixture and frozen parameters | Exact oracle | Metric and tolerance/budget | Required device/artifact proof |
+|---|---|---|---|---|
+| `layout_abi_v1` | `fdm_gpu_m1_layout_abi_v1`: every v1 prefix, numeric enum/ID/flag registry, `MIN_SIZE_V1`, four-slot token registry, create/destroy/reuse, stale generation, double destroy, generation exhaustion, and codec-only golden | `oracle.generated_c_header_layout_v1`: exact C `sizeof`/`alignof`/`offsetof` and numeric tables plus independent decoder of codec-only golden length=1600 bytes and codec-only golden SHA-256=ad8d00c7c4d3c349ee203946145b9d02f8e34f331ee9687645c9c981bb33b803 | every byte, discriminant, legal mask and status exact; 100% invalid/unknown values and tuple/subrecord mutations reject before pointer access | non-skipped managed lifecycle/decoder run with GPU UUID and `fdm-gpu-m1-layout-abi-v1.json` |
+| `charge_uniform_v1` | `fdm_gpu_m1_charge_uniform_v1`: $64\times4\times2$, $\Delta x=1\,\mathrm{nm}$, $\sigma=5\times10^6\,\mathrm{S/m}$, $V(0)=64\,\mathrm{mV}$, $V(64\,\mathrm{nm})=0$ | `oracle.charge_uniform_linear_v1`: $E_x=10^6\,\mathrm{V/m}$ and every positive-x face $J_c=5\times10^{12}\,\mathrm{A/m^2}$ | $V,J_c$ `rtol<=1e-12`, charge balance `<=1e-10` of flux scale | non-skipped managed FP64 run with GPU UUID and `fdm-gpu-m1-charge-uniform-v1.json` containing fields, residuals and snapshot digest |
+| `charge_layered_v1` | `fdm_gpu_m1_charge_layered_v1`: two $32\,\mathrm{nm}$ layers, $\sigma_1=2\times10^6$, $\sigma_2=8\times10^6\,\mathrm{S/m}$, $\Delta V=50\,\mathrm{mV}$ | `oracle.charge_layered_series_v1`: $R_A=2.0\times10^{-14}\,\Omega\,\mathrm{m^2}$, every oriented face $J_c=2.5\times10^{12}\,\mathrm{A/m^2}$ and analytic piecewise-linear $V$ | current and $V$ `rtol<=1e-10`; interface flux jump `<=1e-12` of $J_c$ | non-skipped managed CPU/GPU FP64 run with GPU UUID and `fdm-gpu-m1-charge-layered-v1.json` |
+| `density_face_bc_v1` | `fdm_gpu_m1_density_face_bc_v1`: $4\times2\times1$ grid with four ordered external faces, areas $[1,1,2,2]\times10^{-18}\,\mathrm{m^2}$ and outward densities $[1,-2,3,-4]\times10^{11}\,\mathrm{A/m^2}$ | `oracle.density_face_descriptor_v1`: accepted values match descriptor order and $I=\sum_f A_f j_f=-3\times10^{-7}\,\mathrm{A}$; internal, duplicate, inactive, wrong-area and wrong-sign mutations are rejected | each face value/sign/identity exact; integrated $I$ `rtol<=1e-12`; 100% invalid mutations reject | non-skipped managed run with GPU UUID and `fdm-gpu-m1-density-face-bc-v1.json` containing the authored and accepted face lists |
+| `component_gauge_v1` | `fdm_gpu_m1_component_gauge_v1`: two disconnected four-cell conductors separated only by a transverse-only contact; component A has one voltage datum at linear cell 0 with $V=0.125\,\mathrm{V}$, while free component B has no voltage datum and has exact zero net Neumann flux | `oracle.component_graph_gauge_v1`: component labels `[0,0,0,0,1,1,1,1]`, no charge edge across the transverse-only contact, component A preserves its datum, and component B has arithmetic mean $\frac14\sum_{i\in B}V_i=0$ | labels and datum exact; recomputed null residual `<=1e-12`; component-B mean `atol<=1e-14 V` | non-skipped managed run with GPU UUID and `fdm-gpu-m1-component-gauge-v1.json` containing labels, accepted values and graph/gauge digests |
+| `charge_snapshot_v1` | `fdm_gpu_m1_charge_snapshot_v1`: validate the synthetic frozen IDs 1--9/18/20 sequence-7 payload as codec oracle A and reject its identity in the actual context; separately solve/export an actual-runtime sequence-7 one-cell payload B, then import B in a fresh exact-matching context | `oracle.snapshot_registry_checkpoint_v1`: A has length=4352 bytes, SHA-256=ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5 and embedded hash `bc3bcc1b51314fe46e0bbd2f71e94f1517f8e438943853e33b8e79b1495c7b60`; B has the same canonical length/sections but an identity-dependent SHA | A byte grammar and SHA exact plus cross-identity `checkpoint_incompatible`; B length exactly 4352 bytes, identity exact, committed SHA self-consistent, fresh-context $V/J_c$ bitwise exact without re-solve; failed operations leave accepted state unchanged | non-skipped managed lifecycle run with GPU UUID and `fdm-gpu-m1-charge-snapshot-v1.json` containing both A-oracle and B-runtime results |
+| `spin_diffusion_v1` | `fdm_gpu_m1_spin_diffusion_v1`: $L=100\,\mathrm{nm}$, $\lambda_{sf}=10\,\mathrm{nm}$, $\mu_s(0)=(1,0,0)\,\mathrm{mV}$, $\mu_s(L)=0$, grids 64/128/256 | `oracle.spin_diffusion_sinh_v1`: $\mu_x(x)=1\,\mathrm{mV}\,\sinh((L-x)/\lambda_{sf})/\sinh(L/\lambda_{sf})$, other components exact zero | profile `rtol<=1e-9`; local/global balance `<=1e-10`; forbidden components exact zero | non-skipped managed CPU/GPU FP64 run with GPU UUID and `fdm-gpu-m1-spin-diffusion-v1.json` containing three grids |
+| `direct_she_six_signs_v1` | `fdm_gpu_m1_direct_she_six_signs_v1`: six one-gradient cases with $E_k=10^5\,\mathrm{V/m}$, $\theta_{SH}=0.1$, $\sigma=5\times10^6\,\mathrm{S/m}$ plus $\theta_{SH}=0$ | `oracle.levi_civita_six_v1`: amplitude $5\times10^{10}\,\mathrm{A/m^2}$ with signs $xyz,yzx,zxy=+1$ and $xzy,zyx,yxz=-1$; all other components zero | active component `rtol<=1e-12`; sign and zero components exact | non-skipped managed kernel run with GPU UUID and `fdm-gpu-m1-direct-she-six-signs-v1.json` containing seven outputs |
+| `face_current_e_v1` | `fdm_gpu_m1_face_current_e_v1`: $\sigma_-=2\times10^6$, $\sigma_+=8\times10^6\,\mathrm{S/m}$, harmonic $\sigma_f=3.2\times10^6\,\mathrm{S/m}$, accepted $J_{c,f}=4\times10^{12}\,\mathrm{A/m^2}$, then perturb unused cell $V$ | `oracle.face_current_e_v1`: $E_{n,f}=1.25\times10^6\,\mathrm{V/m}$ and unchanged direct-SHE $Q$ from the accepted face current | $E,Q$ bitwise unchanged by $V$ mutation; CPU/GPU values `rtol<=1e-12` | non-skipped managed mutation run with GPU UUID and `fdm-gpu-m1-face-current-e-v1.json` plus face-current digest |
+| `upwind_three_way_v1` | `fdm_gpu_m1_upwind_three_way_v1`: $P_f=0.4$, $m_-=(1,0,0)$, $m_+=(0,1,0)$ and $J_{c,f}=+2\times10^{12},-2\times10^{12},+0.0\,\mathrm{A/m^2}$ | `oracle.upwind_three_way_v1`: polarized terms $(8\times10^{11},0,0)$, $(0,-8\times10^{11},0)$ and exact `(+0.0,+0.0,+0.0)` with the negative-axis endpoint selected for the zero tie | nonzero vectors `rtol<=1e-12`; owner ID and all exact-zero bits exact | non-skipped managed three-case run with GPU UUID and `fdm-gpu-m1-upwind-three-way-v1.json` |
+| `mixing_interface_v2` | `fdm_gpu_m1_mixing_interface_v2`: transparent case with two $1\,\mathrm{m}$ cells, $\sigma_s=2\,\mathrm{S/m}$, $\mu_-=(1,0,0)\,\mathrm{V}$, $\mu_+=0$, $P=\theta_{SH}=J_c=0$; plus oriented $N\to F$ cases with $m=(0,0,1)$, $\Delta V=2\,\mathrm{mV}$, $\Delta\mu_s=(3,4,5)\,\mathrm{mV}$, $G_\uparrow=7\times10^{14}$, $G_\downarrow=3\times10^{14}$, $G_r=2\times10^{14}$, $G_i=-10^{14}\,\mathrm{S/m^2}$; repeat reversed storage orientation and with $G_\uparrow=G_\downarrow=0$ | `oracle.mixing_one_way_numeric_v2`: transparent one-sided fluxes $(1,0,0)\,\mathrm{A/m^2}$; full $q_\parallel=(0,0,3.3\times10^{12})$, $q_{abs}=(2\times10^{11},1.1\times10^{12},0)$, N/F fluxes $(2\times10^{11},1.1\times10^{12},3.3\times10^{12})$ and $(0,0,3.3\times10^{12})\,\mathrm{A/m^2}$; reversed positive-axis fluxes are their signed swapped values; transverse-only has $j_c=0$, N flux $q_{abs}$ and F flux zero | every one-sided component `rtol<=1e-12`; charge/interface/absorption closure `<=1e-10`; transverse-only gauge edge count exact zero | non-skipped managed four-case run with GPU UUID and `fdm-gpu-m1-mixing-interface-v2.json` containing all public interface observations |
+| `torque_balance_v1` | `fdm_gpu_m1_torque_balance_v1`: one $2\,\mathrm{nm}$ cube, $M_s=8\times10^5\,\mathrm{A/m}$, volume reaction $R_J+R_\phi=(1,-2,0)\times10^{15}\,\mathrm{A/m^3}$ and one $4\,\mathrm{nm^2}$ face with $q_{abs}=(0.8,4.4,0)\times10^6\,\mathrm{A/m^2}$ | `oracle.torque_volume_surface_v1`: bracket $(1.4,0.2,0)\times10^{15}\,\mathrm{A/m^3}$ and $T_{tr,G}=-(\gamma_e\hbar/(2eM_s))(1.4,0.2,0)\times10^{15}\,\mathrm{s^{-1}}$ | cell torque `rtol<=1e-12`; integrated angular-momentum closure `<=1e-10`; spin-flip contribution exact zero | non-skipped managed CPU/GPU FP64 run with GPU UUID and `fdm-gpu-m1-torque-balance-v1.json` containing volume and surface terms separately |
+| `strict_residency_v1` | `fdm_gpu_m1_strict_residency_v1`: one public charge-to-spin-to-torque stage without cadence, followed by readback of exactly 64 FP64 `V` values and export of an actual-runtime complete charge checkpoint | `oracle.transfer_reason_accounting_v1`: zero stage-vector events, then one `artifact_readback_d2h` and one `checkpoint_export_d2h`; `artifact D2H=512 bytes`, `checkpoint D2H=4352 bytes`, identity-dependent committed payload SHA, `host_fallback_count=0` | stage H2D/D2H bytes exactly zero; authorized totals/counts and runtime payload SHA self-consistent; every synchronization reason classified | non-skipped managed device timeline with GPU UUID and `fdm-gpu-m1-strict-residency-v1.json` plus exported runtime checkpoint |
+| `determinism_restart_v1` | `fdm_gpu_m1_determinism_restart_v1`: two uninterrupted repeats and one actual-runtime export/destroy/new-context/import continuation of a 4352-byte sequence-7 checkpoint; the separate frozen oracle A supplies codec mutations for truncation, corruption, unknown required ID, nonzero or surplus-zero padding, wrong ID-1 tuple, subrecord `record_bytes`, field type, extra inter-section block and missing required section | `oracle.checkpoint_bitwise_continuation_v1`: runtime payload B preserves exact device/build/static identity, lineage/sequence/content, and next field/balance/iteration/`deterministic_compute_digest`/`scientific_continuation_digest`; frozen payload A retains exact SHA-256 `ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5` solely as codec oracle and must reject across actual identity; `operation_audit_digest` independently proves export/import or failed-import events | scientific/compute digests exact; full telemetry stream is not compared; 100% semantic decoder/import mutation rejection and every actual transfer remains in the audit chain | non-skipped same-GPU UUID managed triplet with `fdm-gpu-m1-determinism-restart-v1.json`, audit records and complete runtime checkpoint payload |
+| `public_path_v1` | `fdm_gpu_m1_public_path_v1`: normalized ProblemIR for $8\times4\times2$, double/strict GPU, $\sigma=5\times10^6\,\mathrm{S/m}$, $\theta_{SH}=0.1$, x-min density $10^{11}\,\mathrm{A/m^2}$, x-max $V=0$, insulating spin BC and one torque target | `oracle.public_artifact_manifest_v1`: exact requested/resolved tuple plus required artifacts `V,J_c,mu_s,Q_ia,torque_stt`, charge/spin/interface balances, transfer audit and checkpoint identity with frozen SI units/components | normalized ProblemIR, requested/resolved identity and artifact key set 100% exact; numeric fields meet their gate tolerances | non-skipped managed ProblemIR-planner-runner-ABI-CUDA run with GPU UUID and `fdm-gpu-m1-public-path-v1.json` plus artifact manifest |
+| `convergence_v1` | `fdm_gpu_m1_convergence_v1`: uniform/layered charge and 1-D spin on 32/64/128 cells; transverse-only N/F interface with $y\in[0,1]\,\mathrm{m}$, unit depth, $m=(0,0,1)$, $G_\uparrow=G_\downarrow=G_i=0$, $G_r=2\,\mathrm{S/m^2}$, $\Delta\mu_s=(y^2,0,0)\,\mathrm{V}$, and mixing grids 2x16x1, 2x32x1, and 2x64x1 | `oracle.richardson_orders_v1`: analytic charge/spin solutions and mixing $q_{abs}=(2y^2,0,0)\,\mathrm{A/m^2}$ with exact integral $2/3\,\mathrm{A/m}$; composite midpoint error $e_n=1/(6n^2)\,\mathrm{A/m}$ | charge/spin order `>=1.8`, ratio `>=3.5`; mixing order `>=1.99`, successive ratio `[3.99,4.01]`, pointwise `rtol<=1e-13`; all balances `<=1e-10` | non-skipped managed mesh sweep with GPU UUID and `fdm-gpu-m1-convergence-v1.json` containing raw norms, exact errors, ratios and fitted orders |
+| `performance_v1` | `fdm_gpu_m1_performance_v1`: $1024\times128\times8=1,048,576$ cell racetrack, fixed solver tolerances, output/checkpoint disabled, one setup then five warm solves on one recorded GPU UUID/runtime/build | `oracle.absolute_fdm_gpu_m1_budget_v1`: no future or relative baseline; each run is checked directly against the frozen limits | `peak device bytes <=2147483648`; setup <=5 s; median total solve <=30 s; p95 total solve <=36 s; forbidden transfer bytes exact zero | five non-skipped managed runs with GPU UUID and `fdm-gpu-m1-performance-v1.json` containing raw setup/apply/solve/reduction times and memory high-water marks |
+
+These gates define qualification. The bounded charge rows named in the status
+section have actual-device contract evidence, while every other row remains a
+future gate; the table as a whole is not evidence that a public GPU runner,
+broader M1 executable workload, parity result or production qualification
+exists.
 
 ### 3.2 FEM/MFEM weak-form contract
 
@@ -782,6 +1255,19 @@ round-trips M2 conductivity tensors and reciprocal nonlinear solver policy as
 typed fields; unknown or incomplete M2 records stay read-only/fail-closed, and
 the capability result remains `semantic_only` until the workload gates below
 are closed.
+
+The opt-in FDM CPU native M1 path is explicit end to end:
+`native_m1_v1` resolves to the C declarations in
+`native/include/fullmag_fdm.h`, the dedicated warning-clean adapter translation
+unit in `backends/fdm/api/cpu_transport_v1.cpp`, Rust FFI records in
+`crates/fullmag-fdm-sys/src/lib.rs`, and the fail-closed runner adapter
+`solve_native_m1_snapshot` in
+`crates/fullmag-runner/src/fdm/cpu/native_transport.rs`. Its managed public
+ProblemIR--planner--runner gate is
+`crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs`. It publishes complete
+cell and face charge/spin fields, reaction channels, interface observations,
+transport torque, and requested/resolved provenance without fallback. These
+are executable contract observations only; `validated_workloads` stays empty.
 
 The executable FEM M1 v1 slice is deliberately narrower than the general
 model: CPU, double precision, `execution_mode=strict`, conforming H1/P1,
@@ -1123,6 +1609,22 @@ a qualified workload without the validation gates above.
 | Descriptor materialization | crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs | materialize_native_fem_steady_transport_request | fail-closed descriptor-to-FFI mapping | runner materialization test |
 | Native dispatch | crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_steady_transport | explicit M1/M2 ABI selection and provenance | runner runtime test |
 | FDM reference | crates/fullmag-runner/src/fdm/cpu/spin_transport.rs | solve_coupled_module | CPU FDM coupled charge/spin realization | FDM reference/common-limit tests |
+| Native FDM M1 C ABI | native/include/fullmag_fdm.h | fullmag_fdm_cpu_charge_solve_v1; fullmag_fdm_cpu_steady_spin_solve_v1 | append-only request/result and accepted-snapshot contract | managed ABI layout and canary gate |
+| Native FDM M1 ABI adapter | backends/fdm/api/cpu_transport_v1.cpp | fullmag_fdm_cpu_charge_solve_v1; fullmag_fdm_cpu_steady_spin_solve_v1 | checked record extents, owner translation, exact topology mapping, and result publication | fdm_cpu_transport_abi_v1_contract |
+| Native FDM M1 Rust FFI | crates/fullmag-fdm-sys/src/lib.rs | fullmag_fdm_cpu_charge_result_v1; fullmag_fdm_cpu_steady_spin_result_v1 | byte-exact Rust records and symbol declarations | layout-manifest and compile-fail ownership tests |
+| Native FDM M1 record extent guard | backends/fdm/api/cpu_transport_v1.cpp | input_records | reject overflowing public record byte extents before dereference | excessive-count pointer canaries |
+| Native FDM M1 observation mapping | backends/fdm/api/cpu_transport_v1.cpp | unique_interface_observation | match each owner observation exactly once by full topology | unsorted multi-interface ABI contract |
+| Native FDM M1 charge Rust symbol | crates/fullmag-fdm-sys/src/lib.rs | fullmag_fdm_cpu_charge_solve_v1 | declare the native charge solve to Rust | layout-manifest and public E2E gate |
+| Native FDM M1 spin Rust symbol | crates/fullmag-fdm-sys/src/lib.rs | fullmag_fdm_cpu_steady_spin_solve_v1 | declare the native spin solve to Rust | layout-manifest and public E2E gate |
+| Native FDM M1 runner adapter | crates/fullmag-runner/src/fdm/cpu/native_transport.rs | solve_native_m1_snapshot | fail-closed descriptor/result mapping and complete artifact carrier | native_m1_v1 full-result mutation tests |
+| Native FDM M1 public E2E | crates/fullmag-runner/tests/native_m1_v1_public_e2e.rs | public_native_m1_v1_transparent_and_mixing_artifacts_match_reference_and_provenance | unchanged public planning/running, persistent fields, and honest provenance | opt-in managed contract; unvalidated, not production qualification |
+| Native FDM M1 charge | backends/fdm/cpu/transport/charge_transport_v1.cpp | solve | matrix-free charge solve, mixing trace elimination, and immutable accepted snapshot | `just verify-fdm-cpu-m1-charge-native-contract` |
+| Native FDM M1 spin | backends/fdm/cpu/transport/spin_transport_v1.cpp | solve | accepted-snapshot spin solve, mixing observations, reaction channels, and torque | `just verify-fdm-cpu-m1-spin-native-contract` |
+| Native FDM M1 validation helpers | backends/fdm/cpu/transport/spin_transport_validation_v1.cpp | evaluate_local_residual_gate | cell-local FV acceptance and independently testable direct-SHE contraction | native spin contract |
+| Native FDM M1 charge regression | backends/fdm/tests/cpu_charge_transport_contract.cpp | main | oriented traces, conservative current, reversed orientation, and finite-conductance validation | native charge contract |
+| Native FDM M1 spin regression | backends/fdm/tests/cpu_spin_transport_contract.cpp | main | independent mixing/reaction/torque algebra, local residual rejection, and six SHE contractions | native spin contract |
+| Rust M1 parity oracle | crates/fullmag-engine/examples/fdm_spin_oracle_v1.rs | main | nonzero mixing charge/spin fixture and public interface observations | managed Rust/native parity |
+| Native M1 parity comparator | backends/fdm/tests/cpu_spin_transport_parity.cpp | main | solved-field, reaction, torque, balance, and public interface-flux comparison | managed Rust/native parity |
 | Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |
 | Runtime regression | crates/fullmag-runner/src/native_fem/steady_transport.rs | native_m2_solver_publishes_reciprocal_diagnostics | reciprocal provenance identity | focused managed test |
 | ABI layout regression | crates/fullmag-fem-sys/src/lib.rs | steady_transport_m2_request_keeps_v1_as_a_nested_prefix | append-only nested M1-prefix guarantee | focused managed test |
@@ -1131,6 +1633,17 @@ a qualified workload without the validation gates above.
 | M2 FDM/FEM common-limit oracle | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles | compare matched reciprocal FDM cell centres with FEM plane averages over three z resolutions | `just verify-fem-steady-transport-m2-common-limit-contract` |
 | FDM M2 heterogeneous-interface gate | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance | exercise an anisotropic N/F region jump and a companion mixing/SML closure with explicit torque accounting | `just verify-fdm-m2-heterogeneous-interface-contract` |
 | M2 3-D SHE/iSHE/AHE common-limit gate | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles | compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE | `just verify-fem-steady-transport-m2-3d-common-limit-contract` |
+| FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
+| FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
+| FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |
+| FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with strength-graph device AMG | uniform/layered actual-device gates |
+| FDM GPU M1 checkpoint codec | backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp | build_checkpoint; parse_checkpoint | encode and decode canonical charge-only FMGPUTR1 sections 1--9/18/20 | frozen codec oracle plus runtime identity A/B gate |
+| FDM GPU M1 Rust ABI mirror | crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs | fullmag_fdm_gpu_transport_solve_charge_v1 | mirror append-only C layouts and symbols without adding a public runner | Rust layout tests |
+| FDM GPU M1 uniform regression | backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp | main | check analytic FP64 field/current, AMG/cache audit, transfer bounds and zero fallback on a physical GPU | `just verify-fdm-gpu-m1-charge-native-contract` |
+| FDM GPU M1 layered regression | backends/fdm/tests/gpu_m1_charge_layered_v1_contract.cpp | main | compare harmonic layered conduction with analytic and independent CPU FP64 oracles | `just verify-fdm-gpu-m1-charge-native-contract` |
+| FDM GPU M1 snapshot regression | backends/fdm/tests/gpu_m1_charge_snapshot_v1_contract.cpp | main | separate the frozen synthetic codec oracle from identity-dependent runtime export/import and prove bitwise no-resolve readback | `just verify-fdm-gpu-m1-charge-native-contract` |
+| FDM GPU M1 boundary mutation regression | backends/fdm/tests/gpu_m1_charge_boundary_mutation_v1_contract.cpp | main | reject malformed typed records without state publication and exercise voltage/density/insulating faces | `just verify-fdm-gpu-m1-charge-native-contract` |
+| FDM GPU M1 runtime ABI contract | docs/specs/spin-transport-runtime-contract-v1.md | DOC-ANCHOR:fdm-gpu-m1-abi-v1 | specify append-only layout, state machine, exact checkpoint grammar and fail-closed errors | normative contract with partial implementation |
 
 (scientific-bibliography)=
 ## 9. References

@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from .common import BILAYER, GRID_ALIGNED_GAPS_M, OFF_GRID_GAP_LABEL
+from .common import (
+    BILAYER,
+    GRID_ALIGNED_GAPS_M,
+    OFF_GRID_GAP_LABEL,
+    QUALIFICATION_SCOPE,
+)
 
 
 def configuration() -> dict[str, object]:
     """Return the immutable bilayer configuration without launching a runtime."""
 
     return {
+        "scope": "bilayer_coupling",
+        "qualification_scope": QUALIFICATION_SCOPE,
+        "runtime_qualification": "not_run",
         "film_dimensions_m": BILAYER.film_dimensions_m,
         "cells": BILAYER.cells,
         "cell_m": BILAYER.cell_m,

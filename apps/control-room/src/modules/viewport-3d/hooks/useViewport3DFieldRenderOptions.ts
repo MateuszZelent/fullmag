@@ -29,6 +29,14 @@ const fieldRenderOptionsCache = new WeakMap<
   Viewport3DFieldRenderOptions
 >();
 
+const AIRBOX_VECTOR_VISIBILITY_MULTIPLIER = 8;
+
+export function resolveViewport3DAirboxVectorLengthScale(
+  requestedScale: number,
+): number {
+  return Math.max(0, requestedScale) * AIRBOX_VECTOR_VISIBILITY_MULTIPLIER;
+}
+
 function targetScalarColorModeForRendering(
   settings: VisualizationTargetSettings,
 ): string | null {
@@ -190,9 +198,12 @@ export function useViewport3DFieldRenderOptions({
       if (airboxVectorsVisible && airboxSettings.vectorBudget > 0) {
         partVectorBudgets.set(partId, airboxSettings.vectorBudget);
       }
-      if (airboxSettings.vectorLengthScale !== 1) {
-        partVectorScales.set(partId, airboxSettings.vectorLengthScale);
-      }
+      partVectorScales.set(
+        partId,
+        resolveViewport3DAirboxVectorLengthScale(
+          airboxSettings.vectorLengthScale,
+        ),
+      );
     }
 
     const next = limitViewport3DFieldRenderVectorBudgets(

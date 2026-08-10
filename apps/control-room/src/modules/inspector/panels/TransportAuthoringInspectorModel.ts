@@ -32,6 +32,11 @@ export interface CurrentTransportDraft {
   timeEnvelope: string;
 }
 
+export interface TransportAuthoringInitialScope {
+  objectId: string;
+  regionId?: string | null;
+}
+
 export interface SpinTransportDraft {
   boundaries: string;
   constitutiveVersion: string;
@@ -162,19 +167,29 @@ export {
   type TransportFamily,
 } from "@/shared/domain/physics/transportRecognition";
 
-export function currentTransportDraft(value?: KnownSceneCurrentTransport | null): CurrentTransportDraft {
+export function currentTransportDraft(
+  value?: KnownSceneCurrentTransport | null,
+  initialScope?: TransportAuthoringInitialScope | null,
+): CurrentTransportDraft {
+  const initialDomain = initialScope
+    ? [{
+        object_id: initialScope.objectId,
+        ...(initialScope.regionId ? { region_id: initialScope.regionId } : {}),
+      }]
+    : [];
+  const scopedRegionSolve = initialScope?.regionId ? null : initialScope?.objectId;
   return {
     boundaries: pretty(value?.boundaries ?? []),
     conductivity: value?.conductivity_s_per_m?.toString() ?? "",
     conservativeCurrentView: pretty(value?.conservative_current_view ?? {}),
     coupling: value?.coupling ?? "one_way",
     currentDensity: pretty(value?.current_density ?? [0, 0, 0]),
-    domain: pretty(value?.domain ?? []),
+    domain: pretty(value?.domain ?? initialDomain),
     gauge: value?.gauge ?? "dirichlet_reference",
     materials: pretty(value?.materials ?? []),
-    model: value?.model ?? "prescribed_density",
+    model: value?.model ?? (initialScope?.regionId ? "ohmic_poisson" : "prescribed_density"),
     name: value?.name ?? "current",
-    solveRegion: value?.solve_region ?? "",
+    solveRegion: value?.solve_region ?? scopedRegionSolve ?? "",
     solverAbsoluteTolerance: value?.solver?.linear.absolute_tolerance.toString() ?? "1e-14",
     solverEngine: value?.solver?.engine ?? "cg",
     solverMaxIterations: value?.solver?.linear.max_iterations.toString() ?? "1000",
@@ -185,12 +200,59 @@ export function currentTransportDraft(value?: KnownSceneCurrentTransport | null)
   };
 }
 
-export function spinTransportDraft(value?: KnownSceneSpinTransport | null): SpinTransportDraft {
+export function currentTransportSupportsPrescribedDensity(
+  draft: CurrentTransportDraft,
+): boolean {
+  try {
+    const domain = JSON.parse(draft.domain) as unknown;
+    if (!Array.isArray(domain) || domain.length === 0) return true;
+    return domain.length === 1
+      && typeof domain[0] === "object"
+      && domain[0] !== null
+      && typeof (domain[0] as { object_id?: unknown }).object_id === "string"
+      && !(domain[0] as { region_id?: unknown }).region_id;
+  } catch {
+    return false;
+  }
+}
+
+export function currentTransportModelPatch(
+  draft: CurrentTransportDraft,
+  model: CurrentTransportDraft["model"],
+): Pick<CurrentTransportDraft, "conductivity" | "model" | "solveRegion"> {
+  if (model !== "prescribed_density") {
+    return { conductivity: "", model, solveRegion: "" };
+  }
+  if (!currentTransportSupportsPrescribedDensity(draft)) {
+    return {
+      conductivity: draft.conductivity,
+      model: draft.model,
+      solveRegion: draft.solveRegion,
+    };
+  }
+  const domain = JSON.parse(draft.domain) as Array<{ object_id?: string }>;
+  return {
+    conductivity: "",
+    model,
+    solveRegion: domain[0]?.object_id ?? "",
+  };
+}
+
+export function spinTransportDraft(
+  value?: KnownSceneSpinTransport | null,
+  initialScope?: TransportAuthoringInitialScope | null,
+): SpinTransportDraft {
+  const initialDomain = initialScope
+    ? [{
+        object_id: initialScope.objectId,
+        ...(initialScope.regionId ? { region_id: initialScope.regionId } : {}),
+      }]
+    : [];
   return {
     boundaries: pretty(value?.boundaries ?? []),
     constitutiveVersion: value?.constitutive_version ?? "transport_constitutive.one_way.fullmag.v1",
     currentSourceId: value?.current_source_id ?? "current",
-    domain: pretty(value?.domain ?? []),
+    domain: pretty(value?.domain ?? initialDomain),
     executionDevice: value?.requested_execution.device ?? "auto",
     executionDiscretization: value?.requested_execution.discretization ?? "auto",
     executionMode: value?.requested_execution.execution_mode ?? "strict",

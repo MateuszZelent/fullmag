@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import math
 from typing import Protocol, Sequence
@@ -37,6 +38,8 @@ CONSERVATIVE_CURRENT_BOUNDARY_ROLES = {
 
 _FEM_CHARGE_OPERATOR_VERSION = "fem_charge_conforming_h1_p1.transparent.v1"
 _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
+_FEM_CLOSED_GEOMETRY_OPERATOR_VERSION = "fem_closed_current_geometry.v1"
+_FEM_EXTERNAL_LEAD_OPERATOR_VERSION = "fem_closed_current_extension.v1"
 
 _TIME_ENVELOPE_TYPES = (
     ConstantEnvelope,
@@ -457,6 +460,39 @@ class ConservativeCurrentSourceCutFacePair:
 
 
 @dataclass(frozen=True, slots=True)
+class ConservativeCurrentLeadInterfacePair:
+    """Stable face pairing between the device and one volumetric lead."""
+
+    transport_face_vertex_ids: tuple[int, int, int]
+    lead_face_vertex_ids: tuple[int, int, int]
+
+    def __init__(
+        self,
+        transport_face_vertex_ids: Sequence[int],
+        lead_face_vertex_ids: Sequence[int],
+    ) -> None:
+        object.__setattr__(
+            self,
+            "transport_face_vertex_ids",
+            _canonical_face_vertex_ids(
+                transport_face_vertex_ids,
+                "transport_face_vertex_ids",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "lead_face_vertex_ids",
+            _canonical_face_vertex_ids(
+                lead_face_vertex_ids,
+                "lead_face_vertex_ids",
+            ),
+        )
+
+    def to_ir(self) -> list[list[int]]:
+        return [list(self.transport_face_vertex_ids), list(self.lead_face_vertex_ids)]
+
+
+@dataclass(frozen=True, slots=True)
 class ConservativeCurrentSourceCut:
     id: str
     translation_m: tuple[float, float, float]
@@ -511,6 +547,11 @@ class ConservativeCurrentClosedGeometry:
         ):
             raise ValueError("source_cuts must contain at least one ConservativeCurrentSourceCut")
         object.__setattr__(self, "operator_version", require_non_empty(operator_version, "operator_version"))
+        if operator_version != _FEM_CLOSED_GEOMETRY_OPERATOR_VERSION:
+            raise ValueError(
+                "closed-geometry operator_version must be "
+                f"{_FEM_CLOSED_GEOMETRY_OPERATOR_VERSION!r}"
+            )
         object.__setattr__(self, "revision", require_non_empty(revision, "revision"))
         object.__setattr__(self, "digest", require_non_empty(digest, "digest"))
         object.__setattr__(self, "source_cuts", normalized_cuts)
@@ -525,6 +566,168 @@ class ConservativeCurrentClosedGeometry:
         }
 
 
+def _lead_mesh_to_ir(mesh: object) -> dict[str, object]:
+    if isinstance(mesh, Mapping):
+        value = dict(mesh)
+    else:
+        converter = getattr(mesh, "to_ir", None)
+        if not callable(converter):
+            raise TypeError("lead_mesh must be a MeshData value or a MeshIR mapping")
+        value = converter("external_lead")
+        if not isinstance(value, Mapping):
+            raise TypeError("lead_mesh.to_ir() must return a mapping")
+        value = dict(value)
+    nodes = value.get("nodes")
+    cells = value.get("cells")
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("lead_mesh.nodes must be a non-empty list")
+    if not isinstance(cells, Mapping):
+        raise ValueError("lead_mesh.cells must be a mapping")
+    cell_types = cells.get("types")
+    cell_offsets = cells.get("offsets")
+    cell_nodes = cells.get("nodes")
+    if (
+        not isinstance(cell_types, list)
+        or not cell_types
+        or not isinstance(cell_offsets, list)
+        or len(cell_offsets) != len(cell_types) + 1
+        or not isinstance(cell_nodes, list)
+        or not cell_nodes
+    ):
+        raise ValueError("lead_mesh.cells must contain valid types, offsets, and nodes")
+    if any(str(cell_type) != "tet4" for cell_type in cell_types):
+        raise ValueError("external lead mesh must contain tet4 cells only")
+    if len(cell_nodes) != int(cell_offsets[-1]):
+        raise ValueError("lead_mesh.cells offsets do not cover cell connectivity")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ConservativeCurrentExternalLead:
+    """Volumetric tetrahedral lead closure for the FEM RT0 solve.
+
+    The lead is deliberately explicit: its mesh, per-element conductivity,
+    stable vertex identity, interface face pairing, and outer electrodes are
+    all part of the canonical IR.  No wire or lumped-circuit fallback is
+    implied.
+    """
+
+    operator_version: str
+    revision: str
+    digest: str
+    drive_id: str
+    outer_electrode_potential_drop_v: float
+    lead_mesh: dict[str, object]
+    lead_conductivity_spm_per_element: tuple[float, ...]
+    lead_stable_vertex_ids: tuple[int, ...]
+    interface_pairs: tuple[ConservativeCurrentLeadInterfacePair, ...]
+    minus_outer_electrode_face_vertex_ids: tuple[tuple[int, int, int], ...]
+    plus_outer_electrode_face_vertex_ids: tuple[tuple[int, int, int], ...]
+    lead_conductivity_digest: str
+
+    def __init__(
+        self,
+        *,
+        operator_version: str,
+        revision: str,
+        digest: str,
+        drive_id: str,
+        outer_electrode_potential_drop_v: float,
+        lead_mesh: object,
+        lead_conductivity_spm_per_element: Sequence[float],
+        lead_stable_vertex_ids: Sequence[int],
+        interface_pairs: Sequence[ConservativeCurrentLeadInterfacePair | Sequence[Sequence[int]]],
+        minus_outer_electrode_face_vertex_ids: Sequence[Sequence[int]],
+        plus_outer_electrode_face_vertex_ids: Sequence[Sequence[int]],
+        lead_conductivity_digest: str,
+    ) -> None:
+        mesh_ir = _lead_mesh_to_ir(lead_mesh)
+        cell_count = len(mesh_ir["cells"]["types"])
+        conductivity = tuple(
+            require_positive(value, "lead_conductivity_spm_per_element")
+            for value in lead_conductivity_spm_per_element
+        )
+        if len(conductivity) != cell_count:
+            raise ValueError(
+                "lead_conductivity_spm_per_element must contain one value per lead tet4 cell"
+            )
+        stable_ids = _stable_vertex_id_list(
+            lead_stable_vertex_ids,
+            "lead_stable_vertex_ids",
+        )
+        if len(stable_ids) != len(mesh_ir["nodes"]):
+            raise ValueError("lead_stable_vertex_ids must contain one ID per lead node")
+        normalized_pairs = []
+        for index, pair in enumerate(interface_pairs):
+            if isinstance(pair, ConservativeCurrentLeadInterfacePair):
+                normalized_pairs.append(pair)
+                continue
+            if isinstance(pair, (str, bytes)) or len(pair) != 2:
+                raise ValueError(
+                    "interface_pairs[{}] must contain exactly one device face and one lead face".format(index)
+                )
+            normalized_pairs.append(
+                ConservativeCurrentLeadInterfacePair(pair[0], pair[1])
+            )
+        normalized_pairs = tuple(normalized_pairs)
+        if not normalized_pairs:
+            raise ValueError("interface_pairs must not be empty")
+        minus_faces = tuple(
+            _canonical_face_vertex_ids(face, "minus_outer_electrode_face_vertex_ids")
+            for face in minus_outer_electrode_face_vertex_ids
+        )
+        plus_faces = tuple(
+            _canonical_face_vertex_ids(face, "plus_outer_electrode_face_vertex_ids")
+            for face in plus_outer_electrode_face_vertex_ids
+        )
+        if not minus_faces or not plus_faces:
+            raise ValueError("external lead requires both outer electrode face sets")
+        object.__setattr__(self, "operator_version", require_non_empty(operator_version, "operator_version"))
+        if operator_version != _FEM_EXTERNAL_LEAD_OPERATOR_VERSION:
+            raise ValueError(
+                "external-lead operator_version must be "
+                f"{_FEM_EXTERNAL_LEAD_OPERATOR_VERSION!r}"
+            )
+        object.__setattr__(self, "revision", require_non_empty(revision, "revision"))
+        object.__setattr__(self, "digest", require_non_empty(digest, "digest"))
+        object.__setattr__(self, "drive_id", require_non_empty(drive_id, "drive_id"))
+        object.__setattr__(
+            self,
+            "outer_electrode_potential_drop_v",
+            require_finite(outer_electrode_potential_drop_v, "outer_electrode_potential_drop_v"),
+        )
+        if outer_electrode_potential_drop_v == 0.0:
+            raise ValueError("outer_electrode_potential_drop_v must be non-zero")
+        object.__setattr__(self, "lead_mesh", mesh_ir)
+        object.__setattr__(self, "lead_conductivity_spm_per_element", conductivity)
+        object.__setattr__(self, "lead_stable_vertex_ids", stable_ids)
+        object.__setattr__(self, "interface_pairs", normalized_pairs)
+        object.__setattr__(self, "minus_outer_electrode_face_vertex_ids", minus_faces)
+        object.__setattr__(self, "plus_outer_electrode_face_vertex_ids", plus_faces)
+        object.__setattr__(
+            self,
+            "lead_conductivity_digest",
+            require_non_empty(lead_conductivity_digest, "lead_conductivity_digest"),
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "external_lead",
+            "operator_version": self.operator_version,
+            "revision": self.revision,
+            "digest": self.digest,
+            "drive_id": self.drive_id,
+            "outer_electrode_potential_drop_v": self.outer_electrode_potential_drop_v,
+            "lead_mesh": self.lead_mesh,
+            "lead_conductivity_spm_per_element": list(self.lead_conductivity_spm_per_element),
+            "lead_stable_vertex_ids": list(self.lead_stable_vertex_ids),
+            "interface_pairs": [pair.to_ir() for pair in self.interface_pairs],
+            "minus_outer_electrode_face_vertex_ids": [list(face) for face in self.minus_outer_electrode_face_vertex_ids],
+            "plus_outer_electrode_face_vertex_ids": [list(face) for face in self.plus_outer_electrode_face_vertex_ids],
+            "lead_conductivity_digest": self.lead_conductivity_digest,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class ConservativeCurrentView:
     """Public, closure-aware FEM current view; no H1-to-RT0 fallback is implied."""
@@ -533,7 +736,7 @@ class ConservativeCurrentView:
     boundary_faces: tuple[ConservativeCurrentBoundaryFace, ...]
     identity: ConservativeCurrentIdentity
     pins: ConservativeCurrentPins
-    closure: ConservativeCurrentClosedGeometry
+    closure: ConservativeCurrentClosedGeometry | ConservativeCurrentExternalLead
     algebraic_relative_tolerance: float
     physical_relative_gate: float
     physical_absolute_gate_a: float
@@ -546,7 +749,7 @@ class ConservativeCurrentView:
         boundary_faces: Sequence[ConservativeCurrentBoundaryFace],
         identity: ConservativeCurrentIdentity,
         pins: ConservativeCurrentPins,
-        closure: ConservativeCurrentClosedGeometry,
+        closure: ConservativeCurrentClosedGeometry | ConservativeCurrentExternalLead,
         algebraic_relative_tolerance: float,
         physical_relative_gate: float,
         physical_absolute_gate_a: float,
@@ -561,8 +764,11 @@ class ConservativeCurrentView:
             raise TypeError("identity must be ConservativeCurrentIdentity")
         if not isinstance(pins, ConservativeCurrentPins):
             raise TypeError("pins must be ConservativeCurrentPins")
-        if not isinstance(closure, ConservativeCurrentClosedGeometry):
-            raise TypeError("closure must be ConservativeCurrentClosedGeometry")
+        if not isinstance(closure, (ConservativeCurrentClosedGeometry, ConservativeCurrentExternalLead)):
+            raise TypeError(
+                "closure must be ConservativeCurrentClosedGeometry or "
+                "ConservativeCurrentExternalLead"
+            )
         object.__setattr__(self, "stable_vertex_ids", _stable_vertex_id_list(stable_vertex_ids, "stable_vertex_ids"))
         object.__setattr__(self, "boundary_faces", normalized_faces)
         object.__setattr__(self, "identity", identity)
@@ -803,7 +1009,9 @@ __all__ = [
     "CurrentTransport",
     "ConservativeCurrentBoundaryFace",
     "ConservativeCurrentClosedGeometry",
+    "ConservativeCurrentExternalLead",
     "ConservativeCurrentIdentity",
+    "ConservativeCurrentLeadInterfacePair",
     "ConservativeCurrentPins",
     "ConservativeCurrentSourceCut",
     "ConservativeCurrentSourceCutFacePair",

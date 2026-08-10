@@ -1,7 +1,7 @@
 # Standard Problem 5: reprodukcja Fullmag i porównanie z MuMax3
 
 **Data audytu:** 2026-08-03
-**Status:** reprodukcja źródła, wersjonowany operator MuMax3 Python → `ProblemIR` → FDM CPU/CUDA oraz świeży przebieg na RTX 4080 SUPER wykonane; izolowana brama jednego kroku CPU↔CUDA przechodzi, ale pełna trajektoria nie spełnia tolerancji MuMax3, więc kwalifikacja produkcyjna pozostaje otwarta.
+**Status:** reprodukcja źródła, wersjonowany operator MuMax3 Python → `ProblemIR` → FDM CPU/CUDA oraz świeży przebieg na RTX 4080 SUPER wykonane; literalny golden domyślnego MuMax3 nadal nie przechodzi, natomiast pełna trajektoria CPU/CUDA przechodzi pełnopolową bramę `1e-4` względem zbieżniejszej referencji `DemagAccuracy=24`. Jest to kwalifikowany workload o jawnej referencji, nie promocja całej rodziny STT.
 **Źródło:** [`external_solvers/3/test/standardproblem5.mx3`](../../../external_solvers/3/test/standardproblem5.mx3)
 **Implementacja:** [`examples/mumax_standard_problem_5_fdm.py`](../../../examples/mumax_standard_problem_5_fdm.py)
 **Test kontraktu:** [`test_standard_problem_5_fdm.py`](../../../packages/fullmag-py/tests/test_standard_problem_5_fdm.py)
@@ -284,6 +284,171 @@ GPU, a błąd względem świeżej referencji pozostaje
 `max|Δ|=2.2795e-4`, więc oba `qualification.json` zachowują
 `status=not_evaluated`.
 
+### 3.8. Wersjonowana brama kwalifikacji artefaktów
+
+Ręczne porównanie zastąpiono wykonywalnym walidatorem
+`scripts/validate_fdm_sp5_runtime.py` i dwiema receptami:
+
+```text
+just verify-fdm-sp5-validator
+just verify-fdm-sp5-artifacts <cpu-run> <gpu-run> <output.json>
+```
+
+Walidator wymaga literalnego problemu `mumax_standard_problem_5_fdm`, siatki
+`32×32×4`, komórki `(3.125, 3.125, 2.5) nm`, FP64, zakazanego fallbacku,
+stałego kroku, całkowitej liczby kroków wyprowadzonej z `1 ns / dt` i czasu
+końcowego `1 ns`. Wymaga również, aby runtime graph oznaczył dokładnie
+`sp5_zhang_li` jako `executed` na wszystkich 4096 komórkach.
+Oddzielnie kwalifikuje pełnopolowy CPU--CUDA parity oraz średnią magnetyzację
+względem świeżej referencji MuMax3. Status końcowy może być `qualified` tylko
+wtedy, gdy przejdą oba kryteria.
+
+Świeże wykonanie na artefaktach z §3.6--3.7 dało:
+
+```text
+cpu_cuda_parity.status = pass
+cpu_cuda_parity.max_abs_component_error = 6.938893903907228e-16
+mumax3_reference.status = fail
+mumax3_reference.max_abs_component_error = 2.2795424643093365e-4
+qualification_status = not_qualified
+```
+
+Raport maszynowy zapisano w
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-qualification-v1-20260809-just.json`.
+Kod wyjścia recepty wynosi `1`, zgodnie z wynikiem naukowym; zielony parytet
+wewnętrzny nie maskuje przekroczenia tolerancji zewnętrznej `1e-4`.
+
+### 3.9. Świeży runtime graph i sweep kroku `dt`, `dt/2`
+
+Po dodaniu obserwacji wykonania operatora powtórzono pełne przebiegi CPU i
+CUDA z aktualnego źródła. Dla `dt=1e-13 s` oba artefakty zawierają
+`executed_module_ids=["sp5_zhang_li"]`, stan `executed` i
+`realized_cell_count=4096`. Mechaniczna brama potwierdziła:
+
+```text
+CPU--CUDA accepted schedule                       equal
+CPU--CUDA max component field error  6.9388939039e-16
+CPU--CUDA component RMS              1.1431120734e-16
+MuMax3 max mean-component error       2.2795424643e-4
+qualification_status                         not_qualified
+```
+
+Następnie powtórzono oba backendy dla `dt=5e-14 s`: 4914 kroków relaksacji i
+20000 kroków etapu dynamicznego. CPU--CUDA ponownie ma identyczny harmonogram,
+pełnopolowy błąd maksymalny `7.4940054162e-16` i RMS
+`1.1983684507e-16`. Maksymalny błąd średniej względem MuMax3 zmienił się tylko
+z `2.2795424643e-4` na `2.2793991698e-4`.
+
+Zmiana pełnego pola CPU między `dt` i `dt/2` wynosi:
+
+```text
+max absolute component delta = 1.7869704683e-7
+component RMS delta          = 1.7570575141e-8
+```
+
+Zmiana czasowa jest ponad trzy rzędy wielkości mniejsza od dominującego błędu
+średniej względem MuMax3. Dwa poziomy kroku nie wyznaczają formalnego rzędu
+zbieżności, ale wystarczają do odrzucenia hipotezy, że przekroczenie progu
+`1e-4` jest powodowane przez `dt=1e-13 s`. Dalsza diagnostyka musi skupić się
+na stanie po relaksacji, demagnetyzacji, warunkach brzegowych stencil Zhang--Li
+i dokładnej konfiguracji referencyjnego MuMax3.
+
+Artefakty i raporty:
+
+- `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-cpu-executed-graph-dt1e-13-20260809-v3`;
+- `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-executed-graph-dt1e-13-20260809-v1`;
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-executed-graph-qualification-dt1e-13-20260809-v2.json`;
+- `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-cpu-executed-graph-dt5e-14-20260809-v1`;
+- `/zfn2/mateuszz/git/fullmag/runs/mumax-sp5-fdm-gpu-executed-graph-dt5e-14-20260809-v1`;
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-executed-graph-qualification-dt5e-14-20260809-v1.json`.
+
+### 3.10. Rozdzielenie relaksacji, pola bazowego i odpowiedzi Zhang--Li
+
+Dodano reprodukowalny komparator pełnych pól
+`scripts/compare_fdm_sp5_mumax_fields.py`. Czyta on OVF2 Binary4, wymaga
+zgodnych wymiarów i liczby komórek, a następnie porównuje osobno:
+
+1. stan po niezależnej relaksacji;
+2. trajektorię bez prądu;
+3. trajektorię z prądem;
+4. odpowiedź prądową po odjęciu trajektorii `J=0` po obu stronach.
+
+MuMax3 oraz Fullmag uruchomiono z tym samym polem początkowym OVF, solverem
+Heuna, `dt=1e-13 s` i horyzontem `1 ns`. Zamrożony binarny build MuMax3 ma
+SHA-256 `1763c7a1f9ed779abdd8ee755a6d2af771b76dc8ab2e2212efe74e0a44f5f600`.
+Build nie publikuje commita, dlatego wynik pozostaje diagnostyczny; jego
+końcowa średnia różni się jednak od referencji `v3.11.2@13ac56f1` tylko o
+około `7.6e-7`.
+
+Raport
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-full-field-diagnostic-20260809-v2.json`
+zawiera:
+
+| kontrola | RMS komponentu | maksimum komponentu | główny wniosek |
+|---|---:|---:|---|
+| natywna relaksacja Fullmag vs MuMax3 | `4.1698e-5` | `1.8525e-4` | stany równowagi są bliskie, lecz nie identyczne |
+| wspólny stan początkowy, `J=0`, 1 ns | `4.1866e-5` | `1.8544e-4` | różnica bazowego LLG nie zanika |
+| wspólny stan początkowy, `J=1e12 A/m^2`, 1 ns | `2.6945e-4` | `2.6553e-3` | błąd rośnie w sprzężonej dynamice |
+| `(m_J-m_0)_Fullmag-(m_J-m_0)_MuMax3` | `2.7246e-4` | `2.6507e-3` | odpowiedź prądowa jest wrażliwa na różnicę pola bazowego |
+
+Kontrola torque-only z wyłączonym exchange i demag daje po 1 ns RMS
+`3.4779e-5` przy zmianie pola RMS `6.8018e-1`, czyli względny błąd około
+`5.1e-5`; maksymalny błąd średniej wynosi `8.5e-6`. Nie ma podstaw do zmiany
+prefaktora ani znaku Zhang--Li. Dominującym następnym przedmiotem audytu jest
+zgodność dyskretnego pola demagnetyzacji i wynikającego z niego RHS LLG.
+
+Pierwsza próba aktualnym lokalnym binarium MuMax3
+`84bd3b230aaff3f059d7ab5586f9dafe1c051acf6f1b3a4e8921b028b5869802`
+utknęła przed pierwszym kernelem CUDA i została przerwana; nie jest dowodem
+fizycznym ani kwalifikacyjnym.
+
+### 3.11. Bezpośredni oracle pól i zbieżniejsza referencja demag
+
+MuMax3 zapisuje `B_demag` i `B_exch`, natomiast Fullmag publikuje `H_demag` i
+`H_ex` w `A/m`. Komparator
+`scripts/compare_fdm_sp5_mumax_effective_fields.py` wykonuje jawną konwersję
+$H=B/\mu_0$, wymaga dokładnie jednego snapshotu każdego pola i zgodnej siatki
+`32x32x4`.
+
+Raport
+`/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-effective-field-diagnostic-20260809-v2.json`
+potwierdza:
+
+| operator | RMS `A/m` | względny RMS | maksimum `A/m` |
+|---|---:|---:|---:|
+| exchange | `4.0756e-1` | `4.5025e-6` | `2.1649` |
+| demag, `DemagAccuracy=6` | `5.6915e1` | `1.1728e-3` | `521.7590` |
+| demag, `DemagAccuracy=12` | `2.3903e1` | `4.9233e-4` | `209.5525` |
+| demag, `DemagAccuracy=24` | `1.1087e1` | `2.2833e-4` | `103.5996` |
+
+Źródło MuMax3 pokazuje przyczynę: jego kernel jest numeryczną kwadraturą
+powierzchnia--objętość sterowaną `DemagAccuracy`; Fullmag używa analitycznego
+tensora Newella. Monotoniczne zbliżanie się MuMax3 do Fullmaga przy zwiększaniu
+dokładności wyklucza naprawę przez zastąpienie dokładnego kernela Fullmaga
+domyślną aproksymacją `accuracy=6`.
+
+Pełny MuMax3 SP5 z `DemagAccuracy=24` daje średnią
+`(-0.2346616633,-0.0945105377,0.0229454409)`. Względem niego Fullmag CPU dla
+`dt=1e-13 s` ma:
+
+```text
+max mean-component error     = 5.9515e-6
+full-field component RMS     = 9.7093e-6
+full-field max component     = 4.3982e-5
+CPU--CUDA max component      = 6.9389e-16
+```
+
+Dla `dt/2=5e-14 s` pełnopolowy RMS wynosi `9.7045e-6`, a maksimum
+`4.3967e-5`. Oba poziomy przechodzą próg `1e-4`. Walidator zachowuje dwa
+oddzielne wyniki: `mumax3_reference=fail` dla literalnego default/golden oraz
+`mumax3_converged_demag_reference=pass`; kwalifikacja wymaga jawnego
+`qualification_reference=converged_demag`.
+
+Artefakty kwalifikacyjne:
+
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-converged-demag-qualification-dt1e-13-20260809-v2.json`;
+- `/zfn2/mateuszz/git/fullmag/runs/sp5-fdm-converged-demag-qualification-dt5e-14-20260809-v1.json`.
+
 ## 4. Ocena fizyczna i numeryczna
 
 Potwierdzone:
@@ -297,38 +462,40 @@ Potwierdzone:
 - żądanie niekwalifikowanego CUDA adaptive nie wykonuje cichego fallbacku;
   aktualnie przechodzi tylko jako jawnie `unvalidated` single-grid lane;
 - artefakt pola i provenance urządzenia są zapisane na szybkim dysku
-  `/zfn2/mateuszz/git/fullmag`.
+  `/zfn2/mateuszz/git/fullmag`;
+- jawnie wybrany workload `converged_demag` przechodzi pełnopolowo na CPU i
+  CUDA dla `dt` oraz `dt/2`.
 
-Niepotwierdzone:
+Nadal niepotwierdzone:
 
-- zgodność konwencji Zhang–Li, stanu po relaksacji i demagnetyzacji z
-  referencyjnym buildem MuMax3 na poziomie trajektorii (nowy operator jest
-  wykonywalny, lecz wynik nie mieści się w tolerancji);
-- wpływ dokładności i algorytmu przygotowania stanu vortex;
-- zgodność demagnetyzacji i kolejności aktualizacji pól;
+- zgodność z literalnym goldenem domyślnego `DemagAccuracy=6`; rozjazd jest
+  wyjaśniony błędem kwadratury referencji, ale wynik pozostaje osobnym `fail`;
 - pełny CPU adaptive RK45 na `1 ns`;
 - CPU accepted-step scalar publication dla pełnego przebiegu;
 - jakakolwiek kwalifikacja FEM/GPU cross-backend.
 
-Nie należy wyciągać z jednego błędu `m_y` wniosku, że winny jest konkretny
-prefaktor lub znak. Różnica dyskretyzacji jest potwierdzonym blockerem, ale
-nadal trzeba rozdzielić: (1) niezależny stan po relaksacji, (2) test samego
-operatora Zhang–Li z analitycznym polem, (3) zbieżność czasową i (4) zgodność
-demagnetyzacji.
+Nie należy wyciągać z literalnego błędu średniej wniosku, że winny jest
+prefaktor lub znak. Kontrolowane testy rozdzieliły stan po relaksacji,
+Zhang--Li, exchange i demag; dominującą przyczyną różnicy względem domyślnego
+MuMax3 jest kwadratura kernela demag.
 
 ## 5. Kryteria zamknięcia SP5
 
-1. Utrzymywać zieloną bramę jednego kroku CPU↔CUDA i rozszerzyć ją do accepted-step
-   parity na pełnej trajektorii.
+1. [wykonane dla fixed-step `dt` i `dt/2`] Utrzymywać zieloną bramę jednego
+   kroku i accepted-step CPU↔CUDA na pełnej trajektorii.
 2. Zakończyć CPU adaptive RK45 z `tolT=1e-6 T` i zapisać accepted-step
    telemetry oraz `m_final`.
-3. Przeprowadzić sweep kroku i sprawdzić, czy różnica jest zbieżna do stałej.
-4. Porównać osobno stan relaksacji i operator Zhang–Li z niezależnym oracle.
-5. Zidentyfikować rozbieżność między centralnym v1 a trajektorią MuMax3
-   (demag, relaksacja, kolejność aktualizacji lub prefaktor) na kontrolowanych
-   testach, zanim zmieni się wzór produkcyjny.
-6. Dopiero po przejściu tych punktów oznaczyć FDM CPU/GPU jako `validated`;
-   obecny GPU fixed-step pozostaje `diagnostic-unqualified`.
+3. [wykonane dla `dt` i `dt/2`] Rozszerzyć sweep o trzeci poziom tylko wtedy,
+   gdy potrzebny będzie formalny estymator rzędu; obecne dane wykluczają błąd
+   czasowy jako dominujące źródło rozjazdu.
+4. [wykonane diagnostycznie] Porównać osobno stan relaksacji, trajektorię
+   `J=0`, trajektorię napędzaną i izolowany operator Zhang–Li.
+5. [wykonane] Zidentyfikować rozbieżność między centralnym v1 a trajektorią
+   domyślnego MuMax3: dominuje niedokładność kernela demag przy
+   `DemagAccuracy=6`, a nie prefaktor Zhang--Li.
+6. [wykonane dla jawnego workloadu] FDM CPU/GPU fixed-step z
+   `qualification_reference=converged_demag` jest `validated`; adaptive oraz
+   literalny default-golden pozostają poza tym zakresem.
 
 ### 5.1. Korekta telemetryki accepted-step
 

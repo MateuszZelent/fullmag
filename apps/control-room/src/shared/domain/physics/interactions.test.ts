@@ -249,7 +249,7 @@ describe("physics interaction catalog", () => {
     expect(oersted).toMatchObject({
       availability: "study",
       id: "oersted_field",
-      scope: "global_or_region",
+      scope: "global_or_object_or_region",
     });
     expect(oersted?.fields.find((field) => field.id === "source_mode")).toMatchObject({
       options: [
@@ -271,7 +271,7 @@ describe("physics interaction catalog", () => {
     expect(current).toMatchObject({
       availability: "study",
       id: "current_transport",
-      scope: "global_or_region",
+      scope: "global_or_object_or_region",
     });
     expect(current?.fields.find((field) => field.id === "model")).toMatchObject({
       options: [

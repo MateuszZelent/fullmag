@@ -47,6 +47,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/analysis/spin-wave/gamma.v1",
   "/v2/sessions/current/data/artifacts",
   "/v2/sessions/current/data/artifacts/{artifact_id}",
+  "/v2/sessions/current/data/domain/fdm-multilayer-layout",
   "/v2/sessions/current/data/domain/meta",
   "/v2/sessions/current/data/domain/slice/mesh-overlay",
   "/v2/sessions/current/data/domain/topology",

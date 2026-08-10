@@ -47,6 +47,20 @@ function model(regionIds: number[]): FdmCuboidInstanceModel {
 }
 
 describe("buildViewport3DFdmTargetViews", () => {
+  it("fails closed when a malformed membership omits freshness", () => {
+    const result = buildViewport3DFdmTargetViews({
+      membership: { ...membership(), freshness: undefined } as never,
+      model: model([1, 2, 1, 2]),
+      realizedRegionIds: Uint32Array.from([1, 2, 1, 2]),
+    });
+
+    expect(result).toMatchObject({
+      reason: "membership-not-current",
+      status: "incompatible",
+      views: [],
+    });
+  });
+
   it("partitions one sampled model into shared object and region views", () => {
     const source = model([1, 2, 1, 2]);
 

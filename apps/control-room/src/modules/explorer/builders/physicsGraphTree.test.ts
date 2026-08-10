@@ -25,6 +25,7 @@ const graph = {
     {
       id: "torque:free-layer",
       kind: "spin_torque",
+      presentation: { family: "slonczewski", label: "Slonczewski STT" },
       applies_to: [{ kind: "region", object_id: "film", region_id: "free" }],
       depends_on: ["spin:film"],
       activation: "active",
@@ -85,16 +86,19 @@ describe("buildPhysicsGraphTree", () => {
       kind: "physics.scope.cross-object",
     });
     expect(nodes.find((node) => node.physicsModuleId === "torque:free-layer")).toMatchObject({
+      label: "Slonczewski STT",
       parentId: "model:object:film:physics",
+      physicsModuleFamily: "slonczewski",
       regionId: "free",
+      status: "unavailable",
     });
     expect(nodes.find((node) => node.physicsModuleId === "interface:stack")).toMatchObject({
       parentId: "model:physics:cross-object",
-      status: "ready",
+      status: "unavailable",
     });
   });
 
-  it("does not render any spin/current family node when the graph has no current module", () => {
+  it("preserves blocked dependent modules from the authoritative graph", () => {
     const nodes = flatten(
       buildPhysicsGraphTree({
         graph: {
@@ -122,7 +126,18 @@ describe("buildPhysicsGraphTree", () => {
       }),
     );
 
-    expect(nodes).toEqual([]);
+    expect(nodes.filter((node) => node.kind === "physics.module")).toEqual([
+      expect.objectContaining({
+        physicsModuleId: "oersted:stale",
+        physicsActivation: "blocked",
+        status: "validation-blocked",
+      }),
+      expect.objectContaining({
+        physicsModuleId: "spin:stale",
+        physicsActivation: "blocked",
+        status: "validation-blocked",
+      }),
+    ]);
   });
 
   it("keeps module identity stable when input order changes", () => {

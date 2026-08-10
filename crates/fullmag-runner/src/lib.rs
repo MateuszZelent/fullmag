@@ -37,6 +37,7 @@ pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
 mod native_fem;
+mod physics_graph_execution;
 mod preview;
 pub mod quantities;
 mod regional_field_drive_artifacts;
@@ -45,15 +46,15 @@ pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
 mod solver_profile;
-pub mod solver_trace;
 mod solver_runtime;
+pub mod solver_trace;
 pub mod spin_wave_response;
 pub mod spin_wave_sampling;
 pub mod table_autosave;
-mod timestep_qualification;
 mod time_dependence;
 mod time_envelope;
 mod time_events;
+mod timestep_qualification;
 mod types;
 
 use types::TimestepExecutionLane;
@@ -305,8 +306,8 @@ fn resolve_timestep_execution_identity(
         integrator: lookup.integrator,
         timestep_policy: lookup.timestep_policy,
         validation_state: resolution.state,
-        qualification_registry_version:
-            timestep_qualification::QUALIFICATION_REGISTRY_VERSION.to_string(),
+        qualification_registry_version: timestep_qualification::QUALIFICATION_REGISTRY_VERSION
+            .to_string(),
         qualification_artifact_sha256: resolution.artifact_sha256,
         runtime_source_inputs_sha256: resolution.runtime_source_inputs_sha256,
         validated_scope: resolution.validated_scope,
@@ -401,9 +402,7 @@ pub fn compare_coupled_m3_checkpoint_module_identity_values(
     actual: &serde_json::Value,
     expected: &serde_json::Value,
 ) -> Result<(), RunError> {
-    fdm::cpu::spin_transport::compare_coupled_m3_checkpoint_module_identity_values(
-        actual, expected,
-    )
+    fdm::cpu::spin_transport::compare_coupled_m3_checkpoint_module_identity_values(actual, expected)
 }
 
 // Public re-exports (unchanged API surface).
@@ -1364,7 +1363,10 @@ mod initial_timestep_tests {
             identity.qualification_id,
             LlgTimestepQualificationId::ExplicitAdaptiveFdmCudaDouble
         );
-        assert_eq!(identity.validation_state, TimestepValidationState::Unvalidated);
+        assert_eq!(
+            identity.validation_state,
+            TimestepValidationState::Unvalidated
+        );
         assert!(identity.qualification_artifact_sha256.is_none());
         assert!(identity.runtime_source_inputs_sha256.is_none());
         assert!(identity.validated_scope.is_none());
@@ -1489,8 +1491,9 @@ pub(crate) fn require_physics_graph_runtime_provenance(
     let Some(expected_scene_revision) = expected_scene_revision else {
         if plan.provenance.physics_graph.is_some() {
             return Err(RunError {
-                message: "physics_graph runtime provenance exists without an authored scene revision"
-                    .to_string(),
+                message:
+                    "physics_graph runtime provenance exists without an authored scene revision"
+                        .to_string(),
             });
         }
         return Ok(());
@@ -1548,8 +1551,9 @@ pub(crate) fn require_physics_graph_runtime_provenance(
     for module in &provenance.modules {
         if module.module_id.trim().is_empty() || !module_ids.insert(module.module_id.as_str()) {
             return Err(RunError {
-                message: "physics_graph runtime provenance contains an empty or duplicate module_id"
-                    .to_string(),
+                message:
+                    "physics_graph runtime provenance contains an empty or duplicate module_id"
+                        .to_string(),
             });
         }
         if module.scope.trim().is_empty() {
@@ -1601,14 +1605,11 @@ pub(crate) fn require_physics_graph_runtime_provenance(
             });
         }
     }
-    let expected_realization = fullmag_plan::physics_graph_realization_provenance(
-        problem,
-        &plan.backend_plan,
-        &[],
-    )
-    .map_err(|reasons| RunError {
-        message: reasons.join("; "),
-    })?;
+    let expected_realization =
+        fullmag_plan::physics_graph_realization_provenance(problem, &plan.backend_plan, &[])
+            .map_err(|reasons| RunError {
+                message: reasons.join("; "),
+            })?;
     if provenance.realization != expected_realization {
         return Err(RunError {
             message: "physics_graph runtime provenance concrete realization does not match the resolved mesh/grid".to_string(),
@@ -2217,8 +2218,9 @@ pub fn run_planned_problem(
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan(
         problem,
+        plan,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -2255,26 +2257,37 @@ pub fn run_planned_problem(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
+            let physics_execution_context =
+                physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
+                    problem, plan,
+                )?;
+            let fem_stage_context =
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+                    .expect("FEM stage context");
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
             let crossover_decision = resolution.fem_crossover_decision.clone();
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_in_mode(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    &fem_stage_context,
                     until_seconds,
                     &runtime_outputs,
                     None,
                     artifact_writer.clone(),
+                    Some(&physics_execution_context),
                     plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem_in_mode(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
+                    &fem_stage_context,
                     until_seconds,
                     &runtime_outputs,
                     None,
                     artifact_writer.clone(),
+                    Some(&physics_execution_context),
                     plan.common.execution_mode,
                 )
             }?;
@@ -2316,6 +2329,7 @@ pub fn run_planned_problem(
     };
     let pipeline_summary = pipeline_summary?;
     attach_plan_integrator_resolution(&mut executed, plan);
+    physics_graph_execution::attach_executed_module_ids(problem, &mut executed)?;
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
     executed
         .auxiliary_artifacts
@@ -2533,8 +2547,9 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     let fem_stage_context = fem_mesh_identity
         .cloned()
         .map(types::FemStageExecutionContext::from_mesh_identity);
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan(
         problem,
+        plan,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -2582,6 +2597,10 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
+            let physics_execution_context =
+                physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
+                    problem, plan,
+                )?;
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
                 problem,
                 fem,
@@ -2605,6 +2624,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     &runtime_outputs,
                     live,
                     artifact_writer.clone(),
+                    Some(&physics_execution_context),
                     plan.common.execution_mode,
                 )
             } else {
@@ -2616,6 +2636,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     &runtime_outputs,
                     live,
                     artifact_writer.clone(),
+                    Some(&physics_execution_context),
                     plan.common.execution_mode,
                 )
             }?;
@@ -2667,6 +2688,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     };
     let pipeline_summary = pipeline_summary?;
     attach_plan_integrator_resolution(&mut executed, plan);
+    physics_graph_execution::attach_executed_module_ids(problem, &mut executed)?;
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
     executed
         .auxiliary_artifacts
@@ -2936,8 +2958,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         .cloned()
         .map(types::FemStageExecutionContext::from_mesh_identity);
     let mut artifact_pipeline =
-        artifact_pipeline::ArtifactPipeline::start_for_problem_with_autosave_root(
+        artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan_with_autosave_root(
             problem,
+            plan,
             output_dir.to_path_buf(),
             autosave_root.to_path_buf(),
             artifacts::build_field_context(problem, plan),
@@ -2987,6 +3010,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
+            let physics_execution_context =
+                physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
+                    problem, plan,
+                )?;
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
                 problem,
                 fem,
@@ -3015,6 +3042,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &runtime_outputs,
                     live,
                     artifact_writer.clone(),
+                    Some(&physics_execution_context),
                     plan.common.execution_mode,
                 )
             } else {
@@ -3026,6 +3054,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &runtime_outputs,
                     live,
                     artifact_writer.clone(),
+                    Some(&physics_execution_context),
                     plan.common.execution_mode,
                 )
             }?;
@@ -3077,6 +3106,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     };
     let pipeline_summary = pipeline_summary?;
     attach_plan_integrator_resolution(&mut executed, plan);
+    physics_graph_execution::attach_executed_module_ids(problem, &mut executed)?;
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
     executed
         .auxiliary_artifacts
@@ -3122,6 +3152,19 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemEigen(_)
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
+    let final_m = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => Some(
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|vector| vector.iter().copied())
+                .collect(),
+        ),
+        BackendPlanIR::Fem(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => None,
+    };
     on_step(StepUpdate {
         coupled_checkpoint: None,
         stats: final_stats,
@@ -3129,7 +3172,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         fem_mesh_generation_id: fem_stage_context
             .as_ref()
             .and_then(|context| context.generation_id()),
-        magnetization: None,
+        magnetization: final_m,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,
@@ -3290,8 +3333,9 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         });
     };
 
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan(
         problem,
+        &plan,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, &plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -3326,6 +3370,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     };
     let pipeline_summary = pipeline_summary?;
     attach_plan_integrator_resolution(&mut executed, &plan);
+    physics_graph_execution::attach_executed_module_ids(problem, &mut executed)?;
 
     if let Err(error) = artifacts::write_artifacts(
         output_dir,
@@ -3423,8 +3468,9 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     };
     let fem_mesh_generation_id = runtime.stage_context().generation_id();
 
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem_and_plan(
         problem,
+        &plan,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, &plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -3458,6 +3504,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     };
     let pipeline_summary = pipeline_summary?;
     attach_plan_integrator_resolution(&mut executed, &plan);
+    physics_graph_execution::attach_executed_module_ids(problem, &mut executed)?;
 
     if let Err(error) = artifacts::write_artifacts(
         output_dir,
@@ -5487,7 +5534,9 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax_in_mode(").count()
+        let route_count = source
+            .matches("fem::relax::execute_fem_relax_in_mode(")
+            .count()
             + source
                 .matches("fem::relax::execute_fem_relax_with_context_in_mode(")
                 .count();
@@ -5600,6 +5649,125 @@ mod tests {
             source.contains("StudyIR::Hysteresis")
                 && source.contains("run_planned_hysteresis_with_live_preview"),
             "unified InteractiveRuntime must route hysteresis through the hysteresis runner so per-point fields and settle algorithms are injected"
+        );
+    }
+
+    #[test]
+    fn every_hysteresis_early_return_routes_through_exact_provenance_finalizer() {
+        let runner = include_str!("lib.rs");
+        for entrypoint in [
+            "pub fn run_planned_problem(",
+            "pub fn run_planned_problem_with_hysteresis_stage_id(",
+            "pub fn run_planned_problem_with_callback_and_fem_mesh_identity(",
+            "pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(",
+            "pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(",
+            "pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(",
+        ] {
+            let body = runner
+                .split(entrypoint)
+                .nth(1)
+                .and_then(|tail| tail.split("\npub fn ").next())
+                .unwrap_or_else(|| panic!("missing hysteresis entrypoint {entrypoint}"));
+            assert!(
+                body.contains("hysteresis::run_planned_hysteresis"),
+                "{entrypoint} bypasses the shared hysteresis owner"
+            );
+        }
+
+        let interactive = include_str!("interactive/runtime.rs");
+        let interactive_body = interactive
+            .split("pub fn execute_planned_streaming(")
+            .nth(1)
+            .and_then(|tail| tail.split("let mut artifact_pipeline").next())
+            .expect("persistent interactive hysteresis branch");
+        assert!(interactive_body.contains("run_planned_hysteresis_with_live_preview"));
+
+        let hysteresis = include_str!("hysteresis.rs");
+        assert!(
+            hysteresis.contains("finalize_hysteresis_execution_provenance("),
+            "the shared hysteresis owner must validate and merge exact runtime observations before writing provenance"
+        );
+    }
+
+    #[test]
+    fn every_direct_minimizer_owner_observes_energy_evaluation() {
+        for (path, accepted_boundary) in [
+            ("fdm/cpu/reference.rs", "steps.push(final_stats);"),
+            (
+                "fdm/gpu/cuda/direct_minimizer.rs",
+                "artifacts.record_scalar(&accepted_stats)?;",
+            ),
+            (
+                "fem/relax/direct_minimizer.rs",
+                "let artifact_metrics = artifacts.record_scalar(&accepted_stats)?;",
+            ),
+        ] {
+            let source = fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src")
+                    .join(path),
+            )
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
+            let boundary = source
+                .find(accepted_boundary)
+                .unwrap_or_else(|| panic!("missing accepted minimizer boundary in {path}"));
+            let observation = source[..boundary]
+                .rfind("artifacts.observe_energy_evaluation();")
+                .unwrap_or_else(|| panic!("{path} does not observe accepted energy evaluation"));
+            assert!(
+                boundary - observation < 2_500,
+                "{path} observation is not owned by the accepted minimizer boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn fem_steady_transport_observation_is_independent_of_artifact_writer() {
+        let source = include_str!("dispatch.rs");
+        let bundle_body = source
+            .split("if let Some(mut bundle) = transport_bundle {")
+            .nth(1)
+            .expect("FEM steady-transport bundle owner");
+        let before_writer = bundle_body
+            .split("if let Some(writer) = transport_artifact_writer {")
+            .next()
+            .expect("FEM steady-transport writer branch");
+        assert!(
+            before_writer.contains("observe_steady_transport"),
+            "successful FEM steady transport must publish exact observation before the optional writer branch"
+        );
+
+        let hysteresis = include_str!("hysteresis.rs");
+        let settle_owner = hysteresis
+            .split("fn execute_settle_step_at_field(")
+            .nth(1)
+            .and_then(|tail| tail.split("fn resolved_settle_timestep(").next())
+            .expect("hysteresis settle-step owner");
+        assert!(
+            settle_owner.contains("PhysicsGraphExecutionContext::from_problem_and_backend_plan")
+                && settle_owner
+                    .contains("None,\n                Some(&physics_execution_context),"),
+            "FEM hysteresis must pass exact execution context even when no artifact writer exists"
+        );
+    }
+
+    #[test]
+    fn run_planned_problem_passes_exact_context_to_basic_fem_execution() {
+        let source = include_str!("lib.rs");
+        let body = source
+            .split("pub fn run_planned_problem(")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("\npub fn run_planned_problem_with_hysteresis_stage_id(")
+                    .next()
+            })
+            .expect("run_planned_problem body");
+        assert!(
+            body.contains("PhysicsGraphExecutionContext::from_problem_and_plan")
+                && body.contains("execute_fem_relax_with_context_in_mode(")
+                && body.contains("execute_fem_with_context_in_mode(")
+                && body.matches("Some(&physics_execution_context)").count() >= 2,
+            "basic public FEM execution must pass exact context through both relaxation and non-relaxation wrappers"
         );
     }
 
@@ -6583,6 +6751,18 @@ mod tests {
         assert!(
             runner.contains("BackendPlanIR::Fem(_) => None,"),
             "the generic finished=true update must not mask asynchronous FEM terminal magnetization with a synchronous final-m copy"
+        );
+        let generic_runner = runner
+            .split(
+                "pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root",
+            )
+            .nth(1)
+            .and_then(|source| source.split("/// Run a problem with live preview").next())
+            .expect("generic live runner source");
+        assert!(
+            generic_runner.contains("let final_m = match &plan.backend_plan")
+                && generic_runner.contains("magnetization: final_m,"),
+            "the generic FDM runner must publish the final magnetization in its terminal update"
         );
     }
 

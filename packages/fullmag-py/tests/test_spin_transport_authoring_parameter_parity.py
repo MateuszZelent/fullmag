@@ -109,7 +109,7 @@ def build_parity_fixtures() -> dict[tuple[str, str], list[dict[str, object]]]:
             required_topology_revision="topology-1",
         ),
         closure=fm.ConservativeCurrentClosedGeometry(
-            "fem_charge_rt0.v1",
+            "fem_closed_current_geometry.v1",
             "closure-1",
             "closure-1",
             [fm.ConservativeCurrentSourceCut(

@@ -917,7 +917,10 @@ impl Default for StepStats {
 
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
-    use super::{ExecutionProvenance, FdmMultilayerTransferTelemetry, StepStats};
+    use super::{
+        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
+        StepStats,
+    };
 
     #[test]
     fn step_stats_carry_hot_loop_transfer_audit() {
@@ -1300,6 +1303,36 @@ mod all_in_gpu_fem_transfer_audit_tests {
             value["fdm_multilayer_transfer_telemetry"]["d2h_bytes"],
             2_304
         );
+    }
+
+    #[test]
+    fn execution_provenance_serializes_native_multilayer_stage_telemetry() {
+        let provenance = ExecutionProvenance {
+            fdm_multilayer_stage_telemetry: Some(FdmMultilayerStageTelemetry {
+                status: "recorded".to_string(),
+                execution_engine: "cuda_native_multilayer_demag_v2".to_string(),
+                data_residency: "device_resident_per_refresh".to_string(),
+                fft_backend: "cuFFT".to_string(),
+                layer_count: 3,
+                refresh_count: 1,
+                forward_fft_count: 3,
+                inverse_fft_count: 3,
+                pair_accumulation_count: 9,
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let value = serde_json::to_value(provenance).expect("provenance should serialize");
+        let telemetry = &value["fdm_multilayer_stage_telemetry"];
+        assert_eq!(telemetry["status"], "recorded");
+        assert_eq!(telemetry["execution_engine"], "cuda_native_multilayer_demag_v2");
+        assert_eq!(telemetry["data_residency"], "device_resident_per_refresh");
+        assert_eq!(telemetry["fft_backend"], "cuFFT");
+        assert_eq!(telemetry["layer_count"], 3);
+        assert_eq!(telemetry["refresh_count"], 1);
+        assert_eq!(telemetry["forward_fft_count"], 3);
+        assert_eq!(telemetry["inverse_fft_count"], 3);
+        assert_eq!(telemetry["pair_accumulation_count"], 9);
     }
 }
 
@@ -2663,6 +2696,24 @@ pub struct FdmMultilayerTransferTelemetry {
     pub d2h_bytes: u64,
 }
 
+/// Exact stage accounting for one native CUDA D-07 demag refresh.
+///
+/// This describes only the device-resident demag operator. The surrounding
+/// multilayer timestep may remain host-authoritative and is reported
+/// independently by [`FdmMultilayerTransferTelemetry`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FdmMultilayerStageTelemetry {
+    pub status: String,
+    pub execution_engine: String,
+    pub data_residency: String,
+    pub fft_backend: String,
+    pub layer_count: u64,
+    pub refresh_count: u64,
+    pub forward_fft_count: u64,
+    pub inverse_fft_count: u64,
+    pub pair_accumulation_count: u64,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FemCrossoverDecision {
@@ -2686,6 +2737,15 @@ pub struct ExecutionProvenance {
     pub precision: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transport_modules: Vec<TransportExecutionProvenance>,
+    /// Legacy compatibility observations retained for historical artifacts.
+    /// Physics-graph realization must never infer an executed module from a
+    /// kind-only observation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executed_physics_kinds: Vec<String>,
+    /// Exact stable physics-graph module IDs confirmed by the executing
+    /// backend for this run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executed_physics_module_ids: Vec<String>,
     /// Demag operator kind: e.g. "tensor_fft_newell".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_operator_kind: Option<String>,
@@ -2749,6 +2809,9 @@ pub struct ExecutionProvenance {
     /// Measured host/device transfers for the FDM multilayer realization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fdm_multilayer_transfer_telemetry: Option<FdmMultilayerTransferTelemetry>,
+    /// Exact counters for a recorded native CUDA D-07 demag refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_multilayer_stage_telemetry: Option<FdmMultilayerStageTelemetry>,
     /// Read-only compatibility for artifacts written before `timestep_policy`.
     #[serde(default, skip_serializing)]
     pub dt_policy: Option<LegacyDtPolicy>,
@@ -2901,6 +2964,14 @@ pub struct TransportExecutionProvenance {
     pub constitutive_version: String,
     pub operator_version: String,
     pub physical_residual_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_operator_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spin_operator_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interface_formula_versions: Vec<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torque_formula_version: Option<String>,
     pub interface_realization: String,
     pub stage_coupling: String,
     pub capability_status: String,
@@ -2916,6 +2987,10 @@ pub struct TransportExecutionProvenance {
     pub interfaces: Vec<fullmag_ir::ResolvedFemTransportInterfaceIR>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torque_target: Option<fullmag_ir::ResolvedFemTorqueTargetIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fdm_interfaces: Vec<fullmag_ir::ResolvedSpinInterfaceFaceIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fdm_torque_target_cells: Vec<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback: Option<TransportFallbackProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3122,16 +3197,33 @@ mod field_snapshot_tests {
 
     #[test]
     fn canonical_snapshot_rejects_invalid_component_shape_and_revision() {
+        assert!(
+            FieldSnapshot::new("bad", 0, 0.0, 0.0, 0, "none", "node", "full", 1, vec![]).is_err()
+        );
         assert!(FieldSnapshot::new(
-            "bad", 0, 0.0, 0.0, 0, "none", "node", "full", 1, vec![]
+            "bad",
+            0,
+            0.0,
+            0.0,
+            3,
+            "xyz",
+            "node",
+            "full",
+            1,
+            vec![1.0, 2.0]
         )
         .is_err());
         assert!(FieldSnapshot::new(
-            "bad", 0, 0.0, 0.0, 3, "xyz", "node", "full", 1, vec![1.0, 2.0]
-        )
-        .is_err());
-        assert!(FieldSnapshot::new(
-            "bad", 0, 0.0, 0.0, 1, "scalar", "node", "full", 0, vec![1.0]
+            "bad",
+            0,
+            0.0,
+            0.0,
+            1,
+            "scalar",
+            "node",
+            "full",
+            0,
+            vec![1.0]
         )
         .is_err());
     }
@@ -3196,10 +3288,10 @@ mod tests {
         fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
         normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
         reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
-        FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
-        FemPoissonDemagProvenance, LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
-        ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate, TimestepBackend,
-        TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
+        FemMeshPayload, FemPoissonDemagProvenance, InitialTimestepReason, LegacyDtPolicy,
+        LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
+        RequestedTimestepPolicy, ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate,
+        TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
         TimestepValidationState,
     };
     use fullmag_ir::{
@@ -3218,8 +3310,8 @@ mod tests {
             integrator: IntegratorChoice::Heun,
             timestep_policy: crate::timestep_qualification::TimestepPolicyKind::Fixed,
             validation_state: TimestepValidationState::Unvalidated,
-            qualification_registry_version:
-                "fullmag.llg_timestep_qualification_registry.v1".to_string(),
+            qualification_registry_version: "fullmag.llg_timestep_qualification_registry.v1"
+                .to_string(),
             qualification_artifact_sha256: None,
             runtime_source_inputs_sha256: None,
             validated_scope: None,
@@ -3689,6 +3781,23 @@ mod tests {
 
         value["dt_policy"] = serde_json::json!("unknown_policy");
         assert!(serde_json::from_value::<ExecutionProvenance>(value).is_err());
+    }
+
+    #[test]
+    fn legacy_execution_provenance_defaults_exact_physics_module_ids() {
+        let mut value = serde_json::to_value(ExecutionProvenance {
+            executed_physics_module_ids: vec!["torque:strip".to_string()],
+            ..ExecutionProvenance::default()
+        })
+        .unwrap();
+        value
+            .as_object_mut()
+            .expect("execution provenance JSON object")
+            .remove("executed_physics_module_ids");
+
+        let provenance: ExecutionProvenance = serde_json::from_value(value).unwrap();
+
+        assert!(provenance.executed_physics_module_ids.is_empty());
     }
 
     #[test]

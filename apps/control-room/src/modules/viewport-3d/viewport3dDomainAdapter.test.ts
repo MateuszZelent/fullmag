@@ -154,6 +154,24 @@ describe("viewport3dDomainAdapter", () => {
     expect(adaptFdmDomainPresentation(presentation, 1_000)).toBeNull();
   });
 
+  it("fails closed instead of throwing when a malformed presentation omits bounds", () => {
+    expect(
+      adaptFdmDomainPresentation(
+        {
+          discretization: "fdm",
+          fdmGrid: {
+            descriptorCellCountCompatible: true,
+            origin: [0, 0, 0],
+            shape: [1, 1, 1],
+            spacing: [1, 1, 1],
+            totalCells: 1,
+          },
+        } as never,
+        1_000,
+      ),
+    ).toBeNull();
+  });
+
   it.each([
     ["stale descriptor", { ...fdmMembership, freshness: "stale" }, fdmMembershipBinary],
     [

@@ -355,8 +355,8 @@ mod control_room_guard_tests {
     use std::time::Duration;
 
     use super::{
-        api_openapi_response_is_compatible, control_room_launch_signature, packaged_install_root,
-        browser_open_args, wait_for_api_ready, BootstrapProcessGuard, ControlRoomGuard,
+        api_openapi_response_is_compatible, browser_open_args, control_room_launch_signature,
+        packaged_install_root, wait_for_api_ready, BootstrapProcessGuard, ControlRoomGuard,
         GuardedProcess,
     };
     use std::process::Command as TestCommand;
@@ -559,7 +559,10 @@ mod control_room_guard_tests {
             packaged_install_root(&root.join("bin").join("fullmag")),
             Some(root.clone())
         );
-        assert_eq!(packaged_install_root(&root.join("target").join("fullmag")), None);
+        assert_eq!(
+            packaged_install_root(&root.join("target").join("fullmag")),
+            None
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1581,9 +1584,7 @@ pub(crate) fn spawn_fullmag_api(
     stream_logs_to_terminal: bool,
 ) -> Result<std::process::Child> {
     let packaged_root = packaged_install_root(self_exe);
-    let runtime_root = packaged_root
-        .clone()
-        .unwrap_or_else(|| root.to_path_buf());
+    let runtime_root = packaged_root.clone().unwrap_or_else(|| root.to_path_buf());
     let sibling_api = self_exe.with_file_name(format!("fullmag-api{EXE_SUFFIX}"));
     let web_static_dir = {
         let candidates = [
@@ -1851,8 +1852,7 @@ pub(crate) fn which_opener() -> Result<String> {
 }
 
 fn is_wsl_environment() -> bool {
-    std::env::var_os("WSL_DISTRO_NAME").is_some()
-        || std::env::var_os("WSL_INTEROP").is_some()
+    std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
 }
 
 fn command_available(command: &str) -> bool {

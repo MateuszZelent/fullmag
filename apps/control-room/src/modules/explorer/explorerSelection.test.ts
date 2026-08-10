@@ -30,12 +30,18 @@ import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
-import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  AIRBOX_VISUALIZATION_TARGET,
+  ObjectVisualizationController,
+  resolveVisualizationTargetFromSelection,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
+import { viewportSelectionForFdmTarget } from "@/modules/viewport-3d/viewport3dSelection";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
 import { buildModelTree, flattenExplorerNodes } from "./builders/buildModelTree";
+import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
 import { selectExplorerNode } from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
 
@@ -260,6 +266,42 @@ describe("selectExplorerNode", () => {
         visualizationTargetId: "fdm-universe-outside-support",
       },
     });
+  });
+
+  it("selects the multilayer Airbox target as the canonical Airbox visualization target", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:airbox:multilayer-target",
+      kind: "airbox.multilayer.target",
+      label: "Multilayer H_demag target",
+      parentId: "model:airbox",
+      visualizationTargetId: "airbox",
+    }, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "airbox.multilayer.target",
+      nodeId: "model:airbox:multilayer-target",
+      ref: {
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+    expect(resolveVisualizationTargetFromSelection(kernel.selection.get())).toEqual(
+      AIRBOX_VISUALIZATION_TARGET,
+    );
+    expect(resolveVisualizationTargetFromSelection(kernel.selection.get())).not.toMatchObject({
+      id: "fdm-universe-outside-support",
+    });
+
+    const viewportSelection = viewportSelectionForFdmTarget({
+      id: "airbox",
+      kind: "airbox",
+      label: "Multilayer Airbox",
+    });
+    expect(viewportSelection).not.toBeNull();
+    expect(resolveVisualizationTargetFromSelection(viewportSelection!)).toEqual(
+      AIRBOX_VISUALIZATION_TARGET,
+    );
   });
 
   it("keeps the shared FDM Airbox root on the outside-support target", () => {
@@ -1357,80 +1399,7 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("selects a spin transport as its own semantic resource", () => {
-    const kernel = makeKernel();
-    selectExplorerNode(kernel, {
-      id: "model:physics:spin-transports:spin",
-      kind: "physics.spin-transport",
-      label: "spin",
-      parentId: "model:physics:spin-transports",
-      spinTransportId: "spin",
-      spinTransportIndex: 0,
-    }, "explorer");
-    expect(kernel.selection.get().ref).toEqual({
-      kind: "physics.spin-transport",
-      nodeId: "model:physics:spin-transports:spin",
-      spinTransportId: "spin",
-      spinTransportIndex: 0,
-      type: "spin-transport",
-    });
-  });
-
-  it("selects a current transport record with stable identity", () => {
-    const kernel = makeKernel();
-    selectExplorerNode(kernel, {
-      currentTransportId: "charge",
-      id: "model:physics:current-transports:id:charge",
-      kind: "physics.current-transport",
-      label: "charge",
-      parentId: "model:physics:current-transports",
-    }, "explorer");
-
-    expect(kernel.selection.get().ref).toEqual({
-      currentTransportId: "charge",
-      kind: "physics.current-transport",
-      nodeId: "model:physics:current-transports:id:charge",
-      type: "current-transport",
-    });
-  });
-
-  it("keeps separate id-less current transport records positionally selectable", () => {
-    const kernel = makeKernel();
-    selectExplorerNode(kernel, {
-      currentTransportIndex: 1,
-      id: "model:physics:current-transports:position:1",
-      kind: "physics.current-transport",
-      label: "Unknown current transport 2",
-      parentId: "model:physics:current-transports",
-    }, "explorer");
-
-    expect(kernel.selection.get().ref).toEqual({
-      currentTransportIndex: 1,
-      kind: "physics.current-transport",
-      nodeId: "model:physics:current-transports:position:1",
-      type: "current-transport",
-    });
-  });
-
-  it("keeps an id-less spin transport positionally selectable", () => {
-    const kernel = makeKernel();
-    selectExplorerNode(kernel, {
-      id: "model:physics:spin-transports:position:2",
-      kind: "physics.spin-transport",
-      label: "Unknown spin transport 3",
-      parentId: "model:physics:spin-transports",
-      spinTransportIndex: 2,
-    }, "explorer");
-
-    expect(kernel.selection.get().ref).toEqual({
-      kind: "physics.spin-transport",
-      nodeId: "model:physics:spin-transports:position:2",
-      spinTransportIndex: 2,
-      type: "spin-transport",
-    });
-  });
-
-  it("selects a graph module without reintroducing family-list identity", () => {
+  it("routes a known graph module to its dedicated family inspector by stable id", () => {
     const kernel = makeKernel();
     selectExplorerNode(kernel, {
       id: "model:object:film:physics:module:spin%3Afilm",
@@ -1445,13 +1414,60 @@ describe("selectExplorerNode", () => {
     }, "explorer");
 
     expect(kernel.selection.get().ref).toEqual({
-      kind: "physics.module",
+      kind: "physics.spin-transport",
       nodeId: "model:object:film:physics:module:spin%3Afilm",
-      physicsActivation: "active",
-      physicsModuleId: "spin:film",
-      physicsModuleKind: "spin_transport",
-      physicsScopeKind: "object",
-      type: "physics-module",
+      spinTransportId: "spin:film",
+      type: "spin-transport",
     });
+  });
+
+  it("routes a graph spin interface with its owning transport identity", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:physics:cross-object:module:nf",
+      kind: "physics.module",
+      label: "Spin-mixing interface",
+      parentId: "model:physics:cross-object",
+      physicsDependencyIds: ["spin:stack"],
+      physicsModuleId: "nf",
+      physicsModuleKind: "spin_interface",
+      physicsScopeKind: "cross-object",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "physics.spin-interface",
+      nodeId: "model:physics:cross-object:module:nf",
+      spinInterfaceId: "nf",
+      spinInterfaceOwnerId: "spin:stack",
+      type: "spin-interface",
+    });
+  });
+
+  it("routes a current module emitted by the graph tree to its dedicated inspector selection", () => {
+    const kernel = makeKernel();
+    const node = buildPhysicsGraphTree({
+      graph: {
+        edges: [],
+        modules: [{
+          activation: "active",
+          applies_to: [{ kind: "global" }],
+          capability: "semantic_only",
+          depends_on: [],
+          id: "known-current",
+          kind: "current_transport",
+        }],
+        schema_version: "physics_graph.v1",
+      },
+    })[0]?.children?.[0];
+    expect(node).toBeDefined();
+    selectExplorerNode(kernel, node!, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportId: "known-current",
+      kind: "physics.current-transport",
+      nodeId: "model:physics:global:module:known-current",
+      type: "current-transport",
+    });
+    expect(kernel.selection.get().kind).toBe("physics.current-transport");
   });
 });

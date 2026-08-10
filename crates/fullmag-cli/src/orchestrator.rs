@@ -936,19 +936,17 @@ fn current_live_metadata(
     let timestep_qualification = resolved_session_runtime.as_ref().and_then(|runtime| {
         fullmag_runner::timestep_qualification_for_plan(plan, &runtime.resolved_device)
     });
-    let resolved_execution = resolved_session_runtime
-        .as_ref()
-        .map(|runtime| {
-            serde_json::json!({
-                "backend": &runtime.resolved_backend,
-                "device": &runtime.resolved_device,
-                "precision": &runtime.resolved_precision,
-                "mode": &runtime.resolved_mode,
-                "runtime_family": &runtime.resolved_runtime_family,
-                "engine_id": &runtime.resolved_engine_id,
-                "lossy_fallback_used": runtime.resolved_fallback.is_some(),
-            })
-        });
+    let resolved_execution = resolved_session_runtime.as_ref().map(|runtime| {
+        serde_json::json!({
+            "backend": &runtime.resolved_backend,
+            "device": &runtime.resolved_device,
+            "precision": &runtime.resolved_precision,
+            "mode": &runtime.resolved_mode,
+            "runtime_family": &runtime.resolved_runtime_family,
+            "engine_id": &runtime.resolved_engine_id,
+            "lossy_fallback_used": runtime.resolved_fallback.is_some(),
+        })
+    });
     let capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
     let live_preview_supported_quantities = capabilities
         .as_ref()
@@ -3638,6 +3636,71 @@ fn scripted_stage_execution_state(
         active_stage_kind,
         published_runtime_state,
     )
+}
+
+fn scripted_stage_execution_state_with_completion(
+    total_stages: usize,
+    active_index: usize,
+    active_stage_kind: &str,
+    runtime_state: &str,
+    command_id: Option<&str>,
+    started_at_unix_ms: Option<u128>,
+    completed_at_unix_ms: Option<u128>,
+    artifact_ref: Option<String>,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+    incoming_transition: Option<&StageTransitionMetadata>,
+) -> CurrentLiveStageExecutionState {
+    let mut execution = scripted_stage_execution_state(
+        total_stages,
+        active_index,
+        active_stage_kind,
+        runtime_state,
+        command_id,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        artifact_ref,
+        completion.and_then(|value| value.reason),
+        incoming_transition,
+    );
+    if let Some(stage) = execution.stages.get_mut(active_index) {
+        stage.reason = completion.and_then(|value| value.reason);
+        stage.converged = completion.is_some_and(|value| value.converged);
+        stage.metric = completion.and_then(|value| value.metric);
+        stage.metric_name = completion.and_then(|value| value.metric_name.clone());
+        stage.metric_value = completion.and_then(|value| value.metric_value);
+        stage.threshold = completion.and_then(|value| value.threshold);
+    }
+    execution
+}
+
+fn preserve_terminal_stage_history(
+    next: &mut CurrentLiveStageExecutionState,
+    previous: Option<&CurrentLiveStageExecutionState>,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let active_index = next.active_stage_index.unwrap_or(next.total_stages);
+    let limit = active_index
+        .min(next.stages.len())
+        .min(previous.stages.len());
+    for index in 0..limit {
+        if matches!(
+            previous.stages[index].status.as_str(),
+            "completed" | "skipped" | "cancelled" | "stopped" | "failed"
+        ) {
+            next.stages[index] = previous.stages[index].clone();
+        }
+    }
+    let runtime_state = next.runtime_state.clone();
+    let active_stage_index = next.active_stage_index;
+    let active_stage_kind = next.active_stage_kind.clone();
+    *next = stage_execution_from_records(
+        &next.stages,
+        active_stage_index,
+        active_stage_kind.as_deref(),
+        &runtime_state,
+    );
 }
 
 fn apply_stage_transition_metadata(
@@ -8166,7 +8229,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &stage_initial_update,
             );
             state.live_state = live_state_manifest_from_update(stage_initial_update.clone());
-            state.stage_execution = Some(scripted_stage_execution_state(
+            let previous_stage_execution = state.stage_execution.clone();
+            let mut next_stage_execution = scripted_stage_execution_state(
                 stage_count,
                 stage_index,
                 &stage.entrypoint_kind,
@@ -8177,7 +8241,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Some(current_stage_artifact_dir.display().to_string()),
                 None,
                 stage.incoming_transition.as_ref(),
-            ));
+            );
+            preserve_terminal_stage_history(
+                &mut next_stage_execution,
+                previous_stage_execution.as_ref(),
+            );
+            state.stage_execution = Some(next_stage_execution);
             clear_cached_preview_fields(state);
         });
 
@@ -8263,7 +8332,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     final_update,
                     true,
                 );
-                state.stage_execution = Some(scripted_stage_execution_state(
+                let previous_stage_execution = state.stage_execution.clone();
+                let mut next_stage_execution = scripted_stage_execution_state(
                     stage_count,
                     stage_index,
                     &stage.entrypoint_kind,
@@ -8274,7 +8344,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(current_stage_artifact_dir.display().to_string()),
                     None,
                     stage.incoming_transition.as_ref(),
-                ));
+                );
+                preserve_terminal_stage_history(
+                    &mut next_stage_execution,
+                    previous_stage_execution.as_ref(),
+                );
+                state.stage_execution = Some(next_stage_execution);
             });
 
             if matches!(action, ResolvedScriptStageAction::LoadState { .. }) {
@@ -8655,6 +8730,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
         }
 
+        let stage_failed = stage_result.status == fullmag_runner::RunStatus::Failed
+            || stage_result
+                .completion
+                .as_ref()
+                .is_some_and(|completion| completion.status == "failed");
         if let Some(final_update) = final_stage_step_update(
             &execution_plan.backend_plan,
             stage_fem_mesh_asset
@@ -8664,22 +8744,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &stage_result.final_magnetization,
             step_offset,
             time_offset,
-            is_session_final_stage,
+            is_session_final_stage && !stage_failed,
         ) {
             live_workspace.update(|state| {
-                state.session.status = if final_update.finished {
-                    "completed".to_string()
-                } else {
-                    "running".to_string()
-                };
-                state.run = running_run_manifest_from_update(
+                // The terminal solver payload must use the same ingest path as ordinary live
+                // callbacks; otherwise the latest-step view changes while latest_fields.m
+                // remains at source_step=0.
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
                     &run_id,
                     &session_id,
                     &artifact_dir,
-                    &final_update,
+                    final_update,
+                    true,
                 );
-                state.live_state = live_state_manifest_from_update(final_update.clone());
-                set_latest_scalar_row_if_due(state, &final_update);
             });
         }
 
@@ -8758,7 +8836,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     });
             }
             live_workspace.update(|state| {
-                state.stage_execution = Some(scripted_stage_execution_state(
+                let previous_stage_execution = state.stage_execution.clone();
+                let mut next_stage_execution = scripted_stage_execution_state(
                     stage_count,
                     stage_index,
                     &stage.entrypoint_kind,
@@ -8773,7 +8852,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         None
                     },
                     stage.incoming_transition.as_ref(),
-                ));
+                );
+                preserve_terminal_stage_history(
+                    &mut next_stage_execution,
+                    previous_stage_execution.as_ref(),
+                );
+                state.stage_execution = Some(next_stage_execution);
             });
             live_workspace.push_log(
                 "system",
@@ -8804,13 +8888,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             break;
         }
 
+        let stage_status = if stage_failed { "failed" } else { "completed" };
         {
             let final_step = stage_result.steps.last();
             eprintln!(
-                "[fullmag] stage {}/{} ({}) completed — steps={}  t={:.4e}  max_torque[T]={:.4e}  stop: {}",
+                "[fullmag] stage {}/{} ({}) {} — steps={}  t={:.4e}  max_torque[T]={:.4e}  stop: {}",
                 stage_index + 1,
                 stage_count,
                 stage.entrypoint_kind,
+                stage_status,
                 stage_result.steps.len(),
                 final_step.map(|s| s.time).unwrap_or(0.0),
                 final_step.map(|s| s.max_torque_T).unwrap_or(0.0),
@@ -8818,29 +8904,54 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
         }
         live_workspace.push_log(
-            "success",
+            if stage_failed { "error" } else { "success" },
             format!(
-                "Stage {}/{} ({}) completed",
+                "Stage {}/{} ({}) {}",
                 stage_index + 1,
                 stage_count,
-                stage.entrypoint_kind
+                stage.entrypoint_kind,
+                stage_status
             ),
         );
         let completed_at_unix_ms = unix_time_millis()?;
         live_workspace.update(|state| {
-            state.stage_execution = Some(scripted_stage_execution_state(
+            let previous_stage_execution = state.stage_execution.clone();
+            let mut next_stage_execution = scripted_stage_execution_state_with_completion(
                 stage_count,
                 stage_index,
                 &stage.entrypoint_kind,
-                "completed",
+                stage_status,
                 start_solver_command_id.as_deref(),
                 Some(stage_started_at_unix_ms),
                 Some(completed_at_unix_ms),
                 Some(current_stage_artifact_dir.display().to_string()),
-                None,
+                stage_result.completion.as_ref(),
                 stage.incoming_transition.as_ref(),
-            ));
+            );
+            preserve_terminal_stage_history(
+                &mut next_stage_execution,
+                previous_stage_execution.as_ref(),
+            );
+            state.stage_execution = Some(next_stage_execution);
+            if stage_failed {
+                state.session.status = "failed".to_string();
+                state.run.status = "failed".to_string();
+                set_live_state_status(&mut state.live_state, "failed", Some(true));
+            }
         });
+        if stage_failed {
+            let failure_detail = format_stop_reason(stage_result.completion.as_ref());
+            let message = format!(
+                "Stage {}/{} ({}) failed: {}",
+                stage_index + 1,
+                stage_count,
+                stage.entrypoint_kind,
+                failure_detail,
+            );
+            live_workspace.push_log("error", message.clone());
+            eprintln!("[fullmag] {}", message);
+            return Err(anyhow!(message));
+        }
     }
 
     if interactive_requested {
@@ -10694,12 +10805,13 @@ mod tests {
         mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
         mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
-        project_script_export_failure, resolve_adaptive_convergence_metric,
-        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
-        run_active_preparation_operation, run_owned_preparation_stage,
-        run_script_preparation_preflight, run_solver_initialization,
+        preserve_terminal_stage_history, project_script_export_failure,
+        resolve_adaptive_convergence_metric, resolve_preview_field_every_n,
+        resolved_shared_domain_object_region_markers, run_active_preparation_operation,
+        run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
-        shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
+        scripted_stage_execution_state_with_completion, shared_domain_object_region_mesh_specs,
+        stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
@@ -13521,6 +13633,7 @@ mod tests {
             field_drives: Vec::new(),
             current_modules: Vec::new(),
             spin_torque_modules: Vec::new(),
+            physics_graph: None,
             excitation_analysis: None,
             current_density: None,
             stt_degree: None,
@@ -13784,6 +13897,44 @@ mod tests {
             Some(fullmag_ir::StageStopReason::MaxSteps)
         );
         assert_eq!(execution.stages[1].status, "pending");
+    }
+
+    #[test]
+    fn scripted_stage_execution_preserves_previous_relaxation_completion() {
+        let completion = stage_completion(fullmag_ir::StageStopReason::Torque);
+        let first_stage = scripted_stage_execution_state_with_completion(
+            2,
+            0,
+            "flat_relax",
+            "completed",
+            Some("cmd-stage-0"),
+            Some(1_700_000_000_000),
+            Some(1_700_000_001_000),
+            Some("artifacts/stage-000".to_string()),
+            Some(&completion),
+            None,
+        );
+        let mut second_stage = scripted_stage_execution_state(
+            2,
+            1,
+            "flat_save_state",
+            "completed",
+            None,
+            Some(1_700_000_001_001),
+            Some(1_700_000_001_002),
+            Some("artifacts/stage-001".to_string()),
+            None,
+            None,
+        );
+
+        preserve_terminal_stage_history(&mut second_stage, Some(&first_stage));
+
+        assert!(second_stage.stages[0].converged);
+        assert_eq!(
+            second_stage.stages[0].reason,
+            Some(fullmag_ir::StageStopReason::Torque)
+        );
+        assert_eq!(second_stage.stages[0].metric_value, Some(6.7e-5));
     }
 
     #[test]

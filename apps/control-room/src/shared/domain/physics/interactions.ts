@@ -21,7 +21,10 @@ export const BACKEND_INTERACTION_IDS = [
 export type PhysicsInteractionId = (typeof BACKEND_INTERACTION_IDS)[number];
 
 type InteractionAvailability = "object" | "study" | "deferred";
-type InteractionScope = "object_or_region" | "global" | "global_or_region";
+type InteractionScope =
+  | "object_or_region"
+  | "global"
+  | "global_or_object_or_region";
 type InteractionFieldKind = "number" | "select" | "text" | "vector3" | "vector6";
 
 interface InteractionFieldOption {
@@ -217,7 +220,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     ],
     id: "current_transport",
     label: "Electric current",
-    scope: "global_or_region",
+    scope: "global_or_object_or_region",
     storage: "study",
   },
   {
@@ -490,8 +493,8 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
       },
     ],
     id: "oersted_field",
-    label: "Regional field source",
-    scope: "global_or_region",
+    label: "Oersted field",
+    scope: "global_or_object_or_region",
     storage: "study",
   },
   {

@@ -90,10 +90,6 @@
 }
 
 @container (max-width: 420px) {
-  .fm-physics-inspector-overview .fm-inspector-metric-strip[data-count="4"] {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .fm-physics-inspector-overview .fm-inspector-overview-frame__actions {
     align-items: stretch;
     flex-direction: column;

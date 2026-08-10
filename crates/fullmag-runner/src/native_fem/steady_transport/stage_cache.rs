@@ -30,17 +30,14 @@ pub(crate) struct SteadySourceCacheKey {
 }
 
 impl SteadySourceCacheKey {
-    pub(crate) fn from_view(
-        view: &ResolvedFemConservativeCurrentViewIR,
-    ) -> Result<Self, RunError> {
+    pub(crate) fn from_view(view: &ResolvedFemConservativeCurrentViewIR) -> Result<Self, RunError> {
         let ConservativeCurrentClosureIR::ClosedGeometry {
             revision, digest, ..
         } = &view.closure
         else {
             return Err(RunError {
-                message:
-                    "steady source cache requires a closed-geometry conservative current view"
-                        .into(),
+                message: "steady source cache requires a closed-geometry conservative current view"
+                    .into(),
             });
         };
         if !view.identity.evaluation_time_s.is_finite()
@@ -146,9 +143,7 @@ impl SteadySourceCache {
     }
 
     pub(crate) fn current_identity(&self) -> Option<(&SteadySourceCacheKey, &str)> {
-        self.key
-            .as_ref()
-            .zip(self.view_identity_digest.as_deref())
+        self.key.as_ref().zip(self.view_identity_digest.as_deref())
     }
 
     pub(crate) fn hits(&self) -> u64 {
@@ -211,7 +206,8 @@ impl SteadySourceStageCoordinator {
         if let Some((pending_key, pending_digest)) = self.pending_solve.as_ref() {
             if pending_key != key || pending_digest != view_identity_digest {
                 return Err(RunError {
-                    message: "steady source stage changed identity before publishing its solve".into(),
+                    message: "steady source stage changed identity before publishing its solve"
+                        .into(),
                 });
             }
             return Err(RunError {
@@ -234,7 +230,8 @@ impl SteadySourceStageCoordinator {
         }
         if self.pending_solve.as_ref() != Some(&(key.clone(), view_identity_digest.clone())) {
             return Err(RunError {
-                message: "steady source solve identity does not match the observed RHS stage".into(),
+                message: "steady source solve identity does not match the observed RHS stage"
+                    .into(),
             });
         }
         let observation = self.cache.publish_solve(key, view_identity_digest)?;
@@ -294,11 +291,11 @@ pub(crate) fn validate_plan(
     if descriptor.stage_coupling != STEADY_SOURCE_CACHE_POLICY {
         return Ok(None);
     }
-    if resolved.resolved_coupling != TransportCouplingIR::OneWay
-        || !descriptor.oersted_source_bound
+    if resolved.resolved_coupling != TransportCouplingIR::OneWay || !descriptor.oersted_source_bound
     {
         return Err(RunError {
-            message: "steady source cache requires one-way transport bound to an Oersted source".into(),
+            message: "steady source cache requires one-way transport bound to an Oersted source"
+                .into(),
         });
     }
     let Some(view) = descriptor.conservative_current_view.as_ref() else {
@@ -314,9 +311,9 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         ConservativeCurrentBoundaryFaceIR, ConservativeCurrentBoundaryRoleIR,
-        ConservativeCurrentClosureIR, ConservativeCurrentIdentityIR,
-        ConservativeCurrentPinsIR, ConservativeCurrentSourceCutFacePairIR,
-        ConservativeCurrentSourceCutIR, ResolvedFemConservativeCurrentViewIR,
+        ConservativeCurrentClosureIR, ConservativeCurrentIdentityIR, ConservativeCurrentPinsIR,
+        ConservativeCurrentSourceCutFacePairIR, ConservativeCurrentSourceCutIR,
+        ResolvedFemConservativeCurrentViewIR,
     };
 
     fn view() -> ResolvedFemConservativeCurrentViewIR {
@@ -336,13 +333,11 @@ mod tests {
         };
         ResolvedFemConservativeCurrentViewIR {
             stable_vertex_ids: vec![1, 2, 3, 4],
-            boundary_faces: vec![
-                ConservativeCurrentBoundaryFaceIR {
-                    face_vertex_ids: [1, 2, 3],
-                    role: ConservativeCurrentBoundaryRoleIR::SourceCut,
-                    circuit_id: Some("cut".into()),
-                },
-            ],
+            boundary_faces: vec![ConservativeCurrentBoundaryFaceIR {
+                face_vertex_ids: [1, 2, 3],
+                role: ConservativeCurrentBoundaryRoleIR::SourceCut,
+                circuit_id: Some("cut".into()),
+            }],
             pins: ConservativeCurrentPinsIR {
                 required_source_state_revision: identity.source_state_revision.clone(),
                 required_source_field_digest: identity.source_field_digest.clone(),
@@ -417,8 +412,7 @@ mod tests {
         let stage_one = SteadySourceCacheKey::from_view(&view()).expect("stage one key");
         let mut stage_two_view = view();
         stage_two_view.identity.stage_identity = 8;
-        let stage_two =
-            SteadySourceCacheKey::from_view(&stage_two_view).expect("stage two key");
+        let stage_two = SteadySourceCacheKey::from_view(&stage_two_view).expect("stage two key");
         let mut coordinator = SteadySourceStageCoordinator::default();
 
         coordinator.begin_attempt().expect("initial attempt");
@@ -476,9 +470,11 @@ mod tests {
         assert_eq!(coordinator.cache().misses(), 3);
         assert_eq!(coordinator.cache().invalidations(), 2);
         assert_eq!(
-            coordinator.cache().current_identity().map(|(_, digest)| digest),
+            coordinator
+                .cache()
+                .current_identity()
+                .map(|(_, digest)| digest),
             Some("view-2")
         );
     }
-
 }

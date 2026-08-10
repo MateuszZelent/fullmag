@@ -1121,6 +1121,48 @@ describe("resolveViewport3DColorbarLegend", () => {
     ]);
   });
 
+  it("keeps FDM target-view colorbars on the full-domain field scope", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const targetViewsStart = source.indexOf(
+      "...sceneProps.fdmTargetViews.map((view) => ({",
+    );
+    const targetViewsEnd = source.indexOf(
+      "      })),\n    ],",
+      targetViewsStart,
+    );
+    const targetViewsSource = source.slice(targetViewsStart, targetViewsEnd);
+
+    expect(targetViewsSource).toContain("objectScopeId: null");
+    expect(targetViewsSource).toContain('targetKind: "fdm-domain"');
+  });
+
+  it("does not plan a colorbar for a quantity missing from the FDM catalog", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      availableQuantityIds: new Set(["m"]),
+      fdmSettings: visualizationSettings({
+        activeQuantityId: "H_demag",
+        viewportColorbarVisible: true,
+      }),
+      parts: [
+        {
+          id: "airbox",
+          label: "Airbox",
+          role: "airbox",
+          settings: visualizationSettings({
+            activeQuantityId: "H_demag",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "airbox",
+        },
+      ],
+    });
+
+    expect(targets).toEqual([]);
+  });
+
   it("does not plan a second viewport colorbar for air-interface parts", () => {
     const targets = buildViewport3DColorbarTargetPlans({
       parts: [
@@ -1860,7 +1902,10 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain('aria-label="Airbox overlay"');
     expect(source).toMatch(/\n\s+Airbox\n/);
     expect(source).toContain("fdmUniverseOutsideSupportSettings?.visible");
-    expect(source).toContain("patchTarget(targetForFdmUniverseOutsideSupport()");
+    expect(source).toContain(
+      "patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET",
+    );
+    expect(source).not.toContain("patchTarget(AIRBOX_VISUALIZATION_TARGET");
     expect(source).toContain("legend.magneticSupport");
     expect(source).toContain("legend.outsideSupport");
     expect(source).toContain('className="fm-viewport-3d__airbox-legend"');

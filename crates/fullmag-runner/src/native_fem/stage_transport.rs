@@ -5,6 +5,7 @@
 //! vector to the LLG RHS and keeps the attempt transaction separate from the
 //! Oersted interaction.
 
+use super::stage_coupled::{StageM2CoupledProvider, FEM_STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY};
 use super::steady_transport::{
     preflight_transport_plans, solve_native_fem_steady_transport, NativeFemSteadyTransportRequest,
 };
@@ -23,8 +24,11 @@ pub(crate) fn plan_requests_stage_transport_callback(plan: &FemPlanIR) -> bool {
     plan.spin_transport_plans.iter().any(|transport| {
         transport.resolved_coupling == TransportCouplingIR::Bidirectional
             && transport.fem_cpu_double.as_ref().is_some_and(|descriptor| {
-                descriptor.stage_coupling == FEM_STAGE_TRANSPORT_CALLBACK_POLICY
-                    && descriptor.torque_target.is_some()
+                matches!(
+                    descriptor.stage_coupling.as_str(),
+                    FEM_STAGE_TRANSPORT_CALLBACK_POLICY
+                        | FEM_STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY
+                ) && descriptor.torque_target.is_some()
             })
     })
 }
@@ -35,6 +39,8 @@ pub(crate) struct StageTransportObservation {
     pub evaluation_time_s: f64,
     pub envelope_multiplier: f64,
     pub source_state_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_state_digest: Option<String>,
     pub torque_sha256: String,
     pub torque_l2_per_s: f64,
 }
@@ -42,6 +48,7 @@ pub(crate) struct StageTransportObservation {
 pub(crate) struct StageTransportProvider {
     request_template: NativeFemSteadyTransportRequest,
     time_envelope: Option<TimeEnvelopeIR>,
+    coupled_evaluator: Option<StageM2CoupledProvider>,
     attempt_active: bool,
     pending_observation: Option<StageTransportObservation>,
     accepted_observation: Option<StageTransportObservation>,
@@ -54,6 +61,13 @@ pub(crate) struct StageTransportProvider {
 
 impl StageTransportProvider {
     pub(crate) fn from_plan(plan: &FemPlanIR) -> Result<Option<Self>, RunError> {
+        Self::from_plan_with_coupled(plan, None)
+    }
+
+    pub(crate) fn from_plan_with_coupled(
+        plan: &FemPlanIR,
+        coupled_evaluator: Option<StageM2CoupledProvider>,
+    ) -> Result<Option<Self>, RunError> {
         if !plan_requests_stage_transport_callback(plan) {
             return Ok(None);
         }
@@ -63,10 +77,16 @@ impl StageTransportProvider {
         let Some(descriptor) = prepared.resolved.fem_cpu_double.as_ref() else {
             return Ok(None);
         };
-        if descriptor.stage_coupling != FEM_STAGE_TRANSPORT_CALLBACK_POLICY
+        let is_combined = descriptor.stage_coupling == FEM_STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY;
+        if (!is_combined && descriptor.stage_coupling != FEM_STAGE_TRANSPORT_CALLBACK_POLICY)
             || descriptor.torque_target.is_none()
         {
             return Ok(None);
+        }
+        if is_combined && coupled_evaluator.is_none() {
+            return Err(RunError {
+                message: "combined FEM M2 stage transport callback was requested but its shared evaluator could not be materialized".into(),
+            });
         }
         if prepared.request.constitutive_model
             != super::steady_transport::NativeFemSteadyTransportConstitutiveModel::ReciprocalM2
@@ -78,6 +98,7 @@ impl StageTransportProvider {
         Ok(Some(Self {
             request_template: prepared.request,
             time_envelope: descriptor.time_envelope.clone(),
+            coupled_evaluator,
             attempt_active: false,
             pending_observation: None,
             accepted_observation: None,
@@ -103,9 +124,14 @@ impl StageTransportProvider {
     }
 
     pub(crate) fn telemetry(&self) -> serde_json::Value {
+        let policy = if self.coupled_evaluator.is_some() {
+            FEM_STAGE_TRANSPORT_OERSTED_CALLBACK_POLICY
+        } else {
+            FEM_STAGE_TRANSPORT_CALLBACK_POLICY
+        };
         serde_json::json!({
             "schema": "fem_stage_transport_callback.v1",
-            "policy": FEM_STAGE_TRANSPORT_CALLBACK_POLICY,
+            "policy": policy,
             "device_lane": "cpu_native",
             "begin_count": self.begin_count,
             "commit_count": self.commit_count,
@@ -113,6 +139,7 @@ impl StageTransportProvider {
             "evaluate_count": self.evaluate_count,
             "accepted_observation": self.accepted_observation,
             "last_observation": self.last_observation,
+            "shared_evaluator": self.coupled_evaluator.as_ref().map(StageM2CoupledProvider::telemetry),
         })
     }
 
@@ -148,50 +175,77 @@ impl StageTransportProvider {
         if m_flat.iter().any(|value| !value.is_finite()) {
             return Err("stage transport magnetization contains a non-finite value".into());
         }
-        let mut request = self.request_template.clone();
-        request.magnetization = m_flat
+        let magnetization = m_flat
             .chunks_exact(3)
             .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-            .collect();
-        let envelope_multiplier = self
-            .time_envelope
-            .as_ref()
-            .map(|envelope| evaluate_time_envelope(envelope, evaluation_time_s))
-            .transpose()?
-            .unwrap_or(1.0);
-        if !envelope_multiplier.is_finite() {
-            return Err(
-                "stage transport time envelope evaluated to a non-finite multiplier".into(),
-            );
-        }
-        apply_charge_source_envelope(&mut request.charge_dirichlet, envelope_multiplier)?;
-        let result = solve_native_fem_steady_transport(&request).map_err(|error| error.message)?;
-        if result.torque_xyz_per_s.len() * 3 != m_xyz_len as usize
-            || result
+            .collect::<Vec<_>>();
+        let (
+            flat_torque,
+            envelope_multiplier,
+            source_state_revision,
+            source_state_digest,
+            torque_sha256,
+        ) = if let Some(coupled) = self.coupled_evaluator.as_ref() {
+            let evaluation = coupled.evaluate(&magnetization, evaluation_time_s, stage_identity)?;
+            (
+                evaluation.torque_xyz_per_s,
+                evaluation.envelope_multiplier,
+                evaluation.source_state_revision,
+                Some(evaluation.source_state_digest),
+                evaluation.torque_sha256,
+            )
+        } else {
+            let mut request = self.request_template.clone();
+            request.magnetization = magnetization;
+            let envelope_multiplier = self
+                .time_envelope
+                .as_ref()
+                .map(|envelope| evaluate_time_envelope(envelope, evaluation_time_s))
+                .transpose()?
+                .unwrap_or(1.0);
+            if !envelope_multiplier.is_finite() {
+                return Err(
+                    "stage transport time envelope evaluated to a non-finite multiplier".into(),
+                );
+            }
+            apply_charge_source_envelope(&mut request.charge_dirichlet, envelope_multiplier)?;
+            let result =
+                solve_native_fem_steady_transport(&request).map_err(|error| error.message)?;
+            if result.torque_xyz_per_s.len() * 3 != m_xyz_len as usize
+                || result
+                    .torque_xyz_per_s
+                    .iter()
+                    .flatten()
+                    .any(|value| !value.is_finite())
+            {
+                return Err("stage transport solve returned an invalid torque field".into());
+            }
+            let flat_torque = result
                 .torque_xyz_per_s
                 .iter()
                 .flatten()
-                .any(|value| !value.is_finite())
-        {
-            return Err("stage transport solve returned an invalid torque field".into());
-        }
-        let flat_torque = result
-            .torque_xyz_per_s
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
+                .copied()
+                .collect::<Vec<_>>();
+            let source_state_revision = source_state_revision(
+                &request.constitutive_version,
+                evaluation_time_s,
+                stage_identity,
+                envelope_multiplier,
+            );
+            let torque_sha256 = sha256_f64_slice(&flat_torque);
+            (
+                flat_torque,
+                envelope_multiplier,
+                source_state_revision,
+                None,
+                torque_sha256,
+            )
+        };
         let torque_l2_per_s = flat_torque
             .iter()
             .map(|value| value * value)
             .sum::<f64>()
             .sqrt();
-        let source_state_revision = source_state_revision(
-            &request.constitutive_version,
-            evaluation_time_s,
-            stage_identity,
-            envelope_multiplier,
-        );
         unsafe {
             ptr::copy_nonoverlapping(
                 flat_torque.as_ptr(),
@@ -205,7 +259,8 @@ impl StageTransportProvider {
             evaluation_time_s,
             envelope_multiplier,
             source_state_revision,
-            torque_sha256: sha256_f64_slice(&flat_torque),
+            source_state_digest,
+            torque_sha256,
             torque_l2_per_s,
         };
         self.last_observation = Some(observation.clone());
@@ -366,7 +421,7 @@ fn source_state_revision(
     )
 }
 
-fn apply_charge_source_envelope(
+pub(crate) fn apply_charge_source_envelope(
     charge_dirichlet: &mut [(u32, f64)],
     envelope_multiplier: f64,
 ) -> Result<(), String> {

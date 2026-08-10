@@ -9,6 +9,7 @@
 #define FULLMAG_FDM_CONTEXT_HPP
 
 #include "fullmag_fdm.h"
+#include "multilayer_batch_contract.hpp"
 #include "spin_torque.hpp"
 
 #include <cstdint>
@@ -359,6 +360,21 @@ struct Context {
     bool fft_components_share_allocation = false;
     bool fft_workspace_bound_to_multilayer_cache = false;
     std::vector<DeviceMultilayerFftWorkspace> multilayer_fft_workspaces;
+    // Device-resident D-07 source/destination spectra.  The component arrays
+    // are laid out as [layer][component][fft_cell] and use the existing
+    // batch=3 cuFFT plan one layer at a time, so one refresh has L forward and
+    // L inverse transforms while all L^2 tensor products stay on the device.
+    void *multilayer_batch_source_fft_x = nullptr;
+    void *multilayer_batch_source_fft_y = nullptr;
+    void *multilayer_batch_source_fft_z = nullptr;
+    void *multilayer_batch_destination_fft_x = nullptr;
+    void *multilayer_batch_destination_fft_y = nullptr;
+    void *multilayer_batch_destination_fft_z = nullptr;
+    uint64_t multilayer_batch_component_stride = 0;
+    uint64_t multilayer_batch_layer_stride = 0;
+    uint32_t multilayer_batch_layer_count = 0;
+    bool multilayer_batch_components_share_allocation = false;
+    MultilayerDemagStageCounters multilayer_demag_stage_counters;
     void *compute_stream = nullptr;      // cudaStream_t
     void *compute_ready_event = nullptr; // cudaEvent_t
     void *compute_done_event = nullptr;  // cudaEvent_t
@@ -562,6 +578,21 @@ inline void fullmag_fdm_publish_hot_loop_audit(
         ctx.hot_loop_control_scalar_host_sync_count;
 }
 
+inline void fullmag_fdm_publish_multilayer_demag_stage_counters(
+    const Context &ctx,
+    fullmag_fdm_step_stats *stats)
+{
+    if (stats == nullptr) {
+        return;
+    }
+    const MultilayerDemagStageCounters &counters =
+        ctx.multilayer_demag_stage_counters;
+    stats->multilayer_refresh_count = counters.refresh_count;
+    stats->multilayer_forward_fft_count = counters.forward_fft_count;
+    stats->multilayer_inverse_fft_count = counters.inverse_fft_count;
+    stats->multilayer_pair_accumulation_count = counters.pair_accumulation_count;
+}
+
 inline void fullmag_fdm_fill_step_stats_metadata(
     const Context &ctx,
     fullmag_fdm_step_stats *stats,
@@ -577,6 +608,7 @@ inline void fullmag_fdm_fill_step_stats_metadata(
     stats->dt_seconds = dt;
     stats->suggested_next_dt = suggested_next_dt;
     fullmag_fdm_publish_hot_loop_audit(ctx, stats);
+    fullmag_fdm_publish_multilayer_demag_stage_counters(ctx, stats);
 }
 
 /// Plain-old-data copy of SOT fields from Context.
@@ -727,6 +759,11 @@ bool context_upload_multilayer_plan_v2(
 
 /// Prepare the initial cuFFT workspace used by staged v2 multilayer tensor kernels.
 bool context_prepare_multilayer_fft_workspace_v2(Context &ctx);
+
+/// Allocate the device-resident D-07 source/destination spectra for a
+/// validated identity-transfer multilayer plan.  Push/pull plans deliberately
+/// remain on the assisted path and do not allocate these buffers.
+bool context_prepare_multilayer_batch_fft_workspace_v2(Context &ctx);
 
 /// Prepare/re-plan the cuFFT workspace for one staged v2 multilayer tensor kernel.
 bool context_prepare_multilayer_fft_workspace_for_kernel(

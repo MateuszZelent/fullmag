@@ -16,13 +16,13 @@ use sha2::{Digest, Sha256};
 
 use crate::artifacts::{read_json_artifact_value, resolve_artifact_path};
 use crate::error::ApiError;
-use crate::schemas::mesh::{
-    FdmMagneticSupportSemanticRole, FdmMagneticSupportSummaryResource,
-    FdmRegionLegendEntryResource, FdmRegionMembershipResource,
-};
 use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{
     fdm_grid_fingerprint, fdm_grid_geometry, fdm_grid_shape,
+};
+use crate::schemas::mesh::{
+    FdmMagneticSupportSemanticRole, FdmMagneticSupportSummaryResource,
+    FdmRegionLegendEntryResource, FdmRegionMembershipResource,
 };
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
@@ -162,12 +162,8 @@ pub async fn get_fdm_region_membership_binary_scoped(
     Query(query): Query<FdmRegionMembershipScopeQuery>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
-    serve_fdm_region_membership_binary(
-        state,
-        headers,
-        Some((query.owner_object_id, region_id)),
-    )
-    .await
+    serve_fdm_region_membership_binary(state, headers, Some((query.owner_object_id, region_id)))
+        .await
 }
 
 async fn serve_fdm_region_membership_binary(
@@ -195,16 +191,13 @@ async fn serve_fdm_region_membership_binary(
     let (mut payload, mask_offset) = validate_fmrm_payload(&original, &descriptor)?;
 
     let selected_region = if let Some((owner_object_id, region_id)) = region_scope.as_ref() {
-        let mut entries = descriptor
-            .region_legend
-            .iter()
-            .filter(|entry| {
-                entry.region_id == region_id.as_str()
-                    && owner_object_id
-                        .as_deref()
-                        .map(|owner| entry.object_id == owner)
-                        .unwrap_or(true)
-            });
+        let mut entries = descriptor.region_legend.iter().filter(|entry| {
+            entry.region_id == region_id.as_str()
+                && owner_object_id
+                    .as_deref()
+                    .map(|owner| entry.object_id == owner)
+                    .unwrap_or(true)
+        });
         let entry = entries.next().ok_or_else(|| {
             ApiError::not_found(match owner_object_id.as_deref() {
                 Some(owner) => format!("FDM region '{owner}/{region_id}' not found"),
@@ -216,7 +209,10 @@ async fn serve_fdm_region_membership_binary(
                 "FDM region '{region_id}' is ambiguous; provide owner_object_id"
             )));
         }
-        Some((entry.numeric_id, format!("region:{}:{}", entry.object_id, entry.region_id)))
+        Some((
+            entry.numeric_id,
+            format!("region:{}:{}", entry.object_id, entry.region_id),
+        ))
     } else {
         None
     };
@@ -360,20 +356,17 @@ fn load_descriptor(
                         });
                         let bounds_max_m: [f64; 3] = std::array::from_fn(|axis| {
                             descriptor.origin_m[axis]
-                                + f64::from(support_max_exclusive[axis])
-                                    * descriptor.cell_m[axis]
+                                + f64::from(support_max_exclusive[axis]) * descriptor.cell_m[axis]
                         });
-                        descriptor.magnetic_support =
-                            Some(FdmMagneticSupportSummaryResource {
-                                semantic_role:
-                                    FdmMagneticSupportSemanticRole::MagneticSupport,
-                                grid_fingerprint: descriptor.grid_fingerprint.clone(),
-                                bounds_min_m,
-                                bounds_max_m,
-                                active_cell_count: active,
-                                inactive_cell_count: inactive,
-                                active_unassigned_cell_count: active_unassigned,
-                            });
+                        descriptor.magnetic_support = Some(FdmMagneticSupportSummaryResource {
+                            semantic_role: FdmMagneticSupportSemanticRole::MagneticSupport,
+                            grid_fingerprint: descriptor.grid_fingerprint.clone(),
+                            bounds_min_m,
+                            bounds_max_m,
+                            active_cell_count: active,
+                            inactive_cell_count: inactive,
+                            active_unassigned_cell_count: active_unassigned,
+                        });
                     }
                 }
             }
@@ -409,8 +402,9 @@ fn descriptor_from_resolved_membership(
             "planned FDM membership length does not match the execution-plan grid",
         ));
     }
-    let legend_json = serde_json::to_vec(&resolved.region_legend)
-        .map_err(|error| ApiError::internal(format!("failed to encode FDM region legend: {error}")))?;
+    let legend_json = serde_json::to_vec(&resolved.region_legend).map_err(|error| {
+        ApiError::internal(format!("failed to encode FDM region legend: {error}"))
+    })?;
     let legend_hash = Sha256::digest(legend_json);
 
     // Compute magnetic-support summary from the cell membership mask.
@@ -446,8 +440,7 @@ fn descriptor_from_resolved_membership(
 
         if active > 0 && inactive > 0 {
             let bounds_min_m: [f64; 3] = std::array::from_fn(|axis| {
-                resolved.origin_m[axis]
-                    + f64::from(support_min[axis]) * resolved.cell_m[axis]
+                resolved.origin_m[axis] + f64::from(support_min[axis]) * resolved.cell_m[axis]
             });
             let bounds_max_m: [f64; 3] = std::array::from_fn(|axis| {
                 resolved.origin_m[axis]
@@ -499,9 +492,11 @@ fn serialize_resolved_membership_payload(
         .iter()
         .map(|entry| entry.numeric_id)
         .collect::<std::collections::BTreeSet<_>>();
-    if membership.cell_membership.iter().any(|value| {
-        *value != u32::MAX && *value != 0 && !snapshot_membership.contains(value)
-    }) {
+    if membership
+        .cell_membership
+        .iter()
+        .any(|value| *value != u32::MAX && *value != 0 && !snapshot_membership.contains(value))
+    {
         return Err(ApiError::internal(
             "planned FDM membership references an unknown region legend entry",
         ));
@@ -539,7 +534,10 @@ fn validate_descriptor_for_current_domain(
     }
     let current_counts = fdm_grid_shape(
         snapshot,
-        snapshot.live_state.as_ref().map(|state| state.latest_step.grid),
+        snapshot
+            .live_state
+            .as_ref()
+            .map(|state| state.latest_step.grid),
     );
     if descriptor.counts != current_counts {
         return Err(ApiError::conflict(
@@ -564,7 +562,9 @@ fn validate_descriptor_for_current_domain(
         }
     }
     if let Some(artifact_generation_id) = descriptor.domain_generation_id.as_deref() {
-        if artifact_generation_id != crate::router_v2::handlers::sessions::status::domain_generation_id(snapshot) {
+        if artifact_generation_id
+            != crate::router_v2::handlers::sessions::status::domain_generation_id(snapshot)
+        {
             return Err(ApiError::conflict(
                 "FDM membership descriptor does not match the current FDM domain generation",
             ));
@@ -757,11 +757,9 @@ fn to_resource(
         region_membership_revision: snapshot.region_realization_revisions.membership,
         freshness: "current".to_string(),
         binary_path: descriptor.binary_path,
-        domain_generation_id: descriptor
-            .domain_generation_id
-            .unwrap_or_else(|| {
-                crate::router_v2::handlers::sessions::status::domain_generation_id(snapshot)
-            }),
+        domain_generation_id: descriptor.domain_generation_id.unwrap_or_else(|| {
+            crate::router_v2::handlers::sessions::status::domain_generation_id(snapshot)
+        }),
         grid_fingerprint: descriptor.grid_fingerprint,
         region_legend_fingerprint: descriptor.region_legend_fingerprint,
         origin_m: descriptor.origin_m,
@@ -1020,8 +1018,8 @@ fn insert_header(response: &mut axum::response::Response, name: &'static str, va
 #[cfg(test)]
 mod tests {
     use super::{
-        serialize_resolved_membership_payload, validate_descriptor_summary,
-        validate_fmrm_payload, ResolvedFdmMembership, FMRM_HEADER_LEN,
+        serialize_resolved_membership_payload, validate_descriptor_summary, validate_fmrm_payload,
+        ResolvedFdmMembership, FMRM_HEADER_LEN,
     };
     use crate::schemas::mesh::{
         FdmMagneticSupportSemanticRole, FdmMagneticSupportSummaryResource,

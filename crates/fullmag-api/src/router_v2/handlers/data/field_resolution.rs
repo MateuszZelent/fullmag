@@ -66,10 +66,7 @@ pub(super) fn field_point_count_matches_current_domain(
 }
 
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {
-    let layout = snapshot
-        .metadata
-        .as_ref()?
-        .get("artifact_layout")?;
+    let layout = snapshot.metadata.as_ref()?.get("artifact_layout")?;
     if layout.get("backend")?.as_str()? != "fdm_multilayer" {
         return None;
     }
@@ -417,7 +414,10 @@ fn fdm_grid_shape_for_point_count(
 ) -> Option<[u32; 3]> {
     let shape = fdm_grid_shape(
         snapshot,
-        snapshot.live_state.as_ref().map(|state| state.latest_step.grid),
+        snapshot
+            .live_state
+            .as_ref()
+            .map(|state| state.latest_step.grid),
     );
     let expected = shape.into_iter().try_fold(1usize, |count, axis| {
         usize::try_from(axis).ok()?.checked_mul(count)

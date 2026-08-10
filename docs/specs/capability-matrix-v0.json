@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-05",
+  "updated_at": "2026-08-10",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -306,9 +306,9 @@
     },
     {
       "id":"spin_torque.zhang_li.mumax3.v1", "capability_id":"spin_torque.zhang_li", "formula_version":"zhang_li.mumax3.v1", "operator_versions":["zl_mumax3_central_v1"],
-      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"source_visible","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"},
-      "precision_scope":["double","single only after qualification"], "execution_mode_scope":["strict"], "workload_scope":"MuMax3 Standard Problem 5 and the central-stencil one-step oracle.", "validated_workloads":[],
-      "notes":"Python/IR/planner identity, CPU algebra, AoS/SoA parity, and native FP32/FP64 source branches are implemented. Managed CUDA rebuild, device runtime parity, and full SP5 trajectory qualification remain open. FEM fails closed because this is an FDM-only MuMax3 compatibility realization."
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"production_executable","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"},
+      "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Fixed-step FP64 MuMax3 Standard Problem 5 with explicit converged_demag reference plus the central-stencil one-step oracle.", "validated_workloads":["just verify-fdm-sp5-converged-demag-artifacts <cpu_run> <gpu_run> <reference_ovf> <output>"],
+      "notes":"Python/IR/planner identity, CPU algebra, native CUDA execution, exact CPU/GPU schedules and full-field parity pass for dt=1e-13 s and dt/2. Full-field comparison to MuMax3 DemagAccuracy=24 passes 1e-4 while the literal default-accuracy golden remains a separately reported failure caused by the converging MuMax3 demag quadrature. Adaptive integration, FP32, other grids and the canonical zhang_li.fullmag.v1 family remain unvalidated. FEM fails closed because this is an FDM-only MuMax3 compatibility realization."
     },
     {
       "id": "spin_torque.slonczewski.fullmag.v2", "capability_id": "spin_torque.slonczewski", "formula_version": "slonczewski.fullmag.v2",
@@ -325,8 +325,8 @@
       "notes":"Planning preserves the surface-functional intent, but no FDM/FEM implementation may replace it with a homogenized 1/t_F volume source. A dedicated oriented interface functional and its balance/parity gates are still required."
     },
     {
-      "id":"transport.charge.ohmic.fullmag.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_face_flux.v1","fem_charge_spin_broken_h1_mortar.v1"],
-      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 uniform/layered conductor with explicit BC and gauge.", "validated_workloads":[], "notes":"PR-00 contract only."
+      "id":"transport.charge.ohmic.fullmag.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_harmonic_v1","fem_charge_spin_broken_h1_mortar.v1"],
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 uniform/layered conductor with explicit BC and gauge.", "implementation_state":"partial", "validation_state":"unvalidated", "validated_workloads":[], "notes":"A bounded native CUDA FP64 charge-only FV/CG/strength-graph-AMG slice passes managed actual-device uniform, layered, snapshot and boundary-mutation contract gates with zero fallback. It has no public ProblemIR/planner/runner path, free-component zero-mean gauge, next-solve Krylov warm-start continuation, mesh-convergence or production qualification; the public lane therefore remains semantic_only."
     },
     {
       "id":"transport.charge.magnetoresistive.fullmag.v1", "capability_id":"transport.charge.magnetoresistive", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",

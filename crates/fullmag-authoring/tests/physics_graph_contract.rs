@@ -94,6 +94,77 @@ fn object_scope_uses_stable_region_ids() {
 }
 
 #[test]
+fn legacy_current_solve_region_maps_to_object_scope() {
+    let mut scene = fixture("object_local_current_chain");
+    let current = scene.current_transports[0]
+        .known_mut()
+        .expect("known current");
+    current.domain.clear();
+    current.solve_region = Some("film".to_string());
+
+    let graph = normalize_physics_graph(&scene).expect("normalization");
+    let module = graph
+        .modules
+        .iter()
+        .find(|module| module.id == "current:film")
+        .expect("current module");
+    assert_eq!(
+        module.applies_to,
+        vec![PhysicsScopeRef::Object {
+            object_id: "film".into()
+        }]
+    );
+    assert_eq!(module.solve_domain[0].object_id, "film");
+}
+
+#[test]
+fn spin_torque_presentation_preserves_typed_family_without_payload_duplication() {
+    let graph =
+        normalize_physics_graph(&fixture("object_local_current_chain")).expect("normalization");
+    let module = graph
+        .modules
+        .iter()
+        .find(|module| module.id == "torque:free-layer")
+        .expect("spin torque module");
+
+    assert_eq!(module.presentation.family, "slonczewski");
+    assert_eq!(module.presentation.label, "Slonczewski STT");
+}
+
+#[test]
+fn zhang_li_target_is_preserved_as_exact_graph_scope() {
+    let mut scene = fixture("object_local_current_chain");
+    scene.spin_torques[0] = serde_json::from_value(serde_json::json!({
+        "kind": "zhang_li",
+        "id": "torque:free-layer",
+        "formula_version": "zhang_li.fullmag.v1",
+        "operator_version": "zl_central_reference_v1",
+        "target": {"object_id": "film"},
+        "current_source": "current:film",
+        "degree": 0.4,
+        "beta": 0.02
+    }))
+    .expect("typed Zhang-Li torque");
+
+    let graph = normalize_physics_graph(&scene).expect("normalization");
+    let module = graph
+        .modules
+        .iter()
+        .find(|module| module.id == "torque:free-layer")
+        .expect("Zhang-Li module");
+
+    assert_eq!(
+        module.applies_to,
+        vec![PhysicsScopeRef::Object {
+            object_id: "film".into(),
+        }]
+    );
+    assert_eq!(module.solve_domain.len(), 1);
+    assert_eq!(module.solve_domain[0].object_id, "film");
+    assert_eq!(module.solve_domain[0].region_id, None);
+}
+
+#[test]
 fn interface_is_emitted_once_as_cross_object_scope() {
     let graph = normalize_physics_graph(&fixture("cross_object_interface")).expect("normalization");
     let interfaces: Vec<_> = graph

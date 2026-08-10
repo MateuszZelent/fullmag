@@ -1,12 +1,18 @@
 import type {
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
   FdmRegionMembershipResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import type {
   DecodedFdmRegionMembership,
+  DecodedFieldVector,
   DecodedTopology,
 } from "@/kernel/api/codecs";
+import type {
+  VisualizationTargetRef,
+  VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import {
   normalizeManifestRenderableCarriers,
   type ManifestCarrierSourceKind,
@@ -31,6 +37,8 @@ import {
   type FdmUniverseOutsideMagneticSupport,
 } from "@/shared/domain/mesh/domainPresentation";
 import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampling";
+import type { FdmCuboidInstanceModel } from "./layers/fdmCuboidBuildModel";
+import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 
 export {
   buildDomainPresentation,
@@ -115,6 +123,231 @@ export interface FdmGridRenderDomain {
   spacing: [number, number, number];
   stride: number;
   totalCells: number;
+}
+
+/** A physical native layer carrier; the common convolution grid is excluded. */
+export interface FdmNativeLayerRenderDomain extends Omit<FdmGridRenderDomain, "kind"> {
+  activeCellCount: number;
+  kind: "fdm-native-layer";
+  layerId: string;
+  magnetName: string;
+  objectId: string;
+  gridFingerprint: string | null;
+  transferKind: string;
+  activeMaskPresent: boolean;
+  inactiveCellCount: number;
+}
+
+/**
+ * Published target-only FDM multilayer Airbox.  This deliberately has no
+ * relationship to the FFT/common-transform grid: it is the grid certified by
+ * the Airbox carrier resource itself.
+ */
+export interface FdmMultilayerAirboxRenderDomain extends Omit<FdmGridRenderDomain, "kind"> {
+  carrierFingerprint: string;
+  domainGenerationId: string;
+  kind: "fdm-multilayer-airbox";
+  layoutRevision: number;
+  observationRevision: number;
+}
+
+export interface FdmNativeLayerRenderView {
+  domain: FdmNativeLayerRenderDomain;
+  fieldVector: DecodedFieldVector | null;
+  model: FdmCuboidInstanceModel | null;
+  settings: VisualizationTargetSettings;
+  surfaceColors: ScalarColorBuffer | null;
+  target: VisualizationTargetRef;
+  vectorGlyphColors: ScalarColorBuffer | null;
+  vectorSegments: Float32Array | null;
+}
+
+export interface FdmMultilayerAirboxRenderView {
+  domain: FdmMultilayerAirboxRenderDomain;
+  fieldVector: DecodedFieldVector | null;
+  model: FdmCuboidInstanceModel | null;
+  settings: VisualizationTargetSettings;
+  surfaceColors: ScalarColorBuffer | null;
+  target: VisualizationTargetRef;
+  vectorGlyphColors: ScalarColorBuffer | null;
+  vectorSegments: Float32Array | null;
+}
+
+export function adaptFdmMultilayerNativeLayerDomains(
+  layout: FdmMultilayerLayoutResource | null | undefined,
+  displayCellBudget: number,
+): FdmNativeLayerRenderDomain[] {
+  if (!layout?.available) return [];
+  return layout.layers.flatMap((layer) => {
+    const shape: [number, number, number] = [
+      layer.native_grid[0],
+      layer.native_grid[1],
+      layer.native_grid[2],
+    ];
+    const spacing: [number, number, number] = [
+      layer.native_cell_size[0],
+      layer.native_cell_size[1],
+      layer.native_cell_size[2],
+    ];
+    const origin: [number, number, number] = [
+      layer.native_origin[0],
+      layer.native_origin[1],
+      layer.native_origin[2],
+    ];
+    if (
+      shape.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+      spacing.some((value) => !Number.isFinite(value) || value <= 0) ||
+      origin.some((value) => !Number.isFinite(value))
+    ) {
+      return [];
+    }
+    const totalCells = shape[0] * shape[1] * shape[2];
+    const sampling = resolveFdmDisplaySampling(totalCells, displayCellBudget);
+    const boundsSize: [number, number, number] = [
+      shape[0] * spacing[0],
+      shape[1] * spacing[1],
+      shape[2] * spacing[2],
+    ];
+    const bounds: Viewport3DBounds = {
+      center: [
+        origin[0] + boundsSize[0] / 2,
+        origin[1] + boundsSize[1] / 2,
+        origin[2] + boundsSize[2] / 2,
+      ],
+      radius: Math.hypot(...boundsSize) / 2,
+      size: boundsSize,
+    };
+    return [{
+      activeCellCount: layer.active_cell_count,
+      activeMaskPresent: layer.active_mask_present,
+      bounds,
+      displayCellBudget: sampling.budget,
+      displayCellCount: sampling.displaySamples,
+      gridFingerprint: layer.native_grid_fingerprint ?? null,
+      kind: "fdm-native-layer" as const,
+      layerId: layer.layer_id,
+      magnetName: layer.magnet_name,
+      objectId: layer.object_id,
+      origin,
+      shape,
+      spacing,
+      stride: sampling.stride,
+      totalCells,
+      transferKind: layer.transfer_kind,
+      inactiveCellCount: layer.inactive_cell_count,
+    }];
+  });
+}
+
+export function adaptFdmMultilayerAirboxDomain(
+  layout: FdmMultilayerLayoutResource | null | undefined,
+  displayCellBudget: number,
+): FdmMultilayerAirboxRenderDomain | null {
+  if (!layout?.available || !layout.airbox?.carrier_available) return null;
+  const airbox = layout.airbox;
+  const domainGenerationId = safeNonEmptyViewport3DDomainGenerationId(
+    layout.domain_generation_id,
+  );
+  const shape = tuple3PositiveIntegers(airbox.cells);
+  const spacing = tuple3PositiveFinite(airbox.cell_size_m);
+  const origin = tuple3Finite(airbox.origin_m);
+  const carrierFingerprint = canonicalSha256Fingerprint(airbox.carrier_fingerprint);
+  const totalCells = shape ? shape[0] * shape[1] * shape[2] : 0;
+  if (
+    !shape ||
+    !spacing ||
+    !origin ||
+    !domainGenerationId ||
+    !carrierFingerprint ||
+    airbox.target_only !== true ||
+    airbox.h_demag_available !== true ||
+    airbox.h_eff_available !== false ||
+    !Number.isSafeInteger(airbox.sample_count) ||
+    airbox.sample_count !== totalCells ||
+    !Number.isSafeInteger(airbox.value_count) ||
+    airbox.value_count !== totalCells * 3
+  ) {
+    return null;
+  }
+  const boundsSize: [number, number, number] = [
+    shape[0] * spacing[0],
+    shape[1] * spacing[1],
+    shape[2] * spacing[2],
+  ];
+  const sampling = resolveFdmDisplaySampling(totalCells, displayCellBudget);
+  return {
+    bounds: {
+      center: [
+        origin[0] + boundsSize[0] / 2,
+        origin[1] + boundsSize[1] / 2,
+        origin[2] + boundsSize[2] / 2,
+      ],
+      radius: Math.hypot(...boundsSize) / 2,
+      size: boundsSize,
+    },
+    carrierFingerprint,
+    displayCellBudget: sampling.budget,
+    displayCellCount: sampling.displaySamples,
+    domainGenerationId,
+    kind: "fdm-multilayer-airbox",
+    layoutRevision: layout.layout_revision,
+    observationRevision: layout.observation_revision,
+    origin,
+    shape,
+    spacing,
+    stride: sampling.stride,
+    totalCells,
+  };
+}
+
+/**
+ * A multilayer Airbox carrier is only renderable when its layout generation
+ * is a concrete, stable identity.  Empty and whitespace-only values must not
+ * compare equal to an equally malformed FMVP generation.
+ */
+function safeNonEmptyViewport3DDomainGenerationId(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    return null;
+  }
+  return value;
+}
+
+function tuple3PositiveIntegers(value: readonly number[] | null | undefined): [number, number, number] | null {
+  if (!value || value.length !== 3 || value.some((entry) => !Number.isSafeInteger(entry) || entry <= 0)) {
+    return null;
+  }
+  return [value[0]!, value[1]!, value[2]!];
+}
+
+function tuple3PositiveFinite(value: readonly number[] | null | undefined): [number, number, number] | null {
+  if (!value || value.length !== 3 || value.some((entry) => !Number.isFinite(entry) || entry <= 0)) {
+    return null;
+  }
+  return [value[0]!, value[1]!, value[2]!];
+}
+
+function tuple3Finite(value: readonly number[] | null | undefined): [number, number, number] | null {
+  if (!value || value.length !== 3 || value.some((entry) => !Number.isFinite(entry))) {
+    return null;
+  }
+  return [value[0]!, value[1]!, value[2]!];
+}
+
+function canonicalSha256Fingerprint(value: string | null | undefined): string | null {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value)
+    ? value
+    : null;
+}
+
+export function resolveFdmMultilayerAirboxFieldAvailability(
+  layout: FdmMultilayerLayoutResource | null | undefined,
+): { hDemagAvailable: boolean; hEffAvailable: boolean; reason: string } {
+  const airbox = layout?.available ? layout.airbox : null;
+  return {
+    hDemagAvailable: airbox?.h_demag_available === true,
+    hEffAvailable: airbox?.h_eff_available === true,
+    reason: airbox?.h_eff_unavailable_reason ?? "airbox_heff_not_available_v1",
+  };
 }
 
 export interface FemManifestRenderDomain {
@@ -205,8 +438,19 @@ export function adaptFdmDomainPresentation(
     return null;
   }
   const grid = presentation.fdmGrid;
-  const min = presentation.bounds.min;
-  const max = presentation.bounds.max;
+  const presentationBounds = presentation.bounds;
+  const min = presentationBounds?.min;
+  const max = presentationBounds?.max;
+  if (
+    !Array.isArray(min) ||
+    !Array.isArray(max) ||
+    min.length !== 3 ||
+    max.length !== 3 ||
+    !min.every(Number.isFinite) ||
+    !max.every(Number.isFinite)
+  ) {
+    return null;
+  }
   const size: [number, number, number] = [
     Math.max((max[0] ?? 0) - (min[0] ?? 0), 0),
     Math.max((max[1] ?? 0) - (min[1] ?? 0), 0),

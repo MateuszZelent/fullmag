@@ -6,6 +6,8 @@ import {
   buildCurrentTransport,
   buildSpinTransport,
   currentTransportDraft,
+  currentTransportModelPatch,
+  currentTransportSupportsPrescribedDensity,
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
@@ -154,6 +156,47 @@ describe("transport authoring drafts", () => {
       },
     };
     expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
+  });
+
+  it("prefills a new object-scoped prescribed-current draft without losing the Poisson domain", () => {
+    const draft = currentTransportDraft(null, { objectId: "free-layer" });
+
+    expect(draft.model).toBe("prescribed_density");
+    expect(draft.solveRegion).toBe("free-layer");
+    expect(JSON.parse(draft.domain)).toEqual([{ object_id: "free-layer" }]);
+    expect(buildCurrentTransport(draft)).toMatchObject({
+      model: "prescribed_density",
+      solve_region: "free-layer",
+    });
+
+    Object.assign(draft, currentTransportModelPatch(draft, "ohmic_poisson"));
+    expect(buildCurrentTransport(draft)).toMatchObject({
+      domain: [{ object_id: "free-layer" }],
+      model: "ohmic_poisson",
+    });
+    expect(buildCurrentTransport(draft)).not.toHaveProperty("solve_region");
+
+    Object.assign(draft, currentTransportModelPatch(draft, "prescribed_density"));
+    expect(draft.solveRegion).toBe("free-layer");
+  });
+
+  it("uses the exact selected region for a new current solve instead of broadening it to the object", () => {
+    const draft = currentTransportDraft(null, {
+      objectId: "pillar",
+      regionId: "free-layer",
+    });
+
+    expect(draft.model).toBe("ohmic_poisson");
+    expect(draft.solveRegion).toBe("");
+    expect(JSON.parse(draft.domain)).toEqual([{
+      object_id: "pillar",
+      region_id: "free-layer",
+    }]);
+    expect(currentTransportSupportsPrescribedDensity(draft)).toBe(false);
+    expect(currentTransportModelPatch(draft, "prescribed_density")).toMatchObject({
+      model: "ohmic_poisson",
+      solveRegion: "",
+    });
   });
 
   it("round-trips every spin-transport field including requested execution", () => {

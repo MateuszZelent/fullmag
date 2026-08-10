@@ -1888,6 +1888,11 @@ impl ProblemIR {
 
         if let Some(hints) = &self.backend_policy.discretization_hints {
             if let Some(fdm) = &hints.fdm {
+                if let Some(demag) = &fdm.demag {
+                    if let Err(demag_errors) = demag.validate() {
+                        errors.extend(demag_errors);
+                    }
+                }
                 let legacy_cell =
                     (!fdm.cell.iter().all(|component| *component == 0.0)).then_some(fdm.cell);
                 let default_cell = fdm.default_cell.or(legacy_cell);

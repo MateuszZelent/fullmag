@@ -136,13 +136,17 @@ const kernel = {
   resources: { invalidate: vi.fn() },
 } as unknown as KernelApi;
 
-function selection(kind: string, ref: SelectionRef | null = null): Selection {
+function selection(
+  kind: string,
+  ref: SelectionRef | null = null,
+  objectId: string | null = null,
+): Selection {
   return {
     kind,
     label: kind,
     moduleSource: "explorer" as const,
     nodeId: `model:${kind}`,
-    objectId: null,
+    objectId,
     ref,
   };
 }
@@ -160,17 +164,83 @@ function expectedOpaqueTextareaContent(value: unknown): string {
 }
 
 describe("TransportAuthoringInspector", () => {
-  it("routes the current transport collection to a collision-free creation picker", () => {
+  it("initializes a new current transport from the selected object scope", () => {
+    const objectId = "free-layer";
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={kernel}>
-        <CurrentTransportInspectorPanel selection={selection("physics.current-transports")} />
+        <CurrentTransportInspectorPanel selection={selection("object.physics", {
+          kind: "object.physics",
+          nodeId: "model:object:free-layer:physics:current_transport",
+          objectId,
+          type: "scene-object",
+          visualizationTargetId: "object:free-layer",
+        }, objectId)} />
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain("New resource");
-    expect(html).toContain('value="position:0"');
-    expect(html).toContain('value="position:1"');
-    expect(html).toContain("Create");
+    expect(html).toContain('value="free-layer"');
+    expect(html).toContain('data-scope-kind="object"');
+    expect(html).toContain("object:free-layer");
+  });
+
+  it("initializes a new current solve from the exact selected region scope", () => {
+    const objectId = "pillar";
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <CurrentTransportInspectorPanel selection={selection("object.physics", {
+          kind: "object.physics",
+          nodeId: "model:object:pillar:physics:current_transport",
+          objectId,
+          regionId: "free-layer",
+          type: "scene-object",
+          visualizationTargetId: "region:pillar:free-layer",
+        }, objectId)} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('value="ohmic_poisson" selected=""');
+    expect(html).toContain('&quot;region_id&quot;: &quot;free-layer&quot;');
+    expect(html).toContain('data-scope-kind="region"');
+    expect(html).toContain("region:pillar:free-layer");
+  });
+
+  it("initializes a new spin transport from the exact selected region scope", () => {
+    const objectId = "pillar";
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SpinTransportInspectorPanel selection={selection("physics.spin-transport", {
+          draft: true,
+          kind: "physics.spin-transport",
+          nodeId: "model:physics:spin-transport:draft",
+          regionId: "free-layer",
+          type: "spin-transport",
+        } as SelectionRef, objectId)} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('&quot;object_id&quot;: &quot;pillar&quot;');
+    expect(html).toContain('&quot;region_id&quot;: &quot;free-layer&quot;');
+    expect(html).toContain('data-scope-kind="region"');
+    expect(html).toContain("region:pillar:free-layer");
+  });
+
+  it("initializes a new spin transport from the selected object-only scope", () => {
+    const objectId = "free-layer";
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SpinTransportInspectorPanel selection={selection("physics.spin-transport", {
+          draft: true,
+          kind: "physics.spin-transport",
+          nodeId: "model:physics:spin-transport:draft",
+          type: "spin-transport",
+        }, objectId)} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('&quot;object_id&quot;: &quot;free-layer&quot;');
+    expect(html).not.toContain('&quot;region_id&quot;');
+    expect(html).toContain('data-scope-kind="object"');
+    expect(html).toContain("object:free-layer");
   });
 
   it("renders the stable-id spin record after reorder even when selection carries a stale index", () => {

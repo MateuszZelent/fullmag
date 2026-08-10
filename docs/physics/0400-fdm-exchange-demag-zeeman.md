@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-03-23
+- Last updated: 2026-08-07
 - Related ADRs: `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
   - `docs/specs/problem-ir-v0.md`
@@ -468,8 +468,32 @@ The CUDA implementation should:
 ##### Nonmagnetic cells
 
 Cells outside the magnetic body should contribute zero magnetization to the convolution.
-This means the demag operator may still be evaluated on the full padded grid, but only active
-magnetic cells are physically meaningful for outputs and LLG stepping.
+This means the demag operator is evaluated on the full padded grid. The magnetic solver state
+and LLG stepping remain restricted to active cells, but that mask must not erase full-domain
+observables used to inspect the surrounding airbox.
+
+For visualization and field export, inactive FDM cells therefore obey
+
+```{math}
+:label: fdm-airbox-effective-field
+
+\mathbf{H}^{\mathrm{visual}}_{\mathrm{eff},i}
+=
+\mathbf{H}_{\mathrm{demag},i}
++
+\mathbf{H}_{\mathrm{ext},i}
++
+\mathbf{H}_{\mathrm{oe},i}
++
+\mathbf{H}_{\mathrm{ant},i},
+\qquad i \notin \Omega_m .
+```
+
+Magnetic-only contributions such as exchange, anisotropy, DMI, regional drive and thermal
+noise remain zero outside $\Omega_m$. A uniform Zeeman source is spatially present in the
+airbox even though its energy and torque are evaluated only on magnetic cells. Consequently
+`H_demag`, `H_ext` and the reconstructed visualization `H_eff` are full-domain quantities;
+the solver-owned masked `H_eff` remains the source used by LLG.
 
 #### 3.1.4 Zeeman field realization
 

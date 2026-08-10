@@ -214,12 +214,17 @@ fn validate_single_grid_budget_with_policy(
                     .to_string(),
             });
         }
-        let current_density = plan.sot_current_density.expect("complete contract checked above");
+        let current_density = plan
+            .sot_current_density
+            .expect("complete contract checked above");
         let xi_dl = plan.sot_xi_dl.expect("complete contract checked above");
         let xi_fl = plan.sot_xi_fl.expect("complete contract checked above");
         let sigma = plan.sot_sigma.expect("complete contract checked above");
         let thickness = plan.sot_thickness.expect("complete contract checked above");
-        let sigma_norm_sq = sigma.iter().map(|component| component * component).sum::<f64>();
+        let sigma_norm_sq = sigma
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>();
         if !current_density.is_finite()
             || !xi_dl.is_finite()
             || !xi_fl.is_finite()
@@ -239,8 +244,9 @@ fn validate_single_grid_budget_with_policy(
                     !matches!(envelope, fullmag_ir::TimeEnvelopeIR::Constant { .. })
                 }) {
                     return Err(RunError {
-                        message: "prescribed SOT non-constant envelope requires_stage_time_execution"
-                            .to_string(),
+                        message:
+                            "prescribed SOT non-constant envelope requires_stage_time_execution"
+                                .to_string(),
                     });
                 }
                 if sigma_norm_sq <= 0.0
@@ -262,9 +268,10 @@ fn validate_single_grid_budget_with_policy(
                 }
                 if target_mask.iter().enumerate().any(|(index, selected)| {
                     *selected
-                        && plan.active_mask.as_ref().is_some_and(|active| {
-                            !active.get(index).copied().unwrap_or(false)
-                        })
+                        && plan
+                            .active_mask
+                            .as_ref()
+                            .is_some_and(|active| !active.get(index).copied().unwrap_or(false))
                 }) {
                     return Err(RunError {
                         message: "prescribed SOT runtime contract target mask selects an inactive FDM cell"
@@ -318,6 +325,26 @@ fn validate_single_grid_budget_with_policy(
 pub(crate) fn validate_multilayer_grid_budget(
     plan: &fullmag_ir::FdmMultilayerPlanIR,
 ) -> Result<u64, RunError> {
+    if let Err(errors) = plan.validate() {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer plan contract rejected before allocation: {}",
+                errors.join("; ")
+            ),
+        });
+    }
+    if let Some(layer) = plan
+        .layers
+        .iter()
+        .find(|layer| layer.transfer_kind == "unsupported")
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer layer '{}' has unsupported transfer; refusing runtime allocation",
+                layer.layer_id
+            ),
+        });
+    }
     let cost = fullmag_plan::checked_fdm_grid_cost(
         plan.common_cells,
         fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
@@ -337,7 +364,8 @@ pub(crate) fn validate_multilayer_grid_budget(
         None => {
             #[cfg(test)]
             {
-                let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
+                let topology_tokens =
+                    fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
                 _legacy_certificate = fullmag_ir::FdmGridCertificateIR::new_with_masks(
                     plan.layers
                         .iter()
@@ -373,7 +401,7 @@ pub(crate) fn validate_multilayer_grid_budget(
             }
         }
     };
-    let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
+    let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
     certificate
         .validate_against_topology_tokens(None, &topology_tokens)
         .map_err(|message| RunError {

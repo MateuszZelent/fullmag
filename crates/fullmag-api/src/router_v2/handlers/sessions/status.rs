@@ -75,6 +75,41 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     )))
 }
 
+fn is_terminal_stage_record(record: &crate::types::StageExecutionRecord) -> bool {
+    matches!(
+        record.status,
+        crate::types::StageLifecycleState::Skipped
+            | crate::types::StageLifecycleState::Completed
+            | crate::types::StageLifecycleState::Cancelled
+            | crate::types::StageLifecycleState::Stopped
+            | crate::types::StageLifecycleState::Failed
+    )
+}
+
+fn solver_completion_record(
+    execution: &crate::types::StageExecutionState,
+) -> Option<&crate::types::StageExecutionRecord> {
+    execution
+        .active_stage_index
+        .and_then(|index| execution.stages.get(index))
+        .or_else(|| {
+            execution.stages.iter().rev().find(|record| {
+                is_terminal_stage_record(record)
+                    && (record.converged
+                        || record.reason.is_some()
+                        || record.metric.is_some()
+                        || record.metric_value.is_some())
+            })
+        })
+        .or_else(|| {
+            execution
+                .stages
+                .iter()
+                .rev()
+                .find(|record| is_terminal_stage_record(record))
+        })
+}
+
 pub(crate) fn build_live_status(
     workspace_root: &std::path::Path,
     snapshot: &SessionStateResponse,
@@ -133,23 +168,10 @@ pub(crate) fn build_live_status(
     let ls = snapshot.live_state.as_ref();
     let latest = ls.map(|l| &l.latest_step);
     let max_torque_apm = latest.and_then(|step| canonical_torque_apm(step.max_torque_Apm));
-    let completion = snapshot.stage_execution.as_ref().and_then(|execution| {
-        execution
-            .active_stage_index
-            .and_then(|index| execution.stages.get(index))
-            .or_else(|| {
-                execution.stages.iter().rev().find(|record| {
-                    matches!(
-                        record.status,
-                        crate::types::StageLifecycleState::Skipped
-                            | crate::types::StageLifecycleState::Completed
-                            | crate::types::StageLifecycleState::Cancelled
-                            | crate::types::StageLifecycleState::Stopped
-                            | crate::types::StageLifecycleState::Failed
-                    )
-                })
-            })
-    });
+    let completion = snapshot
+        .stage_execution
+        .as_ref()
+        .and_then(solver_completion_record);
 
     let solver = SolverSummary {
         state: ls
@@ -981,9 +1003,7 @@ fn fdm_artifact_layout(snapshot: &SessionStateResponse) -> Option<&Value> {
 /// The latter is intentionally the fallback because `field_layout` stores
 /// multilayer native layers rather than duplicating common-grid coordinates at
 /// the top level.
-pub(crate) fn fdm_grid_geometry(
-    snapshot: &SessionStateResponse,
-) -> Option<([f64; 3], [f64; 3])> {
+pub(crate) fn fdm_grid_geometry(snapshot: &SessionStateResponse) -> Option<([f64; 3], [f64; 3])> {
     let metadata = snapshot.metadata.as_ref()?;
     if let Some(layout) = fdm_artifact_layout(snapshot) {
         if let Some(geometry) = fdm_geometry_from_value(layout) {
@@ -1211,7 +1231,32 @@ fn compat_end_to_end_steps_per_second(
 
 #[cfg(test)]
 mod tests {
-    use super::{compat_end_to_end_steps_per_second, relaxation_algorithms_available};
+    use super::{
+        compat_end_to_end_steps_per_second, relaxation_algorithms_available,
+        solver_completion_record,
+    };
+
+    #[test]
+    fn status_uses_last_solver_completion_before_terminal_save_stage() {
+        let execution: crate::types::StageExecutionState =
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 2,
+                "completed_stage_indexes": [0, 1],
+                "stage_statuses": ["completed", "completed"],
+                "active_stage_index": null,
+                "active_stage_kind": "flat_save_state",
+                "runtime_state": "completed",
+                "stages": [
+                    {"status": "completed", "converged": true, "reason": "torque"},
+                    {"status": "completed"}
+                ]
+            }))
+            .expect("two completed scripted stages should deserialize");
+
+        let completion = solver_completion_record(&execution).expect("solver completion");
+        assert!(completion.converged);
+        assert_eq!(completion.reason, Some(fullmag_ir::StageStopReason::Torque));
+    }
 
     #[test]
     fn session_status_advertises_production_relaxation_algorithms() {

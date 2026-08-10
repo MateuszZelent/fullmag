@@ -142,7 +142,15 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
                     ],
                 });
             }
-            if problem.magnets.len() > 1 {
+            let requested_demag_strategy = problem
+                .backend_policy
+                .discretization_hints
+                .as_ref()
+                .and_then(|hints| hints.fdm.as_ref())
+                .and_then(|fdm| fdm.demag.as_ref())
+                .map(|demag| demag.strategy.as_str())
+                .unwrap_or("auto");
+            if problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution" {
                 fdm::plan_fdm_multilayer(problem, resolved_backend)
             } else {
                 fdm::plan_fdm(problem, resolved_backend)
@@ -158,9 +166,8 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     }?;
 
     if problem.physics_graph.is_some() {
-        let notes = physics_graph_provenance_notes(problem, resolved_backend).map_err(|reasons| {
-            PlanError { reasons }
-        })?;
+        let notes = physics_graph_provenance_notes(problem, resolved_backend)
+            .map_err(|reasons| PlanError { reasons })?;
         execution_plan.provenance.notes.extend(notes);
         execution_plan.provenance.physics_graph =
             physics_graph_runtime_provenance(problem, &execution_plan.backend_plan)

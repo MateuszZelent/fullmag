@@ -12,6 +12,7 @@ import {
 import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
+  RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
@@ -1558,9 +1559,89 @@ describe("ribbon structure", () => {
     expect(selections).toEqual([
       expect.objectContaining({
         kind: "object.physics",
-        label: "Regional field source",
+        label: "Oersted field",
         nodeId: "model:object:free-layer:physics:oersted_field",
         objectId: "free-layer",
+      }),
+    ]);
+  });
+
+  it("requires an object or region before opening object-scoped spin torque", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.spin_torque": {
+                    state: "supported",
+                    reason: "Spin torque authoring is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fdm" },
+          },
+        },
+        selection: {
+          get: () => ({ objectId: null }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "spin_torque" },
+    );
+
+    expect(result).toEqual({
+      message: "Select an object or region before adding 'Spin torque'.",
+      status: "failed",
+    });
+    expect(selections).toEqual([]);
+  });
+
+  it("keeps global interactions global even when an object is selected", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.zeeman": {
+                    state: "supported",
+                    reason: "Zeeman authoring is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fem" },
+          },
+        },
+        selection: {
+          get: () => ({ objectId: "free-layer" }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "zeeman" },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([
+      expect.objectContaining({
+        kind: "object.physics",
+        nodeId: "model:physics:zeeman",
+        objectId: null,
+        ref: null,
       }),
     ]);
   });
@@ -1702,7 +1783,6 @@ describe("ribbon structure", () => {
     const unsupportedIds = new Set([
       "physics-add-dmi",
       "physics-add-ku",
-      "physics-global",
       "manage-rf",
       "add-cpw",
     ]);
@@ -1717,6 +1797,219 @@ describe("ribbon structure", () => {
       }
     }
     expect(matchedIds).toEqual(unsupportedIds);
+  });
+
+  it("exposes only global interactions from the Global Physics action", () => {
+    const content = buildRibbonTabContent("physics", {
+      sessionStatus: {
+        capabilities: {
+          active_lane: activeLaneCapabilityFixture(),
+        },
+        domain: { discretization: "fem" },
+      },
+    } as never);
+    const core = content?.groups.find((group) => group.id === "physics-core");
+    const globalPhysics = core?.actions.find(
+      (action) => action.id === "physics-global",
+    );
+    const items = globalPhysics?.menu?.filter((node) => node.type === "item") ?? [];
+
+    expect(globalPhysics?.disabled).toBe(false);
+    expect(items.map((node) => node.id)).toEqual([
+      "physics-global:exchange",
+      "physics-global:demag",
+      "physics-global:zeeman",
+      "physics-global:add-field-drive",
+    ]);
+    expect(items.slice(0, 3).every(
+      (node) => node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+    )).toBe(true);
+    expect(items[3]).toMatchObject({
+      commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+      label: "Field Drive",
+    });
+    expect(items.some((node) => node.id.includes("current_transport"))).toBe(false);
+  });
+
+  it("opens a canonical global field-drive draft from the Ribbon", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+      {
+        selection: {
+          get: () => null,
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([{
+      kind: "physics.field-drive",
+      label: "New field drive",
+      nodeId: "model:physics:field-drive:draft",
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.field-drive",
+        nodeId: "model:physics:field-drive:draft",
+        type: "physics-field-drive",
+      },
+    }]);
+  });
+
+  it("keeps Oersted and spin torque in the single capability-gated Add Physics menu", () => {
+    const content = buildRibbonTabContent("physics", {
+      sessionStatus: {
+        capabilities: {
+          active_lane: {
+            ...activeLaneCapabilityFixture(),
+            operations: {
+              "interaction.oersted_field": {
+                state: "supported",
+                reason: "Oersted authoring is supported.",
+                requires: [],
+              },
+              "interaction.spin_torque": {
+                state: "unsupported",
+                reason: "Spin torque is unavailable on this lane.",
+                requires: [],
+              },
+            },
+          },
+        },
+        domain: { discretization: "fem" },
+      },
+    } as never);
+    const core = content?.groups.find((group) => group.id === "physics-core");
+    const addPhysics = core?.actions.find((action) => action.id === "physics-interactions");
+    const oersted = addPhysics?.menu?.find(
+      (node) => node.id === "physics-interactions:oersted_field",
+    );
+    const torque = addPhysics?.menu?.find(
+      (node) => node.id === "physics-interactions:spin_torque",
+    );
+
+    expect(oersted).toMatchObject({
+      disabled: false,
+      label: "Oersted field",
+      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      commandInput: { interactionId: "oersted_field" },
+    });
+    expect(torque).toMatchObject({
+      disabled: true,
+      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      commandInput: { interactionId: "spin_torque" },
+      tooltip: "Spin torque is unavailable on this lane.",
+    });
+    expect(content?.groups.some((group) => group.id === "physics-drive")).toBe(false);
+    expect(addPhysics?.label).toBe("Add Physics");
+  });
+
+  it.each(["fdm", "fem"] as const)(
+    "keeps typed spin transport and spin interface authoring in the %s Add Physics menu",
+    (discretization) => {
+      const content = buildRibbonTabContent("physics", {
+        sessionStatus: {
+          capabilities: {
+            active_lane: activeLaneCapabilityFixture(),
+          },
+          domain: { discretization },
+        },
+      } as never);
+      const core = content?.groups.find((group) => group.id === "physics-core");
+      const addPhysics = core?.actions.find(
+        (action) => action.id === "physics-interactions",
+      );
+
+      expect(addPhysics?.menu?.find(
+        (node) => node.id === "physics-resources:spin-transport",
+      )).toMatchObject({
+        commandId: "ribbon.physics.create-spin-transport",
+        disabled: false,
+        label: "Spin Transport / SHE",
+      });
+      expect(addPhysics?.menu?.find(
+        (node) => node.id === "physics-resources:spin-interface",
+      )).toMatchObject({
+        commandId: "ribbon.physics.create-spin-interface",
+        disabled: false,
+        label: "Spin Interface",
+      });
+    },
+  );
+
+  it("opens a spin-transport draft with the exact selected region scope", async () => {
+    const selections: unknown[] = [];
+    const currentSelection = {
+      kind: "object.region",
+      label: "free-layer",
+      moduleSource: "explorer",
+      nodeId: "model:object:pillar:region:free-layer",
+      objectId: "pillar",
+      ref: {
+        kind: "object.region",
+        nodeId: "model:object:pillar:region:free-layer",
+        objectId: "pillar",
+        regionId: "free-layer",
+        type: "scene-object",
+        visualizationTargetId: "region:pillar:free-layer",
+      },
+    };
+    const result = await createRibbonCommandRegistry().execute(
+      "ribbon.physics.create-spin-transport",
+      {
+        selection: {
+          get: () => currentSelection,
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([{
+      kind: "physics.spin-transport",
+      label: "New spin transport",
+      nodeId: "model:physics:spin-transport:draft",
+      objectId: "pillar",
+      ref: {
+        draft: true,
+        kind: "physics.spin-transport",
+        nodeId: "model:physics:spin-transport:draft",
+        regionId: "free-layer",
+        type: "spin-transport",
+      },
+    }]);
+  });
+
+  it("opens a spin-interface draft without inventing an owner", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      "ribbon.physics.create-spin-interface",
+      {
+        selection: {
+          get: () => null,
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([{
+      kind: "physics.spin-interface",
+      label: "New spin interface",
+      nodeId: "model:physics:spin-interface:draft",
+      objectId: null,
+      ref: {
+        draft: true,
+        kind: "physics.spin-interface",
+        nodeId: "model:physics:spin-interface:draft",
+        type: "spin-interface",
+      },
+    }]);
   });
 
   it("wires Physics Microstrip to the geometry antenna command", () => {
@@ -1865,7 +2158,10 @@ describe("ribbon structure", () => {
       disabled: false,
       value: "var(--fm-airbox-wire)",
     });
-    expect(pointColorNode).toBeUndefined();
+    expect(pointColorNode).toMatchObject({
+      disabled: false,
+      value: "var(--fm-info)",
+    });
 
     if (
       vectorThicknessNode?.type !== "slider" ||
@@ -2371,7 +2667,7 @@ describe("ribbon structure", () => {
     );
 
     expect(visibleNode).toMatchObject({ checked: false, disabled: false });
-    expect(renderModeNode).toMatchObject({ value: "wireframe", disabled: true });
+    expect(renderModeNode).toMatchObject({ value: "points", disabled: true });
     expect(vectorsNode).toMatchObject({ checked: false, disabled: true });
   });
 

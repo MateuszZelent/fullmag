@@ -69,6 +69,9 @@ function titleCase(value: string): string {
 }
 
 function resolveFamily(kind: string): FamilyDescriptor {
+  if (kind === "airbox.multilayer.target") {
+    return { tabs: [], typeLabel: "Multilayer Airbox target" };
+  }
   if (kind === "fdm.cell" || kind === "mesh.grid" || kind.startsWith("mesh.grid.")) {
     return { tabs: [], typeLabel: "FDM mesh" };
   }

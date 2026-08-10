@@ -1010,6 +1010,9 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     if (!context_upload_multilayer_plan_v2(*ctx, *plan)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (!context_create_compute_stream(*ctx)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     if (!context_prepare_multilayer_fft_workspace_v2(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -1073,6 +1076,7 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_CUDA;
         }
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
+        fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
         return FULLMAG_FDM_OK;
     }
 
@@ -1674,6 +1678,16 @@ int fullmag_fdm_backend_snapshot_stats(
 #if FULLMAG_HAS_CUDA
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (ctx->has_multilayer_plan_v2) {
+        std::memset(out_stats, 0, sizeof(*out_stats));
+        out_stats->step = ctx->step_count;
+        out_stats->time_seconds = ctx->current_time;
+        out_stats->dt_seconds = ctx->current_dt;
+        fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
+        fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
+        return FULLMAG_FDM_OK;
+    }
 
     if (!context_fill_current_stats(*ctx, out_stats)) {
         return FULLMAG_FDM_ERR_CUDA;

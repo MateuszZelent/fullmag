@@ -917,8 +917,7 @@ pub struct fullmag_fem_steady_transport_rt0_external_lead_closure_v1 {
     pub lead_mesh: fullmag_fem_mesh_desc,
     pub lead_conductivity_spm_per_element: *const f64,
     pub lead_conductivity_spm_per_element_len: u64,
-    pub lead_stable_vertex_identities:
-        fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
+    pub lead_stable_vertex_identities: fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
     pub interface_pairs: *const fullmag_fem_steady_transport_rt0_interface_pair_v1,
     pub interface_pair_count: u64,
     pub minus_outer_electrode_face_vertex_ids: *const u64,
@@ -939,14 +938,11 @@ pub struct fullmag_fem_steady_transport_rt0_request_v1 {
     pub reserved_closure: u32,
     pub identity: fullmag_fem_steady_transport_rt0_identity_v1,
     pub pins: fullmag_fem_steady_transport_rt0_identity_v1,
-    pub stable_vertex_identities:
-        fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
+    pub stable_vertex_identities: fullmag_fem_steady_transport_rt0_stable_vertex_identities_v1,
     pub boundary_faces: *const fullmag_fem_steady_transport_rt0_boundary_face_v1,
     pub boundary_face_count: u64,
-    pub closed_geometry:
-        *const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1,
-    pub external_lead:
-        *const fullmag_fem_steady_transport_rt0_external_lead_closure_v1,
+    pub closed_geometry: *const fullmag_fem_steady_transport_rt0_closed_geometry_closure_v1,
+    pub external_lead: *const fullmag_fem_steady_transport_rt0_external_lead_closure_v1,
     pub algebraic_relative_tolerance: f64,
     pub physical_relative_gate: f64,
     pub physical_absolute_gate_a: f64,
@@ -969,8 +965,7 @@ pub struct fullmag_fem_steady_transport_rt0_result_v1 {
     pub rt0_dof_values: *mut f64,
     pub rt0_dof_values_capacity: u64,
     pub rt0_dof_values_len: u64,
-    pub canonical_face_records:
-        *mut fullmag_fem_steady_transport_rt0_face_flux_record_v1,
+    pub canonical_face_records: *mut fullmag_fem_steady_transport_rt0_face_flux_record_v1,
     pub canonical_face_records_capacity: u64,
     pub canonical_face_records_len: u64,
     pub converged: i32,
@@ -2496,10 +2491,8 @@ mod tests {
                 > former_tail_offset
         );
         assert!(
-            std::mem::offset_of!(
-                fullmag_fem_step_stats,
-                demag_recovered_field_energy_joules
-            ) > former_tail_offset
+            std::mem::offset_of!(fullmag_fem_step_stats, demag_recovered_field_energy_joules)
+                > former_tail_offset
         );
     }
 
@@ -2581,7 +2574,10 @@ mod tests {
             0
         );
         assert_eq!(
-            std::mem::offset_of!(fullmag_fem_steady_transport_m2_request_v1, sigma_parallel_spm),
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_m2_request_v1,
+                sigma_parallel_spm
+            ),
             std::mem::size_of::<fullmag_fem_steady_transport_request_v1>()
         );
         assert!(
@@ -2629,15 +2625,15 @@ mod tests {
             128
         );
         assert_eq!(
-            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_result_v1, view_identity_digest),
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_rt0_result_v1,
+                view_identity_digest
+            ),
             402
         );
         assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION, 1);
         assert_eq!(
-            std::mem::offset_of!(
-                fullmag_fem_steady_transport_rt0_oersted_request_v1,
-                rt0
-            ),
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_oersted_request_v1, rt0),
             16
         );
         assert_eq!(
@@ -2652,10 +2648,7 @@ mod tests {
             840
         );
         assert_eq!(
-            std::mem::offset_of!(
-                fullmag_fem_steady_transport_rt0_oersted_result_v1,
-                rt0
-            ),
+            std::mem::offset_of!(fullmag_fem_steady_transport_rt0_oersted_result_v1, rt0),
             16
         );
         assert_eq!(
@@ -2695,9 +2688,8 @@ mod tests {
             16
         );
         assert_eq!(
-            std::mem::size_of::<
-                fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1,
-            >(),
+            std::mem::size_of::<fullmag_fem_steady_transport_rt0_oersted_vector_potential_request_v1>(
+            ),
             824
         );
         assert_eq!(
@@ -2942,9 +2934,8 @@ mod tests {
             3448
         );
         assert_eq!(
-            std::mem::size_of::<
-                fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1,
-            >(),
+            std::mem::size_of::<fullmag_fem_steady_transport_rt0_oersted_vector_potential_result_v1>(
+            ),
             3456
         );
     }
@@ -3764,9 +3755,18 @@ mod tests {
         assert_eq!(info.struct_size, 0);
         assert_eq!(info.mfem_version, [0; 32]);
         assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info>(), 40);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, abi_version), 0);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, struct_size), 4);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, mfem_version), 8);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info, abi_version),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info, struct_size),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info, mfem_version),
+            8
+        );
     }
 
     #[test]
@@ -3779,10 +3779,22 @@ mod tests {
         assert_eq!(info.hypre_version, [0; 32]);
         assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info>(), 40);
         assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info_v2>(), 72);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, abi_version), 0);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, struct_size), 4);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, mfem_version), 8);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, hypre_version), 40);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, abi_version),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, struct_size),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, mfem_version),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, hypre_version),
+            40
+        );
     }
 
     /// Verify native FEM demag timing totals are ABI-visible.

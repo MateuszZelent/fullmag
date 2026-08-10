@@ -37,8 +37,9 @@ use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FdmMultilayerTransferTelemetry, FieldSnapshot, RunError,
-    RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmMultilayerStageTelemetry,
+    FdmMultilayerTransferTelemetry, FieldSnapshot, RunError, RunResult, RunStatus,
+    StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -64,6 +65,7 @@ struct NativeMultilayerDemagOperator {
     backend: NativeFdmBackend,
     layer_cell_counts: Vec<usize>,
     transfer_counters: CudaTransferCounters,
+    latest_stage_telemetry: Option<FdmMultilayerStageTelemetry>,
 }
 
 /// Exact payload accounting for FDM vectors which cross the host/CUDA boundary.
@@ -218,6 +220,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     validate_multilayer_grid_budget(plan)?;
+    validate_cuda_multilayer_execution_contract(plan)?;
     if !is_cuda_available() {
         return Err(RunError {
             message: "FULLMAG_FDM_EXECUTION=cuda requested for multilayer FDM, but CUDA backend is not available".to_string(),
@@ -315,6 +318,83 @@ fn resolve_cuda_multilayer_execution_shape(
         });
     }
     Ok(native_stacked)
+}
+
+/// Validate the subset of the multilayer descriptor contract which the
+/// current native CUDA runner can execute without changing the physical
+/// operator.  The legacy two-dimensional stack remains an explicit
+/// CUDA-assisted lane; it does not enter the native D-07 descriptor path and
+/// therefore does not require the native common-grid certificate here.
+fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
+    if plan.mode == "two_d_stack" && plan.planner_summary.resolved_mode == "two_d_stack" {
+        return Ok(());
+    }
+    if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
+        return Err(RunError {
+            message: format!(
+                "unsupported_gpu_multilayer_mode: native CUDA multilayer currently requires resolved_mode='three_d', got plan.mode='{}' resolved_mode='{}'",
+                plan.mode, plan.planner_summary.resolved_mode
+            ),
+        });
+    }
+
+    let Some(certificate) = plan.grid_certificate.as_ref() else {
+        return Err(RunError {
+            message:
+                "native CUDA multilayer requires a validated common-grid fingerprint before allocation"
+                    .to_string(),
+        });
+    };
+    let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+    certificate
+        .validate_against_topology_tokens(None, &topology_tokens)
+        .map_err(|message| RunError {
+            message: format!(
+                "native CUDA multilayer descriptor fingerprint rejected before allocation: {message}"
+            ),
+        })?;
+    if certificate.grid_fingerprint.is_empty() {
+        return Err(RunError {
+            message: "native CUDA multilayer descriptor fingerprint is empty; refusing allocation"
+                .to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Return whether the native single-grid/v2 descriptor can represent every
+/// layer without a hidden transfer.  `push_pull` remains a valid explicit
+/// CUDA-assisted lane, but it is not promoted to the native production lane
+/// because the current ABI does not transport its canonical transfer
+/// descriptor/fingerprint.
+fn native_cuda_identity_descriptor_eligible(plan: &FdmMultilayerPlanIR) -> Result<bool, RunError> {
+    for layer in &plan.layers {
+        match layer.transfer_kind.as_str() {
+            "identity" => {
+                if layer.native_grid != layer.convolution_grid
+                    || layer.native_cell_size != layer.convolution_cell_size
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "native CUDA multilayer identity descriptor mismatch for layer '{}': native grid/cell must equal convolution scratch grid/cell",
+                            layer.layer_id
+                        ),
+                    });
+                }
+            }
+            "push_pull" => return Ok(false),
+            other => {
+                return Err(RunError {
+                    message: format!(
+                        "native CUDA multilayer transfer descriptor '{other}' is unsupported for layer '{}'",
+                        layer.layer_id
+                    ),
+                });
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn build_contexts_and_states(
@@ -465,11 +545,10 @@ fn build_native_multilayer_demag_operator(
     if !plan.enable_demag {
         return Ok(None);
     }
-    if plan
-        .layers
-        .iter()
-        .any(|layer| layer.transfer_kind != "identity")
-    {
+    if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
+        return Ok(None);
+    }
+    if !native_cuda_identity_descriptor_eligible(plan)? {
         return Ok(None);
     }
 
@@ -486,6 +565,7 @@ fn build_native_multilayer_demag_operator(
         backend: NativeFdmBackend::create_multilayer_v2(plan)?,
         layer_cell_counts,
         transfer_counters: CudaTransferCounters::default(),
+        latest_stage_telemetry: None,
     }))
 }
 
@@ -503,6 +583,11 @@ impl NativeMultilayerDemagOperator {
             );
         }
         self.backend.refresh_multilayer_demag()?;
+        self.latest_stage_telemetry = Some(
+            self.backend.snapshot_multilayer_demag_stage_telemetry(
+                self.layer_cell_counts.len() as u64,
+            )?,
+        );
         self.layer_cell_counts
             .iter()
             .enumerate()
@@ -530,6 +615,11 @@ impl NativeMultilayerDemagOperator {
             );
         }
         self.backend.refresh_multilayer_demag()?;
+        self.latest_stage_telemetry = Some(
+            self.backend.snapshot_multilayer_demag_stage_telemetry(
+                self.layer_cell_counts.len() as u64,
+            )?,
+        );
         self.layer_cell_counts
             .iter()
             .enumerate()
@@ -579,6 +669,7 @@ fn execute_cuda_assisted_multilayer_double(
         device_info.clone(),
         native_demag_enabled,
         CudaTransferCounters::default(),
+        None,
     )?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
@@ -758,11 +849,15 @@ fn execute_cuda_assisted_multilayer_double(
     }
 
     let transfer_counters = assisted_transfer_counters(&gpu_contexts, native_demag.as_ref());
+    let stage_telemetry = native_demag
+        .as_ref()
+        .and_then(|operator| operator.latest_stage_telemetry.clone());
     artifacts.update_provenance(assisted_multilayer_provenance(
         plan,
         device_info,
         native_demag_enabled,
         transfer_counters,
+        stage_telemetry,
     )?);
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
@@ -834,6 +929,7 @@ fn execute_cuda_assisted_multilayer_single(
         device_info.clone(),
         native_demag_enabled,
         CudaTransferCounters::default(),
+        None,
     )?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
@@ -1013,11 +1109,15 @@ fn execute_cuda_assisted_multilayer_single(
     }
 
     let transfer_counters = assisted_transfer_counters(&gpu_contexts, native_demag.as_ref());
+    let stage_telemetry = native_demag
+        .as_ref()
+        .and_then(|operator| operator.latest_stage_telemetry.clone());
     artifacts.update_provenance(assisted_multilayer_provenance(
         plan,
         device_info,
         native_demag_enabled,
         transfer_counters,
+        stage_telemetry,
     )?);
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
@@ -1060,6 +1160,7 @@ fn assisted_multilayer_provenance(
     device_info: Option<DeviceInfo>,
     native_demag_enabled: bool,
     transfer_counters: CudaTransferCounters,
+    stage_telemetry: Option<FdmMultilayerStageTelemetry>,
 ) -> Result<ExecutionProvenance, RunError> {
     let timestep_policy = crate::resolve_timestep_policy(
         Some(plan.integrator),
@@ -1102,6 +1203,7 @@ fn assisted_multilayer_provenance(
         cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
         timestep_policy: Some(timestep_policy),
         fdm_multilayer_transfer_telemetry: Some(transfer_counters.assisted_telemetry()),
+        fdm_multilayer_stage_telemetry: stage_telemetry,
         ..Default::default()
     })
 }
@@ -1124,6 +1226,12 @@ fn build_native_stacked_cuda_plan(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<Option<NativeStackedCudaPlan>, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
+        return Ok(None);
+    }
+    if !native_cuda_identity_descriptor_eligible(plan)? {
+        return Ok(None);
+    }
     let Some(first_layer) = plan.layers.first() else {
         return Ok(None);
     };
@@ -3198,7 +3306,7 @@ fn field_energy_from_vectors_f32(
 mod tests {
     use super::*;
     use crate::fdm::cpu::multilayer_reference;
-    use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
+    use fullmag_ir::{FdmGridCertificateIR, RelaxationAlgorithmIR, RelaxationControlIR};
 
     #[test]
     fn assisted_multilayer_telemetry_counts_vector_roundtrips() {
@@ -3231,6 +3339,7 @@ mod tests {
             None,
             false,
             counters,
+            None,
         )
         .expect("assisted plan should resolve a provenance contract");
         let telemetry = provenance
@@ -3301,13 +3410,15 @@ mod tests {
 
     fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         FdmMultilayerPlanIR {
-            mode: "two_d_stack".to_string(),
+            mode: "three_d".to_string(),
             common_cells: [4, 4, 1],
             grid_certificate: None,
             resolved_periodic_images: None,
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),
+                    layer_id: "layer:free".to_string(),
+                    object_id: "free".to_string(),
                     native_grid: [4, 4, 1],
                     native_cell_size: [2e-9, 2e-9, 1e-9],
                     native_origin: [-4e-9, -4e-9, 0.0],
@@ -3327,6 +3438,8 @@ mod tests {
                 },
                 FdmLayerPlanIR {
                     magnet_name: "ref".to_string(),
+                    layer_id: "layer:ref".to_string(),
+                    object_id: "ref".to_string(),
                     native_grid: [4, 4, 1],
                     native_cell_size: [2e-9, 2e-9, 1e-9],
                     native_origin: [-4e-9, -4e-9, 3e-9],
@@ -3369,6 +3482,8 @@ mod tests {
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),
                 selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "three_d".to_string(),
+                resolved_mode: "three_d".to_string(),
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 3,
@@ -3411,6 +3526,81 @@ mod tests {
         assert!(error.message.contains("adaptive time stepping"));
     }
 
+    #[test]
+    fn cuda_multilayer_two_d_mode_preserves_assisted_lane_without_d07() {
+        let mut plan = make_plan(true, ExecutionPrecision::Double);
+        plan.mode = "two_d_stack".to_string();
+        plan.planner_summary.requested_mode = "two_d_stack".to_string();
+        plan.planner_summary.resolved_mode = "two_d_stack".to_string();
+
+        validate_cuda_multilayer_execution_contract(&plan)
+            .expect("2-D stack must retain the CUDA-assisted lane");
+        assert!(
+            resolve_cuda_multilayer_execution_shape(&plan)
+                .expect("2-D stack shape resolution")
+                .is_none(),
+            "2-D stack must not choose native stacked D-07"
+        );
+        assert!(
+            build_native_multilayer_demag_operator(&plan)
+                .expect("2-D native demag eligibility")
+                .is_none(),
+            "2-D stack must not publish native D-07 stage telemetry"
+        );
+    }
+
+    #[test]
+    fn cuda_multilayer_requires_a_validated_fingerprint_before_allocation() {
+        let plan = make_plan(false, ExecutionPrecision::Double);
+        let error = validate_cuda_multilayer_execution_contract(&plan)
+            .expect_err("native CUDA must require the planner grid certificate");
+        assert!(error.message.contains("fingerprint"));
+        assert!(error.message.contains("before allocation"));
+    }
+
+    #[test]
+    fn cuda_multilayer_rejects_forged_fingerprint_before_allocation() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        let mut certificate = FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 0.0],
+            plan.common_cells,
+            [2e-9, 2e-9, 1e-9],
+            16,
+            1024,
+            None,
+            &topology_tokens,
+        )
+        .expect("test certificate should be valid before tampering");
+        certificate.grid_fingerprint = "0".repeat(64);
+        plan.grid_certificate = Some(certificate);
+
+        let error = validate_cuda_multilayer_execution_contract(&plan)
+            .expect_err("a forged multilayer fingerprint must fail before allocation");
+        assert!(error.message.contains("fingerprint mismatch"));
+        assert!(error.message.contains("before allocation"));
+    }
+
+    #[test]
+    fn native_cuda_identity_descriptor_rejects_forged_native_scratch_mismatch() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.layers[0].convolution_grid[0] += 1;
+        let error = native_cuda_identity_descriptor_eligible(&plan)
+            .expect_err("identity transfer must not hide a native/scratch mismatch");
+        assert!(error.message.contains("identity descriptor mismatch"));
+    }
+
+    #[test]
+    fn native_cuda_push_pull_stays_explicitly_cuda_assisted() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.layers[0].transfer_kind = "push_pull".to_string();
+        assert_eq!(
+            native_cuda_identity_descriptor_eligible(&plan)
+                .expect("push_pull is a known non-native descriptor"),
+            false
+        );
+    }
+
     fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
@@ -3421,6 +3611,8 @@ mod tests {
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "bottom".to_string(),
+                    layer_id: "layer:bottom".to_string(),
+                    object_id: "bottom".to_string(),
                     native_grid: [2, 1, 1],
                     native_cell_size: [2e-9, 2e-9, 2e-9],
                     native_origin: [0.0, 0.0, 0.0],
@@ -3440,6 +3632,8 @@ mod tests {
                 },
                 FdmLayerPlanIR {
                     magnet_name: "top".to_string(),
+                    layer_id: "layer:top".to_string(),
+                    object_id: "top".to_string(),
                     native_grid: [2, 1, 1],
                     native_cell_size: [2e-9, 2e-9, 2e-9],
                     native_origin: [0.0, 0.0, 2e-9],
@@ -3473,6 +3667,8 @@ mod tests {
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
                 requested_strategy: "multilayer_convolution".to_string(),
                 selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "three_d".to_string(),
+                resolved_mode: "three_d".to_string(),
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 1,

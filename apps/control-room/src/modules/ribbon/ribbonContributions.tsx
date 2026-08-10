@@ -125,6 +125,9 @@ import {
 } from "./ribbonCommon";
 import {
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+  RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
+  RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
   RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
@@ -209,22 +212,60 @@ const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
 function physicsInteractionMenu(
   discretization: InteractionDiscretization,
   activeLane: ActiveLaneCapabilitySnapshot | null = null,
+  scope: "all" | "global" = "all",
 ): RibbonMenuNode[] {
-  const specs = interactionSpecsForDiscretization(discretization);
+  const specs = interactionSpecsForDiscretization(discretization).filter(
+    (spec) => scope === "all" || spec.scope === "global",
+  );
+  const menuId = scope === "global" ? "physics-global" : "physics-interactions";
+  const createFieldDriveItem: RibbonMenuNode = {
+    type: "item",
+    id: "physics-global:add-field-drive",
+    label: "Field Drive",
+    commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  };
+  const spinAuthoringItems: RibbonMenuNode[] = scope === "all" &&
+    (discretization === "fdm" || discretization === "fem")
+    ? [
+        {
+          type: "label",
+          id: "physics-resources:label",
+          label: "Transport Resources",
+        },
+        {
+          type: "item",
+          id: "physics-resources:spin-transport",
+          label: "Spin Transport / SHE",
+          disabled: false,
+          commandId: RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
+        },
+        {
+          type: "item",
+          id: "physics-resources:spin-interface",
+          label: "Spin Interface",
+          disabled: false,
+          commandId: RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
+        },
+        separator("physics-resources:separator"),
+      ]
+    : [];
   if (specs.length === 0) {
     return [
-      { type: "label", id: "physics-interactions:label", label: "Interactions" },
+      ...spinAuthoringItems,
+      { type: "label", id: `${menuId}:label`, label: scope === "global" ? "Global Physics" : "Interactions" },
       {
         type: "status",
-        id: "physics-interactions:unresolved",
+        id: `${menuId}:unresolved`,
         label: "Lane",
         value: "Discretization unresolved; FDM/FEM controls are unavailable",
         tone: "warning",
       },
+      ...(scope === "global" ? [createFieldDriveItem] : []),
     ];
   }
   return [
-    { type: "label", id: "physics-interactions:label", label: "Interactions" },
+    ...spinAuthoringItems,
+    { type: "label", id: `${menuId}:label`, label: scope === "global" ? "Global Physics" : "Interactions" },
     ...specs.map((spec) => {
       const operation = resolveActiveLaneOperation(
         activeLane,
@@ -232,7 +273,7 @@ function physicsInteractionMenu(
       );
       return {
         type: "item" as const,
-        id: `physics-interactions:${spec.id}`,
+        id: `${menuId}:${spec.id}`,
         label: spec.label,
         shortcut: operation.enabled ? undefined : operation.state,
         tooltip: operation.enabled ? undefined : operation.reason,
@@ -241,6 +282,7 @@ function physicsInteractionMenu(
         commandInput: { interactionId: spec.id },
       };
     }),
+    ...(scope === "global" ? [createFieldDriveItem] : []),
   ];
 }
 
@@ -442,8 +484,8 @@ const physicsTab: RibbonTabContent = {
       subtitle: "interactions",
       tone: "neutral",
       actions: [
-        { id: "physics-interactions", icon: icon(Magnet), label: "Interactions", iconColor: "text-violet-400", menu: physicsInteractionMenu("unknown") },
-        { id: "physics-global", icon: icon(Cog),    label: "Global Physics", disabled: true, iconColor: "text-muted-foreground" },
+        { id: "physics-interactions", icon: icon(Magnet), label: "Add Physics", iconColor: "text-violet-400", menu: physicsInteractionMenu("unknown") },
+        { id: "physics-global", icon: icon(Cog),    label: "Global Physics", disabled: false, iconColor: "text-sky-400" },
       ],
     },
     {
@@ -454,16 +496,6 @@ const physicsTab: RibbonTabContent = {
       actions: [
         { id: "physics-add-dmi", icon: icon(Sparkles), label: "DMI",         disabled: true, iconColor: "text-cyan-400",  menu: radioMenu("physics-dmi-type", "DMI type", "bulk", [["bulk", "Bulk DMI"], ["interfacial", "Interfacial DMI"]]) },
         { id: "physics-add-ku",  icon: icon(Binary),   label: "Uniaxial Ku", disabled: true, iconColor: "text-rose-400" },
-      ],
-    },
-    {
-      id: "physics-drive",
-      title: "Drive / STT",
-      subtitle: "excitation",
-      actions: [
-        { id: "physics-oersted",      icon: icon(RadioTower),  label: "Oersted",     iconColor: "text-amber-400",   disabled: true },
-        { id: "physics-spin-torque",  icon: icon(Zap),         label: "Spin Torque", iconColor: "text-emerald-400", disabled: true },
-        { id: "physics-thermal",      icon: icon(FlaskConical),label: "Thermal",     iconColor: "text-orange-400",  disabled: true },
       ],
     },
     {
@@ -793,6 +825,15 @@ function buildPhysicsTabContent(
                       context.sessionStatus?.capabilities?.active_lane ?? null,
                     ),
                   }
+                : action.id === "physics-global"
+                  ? {
+                      ...action,
+                      menu: physicsInteractionMenu(
+                        discretization,
+                        context.sessionStatus?.capabilities?.active_lane ?? null,
+                        "global",
+                      ),
+                    }
                 : action,
             ),
           }

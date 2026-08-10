@@ -156,6 +156,21 @@ export function viewportSelectionForRegion(
 export function viewportSelectionForFdmTarget(
   target: Pick<VisualizationTargetRef, "id" | "kind" | "label">,
 ): ViewportSelectionPatch | null {
+  if (target.kind === "airbox" && target.id === "airbox") {
+    return {
+      kind: "airbox.root",
+      label: target.label ?? "Airbox",
+      nodeId: "model:airbox",
+      objectId: null,
+      ref: {
+        kind: "airbox.root",
+        nodeId: "model:airbox",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    };
+  }
+
   if (target.kind === "object") {
     const objectId = target.id.startsWith("object:")
       ? target.id.slice("object:".length)

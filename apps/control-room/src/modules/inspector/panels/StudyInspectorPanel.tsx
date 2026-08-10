@@ -1444,6 +1444,18 @@ export function StudyBoundarySection({
       sessionDiscretization,
     },
   );
+  const fdm = draft.fdm ?? {
+    boundaryCorrection: "",
+    boundaryDeltaMin: "",
+    boundaryPhiFloor: "",
+    commonCells: "",
+    commonCellsXy: "",
+    defaultCell: "",
+    demagExplain: true,
+    demagMode: "auto",
+    demagStrategy: demagRealization,
+    perMagnet: "",
+  };
   const validation = validateStudyGlobalDraft(draft, {
     activeLane,
     algorithmsAvailable,
@@ -1538,7 +1550,19 @@ export function StudyBoundarySection({
         label={explicitFdm ? "FDM demag" : "Demag"}
         type="select"
         value={demagRealization}
-        onChange={(event) => onUpdate({ demagRealization: event.target.value })}
+        onChange={(event) =>
+          onUpdate({
+            demagRealization: event.target.value,
+            ...(explicitFdm
+              ? {
+                  fdm: {
+                    ...fdm,
+                    demagStrategy: event.target.value,
+                  },
+                }
+              : {}),
+          })
+        }
       >
         {explicitFdm ? (
           <>
@@ -1560,6 +1584,95 @@ export function StudyBoundarySection({
           </>
         )}
       </FormField>
+      {explicitFdm ? (
+        <>
+          <FormField
+            label="FDM default cell"
+            hint="dx, dy, dz in metres. Leave blank when every magnet has a per-object grid."
+            unit="m"
+            value={fdm.defaultCell}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, defaultCell: event.target.value } })
+            }
+          />
+          <FormField
+            label="FDM per-magnet grids"
+            hint='JSON object keyed by canonical magnet name, for example {"free":{"cell":[2e-9,2e-9,1e-9]}}.'
+            rows={3}
+            type="textarea"
+            value={fdm.perMagnet}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, perMagnet: event.target.value } })
+            }
+          />
+          <FormField
+            label="FDM demag mode"
+            type="select"
+            value={fdm.demagMode}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, demagMode: event.target.value } })
+            }
+          >
+            <option value="auto">Auto</option>
+            <option value="two_d_stack">2-D stack</option>
+            <option value="three_d">3-D</option>
+          </FormField>
+          <FormField
+            label="Common convolution cells"
+            hint="Nx, Ny, Nz; mutually exclusive with common XY cells."
+            value={fdm.commonCells}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, commonCells: event.target.value } })
+            }
+          />
+          <FormField
+            label="Common convolution cells XY"
+            hint="Nx, Ny for the two-dimensional stack path."
+            value={fdm.commonCellsXy}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, commonCellsXy: event.target.value } })
+            }
+          />
+          <FormField
+            label="Explain FDM demag plan"
+            checked={fdm.demagExplain}
+            type="checkbox"
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, demagExplain: event.target.checked } })
+            }
+          />
+          <FormField
+            label="Boundary correction"
+            type="select"
+            value={fdm.boundaryCorrection}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, boundaryCorrection: event.target.value } })
+            }
+          >
+            <option value="">Backend default</option>
+            <option value="none">None</option>
+            <option value="volume">Volume (T0)</option>
+            <option value="full">Full (T1)</option>
+          </FormField>
+          <FormField
+            label="Boundary phi floor"
+            hint="Effective volume fraction in (0, 1)."
+            value={fdm.boundaryPhiFloor}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, boundaryPhiFloor: event.target.value } })
+            }
+          />
+          <FormField
+            label="Boundary delta minimum"
+            hint="Minimum intersection distance in metres."
+            unit="m"
+            value={fdm.boundaryDeltaMin}
+            onChange={(event) =>
+              onUpdate({ fdm: { ...fdm, boundaryDeltaMin: event.target.value } })
+            }
+          />
+        </>
+      ) : null}
       <FormField
         label="External field"
         hint="B_ext vector in T. Leave blank to remove the global field."

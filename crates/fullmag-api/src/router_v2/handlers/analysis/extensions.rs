@@ -18,11 +18,11 @@ use crate::fem_slice_overlay::{
     collect_fem_slice_overlay, FemSliceOverlayInput, SliceOverlayPoint,
 };
 use crate::field_slice::{resolve_slice_query, FemField, FieldSliceQuery, SlicePlane};
+use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::data::resolved_vector_field::{
     expand_compact_fem_node_values, resolve_topological_charge_magnetization,
     ResolvedFieldSourceKind, ResolvedObjectVectorField,
 };
-use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, field_quantity_revision};
 use crate::schemas::analysis_extensions::{
     TopologicalChargeExecutionProvenance as TopologicalChargeExecutionProvenanceV2,

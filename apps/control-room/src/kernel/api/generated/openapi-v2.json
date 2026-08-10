@@ -3603,6 +3603,148 @@
         ],
         "type": "object"
       },
+      "FdmCommonTransformLayoutResource": {
+        "properties": {
+          "cell_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "fft_shape": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "is_physical_mesh": {
+            "type": "boolean"
+          },
+          "origin": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "type": "string"
+          },
+          "shape": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "shape",
+          "cell_size",
+          "origin",
+          "fft_shape",
+          "is_physical_mesh",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "FdmLayerLayoutResource": {
+        "properties": {
+          "active_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_mask_present": {
+            "type": "boolean"
+          },
+          "convolution_cell_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "convolution_grid": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "inactive_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "magnet_name": {
+            "type": "string"
+          },
+          "mask_provenance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "native_cell_size": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "native_grid": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "native_grid_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "native_origin": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "transfer_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "layer_id",
+          "object_id",
+          "magnet_name",
+          "native_grid",
+          "native_cell_size",
+          "native_origin",
+          "convolution_grid",
+          "convolution_cell_size",
+          "transfer_kind",
+          "active_mask_present",
+          "active_cell_count",
+          "inactive_cell_count"
+        ],
+        "type": "object"
+      },
       "FdmMagneticSupportSemanticRole": {
         "enum": [
           "magnetic-support"
@@ -3658,6 +3800,213 @@
           "active_cell_count",
           "inactive_cell_count",
           "active_unassigned_cell_count"
+        ],
+        "type": "object"
+      },
+      "FdmMultilayerAirboxResource": {
+        "properties": {
+          "carrier_available": {
+            "type": "boolean"
+          },
+          "carrier_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "carrier_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "cells": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "h_demag_available": {
+            "type": "boolean"
+          },
+          "h_eff_available": {
+            "type": "boolean"
+          },
+          "h_eff_unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_grid_fingerprints": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "source_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_runtime_identity": {},
+          "target_only": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "carrier_available",
+          "h_demag_available",
+          "h_eff_available"
+        ],
+        "type": "object"
+      },
+      "FdmMultilayerLayoutResource": {
+        "description": "Thin, revision-driven description of the native carriers used by an FDM\nmultilayer convolution.  The common transform layout is an FFT scratch\nlayout and must never be interpreted as a physical mesh.",
+        "properties": {
+          "airbox": {
+            "$ref": "#/components/schemas/FdmMultilayerAirboxResource"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "common_transform_layout": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FdmCommonTransformLayoutResource"
+              }
+            ]
+          },
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "execution_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/FdmLayerLayoutResource"
+            },
+            "type": "array"
+          },
+          "layout_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "layout_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requested_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "domain_generation_id",
+          "available",
+          "backend",
+          "layout_revision",
+          "observation_revision",
+          "execution_revision",
+          "layers",
+          "airbox"
         ],
         "type": "object"
       },
@@ -9437,6 +9786,9 @@
                 "format": "double",
                 "type": "number"
               },
+              "formula_version": {
+                "$ref": "#/components/schemas/ZhangLiFormulaVersion"
+              },
               "id": {
                 "type": "string"
               },
@@ -9445,6 +9797,39 @@
                   "zhang_li"
                 ],
                 "type": "string"
+              },
+              "lande_g": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "operator_version": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ZhangLiOperatorVersion"
+                  }
+                ]
+              },
+              "schema_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneRegionRef"
+                  }
+                ]
               }
             },
             "required": [
@@ -13939,6 +14324,281 @@
         ],
         "type": "string"
       },
+      "PhysicsGraphActivationResource": {
+        "enum": [
+          "configured",
+          "active",
+          "inactive",
+          "blocked",
+          "unsupported",
+          "unresolved"
+        ],
+        "type": "string"
+      },
+      "PhysicsGraphEdgeResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "source_id",
+          "target_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphModuleResource": {
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
+          },
+          "applies_to": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphScopeResource"
+            },
+            "type": "array"
+          },
+          "authored_state": {
+            "type": "string"
+          },
+          "capability": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/PhysicsGraphPresentationResource"
+          },
+          "solve_domain": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionRef"
+            },
+            "type": "array"
+          },
+          "source_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "applies_to",
+          "solve_domain",
+          "depends_on",
+          "activation",
+          "authored_state",
+          "capability",
+          "source_path",
+          "presentation"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphPresentationResource": {
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "family",
+          "label"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphProvenanceResource": {
+        "properties": {
+          "normalizer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "normalizer"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphResource": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphEdgeResource"
+            },
+            "type": "array"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphModuleResource"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/PhysicsGraphProvenanceResource"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "schema_version",
+          "modules",
+          "edges",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphScopeResource": {
+        "description": "Stable scope reference used by the graph-driven model tree.\n\nThe graph endpoint intentionally exposes scope and dependency metadata,\nwhile constitutive family payloads remain on the family resources.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "interface"
+                ],
+                "type": "string"
+              },
+              "side_a": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "side_b": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              }
+            },
+            "required": [
+              "side_a",
+              "side_b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "cross_object"
+                ],
+                "type": "string"
+              },
+              "object_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "object_ids",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "source_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "source_path",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "PlanarEmptyPolicySchema": {
         "enum": [
           "exclude_empty",
@@ -15174,261 +15834,6 @@
           "interaction"
         ],
         "type": "object"
-      },
-      "PhysicsGraphActivationResource": {
-        "enum": [
-          "configured",
-          "active",
-          "inactive",
-          "blocked",
-          "unsupported",
-          "unresolved"
-        ],
-        "type": "string"
-      },
-      "PhysicsGraphEdgeResource": {
-        "properties": {
-          "kind": {
-            "type": "string"
-          },
-          "source_id": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
-          },
-          "target_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "source_id",
-          "target_id",
-          "status"
-        ],
-        "type": "object"
-      },
-      "PhysicsGraphModuleResource": {
-        "properties": {
-          "activation": {
-            "$ref": "#/components/schemas/PhysicsGraphActivationResource"
-          },
-          "applies_to": {
-            "items": {
-              "$ref": "#/components/schemas/PhysicsGraphScopeResource"
-            },
-            "type": "array"
-          },
-          "authored_state": {
-            "type": "string"
-          },
-          "capability": {
-            "type": "string"
-          },
-          "depends_on": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "solve_domain": {
-            "items": {
-              "$ref": "#/components/schemas/SceneRegionRef"
-            },
-            "type": "array"
-          },
-          "source_path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "applies_to",
-          "solve_domain",
-          "depends_on",
-          "activation",
-          "authored_state",
-          "capability",
-          "source_path"
-        ],
-        "type": "object"
-      },
-      "PhysicsGraphProvenanceResource": {
-        "properties": {
-          "normalizer": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "normalizer"
-        ],
-        "type": "object"
-      },
-      "PhysicsGraphResource": {
-        "properties": {
-          "edges": {
-            "items": {
-              "$ref": "#/components/schemas/PhysicsGraphEdgeResource"
-            },
-            "type": "array"
-          },
-          "modules": {
-            "items": {
-              "$ref": "#/components/schemas/PhysicsGraphModuleResource"
-            },
-            "type": "array"
-          },
-          "provenance": {
-            "$ref": "#/components/schemas/PhysicsGraphProvenanceResource"
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "scene_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "scene_revision",
-          "schema_version",
-          "modules",
-          "edges",
-          "provenance"
-        ],
-        "type": "object"
-      },
-      "PhysicsGraphScopeResource": {
-        "oneOf": [
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "global"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "object"
-                ],
-                "type": "string"
-              },
-              "object_id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "object_id",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "region"
-                ],
-                "type": "string"
-              },
-              "object_id": {
-                "type": "string"
-              },
-              "region_id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "object_id",
-              "region_id",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "interface"
-                ],
-                "type": "string"
-              },
-              "side_a": {
-                "$ref": "#/components/schemas/SceneRegionRef"
-              },
-              "side_b": {
-                "$ref": "#/components/schemas/SceneRegionRef"
-              }
-            },
-            "required": [
-              "side_a",
-              "side_b",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "cross_object"
-                ],
-                "type": "string"
-              },
-              "object_ids": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "object_ids",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "unresolved"
-                ],
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "source_path": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "source_path",
-              "kind"
-            ],
-            "type": "object"
-          }
-        ]
       },
       "PreparationClockAdjustment": {
         "properties": {
@@ -27321,6 +27726,21 @@
           }
         },
         "type": "object"
+      },
+      "ZhangLiFormulaVersion": {
+        "enum": [
+          "zhang_li.fullmag.v1",
+          "zhang_li.mumax3.v1",
+          "zhang_li.legacy_fullmag.v0"
+        ],
+        "type": "string"
+      },
+      "ZhangLiOperatorVersion": {
+        "enum": [
+          "zl_central_reference_v1",
+          "zl_mumax3_central_v1"
+        ],
+        "type": "string"
       }
     }
   },
@@ -28658,6 +29078,29 @@
         ]
       }
     },
+    "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FdmMultilayerLayoutResource"
+                }
+              }
+            },
+            "description": "FDM multilayer native and common transform layouts"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/domain/meta": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_meta",
@@ -29112,7 +29555,7 @@
             }
           },
           {
-            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
+            "description": "Scope identifier for `object`, `layer`, `region`, and `part` scopes.",
             "in": "query",
             "name": "scope_id",
             "required": false,
@@ -36096,6 +36539,34 @@
         ]
       }
     },
+    "/v2/sessions/current/model/physics-graph": {
+      "get": {
+        "description": "This endpoint is intentionally thin: mesh topology, field samples and the\nconstitutive family records stay on their dedicated resources.  The graph\nis normalized once by `fullmag-authoring` so the planner and Control Room\nconsume the same stable module identity, scope and dependency semantics.",
+        "operationId": "model_get_sessions_current_model_physics_graph",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicsGraphResource"
+                }
+              }
+            },
+            "description": "Normalized authored physics graph"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          },
+          "409": {
+            "description": "The authored scene cannot be normalized into a graph"
+          }
+        },
+        "summary": "Return the semantic physics-module graph for the current authoring scene.",
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/planar-monitors": {
       "get": {
         "operationId": "model_get_sessions_current_model_planar_monitors",
@@ -36310,32 +36781,6 @@
           },
           "409": {
             "description": "Revision conflict"
-          }
-        },
-        "tags": [
-          "model"
-        ]
-      }
-    },
-    "/v2/sessions/current/model/physics-graph": {
-      "get": {
-        "operationId": "model_get_sessions_current_model_physics_graph",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PhysicsGraphResource"
-                }
-              }
-            },
-            "description": "Normalized authored physics graph"
-          },
-          "404": {
-            "description": "No active workspace or scene document"
-          },
-          "409": {
-            "description": "The authored scene cannot be normalized into a graph"
           }
         },
         "tags": [

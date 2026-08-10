@@ -5,6 +5,8 @@
 
 #![allow(non_camel_case_types)]
 
+pub mod gpu_transport_abi_v1;
+
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
@@ -458,6 +460,10 @@ pub struct fullmag_fdm_step_stats {
     pub hot_loop_host_sync_count: u64,
     pub hot_loop_control_scalar_d2h_bytes: u64,
     pub hot_loop_control_scalar_host_sync_count: u64,
+    pub multilayer_refresh_count: u64,
+    pub multilayer_forward_fft_count: u64,
+    pub multilayer_inverse_fft_count: u64,
+    pub multilayer_pair_accumulation_count: u64,
 }
 
 // ── Device info ──
@@ -496,6 +502,375 @@ pub struct fullmag_fdm_field_snapshot {
 #[repr(C)]
 pub struct fullmag_fdm_preview_snapshot {
     _private: [u8; 0],
+}
+
+// ── FDM CPU steady charge + one-way spin transport ABI v1 ──
+
+pub const FULLMAG_FDM_CPU_TRANSPORT_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY: usize = 64;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERROR_CAPACITY: usize = 512;
+pub const FULLMAG_FDM_CPU_TRANSPORT_OK: i32 = 0;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_NULL: i32 = -100;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_ABI: i32 = -101;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_INVALID: i32 = -102;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_BUFFER: i32 = -103;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_UNSUPPORTED: i32 = -104;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_CONVERGENCE: i32 = -105;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_BALANCE: i32 = -106;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_NUMERICAL: i32 = -107;
+pub const FULLMAG_FDM_CPU_TRANSPORT_ERR_INTERNAL: i32 = -108;
+pub const FULLMAG_FDM_CPU_TRANSPORT_DEVICE_CPU: u32 = 1;
+pub const FULLMAG_FDM_CPU_TRANSPORT_DEVICE_GPU: u32 = 2;
+pub const FULLMAG_FDM_CPU_TRANSPORT_PRECISION_F32: u32 = 1;
+pub const FULLMAG_FDM_CPU_TRANSPORT_PRECISION_F64: u32 = 2;
+pub const FULLMAG_FDM_CPU_CHARGE_BC_UNSET: u32 = 0;
+pub const FULLMAG_FDM_CPU_CHARGE_BC_INSULATING: u32 = 1;
+pub const FULLMAG_FDM_CPU_CHARGE_BC_VOLTAGE: u32 = 2;
+pub const FULLMAG_FDM_CPU_CHARGE_BC_TOTAL_CURRENT: u32 = 3;
+pub const FULLMAG_FDM_CPU_CHARGE_BC_SPECIFIED_OUTWARD_CURRENT_DENSITY: u32 = 4;
+pub const FULLMAG_FDM_CPU_CHARGE_GAUGE_NONE: u32 = 0;
+pub const FULLMAG_FDM_CPU_CHARGE_GAUGE_ZERO_MEAN: u32 = 1;
+pub const FULLMAG_FDM_CPU_SPIN_BC_UNSET: u32 = 0;
+pub const FULLMAG_FDM_CPU_SPIN_BC_INSULATING: u32 = 1;
+pub const FULLMAG_FDM_CPU_SPIN_BC_SINK: u32 = 2;
+pub const FULLMAG_FDM_CPU_SPIN_BC_SPECIFIED_POTENTIAL: u32 = 3;
+pub const FULLMAG_FDM_CPU_SPIN_BC_SPECIFIED_OUTWARD_FLUX: u32 = 4;
+pub const FULLMAG_FDM_CPU_SPIN_BC_PERIODIC: u32 = 5;
+pub const FULLMAG_FDM_CPU_SPIN_INTERFACE_TRANSPARENT: u32 = 0;
+pub const FULLMAG_FDM_CPU_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2: u32 = 1;
+pub const FULLMAG_FDM_CPU_SPIN_INTERFACE_SML_RESERVOIR_V2: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_transport_grid_v1 {
+    pub nx: u64,
+    pub ny: u64,
+    pub nz: u64,
+    pub dx_m: f64,
+    pub dy_m: f64,
+    pub dz_m: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_f64_buffer_v1 {
+    pub data: *mut f64,
+    pub capacity: u64,
+    pub length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_charge_boundary_v1 {
+    pub kind: u32,
+    pub reserved: u32,
+    pub value: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_spin_boundary_v1 {
+    pub kind: u32,
+    pub reserved: u32,
+    pub potential_v: [f64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_specified_current_face_v1 {
+    pub axis: u32,
+    pub outward_normal_sign: i32,
+    pub face_index: u64,
+    pub adjacent_cell: u64,
+    pub area_m2: f64,
+    pub outward_current_density_a_per_m2: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_transport_interface_v1 {
+    pub interface_id: u64,
+    pub axis: u32,
+    pub kind: u32,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+    pub from_cell: u64,
+    pub to_cell: u64,
+    pub g_up_s_per_m2: f64,
+    pub g_down_s_per_m2: f64,
+    pub g_r_s_per_m2: f64,
+    pub g_i_s_per_m2: f64,
+    pub magnetization: [f64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_charge_interface_observation_v1 {
+    pub interface_id: u64,
+    pub axis: u32,
+    pub reserved: u32,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+    pub from_cell: u64,
+    pub to_cell: u64,
+    pub g_up_s_per_m2: f64,
+    pub g_down_s_per_m2: f64,
+    pub from_potential_trace_v: f64,
+    pub to_potential_trace_v: f64,
+    pub delta_potential_trace_v: f64,
+    pub from_to_current_density_a_per_m2: f64,
+    pub global_face_current_density_a_per_m2: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_charge_interface_observation_buffer_v1 {
+    pub data: *mut fullmag_fdm_cpu_charge_interface_observation_v1,
+    pub capacity: u64,
+    pub length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_spin_interface_observation_v1 {
+    pub interface_id: u64,
+    pub axis: u32,
+    pub reserved: u32,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+    pub from_cell: u64,
+    pub to_cell: u64,
+    pub incoming_longitudinal_a_per_m2: [f64; 3],
+    pub backflow_longitudinal_a_per_m2: [f64; 3],
+    pub absorbed_transverse_a_per_m2: [f64; 3],
+    pub negative_cell_flux_positive_axis_a_per_m2: [f64; 3],
+    pub positive_cell_flux_positive_axis_a_per_m2: [f64; 3],
+    pub from_side_outgoing_a_per_m2: [f64; 3],
+    pub to_side_transmitted_a_per_m2: [f64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_spin_interface_observation_buffer_v1 {
+    pub data: *mut fullmag_fdm_cpu_spin_interface_observation_v1,
+    pub capacity: u64,
+    pub length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_spin_reaction_lengths_v1 {
+    pub spin_flip_m: f64,
+    pub exchange_m: f64,
+    pub dephasing_m: f64,
+}
+
+#[repr(C)]
+pub struct fullmag_fdm_cpu_charge_snapshot_v1 {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_transport_abi_layout_field_v1 {
+    pub field_name: *const c_char,
+    pub offset: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_transport_abi_layout_record_v1 {
+    pub record_name: *const c_char,
+    pub size: u64,
+    pub alignment: u64,
+    pub field_count: u64,
+    pub fields: *const fullmag_fdm_cpu_transport_abi_layout_field_v1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_transport_abi_layout_manifest_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub record_count: u64,
+    pub records: *const fullmag_fdm_cpu_transport_abi_layout_record_v1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_charge_request_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub grid: fullmag_fdm_cpu_transport_grid_v1,
+    pub device: u32,
+    pub precision: u32,
+    pub conductivity_s_per_m: *const f64,
+    pub conductivity_len: u64,
+    pub active_cells: *const u8,
+    pub active_cells_len: u64,
+    pub boundaries: [fullmag_fdm_cpu_charge_boundary_v1; 6],
+    pub specified_current_faces: *const fullmag_fdm_cpu_specified_current_face_v1,
+    pub specified_current_face_count: u64,
+    pub interfaces: *const fullmag_fdm_cpu_transport_interface_v1,
+    pub interface_count: u64,
+    pub gauge: u32,
+    pub reserved0: u32,
+    pub relative_tolerance: f64,
+    pub absolute_tolerance_a_per_m3: f64,
+    pub max_iterations: u64,
+    pub api_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub solver_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+}
+
+#[repr(C)]
+#[derive(Debug)]
+/// Raw caller-allocated result whose accepted snapshot is a unique owner.
+///
+/// A successful result must not be copied. Pass its address to spin solve only
+/// while it remains alive, then call `fullmag_fdm_cpu_charge_result_destroy_v1`
+/// exactly as the owner teardown. Destroying an empty/full-size result is safe
+/// and repeated destruction is idempotent. Safe Rust intentionally cannot
+/// duplicate this record:
+///
+/// ```compile_fail
+/// use fullmag_fdm_sys::fullmag_fdm_cpu_charge_result_v1;
+///
+/// let result = unsafe { std::mem::zeroed::<fullmag_fdm_cpu_charge_result_v1>() };
+/// let copied = result;
+/// let _use_after_move = result;
+/// let _ = copied;
+/// ```
+///
+/// ```compile_fail
+/// use fullmag_fdm_sys::fullmag_fdm_cpu_charge_result_v1;
+///
+/// let result = unsafe { std::mem::zeroed::<fullmag_fdm_cpu_charge_result_v1>() };
+/// let _duplicate_owner = result.clone();
+/// ```
+pub struct fullmag_fdm_cpu_charge_result_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub status: i32,
+    pub reserved0: u32,
+    pub potential_v: fullmag_fdm_cpu_f64_buffer_v1,
+    pub jc_x_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub jc_y_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub jc_z_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub jc_cell_xyz_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub interface_observations: fullmag_fdm_cpu_charge_interface_observation_buffer_v1,
+    pub iterations: u64,
+    pub algebraic_residual_l2_a_per_m3: f64,
+    pub recomputed_algebraic_residual_l2_a_per_m3: f64,
+    pub physical_balance_integrated_l2_a: f64,
+    pub max_cell_current_imbalance_a: f64,
+    pub max_abs_divergence_a_per_m3: f64,
+    pub boundary_outward_current_a: [f64; 6],
+    pub net_boundary_current_a: f64,
+    pub accepted_snapshot_identity: u64,
+    pub accepted_snapshot: *mut fullmag_fdm_cpu_charge_snapshot_v1,
+    pub api_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub interface_operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub solver_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub runtime_owner: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub error_message: [c_char; FULLMAG_FDM_CPU_TRANSPORT_ERROR_CAPACITY],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_steady_spin_request_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub grid: fullmag_fdm_cpu_transport_grid_v1,
+    pub device: u32,
+    pub precision: u32,
+    pub spin_conductivity_s_per_m: *const f64,
+    pub spin_conductivity_len: u64,
+    pub polarization: *const f64,
+    pub polarization_len: u64,
+    pub spin_hall_angle: *const f64,
+    pub spin_hall_angle_len: u64,
+    pub magnetization_xyz: *const f64,
+    pub magnetization_xyz_len: u64,
+    pub reactions: *const fullmag_fdm_cpu_spin_reaction_lengths_v1,
+    pub reaction_count: u64,
+    pub active_cells: *const u8,
+    pub active_cells_len: u64,
+    pub region_ids: *const u32,
+    pub region_id_count: u64,
+    pub boundaries: [fullmag_fdm_cpu_spin_boundary_v1; 6],
+    pub interfaces: *const fullmag_fdm_cpu_transport_interface_v1,
+    pub interface_count: u64,
+    pub torque_target_cells: *const u8,
+    pub torque_target_cells_len: u64,
+    pub saturation_magnetization_a_per_m: *const f64,
+    pub saturation_magnetization_len: u64,
+    pub gamma_e_rad_per_s_t: f64,
+    pub relative_tolerance: f64,
+    pub absolute_tolerance_a: f64,
+    pub local_relative_tolerance: f64,
+    pub local_absolute_tolerance_a_per_m3: f64,
+    pub max_iterations: u64,
+    pub gmres_restart: u64,
+    pub api_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub formula_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub electric_reconstruction_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub solver_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub local_residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub interface_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub torque_operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_cpu_steady_spin_result_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub reserved_flags: u64,
+    pub status: i32,
+    pub reserved0: u32,
+    pub spin_potential_xyz_v: fullmag_fdm_cpu_f64_buffer_v1,
+    pub q_x_xyz_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub q_y_xyz_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub q_z_xyz_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub q_cell_ia_a_per_m2: fullmag_fdm_cpu_f64_buffer_v1,
+    pub reaction_spin_flip_xyz_a_per_m3: fullmag_fdm_cpu_f64_buffer_v1,
+    pub reaction_exchange_xyz_a_per_m3: fullmag_fdm_cpu_f64_buffer_v1,
+    pub reaction_dephasing_xyz_a_per_m3: fullmag_fdm_cpu_f64_buffer_v1,
+    pub reaction_total_xyz_a_per_m3: fullmag_fdm_cpu_f64_buffer_v1,
+    pub transport_torque_xyz_per_s: fullmag_fdm_cpu_f64_buffer_v1,
+    pub interface_observations: fullmag_fdm_cpu_spin_interface_observation_buffer_v1,
+    pub iterations: u64,
+    pub gmres_restart: u64,
+    pub initial_rhs_integrated_l2_a: f64,
+    pub recursive_residual_integrated_l2_a: f64,
+    pub recomputed_balance_integrated_l2_a: f64,
+    pub balance_tolerance_integrated_l2_a: f64,
+    pub boundary_outward_current_a: [f64; 18],
+    pub global_balance_closure_a: [f64; 3],
+    pub relative_global_balance: f64,
+    pub max_abs_residual_a_per_m3: f64,
+    pub api_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub formula_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub electric_reconstruction_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub solver_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub local_residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub interface_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub torque_operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub runtime_owner: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub convergence_reason: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
+    pub error_message: [c_char; FULLMAG_FDM_CPU_TRANSPORT_ERROR_CAPACITY],
 }
 
 // ── Functions ──
@@ -660,11 +1035,397 @@ extern "C" {
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
     pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);
+
+    pub fn fullmag_fdm_cpu_transport_is_available_v1() -> i32;
+    pub fn fullmag_fdm_cpu_transport_abi_layout_manifest_get_v1(
+    ) -> *const fullmag_fdm_cpu_transport_abi_layout_manifest_v1;
+    pub fn fullmag_fdm_cpu_charge_solve_v1(
+        request: *const fullmag_fdm_cpu_charge_request_v1,
+        result: *mut fullmag_fdm_cpu_charge_result_v1,
+    ) -> i32;
+    pub fn fullmag_fdm_cpu_steady_spin_solve_v1(
+        request: *const fullmag_fdm_cpu_steady_spin_request_v1,
+        charge: *const fullmag_fdm_cpu_charge_result_v1,
+        result: *mut fullmag_fdm_cpu_steady_spin_result_v1,
+    ) -> i32;
+    pub fn fullmag_fdm_cpu_charge_result_destroy_v1(result: *mut fullmag_fdm_cpu_charge_result_v1);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fullmag_fdm_step_stats;
+    use std::ffi::CStr;
+    use std::mem::{align_of, offset_of, size_of};
+
+    use super::*;
+
+    fn layout_record<'a>(
+        records: &'a [fullmag_fdm_cpu_transport_abi_layout_record_v1],
+        index: usize,
+        expected_name: &str,
+    ) -> &'a fullmag_fdm_cpu_transport_abi_layout_record_v1 {
+        let record = &records[index];
+        let actual_name = unsafe { CStr::from_ptr(record.record_name) }
+            .to_str()
+            .expect("layout record names must be UTF-8");
+        assert_eq!(actual_name, expected_name);
+        record
+    }
+
+    macro_rules! assert_layout_record {
+        ($records:expr, $index:expr, $name:literal, $type:ty, [$($field:ident),+ $(,)?]) => {{
+            let record = layout_record($records, $index, $name);
+            assert_eq!(record.size, size_of::<$type>() as u64, "{} size", $name);
+            assert_eq!(record.alignment, align_of::<$type>() as u64, "{} alignment", $name);
+            let expected = [$( (stringify!($field), offset_of!($type, $field) as u64) ),+];
+            assert_eq!(record.field_count, expected.len() as u64, "{} field count", $name);
+            let fields = unsafe {
+                std::slice::from_raw_parts(record.fields, record.field_count as usize)
+            };
+            for (field, (expected_name, expected_offset)) in fields.iter().zip(expected) {
+                let actual_name = unsafe { CStr::from_ptr(field.field_name) }
+                    .to_str()
+                    .expect("layout field names must be UTF-8");
+                assert_eq!(actual_name, expected_name, "{} field name", $name);
+                assert_eq!(field.offset, expected_offset, "{}.{expected_name} offset", $name);
+            }
+        }};
+    }
+
+    #[test]
+    fn cpu_transport_abi_layout_manifest_matches_every_rust_record_field() {
+        let manifest = unsafe { fullmag_fdm_cpu_transport_abi_layout_manifest_get_v1() };
+        assert!(!manifest.is_null());
+        let manifest = unsafe { &*manifest };
+        assert_eq!(manifest.abi_version, FULLMAG_FDM_CPU_TRANSPORT_ABI_V1);
+        assert_eq!(
+            manifest.struct_size as usize,
+            size_of::<fullmag_fdm_cpu_transport_abi_layout_manifest_v1>()
+        );
+        assert_eq!(manifest.reserved_flags, 0);
+        let records =
+            unsafe { std::slice::from_raw_parts(manifest.records, manifest.record_count as usize) };
+        assert_eq!(records.len(), 18);
+
+        assert_layout_record!(
+            records,
+            0,
+            "fullmag_fdm_cpu_transport_grid_v1",
+            fullmag_fdm_cpu_transport_grid_v1,
+            [nx, ny, nz, dx_m, dy_m, dz_m]
+        );
+        assert_layout_record!(
+            records,
+            1,
+            "fullmag_fdm_cpu_f64_buffer_v1",
+            fullmag_fdm_cpu_f64_buffer_v1,
+            [data, capacity, length]
+        );
+        assert_layout_record!(
+            records,
+            2,
+            "fullmag_fdm_cpu_charge_boundary_v1",
+            fullmag_fdm_cpu_charge_boundary_v1,
+            [kind, reserved, value]
+        );
+        assert_layout_record!(
+            records,
+            3,
+            "fullmag_fdm_cpu_spin_boundary_v1",
+            fullmag_fdm_cpu_spin_boundary_v1,
+            [kind, reserved, potential_v]
+        );
+        assert_layout_record!(
+            records,
+            4,
+            "fullmag_fdm_cpu_specified_current_face_v1",
+            fullmag_fdm_cpu_specified_current_face_v1,
+            [
+                axis,
+                outward_normal_sign,
+                face_index,
+                adjacent_cell,
+                area_m2,
+                outward_current_density_a_per_m2
+            ]
+        );
+        assert_layout_record!(
+            records,
+            5,
+            "fullmag_fdm_cpu_transport_interface_v1",
+            fullmag_fdm_cpu_transport_interface_v1,
+            [
+                interface_id,
+                axis,
+                kind,
+                negative_cell,
+                positive_cell,
+                from_cell,
+                to_cell,
+                g_up_s_per_m2,
+                g_down_s_per_m2,
+                g_r_s_per_m2,
+                g_i_s_per_m2,
+                magnetization
+            ]
+        );
+        assert_layout_record!(
+            records,
+            6,
+            "fullmag_fdm_cpu_charge_interface_observation_v1",
+            fullmag_fdm_cpu_charge_interface_observation_v1,
+            [
+                interface_id,
+                axis,
+                reserved,
+                negative_cell,
+                positive_cell,
+                from_cell,
+                to_cell,
+                g_up_s_per_m2,
+                g_down_s_per_m2,
+                from_potential_trace_v,
+                to_potential_trace_v,
+                delta_potential_trace_v,
+                from_to_current_density_a_per_m2,
+                global_face_current_density_a_per_m2
+            ]
+        );
+        assert_layout_record!(
+            records,
+            7,
+            "fullmag_fdm_cpu_charge_interface_observation_buffer_v1",
+            fullmag_fdm_cpu_charge_interface_observation_buffer_v1,
+            [data, capacity, length]
+        );
+        assert_layout_record!(
+            records,
+            8,
+            "fullmag_fdm_cpu_spin_interface_observation_v1",
+            fullmag_fdm_cpu_spin_interface_observation_v1,
+            [
+                interface_id,
+                axis,
+                reserved,
+                negative_cell,
+                positive_cell,
+                from_cell,
+                to_cell,
+                incoming_longitudinal_a_per_m2,
+                backflow_longitudinal_a_per_m2,
+                absorbed_transverse_a_per_m2,
+                negative_cell_flux_positive_axis_a_per_m2,
+                positive_cell_flux_positive_axis_a_per_m2,
+                from_side_outgoing_a_per_m2,
+                to_side_transmitted_a_per_m2
+            ]
+        );
+        assert_layout_record!(
+            records,
+            9,
+            "fullmag_fdm_cpu_spin_interface_observation_buffer_v1",
+            fullmag_fdm_cpu_spin_interface_observation_buffer_v1,
+            [data, capacity, length]
+        );
+        assert_layout_record!(
+            records,
+            10,
+            "fullmag_fdm_cpu_spin_reaction_lengths_v1",
+            fullmag_fdm_cpu_spin_reaction_lengths_v1,
+            [spin_flip_m, exchange_m, dephasing_m]
+        );
+        assert_layout_record!(
+            records,
+            11,
+            "fullmag_fdm_cpu_charge_request_v1",
+            fullmag_fdm_cpu_charge_request_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                grid,
+                device,
+                precision,
+                conductivity_s_per_m,
+                conductivity_len,
+                active_cells,
+                active_cells_len,
+                boundaries,
+                specified_current_faces,
+                specified_current_face_count,
+                interfaces,
+                interface_count,
+                gauge,
+                reserved0,
+                relative_tolerance,
+                absolute_tolerance_a_per_m3,
+                max_iterations,
+                api_version,
+                operator_version,
+                solver_version,
+                residual_version
+            ]
+        );
+        assert_layout_record!(
+            records,
+            12,
+            "fullmag_fdm_cpu_charge_result_v1",
+            fullmag_fdm_cpu_charge_result_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                status,
+                reserved0,
+                potential_v,
+                jc_x_a_per_m2,
+                jc_y_a_per_m2,
+                jc_z_a_per_m2,
+                jc_cell_xyz_a_per_m2,
+                interface_observations,
+                iterations,
+                algebraic_residual_l2_a_per_m3,
+                recomputed_algebraic_residual_l2_a_per_m3,
+                physical_balance_integrated_l2_a,
+                max_cell_current_imbalance_a,
+                max_abs_divergence_a_per_m3,
+                boundary_outward_current_a,
+                net_boundary_current_a,
+                accepted_snapshot_identity,
+                accepted_snapshot,
+                api_version,
+                operator_version,
+                interface_operator_version,
+                solver_version,
+                residual_version,
+                runtime_owner,
+                error_message
+            ]
+        );
+        assert_layout_record!(
+            records,
+            13,
+            "fullmag_fdm_cpu_steady_spin_request_v1",
+            fullmag_fdm_cpu_steady_spin_request_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                grid,
+                device,
+                precision,
+                spin_conductivity_s_per_m,
+                spin_conductivity_len,
+                polarization,
+                polarization_len,
+                spin_hall_angle,
+                spin_hall_angle_len,
+                magnetization_xyz,
+                magnetization_xyz_len,
+                reactions,
+                reaction_count,
+                active_cells,
+                active_cells_len,
+                region_ids,
+                region_id_count,
+                boundaries,
+                interfaces,
+                interface_count,
+                torque_target_cells,
+                torque_target_cells_len,
+                saturation_magnetization_a_per_m,
+                saturation_magnetization_len,
+                gamma_e_rad_per_s_t,
+                relative_tolerance,
+                absolute_tolerance_a,
+                local_relative_tolerance,
+                local_absolute_tolerance_a_per_m3,
+                max_iterations,
+                gmres_restart,
+                api_version,
+                formula_version,
+                operator_version,
+                electric_reconstruction_version,
+                solver_version,
+                residual_version,
+                local_residual_version,
+                interface_version,
+                torque_operator_version
+            ]
+        );
+        assert_layout_record!(
+            records,
+            14,
+            "fullmag_fdm_cpu_steady_spin_result_v1",
+            fullmag_fdm_cpu_steady_spin_result_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                status,
+                reserved0,
+                spin_potential_xyz_v,
+                q_x_xyz_a_per_m2,
+                q_y_xyz_a_per_m2,
+                q_z_xyz_a_per_m2,
+                q_cell_ia_a_per_m2,
+                reaction_spin_flip_xyz_a_per_m3,
+                reaction_exchange_xyz_a_per_m3,
+                reaction_dephasing_xyz_a_per_m3,
+                reaction_total_xyz_a_per_m3,
+                transport_torque_xyz_per_s,
+                interface_observations,
+                iterations,
+                gmres_restart,
+                initial_rhs_integrated_l2_a,
+                recursive_residual_integrated_l2_a,
+                recomputed_balance_integrated_l2_a,
+                balance_tolerance_integrated_l2_a,
+                boundary_outward_current_a,
+                global_balance_closure_a,
+                relative_global_balance,
+                max_abs_residual_a_per_m3,
+                api_version,
+                formula_version,
+                operator_version,
+                electric_reconstruction_version,
+                solver_version,
+                residual_version,
+                local_residual_version,
+                interface_version,
+                torque_operator_version,
+                runtime_owner,
+                convergence_reason,
+                error_message
+            ]
+        );
+        assert_layout_record!(
+            records,
+            15,
+            "fullmag_fdm_cpu_transport_abi_layout_field_v1",
+            fullmag_fdm_cpu_transport_abi_layout_field_v1,
+            [field_name, offset]
+        );
+        assert_layout_record!(
+            records,
+            16,
+            "fullmag_fdm_cpu_transport_abi_layout_record_v1",
+            fullmag_fdm_cpu_transport_abi_layout_record_v1,
+            [record_name, size, alignment, field_count, fields]
+        );
+        assert_layout_record!(
+            records,
+            17,
+            "fullmag_fdm_cpu_transport_abi_layout_manifest_v1",
+            fullmag_fdm_cpu_transport_abi_layout_manifest_v1,
+            [
+                abi_version,
+                struct_size,
+                reserved_flags,
+                record_count,
+                records
+            ]
+        );
+    }
 
     #[test]
     fn step_stats_abi_carries_hot_loop_scalar_readback_audit() {
@@ -689,11 +1450,19 @@ mod tests {
             hot_loop_host_sync_count: 1,
             hot_loop_control_scalar_d2h_bytes: 24,
             hot_loop_control_scalar_host_sync_count: 1,
+            multilayer_refresh_count: 1,
+            multilayer_forward_fft_count: 3,
+            multilayer_inverse_fft_count: 3,
+            multilayer_pair_accumulation_count: 9,
         };
 
         assert_eq!(stats.hot_loop_d2h_bytes, 24);
         assert_eq!(stats.hot_loop_host_sync_count, 1);
         assert_eq!(stats.hot_loop_control_scalar_d2h_bytes, 24);
         assert_eq!(stats.hot_loop_control_scalar_host_sync_count, 1);
+        assert_eq!(stats.multilayer_refresh_count, 1);
+        assert_eq!(stats.multilayer_forward_fft_count, 3);
+        assert_eq!(stats.multilayer_inverse_fft_count, 3);
+        assert_eq!(stats.multilayer_pair_accumulation_count, 9);
     }
 }

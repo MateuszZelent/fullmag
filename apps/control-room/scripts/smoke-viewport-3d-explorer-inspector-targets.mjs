@@ -185,14 +185,10 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
 
     if (process.env.CONTROL_ROOM_TARGET_SMOKE_AIRBOX_ONLY === "1") {
       await selectAirboxVisualization(page);
-      const vectors = await assertAirboxVectorOnly(page);
-      console.log(`AIRBOX_DEBUG_OFF ${JSON.stringify(await readAirboxSmokeDebug(page, fixture))}`);
-      const baseline = await sampleViewportPixels(page);
-      await vectors.click();
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      console.log(`AIRBOX_DEBUG_ON ${JSON.stringify(await readAirboxSmokeDebug(page, fixture))}`);
-      const delta = await waitForViewportPixelDelta(page, baseline, "Airbox vectors");
-      return { airboxDebug: true, delta, fieldRequests: fixture.fieldRequests };
+      const geometry = await verifyAirboxGeometryModes(page, "fdm");
+      await setAirboxGeometryOff(page);
+      const vectorDeltas = await verifyAirboxVectorQuantities(page, fixture, "fdm");
+      return { airboxDebug: true, fieldRequests: fixture.fieldRequests, geometry, vectorDeltas };
     }
 
     const a = await selectVisualizationNode(page, "fdm-left", null);
@@ -245,38 +241,22 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
     }
 
     await selectAirboxVisualization(page);
-    const airboxVectors = await assertAirboxVectorOnly(page);
-    const airboxBefore = await sampleViewportPixels(page);
+    const geometry = await verifyAirboxGeometryModes(page, "fdm");
+    await setAirboxGeometryOff(page);
+    const airboxVectors = await assertAirboxControls(page);
+    const airboxBefore = await sampleViewportPixels(page, 1);
     await airboxVectors.click();
-    const airboxDelta = await waitForViewportPixelDelta(page, airboxBefore, "Airbox vectors");
+    const airboxDelta = await waitForViewportPixelDelta(page, airboxBefore, "Airbox vectors", {
+      minimumChangedPixels: 100,
+    });
     await assertHealthyCanvas(page, "FDM Explorer/Inspector interactions");
     assertNoBrowserErrors(errors);
     assertFieldRequest(fixture, { component: "full", quantityId: "m", scopeId: null, scopeKind: "full" });
     await captureBrowserAuditScreenshot(page, "target-smoke-fdm-success.png");
-    return { aDelta, aRenderModeDeltas, airboxDelta, bDelta, fieldRequests: fixture.fieldRequests, leftRegionDelta, objectTargets: [a, b], regionTargets: [leftRegionTarget, rightRegionTarget], rightRegionDelta };
+    return { aDelta, aRenderModeDeltas, airboxDelta, bDelta, fieldRequests: fixture.fieldRequests, geometry, leftRegionDelta, objectTargets: [a, b], regionTargets: [leftRegionTarget, rightRegionTarget], rightRegionDelta };
   } finally {
     await page.close();
   }
-}
-
-async function readAirboxSmokeDebug(page, fixture) {
-  return page.evaluate((fieldRequests) => {
-    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    const runtime = audit?.readViewportAuditRuntime?.() ?? null;
-    const entries = performance.getEntriesByType("resource")
-      .map((entry) => entry.name)
-      .filter((name) => name.includes("/v2/sessions/current/") || name.includes("/data/fields/"));
-    const panels = Array.from(document.querySelectorAll(".fm-inspector-panel"));
-    const panel = panels.at(-1);
-    return {
-      fieldRequests,
-      listenerCounts: runtime?.listenerCounts ?? null,
-      resources: runtime?.resources ?? null,
-      performance: entries.slice(-80),
-      panelText: panel?.textContent?.slice(0, 4_000) ?? null,
-      settings: audit?.readFdmVisualizationSettings?.() ?? null,
-    };
-  }, fixture.fieldRequests);
 }
 
 async function verifyFemObjectTargetAndFallback(browser, url) {
@@ -288,6 +268,14 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await assertHealthyCanvas(page, "FEM initial");
+    if (process.env.CONTROL_ROOM_TARGET_SMOKE_AIRBOX_ONLY === "1") {
+      await selectAirboxVisualization(page);
+      const geometry = await verifyAirboxGeometryModes(page, "fem");
+      await setAirboxGeometryOff(page);
+      const vectorDeltas = await verifyAirboxVectorQuantities(page, fixture, "fem");
+      assertNoBrowserErrors(errors);
+      return { airboxOnly: true, fieldRequests: fixture.fieldRequests, geometry, vectorDeltas };
+    }
     await selectVisualizationNode(page, "fem-owned", null);
     await assertTarget(page, "object:fem-owned");
     const ownedBeforePixels = await sampleViewportPixels(page);
@@ -308,7 +296,8 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
       throw new Error(`FEM object target and fallback share state: ${JSON.stringify({ owned, fallback })}`);
     }
     await selectAirboxVisualization(page);
-    await assertAirboxVectorOnly(page);
+    await verifyAirboxGeometryModes(page, "fem");
+    await assertAirboxControls(page);
     await setAirboxQuantityAndVectors(page, "H_demag");
     await waitForFieldRequest(page, { component: "full", quantityId: "H_demag", scopeId: "part-airbox", scopeKind: "airbox" });
     assertFieldRequest(fixture, { component: "full", quantityId: "H_demag", scopeId: "part-airbox", scopeKind: "airbox" });
@@ -620,10 +609,12 @@ function sameControlState(left, right) {
   return left.colorbar === right.colorbar && left.renderMode === right.renderMode && left.vectors === right.vectors;
 }
 
-async function assertAirboxVectorOnly(page) {
+async function assertAirboxControls(page) {
   const panel = page.locator(".fm-inspector-panel").last();
   await panel.getByRole("button", { name: "Toggle vector field arrows" }).waitFor({ state: "visible", timeout: timeoutMs });
   if (await panel.getByRole("radio", { name: "Shaded", exact: true }).count()) throw new Error("Airbox exposed a shaded render mode.");
+  if (await panel.getByRole("radio", { name: "Wireframe", exact: true }).count() !== 1) throw new Error("Airbox did not expose wireframe mode.");
+  if (await panel.getByRole("radio", { name: "Points", exact: true }).count() !== 1) throw new Error("Airbox did not expose points mode.");
   if (await panel.getByRole("switch", { name: "Add colorbar to viewport" }).count()) throw new Error("Airbox exposed a colorbar control.");
   const vectors = panel.getByRole("button", { name: "Toggle vector field arrows" });
   // Establish a deterministic disabled baseline for the following pixel-delta
@@ -635,6 +626,46 @@ async function assertAirboxVectorOnly(page) {
   return vectors;
 }
 
+async function verifyAirboxGeometryModes(page, lane) {
+  const panel = page.locator(".fm-inspector-panel").last();
+  await assertAirboxControls(page);
+  const off = panel.getByRole("radio", { name: "Off", exact: true });
+  const deltas = {};
+  for (const mode of ["Wireframe", "Points"]) {
+    if ((await off.getAttribute("aria-checked")) !== "true") await off.click();
+    const baseline = await sampleViewportPixels(page, 1);
+    const control = panel.getByRole("radio", { name: mode, exact: true });
+    await control.click();
+    await page.waitForFunction(
+      (label) => document.querySelector(`.fm-viz-render-mode-grid [role="radio"][aria-label="${label}"]`)?.getAttribute("aria-checked") === "true",
+      mode,
+      { timeout: timeoutMs },
+    );
+    deltas[mode] = await waitForViewportPixelDelta(
+      page,
+      baseline,
+      `${lane.toUpperCase()} Airbox ${mode}`,
+      { minimumChangedPixels: 12 },
+    );
+    await assertHealthyCanvas(page, `${lane.toUpperCase()} Airbox ${mode}`);
+    await captureBrowserAuditScreenshot(page, `target-smoke-${lane}-airbox-${mode.toLowerCase()}.png`);
+  }
+  return deltas;
+}
+
+async function setAirboxGeometryOff(page) {
+  const off = page.locator(".fm-inspector-panel").last().getByRole("radio", {
+    name: "Off",
+    exact: true,
+  });
+  if ((await off.getAttribute("aria-checked")) !== "true") await off.click();
+  await page.waitForFunction(
+    () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Off"]')?.getAttribute("aria-checked") === "true",
+    null,
+    { timeout: timeoutMs },
+  );
+}
+
 async function setAirboxQuantityAndVectors(page, quantityId) {
   const panel = page.locator(".fm-inspector-panel").last();
   const quantity = panel.locator('select[aria-label="Quantity Source"]');
@@ -642,6 +673,39 @@ async function setAirboxQuantityAndVectors(page, quantityId) {
   await quantity.selectOption(quantityId);
   const vectors = panel.getByRole("button", { name: "Toggle vector field arrows" });
   if ((await vectors.getAttribute("aria-pressed")) !== "true") await vectors.click();
+}
+
+async function verifyAirboxVectorQuantities(page, fixture, lane) {
+  await assertAirboxControls(page);
+  const scopeId = lane === "fem" ? "part-airbox" : null;
+  const minimumChangedPixels = lane === "fdm" ? 100 : 12;
+  const deltas = {};
+  for (const quantityId of ["H_demag", "H_eff", "H_ext"]) {
+    const baseline = await sampleViewportPixels(page, 1);
+    await setAirboxQuantityAndVectors(page, quantityId);
+    await waitForFieldRequest(page, {
+      component: "full",
+      quantityId,
+      scopeId,
+      scopeKind: "airbox",
+    });
+    assertFieldRequest(fixture, {
+      component: "full",
+      quantityId,
+      scopeId,
+      scopeKind: "airbox",
+    });
+    const label = `${lane.toUpperCase()} Airbox ${quantityId} vectors`;
+    deltas[quantityId] = await waitForViewportPixelDelta(page, baseline, label, {
+      minimumChangedPixels,
+    });
+    await assertHealthyCanvas(page, label);
+    await captureBrowserAuditScreenshot(
+      page,
+      `target-smoke-${lane}-airbox-${quantityId.toLowerCase().replace("_", "-")}-vectors.png`,
+    );
+  }
+  return deltas;
 }
 
 async function assertHealthyCanvas(page, label) {
@@ -711,12 +775,13 @@ async function readViewportDeltaDiagnostics(page) {
     const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
     const panel = document.querySelectorAll(".fm-inspector-panel");
     const selected = document.querySelector('[aria-selected="true"][data-node-id]');
+    const runtime = audit?.readViewportAuditRuntime?.() ?? null;
     return {
       selectedNode: selected?.getAttribute("data-node-id") ?? null,
       controls: Array.from(panel).at(-1)?.textContent?.slice(0, 2_000) ?? null,
       fdmSettings: audit?.readFdmVisualizationSettings?.() ?? null,
       fieldUpdateHoldActive: audit?.readViewport3DFieldUpdateHoldActive?.() ?? null,
-      runtime: audit?.readViewportAuditRuntime?.() ?? null,
+      runtime,
       resources: performance.getEntriesByType("resource")
         .map((entry) => entry.name)
         .filter((name) => name.includes("/v2/sessions/current/"))
@@ -843,18 +908,18 @@ function createFemFixture() {
   }));
   const fixture = baseFixture("fem", objects);
   const surfaceFaces = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
-  const part = (id, role, objectId = null) => ({
+  const part = (id, role, objectId = null, ordinal = 0) => ({
     boundary_face_count: 4,
-    boundary_face_indices: [0, 1, 2, 3],
-    boundary_face_start: 0,
-    bounds_max: [1, 1, 1],
-    bounds_min: [0, 0, 0],
+    boundary_face_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
+    boundary_face_start: ordinal * 4,
+    bounds_max: ordinal === 0 ? [1, 1, 1] : [2, 2, 2],
+    bounds_min: ordinal === 0 ? [0, 0, 0] : [-1, -1, -1],
     element_count: 1,
-    element_start: 0,
+    element_start: ordinal,
     id,
     node_count: 4,
-    node_indices: [0, 1, 2, 3],
-    node_start: 0,
+    node_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
+    node_start: ordinal * 4,
     object_id: objectId,
     role,
     surface_faces: surfaceFaces,
@@ -862,7 +927,7 @@ function createFemFixture() {
   });
   fixture.manifest = {
     generation_id: "1",
-    mesh_parts: [part("part-owned", "magnetic", "fem-owned"), part("part-airbox", "airbox")],
+    mesh_parts: [part("part-owned", "magnetic", "fem-owned"), part("part-airbox", "airbox", null, 1)],
     regions: [],
     revision: 1,
     topology_fingerprint: "1".repeat(64),
@@ -909,7 +974,7 @@ function regionListFixture(objects) {
   };
 }
 
-function fieldCatalogFixture() { return { domain_generation_id: 1, quantities: ["m", "H_eff", "H_demag"].map((quantity_id) => ({ available: true, components: 3, domain_generation_id: 1, field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, stale_by_steps: 0, state: "complete", unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
+function fieldCatalogFixture() { return { domain_generation_id: 1, quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({ available: true, components: 3, domain_generation_id: 1, field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : quantity_id === "H_ext" ? "External field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, stale_by_steps: 0, state: "complete", unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
 function fieldMetaFixture(quantityId) { return { components: ["x", "y", "z"], quantity_id: quantityId, stats: { max: 1, min: 0 }, unit: quantityId === "m" ? "1" : "A/m" }; }
 function fdmMembershipFixture(objects) {
   const region_legend = objects.map(({ id }, index) => ({
@@ -1005,7 +1070,9 @@ function fdmFieldVectorBuffer({ quantityId = "m", gridShape = FDM_TARGET_GRID_SH
 function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
   const cellIndices = fixture.fdmMembership
     ? resolveFdmScopedCellIndices({ fieldRequest, fixture })
-    : [0, 1, 2, 3];
+    : fieldRequest.scopeKind === "airbox"
+      ? [4, 5, 6, 7]
+      : [0, 1, 2, 3];
   const encoder = new TextEncoder();
   const scopeKindBytes = encoder.encode(fieldRequest.scopeKind ?? "full");
   const scopeIdBytes = encoder.encode(fieldRequest.scopeId ?? "");
@@ -1065,9 +1132,20 @@ function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
   const values = new Float64Array(buffer, 48 + metadataLength, valueCount);
   for (let point = 0; point < cellIndices.length; point += 1) {
     const cellIndex = cellIndices[point];
-    values[point * 3] = 1;
-    values[point * 3 + 1] = (cellIndex % 3) * 0.25;
-    values[point * 3 + 2] = 0.5;
+    const varying = (cellIndex % 3) * 0.25;
+    if (fieldRequest.quantityId === "H_eff") {
+      values[point * 3] = 0.5;
+      values[point * 3 + 1] = 1;
+      values[point * 3 + 2] = varying;
+    } else if (fieldRequest.quantityId === "H_ext") {
+      values[point * 3] = varying;
+      values[point * 3 + 1] = 0.5;
+      values[point * 3 + 2] = 1;
+    } else {
+      values[point * 3] = 1;
+      values[point * 3 + 1] = varying;
+      values[point * 3 + 2] = 0.5;
+    }
   }
   return {
     buffer,
@@ -1144,7 +1222,40 @@ function validateFdmTargetFixture(fixture) {
     throw new Error(`FDM target fixture support AABB mismatch: mask=[${supportMin}]–[${supportMax}] summary=[${summary.bounds_min_m}]–[${summary.bounds_max_m}].`);
   }
 }
-function femTopologyBuffer() { const buffer = new ArrayBuffer(32 + 12 * 8 + 4 * 4 + 4 * 3 * 4 + 8); const view = new DataView(buffer); for (const [i, c] of [..."FMMT"].entries()) view.setUint8(i, c.charCodeAt(0)); view.setUint8(4, 1); view.setUint8(5, 1); view.setUint32(8, 4, true); view.setUint32(12, 1, true); view.setUint32(16, 4, true); view.setUint32(20, 1, true); view.setUint32(24, 1, true); let offset = 32; new Float64Array(buffer, offset, 12).set([0,0,0, 1,0,0, 0,1,0, 0,0,1]); offset += 96; new Uint32Array(buffer, offset, 4).set([0,1,2,3]); offset += 16; new Uint32Array(buffer, offset, 12).set([0,1,2, 0,1,3, 0,2,3, 1,2,3]); offset += 48; new Uint32Array(buffer, offset, 1).set([1]); offset += 4; new Uint32Array(buffer, offset, 1).set([1]); return buffer; }
+function femTopologyBuffer() {
+  const nodeCount = 8;
+  const elementCount = 2;
+  const boundaryFaceCount = 8;
+  const buffer = new ArrayBuffer(
+    32 + nodeCount * 3 * 8 + elementCount * 4 * 4 + boundaryFaceCount * 3 * 4 + elementCount * 4 * 2,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) view.setUint8(index, code.charCodeAt(0));
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, elementCount, true);
+  view.setUint32(24, elementCount, true);
+  let offset = 32;
+  new Float64Array(buffer, offset, nodeCount * 3).set([
+    0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
+    -1, -1, -1, 2, -1, -1, -1, 2, -1, -1, -1, 2,
+  ]);
+  offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount * 4).set([0, 1, 2, 3, 4, 5, 6, 7]);
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount * 3).set([
+    0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3,
+    4, 5, 6, 4, 5, 7, 4, 6, 7, 5, 6, 7,
+  ]);
+  offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1, 0]);
+  offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1, 0]);
+  return buffer;
+}
 
 function parsePng(buffer) {
   if (buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") throw new Error("Viewport screenshot is not PNG.");

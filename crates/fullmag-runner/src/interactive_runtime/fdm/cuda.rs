@@ -242,6 +242,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             else {
                 continue;
             };
+            artifacts.observe_physics_execution();
             self.total_steps = total_stats.step;
             self.total_time = total_stats.time;
             if let Some(next) = total_stats.dt_suggested {

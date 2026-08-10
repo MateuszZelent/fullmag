@@ -278,11 +278,11 @@ pub(crate) fn finalize_native_fem_relaxation(
                     step: final_stats.step,
                     time: final_stats.time,
                     solver_dt: final_stats.dt,
-                   component_count: 3,
-                   component_order: "xyz".into(),
-                   location: "sample".into(),
-                   scope: "full".into(),
-                   revision: (final_stats.step as u64).saturating_add(1),
+                    component_count: 3,
+                    component_order: "xyz".into(),
+                    location: "sample".into(),
+                    scope: "full".into(),
+                    revision: (final_stats.step as u64).saturating_add(1),
                     values: FieldSnapshot::flatten_vec3(values),
                 });
             }
@@ -301,11 +301,11 @@ pub(crate) fn finalize_native_fem_relaxation(
                 step: final_stats.step,
                 time: final_stats.time,
                 solver_dt: final_stats.dt,
-               component_count: 3,
-               component_order: "xyz".into(),
-               location: "sample".into(),
-               scope: "full".into(),
-               revision: (final_stats.step as u64).saturating_add(1),
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (final_stats.step as u64).saturating_add(1),
                 values: FieldSnapshot::flatten_vec3(values),
             })?;
         }

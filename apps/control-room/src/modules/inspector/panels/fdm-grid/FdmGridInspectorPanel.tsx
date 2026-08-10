@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 
 import {
   useDomainMetaResource,
+  useFdmMultilayerLayoutResource,
   useFdmRegionMembershipBinaryResource,
   useFdmRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -35,6 +36,10 @@ import {
   type FdmGridSelectionCell,
   type FdmGridSelectionInspectorModel,
 } from "./fdmGridInspectorModel";
+import {
+  resolveFdmMultilayerInspectorModel,
+  type FdmMultilayerInspectorModel,
+} from "./fdmMultilayerInspectorModel";
 
 function formatTuple(values: readonly number[] | null): string {
   return values ? `[${values.join(", ")}]` : "not available";
@@ -121,17 +126,42 @@ function FdmUniverseDisplayControls({
   );
 }
 
+function FdmMultilayerInspectorPanelView({
+  model,
+}: {
+  model: FdmMultilayerInspectorModel;
+}) {
+  return (
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-fdm-multilayer-status={model.status}>
+      {model.notice ? (
+        <FeedbackBanner
+          kind="warning"
+          message={model.notice}
+        />
+      ) : null}
+      <InspectorGroup title={model.title} badge={model.status}>
+        {model.rows.length ? model.rows.map((row) => (
+          <FieldRow key={row.label} label={row.label} value={row.value} mono={row.mono} />
+        )) : <FieldRow label="State" value="not published" />}
+      </InspectorGroup>
+    </div>
+  );
+}
+
 export function FdmGridInspectorPanelView({
   detail,
   displaySettings,
   model,
+  multilayer,
   onDisplayPatch,
 }: {
   detail: FdmGridSelectionInspectorModel;
   displaySettings?: VisualizationTargetSettings | null;
   model: FdmGridInspectorModel;
+  multilayer?: FdmMultilayerInspectorModel | null;
   onDisplayPatch?: (patch: VisualizationTargetPatch) => void;
 }) {
+  if (multilayer) return <FdmMultilayerInspectorPanelView model={multilayer} />;
   const bannerKind = statusBannerKind(model.status);
   const displaySampling =
     model.totalCells == null ? null : resolveFdmDisplaySampling(model.totalCells);
@@ -342,6 +372,11 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
     () => resolveFdmGridInspectorModel({ domain, membership }),
     [domain, membership],
   );
+  const multilayerLayout = useFdmMultilayerLayoutResource({ enabled: explicitFdm });
+  const multilayer = useMemo(
+    () => resolveFdmMultilayerInspectorModel(multilayerLayout.data, selection),
+    [multilayerLayout.data, selection],
+  );
   const detail = useMemo(
     () =>
       resolveFdmGridSelectionInspectorModel({
@@ -383,6 +418,7 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
       detail={detail}
       displaySettings={displaySettings}
       model={model}
+      multilayer={multilayer}
       onDisplayPatch={onDisplayPatch}
     />
   );

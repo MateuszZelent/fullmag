@@ -205,6 +205,65 @@ export function buildFdmCuboidInstanceModel(
   };
 }
 
+/**
+ * Build a native multilayer carrier only when the planner proves that every
+ * native cell is active.  The returned region ids are display-local active
+ * sentinels; they are not a replacement for an FMRM mask and are never used
+ * for field scope or cell selection.  Partial/unknown masks must use the
+ * fail-closed path in the caller instead.
+ */
+export function buildFdmDenseNativeLayerInstanceModel(
+  domain: FdmGridRenderDomain | null,
+  voxelFillRatio = CELL_VISUAL_FILL,
+): FdmCuboidInstanceModel | null {
+  if (!domain || domain.displayCellCount <= 0 || domain.totalCells <= 0) {
+    return null;
+  }
+  const [nx, ny, nz] = domain.shape;
+  const totalCells = nx * ny * nz;
+  if (
+    !Number.isSafeInteger(totalCells) ||
+    totalCells <= 0 ||
+    totalCells !== domain.totalCells
+  ) {
+    return null;
+  }
+  const displayCellIndices = sampleFdmDisplayCellIndices(
+    totalCells,
+    domain.displayCellCount,
+  );
+  if (displayCellIndices.length === 0) return null;
+  const centers = new Float32Array(displayCellIndices.length * 3);
+  const cellIndices = new Uint32Array(displayCellIndices);
+  const regionIds = new Uint32Array(displayCellIndices.length);
+  const [dx, dy, dz] = domain.spacing;
+  const [ox, oy, oz] = domain.origin;
+  const fillRatio = clampVoxelFillRatio(voxelFillRatio);
+  const planeStride = nx * ny;
+  for (let instance = 0; instance < cellIndices.length; instance += 1) {
+    const cellIndex = cellIndices[instance] ?? 0;
+    const ix = cellIndex % nx;
+    const iy = Math.floor(cellIndex / nx) % ny;
+    const iz = Math.floor(cellIndex / planeStride) % nz;
+    const offset = instance * 3;
+    centers[offset] = ox + (ix + 0.5) * dx;
+    centers[offset + 1] = oy + (iy + 0.5) * dy;
+    centers[offset + 2] = oz + (iz + 0.5) * dz;
+  }
+  return {
+    cellSize: [
+      Math.max(dx * fillRatio, 1e-18),
+      Math.max(dy * fillRatio, 1e-18),
+      Math.max(dz * fillRatio, 1e-18),
+    ],
+    cellIndices,
+    centers,
+    count: cellIndices.length,
+    gridShape: [nx, ny, nz],
+    regionIds,
+  };
+}
+
 function sampleFdmDisplayCellIndicesWithMinimumMembership({
   cellSelection,
   displayCellCount,

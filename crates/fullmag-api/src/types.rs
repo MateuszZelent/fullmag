@@ -1433,6 +1433,7 @@ mod tests {
             exchange_enabled: true,
             demag_enabled: true,
             demag_realization: None,
+            fdm: None,
             external_field: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),

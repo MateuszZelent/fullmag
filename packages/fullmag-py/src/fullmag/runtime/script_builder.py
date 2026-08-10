@@ -34,7 +34,7 @@ from fullmag.model.antenna import (
     UniformFieldProfile,
 )
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPolicy
+from fullmag.model.discretization import FDM, FDMGrid, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.spin_torque import (
     DriftDiffusionSpinTorque as LegacyDriftDiffusionSpinTorque,
     InterfaceCppSTT,
@@ -345,6 +345,9 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    fdm_draft = _export_fdm(base_problem)
+    if fdm_draft is not None:
+        draft["fdm"] = fdm_draft
     solver_draft = draft["solver"]
     if base_dynamics is None or base_dynamics.fixed_timestep is None:
         solver_draft.pop("fixed_timestep", None)
@@ -925,6 +928,142 @@ def _render_header(script_path: Path, entrypoint_kind: str) -> list[str]:
     ]
 
 
+def _fdm_from_overrides(
+    problem: Problem,
+    overrides: dict[str, object],
+) -> FDM | None:
+    """Apply canonical SceneDocument FDM authoring to the exported script.
+
+    The scene owns requested FDM policy while the loaded Problem remains the
+    source of values that were not edited.  Keeping this merge here ensures a
+    UI transaction reaches the public ``fm.fdm`` authoring call and therefore
+    lowers through the same Python → ProblemIR path as a hand-written script.
+    """
+    base = problem.discretization.fdm if problem.discretization is not None else None
+    raw = overrides.get("fdm")
+    if not isinstance(raw, Mapping):
+        return base if isinstance(base, FDM) else None
+
+    if "default_cell" in raw:
+        default_cell = _fdm_vector(raw.get("default_cell"), "fdm.default_cell", 3)
+    else:
+        default_cell = base.default_cell if isinstance(base, FDM) else None
+
+    if "per_magnet" in raw:
+        raw_per_magnet = raw.get("per_magnet")
+        if raw_per_magnet is None:
+            per_magnet = None
+        elif isinstance(raw_per_magnet, Mapping):
+            per_magnet = {}
+            for name, raw_grid in raw_per_magnet.items():
+                if not isinstance(raw_grid, Mapping):
+                    raise ValueError(f"fdm.per_magnet[{name!r}] must be an object")
+                per_magnet[str(name)] = FDMGrid(
+                    cell=_fdm_vector(
+                        raw_grid.get("cell"),
+                        f"fdm.per_magnet[{name!r}].cell",
+                        3,
+                    )
+                )
+        else:
+            raise ValueError("fdm.per_magnet must be an object or null")
+    else:
+        per_magnet = base.per_magnet if isinstance(base, FDM) else None
+
+    if "demag" in raw:
+        raw_demag = raw.get("demag")
+        if raw_demag is None:
+            demag = None
+        elif isinstance(raw_demag, Mapping):
+            common_cells = _fdm_integer_vector(
+                raw_demag.get("common_cells"), "fdm.demag.common_cells", 3
+            )
+            common_cells_xy = _fdm_integer_vector(
+                raw_demag.get("common_cells_xy"), "fdm.demag.common_cells_xy", 2
+            )
+            explain = raw_demag.get("explain", True)
+            if not isinstance(explain, bool):
+                raise ValueError("fdm.demag.explain must be boolean")
+            demag = FDMDemag(
+                strategy=str(raw_demag.get("strategy", "auto")),
+                mode=str(raw_demag.get("mode", "auto")),
+                common_cells=common_cells,
+                common_cells_xy=common_cells_xy,
+                explain=explain,
+            )
+        else:
+            raise ValueError("fdm.demag must be an object or null")
+    else:
+        demag = base.demag if isinstance(base, FDM) else None
+
+    boundary_correction = (
+        raw.get("boundary_correction")
+        if "boundary_correction" in raw
+        else base.boundary_correction if isinstance(base, FDM) else None
+    )
+    if boundary_correction is not None and not isinstance(boundary_correction, str):
+        raise ValueError("fdm.boundary_correction must be a string or null")
+    boundary_phi_floor = (
+        _fdm_number(raw.get("boundary_phi_floor"), "fdm.boundary_phi_floor")
+        if "boundary_phi_floor" in raw
+        else base.boundary_phi_floor if isinstance(base, FDM) else None
+    )
+    boundary_delta_min = (
+        _fdm_number(raw.get("boundary_delta_min"), "fdm.boundary_delta_min")
+        if "boundary_delta_min" in raw
+        else base.boundary_delta_min if isinstance(base, FDM) else None
+    )
+    if default_cell is None and not per_magnet:
+        raise ValueError("fdm requires default_cell or per_magnet grid specifications")
+    return FDM(
+        default_cell=default_cell,
+        per_magnet=per_magnet,
+        demag=demag,
+        boundary_correction=boundary_correction,
+        boundary_phi_floor=boundary_phi_floor,
+        boundary_delta_min=boundary_delta_min,
+    )
+
+
+def _fdm_vector(value: object, label: str, length: int) -> tuple[float, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{label} must contain exactly {length} numbers or null")
+    result = tuple(float(component) for component in value)
+    if not all(math.isfinite(component) for component in result):
+        raise ValueError(f"{label} must contain finite numbers")
+    return result
+
+
+def _fdm_integer_vector(value: object, label: str, length: int) -> tuple[int, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{label} must contain exactly {length} integers or null")
+    if any(
+        isinstance(component, bool)
+        or not isinstance(component, int)
+        or component <= 0
+        for component in value
+    ):
+        raise ValueError(f"{label} values must be positive integers")
+    result = tuple(value)
+    return result
+
+
+def _fdm_number(value: object, label: str) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} must be a finite number or null") from error
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be a finite number or null")
+    return number
+
+
 def _render_runtime(
     problem: Problem,
     *,
@@ -1011,7 +1150,7 @@ def _render_runtime(
             f"print_level={fem.demag_solver_policy.print_level})"
         )
 
-    fdm = problem.discretization.fdm if problem.discretization is not None else None
+    fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
         has_extended_policy = (
             fdm.demag is not None
@@ -2480,39 +2619,83 @@ def _render_conservative_current_view_payload(payload: object) -> str:
     ) + ")"
 
     closure = _normalize_mapping(entry.get("closure"))
-    if closure.get("kind") != "closed_geometry":
-        raise ValueError("canonical script export supports only closed_geometry current closure")
-    cuts = closure.get("source_cuts")
-    if not isinstance(cuts, list) or not cuts:
-        raise ValueError("conservative current view source_cuts is incomplete")
-    cut_exprs = []
-    for raw_cut in cuts:
-        cut = _normalize_mapping(raw_cut)
-        pairs = cut.get("face_pairs")
-        if not isinstance(pairs, list) or not pairs:
-            raise ValueError("conservative current view source-cut face_pairs is incomplete")
+    if closure.get("kind") == "external_lead":
+        interface_value = closure.get("interface_pairs")
+        minus_faces = closure.get("minus_outer_electrode_face_vertex_ids")
+        plus_faces = closure.get("plus_outer_electrode_face_vertex_ids")
+        conductivity = closure.get("lead_conductivity_spm_per_element")
+        stable_lead_ids = closure.get("lead_stable_vertex_ids")
+        lead_mesh = closure.get("lead_mesh")
+        if (
+            not isinstance(interface_value, list)
+            or not interface_value
+            or not isinstance(minus_faces, list)
+            or not minus_faces
+            or not isinstance(plus_faces, list)
+            or not plus_faces
+            or not isinstance(conductivity, list)
+            or not isinstance(stable_lead_ids, list)
+            or not isinstance(lead_mesh, Mapping)
+        ):
+            raise ValueError("conservative current external-lead closure is incomplete")
         pair_exprs = []
-        for raw_pair in pairs:
-            pair = _normalize_mapping(raw_pair)
+        for raw_pair in interface_value:
+            if not isinstance(raw_pair, list) or len(raw_pair) != 2:
+                raise ValueError("external-lead interface_pairs must contain two faces")
             pair_exprs.append(
-                "fm.ConservativeCurrentSourceCutFacePair("
-                f"{_render_int_triplet(pair.get('minus_face_vertex_ids'), 'minus face IDs')}, "
-                f"{_render_int_triplet(pair.get('plus_face_vertex_ids'), 'plus face IDs')})"
+                "fm.ConservativeCurrentLeadInterfacePair("
+                f"{_py_literal(raw_pair[0])}, {_py_literal(raw_pair[1])})"
             )
-        cut_exprs.append(
-            "fm.ConservativeCurrentSourceCut("
-            f"{_py_repr(str(cut.get('id') or ''))}, "
-            f"{_py_tuple3(_optional_vec3(cut.get('translation_m')) or (0.0, 0.0, 0.0))}, "
-            f"{_py_number(_number_or_none(cut.get('potential_drop_v')) or 0.0)}, "
-            f"[{', '.join(pair_exprs)}])"
+        closure_expr = (
+            "fm.ConservativeCurrentExternalLead("
+            f"operator_version={_py_repr(str(closure.get('operator_version') or ''))}, "
+            f"revision={_py_repr(str(closure.get('revision') or ''))}, "
+            f"digest={_py_repr(str(closure.get('digest') or ''))}, "
+            f"drive_id={_py_repr(str(closure.get('drive_id') or ''))}, "
+            "outer_electrode_potential_drop_v="
+            f"{_py_number(_number_or_none(closure.get('outer_electrode_potential_drop_v')) or 0.0)}, "
+            f"lead_mesh={_py_literal(dict(lead_mesh))}, "
+            f"lead_conductivity_spm_per_element={_py_literal(conductivity)}, "
+            f"lead_stable_vertex_ids={_py_literal(stable_lead_ids)}, "
+            f"interface_pairs=[{', '.join(pair_exprs)}], "
+            f"minus_outer_electrode_face_vertex_ids={_py_literal(minus_faces)}, "
+            f"plus_outer_electrode_face_vertex_ids={_py_literal(plus_faces)}, "
+            f"lead_conductivity_digest={_py_repr(str(closure.get('lead_conductivity_digest') or ''))})"
         )
-    closure_expr = (
-        "fm.ConservativeCurrentClosedGeometry("
-        f"{_py_repr(str(closure.get('operator_version') or ''))}, "
-        f"{_py_repr(str(closure.get('revision') or ''))}, "
-        f"{_py_repr(str(closure.get('digest') or ''))}, "
-        f"[{', '.join(cut_exprs)}])"
-    )
+    elif closure.get("kind") == "closed_geometry":
+        cuts = closure.get("source_cuts")
+        if not isinstance(cuts, list) or not cuts:
+            raise ValueError("conservative current view source_cuts is incomplete")
+        cut_exprs = []
+        for raw_cut in cuts:
+            cut = _normalize_mapping(raw_cut)
+            pairs = cut.get("face_pairs")
+            if not isinstance(pairs, list) or not pairs:
+                raise ValueError("conservative current view source-cut face_pairs is incomplete")
+            pair_exprs = []
+            for raw_pair in pairs:
+                pair = _normalize_mapping(raw_pair)
+                pair_exprs.append(
+                    "fm.ConservativeCurrentSourceCutFacePair("
+                    f"{_render_int_triplet(pair.get('minus_face_vertex_ids'), 'minus face IDs')}, "
+                    f"{_render_int_triplet(pair.get('plus_face_vertex_ids'), 'plus face IDs')})"
+                )
+            cut_exprs.append(
+                "fm.ConservativeCurrentSourceCut("
+                f"{_py_repr(str(cut.get('id') or ''))}, "
+                f"{_py_tuple3(_optional_vec3(cut.get('translation_m')) or (0.0, 0.0, 0.0))}, "
+                f"{_py_number(_number_or_none(cut.get('potential_drop_v')) or 0.0)}, "
+                f"[{', '.join(pair_exprs)}])"
+            )
+        closure_expr = (
+            "fm.ConservativeCurrentClosedGeometry("
+            f"{_py_repr(str(closure.get('operator_version') or ''))}, "
+            f"{_py_repr(str(closure.get('revision') or ''))}, "
+            f"{_py_repr(str(closure.get('digest') or ''))}, "
+            f"[{', '.join(cut_exprs)}])"
+        )
+    else:
+        raise ValueError("canonical script export supports only known current closures")
     view_kwargs = [
         f"stable_vertex_ids={stable_expr}",
         f"boundary_faces=[{', '.join(boundary_exprs)}]",
@@ -3633,19 +3816,20 @@ def _render_oersted_entry(entry: Mapping[str, object]) -> str:
     if kind == "oersted_field":
         _reject_unexpected_fields(
             entry,
-            {"kind", "model", "source"},
+            {"kind", "id", "model", "source"},
             context="oersted_field",
         )
         model = _required_entry(entry, "model", context="oersted_field")
         if model != "from_current_solution":
             raise ValueError(f"unsupported OerstedField model {model!r}")
         source = _required_nonempty_string(entry, "source", context="oersted_field")
-        return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)})"
+        module_id = _required_nonempty_string(entry, "id", context="oersted_field")
+        return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)}, id={_py_repr(module_id)})"
     if kind != "oersted_cylinder":
         raise ValueError(f"unsupported Oersted term kind {kind!r}")
     _reject_unexpected_fields(
         entry,
-        {"kind", "current", "radius", "center", "axis", "time_dependence"},
+        {"kind", "id", "current", "radius", "center", "axis", "time_dependence"},
         context="oersted_cylinder",
     )
     kwargs = [
@@ -3655,6 +3839,7 @@ def _render_oersted_entry(entry: Mapping[str, object]) -> str:
         f"{_roundtrip_literal(list(_required_vec3(entry, 'center', context='oersted_cylinder')), context='oersted_cylinder.center')}",
         "axis="
         f"{_roundtrip_literal(list(_required_vec3(entry, 'axis', context='oersted_cylinder')), context='oersted_cylinder.axis')}",
+        f"id={_py_repr(_required_nonempty_string(entry, 'id', context='oersted_cylinder'))}",
     ]
     if "time_dependence" in entry:
         time_dependence = entry["time_dependence"]
@@ -7091,6 +7276,41 @@ def _override_bool(value: object, fallback: bool) -> bool:
 def _export_demag_realization(problem: Problem) -> str | None:
     realization = _problem_demag_realization(problem)
     return str(realization) if isinstance(realization, str) and realization.strip() else None
+
+
+def _export_fdm(problem: Problem) -> dict[str, object] | None:
+    fdm = problem.discretization.fdm if problem.discretization is not None else None
+    if not isinstance(fdm, FDM):
+        return None
+    payload: dict[str, object] = {
+        "default_cell": list(fdm.default_cell) if fdm.default_cell is not None else None,
+        "per_magnet": (
+            {
+                name: {"cell": list(grid.cell)}
+                for name, grid in sorted((fdm.per_magnet or {}).items())
+            }
+            if fdm.per_magnet
+            else None
+        ),
+        "boundary_correction": fdm.boundary_correction,
+        "boundary_phi_floor": fdm.boundary_phi_floor,
+        "boundary_delta_min": fdm.boundary_delta_min,
+    }
+    if fdm.demag is not None:
+        payload["demag"] = {
+            "strategy": fdm.demag.strategy,
+            "mode": fdm.demag.mode,
+            "common_cells": list(fdm.demag.common_cells)
+            if fdm.demag.common_cells is not None
+            else None,
+            "common_cells_xy": list(fdm.demag.common_cells_xy)
+            if fdm.demag.common_cells_xy is not None
+            else None,
+            "explain": fdm.demag.explain,
+        }
+    else:
+        payload["demag"] = None
+    return payload
 
 
 def _render_exchange(

@@ -89,7 +89,7 @@ export function PhysicsGraphModuleInspectorPanel({ selection }: InspectorPanelPr
       graphRevision: resource.data?.scene_revision ?? null,
       sceneRevision: resource.data?.scene_revision ?? null,
     },
-    family: module.kind,
+    family: module.presentation.family,
     scope: scopeFromResource(module),
     source: {
       id: module.id,

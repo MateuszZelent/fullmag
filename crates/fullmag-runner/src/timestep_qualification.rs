@@ -10,9 +10,8 @@ use crate::{
 const REGISTRY_SCHEMA: &str = "fullmag.llg_timestep_qualification_registry.v1";
 pub const QUALIFICATION_REGISTRY_VERSION: &str = REGISTRY_SCHEMA;
 const VALIDATOR_SCHEMA: &str = "fullmag.llg_timestep_qualification.validator.v1";
-const REGISTRY_JSON: &str = include_str!(
-    "../../../benchmarks/fem-llg/qualification-registry-v1.json"
-);
+const REGISTRY_JSON: &str =
+    include_str!("../../../benchmarks/fem-llg/qualification-registry-v1.json");
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -108,7 +107,12 @@ impl RegistryKey {
 
 fn expected_lane(
     qualification_id: LlgTimestepQualificationId,
-) -> (TimestepBackend, TimestepDevice, fullmag_ir::ExecutionPrecision, TimestepPolicyKind) {
+) -> (
+    TimestepBackend,
+    TimestepDevice,
+    fullmag_ir::ExecutionPrecision,
+    TimestepPolicyKind,
+) {
     use fullmag_ir::ExecutionPrecision::Double;
     use LlgTimestepQualificationId::*;
     use TimestepBackend::{Fdm, Fem};
@@ -145,7 +149,10 @@ fn key_is_coherent(key: &RegistryKey) -> bool {
 
 fn promoted_entry_is_complete(entry: &RegistryEntry) -> bool {
     entry.validation_state != TimestepValidationState::Unvalidated
-        && entry.artifact_path.as_deref().is_some_and(|path| !path.is_empty())
+        && entry
+            .artifact_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
         && entry.artifact_sha256.as_deref().is_some_and(is_sha256)
         && entry
             .runtime_source_inputs_sha256
@@ -154,7 +161,10 @@ fn promoted_entry_is_complete(entry: &RegistryEntry) -> bool {
         && entry.runtime_dirty == Some(false)
         && entry.runtime_dirty_patch_sha256.is_none()
         && entry.validated_scope.is_some()
-        && entry.validated_at.as_deref().is_some_and(|value| !value.is_empty())
+        && entry
+            .validated_at
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
         && entry.validator_schema.as_deref() == Some(VALIDATOR_SCHEMA)
         && has_required_gates(entry.validation_state, &entry.completed_gates)
 }
@@ -253,8 +263,7 @@ pub(crate) fn qualification_resolution_for(
     };
     if !is_sha256(artifact_sha256)
         || entry.artifact_sha256.as_deref() != Some(artifact_sha256)
-        || entry.runtime_source_inputs_sha256.as_deref()
-            != Some(runtime_source_inputs_sha256)
+        || entry.runtime_source_inputs_sha256.as_deref() != Some(runtime_source_inputs_sha256)
         || entry.runtime_dirty != Some(false)
         || entry.runtime_dirty_patch_sha256.is_some()
         || entry.validated_scope.is_none()
@@ -284,8 +293,8 @@ pub fn validation_state_for(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_registry_document, registry, validation_state_for,
-        TimestepExecutionIdentityKey, TimestepPolicyKind,
+        parse_registry_document, registry, validation_state_for, TimestepExecutionIdentityKey,
+        TimestepPolicyKind,
     };
     use crate::{
         LlgTimestepCapabilityId, LlgTimestepQualificationId, TimestepBackend, TimestepDevice,
@@ -309,8 +318,14 @@ mod tests {
     fn validation_state_vocabulary_roundtrips_exactly() {
         for (state, serialized) in [
             (TimestepValidationState::Unvalidated, "unvalidated"),
-            (TimestepValidationState::AlgebraValidated, "algebra_validated"),
-            (TimestepValidationState::PhysicsValidated, "physics_validated"),
+            (
+                TimestepValidationState::AlgebraValidated,
+                "algebra_validated",
+            ),
+            (
+                TimestepValidationState::PhysicsValidated,
+                "physics_validated",
+            ),
             (
                 TimestepValidationState::ProductionQualified,
                 "production_qualified",
@@ -335,10 +350,7 @@ mod tests {
     #[test]
     fn stale_source_hash_fails_closed() {
         assert_eq!(
-            validation_state_for(
-                &fem_cpu_identity(Some(&"b".repeat(64))),
-                &"c".repeat(64)
-            ),
+            validation_state_for(&fem_cpu_identity(Some(&"b".repeat(64))), &"c".repeat(64)),
             TimestepValidationState::Unvalidated
         );
     }
