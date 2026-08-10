@@ -18,6 +18,13 @@ namespace {
 
 constexpr uint32_t kChargeFaceVoltage = 1;
 
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint64_t *promotion_count,
+    uint64_t *use_count, uint64_t *cells, uint64_t *descriptor_revision,
+    uint64_t *source_revision, uint32_t *valid);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint32_t boundary);
+
 struct ChargeFaceV1 {
     uint32_t kind;
     uint32_t axis;
@@ -332,6 +339,75 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK && tail_count == 0,
             "telemetry cursor replayed already-consumed audit records");
 
+    fullmag_fdm_gpu_charge_snapshot_info_v1 warm_snapshot{};
+    init_record(warm_snapshot);
+    require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                created.context_handle, cached_solved.provisional_generation,
+                &warm_snapshot) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm charge candidate was not atomically accepted");
+    uint64_t warm_promotions = 0, warm_uses = 0, warm_cells = 0;
+    uint64_t warm_descriptor_revision = 0, warm_source_revision = 0;
+    uint32_t warm_valid = 0;
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+                created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
+                &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_promotions == 2 && warm_uses == 1 && warm_cells == cells &&
+                warm_descriptor_revision == 1 && warm_source_revision == 1 &&
+                warm_valid == 1,
+            "accepted FP64 charge state was not retained and used as the warm start");
+
+    require(fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
+                created.context_handle, 13) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm-start rejected-candidate fault hook failed");
+    auto rejected_solve = solve;
+    rejected_solve.attempt_id = 3;
+    fullmag_fdm_gpu_charge_solve_result_v1 rejected_result{};
+    init_record(rejected_result);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(&rejected_solve, &rejected_result) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR,
+            "injected rejected candidate did not fail closed");
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+                created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
+                &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_promotions == 2 && warm_uses == 1 && warm_valid == 1,
+            "rejected candidate overwrote the last accepted warm state");
+
+    auto incompatible_source = solve;
+    incompatible_source.attempt_id = 4;
+    incompatible_source.source_revision = 2;
+    fullmag_fdm_gpu_charge_solve_result_v1 incompatible_result{};
+    init_record(incompatible_result);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(
+                &incompatible_source, &incompatible_result) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+            "incompatible source revision did not fail before warm-start reuse");
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+                created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
+                &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_promotions == 2 && warm_uses == 1 && warm_valid == 1,
+            "incompatible source revision consumed or replaced the warm state");
+
+    auto recovered_solve = solve;
+    recovered_solve.attempt_id = 5;
+    fullmag_fdm_gpu_charge_solve_result_v1 recovered{};
+    init_record(recovered);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(&recovered_solve, &recovered) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                recovered.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED &&
+                recovered.physical_residual <= 1.0e-10 &&
+                recovered.component_balance <= 1.0e-10 &&
+                recovered.electrode_balance <= 1.0e-10,
+            "accepted warm start did not preserve charge convergence and balance");
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+                created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
+                &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_promotions == 2 && warm_uses == 2 && warm_valid == 1,
+            "recovered solve did not report use of the accepted warm state");
+
     auto changed_descriptor = descriptor;
     changed_descriptor.descriptor_revision = 2;
     std::fill(std::begin(changed_descriptor.descriptor_digest),
@@ -340,6 +416,12 @@ int main() {
                 created.context_handle, &changed_descriptor) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
             "changed static identity reused a live hierarchy cache");
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+                created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
+                &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_promotions == 2 && warm_uses == 2 && warm_valid == 1,
+            "incompatible descriptor consumed or replaced the warm state");
     fullmag_fdm_gpu_transport_context_create_result_v1 changed_created{};
     init_record(changed_created);
     require(fullmag_fdm_gpu_transport_context_create_v1(&create, &changed_created) ==
@@ -374,6 +456,9 @@ int main() {
     require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "snapshot destroy failed");
+    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(warm_snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm snapshot destroy failed");
     require(fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "context destroy failed");

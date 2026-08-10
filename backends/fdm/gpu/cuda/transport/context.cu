@@ -1812,6 +1812,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
     device_input.workspace_limit = slot.workspace_limit;
     device_input.relative_tolerance = request->relative_tolerance;
     device_input.max_iterations = request->max_iterations;
+    device_input.descriptor_revision = slot.descriptor_revision;
+    device_input.source_revision = slot.source_revision;
     device_input.hierarchy_cache = &slot.hierarchy_cache;
     CudaFailurePolicy failure_policy{slot.test_failure_boundary, 0};
     device_input.failure_policy = &failure_policy;
@@ -1954,6 +1956,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
     slot.hierarchy_build_count += device_output.hierarchy_build_count;
     slot.hierarchy_cache_hit_count += device_output.cache_hit_count;
     slot.amg_apply_count += device_output.amg_apply_count;
+    if (device_output.warm_start_used)
+        ++slot.hierarchy_cache.warm_use_count;
     slot.fine_unknown_count = device_output.fine_unknown_count;
     slot.coarse_unknown_count = device_output.coarse_unknown_count;
     slot.hierarchy_levels = device_output.hierarchy_levels;
@@ -2018,53 +2022,76 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
     if (parent.accepted_sequence == UINT64_MAX)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    size_t snapshot_index = slots.size();
+    for (size_t i = 0; i < slots.size(); ++i) {
+        if (!slots[i].active && slots[i].generation != UINT64_MAX) {
+            snapshot_index = i;
+            break;
+        }
+    }
+    if (snapshot_index == slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     const uint64_t accepted_sequence = parent.accepted_sequence + 1;
+    if (!parent.hierarchy_cache.valid ||
+        parent.hierarchy_cache.warm_potential == nullptr ||
+        parent.hierarchy_cache.cells != parent.provisional.cells ||
+        cudaSetDevice(parent.device) != cudaSuccess) {
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    }
+    parent.hierarchy_cache.warm_valid = false;
+    if (cudaMemcpyAsync(parent.hierarchy_cache.warm_potential,
+                        parent.provisional.potential,
+                        parent.provisional.cells * sizeof(double),
+                        cudaMemcpyDeviceToDevice, parent.stream) != cudaSuccess ||
+        cudaStreamSynchronize(parent.stream) != cudaSuccess) {
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    }
+    parent.hierarchy_cache.warm_descriptor_revision = parent.descriptor_revision;
+    parent.hierarchy_cache.warm_source_revision = parent.source_revision;
+    parent.hierarchy_cache.warm_valid = true;
+    ++parent.hierarchy_cache.warm_promotion_count;
     std::array<uint8_t, 16> lineage{};
     for (size_t byte = 0; byte < lineage.size(); ++byte)
         lineage[byte] = static_cast<uint8_t>(
             parent.descriptor_digest[byte] ^ ((accepted_sequence + byte) & 0xff));
     const std::array<uint8_t, 32> content_digest = parent.candidate_digest;
-    for (size_t i = 0; i < slots.size(); ++i) {
-        Slot &snapshot = slots[i];
-        if (snapshot.active || snapshot.generation == UINT64_MAX) continue;
-        ++snapshot.generation;
-        snapshot.active = true;
-        snapshot.tombstone = false;
-        snapshot.type_tag = kSnapshotTag;
-        snapshot.parent_slot = context.slot;
-        snapshot.parent_generation = context.generation;
-        snapshot.accepted = parent.provisional;
-        parent.provisional = {};
-        snapshot.source_revision = parent.source_revision;
-        snapshot.descriptor_revision = parent.descriptor_revision;
-        snapshot.candidate_digest = content_digest;
-        snapshot.iterations = parent.iterations;
-        snapshot.algebraic_residual = parent.algebraic_residual;
-        snapshot.physical_residual = parent.physical_residual;
-        snapshot.component_balance = parent.component_balance;
-        snapshot.electrode_balance = parent.electrode_balance;
-        parent.accepted_sequence = accepted_sequence;
-        snapshot.accepted_sequence = accepted_sequence;
-        ++parent.live_snapshots;
-        snapshot_info->snapshot_handle = {kCookie, i, snapshot.generation, kSnapshotTag};
-        snapshot_info->context_handle = context;
-        snapshot.snapshot_lineage = lineage;
-        std::memcpy(snapshot_info->snapshot_lineage_id, snapshot.snapshot_lineage.data(), 16);
-        snapshot_info->accepted_sequence = parent.accepted_sequence;
-        snapshot_info->local_generation = provisional_generation;
-        snapshot_info->source_revision = parent.source_revision;
-        snapshot_info->operator_revision = parent.descriptor_revision;
-        std::memcpy(snapshot_info->snapshot_content_digest, content_digest.data(), 32);
-        for (size_t byte = 0; byte < 32; ++byte)
-            snapshot_info->convergence_digest[byte] = static_cast<uint8_t>(
-                content_digest[31 - byte] ^ ((parent.iterations + byte) & 0xff));
-        snapshot_info->device_bytes = snapshot.accepted.cells +
-            (2 * snapshot.accepted.cells + snapshot.accepted.jx_count +
-             snapshot.accepted.jy_count + snapshot.accepted.jz_count +
-             4 * snapshot.accepted.interface_count) * sizeof(double);
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
-    }
-    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    Slot &snapshot = slots[snapshot_index];
+    ++snapshot.generation;
+    snapshot.active = true;
+    snapshot.tombstone = false;
+    snapshot.type_tag = kSnapshotTag;
+    snapshot.parent_slot = context.slot;
+    snapshot.parent_generation = context.generation;
+    snapshot.accepted = parent.provisional;
+    parent.provisional = {};
+    snapshot.source_revision = parent.source_revision;
+    snapshot.descriptor_revision = parent.descriptor_revision;
+    snapshot.candidate_digest = content_digest;
+    snapshot.iterations = parent.iterations;
+    snapshot.algebraic_residual = parent.algebraic_residual;
+    snapshot.physical_residual = parent.physical_residual;
+    snapshot.component_balance = parent.component_balance;
+    snapshot.electrode_balance = parent.electrode_balance;
+    parent.accepted_sequence = accepted_sequence;
+    snapshot.accepted_sequence = accepted_sequence;
+    ++parent.live_snapshots;
+    snapshot_info->snapshot_handle = {kCookie, snapshot_index, snapshot.generation, kSnapshotTag};
+    snapshot_info->context_handle = context;
+    snapshot.snapshot_lineage = lineage;
+    std::memcpy(snapshot_info->snapshot_lineage_id, snapshot.snapshot_lineage.data(), 16);
+    snapshot_info->accepted_sequence = parent.accepted_sequence;
+    snapshot_info->local_generation = provisional_generation;
+    snapshot_info->source_revision = parent.source_revision;
+    snapshot_info->operator_revision = parent.descriptor_revision;
+    std::memcpy(snapshot_info->snapshot_content_digest, content_digest.data(), 32);
+    for (size_t byte = 0; byte < 32; ++byte)
+        snapshot_info->convergence_digest[byte] = static_cast<uint8_t>(
+            content_digest[31 - byte] ^ ((parent.iterations + byte) & 0xff));
+    snapshot_info->device_bytes = snapshot.accepted.cells +
+        (2 * snapshot.accepted.cells + snapshot.accepted.jx_count +
+         snapshot.accepted.jy_count + snapshot.accepted.jz_count +
+         4 * snapshot.accepted.interface_count) * sizeof(double);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
 extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
@@ -3741,6 +3768,30 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
         cudaMemcpy(structured_edge_weight, slot.hierarchy_cache.coarse_edge_weight,
                    edge_count * sizeof(double), cudaMemcpyDeviceToHost) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint64_t *promotion_count,
+    uint64_t *use_count, uint64_t *cells, uint64_t *descriptor_revision,
+    uint64_t *source_revision, uint32_t *valid) {
+    if (promotion_count == nullptr || use_count == nullptr || cells == nullptr ||
+        descriptor_revision == nullptr || source_revision == nullptr || valid == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const ChargeHierarchyCache &cache = slot.hierarchy_cache;
+    *promotion_count = cache.warm_promotion_count;
+    *use_count = cache.warm_use_count;
+    *cells = cache.cells;
+    *descriptor_revision = cache.warm_descriptor_revision;
+    *source_revision = cache.warm_source_revision;
+    *valid = cache.warm_valid ? 1u : 0u;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
