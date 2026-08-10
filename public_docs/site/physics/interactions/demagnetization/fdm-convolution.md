@@ -16,6 +16,10 @@ potential on an airbox and it does not use FEM boundary matrices. Open-boundary 
 from the finite convolution embedding and the precomputed Newell tensor; periodic behavior uses a
 separate truncated-image policy documented in {doc}`periodic-demag`.
 
+For multiple separated magnetic layers with native grids, use the dedicated
+{doc}`multilayer-convolution` physics page and the complete
+{doc}`../../../python-api/discretization/fdm-multilayer-convolution` Python/ProblemIR/UI guide.
+
 (demag-fdm-problem-statement)=
 ## 1. Physical problem and grid
 

@@ -53,6 +53,7 @@ DEMAGNETIZATION_SUBPAGES = (
     "mathematical-formulation",
     "boundary-conditions",
     "fdm-convolution",
+    "multilayer-convolution",
     "fem-poisson-airbox",
     "fem-bem",
     "periodic-demag",
@@ -215,6 +216,8 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",
     "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
     "physics/interactions/dmi/interfacial.md": "Interfacial Dzyaloshinskii–Moriya interaction",
+    "physics/interactions/demagnetization/multilayer-convolution.md": "Wielowarstwowa konwolucja FDM",
+    "python-api/discretization/fdm-multilayer-convolution.md": "FDM multilayer convolution — Python, ProblemIR, and UI",
     "physics/interactions/thermal-noise/index.md": "Thermal Brown noise",
     "physics/interactions/oersted-field/index.md": "Oersted field",
     "python-api/interactions/exchange.md": "Exchange Python API",
@@ -243,6 +246,7 @@ REFERENCE_PAGE_LABELS = {
     "python-api/interactions/spin-transfer-torque.md": "stt-api-problem-statement",
     "python-api/interactions/spin-orbit-torque.md": "sot-api-problem-statement",
     "python-api/interactions/magnetoelastic.md": "magnetoelastic-api-problem-statement",
+    "python-api/discretization/fdm-multilayer-convolution.md": "python-api-fdm-multilayer-convolution",
 }
 
 
@@ -323,6 +327,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/magnets-and-textures/uniform-texture.md",
     "python-api/discretization/discretization-hints.md",
     "python-api/discretization/fdm.md",
+    "python-api/discretization/fdm-multilayer-convolution.md",
     "python-api/discretization/fem.md",
     "python-api/dynamics/llg.md",
     "python-api/studies/time-evolution.md",
@@ -481,7 +486,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     ),
     *_section("python-api/current-and-excitations", "Current and Excitations", ("current-transport", "prescribed-current", "regional-field-drive", "rf-drive", "microstrip-antenna", "cpw-antenna"), "the Python API current and excitations reference"),
     *_section("python-api/boundary-conditions", "Boundary Conditions", ("periodic-boundary-conditions", "floquet-boundary-conditions", "mechanical-boundary-conditions"), "the Python API boundary-conditions reference"),
-    *_section("python-api/discretization", "Discretization", ("discretization-hints", "fdm", "fem", "hybrid", "mesh-controls", "per-object-meshing"), "the Python API discretization reference"),
+    *_section("python-api/discretization", "Discretization", ("discretization-hints", "fdm", "fdm-multilayer-convolution", "fem", "hybrid", "mesh-controls", "per-object-meshing"), "the Python API discretization reference"),
     *_section("python-api/dynamics", "Dynamics", ("llg", "integrators", "adaptive-timestep", "field-refresh"), "the Python API dynamics reference"),
     *_section("python-api/studies", "Studies", ("time-evolution", "relaxation", "hysteresis", "eigenmodes", "frequency-response"), "the Python API studies reference"),
     *_section("python-api/outputs", "Outputs", ("fields-and-scalars", "quantities", "modes-and-spectra", "dispersion-and-response", "snapshots", "autosave"), "the Python API outputs reference"),

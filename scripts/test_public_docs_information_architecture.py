@@ -26,6 +26,7 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         "mathematical-formulation",
         "boundary-conditions",
         "fdm-convolution",
+        "multilayer-convolution",
         "fem-poisson-airbox",
         "fem-bem",
         "periodic-demag",

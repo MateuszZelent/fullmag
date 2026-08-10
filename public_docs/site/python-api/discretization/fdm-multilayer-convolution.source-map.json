@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/fdm-multilayer-convolution.md",
-    "title": "FDM multilayer convolution: Python, ProblemIR, and UI"
+    "title": "FDM multilayer convolution — Python, ProblemIR, and UI"
   },
   "backend_matrix": [
     {

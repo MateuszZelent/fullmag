@@ -1,7 +1,7 @@
 ---
 title: Wielowarstwowa konwolucja FDM
 status: partial
-doc_kind: physics-reference
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: docs/physics/0421-fdm-multilayer-convolution-demag.md

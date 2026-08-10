@@ -1,7 +1,7 @@
 ---
-title: "FDM multilayer convolution: Python, ProblemIR, and UI"
+title: FDM multilayer convolution — Python, ProblemIR, and UI
 status: partial
-doc_kind: guide
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 ---
