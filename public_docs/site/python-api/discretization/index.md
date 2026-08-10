@@ -16,6 +16,7 @@ This page reserves the public documentation location for the Python API discreti
 
 discretization-hints
 fdm
+fdm-multilayer-convolution
 fem
 hybrid
 mesh-controls

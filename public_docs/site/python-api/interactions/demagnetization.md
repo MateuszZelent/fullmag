@@ -13,6 +13,10 @@ This page documents the Python authoring contract. The physical equations and ba
 details live in {doc}`../../physics/interactions/demagnetization/index`; this page owns constructor
 signatures, validation, lowering, and copyable examples.
 
+For the complete multilayer workflow, including per-magnet native grids, common convolution cells,
+`ProblemIR`, Explorer, Airbox and viewport configuration, see
+{doc}`../discretization/fdm-multilayer-convolution`.
+
 (demag-api-problem-statement)=
 ## Physical problem
 

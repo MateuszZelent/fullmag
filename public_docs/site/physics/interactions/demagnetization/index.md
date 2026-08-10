@@ -21,6 +21,7 @@ or requested model semantics defined here.
 mathematical-formulation
 boundary-conditions
 fdm-convolution
+multilayer-convolution
 fem-poisson-airbox
 fem-bem
 periodic-demag
