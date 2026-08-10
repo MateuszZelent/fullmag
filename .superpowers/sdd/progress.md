@@ -83,3 +83,9 @@ recipe is the authoritative exact-source runtime gate. Task 4.3 remains
 Task 8.1 matrix-smoke evidence mode: complete (commits af33bed2..26f04b60, review clean; 94 executor/planner/runtime-verifier tests passed).
 Managed runtime SONAME evidence fix: complete (commits 26f04b60..087a7411, review clean; 64 canonical bundle tests and 95 SP4 matrix/runtime-verifier tests passed).
 Control Room Thin Film authoring slice: complete (commits 087a7411..bc6290a4, review clean; 93 targeted tests, typecheck, and zero-warning targeted ESLint passed).
+
+## Plan: Control Room Inspector refactor
+
+Task 1: complete (commits `5d8d18a8..fdfe1037`, review clean; focused RED
+confirmed 2 intended failures and 52 passing tests; fixture coverage includes
+model, resources, results, jobs, and diagnostics).
