@@ -15,7 +15,8 @@ owner: fullmag-public-docs
 The canonical demagnetizing interaction is documented in
 {doc}`../../physics/interactions/demagnetization/fdm-convolution`. This page owns the FDM
 realization: a Cartesian cell grid, a cell-averaged demagnetization tensor, zero-padded open-boundary
-convolution, and a field/energy reduction shared by CPU and GPU lanes.
+convolution, and a field/energy reduction with one shared physical convention. Python can author an
+FDM CPU or GPU request, but execution and qualification remain separate per device lane.
 
 (numerical-methods-demag-fdm-governing-equations)=
 ## Governing equations
@@ -75,9 +76,16 @@ convolution, not an assumption of periodic physical boundaries.
   periodic demag policy is a different problem.
 - The cell-averaged Newell tensor is exact for the chosen rectangular-cell discretization; it does
   not remove grid, geometry-mask, or finite-precision error.
-- GPU FP32 and FP64 are separate precision lanes. Matching source code is not parity evidence.
+- GPU FP32 and FP64 are separate precision lanes. Matching source code is not parity evidence, and
+  authoring a GPU request does not prove that the GPU executed it.
 - Multilayer convolution uses an explicit common-grid policy. A failed common-grid resolution must
   not silently fall back to a single-grid approximation.
+- Omitting both `common_cells` and `common_cells_xy` delegates scratch-grid selection to Fullmag's
+  planner-auto policy. This is not a reproduction of BORIS `ncommonstatus=false`: the authored
+  `ProblemIR` simply has no `common_cells*` fields, while the resolved union-scratch layout is
+  recorded separately in the plan/provenance.
+- Fullmag `mode="two_d_stack"` is not BORIS `2dmulticonvolution=1` or `=2`. It requires one
+  native Z cell per layer; use `three_d` for native through-thickness cells.
 
 (numerical-methods-demag-fdm-python-api)=
 ## Python API
@@ -115,13 +123,13 @@ study.stages.add_relax(
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m}$ | three finite positive values | default Cartesian cell | FDM CPU/GPU | `discretization.fdm.default_cell` |
-| `FDM.per_magnet` | `dict[str,FDMGrid] \| None` | `None` | $1$ | every grid has three positive sizes | per-magnet grid overrides | FDM CPU/GPU | `discretization.fdm.per_magnet` |
-| `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, `multilayer_convolution` | common-grid or multilayer topology | FDM CPU/GPU | `discretization.demag.strategy` |
-| `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, `three_d` | thin-film or full-3D mode | FDM CPU/GPU | `discretization.demag.mode` |
-| `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | exactly three positive integers | explicit common convolution grid | FDM CPU/GPU | `discretization.demag.common_cells` |
-| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | exactly two positive integers | in-plane stack grid | FDM CPU/GPU | `discretization.demag.common_cells_xy` |
-| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | partial-cell correction family | lane-dependent | `discretization.fdm.boundary_correction` |
+| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m}$ | three finite positive values | default Cartesian cell | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.cell` and `.default_cell` |
+| `FDM.per_magnet` | `dict[str,FDMGrid] \| None` | `None` | $1$ | every grid has three positive sizes | per-magnet grid overrides | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
+| `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, `multilayer_convolution` | common-grid or multilayer topology | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.strategy` |
+| `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, `three_d` | thin-film or full-3D mode | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.mode` |
+| `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | exactly three positive integers | explicit common convolution grid | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.common_cells` |
+| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | exactly two positive integers | in-plane stack grid | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | partial-cell correction family | lane-dependent | `backend_policy.discretization_hints.fdm.boundary_correction` |
 
 `FDMDemag.allow_single_grid_fallback` is a removed compatibility switch: any non-`None` value is
 rejected. `explain` is an authoring-only plan summary and is not physical IR.
@@ -129,14 +137,20 @@ rejected. `explain` is an authoring-only plan summary and is not physical IR.
 (numerical-methods-demag-fdm-problem-ir)=
 ## ProblemIR and provenance
 
-The physical request remains `Demag`; FDM policy is nested under discretization:
+The physical request remains `Demag`; the FDM policy is nested under
+`backend_policy.discretization_hints.fdm`:
 
 ```json
 {
   "energy_terms": [{"kind": "demag"}],
-  "discretization": {
-    "fdm": {"default_cell": [2e-9, 2e-9, 5e-9]},
-    "demag": {"strategy": "auto", "mode": "auto"}
+  "backend_policy": {
+    "discretization_hints": {
+      "fdm": {
+        "cell": [2e-9, 2e-9, 5e-9],
+        "default_cell": [2e-9, 2e-9, 5e-9],
+        "demag": {"strategy": "auto", "mode": "auto"}
+      }
+    }
   }
 }
 ```
@@ -152,8 +166,9 @@ Script export preserves the stage-first study and discretization policy. Validat
 invalid cell sizes, malformed common grids, unsupported boundary-correction values, and the removed
 fallback switch. Unsupported combinations are explicit: FEM requests, periodic axes without the
 periodic demag policy, and unavailable GPU precision lanes are rejected or reported by the planner;
-they do not silently become an open single-grid CPU run. Requested intent, resolved execution and
-provenance are separate.
+they do not silently become an open single-grid CPU run. A successful Python/ProblemIR GPU request
+is authoring evidence only; it becomes a GPU execution claim only with an executed-device receipt.
+Requested intent, resolved execution and provenance are separate.
 
 (numerical-methods-demag-fdm-discrete-realization)=
 ## Discrete realization by lane

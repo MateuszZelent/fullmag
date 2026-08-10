@@ -224,8 +224,13 @@ study.stages.add_run(until=1.0e-13, stage_id="multilayer_run")
 
 Use `mode="three_d"` with `common_cells=(N_x,N_y,N_z)` when any native layer has more than one
 Z cell. Do not set both common-grid fields. Omitting both delegates common-grid sizing to the
-planner; it does not turn the common grid into a physical layer mesh. The common grid is a
-supercell for kernel/FFT work, while each layer retains its own FDM grid and z origin.
+planner; it does not turn the common grid into a physical layer mesh. This Fullmag planner-auto
+policy is not BORIS `ncommonstatus=false`: the authored `ProblemIR` has no `common_cells*` fields,
+and the resolved union-scratch layout is recorded in the plan/provenance rather than reproducing
+BORIS's largest-mesh default. The common grid is a supercell for kernel/FFT work, while each layer
+retains its own FDM grid and z origin.
+Likewise, `two_d_stack` is not BORIS `2dmulticonvolution=1` or `=2`; it requires one native Z cell
+per layer.
 
 ### Optional CPU FP64 target-only Airbox observation
 
@@ -456,13 +461,14 @@ compatibility. The matrix covers:
 
 ### Inspect the realized meshes
 
-After planning/materialization, open **Mesh** in Explorer:
+When the versioned multilayer-layout resource is available, its current Explorer integration may
+expose the following diagnostics under **Mesh**:
 
-- **Common Convolution Grid** shows shape, cell size, origin, FFT shape, and provenance. Its
-  Inspector states **Physical mesh: no** and identifies it as diagnostic FFT scratch.
-- **Native Layers** contains one node per named magnet. Each layer exposes **Native Grid**,
-  **Active Mask**, **Transfer**, and **Provenance** children. Inspect them to verify the realized
-  carrier, active/inactive counts, `identity`/`push_pull`, layout fingerprint, and revisions.
+- **Common Convolution Grid** can show shape, cell size, origin, FFT shape, and provenance. Its
+  Inspector identifies it as diagnostic FFT scratch, not a physical mesh.
+- **Native Layers** can contain one node per named magnet. Where published, layer diagnostics expose
+  the realized carrier, active/inactive counts, `identity`/`push_pull`, layout fingerprint, and
+  revisions.
 - The current Explorer omits layout-specific nodes when their layout resource has
   `available=false`; it does not synthesize a common/native grid or a single-grid fallback. A
   caller must inspect the resource's `reason` or `degraded` payload rather than infer a mesh from
@@ -470,10 +476,11 @@ After planning/materialization, open **Mesh** in Explorer:
 
 ### Inspect and display target-only Airbox `H_demag`
 
-When a validated runtime carrier exists, Explorer → **Airbox** adds **Multilayer H_demag target**.
-Select it to inspect target cells, origin, cell size, sample/value counts, carrier fingerprint,
-layout/observation revisions, source-grid fingerprints, and runtime identity. The Inspector must
-report `H_demag` available and `H_eff` unavailable with its reason.
+When a validated runtime carrier exists *and the Airbox target resource is published*, Explorer may
+add **Multilayer H_demag target**. Its available Inspector data can include target cells, origin,
+cell size, sample/value counts, carrier fingerprint, layout/observation revisions, source-grid
+fingerprints, and runtime identity. A missing resource is not a UI failure and does not authorize a
+synthetic target; where published, `H_demag` is available and `H_eff` retains its unavailable reason.
 
 The viewport requests `quantity_id=H_demag` with `scope_kind=airbox` and `scope_id=airbox`. It
 accepts only FMVP v3 data with the target carrier fingerprint, matching domain generation, exact

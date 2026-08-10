@@ -283,6 +283,11 @@ transfer, and exchange-seam classes are qualified.
 cells is rejected: there is no public moment-preserving Z average today, and the planner
 does not copy an arbitrary slice. Select `three_d` instead. `common_cells_xy=(N_x,N_y)`
 resolves a scratch grid $(N_x,N_y,1)$; `common_cells=(N_x,N_y,N_z)` selects a full 3-D grid.
+`two_d_stack` is a Fullmag mode, not a spelling for BORIS `2dmulticonvolution=1` or `=2`:
+those BORIS modes remain distinct, unsupported semantics. If both `common_cells` fields are
+absent, Fullmag applies planner-auto common-scratch selection and records the resolved layout in
+the plan/provenance; the authored `ProblemIR` contains no `common_cells*` fields. This absence is
+not an alias for BORIS `ncommonstatus=false`, whose largest-mesh default is a different policy.
 
 The symmetry classes in Lepadatu Table I determine the legal spectral representation:
 
