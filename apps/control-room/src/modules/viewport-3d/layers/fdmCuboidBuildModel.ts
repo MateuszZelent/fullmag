@@ -37,7 +37,7 @@ export interface FdmVoxelTopographyOptions {
  * viewport pass must select cells from that artifact rather than treating the
  * authored universe as magnetic material.
  */
-export type FdmCuboidCellSelection = "all" | "active" | "inactive";
+export type FdmCuboidCellSelection = "all" | "active" | "dense" | "inactive";
 
 export interface FdmCuboidInstanceModelOptions {
   cellSelection: FdmCuboidCellSelection;
@@ -56,6 +56,7 @@ export interface FdmCuboidBuildRequest {
   realizedRegionIds: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
+  vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
   voxelFillRatio: number;
   voxelMagnitudeThreshold: number;
@@ -72,25 +73,35 @@ export interface FdmCuboidBuildResult {
 export function buildViewport3DFdmCuboid(
   request: FdmCuboidBuildRequest,
 ): FdmCuboidBuildResult {
-  const model = buildFdmCuboidInstanceModel(request.domain, {
-    cellSelection: request.cellSelection,
-    fieldVector: request.modelFieldVector,
-    realizedRegionIds: request.realizedRegionIds,
-    voxelFillRatio: request.voxelFillRatio,
-    voxelMagnitudeThreshold: request.voxelMagnitudeThreshold,
-    voxelTopography: request.voxelTopography,
-  });
+  const model = request.cellSelection === "dense"
+    ? buildFdmDenseNativeLayerInstanceModel(
+        request.domain,
+        request.voxelFillRatio,
+      )
+    : buildFdmCuboidInstanceModel(request.domain, {
+        cellSelection: request.cellSelection,
+        fieldVector: request.modelFieldVector,
+        realizedRegionIds: request.realizedRegionIds,
+        voxelFillRatio: request.voxelFillRatio,
+        voxelMagnitudeThreshold: request.voxelMagnitudeThreshold,
+        voxelTopography: request.voxelTopography,
+      });
   const vectorSegments = buildFdmVectorSegmentsUncached(
     model,
     request.vectorField,
     resolveFdmVectorGlyphScale(model, request.vectorScale),
     request.maxVectorGlyphs,
-    { anchorMode: request.vectorAnchorMode },
+    {
+      anchorMode: request.vectorAnchorMode,
+      geometryScope: request.vectorGeometryScope ?? "full",
+    },
   );
   const vectorCellIndices = buildFdmVectorSampledCellIndices(
     model,
     request.vectorField,
     request.maxVectorGlyphs,
+    undefined,
+    request.vectorGeometryScope ?? "full",
   );
   return { model, vectorCellIndices, vectorSegments };
 }
@@ -414,7 +425,10 @@ function isFdmCuboidCellSelection(
   selection: unknown,
 ): selection is FdmCuboidCellSelection {
   return (
-    selection === "all" || selection === "active" || selection === "inactive"
+    selection === "all" ||
+    selection === "active" ||
+    selection === "dense" ||
+    selection === "inactive"
   );
 }
 

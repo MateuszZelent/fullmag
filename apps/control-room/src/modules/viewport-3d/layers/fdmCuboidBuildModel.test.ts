@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
 
 import {
   buildFdmCuboidInstanceModel,
   buildFdmDenseNativeLayerInstanceModel,
+  buildViewport3DFdmCuboid,
 } from "./fdmCuboidBuildModel";
 
 function allActiveMembership(cellCount: number): Uint32Array {
@@ -46,6 +48,81 @@ describe("FDM cuboid realized membership", () => {
 
     expect(model?.cellIndices).toEqual(new Uint32Array([0, 1]));
     expect(model?.regionIds).toEqual(new Uint32Array([0, 0]));
+  });
+
+  it("builds a dense native carrier through the worker-safe request contract", () => {
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: {
+        bounds: null,
+        displayCellBudget: 4096,
+        displayCellCount: 4096,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [64, 64, 1],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 4096,
+      },
+      maxVectorGlyphs: 0,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorScale: 1,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    expect(result.model?.count).toBe(4096);
+    expect(result.model?.centers).toHaveLength(4096 * 3);
+  });
+
+  it("keeps surface vector indices in the same order and scope as worker segments", () => {
+    const values = Array.from({ length: 27 }, () => [1, 0, 0]).flat();
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: {
+        bounds: null,
+        displayCellBudget: 27,
+        displayCellCount: 27,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [3, 3, 3],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 27,
+      },
+      maxVectorGlyphs: 27,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: fieldVector(values),
+      vectorGeometryScope: "surface",
+      vectorScale: 1,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    expect(result.vectorCellIndices).toHaveLength(26);
+    expect(result.vectorCellIndices).not.toContain(13);
+    expect(result.vectorSegments).toHaveLength(26 * 7);
+    const colors = buildFdmSampledScalarColors(
+      fieldVector(values),
+      result.vectorCellIndices,
+      27,
+    );
+    expect(colors?.colors).toHaveLength(26 * 3);
+    expect((colors?.colors.length ?? 0) / 3).toBe(
+      (result.vectorSegments?.length ?? 0) / 7,
+    );
   });
 
   it("fails closed for an all-cell pass without an exact FMRM mask", () => {

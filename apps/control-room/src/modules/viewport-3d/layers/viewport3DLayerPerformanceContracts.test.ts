@@ -88,6 +88,12 @@ describe("viewport 3D layer performance contracts", () => {
     expect(viewport3dSceneModelSource).not.toContain(
       "buildFdmCuboidInstanceModel(",
     );
+    expect(viewport3dSceneModelSource).toContain(
+      "useFdmCuboidBuildResults",
+    );
+    expect(viewport3dSceneModelSource).not.toContain(
+      "buildFdmDenseNativeLayerInstanceModel(",
+    );
   });
 
   it("cleans native multilayer request ownership 2 -> 1 -> 0 and changes quantity target-locally", () => {
@@ -127,5 +133,19 @@ describe("viewport 3D layer performance contracts", () => {
     expect(topChanged.get("layer:top")?.requestId).toBe(
       "fdm-native-layer:layer:top:H_demag",
     );
+  });
+
+  it("keys multilayer cuboid builds from target-local carrier, field, and settings identities", () => {
+    const buildBlock = viewport3dSceneModelSource.slice(
+      viewport3dSceneModelSource.indexOf("const fdmMultilayerCuboidBuildEntries"),
+      viewport3dSceneModelSource.indexOf("const fdmMultilayerCuboidBuildResults"),
+    );
+
+    expect(buildBlock).toContain("payloadRevisionByRequestId.get");
+    expect(buildBlock).toContain("domain.gridFingerprint");
+    expect(buildBlock).toContain("fdmMultilayerAirboxDomain.carrierFingerprint");
+    expect(buildBlock).not.toContain("renderingState?.revision");
+    expect(buildBlock).not.toContain("nativeLayerFieldVectors.payloadRevision ??");
+    expect(buildBlock).not.toContain("nativeLayerFieldVectors.revision ??");
   });
 });

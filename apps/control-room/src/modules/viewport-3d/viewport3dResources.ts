@@ -1114,6 +1114,16 @@ export function useViewport3DQuantityFieldVectors(
       ),
     [fieldVectorEnvelopes],
   );
+  const payloadRevisionByRequestId = useMemo(
+    () =>
+      new Map(
+        Array.from(fieldVectorEnvelopes ?? [], ([requestId, envelope]) => [
+          requestId,
+          envelope.etag ?? null,
+        ]),
+      ),
+    [fieldVectorEnvelopes],
+  );
   const payloadRevision = useMemo(
     () =>
       fieldVectorEnvelopes && fieldVectorEnvelopes.size > 0
@@ -1128,6 +1138,7 @@ export function useViewport3DQuantityFieldVectors(
     ...resource,
     data,
     payloadRevision,
+    payloadRevisionByRequestId,
     responseMetadataByRequestId,
   };
 }

@@ -634,10 +634,206 @@ export interface FdmCuboidAsyncBuildInput {
   revisionSummary: string;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
+  vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
   voxelFillRatio: number;
   voxelMagnitudeThreshold: number;
   voxelTopography: FdmVoxelTopographyOptions;
+}
+
+export interface FdmCuboidAsyncBuildEntry extends FdmCuboidAsyncBuildInput {
+  id: string;
+}
+
+interface FdmCuboidBuildResultsController {
+  begin: (entries: readonly FdmCuboidAsyncBuildEntry[]) => void;
+  getSnapshot: () => ReadonlyMap<string, FdmCuboidBuildState>;
+  reject: (id: string, buildKey: string, error: unknown) => void;
+  resolve: (id: string, buildKey: string, result: FdmCuboidBuildResult) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+const EMPTY_FDM_CUBOID_BUILD_RESULTS = new Map<string, FdmCuboidBuildState>();
+
+function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsController {
+  let snapshot: ReadonlyMap<string, FdmCuboidBuildState> =
+    EMPTY_FDM_CUBOID_BUILD_RESULTS;
+  const listeners = new Set<() => void>();
+  const publish = (next: ReadonlyMap<string, FdmCuboidBuildState>) => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  return {
+    begin: (entries) =>
+      publish(
+        new Map(
+          entries.flatMap((entry) =>
+            entry.enabled && entry.buildKey
+              ? [[
+                  entry.id,
+                  snapshot.get(entry.id)?.buildKey === entry.buildKey
+                    ? snapshot.get(entry.id)!
+                    : {
+                        buildKey: entry.buildKey,
+                        error: null,
+                        result: null,
+                        status: "pending" as const,
+                      },
+                ] as const]
+              : [],
+          ),
+        ),
+      ),
+    getSnapshot: () => snapshot,
+    reject: (id, buildKey, error) => {
+      const current = snapshot.get(id);
+      if (!current || current.buildKey !== buildKey) return;
+      if (error instanceof Error && error.name === "AbortError") return;
+      publish(new Map(snapshot).set(id, {
+        buildKey,
+        error: error instanceof Error ? error : new Error(String(error)),
+        result: null,
+        status: "error",
+      }));
+    },
+    resolve: (id, buildKey, result) => {
+      const current = snapshot.get(id);
+      if (!current || current.buildKey !== buildKey) return;
+      publish(new Map(snapshot).set(id, {
+        buildKey,
+        error: null,
+        result,
+        status: "ready",
+      }));
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+export interface FdmCuboidBatchBuildController {
+  dispose: () => void;
+  getActiveBuildCount: () => number;
+  getSnapshot: () => ReadonlyMap<string, FdmCuboidBuildState>;
+  reconcile: (entries: readonly FdmCuboidAsyncBuildEntry[]) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+type FdmCuboidBatchBuild = (
+  request: FdmCuboidBuildRequest,
+  options: Parameters<typeof buildViewport3DFdmCuboidOffMainThread>[1],
+) => Promise<FdmCuboidBuildResult>;
+
+export function createFdmCuboidBatchBuildController(
+  build: FdmCuboidBatchBuild = buildViewport3DFdmCuboidOffMainThread,
+): FdmCuboidBatchBuildController {
+  const store = createFdmCuboidBuildResultsController();
+  const activeBuilds = new Map<
+    string,
+    { buildKey: string; controller: AbortController }
+  >();
+
+  const reconcile = (entries: readonly FdmCuboidAsyncBuildEntry[]) => {
+    const activeEntries = entries.filter(
+      (entry): entry is FdmCuboidAsyncBuildEntry & { buildKey: string } =>
+        entry.enabled && Boolean(entry.domain) && Boolean(entry.buildKey),
+    );
+    store.begin(activeEntries);
+    for (const [id, active] of activeBuilds) {
+      const next = activeEntries.find((entry) => entry.id === id);
+      if (!next || next.buildKey !== active.buildKey) {
+        active.controller.abort();
+        activeBuilds.delete(id);
+      }
+    }
+    for (const entry of activeEntries) {
+      if (activeBuilds.get(entry.id)?.buildKey === entry.buildKey) continue;
+      if (
+        store.getSnapshot().get(entry.id)?.buildKey === entry.buildKey &&
+        store.getSnapshot().get(entry.id)?.status === "ready"
+      ) {
+        continue;
+      }
+      const abortController = new AbortController();
+      activeBuilds.set(entry.id, {
+        buildKey: entry.buildKey,
+        controller: abortController,
+      });
+      const request: FdmCuboidBuildRequest = {
+        cellSelection: entry.cellSelection,
+        domain: entry.domain,
+        maxVectorGlyphs: entry.maxVectorGlyphs,
+        modelFieldVector: entry.modelFieldVector,
+        realizedRegionIds: entry.realizedRegionIds,
+        vectorAnchorMode: entry.vectorAnchorMode,
+        vectorField: entry.vectorField,
+        vectorGeometryScope: entry.vectorGeometryScope,
+        vectorScale: entry.vectorScale,
+        voxelFillRatio: entry.voxelFillRatio,
+        voxelMagnitudeThreshold: entry.voxelMagnitudeThreshold,
+        voxelTopography: entry.voxelTopography,
+      };
+      void build(request, {
+        buildKey: entry.buildKey,
+        groupKey: entry.groupKey ?? undefined,
+        latestWins: true,
+        revisionSummary: entry.revisionSummary,
+        signal: abortController.signal,
+      }).then(
+        (result) => {
+          if (!abortController.signal.aborted) {
+            store.resolve(entry.id, entry.buildKey, result);
+          }
+          if (activeBuilds.get(entry.id)?.buildKey === entry.buildKey) {
+            activeBuilds.delete(entry.id);
+          }
+        },
+        (error: unknown) => {
+          if (!abortController.signal.aborted) {
+            store.reject(entry.id, entry.buildKey, error);
+          }
+          if (activeBuilds.get(entry.id)?.buildKey === entry.buildKey) {
+            activeBuilds.delete(entry.id);
+          }
+        },
+      );
+    }
+  };
+
+  return {
+    dispose: () => {
+      for (const active of activeBuilds.values()) active.controller.abort();
+      activeBuilds.clear();
+      store.begin([]);
+    },
+    getActiveBuildCount: () => activeBuilds.size,
+    getSnapshot: store.getSnapshot,
+    reconcile,
+    subscribe: store.subscribe,
+  };
+}
+
+export function useFdmCuboidBuildResults(
+  entries: readonly FdmCuboidAsyncBuildEntry[],
+): ReadonlyMap<string, FdmCuboidBuildState> {
+  const controller = useMemo(() => createFdmCuboidBatchBuildController(), []);
+  const snapshot = useSyncExternalStore(
+    controller.subscribe,
+    controller.getSnapshot,
+    () => EMPTY_FDM_CUBOID_BUILD_RESULTS,
+  );
+
+  useEffect(() => {
+    controller.reconcile(entries);
+  }, [controller, entries]);
+
+  useEffect(() => {
+    return () => controller.dispose();
+  }, [controller]);
+
+  return snapshot;
 }
 
 export function useFdmCuboidBuildResult({
@@ -669,6 +865,7 @@ export function useFdmCuboidBuildResult({
             realizedRegionIds: realizedRegionIds ?? null,
             vectorAnchorMode,
             vectorField,
+            vectorGeometryScope: "full",
             vectorScale,
             voxelFillRatio,
             voxelMagnitudeThreshold,
