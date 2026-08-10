@@ -719,7 +719,8 @@ __device__ void device_galerkin_amg_vcycle(
 }
 
 __global__ void charge_pcg_device_amg_kernel(
-    const double *diag, const double *rhs, const double *gx, const double *gy,
+    const uint8_t *active, const double *diag, const double *rhs, const double *gx,
+    const double *gy,
     const double *gz, uint64_t nx, uint64_t ny, uint64_t nz, double tolerance,
     uint64_t max_iterations, double *potential, double *r, double *z, double *p,
     double *ap, double *fine_tmp, double *coarse_rhs, double *coarse_x,
@@ -735,12 +736,25 @@ __global__ void charge_pcg_device_amg_kernel(
     __shared__ double beta;
     __shared__ uint64_t completed;
     __shared__ uint32_t reason;
+    __shared__ uint64_t active_tree[256];
     const uint64_t cells = nx * ny * nz;
     for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
         potential[i] = 0.0;
         r[i] = rhs[i];
     }
     __syncthreads();
+    uint64_t active_local = 0;
+    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
+        active_local += active[i] != 0 ? 1 : 0;
+    active_tree[threadIdx.x] = active_local;
+    __syncthreads();
+    for (uint32_t width = blockDim.x / 2; width != 0; width >>= 1) {
+        if (threadIdx.x < width)
+            active_tree[threadIdx.x] += active_tree[threadIdx.x + width];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+        metrics->fine_unknown_count = active_tree[0];
     const double rhs_norm_squared = fixed_tree_dot(rhs, rhs, cells, tree);
     if (threadIdx.x == 0) {
         norm_b = sqrt(rhs_norm_squared);
@@ -810,7 +824,6 @@ __global__ void charge_pcg_device_amg_kernel(
             (reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS ? 1 : 0);
         metrics->reason = reason;
         metrics->hierarchy_levels = hierarchy->coarse_cells < cells ? 2 : 1;
-        metrics->fine_unknown_count = cells;
         metrics->coarse_unknown_count = hierarchy->coarse_cells;
         for (uint32_t byte = 0; byte < 32; ++byte)
             metrics->hierarchy_digest[byte] = hierarchy->digest[byte];
@@ -1126,6 +1139,10 @@ __global__ void charge_balance_kernel(
 }
 } // namespace
 
+uint64_t solve_metrics_bytes() noexcept {
+    return sizeof(DeviceSolveMetrics);
+}
+
 void release(Buffers &buffers) noexcept {
     if (buffers.active) (void)cudaFree(buffers.active);
     if (buffers.conductivity) (void)cudaFree(buffers.conductivity);
@@ -1247,6 +1264,7 @@ uint32_t validate_static_payload_device(
 uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     if (output == nullptr || input.hierarchy_cache == nullptr)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    output->transfer_bytes = solve_metrics_bytes() + sizeof(uint32_t);
     const uint64_t nx = input.grid[0], ny = input.grid[1], nz = input.grid[2];
     const uint64_t cells = nx * ny * nz;
     const uint64_t jx_count = (nx + 1) * ny * nz;
@@ -1475,7 +1493,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     charge_pcg_device_amg_kernel<<<1, threads, 0, input.stream>>>(
-        cache.diag, cache.rhs, cache.gx, cache.gy, cache.gz, nx, ny, nz,
+        cache.active, cache.diag, cache.rhs, cache.gx, cache.gy, cache.gz, nx, ny, nz,
         0.1 * input.relative_tolerance,
         input.max_iterations, candidate.potential, r, z, p, ap, fine_tmp,
         coarse_rhs, coarse_x, coarse_tmp, cache.aggregate, cache.coarse_diag,
