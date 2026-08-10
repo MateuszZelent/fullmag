@@ -43,6 +43,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Ferromagnet.object_regions` | `tuple` | `()` | $1$ | Authored object-local regions lowered into `object_regions`; names and ownership are validated. | Authored object-local regions lowered into `object_regions`; names and ownership are validated. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].object_regions` |
 | `Ferromagnet.allocated_region_ids` | `tuple of strings` | `()` | $1$ | Reserved region identities used by builder and round-trip ownership. | Reserved region identities used by builder and round-trip ownership. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].allocated_region_ids` |
 | `Ferromagnet.material_parameter_fields` | `tuple` | `()` | $1$ | Object-owned spatial material assignments lowered into `material_parameter_fields`. | Object-owned spatial material assignments lowered into `material_parameter_fields`. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].material_parameter_fields` |
+| `Ferromagnet.absorbing_boundary` | `AbsorbingBoundaryLayer \| None` | `None` | $1$ | Optional per-object additive Gilbert-damping layer; `AbsorbingBoundaryLayer` validates widths, faces, profile, and frame. | Object-scoped damping ramp at selected boundary faces. | FEM/FDM CPU/GPU authoring; planner and runtime capability-gate the resolved lane. | `magnets[].absorbing_boundary` |
 
 
 ### Complete ferromagnet stage scenario

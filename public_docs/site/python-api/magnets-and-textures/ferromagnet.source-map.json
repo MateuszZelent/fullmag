@@ -125,6 +125,16 @@
         "meaning": "Object-owned spatial material assignments lowered into `material_parameter_fields`.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "magnets[].material_parameter_fields"
+      },
+      {
+        "python": "Ferromagnet.absorbing_boundary",
+        "type": "AbsorbingBoundaryLayer | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional per-object additive Gilbert-damping layer; `AbsorbingBoundaryLayer` validates widths, faces, profile, and frame.",
+        "meaning": "Object-scoped damping ramp at selected boundary faces.",
+        "backend_support": "FEM/FDM CPU/GPU authoring; planner and runtime capability-gate the resolved lane.",
+        "problem_ir": "magnets[].absorbing_boundary"
       }
     ]
   }
