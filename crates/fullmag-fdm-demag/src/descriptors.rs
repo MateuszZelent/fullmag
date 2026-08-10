@@ -278,7 +278,16 @@ impl ActiveMaskIdentity {
     /// it never synthesizes or embeds the mask itself.
     pub fn from_mask(mask: &[bool]) -> Self {
         let active_cells = mask.iter().filter(|active| **active).count();
-        let fingerprint = sha256_fingerprint(&mask.to_vec());
+        let mut digest = Sha256::new();
+        digest.update(b"[");
+        for (index, active) in mask.iter().enumerate() {
+            if index != 0 {
+                digest.update(b",");
+            }
+            digest.update(if *active { &b"true"[..] } else { &b"false"[..] });
+        }
+        digest.update(b"]");
+        let fingerprint = format!("sha256:{:x}", digest.finalize());
         Self {
             present: true,
             fingerprint: Some(fingerprint),
@@ -1157,6 +1166,68 @@ impl TransformKey {
 }
 
 impl KernelReuseKey {
+    /// Build a canonical runtime key directly from two layer descriptors.
+    /// Unlike [`OrientedKernelPairDescriptor`], this constructor also accepts
+    /// self-pairs, which are required by an ordered `L x L` runtime catalog.
+    pub fn from_layers_with_layout(
+        destination: &FdmLayerDescriptor,
+        source: &FdmLayerDescriptor,
+        relative_shift: [f64; 3],
+        representation: TensorRepresentation,
+        layout: &CommonTransformLayout,
+        precision: KernelPrecision,
+        boundary: BoundaryPolicy,
+    ) -> Result<Self, DescriptorError> {
+        destination.validate()?;
+        source.validate()?;
+        layout.validate()?;
+        if destination.mode != source.mode || layout.mode != destination.mode {
+            return Err(DescriptorError::Invalid(
+                "kernel key layer and transform modes must agree".to_string(),
+            ));
+        }
+        if relative_shift.iter().any(|value| !value.is_finite()) {
+            return Err(DescriptorError::Invalid(
+                "kernel key relative shift must be finite".to_string(),
+            ));
+        }
+        let source_cell_size = if source.mode == ConvolutionMode::TwoDStack {
+            [
+                source.scratch.spacing[0],
+                source.scratch.spacing[1],
+                source.native.thickness(),
+            ]
+        } else {
+            source.scratch.spacing
+        };
+        let destination_cell_size = if destination.mode == ConvolutionMode::TwoDStack {
+            [
+                destination.scratch.spacing[0],
+                destination.scratch.spacing[1],
+                destination.native.thickness(),
+            ]
+        } else {
+            destination.scratch.spacing
+        };
+        let value = Self {
+            schema_version: DESCRIPTOR_SCHEMA_VERSION.to_string(),
+            mode: destination.mode,
+            oriented_shift: quantize3(relative_shift),
+            h_source: quantize3(source_cell_size),
+            h_destination: quantize3(destination_cell_size),
+            source_thickness_pm: quantize(source.native.thickness()),
+            destination_thickness_pm: quantize(destination.native.thickness()),
+            source_layer_volume_pm3: quantize_volume(source.native.total_volume()),
+            destination_layer_volume_pm3: quantize_volume(destination.native.total_volume()),
+            transform: TransformKey::from_layout(layout),
+            representation,
+            precision,
+            boundary,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     pub fn from_pair(
         pair: &OrientedKernelPairDescriptor,
         precision: KernelPrecision,

@@ -10,10 +10,16 @@
 
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
+use serde::{Deserialize, Serialize};
+use std::mem::size_of;
+use std::sync::Mutex;
 
 use fullmag_fdm_demag::{
     self,
-    descriptors::{BoundaryPolicy, CommonTransformLayout, ConvolutionMode, FdmLayerDescriptor},
+    descriptors::{
+        BoundaryPolicy, CommonTransformLayout, ConvolutionMode, FdmLayerDescriptor,
+        KernelPrecision, KernelReuseKey, TensorRepresentation, TransformKey,
+    },
     pull_h_f32_with_boundary_policy, pull_h_with_boundary_policy, push_m_f32_with_boundary_policy,
     push_m_with_boundary_policy,
     transfer::VolumeWeightedTransfer,
@@ -104,9 +110,84 @@ pub struct KernelPairF32 {
     pub kernel: TensorDemagKernelF32,
 }
 
+/// One physically stored FFT-domain tensor and its canonical reuse identity.
+#[derive(Debug, Clone)]
+pub struct MultilayerKernelCatalogEntry {
+    pub key: KernelReuseKey,
+    pub content_hash: String,
+    pub kernel: TensorDemagKernel,
+}
+
+/// Ordered destination/source binding into [`MultilayerKernelCatalogEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultilayerKernelPairBinding {
+    pub src_layer: usize,
+    pub dst_layer: usize,
+    pub kernel_index: usize,
+}
+
+/// Runtime-owned counters and memory evidence for CPU multilayer refreshes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultilayerReuseMemoryTelemetry {
+    pub refresh_count: u64,
+    pub forward_fft_count: u64,
+    pub inverse_fft_count: u64,
+    pub pair_accumulation_count: u64,
+    pub unique_kernel_count: usize,
+    pub pair_count: usize,
+    pub cold_allocated_bytes: usize,
+    pub warm_allocated_bytes: usize,
+    pub peak_workspace_bytes: usize,
+    pub cache_hit_count: u64,
+    pub cache_miss_count: u64,
+    pub invalidation_fingerprint: String,
+    pub transfer_kind: String,
+    pub residency: String,
+}
+
+struct MultilayerFftWorkspace {
+    fingerprint: String,
+    m_fft: Vec<VectorFieldFft>,
+    h_fft: Vec<VectorFieldFft>,
+    conv_m: Vec<Vec<[f64; 3]>>,
+    conv_h: Vec<Vec<[f64; 3]>>,
+    line_y: Vec<Complex<f64>>,
+    line_z: Vec<Complex<f64>>,
+    fft_scratch: Vec<Complex<f64>>,
+}
+
+impl MultilayerFftWorkspace {
+    fn allocated_bytes(&self) -> usize {
+        fn field_bytes(field: &VectorFieldFft) -> usize {
+            (field.x.capacity() + field.y.capacity() + field.z.capacity())
+                * size_of::<Complex<f64>>()
+        }
+        self.m_fft.iter().map(field_bytes).sum::<usize>()
+            + self.h_fft.iter().map(field_bytes).sum::<usize>()
+            + self
+                .conv_m
+                .iter()
+                .map(|values| values.capacity() * size_of::<[f64; 3]>())
+                .sum::<usize>()
+            + self
+                .conv_h
+                .iter()
+                .map(|values| values.capacity() * size_of::<[f64; 3]>())
+                .sum::<usize>()
+            + (self.line_y.capacity() + self.line_z.capacity() + self.fft_scratch.capacity())
+                * size_of::<Complex<f64>>()
+    }
+}
+
+struct MultilayerRuntimeState {
+    workspace: Option<MultilayerFftWorkspace>,
+    telemetry: MultilayerReuseMemoryTelemetry,
+}
+
 /// Multilayer demag operator runtime.
 pub struct MultilayerDemagRuntime {
-    pub kernel_pairs: Vec<KernelPair>,
+    pub kernel_catalog: Vec<MultilayerKernelCatalogEntry>,
+    pub pair_bindings: Vec<MultilayerKernelPairBinding>,
     pub conv_grid: [usize; 3],
     pub conv_cell_size: [f64; 3],
     pub fft_shape: [usize; 3],
@@ -127,6 +208,8 @@ pub struct MultilayerDemagRuntime {
     inv_x: std::sync::Arc<dyn rustfft::Fft<f64>>,
     inv_y: std::sync::Arc<dyn rustfft::Fft<f64>>,
     inv_z: std::sync::Arc<dyn rustfft::Fft<f64>>,
+    invalidation_fingerprint: String,
+    state: Mutex<MultilayerRuntimeState>,
 }
 
 /// `f32` multilayer demag runtime used by host-side single-precision FFT paths.
@@ -157,6 +240,218 @@ fn source_window_fits(layout: &CommonTransformLayout, source_shape: [usize; 3]) 
         .zip(source_shape.iter())
         .zip(layout.fft_shape.iter())
         .all(|((offset, extent), fft)| offset.saturating_add(*extent) <= *fft)
+}
+
+fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn tensor_kernel_content_hash(kernel: &TensorDemagKernel) -> String {
+    let mut hash = 0xcbf29ce484222325;
+    for extent in kernel.fft_shape {
+        hash = fnv1a_update(hash, &extent.to_le_bytes());
+    }
+    for component in [
+        &kernel.k_xx,
+        &kernel.k_yy,
+        &kernel.k_zz,
+        &kernel.k_xy,
+        &kernel.k_xz,
+        &kernel.k_yz,
+    ] {
+        for value in component {
+            hash = fnv1a_update(hash, &value.re.to_bits().to_le_bytes());
+            hash = fnv1a_update(hash, &value.im.to_bits().to_le_bytes());
+        }
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
+fn tensor_kernels_equal(left: &TensorDemagKernel, right: &TensorDemagKernel) -> bool {
+    left.fft_shape == right.fft_shape
+        && left.k_xx == right.k_xx
+        && left.k_yy == right.k_yy
+        && left.k_zz == right.k_zz
+        && left.k_xy == right.k_xy
+        && left.k_xz == right.k_xz
+        && left.k_yz == right.k_yz
+}
+
+fn kernel_key_for_pair(
+    pair: &KernelPair,
+    common_layout: &CommonTransformLayout,
+    layer_descriptors: &[FdmLayerDescriptor],
+    conv_cell_size: [f64; 3],
+) -> Result<KernelReuseKey, String> {
+    if layer_descriptors.is_empty() {
+        let mut key = KernelReuseKey::new(
+            0.0,
+            conv_cell_size,
+            conv_cell_size,
+            conv_cell_size[2],
+            common_layout.shape,
+        );
+        key.mode = common_layout.mode;
+        key.oriented_shift = [pair.src_layer as i64, pair.dst_layer as i64, 0];
+        key.transform = TransformKey::from_layout(common_layout);
+        return Ok(key);
+    }
+    let source = &layer_descriptors[pair.src_layer];
+    let destination = &layer_descriptors[pair.dst_layer];
+    if source.transfer.boundary != destination.transfer.boundary {
+        return Err(format!(
+            "kernel pair {}<-{} has mismatched source/destination boundary policy",
+            pair.dst_layer, pair.src_layer
+        ));
+    }
+    let source_cell = if common_layout.mode == ConvolutionMode::TwoDStack {
+        [
+            source.scratch.spacing[0],
+            source.scratch.spacing[1],
+            source.native.thickness(),
+        ]
+    } else {
+        source.scratch.spacing
+    };
+    let destination_cell = if common_layout.mode == ConvolutionMode::TwoDStack {
+        [
+            destination.scratch.spacing[0],
+            destination.scratch.spacing[1],
+            destination.native.thickness(),
+        ]
+    } else {
+        destination.scratch.spacing
+    };
+    let relative_shift = [
+        destination.scratch.origin[0] - source.scratch.origin[0]
+            + 0.5 * (destination_cell[0] - source_cell[0]),
+        destination.scratch.origin[1] - source.scratch.origin[1]
+            + 0.5 * (destination_cell[1] - source_cell[1]),
+        destination.scratch.origin[2] - source.scratch.origin[2]
+            + 0.5 * (destination_cell[2] - source_cell[2]),
+    ];
+    KernelReuseKey::from_layers_with_layout(
+        destination,
+        source,
+        relative_shift,
+        TensorRepresentation::FullComplex,
+        common_layout,
+        KernelPrecision::F64,
+        source.transfer.boundary,
+    )
+    .map_err(|error| format!("invalid kernel reuse key: {error}"))
+}
+
+fn build_kernel_catalog(
+    kernel_pairs: Vec<KernelPair>,
+    common_layout: &CommonTransformLayout,
+    layer_descriptors: &[FdmLayerDescriptor],
+    conv_cell_size: [f64; 3],
+) -> Result<
+    (
+        Vec<MultilayerKernelCatalogEntry>,
+        Vec<MultilayerKernelPairBinding>,
+    ),
+    String,
+> {
+    let mut entries: Vec<MultilayerKernelCatalogEntry> = Vec::new();
+    let mut bindings = Vec::with_capacity(kernel_pairs.len());
+    for pair in kernel_pairs {
+        let key = kernel_key_for_pair(&pair, common_layout, layer_descriptors, conv_cell_size)?;
+        let content_hash = tensor_kernel_content_hash(&pair.kernel);
+        let kernel_index = if let Some((index, entry)) = entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| entry.key == key)
+        {
+            if entry.content_hash != content_hash
+                || !tensor_kernels_equal(&entry.kernel, &pair.kernel)
+            {
+                return Err(format!(
+                    "canonical kernel key collision for pair {}<-{}",
+                    pair.dst_layer, pair.src_layer
+                ));
+            }
+            index
+        } else {
+            entries.push(MultilayerKernelCatalogEntry {
+                key,
+                content_hash,
+                kernel: pair.kernel,
+            });
+            entries.len() - 1
+        };
+        bindings.push(MultilayerKernelPairBinding {
+            src_layer: pair.src_layer,
+            dst_layer: pair.dst_layer,
+            kernel_index,
+        });
+    }
+
+    let mut order = (0..entries.len()).collect::<Vec<_>>();
+    order.sort_by_key(|index| entries[*index].key.fingerprint());
+    let mut remap = vec![0; entries.len()];
+    for (new_index, old_index) in order.iter().copied().enumerate() {
+        remap[old_index] = new_index;
+    }
+    let mut sorted = Vec::with_capacity(entries.len());
+    let mut entries = entries.into_iter().map(Some).collect::<Vec<_>>();
+    for old_index in order {
+        sorted.push(entries[old_index].take().expect("catalog index is unique"));
+    }
+    for binding in &mut bindings {
+        binding.kernel_index = remap[binding.kernel_index];
+    }
+    Ok((sorted, bindings))
+}
+
+fn runtime_invalidation_fingerprint(
+    kernel_catalog: &[MultilayerKernelCatalogEntry],
+    pair_bindings: &[MultilayerKernelPairBinding],
+    common_layout: &CommonTransformLayout,
+    layer_transform_layouts: &[CommonTransformLayout],
+    layer_descriptors: &[FdmLayerDescriptor],
+) -> String {
+    let mut hash = fnv1a_update(
+        0xcbf29ce484222325,
+        b"fdm_multilayer_cpu_runtime_workspace.v1\0f64\0host",
+    );
+    hash = fnv1a_update(hash, common_layout.fingerprint().as_bytes());
+    for layout in layer_transform_layouts {
+        hash = fnv1a_update(hash, layout.fingerprint().as_bytes());
+    }
+    for descriptor in layer_descriptors {
+        hash = fnv1a_update(hash, descriptor.fingerprint().as_bytes());
+    }
+    for entry in kernel_catalog {
+        hash = fnv1a_update(hash, entry.key.fingerprint().as_bytes());
+        hash = fnv1a_update(hash, entry.content_hash.as_bytes());
+    }
+    for binding in pair_bindings {
+        hash = fnv1a_update(hash, &binding.src_layer.to_le_bytes());
+        hash = fnv1a_update(hash, &binding.dst_layer.to_le_bytes());
+        hash = fnv1a_update(hash, &binding.kernel_index.to_le_bytes());
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
+fn kernel_catalog_allocated_bytes(catalog: &[MultilayerKernelCatalogEntry]) -> usize {
+    catalog
+        .iter()
+        .map(|entry| {
+            (entry.kernel.k_xx.capacity()
+                + entry.kernel.k_yy.capacity()
+                + entry.kernel.k_zz.capacity()
+                + entry.kernel.k_xy.capacity()
+                + entry.kernel.k_xz.capacity()
+                + entry.kernel.k_yz.capacity())
+                * size_of::<Complex<f64>>()
+        })
+        .sum()
 }
 
 impl MultilayerDemagRuntime {
@@ -365,11 +660,64 @@ impl MultilayerDemagRuntime {
                 },
             )
             .collect::<Result<Vec<_>, String>>()?;
+        let (kernel_catalog, pair_bindings) = build_kernel_catalog(
+            kernel_pairs,
+            &common_layout,
+            &layer_descriptors,
+            conv_cell_size,
+        )?;
+        let invalidation_fingerprint = runtime_invalidation_fingerprint(
+            &kernel_catalog,
+            &pair_bindings,
+            &common_layout,
+            &layer_transform_layouts,
+            &layer_descriptors,
+        );
+        let transfer_kind = if layer_descriptors.is_empty() {
+            "legacy_unrecorded"
+        } else if layer_descriptors
+            .iter()
+            .all(|descriptor| descriptor.transfer.kind == TransferKind::Identity)
+        {
+            "identity"
+        } else if layer_descriptors
+            .iter()
+            .all(|descriptor| descriptor.transfer.kind == TransferKind::PushPull)
+        {
+            "push_pull"
+        } else {
+            "mixed"
+        }
+        .to_string();
+        let cold_allocated_bytes = kernel_catalog_allocated_bytes(&kernel_catalog);
+        let telemetry = MultilayerReuseMemoryTelemetry {
+            refresh_count: 0,
+            forward_fft_count: 0,
+            inverse_fft_count: 0,
+            pair_accumulation_count: 0,
+            unique_kernel_count: kernel_catalog.len(),
+            pair_count: pair_bindings.len(),
+            cold_allocated_bytes,
+            warm_allocated_bytes: 0,
+            peak_workspace_bytes: 0,
+            cache_hit_count: 0,
+            cache_miss_count: 0,
+            invalidation_fingerprint: invalidation_fingerprint.clone(),
+            transfer_kind,
+            residency: "host".to_string(),
+        };
         let [px, py, pz] = common_layout.fft_shape;
         let mut planner = FftPlanner::<f64>::new();
+        let fwd_x = planner.plan_fft_forward(px);
+        let fwd_y = planner.plan_fft_forward(py);
+        let fwd_z = planner.plan_fft_forward(pz);
+        let inv_x = planner.plan_fft_inverse(px);
+        let inv_y = planner.plan_fft_inverse(py);
+        let inv_z = planner.plan_fft_inverse(pz);
 
         Ok(Self {
-            kernel_pairs,
+            kernel_catalog,
+            pair_bindings,
             conv_grid,
             conv_cell_size,
             fft_shape: [px, py, pz],
@@ -377,13 +725,44 @@ impl MultilayerDemagRuntime {
             layer_transform_layouts,
             layer_descriptors,
             transfer_stencils,
-            fwd_x: planner.plan_fft_forward(px),
-            fwd_y: planner.plan_fft_forward(py),
-            fwd_z: planner.plan_fft_forward(pz),
-            inv_x: planner.plan_fft_inverse(px),
-            inv_y: planner.plan_fft_inverse(py),
-            inv_z: planner.plan_fft_inverse(pz),
+            fwd_x,
+            fwd_y,
+            fwd_z,
+            inv_x,
+            inv_y,
+            inv_z,
+            invalidation_fingerprint,
+            state: Mutex::new(MultilayerRuntimeState {
+                workspace: None,
+                telemetry,
+            }),
         })
+    }
+
+    pub fn telemetry(&self) -> MultilayerReuseMemoryTelemetry {
+        self.state
+            .lock()
+            .expect("multilayer runtime state mutex poisoned")
+            .telemetry
+            .clone()
+    }
+
+    pub fn invalidation_fingerprint(&self) -> &str {
+        &self.invalidation_fingerprint
+    }
+
+    pub fn kernel_for_ordered_pair(
+        &self,
+        src_layer: usize,
+        dst_layer: usize,
+    ) -> Option<&TensorDemagKernel> {
+        let binding = self
+            .pair_bindings
+            .iter()
+            .find(|binding| binding.src_layer == src_layer && binding.dst_layer == dst_layer)?;
+        self.kernel_catalog
+            .get(binding.kernel_index)
+            .map(|entry| &entry.kernel)
     }
 
     fn transform_layout_for_layer(&self, layer_index: usize) -> &CommonTransformLayout {
@@ -395,6 +774,65 @@ impl MultilayerDemagRuntime {
     /// Padded FFT buffer length.
     fn padded_len(&self) -> usize {
         self.fft_shape[0] * self.fft_shape[1] * self.fft_shape[2]
+    }
+
+    fn allocate_workspace(&self, layers: &[FdmLayerRuntime]) -> MultilayerFftWorkspace {
+        let padded_len = self.padded_len();
+        let fft_scratch_len = [
+            self.fwd_x.get_inplace_scratch_len(),
+            self.fwd_y.get_inplace_scratch_len(),
+            self.fwd_z.get_inplace_scratch_len(),
+            self.inv_x.get_inplace_scratch_len(),
+            self.inv_y.get_inplace_scratch_len(),
+            self.inv_z.get_inplace_scratch_len(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+        MultilayerFftWorkspace {
+            fingerprint: self.invalidation_fingerprint.clone(),
+            m_fft: (0..layers.len())
+                .map(|_| VectorFieldFft::zeros(padded_len))
+                .collect(),
+            h_fft: (0..layers.len())
+                .map(|_| VectorFieldFft::zeros(padded_len))
+                .collect(),
+            conv_m: layers
+                .iter()
+                .map(|layer| vec![[0.0; 3]; layer.conv_grid.into_iter().product()])
+                .collect(),
+            conv_h: layers
+                .iter()
+                .map(|layer| vec![[0.0; 3]; layer.conv_grid.into_iter().product()])
+                .collect(),
+            line_y: vec![Complex::new(0.0, 0.0); self.fft_shape[1]],
+            line_z: vec![Complex::new(0.0, 0.0); self.fft_shape[2]],
+            fft_scratch: vec![Complex::new(0.0, 0.0); fft_scratch_len],
+        }
+    }
+
+    fn workspace_matches(
+        &self,
+        workspace: &MultilayerFftWorkspace,
+        layers: &[FdmLayerRuntime],
+    ) -> bool {
+        workspace.fingerprint == self.invalidation_fingerprint
+            && workspace.m_fft.len() == layers.len()
+            && workspace.h_fft.len() == layers.len()
+            && workspace
+                .conv_m
+                .iter()
+                .zip(layers.iter())
+                .all(|(values, layer)| {
+                    values.len() == layer.conv_grid.into_iter().product::<usize>()
+                })
+            && workspace
+                .conv_h
+                .iter()
+                .zip(layers.iter())
+                .all(|(values, layer)| {
+                    values.len() == layer.conv_grid.into_iter().product::<usize>()
+                })
     }
 
     /// Compute demag fields for all layers.
@@ -421,27 +859,68 @@ impl MultilayerDemagRuntime {
                 self.layer_descriptors.len()
             ));
         }
-        let padded_len = self.padded_len();
-        for (pair_index, pair) in self.kernel_pairs.iter().enumerate() {
-            if pair.src_layer >= n_layers || pair.dst_layer >= n_layers {
+        for (index, layer) in layers.iter().enumerate() {
+            let native_cells = layer.cell_count();
+            if layer.m.len() != native_cells
+                || layer.h_demag.len() != native_cells
+                || layer.h_ex.len() != native_cells
+                || layer.h_eff.len() != native_cells
+            {
                 return Err(format!(
-                    "kernel pair {pair_index} references source {} or destination {} outside {n_layers} runtime layers",
-                    pair.src_layer, pair.dst_layer
+                    "layer {index} field component lengths do not match its native grid"
                 ));
             }
-            if pair.kernel.fft_shape != self.fft_shape {
+            if let Some(mask) = layer.active_mask.as_deref() {
+                if mask.len() != native_cells {
+                    return Err(format!(
+                        "layer {index} active mask has {} entries, expected {native_cells}",
+                        mask.len()
+                    ));
+                }
+            }
+            if layer.conv_grid != self.conv_grid || layer.conv_cell_size != self.conv_cell_size {
+                return Err(format!(
+                    "layer {index} scratch grid does not match the runtime convolution grid"
+                ));
+            }
+            let scratch_cells = layer.conv_grid[0] * layer.conv_grid[1] * layer.conv_grid[2];
+            if !layer.needs_transfer && native_cells != scratch_cells {
+                return Err(format!(
+                    "layer {index} identity transfer requires {native_cells} native cells to match {scratch_cells} scratch cells"
+                ));
+            }
+        }
+        let padded_len = self.padded_len();
+        for (pair_index, binding) in self.pair_bindings.iter().enumerate() {
+            if binding.src_layer >= n_layers || binding.dst_layer >= n_layers {
+                return Err(format!(
+                    "kernel pair {pair_index} references source {} or destination {} outside {n_layers} runtime layers",
+                    binding.src_layer, binding.dst_layer
+                ));
+            }
+            let entry = self
+                .kernel_catalog
+                .get(binding.kernel_index)
+                .ok_or_else(|| {
+                    format!(
+                        "kernel pair {pair_index} references catalog entry {} outside {} entries",
+                        binding.kernel_index,
+                        self.kernel_catalog.len()
+                    )
+                })?;
+            if entry.kernel.fft_shape != self.fft_shape {
                 return Err(format!(
                     "kernel pair {pair_index} FFT shape {:?} disagrees with runtime {:?}",
-                    pair.kernel.fft_shape, self.fft_shape
+                    entry.kernel.fft_shape, self.fft_shape
                 ));
             }
             let component_lengths = [
-                pair.kernel.k_xx.len(),
-                pair.kernel.k_yy.len(),
-                pair.kernel.k_zz.len(),
-                pair.kernel.k_xy.len(),
-                pair.kernel.k_xz.len(),
-                pair.kernel.k_yz.len(),
+                entry.kernel.k_xx.len(),
+                entry.kernel.k_yy.len(),
+                entry.kernel.k_zz.len(),
+                entry.kernel.k_xy.len(),
+                entry.kernel.k_xz.len(),
+                entry.kernel.k_yz.len(),
             ];
             if component_lengths.iter().any(|length| *length != padded_len) {
                 return Err(format!(
@@ -502,47 +981,103 @@ impl MultilayerDemagRuntime {
             }
         }
         let [px, py, _pz] = self.fft_shape;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "multilayer runtime state mutex poisoned".to_string())?;
+        let workspace_hit = state
+            .workspace
+            .as_ref()
+            .map(|workspace| self.workspace_matches(workspace, layers))
+            .unwrap_or(false);
+        if workspace_hit {
+            state.telemetry.cache_hit_count += 1;
+        } else {
+            let workspace = self.allocate_workspace(layers);
+            let allocated_bytes = workspace.allocated_bytes();
+            state.telemetry.cache_miss_count += 1;
+            state.telemetry.cold_allocated_bytes = state
+                .telemetry
+                .cold_allocated_bytes
+                .saturating_add(allocated_bytes);
+            state.telemetry.peak_workspace_bytes =
+                state.telemetry.peak_workspace_bytes.max(allocated_bytes);
+            state.workspace = Some(workspace);
+        }
+        state.telemetry.refresh_count += 1;
+        let MultilayerRuntimeState {
+            workspace,
+            telemetry,
+        } = &mut *state;
+        let workspace = workspace
+            .as_mut()
+            .expect("workspace is materialized before a multilayer refresh");
 
-        // Step 1: Forward FFT all layers' magnetizations
-        let mut m_fft: Vec<VectorFieldFft> = Vec::with_capacity(n_layers);
+        // Step 1: Forward FFT all layers' magnetizations.
         for (layer_index, layer) in layers.iter().enumerate() {
-            // Transfer M to convolution grid
-            let conv_m = if let Some(transfer) = self
+            let conv_m = &mut workspace.conv_m[layer_index];
+            if let Some(transfer) = self
                 .transfer_stencils
                 .get(layer_index)
                 .and_then(|value| value.as_ref())
             {
-                transfer.push_m(&layer.m, layer.active_mask.as_deref())?
+                transfer.push_m_into(&layer.m, layer.active_mask.as_deref(), conv_m)?;
             } else if layer.needs_transfer {
-                push_m_with_boundary_policy(
+                let transferred = push_m_with_boundary_policy(
                     &layer.m,
                     layer.grid,
                     layer.cell_size,
                     layer.conv_grid,
                     layer.conv_cell_size,
                     layer.transfer_boundary_policy,
-                )
+                );
+                let transient_bytes = transferred.capacity() * size_of::<[f64; 3]>();
+                if workspace_hit {
+                    telemetry.warm_allocated_bytes = telemetry
+                        .warm_allocated_bytes
+                        .saturating_add(transient_bytes);
+                } else {
+                    telemetry.cold_allocated_bytes = telemetry
+                        .cold_allocated_bytes
+                        .saturating_add(transient_bytes);
+                }
+                if transferred.len() != conv_m.len() {
+                    return Err(format!(
+                        "layer {layer_index} transfer produced {} scratch cells, expected {}",
+                        transferred.len(),
+                        conv_m.len()
+                    ));
+                }
+                conv_m.copy_from_slice(&transferred);
             } else {
-                let mut identity_m = layer.m.clone();
+                if layer.m.len() != conv_m.len() {
+                    return Err(format!(
+                        "layer {layer_index} identity transfer requires {} native cells to match {} scratch cells",
+                        layer.m.len(),
+                        conv_m.len()
+                    ));
+                }
+                conv_m.copy_from_slice(&layer.m);
                 if let Some(mask) = layer.active_mask.as_deref() {
-                    if mask.len() != identity_m.len() {
+                    if mask.len() != conv_m.len() {
                         return Err(format!(
                             "layer {layer_index} active mask has {} entries, expected {}",
                             mask.len(),
-                            identity_m.len()
+                            conv_m.len()
                         ));
                     }
-                    for (value, active) in identity_m.iter_mut().zip(mask.iter()) {
+                    for (value, active) in conv_m.iter_mut().zip(mask.iter()) {
                         if !active {
                             *value = [0.0; 3];
                         }
                     }
                 }
-                identity_m
-            };
+            }
 
-            // Pad and FFT
-            let mut buf = VectorFieldFft::zeros(padded_len);
+            let buf = &mut workspace.m_fft[layer_index];
+            buf.x.fill(Complex::new(0.0, 0.0));
+            buf.y.fill(Complex::new(0.0, 0.0));
+            buf.z.fill(Complex::new(0.0, 0.0));
             let [cx, cy, cz] = layer.conv_grid;
             if cx * cy * cz != conv_m.len() {
                 return Err(format!(
@@ -568,31 +1103,43 @@ impl MultilayerDemagRuntime {
                     }
                 }
             }
-
-            self.fft3_forward(&mut buf);
-            m_fft.push(buf);
-        }
-
-        // Step 2: Pairwise tensor multiplication
-        let mut h_fft: Vec<VectorFieldFft> = (0..n_layers)
-            .map(|_| VectorFieldFft::zeros(padded_len))
-            .collect();
-
-        for pair in &self.kernel_pairs {
-            fullmag_fdm_demag::accumulate_tensor_convolution(
-                &mut h_fft[pair.dst_layer],
-                &m_fft[pair.src_layer],
-                &pair.kernel,
+            self.fft3_forward_with_workspace(
+                buf,
+                &mut workspace.line_y,
+                &mut workspace.line_z,
+                &mut workspace.fft_scratch,
             );
+            telemetry.forward_fft_count += 1;
         }
 
-        // Step 3: Negate, inverse FFT, extract and pull to native grid
+        // Step 2: Pairwise tensor multiplication into persistent destinations.
+        for field in &mut workspace.h_fft {
+            field.x.fill(Complex::new(0.0, 0.0));
+            field.y.fill(Complex::new(0.0, 0.0));
+            field.z.fill(Complex::new(0.0, 0.0));
+        }
+        for binding in &self.pair_bindings {
+            let entry = &self.kernel_catalog[binding.kernel_index];
+            fullmag_fdm_demag::accumulate_tensor_convolution(
+                &mut workspace.h_fft[binding.dst_layer],
+                &workspace.m_fft[binding.src_layer],
+                &entry.kernel,
+            );
+            telemetry.pair_accumulation_count += 1;
+        }
+
+        // Step 3: Negate, inverse FFT, extract and pull to native grid.
         let normalisation = self.common_layout.inverse_normalization;
         for (li, layer) in layers.iter_mut().enumerate() {
-            fullmag_fdm_demag::multiply::negate_field(&mut h_fft[li]);
-            self.fft3_inverse(&mut h_fft[li]);
+            fullmag_fdm_demag::multiply::negate_field(&mut workspace.h_fft[li]);
+            self.fft3_inverse_with_workspace(
+                &mut workspace.h_fft[li],
+                &mut workspace.line_y,
+                &mut workspace.line_z,
+                &mut workspace.fft_scratch,
+            );
+            telemetry.inverse_fft_count += 1;
 
-            // Extract from padded grid to convolution grid
             let crop = self.transform_layout_for_layer(li).destination_crop;
             let [cx, cy, cz] = crop.shape;
             if [cx, cy, cz] != layer.conv_grid {
@@ -602,7 +1149,13 @@ impl MultilayerDemagRuntime {
                 ));
             }
             let conv_total = cx * cy * cz;
-            let mut conv_h = vec![[0.0, 0.0, 0.0]; conv_total];
+            let conv_h = &mut workspace.conv_h[li];
+            if conv_h.len() != conv_total {
+                return Err(format!(
+                    "layer {li} workspace crop has {} cells, expected {conv_total}",
+                    conv_h.len()
+                ));
+            }
             for z in 0..cz {
                 for y in 0..cy {
                     for x in 0..cx {
@@ -612,32 +1165,67 @@ impl MultilayerDemagRuntime {
                             + x;
                         let dst = z * cy * cx + y * cx + x;
                         conv_h[dst] = [
-                            h_fft[li].x[src].re * normalisation,
-                            h_fft[li].y[src].re * normalisation,
-                            h_fft[li].z[src].re * normalisation,
+                            workspace.h_fft[li].x[src].re * normalisation,
+                            workspace.h_fft[li].y[src].re * normalisation,
+                            workspace.h_fft[li].z[src].re * normalisation,
                         ];
                     }
                 }
             }
 
-            // Transfer H back to native grid
             if let Some(transfer) = self
                 .transfer_stencils
                 .get(li)
                 .and_then(|value| value.as_ref())
             {
-                layer.h_demag = transfer.pull_h_adjoint(&conv_h, layer.active_mask.as_deref())?;
+                transfer.pull_h_adjoint_into(
+                    conv_h,
+                    layer.active_mask.as_deref(),
+                    &mut layer.h_demag,
+                )?;
             } else if layer.needs_transfer {
-                layer.h_demag = pull_h_with_boundary_policy(
-                    &conv_h,
+                let pulled = pull_h_with_boundary_policy(
+                    conv_h,
                     layer.conv_grid,
                     layer.conv_cell_size,
                     layer.grid,
                     layer.cell_size,
                     layer.transfer_boundary_policy,
                 );
+                let transient_bytes = pulled.capacity() * size_of::<[f64; 3]>();
+                if workspace_hit {
+                    telemetry.warm_allocated_bytes = telemetry
+                        .warm_allocated_bytes
+                        .saturating_add(transient_bytes);
+                } else {
+                    telemetry.cold_allocated_bytes = telemetry
+                        .cold_allocated_bytes
+                        .saturating_add(transient_bytes);
+                }
+                if pulled.len() != layer.h_demag.len() {
+                    return Err(format!(
+                        "layer {li} inverse transfer produced {} native cells, expected {}",
+                        pulled.len(),
+                        layer.h_demag.len()
+                    ));
+                }
+                layer.h_demag.copy_from_slice(&pulled);
             } else {
-                layer.h_demag = conv_h;
+                if conv_h.len() != layer.h_demag.len() {
+                    return Err(format!(
+                        "layer {li} identity transfer requires {} scratch cells to match {} native output cells",
+                        conv_h.len(),
+                        layer.h_demag.len()
+                    ));
+                }
+                layer.h_demag.copy_from_slice(conv_h);
+                if let Some(mask) = layer.active_mask.as_deref() {
+                    for (value, active) in layer.h_demag.iter_mut().zip(mask.iter()) {
+                        if !active {
+                            *value = [0.0; 3];
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -646,19 +1234,38 @@ impl MultilayerDemagRuntime {
     // -----------------------------------------------------------------------
     // FFT helpers
     // -----------------------------------------------------------------------
-    fn fft3_forward(&self, field: &mut VectorFieldFft) {
-        self.fft3_component(&mut field.x, true);
-        self.fft3_component(&mut field.y, true);
-        self.fft3_component(&mut field.z, true);
+    fn fft3_forward_with_workspace(
+        &self,
+        field: &mut VectorFieldFft,
+        line_y: &mut [Complex<f64>],
+        line_z: &mut [Complex<f64>],
+        fft_scratch: &mut [Complex<f64>],
+    ) {
+        self.fft3_component_with_workspace(&mut field.x, true, line_y, line_z, fft_scratch);
+        self.fft3_component_with_workspace(&mut field.y, true, line_y, line_z, fft_scratch);
+        self.fft3_component_with_workspace(&mut field.z, true, line_y, line_z, fft_scratch);
     }
 
-    fn fft3_inverse(&self, field: &mut VectorFieldFft) {
-        self.fft3_component(&mut field.x, false);
-        self.fft3_component(&mut field.y, false);
-        self.fft3_component(&mut field.z, false);
+    fn fft3_inverse_with_workspace(
+        &self,
+        field: &mut VectorFieldFft,
+        line_y: &mut [Complex<f64>],
+        line_z: &mut [Complex<f64>],
+        fft_scratch: &mut [Complex<f64>],
+    ) {
+        self.fft3_component_with_workspace(&mut field.x, false, line_y, line_z, fft_scratch);
+        self.fft3_component_with_workspace(&mut field.y, false, line_y, line_z, fft_scratch);
+        self.fft3_component_with_workspace(&mut field.z, false, line_y, line_z, fft_scratch);
     }
 
-    fn fft3_component(&self, buf: &mut [Complex<f64>], forward: bool) {
+    fn fft3_component_with_workspace(
+        &self,
+        buf: &mut [Complex<f64>],
+        forward: bool,
+        line_y: &mut [Complex<f64>],
+        line_z: &mut [Complex<f64>],
+        fft_scratch: &mut [Complex<f64>],
+    ) {
         let [px, py, pz] = self.fft_shape;
         let (fx, fy, fz) = if forward {
             (&self.fwd_x, &self.fwd_y, &self.fwd_z)
@@ -670,30 +1277,28 @@ impl MultilayerDemagRuntime {
         for z in 0..pz {
             for y in 0..py {
                 let offset = z * py * px + y * px;
-                fx.process(&mut buf[offset..offset + px]);
+                fx.process_with_scratch(&mut buf[offset..offset + px], fft_scratch);
             }
         }
         // Y transforms
-        let mut line_y = vec![Complex::new(0.0, 0.0); py];
         for z in 0..pz {
             for x in 0..px {
                 for y in 0..py {
                     line_y[y] = buf[z * py * px + y * px + x];
                 }
-                fy.process(&mut line_y);
+                fy.process_with_scratch(line_y, fft_scratch);
                 for y in 0..py {
                     buf[z * py * px + y * px + x] = line_y[y];
                 }
             }
         }
         // Z transforms
-        let mut line_z = vec![Complex::new(0.0, 0.0); pz];
         for y in 0..py {
             for x in 0..px {
                 for z in 0..pz {
                     line_z[z] = buf[z * py * px + y * px + x];
                 }
-                fz.process(&mut line_z);
+                fz.process_with_scratch(line_z, fft_scratch);
                 for z in 0..pz {
                     buf[z * py * px + y * px + x] = line_z[z];
                 }
@@ -913,6 +1518,343 @@ mod tests {
         ActiveMaskIdentity, CommonTransformLayout, ConvolutionMode, FdmLayerDescriptor,
         GridGeometry,
     };
+
+    fn catalog_test_runtime(
+        thicknesses: &[f64],
+        mask_first_cell: bool,
+    ) -> (MultilayerDemagRuntime, Vec<FdmLayerRuntime>) {
+        let grid = [2, 2, 1];
+        let scratch_cell = [1.0, 1.0, 1.0];
+        let layout = CommonTransformLayout::for_pair(
+            grid,
+            grid,
+            ConvolutionMode::TwoDStack,
+            [0; 3],
+            [0; 3],
+            [0; 3],
+            grid,
+            [4, 4, 1],
+            1.0 / 16.0,
+        )
+        .expect("catalog test layout");
+        let descriptors = thicknesses
+            .iter()
+            .enumerate()
+            .map(|(index, thickness)| {
+                let z = index as f64 * 4.0;
+                let active_mask = if index == 0 && mask_first_cell {
+                    ActiveMaskIdentity::from_mask(&[false, true, true, true])
+                } else {
+                    ActiveMaskIdentity::all_active()
+                };
+                FdmLayerDescriptor::new(
+                    format!("layer:{index}"),
+                    format!("object:{index}"),
+                    GridGeometry::new([0.0, 0.0, z], grid, [1.0, 1.0, *thickness])
+                        .expect("native grid"),
+                    GridGeometry::new([0.0, 0.0, z], grid, scratch_cell).expect("scratch grid"),
+                    ConvolutionMode::TwoDStack,
+                    active_mask,
+                    if *thickness == 1.0 {
+                        TransferKind::Identity
+                    } else {
+                        TransferKind::PushPull
+                    },
+                )
+                .expect("layer descriptor")
+            })
+            .collect::<Vec<_>>();
+        let mut kernel_pairs = Vec::with_capacity(thicknesses.len() * thicknesses.len());
+        for (source, source_descriptor) in descriptors.iter().enumerate() {
+            for (destination, destination_descriptor) in descriptors.iter().enumerate() {
+                let source_cell = [1.0, 1.0, thicknesses[source]];
+                let destination_cell = [1.0, 1.0, thicknesses[destination]];
+                let shift = [
+                    0.0,
+                    0.0,
+                    destination_descriptor.scratch.origin[2] - source_descriptor.scratch.origin[2]
+                        + 0.5 * (destination_cell[2] - source_cell[2]),
+                ];
+                let kernel = fullmag_fdm_demag::compute_shifted_kernel_pair(
+                    grid,
+                    source_cell,
+                    destination_cell,
+                    shift,
+                )
+                .expect("catalog test kernel");
+                kernel_pairs.push(KernelPair {
+                    src_layer: source,
+                    dst_layer: destination,
+                    kernel: collapse_kernel_z_plane(kernel).expect("2-D kernel collapse"),
+                });
+            }
+        }
+        let runtime = MultilayerDemagRuntime::new_with_layout_and_descriptors(
+            kernel_pairs,
+            grid,
+            scratch_cell,
+            layout,
+            descriptors,
+        )
+        .expect("catalog test runtime");
+        let count = grid[0] * grid[1] * grid[2];
+        let layers = thicknesses
+            .iter()
+            .enumerate()
+            .map(|(index, thickness)| {
+                let active_mask = if index == 0 && mask_first_cell {
+                    Some(vec![false, true, true, true])
+                } else {
+                    None
+                };
+                FdmLayerRuntime {
+                    magnet_name: format!("layer:{index}"),
+                    grid,
+                    cell_size: [1.0, 1.0, *thickness],
+                    origin: [0.0, 0.0, index as f64 * 4.0],
+                    ms: 1.0,
+                    exchange_stiffness: 0.0,
+                    damping: 0.1,
+                    active_mask,
+                    m: (0..count)
+                        .map(|cell| [1.0 + index as f64, cell as f64 * 0.1, 0.25])
+                        .collect(),
+                    h_ex: vec![[0.0; 3]; count],
+                    h_demag: vec![[0.0; 3]; count],
+                    h_eff: vec![[0.0; 3]; count],
+                    conv_grid: grid,
+                    conv_cell_size: scratch_cell,
+                    needs_transfer: *thickness != 1.0,
+                    transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
+                }
+            })
+            .collect();
+        (runtime, layers)
+    }
+
+    #[test]
+    fn regular_stack_materializes_five_unique_kernels_for_nine_ordered_pairs() {
+        let (runtime, _) = catalog_test_runtime(&[1.0, 1.0, 1.0], false);
+        assert_eq!(runtime.kernel_catalog.len(), 5);
+        assert_eq!(runtime.pair_bindings.len(), 9);
+        assert!(runtime.kernel_catalog.len() < runtime.pair_bindings.len());
+    }
+
+    #[test]
+    fn irregular_stack_does_not_reuse_oriented_kernel_entries() {
+        let (runtime, _) = catalog_test_runtime(&[1.0, 1.5, 2.0], false);
+        assert_eq!(runtime.kernel_catalog.len(), 9);
+        assert_eq!(runtime.pair_bindings.len(), 9);
+    }
+
+    #[test]
+    fn runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace() {
+        let (runtime, mut layers) = catalog_test_runtime(&[1.0, 1.0, 1.0], false);
+        runtime
+            .compute_demag_fields_checked(&mut layers)
+            .expect("cold refresh");
+        let cold = runtime.telemetry();
+        assert_eq!(cold.refresh_count, 1);
+        assert_eq!(cold.forward_fft_count, 3);
+        assert_eq!(cold.inverse_fft_count, 3);
+        assert_eq!(cold.pair_accumulation_count, 9);
+        assert_eq!(cold.unique_kernel_count, 5);
+        assert_eq!(cold.pair_count, 9);
+        assert_eq!(cold.cache_hit_count, 0);
+        assert_eq!(cold.cache_miss_count, 1);
+        assert!(cold.cold_allocated_bytes > 0);
+        assert_eq!(cold.warm_allocated_bytes, 0);
+        assert!(cold.peak_workspace_bytes > 0);
+        assert_eq!(cold.transfer_kind, "identity");
+        assert_eq!(cold.residency, "host");
+        serde_json::to_string(&cold).expect("telemetry must serialize");
+
+        runtime
+            .compute_demag_fields_checked(&mut layers)
+            .expect("warm refresh");
+        let warm = runtime.telemetry();
+        assert_eq!(warm.refresh_count, 2);
+        assert_eq!(warm.forward_fft_count, 6);
+        assert_eq!(warm.inverse_fft_count, 6);
+        assert_eq!(warm.pair_accumulation_count, 18);
+        assert_eq!(warm.cache_hit_count, 1);
+        assert_eq!(warm.cache_miss_count, 1);
+        assert_eq!(warm.warm_allocated_bytes, 0);
+        assert_eq!(warm.invalidation_fingerprint, cold.invalidation_fingerprint);
+    }
+
+    #[test]
+    fn push_pull_refresh_reuses_transfer_and_fft_workspace() {
+        let (runtime, mut layers) = catalog_test_runtime(&[0.5, 0.5], false);
+        runtime
+            .compute_demag_fields_checked(&mut layers)
+            .expect("cold push/pull refresh");
+        runtime
+            .compute_demag_fields_checked(&mut layers)
+            .expect("warm push/pull refresh");
+        let telemetry = runtime.telemetry();
+        assert_eq!(telemetry.refresh_count, 2);
+        assert_eq!(telemetry.forward_fft_count, 4);
+        assert_eq!(telemetry.inverse_fft_count, 4);
+        assert_eq!(telemetry.pair_accumulation_count, 8);
+        assert_eq!(telemetry.cache_hit_count, 1);
+        assert_eq!(telemetry.cache_miss_count, 1);
+        assert_eq!(telemetry.warm_allocated_bytes, 0);
+        assert_eq!(telemetry.transfer_kind, "push_pull");
+    }
+
+    #[test]
+    #[ignore = "manual CPU cold/warm microbenchmark"]
+    fn cpu_multilayer_catalog_workspace_benchmark_smoke() {
+        let (runtime, mut layers) = catalog_test_runtime(&[1.0, 1.0, 1.0], false);
+        let cold_started = std::time::Instant::now();
+        runtime
+            .compute_demag_fields_checked(&mut layers)
+            .expect("cold benchmark refresh");
+        let cold_elapsed = cold_started.elapsed();
+        let warm_iterations = 100;
+        let warm_started = std::time::Instant::now();
+        for _ in 0..warm_iterations {
+            runtime
+                .compute_demag_fields_checked(&mut layers)
+                .expect("warm benchmark refresh");
+        }
+        let warm_elapsed = warm_started.elapsed();
+        let telemetry = runtime.telemetry();
+        assert_eq!(telemetry.warm_allocated_bytes, 0);
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "fdm_multilayer_cpu_catalog_workspace_benchmark.v1",
+                "grid": [2, 2, 1],
+                "layers": 3,
+                "pair_count": telemetry.pair_count,
+                "unique_kernel_count": telemetry.unique_kernel_count,
+                "cold_elapsed_us": cold_elapsed.as_micros(),
+                "warm_iterations": warm_iterations,
+                "warm_total_us": warm_elapsed.as_micros(),
+                "warm_average_us": warm_elapsed.as_micros() as f64 / warm_iterations as f64,
+                "telemetry": telemetry,
+                "qualification": "diagnostic_only"
+            })
+        );
+    }
+
+    #[test]
+    fn geometry_and_mask_changes_produce_distinct_invalidation_fingerprints() {
+        let (regular, _) = catalog_test_runtime(&[1.0, 1.0, 1.0], false);
+        let (geometry_changed, _) = catalog_test_runtime(&[1.0, 1.0, 1.5], false);
+        let (mask_changed, _) = catalog_test_runtime(&[1.0, 1.0, 1.0], true);
+        assert_ne!(
+            regular.invalidation_fingerprint(),
+            geometry_changed.invalidation_fingerprint()
+        );
+        assert_ne!(
+            regular.invalidation_fingerprint(),
+            mask_changed.invalidation_fingerprint()
+        );
+    }
+
+    #[test]
+    fn deduplicated_catalog_preserves_per_pair_cpu_result() {
+        let (runtime, mut combined_layers) = catalog_test_runtime(&[1.0, 1.0, 1.0], false);
+        let input_layers = combined_layers.clone();
+        runtime
+            .compute_demag_fields_checked(&mut combined_layers)
+            .expect("catalog refresh");
+
+        let mut summed = vec![vec![[0.0; 3]; 4]; 3];
+        for binding in &runtime.pair_bindings {
+            let mut pair_layers = input_layers.clone();
+            let kernel = runtime.kernel_catalog[binding.kernel_index].kernel.clone();
+            let pair_runtime = MultilayerDemagRuntime::new_with_layout_and_descriptors(
+                vec![KernelPair {
+                    src_layer: binding.src_layer,
+                    dst_layer: binding.dst_layer,
+                    kernel,
+                }],
+                runtime.conv_grid,
+                runtime.conv_cell_size,
+                runtime.common_layout.clone(),
+                runtime.layer_descriptors.clone(),
+            )
+            .expect("single-pair reference runtime");
+            pair_runtime
+                .compute_demag_fields_checked(&mut pair_layers)
+                .expect("single-pair refresh");
+            for (sum, value) in summed[binding.dst_layer]
+                .iter_mut()
+                .zip(pair_layers[binding.dst_layer].h_demag.iter())
+            {
+                for component in 0..3 {
+                    sum[component] += value[component];
+                }
+            }
+        }
+        for (layer, expected) in combined_layers.iter().zip(summed.iter()) {
+            for (actual, expected) in layer.h_demag.iter().zip(expected.iter()) {
+                for component in 0..3 {
+                    assert!(
+                        (actual[component] - expected[component]).abs() < 1.0e-10,
+                        "catalog changed component {component}: actual={actual:?} expected={expected:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn identity_path_rejects_native_scratch_cell_count_mismatch_without_panicking() {
+        let conv_grid = [2, 1, 1];
+        let cell_size = [1.0, 1.0, 1.0];
+        let kernel = fullmag_fdm_demag::compute_exact_self_kernel(
+            conv_grid[0],
+            conv_grid[1],
+            conv_grid[2],
+            cell_size[0],
+            cell_size[1],
+            cell_size[2],
+        );
+        let runtime = MultilayerDemagRuntime::new(
+            vec![KernelPair {
+                src_layer: 0,
+                dst_layer: 0,
+                kernel,
+            }],
+            conv_grid,
+            cell_size,
+        );
+        let mut layer = FdmLayerRuntime {
+            magnet_name: "mismatched-identity".into(),
+            grid: [1, 1, 1],
+            cell_size,
+            origin: [0.0; 3],
+            ms: 1.0,
+            exchange_stiffness: 0.0,
+            damping: 0.0,
+            active_mask: None,
+            m: vec![[1.0, 0.0, 0.0]],
+            h_ex: vec![[0.0; 3]],
+            h_demag: vec![[0.0; 3]],
+            h_eff: vec![[0.0; 3]],
+            conv_grid,
+            conv_cell_size: cell_size,
+            needs_transfer: false,
+            transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
+        };
+
+        let error = runtime
+            .compute_demag_fields_checked(std::slice::from_mut(&mut layer))
+            .expect_err("identity path must fail closed for mismatched native/scratch cells");
+        assert!(
+            error.contains("identity transfer requires"),
+            "unexpected error: {error}"
+        );
+        let telemetry = runtime.telemetry();
+        assert_eq!(telemetry.refresh_count, 0);
+        assert_eq!(telemetry.cache_hit_count, 0);
+        assert_eq!(telemetry.cache_miss_count, 0);
+    }
 
     #[test]
     fn single_layer_uniform_m_gives_uniform_h() {

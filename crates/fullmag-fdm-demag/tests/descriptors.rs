@@ -317,6 +317,79 @@ fn reuse_key_allows_only_two_d_pure_z_opposite_shift_with_equal_h() {
 }
 
 #[test]
+fn runtime_reuse_key_covers_layout_precision_boundary_and_schema() {
+    let source = two_d_layer("layer:s", "object:s", 0.0);
+    let destination = two_d_layer("layer:d", "object:d", 2.0);
+    let layout = |offset| {
+        CommonTransformLayout::for_pair(
+            source.scratch.shape,
+            destination.scratch.shape,
+            ConvolutionMode::TwoDStack,
+            [offset, 0, 0],
+            [0; 3],
+            [offset, 0, 0],
+            destination.scratch.shape,
+            [8, 8, 1],
+            1.0 / 64.0,
+        )
+        .expect("valid runtime key layout")
+    };
+    let f64_key = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout(0),
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("canonical f64 runtime key");
+    let shifted_layout = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout(1),
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("layout-specific runtime key");
+    let f32_key = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout(0),
+        KernelPrecision::F32,
+        BoundaryPolicy::Open,
+    )
+    .expect("precision-specific runtime key");
+    assert_ne!(f64_key, shifted_layout);
+    assert_ne!(f64_key, f32_key);
+
+    let periodic = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout(0),
+        KernelPrecision::F64,
+        BoundaryPolicy::Periodic {
+            axes: [true, false, false],
+        },
+    );
+    assert!(
+        periodic.is_err(),
+        "periodic key must fail closed in schema v1"
+    );
+
+    let mut stale_schema = f64_key.clone();
+    stale_schema.schema_version = "fdm_multilayer_descriptor.v0".to_string();
+    assert_ne!(stale_schema.fingerprint(), f64_key.fingerprint());
+    assert!(stale_schema.validate().is_err());
+}
+
+#[test]
 fn reuse_key_rejects_unequal_oriented_cell_heights() {
     let source = FdmLayerDescriptor::new(
         "layer:s",

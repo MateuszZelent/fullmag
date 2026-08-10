@@ -188,8 +188,27 @@ impl VolumeWeightedTransfer {
         native_m: &[[f64; 3]],
         active_mask: Option<&[bool]>,
     ) -> Result<Vec<[f64; 3]>, String> {
-        self.validate_native_inputs(native_m.len(), active_mask)?;
         let mut scratch_m = vec![[0.0; 3]; self.overlaps.len()];
+        self.push_m_into(native_m, active_mask, &mut scratch_m)?;
+        Ok(scratch_m)
+    }
+
+    /// Fill a caller-owned scratch buffer without allocating field storage.
+    pub fn push_m_into(
+        &self,
+        native_m: &[[f64; 3]],
+        active_mask: Option<&[bool]>,
+        scratch_m: &mut [[f64; 3]],
+    ) -> Result<(), String> {
+        self.validate_native_inputs(native_m.len(), active_mask)?;
+        if scratch_m.len() != self.scratch_len() {
+            return Err(format!(
+                "scratch transfer output length {} does not match {}",
+                scratch_m.len(),
+                self.scratch_len()
+            ));
+        }
+        scratch_m.fill([0.0; 3]);
         for (scratch_index, overlaps) in self.overlaps.iter().enumerate() {
             let mut covered_volume = 0.0;
             let mut moment = [0.0; 3];
@@ -208,7 +227,7 @@ impl VolumeWeightedTransfer {
                 }
             }
         }
-        Ok(scratch_m)
+        Ok(())
     }
 
     /// Pull scratch field through the exact volume-weighted transpose of
@@ -218,8 +237,27 @@ impl VolumeWeightedTransfer {
         scratch_h: &[[f64; 3]],
         active_mask: Option<&[bool]>,
     ) -> Result<Vec<[f64; 3]>, String> {
-        self.validate_scratch_inputs(scratch_h.len(), active_mask)?;
         let mut native_h = vec![[0.0; 3]; self.native_len()];
+        self.pull_h_adjoint_into(scratch_h, active_mask, &mut native_h)?;
+        Ok(native_h)
+    }
+
+    /// Fill a caller-owned native buffer with the volume-weighted adjoint.
+    pub fn pull_h_adjoint_into(
+        &self,
+        scratch_h: &[[f64; 3]],
+        active_mask: Option<&[bool]>,
+        native_h: &mut [[f64; 3]],
+    ) -> Result<(), String> {
+        self.validate_scratch_inputs(scratch_h.len(), active_mask)?;
+        if native_h.len() != self.native_len() {
+            return Err(format!(
+                "native transfer output length {} does not match {}",
+                native_h.len(),
+                self.native_len()
+            ));
+        }
+        native_h.fill([0.0; 3]);
         for (scratch_index, overlaps) in self.overlaps.iter().enumerate() {
             let covered_volume = overlaps
                 .iter()
@@ -242,7 +280,7 @@ impl VolumeWeightedTransfer {
                 }
             }
         }
-        Ok(native_h)
+        Ok(())
     }
 
     fn native_len(&self) -> usize {
@@ -1081,6 +1119,36 @@ mod tests {
             .sum::<f64>();
         assert!((lhs - rhs).abs() < 1e-14, "lhs={lhs} rhs={rhs}");
         assert_eq!(pulled[1], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn volume_weighted_transfer_fills_reused_output_buffers() {
+        let transfer = VolumeWeightedTransfer::new(
+            [2, 1, 1],
+            [0.5, 1.0, 1.0],
+            [0.0; 3],
+            [1, 1, 1],
+            [1.0; 3],
+            [0.0; 3],
+            TransferBoundaryPolicy::OPEN,
+        )
+        .expect("valid transfer");
+        let native = [[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let mut scratch = vec![[99.0; 3]; 1];
+        let scratch_capacity = scratch.capacity();
+        transfer
+            .push_m_into(&native, None, &mut scratch)
+            .expect("push into reused buffer");
+        assert_eq!(scratch, [[2.0, 0.0, 0.0]]);
+        assert_eq!(scratch.capacity(), scratch_capacity);
+
+        let mut pulled = vec![[99.0; 3]; 2];
+        let pulled_capacity = pulled.capacity();
+        transfer
+            .pull_h_adjoint_into(&scratch, None, &mut pulled)
+            .expect("pull into reused buffer");
+        assert_eq!(pulled, [[2.0, 0.0, 0.0], [2.0, 0.0, 0.0]]);
+        assert_eq!(pulled.capacity(), pulled_capacity);
     }
 
     #[test]

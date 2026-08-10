@@ -1378,7 +1378,9 @@ mod tests {
             .expect("unequal two-dimensional source/destination thickness must be explicit");
         let legacy_common_thickness =
             compute_shifted_kernel([4, 4, 1], [2.0e-9, 2.0e-9, 1.0e-9], 3.0e-9);
-        let pair = &runtime.kernel_pairs[1].kernel;
+        let pair = runtime
+            .kernel_for_ordered_pair(0, 1)
+            .expect("ordered source/destination pair must exist in the runtime catalog");
         let expected_pair = compute_shifted_kernel_pair(
             [4, 4, 1],
             [2.0e-9, 2.0e-9, 1.0e-9],
