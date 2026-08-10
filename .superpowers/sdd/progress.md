@@ -128,3 +128,12 @@ the recipe's flock waiter has been blocked for more than one day.
 Task 8.1 matrix-smoke evidence mode: complete (commits af33bed2..26f04b60, review clean; 94 executor/planner/runtime-verifier tests passed).
 Managed runtime SONAME evidence fix: complete (commits 26f04b60..087a7411, review clean; 64 canonical bundle tests and 95 SP4 matrix/runtime-verifier tests passed).
 Control Room Thin Film authoring slice: complete (commits 087a7411..bc6290a4, review clean; 93 targeted tests, typecheck, and zero-warning targeted ESLint passed).
+
+Task 3 (GPU K0 B_qq compile blocker): complete (commit f6f018c4c, independent
+spec/quality review approved with no findings; source contract and diff-check
+pass). Fresh managed GREEN remains the next integration gate.
+
+Task 4 (CLI Eigenmodes bias_field_sweep merge blocker): complete (commit
+7766c1231, independent spec/quality review approved with no findings; focused
+regression, cargo check, rustfmt, and diff-check pass). Fresh managed GREEN
+remains the next integration gate.
