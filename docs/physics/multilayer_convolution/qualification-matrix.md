@@ -4,6 +4,80 @@ Statusy są niezależne: implemented oznacza kod, executable uruchamialny kontra
 runtime-verified świeże uruchomienie, physically-validated niezależny orakl, a
 production-qualified komplet dowodów. Wartości nie są dziedziczone między lane’ami.
 
+(problem-statement)=
+## Problem fizyczny
+
+Macierz kwalifikuje osobno natywne siatki magnetów, computationalny common/scratch
+grid oraz pole docelowe Airbox. Common grid nie jest dodatkowym ferromagnetykiem
+ani supermeshem fizycznym. Każdy status dotyczy konkretnej klasy kernela,
+transferu, precyzji i urządzenia.
+
+(governing-equations)=
+## Równanie rządzące
+
+```{math}
+:label: qualification-demag-field
+\mathbf H_d=-\sum_{s=1}^{L}\mathsf N_{d\leftarrow s}\mathbf M_s .
+```
+
+(symbols-and-si-units)=
+## Symbole i jednostki SI
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\mathbf H_d$ | pole demagnetyzujące w komórkach celu | $\mathrm{A\,m^{-1}}$ |
+| $\mathsf N_{d\leftarrow s}$ | tensor pary źródło-cel | $1$ |
+| $\mathbf M_s$ | magnetyzacja komórek źródła | $\mathrm{A\,m^{-1}}$ |
+| $L$ | liczba warstw/obiektów źródłowych | $1$ |
+
+(assumptions-and-validity)=
+## Założenia i granice ważności
+
+Open boundary jest jedynym kwalifikowanym boundary mode. PBC, BORIS
+`supermesh`, `2dmulticonvolution=1/2`, niezweryfikowane reduced/full storage,
+CUDA device parity i dynamiczny replan są jawnie odseparowane od statusów
+z tabeli. Implementacja CPU może mieć status executable lub runtime-verified,
+ale nie jest automatycznie production-qualified.
+
+(python-api)=
+## Python API
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `FDMDemag.strategy` | `Literal[str]` | `auto` | $1$ | `auto`, `single_grid`, `multilayer_convolution` | requested demag realization | FDM CPU/GPU authoring; runtime lane gated | `discretization.fdm.demag.strategy` |
+
+```python
+# %% Import
+import fullmag as fm
+
+# %% Requested multilayer intent
+demag = fm.FDMDemag(strategy="multilayer_convolution", mode="two_d_stack")
+assert demag.to_ir()["strategy"] == "multilayer_convolution"
+```
+
+(problem-ir)=
+## ProblemIR
+
+The authored `ProblemIR` stores requested strategy and mode. Resolved native grids,
+common transform layout, transfer kind, kernel catalog, and provenance belong to
+the planner/runtime result and are not inferred from the status table.
+
+(round-trip-and-failure-semantics)=
+## Round-trip i semantyka błędów
+
+Requested intent must survive Python → ProblemIR → planner → runtime provenance.
+Resolved execution is reported separately from authored intent. Validation errors
+must reject illegal counts, overlapping layers, PBC and unsupported storage before
+execution. Unsupported combinations never silently fall back to `single_grid` or
+another precision; the matrix records the resulting boundary.
+
+(discrete-realization)=
+## Realizacja dyskretna
+
+The runtime computes ordered source-to-destination pairs. CPU catalog/workspace
+reuse is an implementation fact; each row below still needs the evidence stated in
+its gate column.
+
 | Lane | Transfer | Precision | implemented | executable | runtime-verified | physically-validated | production-qualified | Owner (path::symbol) | Evidence (path::symbol/status) | Artifact | Brama |
 |---|---|---:|---|---|---|---|---|---|---|---|---|
 | FDM CPU, 2D-self | identity | FP64 | yes | yes | yes | yes | no | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::observe_multilayer` | `scripts/verify_fdm_multilayer_independent_oracle.py` nested L=1 report: qualified | `.superpowers/sdd/evidence/fdm-multilayer-runtime/l1-fixed-fresh-v2-oracle.json`; full `4096/4096`, energy/reciprocity/cubature/self-trace pass | direct oracle, managed report |
@@ -24,3 +98,48 @@ Kanoniczny µMAG SP4 pozostaje bez zmian; sp4-derived-multilayer i paper
 reproduction są traceability lanes. Żaden wpis partial, planned, no lub
 no evidence nie może być przedstawiony jako runtime-verified albo
 production-qualified.
+
+(implementation-mapping)=
+## Mapowanie implementacji
+
+`build_kernel_catalog` i `compute_demag_fields_checked` są właścicielami CPU
+catalog/workspace; `compute_shifted_kernel_pair` jest właścicielem checked
+irregular Newell dla nierównych grubości, a `FDMDemag` jest właścicielem
+authoringu. Airbox pozostaje target-only observation, nie common transform mesh.
+
+(validation)=
+## Walidacja
+
+Wymagany dowód dla każdej pozycji obejmuje odpowiedni field/energy oracle,
+volume-weighted reciprocity, transfer moment/adjointness, świeży artefakt
+runtime oraz, dla GPU/UI, urządzenie i browser/WebGL. Statusy w tabeli nie są
+dziedziczone między klasami kernela ani display modes.
+
+(limitations)=
+## Ograniczenia
+
+Macierz nie promuje supermesh, PBC, BORIS force modes `1/2`, pełnego 3-D
+heterogeneous transferu, reduced/full storage, CUDA device parity ani pełnej
+macierzy viewport. Brak artefaktu oznacza `no`, nawet gdy kod lub test
+kontraktowy istnieje.
+
+(scientific-bibliography)=
+## Bibliografia naukowa
+
+1. S. Lepadatu, “Efficient computation of demagnetizing fields for magnetic
+   multilayers using multilayered convolution,” *Journal of Applied Physics*
+   **126**, 103903 (2019), [doi:10.1063/1.5116754](https://doi.org/10.1063/1.5116754).
+2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the
+   demagnetizing tensor for nonuniform magnetization,” *J. Geophys. Res.*
+   **98**, 9551–9555 (1993), [doi:10.1029/93JE01171](https://doi.org/10.1029/93JE01171).
+
+(source-code-index)=
+## Indeks kodu źródłowego
+
+| Claim | Path | Symbol | Responsibility | Lane | Evidence status |
+|---|---|---|---|---|---|
+| CPU multilayer refresh | `crates/fullmag-engine/src/multilayer.rs` | `compute_demag_fields_checked` | Checked ordered-pair refresh with catalog and workspace. | FDM CPU FP64 | runtime-verified, not production-qualified |
+| CPU kernel catalog | `crates/fullmag-engine/src/multilayer.rs` | `build_kernel_catalog` | Deduplicates kernels and binds source/destination pairs. | FDM CPU FP64 | runtime-verified, not production-qualified |
+| Spectral pair multiply | `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | Accumulates six-component source spectra into the destination field. | FDM CPU | executable kernel contract |
+| Shifted Newell pair | `crates/fullmag-fdm-demag/src/shifted_kernel.rs` | `compute_shifted_kernel_pair` | Unequal-thickness checked pair tensor. | FDM CPU | oracle/contract scope only |
+| Python intent | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | Validates and lowers strategy/mode hints. | Python FDM | executable authoring contract |

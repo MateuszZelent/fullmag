@@ -456,7 +456,8 @@ compatibility. The matrix covers:
 | BORIS arbitrary XY rectangles and XYZ offsets | Fullmag planner forms a union scratch envelope for different native XY extents/centers and marks the affected layers `push_pull`; an explicit common grid must contain that union. Complete transfer/runtime/CUDA qualification is still open. |
 | BORIS `2dmulticonvolution=0/1/2` | Fullmag `mode="two_d_stack"` is **not** `=1` or `=2`; it requires one native Z cell and rejects multi-cell Z because no public moment-preserving reduction exists. |
 | Pair kernels, unequal thickness, weighted transfer | Fullmag keeps oriented source/destination cell sizes, signed offsets, six components, and explicit `push_pull` transfer; each scope needs field/energy/reciprocity evidence. |
-| Catalog/reuse, spectral storage, FFT, padding, CPU/CUDA | Fullmag records six-component tensor storage, exact transform/crop reuse keys, $L$ forward/$L^2$ pair/$L$ inverse work, and separate CPU/CUDA qualification gates; source presence is not device proof. |
+| Catalog/reuse, spectral storage, FFT, padding, CPU/CUDA | Fullmag records six-component tensor storage, exact transform/crop reuse keys, and a CPU catalog/workspace that reuses unique kernels across refreshes; $L$ forward/$L^2$ pair/$L$ inverse work and separate CPU/CUDA qualification gates remain explicit. Source presence is not device proof. |
+| BORIS PBC and reconfiguration | BORIS applies shared PBC images and rebuilds modules after mesh/count/mode changes; Fullmag currently accepts only open boundaries and replans from topology fingerprints. |
 | Airbox and UI | Target-only Airbox is not the common transform grid; Explorer/viewport expose only scoped native-layer or Airbox resources and fail closed when unavailable. |
 
 ### Inspect the realized meshes

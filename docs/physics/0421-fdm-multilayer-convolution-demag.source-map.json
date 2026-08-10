@@ -7,7 +7,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "implemented",
-      "scope": "common-grid CPU reference; exact 2D corner tensor, mode/transfer/heterogeneous production gates remain open",
+      "scope": "common-grid CPU reference with active kernel catalog/workspace; exact 2D corner tensor, mode/transfer/heterogeneous production gates remain open",
       "qualification": "not production-qualified",
       "evidence": "54 backend tests, managed CPU FP64 runtime and target-only Airbox carrier; independent full parity remains open"
     },
@@ -349,6 +349,18 @@
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FDM",
       "responsibility": "full public FDM wrapper"
+    },
+    {
+      "id": "cpuCatalog",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "build_kernel_catalog",
+      "responsibility": "CPU catalog deduplication and ordered pair binding"
+    },
+    {
+      "id": "cpuRefresh",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "compute_demag_fields_checked",
+      "responsibility": "checked CPU refresh using catalog and reusable workspace"
     }
   ],
   "public_api": {

@@ -1,0 +1,103 @@
+{
+  "document": {
+    "path": "docs/physics/multilayer_convolution/qualification-matrix.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "multilayer convolution reference and qualification matrix",
+      "qualification": "row-specific",
+      "evidence": "row-specific artifacts"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "CUDA contract and planned device lane",
+      "qualification": "not production-qualified",
+      "evidence": "no fresh device parity artifact"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The matrix describes the FDM multilayer convolution realization."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The matrix describes the FDM multilayer convolution realization."
+    }
+  ],
+  "equations": [
+    {
+      "id": "qualification-demag-field",
+      "symbols": ["Hd", "Nds", "Ms", "L"],
+      "sources": ["runtime_refresh", "kernel_multiply"],
+      "publication_anchor": "ordered source-to-destination field used by every qualification row"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Hd",
+      "latex": "\\mathbf H_d",
+      "meaning": "pole demagnetyzujące w komórkach celu",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Nds",
+      "latex": "\\mathsf N_{d\\leftarrow s}",
+      "meaning": "tensor pary źródło-cel",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Ms",
+      "latex": "\\mathbf M_s",
+      "meaning": "magnetyzacja komórek źródła",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "L",
+      "latex": "L",
+      "meaning": "liczba warstw/obiektów źródłowych",
+      "si_unit": "$1$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "runtime_refresh",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "compute_demag_fields_checked",
+      "responsibility": "checked ordered-pair CPU refresh and runtime fail-closed guards"
+    },
+    {
+      "id": "kernel_multiply",
+      "path": "crates/fullmag-fdm-demag/src/multiply.rs",
+      "symbol": "accumulate_tensor_convolution",
+      "responsibility": "spectral pair accumulation"
+    },
+    {
+      "id": "python_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMDemag",
+      "responsibility": "public strategy and mode authoring contract"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`FDMDemag.strategy`",
+        "type": "`Literal[str]`",
+        "default": "`auto`",
+        "si_unit": "$1$",
+        "validation": "`auto`, `single_grid`, `multilayer_convolution`",
+        "meaning": "requested demag realization",
+        "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "`discretization.fdm.demag.strategy`"
+      }
+    ]
+  }
+}

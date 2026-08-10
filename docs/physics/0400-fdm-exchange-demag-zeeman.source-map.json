@@ -1,0 +1,141 @@
+{
+  "document": {
+    "path": "docs/physics/0400-fdm-exchange-demag-zeeman.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "CPU reference exchange, demagnetization, and external-field assembly",
+      "qualification": "lane-gated",
+      "evidence": "source and focused regression contracts"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "CUDA interaction path with explicit precision gates",
+      "qualification": "not production-qualified",
+      "evidence": "build and contract evidence do not replace device parity"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This note specifies the FDM realization; FEM physics is documented separately."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This note specifies the FDM realization; FEM physics is documented separately."
+    }
+  ],
+  "equations": [
+    {
+      "id": "fdm-airbox-effective-field",
+      "symbols": ["Hvisual", "Hdemag", "Hext", "Hoe", "Hant"],
+      "sources": ["airbox_reconstruction", "fdm_fields"],
+      "publication_anchor": "Full-domain visualization field reconstruction outside magnetic support"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Hvisual",
+      "latex": "\\mathbf{H}^{\\mathrm{visual}}_{\\mathrm{eff}}",
+      "meaning": "full-domain visualization effective field",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "Hdemag",
+      "latex": "\\mathbf{H}_{\\mathrm{demag}}",
+      "meaning": "demagnetizing field",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "Hext",
+      "latex": "\\mathbf{H}_{\\mathrm{ext}}",
+      "meaning": "external field",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "Hoe",
+      "latex": "\\mathbf{H}_{\\mathrm{oe}}",
+      "meaning": "Oersted field contribution",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "Hant",
+      "latex": "\\mathbf{H}_{\\mathrm{ant}}",
+      "meaning": "antenna field contribution",
+      "si_unit": "A/m"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python_exchange",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Exchange",
+      "responsibility": "public exchange interaction authoring and lowering"
+    },
+    {
+      "id": "python_demag",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "public demagnetization realization authoring and lowering"
+    },
+    {
+      "id": "python_zeeman",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Zeeman",
+      "responsibility": "public external-field authoring contract"
+    },
+    {
+      "id": "fdm_fields",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "effective_field_from_vectors",
+      "responsibility": "CPU FDM effective-field assembly"
+    },
+    {
+      "id": "airbox_reconstruction",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "reconstruct_inactive_fdm_visual_effective_field",
+      "responsibility": "full-domain visualization field outside magnetic support"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`fm.Exchange()`",
+        "type": "`Exchange`",
+        "default": "empty constructor",
+        "si_unit": "$1$",
+        "validation": "no arguments",
+        "meaning": "exchange energy term",
+        "backend_support": "FDM/FEM authoring",
+        "problem_ir": "`energy_terms[].kind=exchange`"
+      },
+      {
+        "python": "`fm.Demag(model=\"airbox\")`",
+        "type": "`Demag`",
+        "default": "`model=None` (`auto`)",
+        "si_unit": "$1$",
+        "validation": "model/variant vocabulary",
+        "meaning": "demagnetization term and realization request",
+        "backend_support": "FDM/FEM authoring; lane gated",
+        "problem_ir": "`energy_terms[].kind=demag` plus realization"
+      },
+      {
+        "python": "`fm.Zeeman(B=(Bx, By, Bz))`",
+        "type": "`Zeeman`",
+        "default": "required",
+        "si_unit": "T at the transitional API boundary",
+        "validation": "three finite values",
+      "meaning": "external-field request; planner normalizes to $H$",
+        "backend_support": "FDM/FEM authoring; unit conversion gated",
+        "problem_ir": "`energy_terms[].kind=zeeman` plus normalized field"
+      }
+    ]
+  }
+}

@@ -15,6 +15,7 @@
   - `docs/physics/0200-llg-exchange-reference-engine.md`
   - `docs/physics/0300-gpu-fdm-precision-and-calibration.md`
 
+(problem-statement)=
 ## 1. Problem statement
 
 This note defines the continuum model, discrete formulas, and GPU-oriented implementation target
@@ -39,6 +40,7 @@ later CUDA backend must preserve.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations
 
 The state variable is the reduced magnetization
@@ -214,6 +216,7 @@ $$
 which in a translation-invariant Cartesian discretization becomes a convolution of the cell-averaged
 magnetization with a demagnetizing tensor kernel.
 
+(symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
 | Symbol | Meaning | Unit |
@@ -234,7 +237,12 @@ magnetization with a demagnetizing tensor kernel.
 | $V_i$ | cell volume | m$^3$ |
 | $S_f$ | face area | m$^2$ |
 | $d_f$ | distance between cell centers across face $f$ | m |
+| $\mathbf{H}^{\mathrm{visual}}_{\mathrm{eff}}$ | full-domain visualization effective field | A/m |
+| $\mathbf{H}_{\mathrm{oe}}$ | Oersted field contribution | A/m |
+| $\mathbf{H}_{\mathrm{ant}}$ | antenna field contribution | A/m |
+| $\Omega_m$ | active magnetic support | 1 |
 
+(assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
 
 - FDM uses a regular Cartesian grid with cell-centered magnetization.
@@ -248,6 +256,7 @@ magnetization with a demagnetizing tensor kernel.
   needs `H_ext` in `A/m`. Until the API is cleaned up, the planner must normalize the user input
   and record the conversion in provenance.
 
+(discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
@@ -601,8 +610,10 @@ The most likely future hybrid use for these interactions is grid-assisted demag 
 mesh/grid representations.
 That is a planner/backend concern, not a shared-physics change.
 
+(implementation-mapping)=
 ## 4. API, IR, and planner impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 The shared Python API already has:
@@ -617,6 +628,28 @@ For this interaction set, the API should eventually support:
 - explicit unit semantics for the external field,
 - no FDM-only leakage such as cell indices or FFT padding choices.
 
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `fm.Exchange()` | `Exchange` | empty constructor | $1$ | no arguments | exchange energy term | FDM/FEM authoring | `energy_terms[].kind=exchange` |
+| `fm.Demag(model="airbox")` | `Demag` | `model=None` (`auto`) | $1$ | model/variant vocabulary | demagnetization term and realization request | FDM/FEM authoring; lane gated | `energy_terms[].kind=demag` plus realization |
+| `fm.Zeeman(B=(Bx, By, Bz))` | `Zeeman` | required | T at the transitional API boundary | three finite values | external-field request; planner normalizes to $H$ | FDM/FEM authoring; unit conversion gated | `energy_terms[].kind=zeeman` plus normalized field |
+
+```python
+# %% Import
+import fullmag as fm
+
+# %% Shared interaction intent
+exchange = fm.Exchange()
+demag = fm.Demag(model="airbox")
+zeeman = fm.Zeeman(B=(0.0, 0.0, 20e-3))
+
+# %% Canonical lowering smoke check
+assert exchange.to_ir()["kind"] == "exchange"
+assert demag.to_ir()["kind"] == "demag"
+assert zeeman.to_ir()["kind"] == "zeeman"
+```
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 The shared IR should remain backend-neutral:
@@ -636,7 +669,8 @@ slice. In particular, a future `FdmPlanIR` for these interactions will need:
 
 These are execution-plan fields, not shared `ProblemIR` fields.
 
-### 4.3 Planner and capability-matrix impact
+(round-trip-and-failure-semantics)=
+### 4.3 Planner, round-trip, and capability-matrix impact
 
 The planner should own:
 
@@ -647,6 +681,12 @@ The planner should own:
 - external-field sampling and unit normalization,
 - demag kernel planning and padding decisions,
 - precision propagation into the executable FDM plan.
+
+The Python request is the **requested intent**; the normalized `ProblemIR` and
+planner result are the **resolved execution**. The exporter must preserve both
+without turning an FDM-only hint into shared physics. Validation errors are
+reported before lowering, and unsupported combinations remain explicit instead
+of falling back to a different interaction, precision, or boundary policy.
 
 Current executable FDM plans still carry uniform material constants only. If a used material
 contains per-cell material fields such as `ms_field`, `a_field`, `alpha_field`, `ku*_field`, or
@@ -666,6 +706,7 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 - native CUDA `single` exists as an implementation path but remains unqualified for public use
   until the documented calibration tiers are completed.
 
+(validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
@@ -737,6 +778,7 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 - [ ] Tests / benchmarks complete
 - [x] Documentation
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 - The current public executable FDM path exposes demag and Zeeman through both the CPU reference
@@ -748,6 +790,7 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 - The current `Zeeman(B=...)` API should be treated as transitional until units are made explicit.
 - The final scientific artifact layer should move beyond transitional JSON/CSV bootstrap storage.
 
+(scientific-bibliography)=
 ## 8. References
 
 1. W. F. Brown, *Micromagnetics*, Interscience, 1963.
@@ -757,3 +800,14 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
    nonuniform magnetization,” *J. Geophys. Res.* 98(B6), 9551–9555 (1993).
 5. D. M. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,”
    *IEEE Trans. Magn.* 26(2), 415–417 (1990).
+
+(source-code-index)=
+## Source-code index
+
+| Claim | Path | Symbol | Responsibility | Lane | Evidence status |
+|---|---|---|---|---|---|
+| Exchange interaction | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Exchange` | Public exchange-term authoring and IR lowering. | Python/FDM/FEM | executable authoring contract |
+| Demagnetization interaction | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | Public demagnetization realization request. | Python/FDM/FEM | executable authoring contract |
+| Zeeman interaction | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Zeeman` | Transitional external-field authoring contract. | Python/FDM/FEM | executable authoring contract; unit normalization gated |
+| FDM effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_from_vectors` | CPU reference assembly of the effective field. | FDM CPU | runtime implementation; qualification is lane-specific |
+| Airbox visualization field | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs full-domain visualization fields outside magnetic support. | FDM CPU | target-only observation contract |
