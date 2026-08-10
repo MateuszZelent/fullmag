@@ -5,7 +5,7 @@
 **Pierwotne repozytorium bazowe:** `master@f6073e6f63ea781dcb36293be28387741a52f8da`  \
 **Aktualny kodowy baseline audytu (historyczny):** `master@883ce5650`; implementacja grafu zakresu, typed runtime provenance, artefaktów i paneli Inspector jest scalona lokalnie; promocja fizyki do produkcji pozostaje ograniczona bramami z §32.92–§32.93.  \
 **Dedykowany worktree:** bieżący checkout `/home/kkingstoun/git/fullmag/fullmag`; bounded callback stage tego etapu zapisano w §32.109, a wcześniejszy baseline pozostaje historycznym punktem odniesienia.  \
-**Merge-base:** bieżąca gałąź ma `master` jako bazę i jest o jeden checkpoint przed nim; merge do `master` nie został jeszcze wykonany  \
+**Merge-base:** implementacja została zmergowana fast-forward do lokalnego i zdalnego `master`; commit implementacji to `4ba47841773d82cf285aa280e9866f00615e0102`, a plan został zsynchronizowany po merge  \
 **Data pierwotna:** 2026-07-15  \
 **Ostatnia aktualizacja:** 2026-08-10  \
 **Raport źródłowy:** [README.md](./README.md)
@@ -12602,11 +12602,11 @@ accepted spin przez docelowy runner pozostaje bramą promocji.
 ## 32.170. Bieżący freeze audytowy po implementacji shared worktree (2026-08-10)
 
 Ten wpis jest aktualnym stanem tego checkoutu i ma pierwszeństwo przed
-historycznymi snapshotami z wcześniejszych sekcji. Kod znajduje się na
-gałęzi `agent/stt-sot-she-fem-fdm-implementation`, a bazowy checkpoint to
-`23af64d74059d9f5c4a253ab1ed9cd0a6b5b18a3`. Zmiany są jeszcze
-niezacommitowane; nie wolno traktować ich jako stanu `master` ani deklarować
-merge/push przed zamrożeniem wszystkich właścicieli i osobnym przeglądem.
+historycznymi snapshotami z wcześniejszych sekcji. Implementacja została
+zacommitowana jako `4ba47841773d82cf285aa280e9866f00615e0102`, wypchnięta na
+gałąź implementacyjną i zmergowana fast-forward do lokalnego oraz zdalnego
+`master`. Dirty submodule `external_solvers/3` jest niepowiązaną zmianą
+roboczą i nie należy do tego merge.
 
 ### Potwierdzone w tej iteracji
 
@@ -12633,7 +12633,7 @@ merge/push przed zamrożeniem wszystkich właścicieli i osobnym przeglądem.
 
 Nie wolno podnosić żadnej z tych ścieżek do statusu produkcyjnego ani
 statusu zwalidowanego na podstawie samego kodu, testów hostowych, starego bundle albo
-source-only review. Aktualny honest status celu pozostaje
+source-only review. Merge jest zakończony, ale aktualny honest status celu pozostaje
 `implementation_state=partial`, `validation_state=unvalidated`;
-scalanie do `master` nastąpi dopiero po zamknięciu findingu, zamrożeniu
-worktree, weryfikacji staged diff i osobnym commit/push.
+managed GPU/FEM, browser smoke i pozostałe bramy produkcyjne nadal wymagają
+osobnego wykonania i nie zostały promowane przez ten merge.
