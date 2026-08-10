@@ -336,7 +336,10 @@ selected strategy, eligibility i oszacowaniem kerneli.
 Requested intent jest intencją strategy, mode i common grid. Resolved execution
 jest decyzją planera, zapisaną osobno w planner_summary i provenance runtime.
 Validation errors odrzucają nielegalne counts, warstwy nakładające się,
-niekwalifikowane offsety, niezgodne $h_x,h_y$, PBC i brak transferu.
+niezgodne $h_x,h_y$ bez możliwego transferu do wspólnego scratchu, PBC i brak
+transferu. Różne XY extents/centers są zachowywane jako native geometrie i
+materializowane przez union computational scratch oraz `push_pull`; nie są
+automatycznie odrzucane ani rysowane jako jeden fizyczny supermesh.
 Unsupported combinations nie mogą potajemnie spaść do single_grid ani innej
 precyzji.
 
@@ -401,7 +404,8 @@ CUDA FP32 wymagają osobnych artefaktów runtime, urządzenia i tolerancji.
 (limitations)=
 ## Ograniczenia
 
-Niepromowane: PBC, ogólny XY offset, pełny 3D/heterogeneous production path,
+Niepromowane produkcyjnie: PBC, ogólny XY offset (authoring/planner mają ścieżkę
+union-scratch + `push_pull`, lecz brak pełnego dowodu transfer/insertion/crop), pełny 3D/heterogeneous production path,
 device-resident parity, CUDA/D-07 i FP32. CPU target-only Airbox convergence jest
 kwalifikowane wyłącznie w opisanym zakresie dwóch meshów. Test źródłowy, build albo
 screenshot nie są dowodem fizycznej ani produkcyjnej kwalifikacji.

@@ -267,9 +267,17 @@ justify arbitrary XY offsets or arbitrary, different XY grids.
 (multilayer-convolution-assumptions-and-validity)=
 ## 4. Assumptions, kernel classes, and validity limits
 
-The current public planner requires disconnected objects with identical XY extents and the
-same XY center. Separation along Z is allowed; a general XY offset is rejected. Periodic
-axes fail closed until self/shifted kernels and exchange seams are qualified for every layer.
+The current public planner accepts disconnected objects with different XY extents and/or
+centers by forming the union of their native XY bounds as a **computational** common-scratch
+envelope. Native origins, cell sizes, masks, and material objects remain independent; layers
+that do not coincide with that envelope use explicit `push_pull` transfer. An explicitly
+requested `common_cells` or `common_cells_xy` must contain the union and have a compatible
+resolved pitch; a lane that cannot consume the resulting insertion/crop or transfer descriptor
+fails closed. This is not the same as evaluating the irregular Newell formula on arbitrary
+different XY cells: that formula is only the unequal-Z/common-XY kernel, while lateral
+differences are handled by the transfer path. Layers may be separated by arbitrary non-overlapping
+Z gaps, but overlapping bodies and periodic axes fail closed until the corresponding pair,
+transfer, and exchange-seam classes are qualified.
 
 `two_d_stack` is intended for thin layers with one native Z cell. A layer with multiple Z
 cells is rejected: there is no public moment-preserving Z average today, and the planner

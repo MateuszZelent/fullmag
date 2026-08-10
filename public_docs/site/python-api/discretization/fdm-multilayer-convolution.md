@@ -106,8 +106,14 @@ energy equations on the physics page.
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 
-The current planner requires all multilayer bodies to have identical XY extents and the same XY
-center. Bodies may be separated along $z$, but they may not overlap there. `two_d_stack` requires
+The planner forms a computational common-scratch envelope from the union of every native XY
+rectangle. Therefore multilayer bodies may have different XY extents and centers; their native
+origins, masks, and physical meshes remain separate, and a non-coincident layer is marked
+`push_pull`. An explicit `common_cells` or `common_cells_xy` must contain that union with a
+compatible pitch. A runtime lane that cannot consume the resulting insertion/crop or transfer
+descriptor fails closed. This transfer path is not a claim that Appendix-A irregular Newell
+supports arbitrary different XY cells: the irregular kernel itself requires common XY cell
+sizes. Bodies may be separated along $z$, but they may not overlap there. `two_d_stack` requires
 one native Z cell per layer. A multi-cell-Z request fails closed: no public moment-preserving Z
 reduction exists, so the planner never copies one arbitrary native slice. Select `three_d` for
 through-thickness cells. Open boundaries are executable; periodic multilayer axes fail closed.
