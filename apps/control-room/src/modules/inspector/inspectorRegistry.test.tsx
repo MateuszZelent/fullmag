@@ -5,6 +5,10 @@ import {
   resolveInspectorPanel,
 } from "./inspectorRegistry";
 import {
+  resolveInspectorRoute,
+  resolveUnknownInspectorRoute,
+} from "./inspectorRouteCatalog";
+import {
   ObjectRegionTexturePanel,
   ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
@@ -163,7 +167,7 @@ describe("inspectorRegistry", () => {
       "physics.spin-torques",
       "physics.oersted-fields",
     ]) {
-      expect(resolveInspectorPanel({ kind: legacyKind } as never)?.id).toBe("placeholder");
+      expect(resolveInspectorPanel({ kind: legacyKind } as never)).toBeNull();
     }
     expect(resolveInspectorPanel({ kind: "physics.current-transport" })?.id).toBe(
       "physics-current-transport",
@@ -313,10 +317,10 @@ describe("inspectorRegistry", () => {
     expect(panels.every((panel) => panel?.id !== "placeholder")).toBe(true);
   });
 
-  it("does not route a future structured-grid node to the generic placeholder", () => {
-    expect(resolveInspectorPanel({ kind: "mesh.grid.future-detail" })?.id).toBe(
-      "fdm-grid",
-    );
+  it("does not prefix-match a future structured-grid node", () => {
+    expect(resolveInspectorRoute("mesh.grid.future-detail")).toBeNull();
+    expect(resolveInspectorPanel({ kind: "mesh.grid.future-detail" })).toBeNull();
+    expect(resolveUnknownInspectorRoute().contribution.id).toBe("placeholder");
   });
 
   it("routes field quantities to a dedicated scientific inspector", () => {
@@ -375,7 +379,7 @@ describe("inspectorRegistry", () => {
       expected.length,
     );
     expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
-      "object-visualization",
+      "airbox-visualization",
     );
   });
 
@@ -385,7 +389,7 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("uses one production Debug panel for three distinct visualization selection kinds", () => {
+  it("uses distinct Debug routes with the shared production panel body", () => {
     const kinds = [
       "airbox.visualization.debug",
       "object.visualization.debug",
@@ -395,9 +399,9 @@ describe("inspectorRegistry", () => {
     const panels = kinds.map((kind) => resolveInspectorPanel({ kind }));
 
     expect(panels.map((panel) => panel?.id)).toEqual([
-      "visualization-debug",
-      "visualization-debug",
-      "visualization-debug",
+      "airbox-visualization-debug",
+      "object-visualization-debug",
+      "object-region-visualization-debug",
     ]);
     expect(
       panels.every((panel) => panel?.component === VisualizationDebugPanel),

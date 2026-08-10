@@ -27,6 +27,7 @@ import {
 } from "../explorer/builders/buildModelTree";
 import { modelTreeSnapshotFromScene } from "../explorer/builders/sceneModelTreeAdapter";
 import { resolveInspectorPanel } from "./inspectorRegistry";
+import { resolveInspectorRoute } from "./inspectorRouteCatalog";
 
 const frequencyDomainResponseProgress: FrequencyDomainSweepProgressResource = {
   complete: false,
@@ -424,10 +425,18 @@ describe("inspector route coverage", () => {
       nodesByTab.get(tabId)?.filter((node) => node.selectable !== false) ?? [],
     );
 
+    const uncoveredNodes = selectableNodes
+      .filter((node) => resolveInspectorRoute(node.kind) === null)
+      .map((node) => `${node.id} (${node.kind})`);
+    expect(uncoveredNodes).toEqual([]);
+
     for (const node of selectableNodes) {
+      const route = resolveInspectorRoute(node.kind);
       const panel = resolveInspectorPanel({ kind: node.kind });
+      expect(route?.id, `missing route for ${node.id}`).toBeTruthy();
       expect(panel?.id, `missing Inspector for ${node.id}`).toBeTruthy();
       expect(panel?.id, `placeholder for ${node.id}`).not.toBe("placeholder");
+      expect(panel).toBe(route?.contribution);
     }
   });
 });
