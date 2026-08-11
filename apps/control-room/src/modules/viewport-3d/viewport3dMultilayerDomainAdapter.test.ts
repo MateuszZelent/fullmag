@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { FdmMultilayerLayoutResource } from "@/kernel/api/apiTypes";
+import { DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH } from "@/kernel/api/apiPaths";
 
 import {
   adaptFdmMultilayerAirboxDomain,
@@ -66,7 +67,10 @@ const layout = {
       active_mask_hash:
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       mask_ref:
-        "/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Ab/active-mask",
+        DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH.replace(
+          "{layer_id}",
+          encodeURIComponent("layer:b"),
+        ),
       mask_provenance: "execution_plan.layers.native_active_mask",
     },
   ],
