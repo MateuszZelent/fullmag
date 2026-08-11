@@ -157,6 +157,9 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         payload = _payload(source, module=True)
         module_id = str(payload.get("id") or f"torque:{index}")
         dependency = _first_string(payload, "current_source", "current_source_id", "solve_id")
+        drive = payload.get("drive")
+        if dependency is None and isinstance(drive, Mapping):
+            dependency = _optional_string(drive.get("current_source_id"))
         target = payload.get("target")
         domain = _regions((target,) if isinstance(target, Mapping) else ())
         activation = _dependency_activation(PhysicsActivation.ACTIVE, dependency, statuses) if dependency else PhysicsActivation.ACTIVE

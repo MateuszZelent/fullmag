@@ -153,6 +153,43 @@ def test_spin_torque_edges_preserve_dependency_semantics() -> None:
     ]
 
 
+def test_prescribed_sot_vector_drive_declares_its_current_dependency_edge() -> None:
+    current = _Module(
+        {
+            "kind": "current_transport",
+            "name": "current:film",
+            "model": "prescribed_density",
+            "current_density": [1.0, 0.0, 0.0],
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    torque = fm.PrescribedSpinOrbitTorque(
+        "torque:sot",
+        fm.RegionRef("film"),
+        fm.VectorCurrentDrive(
+            "current:film",
+            drive_direction=(1.0, 0.0, 0.0),
+            interface_normal=(0.0, 0.0, 1.0),
+        ),
+        xi_dl=0.1,
+        free_layer_thickness_m=1e-9,
+    )
+
+    graph = build_physics_graph(
+        _problem(current_modules=(current,), spin_torques=(torque,))
+    )
+
+    assert graph.modules[1].depends_on == ("current:film",)
+    assert [edge.to_ir() for edge in graph.edges] == [
+        {
+            "kind": "current_to_torque",
+            "source_id": "current:film",
+            "target_id": "torque:sot",
+            "status": "active",
+        }
+    ]
+
+
 def test_reordering_authored_families_keeps_graph_order() -> None:
     first = _Module({"kind": "current_transport", "name": "current:a", "model": "prescribed_density", "current_density": [1.0, 0.0, 0.0], "domain": []}, name="current:a", model="prescribed_density", current_density=(1.0, 0.0, 0.0), domain=())
     second = _Module({"kind": "current_transport", "name": "current:b", "model": "prescribed_density", "current_density": [2.0, 0.0, 0.0], "domain": []}, name="current:b", model="prescribed_density", current_density=(2.0, 0.0, 0.0), domain=())

@@ -169,6 +169,93 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
             }
         }
     }
+    for module in modules {
+        let Some(module_object) = module.as_object() else {
+            continue;
+        };
+        if module_object.get("kind").and_then(Value::as_str) != Some("spin_torque") {
+            continue;
+        }
+        let Some(module_id) = module_object.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(payload) = module_object
+            .get("family_payload")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let family = payload.get("kind").and_then(Value::as_str);
+        let contract = if family == Some("drift_diffusion_spin_torque") {
+            match payload.get("solve_id").and_then(Value::as_str) {
+                Some(source_id) => Some((source_id, "spin_transport", "spin_transport_to_torque")),
+                None => {
+                    errors.push(format!(
+                        "physics_graph torque '{module_id}' drift-diffusion payload requires solve_id"
+                    ));
+                    None
+                }
+            }
+        } else {
+            payload
+                .get("current_source")
+                .or_else(|| payload.get("current_source_id"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    payload
+                        .get("drive")
+                        .and_then(Value::as_object)
+                        .and_then(|drive| drive.get("current_source_id"))
+                        .and_then(Value::as_str)
+                })
+                .map(|source_id| (source_id, "current_transport", "current_to_torque"))
+        };
+        let Some((source_id, expected_source_kind, expected_edge_kind)) = contract else {
+            continue;
+        };
+        let dependencies = module_object
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .map(|dependencies| {
+                dependencies
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if dependencies != [source_id] {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' {family:?} payload source '{source_id}' must be its only depends_on entry"
+            ));
+        }
+        if module_kinds
+            .get(source_id)
+            .is_some_and(|kind| kind != expected_source_kind)
+        {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' {family:?} source '{source_id}' must be a {expected_source_kind} module"
+            ));
+        }
+        let target_edges = edges
+            .iter()
+            .filter(|edge| edge.get("target_id").and_then(Value::as_str) == Some(module_id))
+            .collect::<Vec<_>>();
+        if target_edges.len() != 1 {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' requires exactly one {expected_edge_kind} edge from declared dependency '{source_id}', found {}",
+                target_edges.len()
+            ));
+            continue;
+        }
+        let edge = target_edges[0];
+        if edge.get("source_id").and_then(Value::as_str) != Some(source_id)
+            || edge.get("kind").and_then(Value::as_str) != Some(expected_edge_kind)
+        {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' permits only {expected_edge_kind} from declared dependency '{source_id}'"
+            ));
+        }
+    }
     if errors.is_empty() {
         Ok(Some(graph.clone()))
     } else {

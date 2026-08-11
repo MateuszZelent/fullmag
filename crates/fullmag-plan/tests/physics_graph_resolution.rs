@@ -3,6 +3,25 @@ use fullmag_ir::PhysicsGraphRealizationStateIR;
 use fullmag_ir::ProblemIR;
 use fullmag_plan::{resolve_physics_graph, resolve_physics_modules};
 
+fn source_bound_torque_graph(
+    family_payload: serde_json::Value,
+    dependency: &str,
+    edges: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 46,
+        "modules": [
+            {"id":"current:a","kind":"current_transport","applies_to":[],"solve_domain":[],"depends_on":[],"activation":"active","family_payload":{}},
+            {"id":"current:b","kind":"current_transport","applies_to":[],"solve_domain":[],"depends_on":[],"activation":"active","family_payload":{}},
+            {"id":"spin:a","kind":"spin_transport","applies_to":[],"solve_domain":[],"depends_on":["current:a"],"activation":"active","family_payload":{}},
+            {"id":"spin:b","kind":"spin_transport","applies_to":[],"solve_domain":[],"depends_on":["current:b"],"activation":"active","family_payload":{}},
+            {"id":"torque","kind":"spin_torque","applies_to":[],"solve_domain":[],"depends_on":[dependency],"activation":"active","family_payload":family_payload}
+        ],
+        "edges": edges
+    })
+}
+
 #[test]
 fn absent_graph_is_accepted_for_legacy_problem_ir() {
     let problem = ProblemIR::bootstrap_example();
@@ -75,6 +94,133 @@ fn no_current_module_emits_no_resolved_physics_operator() {
     let resolved =
         resolve_physics_modules(&problem, BackendTarget::Fdm).expect("empty graph resolution");
     assert!(resolved.is_empty());
+}
+
+#[test]
+fn source_bound_torque_families_accept_their_exact_declared_semantic_edge() {
+    let cases = [
+        (
+            "drift diffusion",
+            serde_json::json!({
+                "kind": "drift_diffusion_spin_torque",
+                "solve_id": "spin:a"
+            }),
+            "spin:a",
+            serde_json::json!([{
+                "kind": "spin_transport_to_torque",
+                "source_id": "spin:a",
+                "target_id": "torque",
+                "status": "active"
+            }]),
+        ),
+        (
+            "current driven",
+            serde_json::json!({"kind": "zhang_li", "current_source": "current:a"}),
+            "current:a",
+            serde_json::json!([{
+                "kind": "current_to_torque",
+                "source_id": "current:a",
+                "target_id": "torque",
+                "status": "active"
+            }]),
+        ),
+        (
+            "nested prescribed SOT current drive",
+            serde_json::json!({
+                "kind": "prescribed_sot",
+                "drive": {
+                    "kind": "vector_current_source",
+                    "current_source_id": "current:a"
+                }
+            }),
+            "current:a",
+            serde_json::json!([{
+                "kind": "current_to_torque",
+                "source_id": "current:a",
+                "target_id": "torque",
+                "status": "active"
+            }]),
+        ),
+    ];
+
+    for (case, payload, dependency, edges) in cases {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(source_bound_torque_graph(payload, dependency, edges));
+        assert!(resolve_physics_graph(&problem)
+            .unwrap_or_else(|errors| panic!("{case} graph must resolve: {errors:?}"))
+            .is_some());
+    }
+}
+
+#[test]
+fn source_bound_torque_families_reject_semantic_edge_loopholes() {
+    let cases = [
+        (
+            "drift diffusion swapped source",
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
+            "spin:a",
+            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin:b","target_id":"torque","status":"active"}]),
+        ),
+        (
+            "drift diffusion extra wrong edge",
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
+            "spin:a",
+            serde_json::json!([
+                {"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"},
+                {"kind":"current_to_torque","source_id":"current:a","target_id":"torque","status":"active"}
+            ]),
+        ),
+        (
+            "drift diffusion missing edge",
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
+            "spin:a",
+            serde_json::json!([]),
+        ),
+        (
+            "drift diffusion duplicate edge",
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
+            "spin:a",
+            serde_json::json!([
+                {"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"},
+                {"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"}
+            ]),
+        ),
+        (
+            "drift diffusion payload dependency mismatch",
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:b"}),
+            "spin:a",
+            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"}]),
+        ),
+        (
+            "current driven swapped source",
+            serde_json::json!({"kind":"zhang_li","current_source":"current:a"}),
+            "current:a",
+            serde_json::json!([{"kind":"current_to_torque","source_id":"current:b","target_id":"torque","status":"active"}]),
+        ),
+        (
+            "current family inverse spin edge",
+            serde_json::json!({"kind":"zhang_li","current_source":"current:a"}),
+            "spin:a",
+            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"}]),
+        ),
+        (
+            "spin family inverse current edge",
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
+            "current:a",
+            serde_json::json!([{"kind":"current_to_torque","source_id":"current:a","target_id":"torque","status":"active"}]),
+        ),
+    ];
+
+    for (case, payload, dependency, edges) in cases {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(source_bound_torque_graph(payload, dependency, edges));
+        let errors =
+            resolve_physics_graph(&problem).expect_err(&format!("{case} graph must fail closed"));
+        assert!(
+            errors.iter().any(|error| error.contains("torque 'torque'")),
+            "{case} must identify the rejected torque contract: {errors:?}"
+        );
+    }
 }
 
 #[test]

@@ -1713,7 +1713,7 @@ fn validate_descriptor(
             }
         }
     }
-    if !descriptor.torque_target_masks.is_empty() {
+    if !legacy_resolved_masks {
         let mut union = vec![false; count];
         for target in &descriptor.torque_target_masks {
             for (aggregate, selected) in union.iter_mut().zip(&target.active_mask) {
@@ -5101,24 +5101,64 @@ mod tests {
 
     #[test]
     fn torque_target_mask_union_must_match_the_aggregate_mask() {
-        let mut invalid = plan();
-        let descriptor = invalid.spin_transport_plans[0]
-            .fdm_cpu_double
-            .as_mut()
-            .expect("one-way descriptor");
-        descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
-            torque_module_id: "torque".into(),
-            target: RegionRefIR {
-                object_id: "fm".into(),
-                region_id: None,
-            },
-            active_mask: vec![true, false, false, false],
-        }];
-        descriptor.torque_target_cells = vec![false; 4];
+        type Mutation = fn(&mut ResolvedFdmSpinTransportIR);
+        let cases: [(&str, Mutation, bool); 3] = [
+            (
+                "nonempty per-target union with stale all-false aggregate",
+                |descriptor| {
+                    descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
+                        torque_module_id: "torque".into(),
+                        target: RegionRefIR {
+                            object_id: "fm".into(),
+                            region_id: None,
+                        },
+                        active_mask: vec![true, false, false, false],
+                    }];
+                    descriptor.torque_target_cells = vec![false; 4];
+                },
+                false,
+            ),
+            (
+                "empty target list with stale nonempty aggregate",
+                |descriptor| {
+                    descriptor.torque_target_masks.clear();
+                    descriptor.torque_target_cells = vec![true, false, false, false];
+                },
+                false,
+            ),
+            (
+                "empty target list with exact all-false aggregate",
+                |descriptor| {
+                    descriptor.torque_target_masks.clear();
+                    descriptor.torque_target_cells = vec![false; 4];
+                },
+                true,
+            ),
+        ];
 
-        let error = FdmSpinTransportWorkflow::from_plan(&invalid)
-            .expect_err("per-target union must equal the aggregate torque mask");
-        assert!(error.message.contains("torque target mask union"));
+        for (case, mutate, accepted) in cases {
+            let mut candidate = plan();
+            let descriptor = candidate.spin_transport_plans[0]
+                .fdm_cpu_double
+                .as_mut()
+                .expect("one-way descriptor");
+            mutate(descriptor);
+            let result = FdmSpinTransportWorkflow::from_plan(&candidate);
+            if accepted {
+                assert!(result
+                    .unwrap_or_else(|error| panic!("{case} must be accepted: {error:?}"))
+                    .is_some());
+            } else {
+                let error = result.expect_err(&format!(
+                    "{case} must reject before stale torque targets can execute"
+                ));
+                assert!(
+                    error.message.contains("torque target mask union"),
+                    "{case} returned the wrong diagnostic: {}",
+                    error.message
+                );
+            }
+        }
     }
 
     #[test]
@@ -5131,6 +5171,7 @@ mod tests {
         descriptor.transport_active_mask.clear();
         descriptor.magnetic_active_mask.clear();
         descriptor.torque_target_masks.clear();
+        descriptor.torque_target_cells[0] = true;
 
         assert!(FdmSpinTransportWorkflow::from_plan(&legacy)
             .expect("empty legacy masks must remain accepted")
