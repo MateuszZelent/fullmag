@@ -1119,6 +1119,50 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("preserves every canonical field id in a mode visualization group selection", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      children: [
+        {
+          fieldId: "analysis:eigen:sample-0000:mode-0002",
+          id: "mode-group:field-a",
+          kind: "object.mode_visualization.field" as ExplorerNode["kind"],
+          label: "Mode 2",
+          objectId: "film",
+          parentId: "mode-group",
+        },
+        {
+          fieldId: "analysis:eigen:sample-0000:mode-0003",
+          id: "mode-group:field-b",
+          kind: "object.mode_visualization.field" as ExplorerNode["kind"],
+          label: "Mode 3",
+          objectId: "film",
+          parentId: "mode-group",
+        },
+      ],
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      fieldIds: [
+        "analysis:eigen:sample-0000:mode-0002",
+        "analysis:eigen:sample-0000:mode-0003",
+      ],
+      id: "mode-group",
+      kind: "object.mode_visualization.group" as ExplorerNode["kind"],
+      label: "Eigenmodes",
+      objectId: "film",
+      parentId: "model:object:film:visualization:mode-visualization",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get().ref).toMatchObject({
+      fieldIds: [
+        "analysis:eigen:sample-0000:mode-0002",
+        "analysis:eigen:sample-0000:mode-0003",
+      ],
+      type: "mode-visualization",
+    });
+  });
+
   it("selects object texture load nodes as scene-object selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

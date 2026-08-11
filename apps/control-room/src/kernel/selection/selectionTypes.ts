@@ -577,6 +577,7 @@ export type SelectionRef =
     }
   | {
       fieldId: string;
+      fieldIds?: readonly string[];
       frequencyIndex?: number;
       kind:
         | "object.mode_visualization"
@@ -1000,6 +1001,7 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.objectId === right.objectId &&
         left.fieldId === right.fieldId &&
+        arrayEquals(left.fieldIds, right.fieldIds) &&
         left.source === right.source &&
         left.frequencyIndex === right.frequencyIndex &&
         left.modeIndex === right.modeIndex &&

@@ -10,8 +10,10 @@ import {
   buildModeFieldDiagnosticRows,
 } from "./ModeVisualizationInspectorPanel";
 import { resolveInspectorPanel } from "../inspectorRegistry";
+import { buildModeVisualizationBreadcrumbs } from "./mode-visualization/ModeVisualizationBreadcrumbs";
 
-const executeMock = vi.fn(() => Promise.resolve());
+const metadataCalls = vi.hoisted(() => ({ eigen: 0, response: 0 }));
+const executeMock = vi.fn(() => Promise.resolve({ status: "success" }));
 const queuePatchMock = vi.fn();
 
 const mockKernel = {
@@ -66,14 +68,14 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
-  useFrequencyDomainEigenModeFieldMetaResource: () => ({
-    data: null,
-    status: "idle",
-  }),
-  useFrequencyDomainResponseFieldMetaResource: () => ({
-    data: null,
-    status: "idle",
-  }),
+  useFrequencyDomainEigenModeFieldMetaResource: () => {
+    metadataCalls.eigen += 1;
+    return { data: null, status: "idle" };
+  },
+  useFrequencyDomainResponseFieldMetaResource: () => {
+    metadataCalls.response += 1;
+    return { data: null, status: "idle" };
+  },
 }));
 
 describe("ModeVisualizationInspectorPanel", () => {
@@ -150,6 +152,151 @@ describe("ModeVisualizationInspectorPanel", () => {
     expect(view).toContain("Display passes");
   });
 
+  it("renders a navigable object and mode breadcrumb for every mode owner", () => {
+    for (const kind of [
+      "object.mode_visualization",
+      "object.mode_visualization.group",
+      "object.mode_visualization.field",
+      "object.mode_visualization.view",
+    ] as const) {
+      const html = renderModeOwner(kind);
+      expect(html).toContain('aria-label="Mode visualization path"');
+      expect(html).toContain(">Object 123</button>");
+      expect(html).toContain("Mode visualization");
+      if (kind !== "object.mode_visualization") {
+        expect(html).toContain(">Mode visualization</button>");
+      }
+    }
+  });
+
+  it("preserves canonical object and mode selection refs in breadcrumbs", () => {
+    const selection = {
+      kind: "object.mode_visualization.group",
+      label: "Eigenmodes",
+      moduleSource: "study",
+      nodeId: "model:object:film:visualization:mode-visualization:eigen",
+      objectId: "film",
+      ref: {
+        fieldId: "field-a",
+        fieldIds: ["field-a", "field-b"],
+        kind: "object.mode_visualization.group",
+        nodeId: "model:object:film:visualization:mode-visualization:eigen",
+        objectId: "film",
+        source: "eigen-mode",
+        type: "mode-visualization",
+        visualizationTargetId: "mode:film:eigen-mode:field-a",
+      },
+    } as const;
+
+    const [object, mode, current] = buildModeVisualizationBreadcrumbs(selection);
+    expect(object?.selection).toMatchObject({
+      kind: "object.root",
+      nodeId: "model:object:film",
+      objectId: "film",
+      ref: {
+        kind: "object.root",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
+    });
+    expect(mode?.selection).toMatchObject({
+      kind: "object.mode_visualization",
+      nodeId: "model:object:film:visualization:mode-visualization",
+      objectId: "film",
+      ref: {
+        fieldId: "field-a",
+        fieldIds: ["field-a", "field-b"],
+        kind: "object.mode_visualization",
+        source: "eigen-mode",
+        type: "mode-visualization",
+      },
+    });
+    expect(current).toMatchObject({ current: true, label: "Eigenmodes" });
+  });
+
+  it("renders the complete canonical field list for a mode group", () => {
+    const html = renderModeOwner("object.mode_visualization.group", {
+      fieldIds: [
+        "analysis:eigen:sample-0000:mode-0002",
+        "analysis:eigen:sample-0000:mode-0003",
+        "analysis:eigen:sample-0001:mode-0000",
+      ],
+    });
+
+    expect(html).toContain("analysis:eigen:sample-0000:mode-0002");
+    expect(html).toContain("analysis:eigen:sample-0000:mode-0003");
+    expect(html).toContain("analysis:eigen:sample-0001:mode-0000");
+    expect(html).not.toContain("Representative published field");
+  });
+
+  it("keeps metadata requests in the field owner and out of the view owner", () => {
+    metadataCalls.eigen = 0;
+    metadataCalls.response = 0;
+
+    renderModeOwner("object.mode_visualization.field");
+    renderModeOwner("object.mode_visualization.view");
+
+    expect(metadataCalls).toEqual({ eigen: 1, response: 1 });
+  });
+
+  it("keeps the view owner limited to view controls and overlay activation", () => {
+    const html = renderModeOwner("object.mode_visualization.view");
+
+    expect(html).toContain("Mode field view");
+    expect(html).toContain("Display passes");
+    expect(html).not.toContain("Mode vector field diagnostics");
+    expect(html).not.toContain("Field info");
+    expect(html).not.toContain("Resource key");
+    expect(html).not.toContain("Published field");
+  });
+
+  it("executes the canonical mode overlay command through the view action", async () => {
+    const panelModule = await import("./ModeVisualizationInspectorPanel");
+    expect(panelModule).toHaveProperty("executeModeVisualizationActivation");
+    const executeActivation = (
+      panelModule as unknown as {
+        executeModeVisualizationActivation: (options: {
+          kernel: KernelApi;
+          label: string;
+          sourceDetail: string;
+          target: {
+            fieldId: string;
+            objectId: string;
+            source: "eigen-mode";
+          };
+          view: string;
+        }) => Promise<unknown>;
+      }
+    ).executeModeVisualizationActivation;
+    executeMock.mockClear();
+
+    await executeActivation({
+      kernel: mockKernel,
+      label: "Eigenmode 5",
+      sourceDetail: "Mode visualization test",
+      target: {
+        fieldId: "field-eigen-456",
+        objectId: "object-123",
+        source: "eigen-mode",
+      },
+      view: "real",
+    });
+
+    expect(executeMock).toHaveBeenCalledWith(
+      "analysis.eigen.plot-mode-3d",
+      expect.objectContaining({
+        source: "inspector",
+        sourceDetail: "Mode visualization test",
+      }),
+      expect.objectContaining({
+        fieldId: "field-eigen-456",
+        label: "Eigenmode 5",
+        source: "eigen-mode",
+        view: "real",
+      }),
+    );
+  });
+
   it("renders empty state when no target is selected", () => {
     const contribution = resolveInspectorPanel({ kind: "object.mode_visualization" });
     if (!contribution) throw new Error("Missing mode visualization overview route");
@@ -172,7 +319,7 @@ describe("ModeVisualizationInspectorPanel", () => {
     expect(html).toContain("No mode visualization target selected.");
   });
 
-  it("renders target fields for eigen-mode source", () => {
+  it("renders eigen-mode resource metadata only in the field owner", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ref: any = {
       type: "mode-visualization",
@@ -182,7 +329,7 @@ describe("ModeVisualizationInspectorPanel", () => {
       sampleIndex: 2,
       modeIndex: 5,
       view: "phase_rotated_real",
-      kind: "object.mode_visualization.view",
+      kind: "object.mode_visualization.field",
       nodeId: "test-node",
       visualizationTargetId: "mode:object-123:eigen-mode:field-eigen-456",
     };
@@ -191,12 +338,12 @@ describe("ModeVisualizationInspectorPanel", () => {
       <KernelContext.Provider value={mockKernel}>
         {(() => {
           const Component = resolveInspectorPanel({
-            kind: "object.mode_visualization.view",
+            kind: "object.mode_visualization.field",
           })?.component;
-          if (!Component) throw new Error("Missing mode visualization view route");
+          if (!Component) throw new Error("Missing mode visualization field route");
           return <Component
           selection={{
-            kind: "object.mode_visualization.view",
+            kind: "object.mode_visualization.field",
             label: "Eigenmode 5",
             nodeId: "test-node",
             objectId: "object-123",
@@ -208,16 +355,14 @@ describe("ModeVisualizationInspectorPanel", () => {
       </KernelContext.Provider>
     );
 
-    expect(html).toContain("object-123");
-    expect(html).toContain("Eigenmode");
-    expect(html).toContain("sample 2, mode 5");
+    expect(html).toContain("Field resource");
+    expect(html).toContain("Requested field");
     expect(html).toContain("field-eigen-456");
-    expect(html).toContain("Phase-rotated real");
-    expect(html).toContain("Mode vector field diagnostics");
-    expect(html).toContain("Field info");
+    expect(html).toContain("eigen-mode");
+    expect(html).not.toContain("Display passes");
   });
 
-  it("renders target fields for frequency-response source", () => {
+  it("renders response resource metadata only in the field owner", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ref: any = {
       type: "mode-visualization",
@@ -226,7 +371,7 @@ describe("ModeVisualizationInspectorPanel", () => {
       fieldId: "field-resp-999",
       frequencyIndex: 4,
       view: "amplitude",
-      kind: "object.mode_visualization.view",
+      kind: "object.mode_visualization.field",
       nodeId: "test-node",
       visualizationTargetId: "mode:object-789:frequency-response:field-resp-999",
     };
@@ -235,12 +380,12 @@ describe("ModeVisualizationInspectorPanel", () => {
       <KernelContext.Provider value={mockKernel}>
         {(() => {
           const Component = resolveInspectorPanel({
-            kind: "object.mode_visualization.view",
+            kind: "object.mode_visualization.field",
           })?.component;
-          if (!Component) throw new Error("Missing mode visualization view route");
+          if (!Component) throw new Error("Missing mode visualization field route");
           return <Component
           selection={{
-            kind: "object.mode_visualization.view",
+            kind: "object.mode_visualization.field",
             label: "Driven Point 4",
             nodeId: "test-node",
             objectId: "object-789",
@@ -252,11 +397,11 @@ describe("ModeVisualizationInspectorPanel", () => {
       </KernelContext.Provider>
     );
 
-    expect(html).toContain("object-789");
-    expect(html).toContain("Driven response");
-    expect(html).toContain("frequency 4");
+    expect(html).toContain("Field resource");
+    expect(html).toContain("Requested field");
     expect(html).toContain("field-resp-999");
-    expect(html).toContain("Complex (abs)");
+    expect(html).toContain("frequency-response");
+    expect(html).not.toContain("Display passes");
   });
 
   it("builds vector field diagnostics from frequency-domain field metadata", () => {

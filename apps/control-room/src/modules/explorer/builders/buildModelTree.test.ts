@@ -2931,6 +2931,10 @@ describe("buildModelTree", () => {
                 resources: {
                   response_field_resources: [
                     {
+                      field_resource_id: "analysis:frequency-response:field-0000",
+                      frequency_index: 0,
+                    },
+                    {
                       field_resource_id: "analysis:frequency-response:field-0001",
                       frequency_index: 1,
                     },
@@ -2951,7 +2955,7 @@ describe("buildModelTree", () => {
           node.id === "model:object:film:visualization:mode-visualization",
       ),
     ).toMatchObject({
-      badge: "2 field(s)",
+      badge: "3 field(s)",
       kind: "object.mode_visualization",
       label: "Mode visualization",
       objectId: "film",
@@ -2972,6 +2976,19 @@ describe("buildModelTree", () => {
       kind: "object.mode_visualization.field",
       objectId: "film",
       status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film:visualization:mode-visualization:response",
+      ),
+    ).toMatchObject({
+      fieldIds: [
+        "analysis:frequency-response:field-0000",
+        "analysis:frequency-response:field-0001",
+      ],
+      kind: "object.mode_visualization.group",
     });
     expect(
       flattened.find(

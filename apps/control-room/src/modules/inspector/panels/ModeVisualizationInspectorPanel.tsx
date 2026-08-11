@@ -1,20 +1,14 @@
 "use client";
 
-import { Info } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { FrequencyDomainFieldResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
-import {
-  useFrequencyDomainEigenModeFieldMetaResource,
-  useFrequencyDomainResponseFieldMetaResource,
-} from "@/kernel/resources/studyRuntimeResources";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
-import { Button } from "@/shared/ui/Button";
+import type { KernelApi } from "@/kernel/types";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   VisualizationContextSwitch,
@@ -25,7 +19,6 @@ import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
   DEFAULT_ANALYSIS_FIELD_VIEW,
   FrequencyDomainModeDisplayControls,
-  analysisFieldViewLabel,
   normalizeAnalysisFieldView,
   useFrequencyDomainModeDisplaySettings,
 } from "./FrequencyDomainModeDisplayControls";
@@ -41,14 +34,12 @@ function modeVisualizationRef(
   return selection.ref?.type === "mode-visualization" ? selection.ref : null;
 }
 
-function modeVisualizationCommandId(target: ModeVisualizationSelectionRef): string {
+function modeVisualizationCommandId(
+  target: Pick<ModeVisualizationSelectionRef, "source">,
+): string {
   return target.source === "eigen-mode"
     ? "analysis.eigen.plot-mode-3d"
     : "analysis.frequency-response.plot-response-field-3d";
-}
-
-function modeVisualizationSourceLabel(target: ModeVisualizationSelectionRef): string {
-  return target.source === "eigen-mode" ? "Eigenmode" : "Driven response";
 }
 
 function modeVisualizationIndexLabel(target: ModeVisualizationSelectionRef): string {
@@ -198,42 +189,36 @@ export function buildModeFieldDiagnosticRows({
   ];
 }
 
-function ModeFieldDiagnostics({
-  meta,
-  metaStatus,
+export function executeModeVisualizationActivation({
+  kernel,
+  label,
+  sourceDetail,
   target,
+  view,
 }: {
-  meta: FrequencyDomainFieldResource | null;
-  metaStatus: string;
-  target: ModeVisualizationSelectionRef;
+  kernel: KernelApi;
+  label: string;
+  sourceDetail: string;
+  target: Pick<ModeVisualizationSelectionRef, "fieldId" | "source">;
+  view: string;
 }) {
-  return (
-    <div className="fm-mode-field-diagnostics">
-      {buildModeFieldDiagnosticRows({ meta, metaStatus, target }).map((row) => (
-        <FieldRow key={row.label} label={row.label} value={row.value} />
-      ))}
-    </div>
+  return kernel.commands.execute(
+    modeVisualizationCommandId(target),
+    createCommandContext("inspector", kernel, { sourceDetail }),
+    {
+      fieldId: target.fieldId,
+      label,
+      phaseRad: 0,
+      source: target.source,
+      view,
+    },
   );
 }
 
-export function ModeVisualizationInspectorPanel({
-  selection,
-}: InspectorPanelProps) {
+export function ModeVisualizationViewControls({ selection }: InspectorPanelProps) {
   const visualizationViewContext = useVisualizationViewContext();
   const target = modeVisualizationRef(selection);
   const kernel = useKernel();
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const eigenFieldMeta = useFrequencyDomainEigenModeFieldMetaResource(
-    target?.source === "eigen-mode" ? target.sampleIndex : null,
-    target?.source === "eigen-mode" ? target.modeIndex : null,
-    { enabled: target?.source === "eigen-mode" },
-  );
-  const responseFieldMeta = useFrequencyDomainResponseFieldMetaResource(
-    target?.source === "frequency-response" ? target.frequencyIndex : null,
-    { enabled: target?.source === "frequency-response" },
-  );
-  const activeFieldMeta =
-    target?.source === "eigen-mode" ? eigenFieldMeta : responseFieldMeta;
   const sourceDetail = useMemo(
     () =>
       target
@@ -273,17 +258,13 @@ export function ModeVisualizationInspectorPanel({
     }
     if (lastActivationKey.current === activationKey) return;
     lastActivationKey.current = activationKey;
-    void kernel.commands.execute(
-      modeVisualizationCommandId(target),
-      createCommandContext("inspector", kernel, { sourceDetail }),
-      {
-        fieldId: target.fieldId,
-        label: selection.label ?? modeVisualizationIndexLabel(target),
-        phaseRad: 0,
-        source: target.source,
-        view: requestedView,
-      },
-    );
+    void executeModeVisualizationActivation({
+      kernel,
+      label: selection.label ?? modeVisualizationIndexLabel(target),
+      sourceDetail,
+      target,
+      view: requestedView,
+    });
   }, [
     activationKey,
     kernel,
@@ -319,37 +300,7 @@ export function ModeVisualizationInspectorPanel({
       <InspectorGroup title="View">
         <VisualizationContextSwitch />
       </InspectorGroup>
-      <InspectorGroup title="Mode Visualization">
-        <FieldRow label="Object" value={target.objectId} />
-      <FieldRow label="Source" value={modeVisualizationSourceLabel(target)} />
-      <FieldRow label="Selection" value={modeVisualizationIndexLabel(target)} />
-      <FieldRow label="Field" value={target.fieldId} />
-      <FieldRow
-        label="Requested view"
-        value={analysisFieldViewLabel(requestedView)}
-      />
-      <div className="fm-mode-field-diagnostics__toolbar">
-        <Button
-          aria-expanded={diagnosticsOpen}
-          aria-label="Mode vector field diagnostics"
-          className="fm-mode-field-diagnostics__button"
-          size="sm"
-          title="Mode vector field diagnostics"
-          type="button"
-          variant="secondary"
-          onClick={() => setDiagnosticsOpen((open) => !open)}
-        >
-          <Info size={14} />
-          <span>Field info</span>
-        </Button>
-      </div>
-      {diagnosticsOpen ? (
-        <ModeFieldDiagnostics
-          meta={activeFieldMeta.data ?? null}
-          metaStatus={activeFieldMeta.status}
-          target={target}
-        />
-      ) : null}
+      <InspectorGroup title="Render controls">
         <FrequencyDomainModeDisplayControls
           disabled={false}
           labelPrefix="Mode visualization"
@@ -360,4 +311,8 @@ export function ModeVisualizationInspectorPanel({
       </InspectorGroup>
     </>
   );
+}
+
+export function ModeVisualizationInspectorPanel(props: InspectorPanelProps) {
+  return <ModeVisualizationViewControls {...props} />;
 }

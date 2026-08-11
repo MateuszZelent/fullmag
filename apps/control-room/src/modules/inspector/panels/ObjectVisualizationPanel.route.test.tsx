@@ -153,7 +153,18 @@ vi.mock("../primitives/FieldRow", () => ({
 }));
 vi.mock("../primitives/FeedbackBanner", () => ({ FeedbackBanner: () => null }));
 vi.mock("../primitives/InspectorGroup", () => ({
-  InspectorGroup: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  InspectorGroup: ({
+    children,
+    title,
+  }: {
+    children?: React.ReactNode;
+    title?: React.ReactNode;
+  }) => (
+    <section>
+      <h2>{title}</h2>
+      {children}
+    </section>
+  ),
 }));
 vi.mock("./ObjectVisualizationOverview", () => ({
   ObjectVisualizationOverview: () => null,
@@ -243,15 +254,29 @@ describe("ObjectVisualizationPanel lane routing", () => {
   it("gives object, Airbox, and mesh-part routes distinct owner identities", () => {
     testState.discretization = "fdm";
 
-    expect(renderResolvedInspector(selection)).toContain(
-      'data-inspector-owner="object.visualization"',
-    );
-    expect(renderResolvedInspector(airboxSelection)).toContain(
-      'data-inspector-owner="airbox.visualization"',
-    );
-    expect(renderResolvedInspector(meshPartSelection)).toContain(
-      'data-inspector-owner="mesh-part.visualization"',
-    );
+    const object = renderResolvedInspector(selection);
+    expect(object).toContain('data-inspector-owner="object.visualization"');
+    expect(object).toContain("Object visualization");
+    expect(object).toContain("Target scope:Magnetic object");
+    expect(object).toContain("Target ID:object:film");
+    expect(object).toContain("canonical object visualization target");
+    expect(object).toContain("Display passes, quantity, vectors, wireframe");
+
+    const airbox = renderResolvedInspector(airboxSelection);
+    expect(airbox).toContain('data-inspector-owner="airbox.visualization"');
+    expect(airbox).toContain("Airbox visualization");
+    expect(airbox).toContain("Target scope:Airbox");
+    expect(airbox).toContain("Target ID:fdm-domain");
+    expect(airbox).toContain("Airbox-specific bounds and field support");
+    expect(airbox).toContain("Airbox extent, display passes, field quantity");
+
+    const meshPart = renderResolvedInspector(meshPartSelection);
+    expect(meshPart).toContain('data-inspector-owner="mesh-part.visualization"');
+    expect(meshPart).toContain("Mesh-part visualization");
+    expect(meshPart).toContain("Target scope:Mesh part");
+    expect(meshPart).toContain("Target ID:part:film-volume");
+    expect(meshPart).toContain("canonical mesh-part target");
+    expect(meshPart).toContain("Part visibility, render mode, vectors, wireframe");
   });
 
   it("gives every visualization debug route its own owner component", () => {
@@ -265,6 +290,11 @@ describe("ObjectVisualizationPanel lane routing", () => {
     expect(new Set(owners.map((owner) => owner?.component)).size).toBe(
       debugKinds.length,
     );
+    expect(owners.map((owner) => owner?.title)).toEqual([
+      "Airbox Visualization Debug",
+      "Object Visualization Debug",
+      "Region Visualization Debug",
+    ]);
   });
 
   it("keeps a normal explicit-FDM object visualization route on the object target", () => {

@@ -1,3 +1,5 @@
+"use client";
+
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -5,6 +7,7 @@ import {
   modeVisualizationSelectionRef,
   modeVisualizationSourceLabel,
 } from "./ModeVisualizationOverviewPanel";
+import { ModeVisualizationBreadcrumbs } from "./ModeVisualizationBreadcrumbs";
 
 export function ModeVisualizationGroupPanel({ selection }: InspectorPanelProps) {
   const target = modeVisualizationSelectionRef(selection);
@@ -13,15 +16,18 @@ export function ModeVisualizationGroupPanel({ selection }: InspectorPanelProps) 
       className="fm-inspector-panel"
       data-inspector-owner="mode-visualization.group"
     >
+      <ModeVisualizationBreadcrumbs selection={selection} />
       <InspectorGroup title="Available fields">
         {target ? (
           <>
             <FieldRow label="Family" value={modeVisualizationSourceLabel(target)} />
-            <FieldRow label={selection.label ?? "Published field"} value={target.fieldId} />
-            <FieldRow
-              label="Selection contract"
-              value="Representative published field; full family remains in Explorer"
-            />
+            {(target.fieldIds ?? [target.fieldId]).map((fieldId, index) => (
+              <FieldRow
+                key={fieldId}
+                label={`Field ${index + 1}`}
+                value={fieldId}
+              />
+            ))}
           </>
         ) : (
           <p className="fm-inspector-empty">No mode field group selected.</p>

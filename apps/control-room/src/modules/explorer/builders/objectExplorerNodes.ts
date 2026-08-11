@@ -296,6 +296,7 @@ function modeVisualizationGroupNode({
     badge: `${fields.length}`,
     analysisFieldSource: firstField.source,
     fieldId: firstField.fieldId,
+    fieldIds: fields.map((field) => field.fieldId),
     icon: "folder",
     objectId,
     status: "ready",

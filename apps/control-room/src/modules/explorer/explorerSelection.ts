@@ -281,6 +281,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     if (!source) return null;
     return {
       fieldId: node.fieldId,
+      ...(node.fieldIds ? { fieldIds: node.fieldIds } : {}),
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),

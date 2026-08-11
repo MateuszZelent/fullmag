@@ -1,8 +1,11 @@
+"use client";
+
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { ModeVisualizationBreadcrumbs } from "./ModeVisualizationBreadcrumbs";
 
 export type ModeVisualizationSelectionRef = Extract<
   SelectionRef,
@@ -42,6 +45,7 @@ export function ModeVisualizationOverviewPanel({
       className="fm-inspector-panel"
       data-inspector-owner="mode-visualization.overview"
     >
+      <ModeVisualizationBreadcrumbs selection={selection} />
       <InspectorGroup title="Mode visualization overview">
         {target ? (
           <>

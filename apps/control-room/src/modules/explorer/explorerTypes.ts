@@ -290,6 +290,7 @@ export interface ExplorerNode {
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
+  fieldIds?: readonly string[];
   extensionId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
