@@ -5,6 +5,53 @@ use crate::geometry::{
 };
 use std::collections::BTreeMap;
 
+#[test]
+fn multilayer_pair_kernel_footprint_counts_every_abi_v2_pair_payload() {
+    assert_eq!(
+        checked_multilayer_pair_kernel_footprint([4, 5, 6], 3)
+            .expect("small ABI v2 tensor footprint should be representable"),
+        829_440
+    );
+}
+
+#[test]
+fn multilayer_pair_kernel_footprint_exposes_l_squared_cost_beyond_shift_telemetry() {
+    let abi_v2_bytes = checked_multilayer_pair_kernel_footprint([262_144, 1, 1], 8)
+        .expect("ABI v2 tensor footprint should be representable");
+    let shift_only_bytes = 2_097_152_u64 * 6 * 16 * 15;
+
+    assert_eq!(abi_v2_bytes, 12 * 1024 * 1024 * 1024);
+    assert!(shift_only_bytes < FDM_GRID_MAX_BYTES);
+    assert!(abi_v2_bytes > FDM_GRID_MAX_BYTES);
+}
+
+#[test]
+fn multilayer_pair_kernel_footprint_rejects_pair_count_above_abi_v2_u32_limit() {
+    let error = checked_multilayer_pair_kernel_footprint([1, 1, 1], 65_536)
+        .expect_err("ABI v2 must reject L squared above its u32 pair-count limit");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("u32 limit")));
+}
+
+#[test]
+fn multilayer_pair_kernel_footprint_rejects_padded_and_byte_overflow() {
+    let padded_error = checked_multilayer_pair_kernel_footprint([u32::MAX, u32::MAX, 1], 1)
+        .expect_err("padded cell product must not wrap");
+    assert!(padded_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("padded cell count overflow")));
+
+    let bytes_error = checked_multilayer_pair_kernel_footprint([u32::MAX, 1, 1], 65_535)
+        .expect_err("ABI v2 byte product must not wrap");
+    assert!(bytes_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("payload byte overflow")));
+}
+
 fn resolved_stage_autosave(
     stage_id: &str,
     format: AutosaveFormatIR,
@@ -6653,6 +6700,60 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
         hybrid: None,
     });
     ir
+}
+
+fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    for index in 2..8 {
+        let name = format!("layer_{index}");
+        let geometry_name = format!("{name}_geom");
+        let region_name = format!("{name}_region");
+        ir.geometry.entries.push(GeometryEntryIR::Translate {
+            name: geometry_name.clone(),
+            base: std::boxed::Box::new(GeometryEntryIR::Box {
+                name: format!("{name}_base"),
+                size: [40e-9, 20e-9, 2e-9],
+            }),
+            by: [0.0, 0.0, index as f64 * 4e-9],
+        });
+        ir.regions.push(fullmag_ir::RegionIR {
+            name: region_name.clone(),
+            geometry: geometry_name,
+        });
+        ir.magnets.push(fullmag_ir::MagnetIR {
+            name,
+            region: region_name,
+            material: "Py".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [1.0, 0.0, 0.0],
+            }),
+            absorbing_boundary: None,
+        });
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: Some([262_144, 1, 1]),
+        common_cells_xy: None,
+    });
+    ir
+}
+
+#[test]
+fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
+    let error = plan(&eight_layer_multilayer_problem_for_kernel_budget())
+        .expect_err("full ABI v2 pair payload must fail planner admission before allocation");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("kernel memory budget exceeded")
+            && reason.contains("estimated_bytes=12884901888")));
 }
 
 fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {

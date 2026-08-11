@@ -32,6 +32,69 @@ use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
 
+/// Calculate the full host tensor payload required by the multilayer ABI v2.
+///
+/// ABI v2 materializes one six-component `complex<f64>` tensor for every
+/// ordered layer pair. `estimated_unique_kernels` remains reuse telemetry and
+/// must not be used as an allocation estimate.
+pub fn checked_multilayer_pair_kernel_footprint(
+    common_cells: [u32; 3],
+    layer_count: usize,
+) -> Result<u64, PlanError> {
+    let requested_counts = format!(
+        "[{},{},{}]",
+        common_cells[0], common_cells[1], common_cells[2]
+    );
+    let padded_cells = common_cells.into_iter().try_fold(1_u64, |acc, cells| {
+        let cells = u64::try_from(cells).map_err(|_| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution padded cell conversion failed: requested_counts={requested_counts}"
+            )],
+        })?;
+        let padded_axis = cells.checked_mul(2).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution padded cell count overflow: requested_counts={requested_counts}"
+            )],
+        })?;
+        acc.checked_mul(padded_axis).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution padded cell count overflow: requested_counts={requested_counts}"
+            )],
+        })
+    })?;
+    let layer_count_u64 = u64::try_from(layer_count).map_err(|_| PlanError {
+        reasons: vec![format!(
+            "multilayer_convolution layer count conversion failed: layer_count={layer_count}"
+        )],
+    })?;
+    let pair_kernel_count = layer_count_u64
+        .checked_mul(layer_count_u64)
+        .ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution pair kernel count overflow: layer_count={layer_count}"
+            )],
+        })?;
+    let abi_v2_pair_limit = u64::try_from(u32::MAX).map_err(|_| PlanError {
+        reasons: vec!["multilayer_convolution ABI v2 pair limit conversion failed".to_string()],
+    })?;
+    if pair_kernel_count > abi_v2_pair_limit {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution pair kernel count exceeds ABI v2 u32 limit: layer_count={layer_count} pair_kernel_count={pair_kernel_count} max_pair_kernel_count={abi_v2_pair_limit}"
+            )],
+        });
+    }
+    padded_cells
+        .checked_mul(6)
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|bytes| bytes.checked_mul(pair_kernel_count))
+        .ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution kernel payload byte overflow: requested_counts={requested_counts} layer_count={layer_count}"
+            )],
+        })
+}
+
 fn grid_sample_points(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
@@ -2634,22 +2697,46 @@ pub(crate) fn plan_fdm_multilayer(
         }
     }
 
-    let estimated_unique_kernels = unique_shifts.len() as u32;
-    let estimated_pair_kernels = (lowered_bodies.len() * lowered_bodies.len()) as u32;
-    let padded_len = common_cells.iter().try_fold(1u64, |acc, cells| {
-        acc.checked_mul((*cells as u64).checked_mul(2)?)
-    });
-    let estimated_kernel_bytes = padded_len
-        .and_then(|cells| cells.checked_mul(6))
-        .and_then(|bytes| bytes.checked_mul(16))
-        .and_then(|bytes| bytes.checked_mul(estimated_unique_kernels as u64));
-    let estimated_kernel_bytes = match (padded_len, estimated_kernel_bytes) {
-        (Some(_padded_len), Some(estimated_kernel_bytes)) => estimated_kernel_bytes,
-        _ => {
-            errors.push(
-                "multilayer_convolution kernel size overflow: resolved common_cells or kernel count exceeds u64"
-                    .to_string(),
-            );
+    let estimated_unique_kernels = match u32::try_from(unique_shifts.len()) {
+        Ok(count) => count,
+        Err(_) => {
+            errors.push(format!(
+                "multilayer_convolution unique shift telemetry exceeds u32: unique_shifts={}",
+                unique_shifts.len()
+            ));
+            0
+        }
+    };
+    let estimated_pair_kernels = match u64::try_from(lowered_bodies.len())
+        .ok()
+        .and_then(|count| count.checked_mul(count))
+        .and_then(|count| u32::try_from(count).ok())
+    {
+        Some(count) => count,
+        None => {
+            errors.push(format!(
+                "multilayer_convolution pair kernel telemetry exceeds ABI v2 u32 limit: layer_count={}",
+                lowered_bodies.len()
+            ));
+            0
+        }
+    };
+    let estimated_kernel_bytes = match checked_multilayer_pair_kernel_footprint(
+        common_cells,
+        lowered_bodies.len(),
+    ) {
+        Ok(estimated_kernel_bytes) if estimated_kernel_bytes <= crate::FDM_GRID_MAX_BYTES => {
+            estimated_kernel_bytes
+        }
+        Ok(estimated_kernel_bytes) => {
+            errors.push(format!(
+                "multilayer_convolution kernel memory budget exceeded: estimated_bytes={estimated_kernel_bytes} max_bytes={}",
+                crate::FDM_GRID_MAX_BYTES
+            ));
+            0
+        }
+        Err(error) => {
+            errors.extend(error.reasons);
             0
         }
     };

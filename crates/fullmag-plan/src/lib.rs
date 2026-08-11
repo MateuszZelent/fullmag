@@ -37,7 +37,7 @@ pub mod boundary_geometry;
 
 pub use error::PlanError;
 pub use fdm::{
-    fdm_multilayer_cuda_containment_reason_codes,
+    checked_multilayer_pair_kernel_footprint, fdm_multilayer_cuda_containment_reason_codes,
     FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
     FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED, FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED,
     FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
