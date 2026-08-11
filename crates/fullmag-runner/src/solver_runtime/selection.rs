@@ -1,6 +1,6 @@
 //! Runtime selection helpers for user/env policy, registry lookup, and device hints.
 
-use fullmag_ir::{ExecutionDevice, FemPlanIR, ProblemIR};
+use fullmag_ir::{ExecutionDevice, FdmPlanIR, FemPlanIR, ProblemIR};
 use serde_json::Value;
 
 use crate::fdm::gpu::cuda::native as native_fdm;
@@ -53,6 +53,25 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
             .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
     }
+}
+
+pub(super) fn public_fdm_gpu_charge_device_request_from_sources(
+    script_device: Option<&str>,
+    execution_env: Option<&str>,
+) -> String {
+    match execution_env {
+        Some("gpu") | Some("cuda") => "gpu".to_string(),
+        Some(other) => other.to_string(),
+        None => script_device.unwrap_or("auto").replace("cuda", "gpu"),
+    }
+}
+
+pub(crate) fn public_fdm_gpu_charge_device_request(problem: &ProblemIR) -> String {
+    let execution_env = std::env::var("FULLMAG_FDM_EXECUTION").ok();
+    public_fdm_gpu_charge_device_request_from_sources(
+        runtime_device(problem),
+        execution_env.as_deref(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +236,28 @@ pub(crate) fn runtime_fdm_policy(problem: &ProblemIR) -> &'static str {
     }
 }
 
+pub(crate) fn require_public_fdm_gpu_charge_runtime_selection(
+    charge_plan_active: bool,
+    requested_device: &str,
+    resolution: &EngineResolution<FdmEngine>,
+) -> Result<(), RunError> {
+    if !charge_plan_active {
+        return Ok(());
+    }
+    if requested_device == "gpu"
+        && resolution.engine == FdmEngine::CudaFdm
+        && resolution.fallback.is_none()
+    {
+        return Ok(());
+    }
+    Err(RunError {
+        message: format!(
+            "fdm_gpu_charge_runtime_scope_rejected: requested_device={requested_device}; resolved_engine={}; required=explicit_gpu+cuda_available+no_cpu_fallback; fallback=none",
+            fdm_engine_id(resolution.engine)
+        ),
+    })
+}
+
 fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
     problem.current_modules.iter().any(|module| {
         matches!(
@@ -323,6 +364,20 @@ pub(crate) fn resolve_fdm_engine(problem: &ProblemIR) -> Result<FdmEngine, RunEr
     resolve_fdm_engine_with_trail(problem).map(|resolution| resolution.engine)
 }
 
+pub(crate) fn resolve_fdm_engine_for_plan_with_trail(
+    problem: &ProblemIR,
+    plan: &FdmPlanIR,
+) -> Result<EngineResolution<FdmEngine>, RunError> {
+    let requested_device = public_fdm_gpu_charge_device_request(problem);
+    let resolution = resolve_fdm_engine_with_trail(problem)?;
+    require_public_fdm_gpu_charge_runtime_selection(
+        !plan.fdm_gpu_charge_transports.is_empty(),
+        &requested_device,
+        &resolution,
+    )?;
+    Ok(resolution)
+}
+
 pub(crate) fn runtime_fem_order(problem: &ProblemIR) -> u32 {
     problem
         .backend_policy
@@ -382,13 +437,109 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
 mod tests {
     use super::{
         effective_fem_device_request_from_snapshot, effective_fem_device_request_from_sources,
-        resolve_fdm_engine_with_trail, FemSelectionEnvSnapshot,
+        public_fdm_gpu_charge_device_request_from_sources,
+        require_public_fdm_gpu_charge_runtime_selection, resolve_fdm_engine_with_trail,
+        FemSelectionEnvSnapshot,
     };
+    use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
     use fullmag_ir::ProblemIR;
     use serde_json::Value;
     use std::sync::{LazyLock, Mutex};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn public_gpu_charge_preserves_explicit_auto_and_unknown_environment_requests() {
+        assert_eq!(
+            public_fdm_gpu_charge_device_request_from_sources(Some("gpu"), None),
+            "gpu"
+        );
+        assert_eq!(
+            public_fdm_gpu_charge_device_request_from_sources(Some("cuda"), None),
+            "gpu"
+        );
+        assert_eq!(
+            public_fdm_gpu_charge_device_request_from_sources(Some("gpu"), Some("auto")),
+            "auto"
+        );
+        assert_eq!(
+            public_fdm_gpu_charge_device_request_from_sources(Some("gpu"), Some("unexpected")),
+            "unexpected"
+        );
+        assert_eq!(
+            public_fdm_gpu_charge_device_request_from_sources(Some("auto"), Some("cuda")),
+            "gpu"
+        );
+    }
+
+    #[test]
+    fn public_gpu_charge_rejects_every_non_gpu_runtime_request() {
+        let resolved_cuda = EngineResolution {
+            engine: FdmEngine::CudaFdm,
+            fallback: None,
+        };
+        for requested in ["cpu", "auto", "unexpected"] {
+            let error =
+                require_public_fdm_gpu_charge_runtime_selection(true, requested, &resolved_cuda)
+                    .expect_err("public GPU charge must require an explicit GPU request");
+            assert!(
+                error
+                    .message
+                    .contains("fdm_gpu_charge_runtime_scope_rejected")
+                    && error
+                        .message
+                        .contains(&format!("requested_device={requested}"))
+                    && error.message.contains("fallback=none"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn public_gpu_charge_rejects_unavailable_cuda_without_cpu_fallback() {
+        let resolved_cpu = EngineResolution {
+            engine: FdmEngine::CpuReference,
+            fallback: None,
+        };
+        let error = require_public_fdm_gpu_charge_runtime_selection(true, "gpu", &resolved_cpu)
+            .expect_err("public GPU charge must fail when CUDA is unavailable");
+        assert!(
+            error
+                .message
+                .contains("fdm_gpu_charge_runtime_scope_rejected")
+                && error.message.contains("resolved_engine=fdm_cpu_reference")
+                && error.message.contains("fallback=none"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn public_gpu_charge_accepts_only_explicit_cuda_without_fallback() {
+        let resolved_cuda = EngineResolution {
+            engine: FdmEngine::CudaFdm,
+            fallback: None,
+        };
+        require_public_fdm_gpu_charge_runtime_selection(true, "gpu", &resolved_cuda)
+            .expect("explicit GPU plus CUDA must pass");
+        require_public_fdm_gpu_charge_runtime_selection(false, "auto", &resolved_cuda)
+            .expect("legacy FDM plans retain their current selection policy");
+
+        let cuda_with_fallback = EngineResolution {
+            engine: FdmEngine::CudaFdm,
+            fallback: Some(crate::solver_runtime::diagnostics::runtime_fallback(
+                "fdm_cuda",
+                "fdm_cpu_reference",
+                "test_fallback",
+                "test fallback".into(),
+            )),
+        };
+        let error =
+            require_public_fdm_gpu_charge_runtime_selection(true, "gpu", &cuda_with_fallback)
+                .expect_err("public GPU charge must reject every fallback trail");
+        assert!(error.message.contains("fallback=none"));
+    }
 
     #[test]
     fn fem_effective_request_collision_matrix_is_deterministic() {

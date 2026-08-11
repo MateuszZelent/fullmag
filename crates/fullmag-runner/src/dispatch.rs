@@ -72,7 +72,7 @@ use crate::solver_runtime::selection::all_in_gpu_fem_required;
 pub(crate) use crate::solver_runtime::selection::{
     all_in_gpu_fem_env_requested, effective_fem_device_request,
     effective_fem_device_request_for_plan, fem_gpu_execution_forced, resolve_fdm_engine,
-    resolve_fdm_engine_with_trail,
+    resolve_fdm_engine_for_plan_with_trail, resolve_fdm_engine_with_trail,
 };
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
@@ -280,6 +280,9 @@ fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
 
 fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'static str> {
     let mut unsupported = Vec::new();
+    if !plan.fdm_gpu_charge_transports.is_empty() {
+        unsupported.push("gpu_charge_transport");
+    }
     if plan.boundary_geometry.is_some() || plan.boundary_correction.is_some() {
         unsupported.push("boundary_correction");
     }
@@ -547,9 +550,12 @@ fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
     _explicit_selection: bool,
+    plan: Option<&FdmPlanIR>,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let requested_device = requested_registry_device_for_fdm(problem);
+    let guard_requested_device =
+        crate::solver_runtime::selection::public_fdm_gpu_charge_device_request(problem);
     let forced_device = requested_device != "auto";
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
@@ -600,6 +606,16 @@ fn resolve_fdm_engine_with_registry(
         worker = cpu_resolved.worker;
         resolved_device = cpu_resolved.device;
     }
+
+    let guarded_resolution = EngineResolution {
+        engine,
+        fallback: fallback.clone(),
+    };
+    crate::solver_runtime::selection::require_public_fdm_gpu_charge_runtime_selection(
+        plan.is_some_and(|plan| !plan.fdm_gpu_charge_transports.is_empty()),
+        &guard_requested_device,
+        &guarded_resolution,
+    )?;
 
     Ok(DispatchEngineResolution {
         engine: DispatchEngine::Fdm(engine),
@@ -1285,8 +1301,11 @@ pub(crate) fn resolve_with_registry(
     let plan = fullmag_plan::plan(problem)?;
     match registry {
         Some(registry) => match &plan.backend_plan {
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
-                resolve_fdm_engine_with_registry(problem, registry, explicit_selection)
+            BackendPlanIR::Fdm(fdm) => {
+                resolve_fdm_engine_with_registry(problem, registry, explicit_selection, Some(fdm))
+            }
+            BackendPlanIR::FdmMultilayer(_) => {
+                resolve_fdm_engine_with_registry(problem, registry, explicit_selection, None)
             }
             BackendPlanIR::Fem(fem) => resolve_fem_engine_with_registry(
                 problem,
@@ -1303,7 +1322,23 @@ pub(crate) fn resolve_with_registry(
             }
         },
         None => match &plan.backend_plan {
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
+            BackendPlanIR::Fdm(fdm) => {
+                let resolution = resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
+                Ok(DispatchEngineResolution {
+                    engine: DispatchEngine::Fdm(resolution.engine),
+                    fallback: resolution.fallback,
+                    runtime_family: None,
+                    worker: None,
+                    resolved_backend: "fdm".to_string(),
+                    resolved_device: match resolution.engine {
+                        FdmEngine::CudaFdm => "gpu".to_string(),
+                        FdmEngine::CpuReference => "cpu".to_string(),
+                    },
+                    resolved_precision: runtime_precision(problem).to_string(),
+                    fem_crossover_decision: None,
+                })
+            }
+            BackendPlanIR::FdmMultilayer(_) => {
                 let resolution = resolve_fdm_engine_with_trail(problem)?;
                 Ok(DispatchEngineResolution {
                     engine: DispatchEngine::Fdm(resolution.engine),
@@ -2018,6 +2053,30 @@ pub(crate) fn execute_fdm<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    if !plan.fdm_gpu_charge_transports.is_empty() {
+        if !matches!(engine, FdmEngine::CudaFdm) {
+            return Err(RunError {
+                message: "public FDM GPU charge-only plan resolved to a non-CUDA engine; fallback is forbidden"
+                    .to_string(),
+            });
+        }
+        #[cfg(feature = "cuda")]
+        {
+            let _ = (until_seconds, outputs, live);
+            return crate::fdm::gpu::cuda::charge_transport::execute_public_gpu_charge_only(
+                plan,
+                artifact_writer,
+            );
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (until_seconds, outputs, live, artifact_writer);
+            return Err(RunError {
+                message: "public FDM GPU charge-only execution requires a runner built with the cuda feature; fallback is forbidden"
+                    .to_string(),
+            });
+        }
+    }
     if matches!(engine, FdmEngine::CpuReference) {
         let unsupported = unsupported_cpu_fdm_terms(plan, outputs);
         if !unsupported.is_empty() {
@@ -6222,9 +6281,11 @@ mod tests {
     use crate::eigen::EigenSolverModel;
     use crate::types::AuxiliaryArtifact;
     use fullmag_ir::{
-        AntennaIR, BackendTarget, CurrentModuleIR, CurrentTransportModelIR, DiscretizationHintsIR,
-        FdmHintsIR, FemHintsIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
-        FemObjectSegmentIR, FemPlanIR, MeshIR, ProblemIR, RfDriveIR,
+        AntennaIR, BackendTarget, ChargePotentialGaugeIR, ChargeSolverPolicyIR, CurrentModuleIR,
+        CurrentTransportModelIR, DiscretizationHintsIR, ExecutionDevice, ExecutionMode,
+        ExecutionPrecision, FdmHintsIR, FemHintsIR, FemMeshPartIR, FemMeshPartRole,
+        FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, LinearTransportSolverPolicyIR, MeshIR,
+        ProblemIR, RequestedTransportExecutionIR, ResolvedFdmGpuChargeTransportIR, RfDriveIR,
     };
     #[cfg(feature = "fem-gpu")]
     use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR};
@@ -6277,6 +6338,51 @@ mod tests {
         plan.has_oersted_cylinder = true;
 
         assert!(unsupported_cpu_fdm_terms(&plan, &[]).is_empty());
+    }
+
+    #[test]
+    fn cpu_fdm_capability_rejects_public_gpu_charge_transport() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.fdm_gpu_charge_transports = vec![ResolvedFdmGpuChargeTransportIR {
+            descriptor_schema: "fdm_gpu_charge_transport.v1".into(),
+            descriptor_revision: 1,
+            source_revision: 1,
+            implementation_version: "fdm_gpu_charge_transport_v1".into(),
+            validation_state: "semantic_only".into(),
+            descriptor_sha256: "test".into(),
+            module_id: "charge".into(),
+            requested_execution: RequestedTransportExecutionIR {
+                discretization: BackendTarget::Fdm,
+                device: ExecutionDevice::Gpu,
+                precision: ExecutionPrecision::Double,
+                execution_mode: ExecutionMode::Strict,
+            },
+            resolved_discretization: BackendTarget::Fdm,
+            resolved_device: ExecutionDevice::Gpu,
+            resolved_precision: ExecutionPrecision::Double,
+            resolved_execution_mode: ExecutionMode::Strict,
+            capabilities: vec![],
+            charge_active_cells: vec![],
+            charge_conductivity_spm: vec![],
+            charge_boundaries: vec![],
+            charge_gauge: ChargePotentialGaugeIR::DirichletReference,
+            charge_solver: ChargeSolverPolicyIR {
+                engine: "cg".into(),
+                linear: LinearTransportSolverPolicyIR {
+                    relative_tolerance: 1.0e-10,
+                    absolute_tolerance: 0.0,
+                    max_iterations: 1000,
+                },
+                physical_residual_version: "charge_balance_integrated_l2.v1".into(),
+                operator_version: "fv_charge_harmonic_v1".into(),
+            },
+            region_ids: vec![],
+        }];
+
+        assert_eq!(
+            unsupported_cpu_fdm_terms(&plan, &[]),
+            vec!["gpu_charge_transport"]
+        );
     }
 
     #[cfg(feature = "fem-gpu")]

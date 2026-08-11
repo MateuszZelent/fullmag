@@ -134,6 +134,8 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HAni
                 | QuantityId::HEff
                 | QuantityId::HOe
+                | QuantityId::VElectric
+                | QuantityId::JCharge
         ),
     };
     engine_exposes && fdm_plan_enables_quantity(plan, id)
@@ -166,6 +168,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenTotal => true,
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
         QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
+        QuantityId::VElectric | QuantityId::JCharge => !plan.fdm_gpu_charge_transports.is_empty(),
         QuantityId::U
         | QuantityId::DemagPhi
         | QuantityId::Eps
@@ -187,8 +190,6 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::MatDind
         | QuantityId::MatDbulk
         | QuantityId::DmDt
-        | QuantityId::VElectric
-        | QuantityId::JCharge
         | QuantityId::SpinPotential
         | QuantityId::SpinCurrentTensor
         | QuantityId::TorqueStt

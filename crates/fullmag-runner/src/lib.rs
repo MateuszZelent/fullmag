@@ -2231,7 +2231,7 @@ pub fn run_planned_problem(
     let cpu_threads = configured_cpu_threads(problem);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
-            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
             let mut executed = dispatch::execute_fdm(
                 resolution.engine,
                 fdm,
@@ -2561,7 +2561,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
-            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
             let mut executed = dispatch::execute_fdm(
                 resolution.engine,
                 fdm,
@@ -2974,7 +2974,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
-            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
             let mut executed = dispatch::execute_fdm(
                 resolution.engine,
                 fdm,
@@ -3717,7 +3717,7 @@ pub fn snapshot_problem_preview(
     let plan = fullmag_plan::plan(problem)?;
     match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
+            let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             dispatch::snapshot_fdm_preview(engine, fdm, request)
         }
         BackendPlanIR::FdmMultilayer(_) => Err(RunError {
@@ -3749,7 +3749,7 @@ pub fn snapshot_problem_vector_fields(
     let plan = fullmag_plan::plan(problem)?;
     match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
+            let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             dispatch::snapshot_fdm_vector_fields(engine, fdm, quantities, request)
         }
         BackendPlanIR::FdmMultilayer(_) => Err(RunError {
@@ -3784,8 +3784,8 @@ pub fn resolve_planned_runtime_engine(
 ) -> Result<RuntimeEngineInfo, RunError> {
     require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
-        BackendPlanIR::Fdm(_) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
+        BackendPlanIR::Fdm(fdm) => {
+            let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             let (engine_id, engine_label, accelerator) = match engine {
                 dispatch::FdmEngine::CpuReference => ("fdm_cpu_reference", "CPU FDM", "cpu"),
                 dispatch::FdmEngine::CudaFdm => ("fdm_cuda", "CUDA FDM", "cuda"),
@@ -3967,8 +3967,8 @@ pub fn resolve_planned_runtime_capabilities(
 ) -> Result<BackendCapabilities, RunError> {
     require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
-        BackendPlanIR::Fdm(_) => Ok(capabilities_for_fdm_engine(
-            dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
+        BackendPlanIR::Fdm(fdm) => Ok(capabilities_for_fdm_engine(
+            dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine,
             capabilities::FdmCapabilityProfile::SingleGrid,
         )),
         BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(

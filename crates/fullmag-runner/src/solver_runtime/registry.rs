@@ -1,6 +1,6 @@
 //! Runtime-registry engine resolution for backend dispatch.
 
-use fullmag_ir::{BackendPlanIR, FemPlanIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, ProblemIR};
 
 use crate::runtime_registry::RuntimeRegistry;
 use crate::solver_runtime::diagnostics::runtime_fallback;
@@ -12,9 +12,10 @@ use crate::solver_runtime::fem_selection::{
     has_antenna_field_source, resolve_fem_engine_for_plan_with_trail, resolve_fem_engine_with_trail,
 };
 use crate::solver_runtime::selection::{
-    apply_runtime_gpu_index, effective_fem_device_request, requested_registry_device_for_fdm,
-    resolve_fdm_engine_with_trail, resolve_registry_runtime_for_backend, runtime_fem_order,
-    runtime_precision,
+    apply_runtime_gpu_index, effective_fem_device_request, public_fdm_gpu_charge_device_request,
+    requested_registry_device_for_fdm, require_public_fdm_gpu_charge_runtime_selection,
+    resolve_fdm_engine_for_plan_with_trail, resolve_fdm_engine_with_trail,
+    resolve_registry_runtime_for_backend, runtime_fem_order, runtime_precision,
 };
 use crate::types::RunError;
 
@@ -36,9 +37,11 @@ pub(crate) fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
     _explicit_selection: bool,
+    plan: Option<&FdmPlanIR>,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let requested_device = requested_registry_device_for_fdm(problem);
+    let guard_requested_device = public_fdm_gpu_charge_device_request(problem);
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
         registry,
@@ -58,6 +61,15 @@ pub(crate) fn resolve_fdm_engine_with_registry(
         _ => FdmEngine::CpuReference,
     };
     let fallback = resolved.fallback;
+    let guarded_resolution = crate::solver_runtime::engine::EngineResolution {
+        engine,
+        fallback: fallback.clone(),
+    };
+    require_public_fdm_gpu_charge_runtime_selection(
+        plan.is_some_and(|plan| !plan.fdm_gpu_charge_transports.is_empty()),
+        &guard_requested_device,
+        &guarded_resolution,
+    )?;
 
     Ok(DispatchEngineResolution {
         engine: DispatchEngine::Fdm(engine),
@@ -263,8 +275,11 @@ pub(crate) fn resolve_with_registry(
     let plan = fullmag_plan::plan(problem)?;
     match registry {
         Some(registry) => match &plan.backend_plan {
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
-                resolve_fdm_engine_with_registry(problem, registry, explicit_selection)
+            BackendPlanIR::Fdm(fdm) => {
+                resolve_fdm_engine_with_registry(problem, registry, explicit_selection, Some(fdm))
+            }
+            BackendPlanIR::FdmMultilayer(_) => {
+                resolve_fdm_engine_with_registry(problem, registry, explicit_selection, None)
             }
             BackendPlanIR::Fem(fem) => resolve_fem_engine_with_registry(
                 problem,
@@ -281,7 +296,23 @@ pub(crate) fn resolve_with_registry(
             }
         },
         None => match &plan.backend_plan {
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
+            BackendPlanIR::Fdm(fdm) => {
+                let resolution = resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
+                Ok(DispatchEngineResolution {
+                    engine: DispatchEngine::Fdm(resolution.engine),
+                    fallback: resolution.fallback,
+                    runtime_family: None,
+                    worker: None,
+                    resolved_backend: "fdm".to_string(),
+                    resolved_device: match resolution.engine {
+                        FdmEngine::CudaFdm => "gpu".to_string(),
+                        FdmEngine::CpuReference => "cpu".to_string(),
+                    },
+                    resolved_precision: runtime_precision(problem).to_string(),
+                    fem_crossover_decision: None,
+                })
+            }
+            BackendPlanIR::FdmMultilayer(_) => {
                 let resolution = resolve_fdm_engine_with_trail(problem)?;
                 Ok(DispatchEngineResolution {
                     engine: DispatchEngine::Fdm(resolution.engine),

@@ -1169,6 +1169,7 @@ fn assisted_multilayer_provenance(
         crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
     )?;
     Ok(ExecutionProvenance {
+        charge_transport: None,
         execution_engine: "cuda_assisted_multilayer".to_string(),
         precision: precision_name(plan.precision).to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -1368,6 +1369,7 @@ fn build_native_stacked_cuda_plan(
             region_mask,
             active_mask: Some(active_mask),
             spin_transport_plans: Vec::new(),
+            fdm_gpu_charge_transports: Vec::new(),
             initial_magnetization,
             material: reference_material.clone(),
             enable_exchange: plan.enable_exchange,
@@ -1744,6 +1746,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         region_mask: vec![0; layer.initial_magnetization.len()],
         active_mask: layer.native_active_mask.clone(),
         spin_transport_plans: Vec::new(),
+        fdm_gpu_charge_transports: Vec::new(),
         initial_magnetization: layer.initial_magnetization.clone(),
         material: FdmMaterialIR {
             name: layer.material.name.clone(),

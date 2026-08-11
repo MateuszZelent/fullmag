@@ -2726,6 +2726,43 @@ pub struct FemCrossoverDecision {
     pub confidence: Option<f64>,
 }
 
+/// Immutable execution proof for the bounded public FDM GPU charge-only lane.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChargeTransportExecutionProvenance {
+    pub schema_version: String,
+    pub module_id: String,
+    pub requested_backend: String,
+    pub requested_device: String,
+    pub requested_precision: String,
+    pub requested_execution_mode: String,
+    pub resolved_engine: String,
+    pub resolved_device: String,
+    pub resolved_precision: String,
+    pub gauge_policy: String,
+    pub solver_policy: String,
+    pub operator_version: String,
+    pub allocator_limit_bytes: u64,
+    pub workspace_limit_bytes: u64,
+    pub fallbacks_triggered: Vec<String>,
+    pub device_uuid: String,
+    pub compute_capability: String,
+    pub cuda_runtime: u32,
+    pub cuda_driver: u32,
+    pub build_digest: String,
+    pub iterations: u64,
+    pub algebraic_residual: f64,
+    pub physical_residual: f64,
+    pub component_balance: f64,
+    pub electrode_balance: f64,
+    pub transfer_count: u64,
+    pub transfer_bytes: u64,
+    pub peak_bytes: u64,
+    pub accepted_sequence: u64,
+    pub candidate_digest: String,
+    pub snapshot_content_digest: String,
+    pub convergence_digest: String,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
@@ -2735,6 +2772,8 @@ pub struct ExecutionProvenance {
     pub execution_engine: String,
     /// Numeric precision used: "double" or "single".
     pub precision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_transport: Option<ChargeTransportExecutionProvenance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transport_modules: Vec<TransportExecutionProvenance>,
     /// Legacy compatibility observations retained for historical artifacts.

@@ -2645,7 +2645,8 @@ fn execute_settle_step_at_field(
                 mutated_fdm.adaptive_timestep = None;
             }
 
-            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let resolution =
+                dispatch::resolve_fdm_engine_for_plan_with_trail(problem, &mutated_fdm)?;
             let mut live_on_step = |update: StepUpdate| {
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)

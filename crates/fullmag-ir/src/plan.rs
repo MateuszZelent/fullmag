@@ -9,9 +9,9 @@ use crate::{
     IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
-    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedPeriodicImagesIR,
-    ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
-    TimeDependenceIR, TimeEnvelopeIR,
+    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedFdmGpuChargeTransportIR,
+    ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR,
+    ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -450,6 +450,11 @@ pub struct FdmPlanIR {
     pub active_mask: Option<Vec<bool>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
+    /// Bounded standalone FDM CUDA charge-only realizations. The public M1
+    /// slice currently permits at most one entry; a vector keeps the resolved
+    /// plan aligned with module-owned current semantics.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fdm_gpu_charge_transports: Vec<ResolvedFdmGpuChargeTransportIR>,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: FdmMaterialIR,
     pub enable_exchange: bool,
@@ -1701,13 +1706,22 @@ pub struct ProvenancePlanIR {
 #[cfg(test)]
 mod tests {
     use super::{
-        FdmGridCertificateIR, FdmRegionLegendEntryIR, FemMeshTopologyFamilyIR,
+        FdmGridCertificateIR, FdmPlanIR, FdmRegionLegendEntryIR, FemMeshTopologyFamilyIR,
         FemMixedTopologyCapabilityStatusIR, FemMixedTopologyProvenanceIR, RequestedFemDemagIR,
         ResolvedFemDemagIR,
     };
     use crate::{
         validate_fdm_region_lut_indices, ExecutionDevice, ExecutionPrecision, MAX_FDM_REGION_IDS,
     };
+
+    #[test]
+    fn legacy_fdm_plan_defaults_gpu_charge_transports_to_empty() {
+        let encoded = serde_json::to_value(FdmPlanIR::default()).expect("FDM plan serializes");
+        assert!(encoded.get("fdm_gpu_charge_transports").is_none());
+        let decoded: FdmPlanIR =
+            serde_json::from_value(encoded).expect("legacy FDM plan deserializes");
+        assert!(decoded.fdm_gpu_charge_transports.is_empty());
+    }
 
     #[test]
     fn fem_mixed_topology_provenance_round_trips_typed_execution_contract() {

@@ -809,6 +809,35 @@ pub enum FdmCpuTransportRealizationIR {
     NativeM1V1,
 }
 
+/// Bounded standalone charge-only realization for the native FDM CUDA lane.
+///
+/// This is resolved execution data, not a second authoring contract: the
+/// public source remains `CurrentTransport(ohmic_poisson)` and the planner
+/// materializes its structured-grid cells, coefficients, and boundary faces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmGpuChargeTransportIR {
+    pub descriptor_schema: String,
+    pub descriptor_revision: u64,
+    pub source_revision: u64,
+    pub implementation_version: String,
+    pub validation_state: String,
+    pub descriptor_sha256: String,
+    pub module_id: String,
+    pub requested_execution: RequestedTransportExecutionIR,
+    pub resolved_discretization: crate::BackendTarget,
+    pub resolved_device: ExecutionDevice,
+    pub resolved_precision: ExecutionPrecision,
+    pub resolved_execution_mode: ExecutionMode,
+    pub capabilities: Vec<String>,
+    pub charge_active_cells: Vec<bool>,
+    #[serde(rename = "charge_conductivity_Spm")]
+    pub charge_conductivity_spm: Vec<f64>,
+    pub charge_boundaries: Vec<ResolvedChargeBoundaryFaceIR>,
+    pub charge_gauge: ChargePotentialGaugeIR,
+    pub charge_solver: ChargeSolverPolicyIR,
+    pub region_ids: Vec<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmSpinTransportIR {
     pub descriptor_schema: String,
