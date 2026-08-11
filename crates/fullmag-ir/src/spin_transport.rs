@@ -839,6 +839,13 @@ pub struct ResolvedFdmGpuChargeTransportIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmTorqueTargetMaskIR {
+    pub torque_module_id: String,
+    pub target: RegionRefIR,
+    pub active_mask: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmSpinTransportIR {
     pub descriptor_schema: String,
     #[serde(default)]
@@ -851,6 +858,12 @@ pub struct ResolvedFdmSpinTransportIR {
     /// transport stage.  `None` means the source is constant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_envelope: Option<crate::TimeEnvelopeIR>,
+    /// Union of the authored charge-transport domain on the resolved common grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_active_mask: Vec<bool>,
+    /// Cells that carry magnetization dynamics on the resolved common grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub magnetic_active_mask: Vec<bool>,
     pub charge_active_cells: Vec<bool>,
     #[serde(rename = "charge_conductivity_Spm")]
     pub charge_conductivity_spm: Vec<f64>,
@@ -870,6 +883,9 @@ pub struct ResolvedFdmSpinTransportIR {
     pub region_ids: Vec<u32>,
     pub spin_boundaries: Vec<ResolvedSpinBoundaryFaceIR>,
     pub interfaces: Vec<ResolvedSpinInterfaceFaceIR>,
+    /// Per-consumer torque targets retained separately from the aggregate legacy mask.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub torque_target_masks: Vec<ResolvedFdmTorqueTargetMaskIR>,
     pub torque_target_cells: Vec<bool>,
     #[serde(rename = "saturation_magnetization_Apm")]
     pub saturation_magnetization_apm: Vec<f64>,

@@ -58,6 +58,7 @@ fn resolve_fem_stage_coupling_for_stage(
 
 pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub owner_names: &'a [&'a str],
+    pub object_masks_by_id: Option<&'a BTreeMap<String, Vec<bool>>>,
     pub grid_cells: [u32; 3],
     pub origin_m: [f64; 3],
     pub cell_size_m: [f64; 3],
@@ -1957,6 +1958,33 @@ fn materialize_fdm_descriptor(
     }
     let charge_active_cells = union_region_masks(&charge.domain, context, "charge domain")?;
     let spin_active_cells = union_region_masks(&module.domain, context, "spin domain")?;
+    let magnetic_active_mask = context
+        .active_mask
+        .map(<[bool]>::to_vec)
+        .unwrap_or_else(|| vec![true; count]);
+    let first_outside = |subset: &[bool], superset: &[bool]| {
+        subset
+            .iter()
+            .zip(superset)
+            .position(|(selected, covered)| *selected && !*covered)
+    };
+    if let Some(cell) = first_outside(&spin_active_cells, &charge_active_cells) {
+        return Err(vec![format!(
+            "spin transport '{}' domain must be a subset of the transport charge domain (cell {cell})",
+            module.id
+        )]);
+    }
+    if let Some(cell) = first_outside(&magnetic_active_mask, &charge_active_cells) {
+        return Err(vec![format!(
+            "magnetic domain must be a subset of the transport charge domain (cell {cell})"
+        )]);
+    }
+    if let Some(cell) = first_outside(&magnetic_active_mask, &spin_active_cells) {
+        return Err(vec![format!(
+            "magnetic domain must be a subset of spin transport '{}' domain (cell {cell})",
+            module.id
+        )]);
+    }
 
     let mut charge_conductivity_spm = vec![0.0; count];
     let mut charge_assigned = vec![false; count];
@@ -2031,11 +2059,12 @@ fn materialize_fdm_descriptor(
         .iter()
         .filter_map(|torque| match torque {
             SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+                id,
                 solve_id,
                 target,
                 formula_version,
                 ..
-            } if solve_id == &module.id => Some((target, formula_version)),
+            } if solve_id == &module.id => Some((id, target, formula_version)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -2045,15 +2074,49 @@ fn materialize_fdm_descriptor(
             module.id
         )]);
     }
-    let (torque_target_cells, torque_formula_version) =
-        if let Some((target, formula)) = matching_torques.first() {
-            (
-                resolve_region_mask(target, context, "transport torque target")?,
-                Some((*formula).clone()),
-            )
-        } else {
-            (vec![false; count], None)
-        };
+    let (torque_target_cells, torque_target_masks, torque_formula_version) = if let Some((
+        torque_id,
+        target,
+        formula,
+    )) =
+        matching_torques.first()
+    {
+        let target_mask = resolve_region_mask(target, context, "transport torque target")?;
+        if let Some(cell) = first_outside(&target_mask, &magnetic_active_mask) {
+            return Err(vec![format!(
+                "transport torque target '{}' must be a subset of the magnetic domain (cell {cell})",
+                torque_id
+            )]);
+        }
+        if let Some(cell) = first_outside(&target_mask, &spin_active_cells) {
+            return Err(vec![format!(
+                "transport torque target '{}' must be a subset of the spin transport domain (cell {cell})",
+                torque_id
+            )]);
+        }
+        if let Some(cell) = target_mask.iter().enumerate().find_map(|(cell, selected)| {
+            (*selected
+                && (!context.saturation_magnetization_apm[cell].is_finite()
+                    || context.saturation_magnetization_apm[cell] <= 0.0))
+                .then_some(cell)
+        }) {
+            return Err(vec![format!(
+                "transport torque target '{}' requires finite positive saturation magnetization on cell {cell}",
+                torque_id
+            )]);
+        }
+        (
+            target_mask.clone(),
+            vec![fullmag_ir::ResolvedFdmTorqueTargetMaskIR {
+                torque_module_id: (*torque_id).to_string(),
+                target: (*target).clone(),
+                active_mask: target_mask,
+            }],
+            Some((*formula).clone()),
+        )
+    } else {
+        (vec![false; count], Vec::new(), None)
+    };
     let has_magnetic_sink = reactions
         .iter()
         .any(|reaction| reaction.exchange_m.is_some() || reaction.dephasing_m.is_some())
@@ -2090,6 +2153,8 @@ fn materialize_fdm_descriptor(
         },
         enclosing_execution_mode: problem.validation_profile.execution_mode,
         time_envelope: time_envelope.cloned(),
+        transport_active_mask: charge_active_cells.clone(),
+        magnetic_active_mask,
         charge_active_cells,
         charge_conductivity_spm,
         charge_boundaries,
@@ -2105,6 +2170,7 @@ fn materialize_fdm_descriptor(
         region_ids: context.region_mask.to_vec(),
         spin_boundaries,
         interfaces,
+        torque_target_masks,
         torque_target_cells,
         saturation_magnetization_apm: context.saturation_magnetization_apm.to_vec(),
         gamma_e_rad_per_s_t: context.gamma0_m_per_a_s / MU0_H_PER_M,
@@ -2496,12 +2562,19 @@ fn is_grid_active(context: &FdmSpinTransportResolutionContext<'_>, cell: usize) 
     context.active_mask.is_none_or(|mask| mask[cell])
 }
 
+fn object_is_on_grid(context: &FdmSpinTransportResolutionContext<'_>, object_id: &str) -> bool {
+    context
+        .object_masks_by_id
+        .is_some_and(|masks| masks.contains_key(object_id))
+        || context.owner_names.contains(&object_id)
+}
+
 fn resolve_region_mask(
     region: &RegionRefIR,
     context: &FdmSpinTransportResolutionContext<'_>,
     label: &str,
 ) -> Result<Vec<bool>, Vec<String>> {
-    if !context.owner_names.contains(&region.object_id.as_str()) {
+    if !object_is_on_grid(context, &region.object_id) {
         return Err(vec![format!(
             "{label} object_id '{}' is outside the resolved single-grid FDM object",
             region.object_id
@@ -2516,12 +2589,18 @@ fn resolve_region_mask(
         })?),
         None => None,
     };
+    let object_mask = context
+        .object_masks_by_id
+        .and_then(|masks| masks.get(&region.object_id));
     let mask = context
         .region_mask
         .iter()
         .enumerate()
         .map(|(cell, numeric)| {
-            is_grid_active(context, cell) && selected.is_none_or(|id| *numeric == id)
+            object_mask.map_or_else(
+                || is_grid_active(context, cell),
+                |mask| mask.get(cell).copied().unwrap_or(false),
+            ) && selected.is_none_or(|id| *numeric == id)
         })
         .collect::<Vec<_>>();
     if !mask.iter().any(|active| *active) {
@@ -2591,12 +2670,12 @@ fn structured_boundary_face(
     surface: &fullmag_ir::SurfaceRefIR,
 ) -> Result<StructuredBoundaryFaceIR, Vec<String>> {
     let expected = match surface.surface_id.as_str() {
-        "x_min" => (StructuredBoundaryFaceIR::XMin, [-1.0, 0.0, 0.0]),
-        "x_max" => (StructuredBoundaryFaceIR::XMax, [1.0, 0.0, 0.0]),
-        "y_min" => (StructuredBoundaryFaceIR::YMin, [0.0, -1.0, 0.0]),
-        "y_max" => (StructuredBoundaryFaceIR::YMax, [0.0, 1.0, 0.0]),
-        "z_min" => (StructuredBoundaryFaceIR::ZMin, [0.0, 0.0, -1.0]),
-        "z_max" => (StructuredBoundaryFaceIR::ZMax, [0.0, 0.0, 1.0]),
+        "x_min" | "x-" => (StructuredBoundaryFaceIR::XMin, [-1.0, 0.0, 0.0]),
+        "x_max" | "x+" => (StructuredBoundaryFaceIR::XMax, [1.0, 0.0, 0.0]),
+        "y_min" | "y-" => (StructuredBoundaryFaceIR::YMin, [0.0, -1.0, 0.0]),
+        "y_max" | "y+" => (StructuredBoundaryFaceIR::YMax, [0.0, 1.0, 0.0]),
+        "z_min" | "z-" => (StructuredBoundaryFaceIR::ZMin, [0.0, 0.0, -1.0]),
+        "z_max" | "z+" => (StructuredBoundaryFaceIR::ZMax, [0.0, 0.0, 1.0]),
         other => return Err(vec![format!(
             "structured FDM surface_id '{other}' is unsupported; use x_min/x_max/y_min/y_max/z_min/z_max"
         )]),
@@ -2623,7 +2702,7 @@ fn resolve_charge_boundaries(
     let mut faces = BTreeSet::new();
     for boundary in boundaries {
         for surface in boundary.surfaces() {
-            if !context.owner_names.contains(&surface.object_id.as_str()) {
+            if !object_is_on_grid(context, &surface.object_id) {
                 return Err(vec![format!(
                     "charge boundary '{}' references object '{}' outside the FDM transport grid",
                     boundary.id(),
@@ -2632,6 +2711,11 @@ fn resolve_charge_boundaries(
             }
             let face = structured_boundary_face(surface)?;
             if !faces.insert(face) {
+                if resolved.iter().any(|entry: &ResolvedChargeBoundaryFaceIR| {
+                    entry.source_id == boundary.id() && entry.face == face
+                }) {
+                    continue;
+                }
                 return Err(vec![format!(
                     "charge boundary face {face:?} is assigned more than once"
                 )]);
@@ -2806,13 +2890,18 @@ fn resolve_spin_boundaries(
                 ..
             } => {
                 for surface in [minus_surface, plus_surface] {
-                    if !context.owner_names.contains(&surface.object_id.as_str()) {
+                    if !object_is_on_grid(context, &surface.object_id) {
                         return Err(vec![format!(
                             "spin boundary '{id}' references an object outside the FDM grid"
                         )]);
                     }
                     let face = structured_boundary_face(surface)?;
                     if !faces.insert(face) {
+                        if resolved.iter().any(|entry: &ResolvedSpinBoundaryFaceIR| {
+                            entry.source_id == *id && entry.face == face
+                        }) {
+                            continue;
+                        }
                         return Err(vec![format!(
                             "spin boundary face {face:?} is assigned more than once"
                         )]);
@@ -2859,13 +2948,18 @@ fn resolve_spin_boundaries(
                     SpinBoundaryIR::PeriodicSpin { .. } => unreachable!(),
                 };
                 for surface in surfaces {
-                    if !context.owner_names.contains(&surface.object_id.as_str()) {
+                    if !object_is_on_grid(context, &surface.object_id) {
                         return Err(vec![format!(
                             "spin boundary '{id}' references an object outside the FDM grid"
                         )]);
                     }
                     let face = structured_boundary_face(surface)?;
                     if !faces.insert(face) {
+                        if resolved.iter().any(|entry: &ResolvedSpinBoundaryFaceIR| {
+                            entry.source_id == *id && entry.face == face
+                        }) {
+                            continue;
+                        }
                         return Err(vec![format!(
                             "spin boundary face {face:?} is assigned more than once"
                         )]);
@@ -3213,6 +3307,7 @@ mod tests {
     ) -> FdmSpinTransportResolutionContext<'a> {
         FdmSpinTransportResolutionContext {
             owner_names,
+            object_masks_by_id: None,
             grid_cells: [1, 1, 1],
             origin_m: [0.0, 0.0, 0.0],
             cell_size_m: [1.0, 1.0, 1.0],
@@ -3294,6 +3389,7 @@ mod tests {
         let region_ids = BTreeMap::from([("source_arm".into(), 1)]);
         let context = FdmSpinTransportResolutionContext {
             owner_names: &owners,
+            object_masks_by_id: None,
             grid_cells: [3, 3, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -3346,6 +3442,7 @@ mod tests {
             );
             let context = FdmSpinTransportResolutionContext {
                 owner_names: &owners,
+                object_masks_by_id: None,
                 grid_cells: [3, 3, 1],
                 origin_m: [0.0; 3],
                 cell_size_m: [1.0; 3],
@@ -3383,6 +3480,7 @@ mod tests {
         let multi_arm_ms = [8.0e5; 9];
         let multi_arm_context = FdmSpinTransportResolutionContext {
             owner_names: &owners,
+            object_masks_by_id: None,
             grid_cells: [3, 3, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -3413,6 +3511,7 @@ mod tests {
         let open_ms = [8.0e5; 3];
         let open_context = FdmSpinTransportResolutionContext {
             owner_names: &owners,
+            object_masks_by_id: None,
             grid_cells: [3, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],

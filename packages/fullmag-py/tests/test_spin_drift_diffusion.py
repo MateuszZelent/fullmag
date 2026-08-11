@@ -479,7 +479,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
                 eta_transport=1.5,
             )
 
-    def test_problem_lowers_spin_solve_and_torque_as_separate_top_level_records(self) -> None:
+    def test_python_and_ir_preserve_separate_transport_and_magnetic_domains(self) -> None:
         geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="stack")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
         magnet = fm.Ferromagnet(name="stack", geometry=geometry, material=material)
@@ -498,6 +498,21 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         ir = problem.to_ir(include_geometry_assets=False)
         self.assertEqual(ir["spin_transport_modules"], [solve.to_ir()])
         self.assertEqual(ir["spin_torque_modules"][0]["solve_id"], "spin_solve")
+        self.assertEqual(
+            ir["current_modules"][0]["domain"],
+            [{"object_id": "stack", "region_id": "ferromagnet"}],
+        )
+        self.assertEqual(
+            ir["spin_transport_modules"][0]["domain"],
+            [{"object_id": "stack", "region_id": "ferromagnet"}],
+        )
+        self.assertEqual(
+            ir["spin_torque_modules"][0]["target"],
+            {"object_id": "stack", "region_id": "ferromagnet"},
+        )
+        self.assertNotIn("transport_active_mask", ir["spin_transport_modules"][0])
+        self.assertNotIn("magnetic_active_mask", ir["spin_transport_modules"][0])
+        self.assertNotIn("torque_target_masks", ir["spin_torque_modules"][0])
 
 
 if __name__ == "__main__":

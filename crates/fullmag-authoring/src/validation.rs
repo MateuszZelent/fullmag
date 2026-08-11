@@ -1085,7 +1085,13 @@ fn validate_spin_authoring(
                 "spin_torques[{index}] id must be non-empty and unique"
             )));
         }
-        validate_spin_torque(index, torque, object_ids, &transport_ids)?;
+        validate_spin_torque(
+            index,
+            torque,
+            object_ids,
+            &transport_ids,
+            &spin_transport_ids,
+        )?;
     }
 
     let mut oersted_ids = BTreeSet::new();
@@ -2247,6 +2253,7 @@ fn validate_spin_torque(
     torque: &SceneSpinTorque,
     object_ids: &BTreeSet<String>,
     transport_ids: &BTreeSet<String>,
+    spin_transport_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let torque = match torque {
         SceneSpinTorque::Known(torque) => torque,
@@ -2465,6 +2472,27 @@ fn validate_spin_torque(
                     validate_prescribed_drive(index, drive, transport_ids, true)?;
                 }
             }
+        }
+        KnownSceneSpinTorque::DriftDiffusionSpinTorque {
+            schema_version,
+            solve_id,
+            target,
+            formula_version,
+            ..
+        } => {
+            if schema_version != "drift_diffusion_spin_torque.v1"
+                || formula_version.trim().is_empty()
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_torques[{index}] has an incomplete drift-diffusion torque contract"
+                )));
+            }
+            if !spin_transport_ids.contains(solve_id) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "spin_torques[{index}].solve_id references missing spin transport '{solve_id}'"
+                )));
+            }
+            validate_region_ref(index, Some(target), object_ids)?;
         }
     }
     Ok(())

@@ -115,6 +115,12 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
     resolved_backend: BackendTarget,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
+    // A spin-transport module owns its coupled charge solve and descriptor.
+    // The standalone GPU charge-only resolver must not reinterpret that same
+    // authored current module as a second, incompatible execution request.
+    if !problem.spin_transport_modules.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut active_modules = Vec::new();
     let mut graph_reasons = Vec::new();
     for module in &problem.current_modules {
@@ -707,6 +713,7 @@ mod tests {
         let region_index_by_id = BTreeMap::from([("strip".to_string(), 0_u32)]);
         let context = crate::spin_transport::FdmSpinTransportResolutionContext {
             owner_names: &owner_names,
+            object_masks_by_id: None,
             grid_cells: [1, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -750,6 +757,7 @@ mod tests {
         let region_index_by_id = BTreeMap::from([("strip".to_string(), 0_u32)]);
         let context = crate::spin_transport::FdmSpinTransportResolutionContext {
             owner_names: &owner_names,
+            object_masks_by_id: None,
             grid_cells: [2, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],

@@ -1,5 +1,5 @@
 use fullmag_ir::{
-    GeometryIR, ProblemIR, ValidationProfileIR,
+    GeometryIR, ProblemIR, RegionRefIR, ResolvedFdmTorqueTargetMaskIR, ValidationProfileIR,
 };
 use serde_json::Value;
 
@@ -8,6 +8,26 @@ fn fixture() -> Value {
         "../../../tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
     ))
     .expect("racetrack fixture must be valid JSON")
+}
+
+#[test]
+fn spin_transport_resolved_target_mask_round_trips_exact_identity() {
+    let target = ResolvedFdmTorqueTargetMaskIR {
+        torque_module_id: "transport_torque".into(),
+        target: RegionRefIR {
+            object_id: "fm".into(),
+            region_id: None,
+        },
+        active_mask: vec![false, true],
+    };
+    let wire = serde_json::to_value(&target).expect("target mask serialization");
+    assert_eq!(wire["torque_module_id"], "transport_torque");
+    assert_eq!(wire["target"]["object_id"], "fm");
+    assert_eq!(
+        serde_json::from_value::<ResolvedFdmTorqueTargetMaskIR>(wire)
+            .expect("target mask deserialization"),
+        target
+    );
 }
 
 #[test]

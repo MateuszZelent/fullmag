@@ -680,6 +680,13 @@ pub enum KnownSceneSpinTorque {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         compatibility_origin: Option<SceneCompatibilityOrigin>,
     },
+    DriftDiffusionSpinTorque {
+        schema_version: String,
+        id: String,
+        solve_id: String,
+        target: SceneRegionRef,
+        formula_version: String,
+    },
 }
 
 impl KnownSceneSpinTorque {
@@ -687,7 +694,8 @@ impl KnownSceneSpinTorque {
         match self {
             Self::Slonczewski { id, .. }
             | Self::ZhangLi { id, .. }
-            | Self::PrescribedSot { id, .. } => id,
+            | Self::PrescribedSot { id, .. }
+            | Self::DriftDiffusionSpinTorque { id, .. } => id,
         }
     }
 
@@ -696,6 +704,7 @@ impl KnownSceneSpinTorque {
             Self::Slonczewski { id, .. }
             | Self::ZhangLi { id, .. }
             | Self::PrescribedSot { id, .. }
+            | Self::DriftDiffusionSpinTorque { id, .. }
                 if id.is_empty() =>
             {
                 *id = fallback

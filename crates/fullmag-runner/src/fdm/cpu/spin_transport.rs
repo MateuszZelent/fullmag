@@ -3165,6 +3165,8 @@ mod tests {
             realization: fullmag_ir::FdmCpuTransportRealizationIR::RustReferenceV1,
             enclosing_execution_mode: ExecutionMode::Strict,
             time_envelope: None,
+            transport_active_mask: vec![true; cells],
+            magnetic_active_mask: vec![true; cells],
             charge_active_cells: vec![true; cells],
             charge_conductivity_spm: vec![2.0; cells],
             charge_boundaries: vec![
@@ -3250,6 +3252,7 @@ mod tests {
                 ),
             ],
             interfaces: vec![],
+            torque_target_masks: vec![],
             torque_target_cells: vec![false; cells],
             saturation_magnetization_apm: vec![8e5; cells],
             gamma_e_rad_per_s_t: 1.760_859e11,

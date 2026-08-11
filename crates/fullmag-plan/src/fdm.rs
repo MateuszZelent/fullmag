@@ -15,8 +15,8 @@ use crate::current_transport::{
 use crate::error::PlanError;
 use crate::geometry::{
     cell_for_magnet, checked_fdm_grid_cost, extract_multilayer_geometry, fdm_default_cell,
-    ir_to_shape, validate_realized_grid, voxelize_shape, GeometryShape, LoweredBody,
-    FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    ir_to_shape, shape_local_bounds, validate_realized_grid, voxelize_shape, GeometryShape,
+    LoweredBody, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
 };
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
@@ -577,6 +577,205 @@ fn finite_cylinder_sdf_for_shape(
     }
 }
 
+fn sample_shape_mask(
+    shape: &GeometryShape,
+    grid_cells: [u32; 3],
+    cell_size: [f64; 3],
+    origin: [f64; 3],
+) -> Vec<bool> {
+    let [nx, ny, nz] = grid_cells.map(|value| value as usize);
+    let mut mask = vec![false; nx * ny * nz];
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let point = [
+                    origin[0] + (x as f64 + 0.5) * cell_size[0],
+                    origin[1] + (y as f64 + 0.5) * cell_size[1],
+                    origin[2] + (z as f64 + 0.5) * cell_size[2],
+                ];
+                mask[x + nx * (y + ny * z)] = shape.contains(point);
+            }
+        }
+    }
+    mask
+}
+
+fn transport_charge_domains<'a>(
+    problem: &'a ProblemIR,
+) -> Result<Vec<&'a fullmag_ir::RegionRefIR>, PlanError> {
+    let mut domains = Vec::new();
+    for spin in &problem.spin_transport_modules {
+        let definition = problem
+            .current_modules
+            .iter()
+            .find_map(|current| match current {
+                fullmag_ir::CurrentModuleIR::CurrentTransport {
+                    name,
+                    definition: Some(definition),
+                    ..
+                } if name == &spin.current_source_id => Some(definition),
+                _ => None,
+            });
+        let Some(definition) = definition else {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "spin transport '{}' requires current source '{}' with an explicit charge definition",
+                    spin.id, spin.current_source_id
+                )],
+            });
+        };
+        domains.extend(definition.domain.iter());
+    }
+    Ok(domains)
+}
+
+fn transport_common_grid(
+    problem: &ProblemIR,
+    magnet: &fullmag_ir::MagnetIR,
+    magnetic_geometry: &GeometryEntryIR,
+    magnetic_shape: &GeometryShape,
+    cell_size: [f64; 3],
+) -> Result<
+    (
+        [f64; 3],
+        Vec<bool>,
+        [u32; 3],
+        [f64; 3],
+        BTreeMap<String, Vec<bool>>,
+    ),
+    PlanError,
+> {
+    let charge_domains = transport_charge_domains(problem)?;
+    let geometry_by_name = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| (entry.name(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let region_to_geometry = problem
+        .regions
+        .iter()
+        .map(|region| (region.name.as_str(), region.geometry.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let resolve_geometry = |object_id: &str| {
+        geometry_by_name
+            .get(object_id)
+            .copied()
+            .or_else(|| {
+                problem
+                    .magnets
+                    .iter()
+                    .find(|candidate| candidate.name == object_id)
+                    .and_then(|candidate| region_to_geometry.get(candidate.region.as_str()))
+                    .and_then(|name| geometry_by_name.get(name).copied())
+            })
+            .or_else(|| {
+                region_to_geometry
+                    .get(object_id)
+                    .and_then(|name| geometry_by_name.get(name).copied())
+            })
+    };
+
+    let mut bounds_min = [f64::INFINITY; 3];
+    let mut bounds_max = [f64::NEG_INFINITY; 3];
+    for region in &charge_domains {
+        let geometry = resolve_geometry(&region.object_id).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "charge transport domain object '{}' has no FDM geometry binding",
+                region.object_id
+            )],
+        })?;
+        let shape = ir_to_shape(geometry).map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?;
+        let (lower, upper) = shape_local_bounds(&shape).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "charge transport geometry '{}' has no analytic FDM bounds",
+                geometry.name()
+            )],
+        })?;
+        for axis in 0..3 {
+            bounds_min[axis] = bounds_min[axis].min(lower[axis]);
+            bounds_max[axis] = bounds_max[axis].max(upper[axis]);
+        }
+    }
+    if charge_domains.is_empty() {
+        return Err(PlanError {
+            reasons: vec!["charge transport domain must not be empty".to_string()],
+        });
+    }
+
+    let (magnetic_min, magnetic_max) =
+        shape_local_bounds(magnetic_shape).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "magnetic geometry '{}' has no analytic FDM bounds",
+                magnetic_geometry.name()
+            )],
+        })?;
+    if (0..3).any(|axis| {
+        magnetic_min[axis] < bounds_min[axis] - GRID_TOLERANCE * cell_size[axis]
+            || magnetic_max[axis] > bounds_max[axis] + GRID_TOLERANCE * cell_size[axis]
+    }) {
+        return Err(PlanError {
+            reasons: vec![
+                "magnetic domain must be a subset of the authored transport charge domain"
+                    .to_string(),
+            ],
+        });
+    }
+
+    let bounding_size = std::array::from_fn(|axis| bounds_max[axis] - bounds_min[axis]);
+    let mut grid_cells = [0_u32; 3];
+    for axis in 0..3 {
+        let cells = bounding_size[axis] / cell_size[axis];
+        let rounded = cells.round();
+        if !cells.is_finite()
+            || rounded < 1.0
+            || (cells - rounded).abs() > GRID_TOLERANCE
+            || rounded > u32::MAX as f64
+        {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "transport domain extent on axis {axis} is not aligned to the requested FDM cell size"
+                )],
+            });
+        }
+        grid_cells[axis] = rounded as u32;
+    }
+    checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
+
+    let magnetic_mask = sample_shape_mask(magnetic_shape, grid_cells, cell_size, bounds_min);
+    if !magnetic_mask.iter().any(|active| *active) {
+        return Err(PlanError {
+            reasons: vec!["magnetic domain selects no cells on the transport grid".to_string()],
+        });
+    }
+    let mut object_masks = BTreeMap::new();
+    for entry in &problem.geometry.entries {
+        let shape = ir_to_shape(entry).map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?;
+        object_masks.insert(
+            entry.name().to_string(),
+            sample_shape_mask(&shape, grid_cells, cell_size, bounds_min),
+        );
+    }
+    for region in &problem.regions {
+        if let Some(mask) = object_masks.get(&region.geometry).cloned() {
+            object_masks.insert(region.name.clone(), mask);
+        }
+    }
+    object_masks.insert(magnet.name.clone(), magnetic_mask.clone());
+
+    Ok((
+        bounding_size,
+        magnetic_mask,
+        grid_cells,
+        bounds_min,
+        object_masks,
+    ))
+}
+
 pub(crate) fn plan_fdm(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -901,26 +1100,50 @@ pub(crate) fn plan_fdm(
             .find(|asset| asset.geometry_name == geometry.name())
     });
 
-    let (bounding_size, active_mask, grid_cells, native_origin, used_precomputed_asset) =
-        if let Some(asset) = provided_grid_asset {
-            validate_grid_asset_cell_size(asset, cell_size, &mut errors);
-            let origin = asset.origin;
-            (
-                [
-                    asset.cells[0] as f64 * asset.cell_size[0],
-                    asset.cells[1] as f64 * asset.cell_size[1],
-                    asset.cells[2] as f64 * asset.cell_size[2],
+    let (
+        mut bounding_size,
+        mut active_mask,
+        mut grid_cells,
+        mut native_origin,
+        mut used_precomputed_asset,
+    ) = if let Some(asset) = provided_grid_asset {
+        validate_grid_asset_cell_size(asset, cell_size, &mut errors);
+        let origin = asset.origin;
+        (
+            [
+                asset.cells[0] as f64 * asset.cell_size[0],
+                asset.cells[1] as f64 * asset.cell_size[1],
+                asset.cells[2] as f64 * asset.cell_size[2],
+            ],
+            Some(asset.active_mask.clone()),
+            asset.cells,
+            origin,
+            true,
+        )
+    } else {
+        let (bounding_size, active_mask, grid_cells, origin) =
+            voxelize_shape(&shape, cell_size, &mut errors);
+        (bounding_size, active_mask, grid_cells, origin, false)
+    };
+
+    let mut transport_object_masks = BTreeMap::new();
+    if !problem.spin_transport_modules.is_empty() {
+        if provided_grid_asset.is_some() {
+            return Err(PlanError {
+                reasons: vec![
+                    "FDM transport common-grid planning does not accept a magnet-only precomputed grid asset; provide analytic charge-domain geometries"
+                        .to_string(),
                 ],
-                Some(asset.active_mask.clone()),
-                asset.cells,
-                origin,
-                true,
-            )
-        } else {
-            let (bounding_size, active_mask, grid_cells, origin) =
-                voxelize_shape(&shape, cell_size, &mut errors);
-            (bounding_size, active_mask, grid_cells, origin, false)
-        };
+            });
+        }
+        let resolved = transport_common_grid(problem, magnet, geometry, &shape, cell_size)?;
+        bounding_size = resolved.0;
+        active_mask = Some(resolved.1);
+        grid_cells = resolved.2;
+        native_origin = resolved.3;
+        transport_object_masks = resolved.4;
+        used_precomputed_asset = false;
+    }
 
     if !used_precomputed_asset {
         validate_realized_grid(
@@ -1305,6 +1528,11 @@ pub(crate) fn plan_fdm(
         grid_cells[2] as f64 * cell_size[2],
     ];
     let grid_legend = build_fdm_region_legend(problem, &owner_names, &region_index_by_id);
+    let grid_object_ids = if transport_object_masks.is_empty() {
+        owner_names.iter().map(|name| (*name).to_string()).collect()
+    } else {
+        transport_object_masks.keys().cloned().collect()
+    };
     let grid_certificate = FdmGridCertificateIR::new_with_masks(
         native_origin,
         grid_cells,
@@ -1317,7 +1545,7 @@ pub(crate) fn plan_fdm(
     .map_err(|message| PlanError {
         reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],
     })?
-    .with_object_ids(owner_names.iter().map(|name| (*name).to_string()).collect())
+    .with_object_ids(grid_object_ids)
     .with_region_legend(grid_legend);
     let active_field_drives: Vec<_> = problem
         .field_drives
@@ -1336,11 +1564,19 @@ pub(crate) fn plan_fdm(
             &problem.geometry.entries,
         )?;
 
-    let resolved_ms_for_transport = ms_field_opt
+    let mut resolved_ms_for_transport = ms_field_opt
         .clone()
         .unwrap_or_else(|| vec![material.saturation_magnetisation; n_cells]);
+    if let Some(magnetic_mask) = active_mask.as_deref() {
+        for (ms, magnetic) in resolved_ms_for_transport.iter_mut().zip(magnetic_mask) {
+            if !magnetic {
+                *ms = 0.0;
+            }
+        }
+    }
     let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
         owner_names: &owner_names,
+        object_masks_by_id: Some(&transport_object_masks),
         grid_cells,
         origin_m: native_origin,
         cell_size_m: cell_size,

@@ -26,12 +26,12 @@ def _problem(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def test_absent_current_does_not_create_a_graph_module() -> None:
+def test_missing_transport_module_emits_no_transport_nodes() -> None:
     graph = build_physics_graph(_problem())
     assert graph.to_ir()["modules"] == []
 
 
-def test_zero_drive_remains_an_inactive_authored_module() -> None:
+def test_zero_current_preserves_transport_module() -> None:
     current = _Module(
         {
             "kind": "current_transport",
