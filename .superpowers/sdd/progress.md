@@ -103,3 +103,7 @@ visualization Inspector owners, canonical mode breadcrumb identity, interactive
 phase commands, distinct debug contracts, and stale CSS cleanup; focused
 171/171, full Control Room 515/515 files and 4947/4947 tests, typecheck, lint,
 and diff-check pass).
+Task 5: ukończony (commit `4955c06f6`; wszystkie selectable node kinds mają
+fail-closed route coverage oraz descriptor owner/icon/type contracts, w tym
+dedykowane Airbox/object/mesh-part/mode metadata; focused 226/226, typecheck,
+targeted ESLint i diff-check przechodzą).
