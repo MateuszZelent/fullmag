@@ -151,6 +151,14 @@ fn live_python_problem_ir_golden_deserializes_and_validates() {
         .flat_map(|boundary| boundary.surfaces())
         .any(|surface| surface.object_id == "hm" && surface.surface_id == "x-"));
     assert_eq!(problem.spin_transport_modules[0].id, "spin_solve");
+    let torque_edge = problem.physics_graph.as_ref().expect("physics graph")["edges"]
+        .as_array()
+        .expect("physics graph edges")
+        .iter()
+        .find(|edge| edge["target_id"] == "tr")
+        .expect("transport torque edge");
+    assert_eq!(torque_edge["source_id"], "spin_solve");
+    assert_eq!(torque_edge["kind"], "spin_transport_to_torque");
     assert_eq!(
         serde_json::to_value(&problem.spin_torque_modules[0]).expect("torque must serialize")
             ["target"],

@@ -234,7 +234,7 @@
         "target_id": "spin_solve"
       },
       {
-        "kind": "current_to_torque",
+        "kind": "spin_transport_to_torque",
         "source_id": "spin_solve",
         "status": "active",
         "target_id": "tr"

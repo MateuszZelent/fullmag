@@ -560,6 +560,14 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         )
         ir = problem.to_ir(include_geometry_assets=False)
         canonical_ir = json.loads(json.dumps(ir, sort_keys=True, allow_nan=False))
+        self.assertEqual(
+            next(
+                edge
+                for edge in canonical_ir["physics_graph"]["edges"]
+                if edge["target_id"] == "tr"
+            )["kind"],
+            "spin_transport_to_torque",
+        )
         golden_path = (
             Path(__file__).resolve().parents[3]
             / "tests/standard_problems/transport/racetrack_m1_v1/python_problem_ir.v1.json"

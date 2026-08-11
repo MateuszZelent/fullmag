@@ -162,7 +162,12 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         activation = _dependency_activation(PhysicsActivation.ACTIVE, dependency, statuses) if dependency else PhysicsActivation.ACTIVE
         add(_module(module_id, "spin_torque", domain, (dependency,) if dependency else (), activation, f"/spin_torques/{index}", payload))
         if dependency:
-            edges.append(_edge("current_to_torque", dependency, module_id, activation))
+            edge_kind = (
+                "spin_transport_to_torque"
+                if payload.get("kind") == "drift_diffusion_spin_torque"
+                else "current_to_torque"
+            )
+            edges.append(_edge(edge_kind, dependency, module_id, activation))
 
     statuses = {module.id: module.activation for module in modules}
     for index, source in enumerate(getattr(problem, "energy", ())):

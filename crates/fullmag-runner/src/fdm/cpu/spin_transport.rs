@@ -1690,22 +1690,27 @@ fn validate_descriptor(
             "spin transport '{module_id}' descriptor fields do not match the FDM grid"
         )));
     }
-    for (name, mask) in [
-        ("transport_active_mask", &descriptor.transport_active_mask),
-        ("magnetic_active_mask", &descriptor.magnetic_active_mask),
-    ] {
-        if !mask.is_empty() && mask.len() != count {
-            return Err(run_error(format!(
-                "spin transport '{module_id}' resolved mask '{name}' does not match the FDM grid"
-            )));
+    let legacy_resolved_masks = descriptor.transport_active_mask.is_empty()
+        && descriptor.magnetic_active_mask.is_empty()
+        && descriptor.torque_target_masks.is_empty();
+    if !legacy_resolved_masks {
+        for (name, mask) in [
+            ("transport_active_mask", &descriptor.transport_active_mask),
+            ("magnetic_active_mask", &descriptor.magnetic_active_mask),
+        ] {
+            if mask.len() != count {
+                return Err(run_error(format!(
+                    "spin transport '{module_id}' resolved mask '{name}' does not match the FDM grid"
+                )));
+            }
         }
-    }
-    for target in &descriptor.torque_target_masks {
-        if !target.active_mask.is_empty() && target.active_mask.len() != count {
-            return Err(run_error(format!(
-                "spin transport '{module_id}' resolved mask for torque target '{}' does not match the FDM grid",
-                target.torque_module_id
-            )));
+        for target in &descriptor.torque_target_masks {
+            if target.active_mask.len() != count {
+                return Err(run_error(format!(
+                    "spin transport '{module_id}' resolved mask for torque target '{}' does not match the FDM grid",
+                    target.torque_module_id
+                )));
+            }
         }
     }
     if !descriptor.torque_target_masks.is_empty() {
@@ -5030,14 +5035,14 @@ mod tests {
     #[test]
     fn resolved_mask_lengths_must_match_the_fdm_grid() {
         type Mutation = fn(&mut ResolvedFdmSpinTransportIR);
-        let cases: [(&str, Mutation); 3] = [
-            ("transport", |descriptor| {
+        let cases: [(&str, Mutation); 7] = [
+            ("short transport", |descriptor| {
                 descriptor.transport_active_mask.pop();
             }),
-            ("magnetic", |descriptor| {
+            ("short magnetic", |descriptor| {
                 descriptor.magnetic_active_mask.pop();
             }),
-            ("torque target", |descriptor| {
+            ("short torque target", |descriptor| {
                 descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
                     torque_module_id: "torque".into(),
                     target: RegionRefIR {
@@ -5045,6 +5050,34 @@ mod tests {
                         region_id: None,
                     },
                     active_mask: vec![false; 3],
+                }];
+            }),
+            ("empty transport with new magnetic", |descriptor| {
+                descriptor.transport_active_mask.clear();
+            }),
+            ("empty magnetic with new transport", |descriptor| {
+                descriptor.magnetic_active_mask.clear();
+            }),
+            ("empty torque target record", |descriptor| {
+                descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
+                    torque_module_id: "torque".into(),
+                    target: RegionRefIR {
+                        object_id: "fm".into(),
+                        region_id: None,
+                    },
+                    active_mask: vec![],
+                }];
+            }),
+            ("target record with legacy main masks", |descriptor| {
+                descriptor.transport_active_mask.clear();
+                descriptor.magnetic_active_mask.clear();
+                descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
+                    torque_module_id: "torque".into(),
+                    target: RegionRefIR {
+                        object_id: "fm".into(),
+                        region_id: None,
+                    },
+                    active_mask: vec![false; 4],
                 }];
             }),
         ];
@@ -5057,7 +5090,7 @@ mod tests {
                 .expect("one-way descriptor");
             mutate(descriptor);
             let error = FdmSpinTransportWorkflow::from_plan(&invalid)
-                .expect_err("nonempty resolved masks must match the FDM grid");
+                .expect_err("partial or malformed resolved masks must fail closed");
             assert!(
                 error.message.contains("resolved mask"),
                 "missing {field} mask diagnostic: {}",

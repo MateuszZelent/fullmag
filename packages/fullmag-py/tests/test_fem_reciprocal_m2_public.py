@@ -77,7 +77,7 @@ class PublicFemReciprocalM2FixtureTests(unittest.TestCase):
                     "target_id": "m2_spin",
                 },
                 {
-                    "kind": "current_to_torque",
+                    "kind": "spin_transport_to_torque",
                     "source_id": "m2_spin",
                     "status": "active",
                     "target_id": "m2_torque",

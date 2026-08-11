@@ -55,6 +55,7 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         .and_then(Value::as_array)
         .ok_or_else(|| vec!["physics_graph.modules must be an array".to_string()])?;
     let mut statuses = BTreeMap::new();
+    let mut module_kinds = BTreeMap::new();
     let mut errors = Vec::new();
     for (index, module) in modules.iter().enumerate() {
         let Some(module_object) = module.as_object() else {
@@ -81,6 +82,9 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
             .and_then(Value::as_str)
             .unwrap_or("unsupported");
         statuses.insert(id.to_string(), activation.to_string());
+        if let Some(kind) = module_object.get("kind").and_then(Value::as_str) {
+            module_kinds.insert(id.to_string(), kind.to_string());
+        }
         for field in ["applies_to", "solve_domain", "depends_on"] {
             if !module_object.get(field).is_some_and(Value::is_array) {
                 errors.push(format!(
@@ -135,6 +139,7 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         let source = edge_object.get("source_id").and_then(Value::as_str);
         let target = edge_object.get("target_id").and_then(Value::as_str);
         let status = edge_object.get("status").and_then(Value::as_str);
+        let kind = edge_object.get("kind").and_then(Value::as_str);
         if target.is_none_or(|id| !module_ids.contains(id)) {
             errors.push(format!(
                 "physics_graph.edges[{index}] target_id is not a module"
@@ -144,6 +149,24 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
             errors.push(format!(
                 "physics_graph.edges[{index}] is active but source_id is not a module"
             ));
+        }
+        if let (Some(source), Some(target)) = (source, target) {
+            let expected_kind = match (
+                module_kinds.get(source).map(String::as_str),
+                module_kinds.get(target).map(String::as_str),
+            ) {
+                (Some("spin_transport"), Some("spin_torque")) => Some("spin_transport_to_torque"),
+                (Some("current_transport"), Some("spin_torque")) => Some("current_to_torque"),
+                _ => None,
+            };
+            if let Some(expected_kind) = expected_kind {
+                if kind != Some(expected_kind) {
+                    errors.push(format!(
+                        "physics_graph.edges[{index}] kind '{}' must be '{expected_kind}' for {source} -> {target}",
+                        kind.unwrap_or("<missing>")
+                    ));
+                }
+            }
         }
     }
     if errors.is_empty() {
@@ -1223,6 +1246,44 @@ fn stable_marker_id(value: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spin_transport_torque_dependency_rejects_current_edge_kind() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "modules": [
+                {
+                    "id": "spin",
+                    "kind": "spin_transport",
+                    "activation": "active",
+                    "applies_to": [],
+                    "solve_domain": [],
+                    "depends_on": []
+                },
+                {
+                    "id": "torque",
+                    "kind": "spin_torque",
+                    "activation": "active",
+                    "applies_to": [],
+                    "solve_domain": [],
+                    "depends_on": ["spin"]
+                }
+            ],
+            "edges": [{
+                "kind": "current_to_torque",
+                "source_id": "spin",
+                "target_id": "torque",
+                "status": "active"
+            }]
+        }));
+
+        let errors = resolve_physics_graph(&problem)
+            .expect_err("spin transport torque dependency must use its semantic edge kind");
+        assert!(errors.iter().any(|error| {
+            error.contains("spin_transport_to_torque") && error.contains("current_to_torque")
+        }));
+    }
 
     fn layer(
         transfer_kind: &str,

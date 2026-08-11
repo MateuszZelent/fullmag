@@ -89,6 +89,70 @@ def test_spin_torque_graph_kind_is_generic_and_family_stays_in_payload() -> None
     assert module.applies_to[0].object_id == "film"
 
 
+def test_spin_torque_edges_preserve_dependency_semantics() -> None:
+    current = _Module(
+        {
+            "kind": "current_transport",
+            "name": "current:film",
+            "model": "prescribed_density",
+            "current_density": [1.0, 0.0, 0.0],
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    spin = _Module(
+        {
+            "kind": "spin_transport",
+            "id": "spin:film",
+            "current_source_id": "current:film",
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    transport_torque = _Module(
+        {
+            "kind": "drift_diffusion_spin_torque",
+            "id": "torque:transport",
+            "solve_id": "spin:film",
+            "target": {"object_id": "film"},
+        }
+    )
+    current_torque = fm.ZhangLiSTT(
+        current_source="current:film",
+        id="torque:current",
+        target=fm.RegionRef("film"),
+        lande_g=2.0,
+        operator_version="zl_central_reference_v1",
+    )
+
+    graph = build_physics_graph(
+        _problem(
+            current_modules=(current,),
+            spin_transports=(spin,),
+            spin_torques=(transport_torque, current_torque),
+        )
+    )
+
+    assert [edge.to_ir() for edge in graph.edges] == [
+        {
+            "kind": "current_to_spin_transport",
+            "source_id": "current:film",
+            "target_id": "spin:film",
+            "status": "active",
+        },
+        {
+            "kind": "current_to_torque",
+            "source_id": "current:film",
+            "target_id": "torque:current",
+            "status": "active",
+        },
+        {
+            "kind": "spin_transport_to_torque",
+            "source_id": "spin:film",
+            "target_id": "torque:transport",
+            "status": "active",
+        },
+    ]
+
+
 def test_reordering_authored_families_keeps_graph_order() -> None:
     first = _Module({"kind": "current_transport", "name": "current:a", "model": "prescribed_density", "current_density": [1.0, 0.0, 0.0], "domain": []}, name="current:a", model="prescribed_density", current_density=(1.0, 0.0, 0.0), domain=())
     second = _Module({"kind": "current_transport", "name": "current:b", "model": "prescribed_density", "current_density": [2.0, 0.0, 0.0], "domain": []}, name="current:b", model="prescribed_density", current_density=(2.0, 0.0, 0.0), domain=())
