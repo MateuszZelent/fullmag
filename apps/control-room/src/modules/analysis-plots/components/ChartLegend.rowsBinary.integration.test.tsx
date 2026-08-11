@@ -12,6 +12,7 @@ import {
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { resetSharedResourceRuntimeStoreForTests } from "@/kernel/resources/ResourceRuntimeStore";
 import { useTableRowsBinaryResource } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 
@@ -20,9 +21,16 @@ import { AnalysisTableSurface } from "./AnalysisTableSurface";
 describe("chart legend local selection", () => {
   it("does not refetch rowsBinary when a mounted legend click changes the rendered subset", async () => {
     const dom = installSimulationPreparationTestDom();
+    resetSharedResourceRuntimeStoreForTests();
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
-    const rowsBinary = vi.fn(async () => ({ data: null, revision: null, status: "ready" }));
+    let resolveRows: ((value: { data: null; revision: null; status: "ready" }) => void) | null = null;
+    const rowsBinary = vi.fn(
+      () =>
+        new Promise<{ data: null; revision: null; status: "ready" }>((resolve) => {
+          resolveRows = resolve;
+        }),
+    );
     const bus = new EventBus<KernelEventMap>();
     const kernel = {
       api: { data: { tables: { rowsBinary } } },
@@ -38,19 +46,29 @@ describe("chart legend local selection", () => {
       return <AnalysisTableSurface chartSeries={series} kernel={kernel} onPointSelect={() => undefined} onRangeChange={() => undefined} onSelectedSeriesIdsChange={setSelected} range={null} selectedPoint={null} selectedSeriesIds={selected} status="ready" table={null} xAxisId="step" xAxisLabel="step" />;
     }
 
-    await act(async () => root.render(<KernelContext.Provider value={kernel}><Harness /></KernelContext.Provider>));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
-    const initialCalls = rowsBinary.mock.calls.length;
-    expect(initialCalls).toBeGreaterThan(0);
-    expect(container.textContent).toContain("mx");
-    expect(container.textContent).toContain("my");
-    const mx = findElement(container, (element) => element.getAttribute("aria-label")?.startsWith("mx,") ?? false, "mx legend") as TestElement;
-    await act(async () => mx.click());
-    expect(rowsBinary).toHaveBeenCalledTimes(initialCalls);
-    expect(mx.getAttribute("aria-pressed")).toBe("false");
-    expect(container.textContent).toContain("my");
-    await act(async () => root.unmount());
-    dom.restore();
+    try {
+      await act(async () => root.render(<KernelContext.Provider value={kernel}><Harness /></KernelContext.Provider>));
+      for (let attempt = 0; attempt < 20 && rowsBinary.mock.calls.length === 0; attempt += 1) {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1)); });
+      }
+      expect(rowsBinary).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("mx");
+      expect(container.textContent).toContain("my");
+      const mx = findElement(container, (element) => element.getAttribute("aria-label")?.startsWith("mx,") ?? false, "mx legend") as TestElement;
+      await act(async () => mx.click());
+      expect(rowsBinary).toHaveBeenCalledTimes(1);
+      expect(mx.getAttribute("aria-pressed")).toBe("false");
+      expect(container.textContent).toContain("my");
+      await act(async () => {
+        resolveRows?.({ data: null, revision: null, status: "ready" });
+        await Promise.resolve();
+      });
+    } finally {
+      await act(async () => root.unmount());
+      kernel.resources.resetForTests();
+      resetSharedResourceRuntimeStoreForTests();
+      dom.restore();
+    }
   });
 });
 

@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn validate_mesh_json_rejects_corrupt_tetrahedra() {
-        pyo3::prepare_freethreaded_python();
+        Python::initialize();
         let cases = [
             (
                 mesh_json([0, 1, 3, 2], [0.0, 0.0, 1.0]),

@@ -43,12 +43,8 @@ export function resolveCurrentFemAirboxEvidence(
     resources.summary.status === "ready" &&
     matchesCurrentMesh(resources.summary.data?.revision);
   const manifestIsCurrent =
-    sceneIsCurrent &&
     resources.manifest.status === "ready" &&
-    matchesCurrentMesh(resources.manifest.data?.revision) &&
-    resources.manifest.data?.source_scene_revision !== null &&
-    resources.manifest.data?.source_scene_revision !== undefined &&
-    String(resources.manifest.data.source_scene_revision) === String(sceneRevision);
+    matchesCurrentMesh(resources.manifest.data?.revision);
 
   return {
     authoredPolicy: policyIsCurrent && resources.policy.data?.config != null,

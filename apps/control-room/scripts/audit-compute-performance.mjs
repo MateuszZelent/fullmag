@@ -1783,8 +1783,8 @@ function checkAnalysisPlotsStableResourceInputs() {
     "useAnalysisFrequencyData",
     'activeSurface === "dynamics" || activeSurface === "comparison"',
     'activeSurface === "comparison" && comparisonDatasetRef !== null',
-    'activeSurface === "frequency-response" || activeSurface === "eigenmodes"',
-    'useSpinWaveGammaResource(activeSurface === "spectrum")',
+    'activeSurface === "resonance-fmr" || activeSurface === "dispersion"',
+    'useSpinWaveGammaResource(activeSurface === "dynamics")',
     'useDynamicStructureFactorResource(activeSurface === "dispersion")',
   ]);
   requireTokens(datasetDataHookSource, "analysis plots dataset resource owner", [
@@ -1801,7 +1801,7 @@ function checkAnalysisPlotsStableResourceInputs() {
     "visibleTable = pinnedForDataset?.table ?? decodedTable",
   ]);
   requireTokens(frequencyDataHookSource, "analysis plots frequency resource owner", [
-    'activeSurface: "frequency-response" | "eigenmodes" | "idle"',
+    'activeSurface: "dispersion" | "resonance-fmr" | "idle"',
     'const loadFrequency = activeSurface !== "idle"',
     "useFrequencyDomainManifestResource",
     "const manifestReady = frequencyDomainManifest.status === \"ready\"",
