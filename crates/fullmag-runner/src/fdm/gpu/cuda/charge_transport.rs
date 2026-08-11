@@ -139,11 +139,6 @@ pub(crate) fn validate_input(
             "the public charge-only lane requires an explicit CUDA device ordinal",
         ));
     }
-    if input.gauge != GpuChargeGauge::BoundaryReferencePerComponent {
-        return Err(GpuChargeTransportError::validation(
-            "the first public FDM GPU charge lane supports only boundary-reference-per-component gauge; zero-mean remains native-only",
-        ));
-    }
     if input.grid.contains(&0) {
         return Err(GpuChargeTransportError::validation(
             "grid dimensions must be positive",
@@ -248,6 +243,8 @@ fn validate_boundary_faces(
     cell_count: usize,
 ) -> Result<(), GpuChargeTransportError> {
     let mut voltage_sources = BTreeSet::new();
+    let mut current_sources = BTreeMap::new();
+    let mut current_flux_a = 0.0;
     let mut canonical_faces = BTreeSet::new();
     for face in &input.boundary_faces {
         if face.axis > 2
@@ -280,17 +277,62 @@ fn validate_boundary_faces(
                 }
             }
             GpuChargeBoundaryKind::ExactCurrentDensity => {
-                return Err(GpuChargeTransportError::validation(
-                    "the first public FDM GPU charge lane supports only two voltage electrodes and insulating walls",
-                ));
+                if face.source_id == 0 {
+                    return Err(GpuChargeTransportError::validation(
+                        "current-density electrodes require non-zero source ids",
+                    ));
+                }
+                match current_sources.insert(face.source_id, (face.axis, face.side)) {
+                    Some((axis, side)) if axis != face.axis || side != face.side => {
+                        return Err(GpuChargeTransportError::validation(
+                            "each current-density electrode source id must occupy one oriented boundary surface",
+                        ));
+                    }
+                    _ => {}
+                }
+                current_flux_a += face.area_m2 * face.value;
             }
         }
     }
-    if voltage_sources.len() != 2 {
-        return Err(GpuChargeTransportError::validation(format!(
-            "the bounded public charge lane requires exactly two voltage electrode source ids, found {}",
-            voltage_sources.len()
-        )));
+    match input.gauge {
+        GpuChargeGauge::BoundaryReferencePerComponent => {
+            if !current_sources.is_empty() || voltage_sources.len() != 2 {
+                return Err(GpuChargeTransportError::validation(format!(
+                    "the bounded public boundary-reference charge lane requires exactly two voltage electrode source ids and insulating walls, found {} voltage and {} current-density sources",
+                    voltage_sources.len(),
+                    current_sources.len(),
+                )));
+            }
+        }
+        GpuChargeGauge::ZeroMeanPerFreeComponent => {
+            if !voltage_sources.is_empty() || current_sources.len() != 2 {
+                return Err(GpuChargeTransportError::validation(format!(
+                    "the bounded public zero-mean charge lane requires exactly two current-density electrode source ids and insulating walls, found {} voltage and {} current-density sources",
+                    voltage_sources.len(),
+                    current_sources.len(),
+                )));
+            }
+            let mut orientations = current_sources.values();
+            let first = orientations.next().expect("two current source ids");
+            let second = orientations.next().expect("two current source ids");
+            if first.0 != second.0 || first.1 != -second.1 {
+                return Err(GpuChargeTransportError::validation(
+                    "the bounded public zero-mean charge lane requires current-density electrodes on opposite faces of one axis",
+                ));
+            }
+            let flux_scale = input
+                .boundary_faces
+                .iter()
+                .filter(|face| face.kind == GpuChargeBoundaryKind::ExactCurrentDensity)
+                .map(|face| (face.area_m2 * face.value).abs())
+                .sum::<f64>()
+                .max(1.0);
+            if current_flux_a.abs() > 1.0e-12 * flux_scale {
+                return Err(GpuChargeTransportError::validation(format!(
+                    "the bounded public zero-mean charge lane requires area-weighted outward current balance; net flux is {current_flux_a:e} A",
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -348,11 +390,6 @@ pub(crate) fn input_from_resolved(
     {
         return Err(GpuChargeTransportError::validation(
             "resolved charge descriptor contradicts the bounded FDM/GPU/double/strict ABI lane",
-        ));
-    }
-    if descriptor.charge_gauge != fullmag_ir::ChargePotentialGaugeIR::DirichletReference {
-        return Err(GpuChargeTransportError::validation(
-            "the public FDM GPU runner rejects zero-mean gauge before native execution",
         ));
     }
     if descriptor.charge_active_cells.len() != descriptor.charge_conductivity_spm.len()
@@ -448,7 +485,14 @@ pub(crate) fn input_from_resolved(
         cells,
         materials,
         boundary_faces,
-        gauge: GpuChargeGauge::BoundaryReferencePerComponent,
+        gauge: match descriptor.charge_gauge {
+            fullmag_ir::ChargePotentialGaugeIR::DirichletReference => {
+                GpuChargeGauge::BoundaryReferencePerComponent
+            }
+            fullmag_ir::ChargePotentialGaugeIR::ZeroMean => {
+                GpuChargeGauge::ZeroMeanPerFreeComponent
+            }
+        },
         attempt_id: 1,
         stage_id: 1,
         relative_tolerance: descriptor.charge_solver.linear.relative_tolerance,
@@ -911,8 +955,14 @@ fn execute_with_abi<A: TransportAbi>(
             prefix: prefix::<ffi::fullmag_fdm_gpu_charge_solve_request_v1>(0),
             context_handle: created.context_handle,
             solver_policy: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHARGE_SOLVER_POLICY_CG_DEVICE_AMG_V1,
-            gauge_policy:
-                ffi::FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT,
+            gauge_policy: match input.gauge {
+                GpuChargeGauge::BoundaryReferencePerComponent => {
+                    ffi::FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT
+                }
+                GpuChargeGauge::ZeroMeanPerFreeComponent => {
+                    ffi::FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT
+                }
+            },
             attempt_id: input.attempt_id,
             stage_id: input.stage_id,
             source_revision: input.source_revision,
@@ -1153,7 +1203,12 @@ pub(crate) fn execute_public_gpu_charge_only(
         resolved_engine: "cuda_fdm_charge_only".to_string(),
         resolved_device: "gpu".to_string(),
         resolved_precision: "double".to_string(),
-        gauge_policy: "boundary_reference_per_component".to_string(),
+        gauge_policy: match input.gauge {
+            GpuChargeGauge::BoundaryReferencePerComponent => {
+                "boundary_reference_per_component".to_string()
+            }
+            GpuChargeGauge::ZeroMeanPerFreeComponent => "zero_mean_per_free_component".to_string(),
+        },
         solver_policy: "cg_device_amg_v1".to_string(),
         operator_version: "fv_charge_harmonic_v1".to_string(),
         allocator_limit_bytes: 0,
@@ -1416,13 +1471,49 @@ mod tests {
     }
 
     #[test]
-    fn bounded_public_contract_rejects_zero_mean_before_ffi() {
-        let mut input = bounded_input();
-        input.gauge = GpuChargeGauge::ZeroMeanPerFreeComponent;
+    fn bounded_public_zero_mean_contract_uses_zero_mean_ffi_policy() {
+        let input = bounded_zero_mean_input();
+        let mut abi = MockAbi::default();
 
-        let error = validate_input(&input).expect_err("zero-mean must stay native-only");
+        execute_with_abi(&mut abi, &input).expect("bounded zero-mean solve");
 
-        assert!(error.message.contains("boundary-reference"));
+        assert_eq!(
+            abi.solve_request.expect("solve request").gauge_policy,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT,
+        );
+    }
+
+    #[test]
+    fn bounded_public_zero_mean_contract_rejects_unbalanced_flux() {
+        let mut input = bounded_zero_mean_input();
+        input.boundary_faces[1].value = -1.0e13;
+
+        let error = validate_input(&input).expect_err("unbalanced Neumann flux must fail");
+
+        assert!(error
+            .message
+            .contains("area-weighted outward current balance"));
+    }
+
+    #[test]
+    fn bounded_public_zero_mean_contract_rejects_mixed_voltage_and_current_faces() {
+        let mut input = bounded_zero_mean_input();
+        input.boundary_faces[1].kind = GpuChargeBoundaryKind::Voltage;
+        input.boundary_faces[1].value = 0.1;
+
+        let error = validate_input(&input).expect_err("mixed boundary profile must fail");
+
+        assert!(error.message.contains("two current-density electrode"));
+    }
+
+    #[test]
+    fn bounded_public_boundary_reference_contract_rejects_current_density_faces() {
+        let mut input = bounded_zero_mean_input();
+        input.gauge = GpuChargeGauge::BoundaryReferencePerComponent;
+
+        let error = validate_input(&input).expect_err("gauge and electrode profile must agree");
+
+        assert!(error.message.contains("two voltage electrode"));
     }
 
     #[test]
@@ -1659,5 +1750,35 @@ mod tests {
             relative_tolerance: 1.0e-12,
             max_iterations: 500,
         }
+    }
+
+    fn bounded_zero_mean_input() -> GpuChargeTransportInput {
+        let mut input = bounded_input();
+        input.gauge = GpuChargeGauge::ZeroMeanPerFreeComponent;
+        input.boundary_faces = vec![
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::ExactCurrentDensity,
+                axis: 0,
+                side: -1,
+                outward_sign: -1,
+                adjacent_cell: 0,
+                canonical_face_index: 0,
+                area_m2: 1.0e-18,
+                value: 2.0e13,
+                source_id: 10,
+            },
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::ExactCurrentDensity,
+                axis: 0,
+                side: 1,
+                outward_sign: 1,
+                adjacent_cell: 1,
+                canonical_face_index: 2,
+                area_m2: 1.0e-18,
+                value: -2.0e13,
+                source_id: 11,
+            },
+        ];
+        input
     }
 }

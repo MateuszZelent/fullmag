@@ -1,7 +1,7 @@
 use fullmag_ir::{
-    AntennaFieldSourceModelIR, BackendTarget, ChargeBoundaryIR, ChargePotentialGaugeIR,
-    CurrentModuleIR, CurrentTransportModelIR, ExecutionPrecision, ProblemIR,
-    ResolvedFdmGpuChargeTransportIR, TimeEnvelopeIR, TransportCouplingIR,
+    AntennaFieldSourceModelIR, BackendTarget, ChargePotentialGaugeIR, CurrentModuleIR,
+    CurrentTransportModelIR, ExecutionPrecision, ProblemIR, ResolvedFdmGpuChargeTransportIR,
+    TimeEnvelopeIR, TransportCouplingIR,
 };
 
 use crate::error::PlanError;
@@ -222,9 +222,6 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
         scope_reasons.push("complete_charge_definition=missing".into());
         return Err(fdm_gpu_charge_scope_error(scope_reasons));
     };
-    if charge.gauge != ChargePotentialGaugeIR::DirichletReference {
-        scope_reasons.push(format!("charge_gauge={:?}", charge.gauge));
-    }
     if charge.conservative_current_view.is_some() || charge.structured_current_closure.is_some() {
         scope_reasons.push("current_closure_or_conservative_view=unsupported".into());
     }
@@ -241,21 +238,6 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
             charge.solver.linear.absolute_tolerance
         ));
     }
-    let voltage_electrodes = charge
-        .boundaries
-        .iter()
-        .filter(|boundary| matches!(boundary, ChargeBoundaryIR::VoltageElectrode { .. }))
-        .count();
-    let voltage_surfaces_are_single = charge.boundaries.iter().all(|boundary| match boundary {
-        ChargeBoundaryIR::VoltageElectrode { surfaces, .. } => surfaces.len() == 1,
-        ChargeBoundaryIR::Insulating { .. } => true,
-        ChargeBoundaryIR::NormalCurrentElectrode { .. } => false,
-    });
-    if voltage_electrodes != 2 || !voltage_surfaces_are_single {
-        scope_reasons.push(format!(
-            "boundary_contract=two_single_surface_voltage_electrodes_plus_insulating; voltage_electrodes={voltage_electrodes}"
-        ));
-    }
     if !scope_reasons.is_empty() {
         return Err(fdm_gpu_charge_scope_error(scope_reasons));
     }
@@ -268,7 +250,158 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
             "charge_domain=not_full_rectangular_active_grid".into(),
         ]));
     }
+    if !bounded_fdm_gpu_charge_boundary_profile(&descriptor, context) {
+        return Err(fdm_gpu_charge_scope_error(vec![
+            "boundary_contract=two_single_surface_voltage_electrodes_plus_insulating_or_two_opposite_balanced_current_density_electrodes_plus_insulating".into(),
+        ]));
+    }
     Ok(vec![descriptor])
+}
+
+fn bounded_fdm_gpu_charge_boundary_profile(
+    descriptor: &ResolvedFdmGpuChargeTransportIR,
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+) -> bool {
+    use fullmag_ir::ResolvedChargeBoundaryConditionIR as Condition;
+
+    let voltage = descriptor
+        .charge_boundaries
+        .iter()
+        .filter(|boundary| matches!(boundary.condition, Condition::Voltage { .. }))
+        .collect::<Vec<_>>();
+    let current = descriptor
+        .charge_boundaries
+        .iter()
+        .filter(|boundary| {
+            matches!(
+                boundary.condition,
+                Condition::OutwardNormalCurrentDensity { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let insulating = descriptor
+        .charge_boundaries
+        .iter()
+        .filter(|boundary| matches!(boundary.condition, Condition::Insulating))
+        .count();
+
+    match descriptor.charge_gauge {
+        ChargePotentialGaugeIR::DirichletReference => {
+            if voltage.len() != 2 || !current.is_empty() || insulating != 4 {
+                return false;
+            }
+            let Some((first_axis, first_side, _)) = boundary_face_geometry(voltage[0], context)
+            else {
+                return false;
+            };
+            let Some((second_axis, second_side, _)) = boundary_face_geometry(voltage[1], context)
+            else {
+                return false;
+            };
+            voltage[0].source_id != voltage[1].source_id
+                && first_axis == second_axis
+                && first_side == -second_side
+        }
+        ChargePotentialGaugeIR::ZeroMean => {
+            if voltage.is_empty() && current.len() == 2 && insulating == 4 {
+                let Some((first_axis, first_side, first_area, first_density)) =
+                    current_boundary_geometry(current[0], context)
+                else {
+                    return false;
+                };
+                let Some((second_axis, second_side, second_area, second_density)) =
+                    current_boundary_geometry(current[1], context)
+                else {
+                    return false;
+                };
+                let flux = first_area * first_density + second_area * second_density;
+                let flux_scale = (first_area * first_density)
+                    .abs()
+                    .max((second_area * second_density).abs())
+                    .max(1.0);
+                first_axis == second_axis
+                    && first_side == -second_side
+                    && current[0].source_id != current[1].source_id
+                    && flux.abs() <= 1.0e-12 * flux_scale
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn current_boundary_geometry(
+    boundary: &fullmag_ir::ResolvedChargeBoundaryFaceIR,
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+) -> Option<(u8, i8, f64, f64)> {
+    use fullmag_ir::ResolvedChargeBoundaryConditionIR as Condition;
+
+    let (axis, side, area_m2) = boundary_face_geometry(boundary, context)?;
+    let Condition::OutwardNormalCurrentDensity {
+        current_density_apm2,
+    } = boundary.condition
+    else {
+        return None;
+    };
+    Some((axis, side, area_m2, current_density_apm2))
+}
+
+fn boundary_face_geometry(
+    boundary: &fullmag_ir::ResolvedChargeBoundaryFaceIR,
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+) -> Option<(u8, i8, f64)> {
+    use fullmag_ir::StructuredBoundaryFaceIR;
+
+    Some(match boundary.face {
+        StructuredBoundaryFaceIR::XMin => (
+            0,
+            -1,
+            f64::from(context.grid_cells[1])
+                * f64::from(context.grid_cells[2])
+                * context.cell_size_m[1]
+                * context.cell_size_m[2],
+        ),
+        StructuredBoundaryFaceIR::XMax => (
+            0,
+            1,
+            f64::from(context.grid_cells[1])
+                * f64::from(context.grid_cells[2])
+                * context.cell_size_m[1]
+                * context.cell_size_m[2],
+        ),
+        StructuredBoundaryFaceIR::YMin => (
+            1,
+            -1,
+            f64::from(context.grid_cells[0])
+                * f64::from(context.grid_cells[2])
+                * context.cell_size_m[0]
+                * context.cell_size_m[2],
+        ),
+        StructuredBoundaryFaceIR::YMax => (
+            1,
+            1,
+            f64::from(context.grid_cells[0])
+                * f64::from(context.grid_cells[2])
+                * context.cell_size_m[0]
+                * context.cell_size_m[2],
+        ),
+        StructuredBoundaryFaceIR::ZMin => (
+            2,
+            -1,
+            f64::from(context.grid_cells[0])
+                * f64::from(context.grid_cells[1])
+                * context.cell_size_m[0]
+                * context.cell_size_m[1],
+        ),
+        StructuredBoundaryFaceIR::ZMax => (
+            2,
+            1,
+            f64::from(context.grid_cells[0])
+                * f64::from(context.grid_cells[1])
+                * context.cell_size_m[0]
+                * context.cell_size_m[1],
+        ),
+    })
 }
 
 fn fdm_gpu_charge_scope_error(reasons: Vec<String>) -> PlanError {
@@ -385,11 +518,15 @@ mod tests {
 
     fn assert_gpu_charge_scope_rejected(problem: &ProblemIR, expected: &str) {
         let error = crate::plan(problem).expect_err("unsupported GPU charge scope must fail");
-        assert!(error.reasons.iter().any(|reason| {
-            reason.contains("fdm_gpu_charge_scope_rejected")
-                && reason.contains(expected)
-                && reason.contains("fallback=none")
-        }));
+        assert!(
+            error.reasons.iter().any(|reason| {
+                reason.contains("fdm_gpu_charge_scope_rejected")
+                    && reason.contains(expected)
+                    && reason.contains("fallback=none")
+            }),
+            "expected {expected:?} in {:?}",
+            error.reasons,
+        );
     }
 
     #[test]
@@ -537,27 +674,132 @@ mod tests {
     }
 
     #[test]
-    fn bounded_public_fdm_gpu_charge_rejects_zero_mean_current_electrodes() {
+    fn materializes_bounded_public_fdm_gpu_zero_mean_charge_plan() {
         let mut problem = bounded_gpu_charge_problem();
         let charge = charge_definition_mut(&mut problem);
         charge.gauge = ChargePotentialGaugeIR::ZeroMean;
         for boundary in &mut charge.boundaries {
-            let ChargeBoundaryIR::VoltageElectrode {
-                id,
-                surfaces,
-                potential_v,
-            } = boundary
-            else {
+            let ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } = boundary else {
                 continue;
             };
-            let outward_current_density_apm2 = if *potential_v == 0.0 { -1.0 } else { 1.0 };
+            let outward_current_density_apm2 = if id == "x_min" { 2.0e13 } else { -2.0e13 };
             *boundary = ChargeBoundaryIR::NormalCurrentElectrode {
                 id: std::mem::take(id),
                 surfaces: std::mem::take(surfaces),
                 outward_current_density_apm2,
             };
         }
-        assert_gpu_charge_scope_rejected(&problem, "charge_gauge=ZeroMean");
+        let plan = crate::plan(&problem).expect("bounded zero-mean FDM GPU charge plan");
+        let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        assert_eq!(fdm.fdm_gpu_charge_transports.len(), 1);
+        let charge = &fdm.fdm_gpu_charge_transports[0];
+        assert_eq!(charge.charge_gauge, ChargePotentialGaugeIR::ZeroMean);
+        assert_eq!(
+            charge
+                .charge_boundaries
+                .iter()
+                .filter(|boundary| matches!(
+                    boundary.condition,
+                    ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity { .. }
+                ))
+                .count(),
+            2
+        );
+        assert_eq!(
+            charge
+                .charge_boundaries
+                .iter()
+                .filter(|boundary| matches!(
+                    boundary.condition,
+                    ResolvedChargeBoundaryConditionIR::Insulating
+                ))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn bounded_public_fdm_gpu_zero_mean_charge_rejects_invalid_electrode_profiles() {
+        let mut same_sign = bounded_gpu_charge_problem();
+        let charge = charge_definition_mut(&mut same_sign);
+        charge.gauge = ChargePotentialGaugeIR::ZeroMean;
+        for boundary in &mut charge.boundaries {
+            let ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } = boundary else {
+                continue;
+            };
+            *boundary = ChargeBoundaryIR::NormalCurrentElectrode {
+                id: std::mem::take(id),
+                surfaces: std::mem::take(surfaces),
+                outward_current_density_apm2: 2.0e13,
+            };
+        }
+        assert_gpu_charge_scope_rejected(&same_sign, "boundary_contract=");
+
+        let mut different_axes = same_sign.clone();
+        let charge = charge_definition_mut(&mut different_axes);
+        let x_max = charge
+            .boundaries
+            .iter_mut()
+            .find(|boundary| matches!(boundary, ChargeBoundaryIR::NormalCurrentElectrode { id, .. } if id == "x_max"))
+            .expect("x-max current electrode");
+        *x_max = ChargeBoundaryIR::Insulating {
+            id: "x_max".into(),
+            surfaces: vec![SurfaceRefIR {
+                object_id: "strip".into(),
+                surface_id: "x_max".into(),
+                orientation: [1.0, 0.0, 0.0],
+            }],
+        };
+        let y_max = charge
+            .boundaries
+            .iter_mut()
+            .find(|boundary| matches!(boundary, ChargeBoundaryIR::Insulating { id, .. } if id == "y_max"))
+            .expect("y-max insulating boundary");
+        *y_max = ChargeBoundaryIR::NormalCurrentElectrode {
+            id: "y_max".into(),
+            surfaces: vec![SurfaceRefIR {
+                object_id: "strip".into(),
+                surface_id: "y_max".into(),
+                orientation: [0.0, 1.0, 0.0],
+            }],
+            outward_current_density_apm2: -2.0e13,
+        };
+        assert_gpu_charge_scope_rejected(&different_axes, "boundary_contract=");
+
+        let mut mixed = same_sign.clone();
+        let charge = charge_definition_mut(&mut mixed);
+        let x_min = charge
+            .boundaries
+            .iter_mut()
+            .find(|boundary| matches!(boundary, ChargeBoundaryIR::NormalCurrentElectrode { id, .. } if id == "x_min"))
+            .expect("x-min current electrode");
+        *x_min = ChargeBoundaryIR::VoltageElectrode {
+            id: "x_min".into(),
+            surfaces: vec![SurfaceRefIR {
+                object_id: "strip".into(),
+                surface_id: "x_min".into(),
+                orientation: [-1.0, 0.0, 0.0],
+            }],
+            potential_v: 0.0,
+        };
+        let mixed_error = crate::plan(&mixed).expect_err("mixed boundary profile must fail");
+        assert!(mixed_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("gauge=zero_mean conflicts with voltage electrodes")));
+
+        let mut wrong_gauge = same_sign;
+        charge_definition_mut(&mut wrong_gauge).gauge = ChargePotentialGaugeIR::DirichletReference;
+        let wrong_gauge_error = crate::plan(&wrong_gauge).expect_err("gauge mismatch must fail");
+        assert!(
+            wrong_gauge_error.reasons.iter().any(|reason| {
+                reason.contains("gauge=dirichlet_reference requires a voltage electrode")
+            }),
+            "unexpected gauge mismatch rejection: {:?}",
+            wrong_gauge_error.reasons,
+        );
     }
 
     #[test]

@@ -1824,16 +1824,20 @@ ABI smoke cannot mask a constitutive sign or `G=-\nabla\mu_s/2` factor error.
 
 ### 7.3 Bounded public FDM GPU charge-only path
 
-The public `CurrentTransport` path now has one deliberately bounded executable
-realization. `resolve_fdm_gpu_charge_transports` lowers the Python/ProblemIR
-module to a versioned `ResolvedFdmGpuChargeTransportIR` descriptor only when
-the request is explicit FDM/CUDA, FP64, strict, one-way OhmicPoisson, a full
-rectangular active grid, two opposite voltage faces, and four insulating faces.
-The runner adapter `execute_public_gpu_charge_only` maps that descriptor to the
-append-only CUDA M1 charge ABI and publishes `V_electric`, `J_charge`, and a
-transport provenance artifact. CPU, `auto`, unknown execution values, partial
-masks, current-density electrodes, zero-mean public gauge, PBC, spin/SHE/STT/SOT
-and implicit fallback are rejected before execution.
+The public `CurrentTransport` path has two deliberately bounded executable
+profiles. `resolve_fdm_gpu_charge_transports` lowers the Python/ProblemIR
+module to a versioned `ResolvedFdmGpuChargeTransportIR` only when the request
+is explicit FDM/CUDA, FP64, strict, one-way OhmicPoisson and a full rectangular
+active grid. The first profile uses two opposite voltage faces, four insulating
+faces and `boundary_reference_per_component`. The second uses exactly two
+opposite, single-surface `NormalCurrentElectrode` faces on one axis, four
+insulating faces, `zero_mean_per_free_component`, and the scale-aware
+compatibility condition $\sum_f |f|J_{n,f}=0$. The runner adapter
+`execute_public_gpu_charge_only` maps both profiles to the append-only CUDA M1
+charge ABI and publishes `V_electric`, `J_charge`, and a transport provenance
+artifact. CPU, `auto`, unknown execution values, partial masks, PBC,
+spin/SHE/STT/SOT, Oersted coupling and implicit fallback are rejected before
+execution.
 
 The managed gate `just verify-fdm-gpu-public-charge-runtime` executes the
 fixture `examples/fdm_gpu_charge_public.py` on a 2 x 1 x 1 grid. An independent
@@ -1853,9 +1857,36 @@ is local to each flux axis (`Jx`, `Jy`, `Jz`), not a globally offset index
 stream. The Rust adapter now uses axis-local formulas and validates uniqueness
 on `(axis, canonical_face_index)`; the regression test
 `expanded_boundary_faces_use_axis_local_canonical_indices` freezes this rule.
-The remaining public charge work includes zero-mean gauge and current-density
-electrodes, larger and masked domains, convergence and sanitizer gates,
-cross-backend parity, and the complete spin/SHE/M2/M3/FEM paths.
+
+The pure-Neumann managed gate
+`just verify-fdm-gpu-public-charge-zero-mean-runtime` runs
+`examples/fdm_gpu_charge_zero_mean_public.py` through the same public path.
+For a $20\times10\times10\,\mathrm{nm^3}$ bar with two $10\,\mathrm{nm}$
+x-cells, $\sigma=4.0\times10^6\,\mathrm{S/m}$,
+$J_n(x_{\min})=+2.0\times10^{13}\,\mathrm{A/m^2}$ and
+$J_n(x_{\max})=-2.0\times10^{13}\,\mathrm{A/m^2}$, the stored axis current
+is $J_x=-2.0\times10^{13}\,\mathrm{A/m^2}$ because $J_n=\mathbf n\cdot
+\mathbf J_c$ and $\mathbf J_c=-\sigma\nabla V$. Hence the zero-mean
+cell-centre oracle in increasing x order is
+$V=(-0.025,+0.025)\,\mathrm{V}$. The verifier also requires physical,
+component and electrode balances below $10^{-12}$ and provenance
+`gauge_policy=zero_mean_per_free_component`. This is an electrical prerequisite
+for later solved-current racetrack/SHE-to-SOT/STT/Hall and current-derived
+Oersted work; it does not itself enable any spin torque, Hall observable or
+Oersted field.
+
+The managed CUDA run completed with `iterations=1`, algebraic residual
+`4.1150157270026995e-17`, physical residual `0.0`, component balance `0.0`,
+and electrode balance `0.0`. It returned the prescribed cell-centre values
+`[-0.024999999999999994, 0.024999999999999994] V` and
+`[-2.0e13, 0, 0, -2.0e13, 0, 0] A/m^2`. The identified device was the RTX
+4080 SUPER UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, CUDA runtime `12040`,
+driver `13010`, build digest
+`d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`.
+
+The remaining public charge work includes larger and masked domains,
+convergence and sanitizer gates, cross-backend parity, and the complete
+spin/SHE/M2/M3/FEM paths.
 
 (source-code-index)=
 ## 8. Source-code index
@@ -1902,6 +1933,10 @@ a qualified workload without the validation gates above.
 | Public FDM GPU charge runner | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_public_gpu_charge_only | map the resolved descriptor to the CUDA M1 charge ABI, read back V/J, and publish provenance without fallback | `just verify-fdm-gpu-public-charge-runtime`; bounded actual-device E2E |
 | Public charge fixture and analytic oracle | examples/fdm_gpu_charge_public.py; scripts/verify_fdm_gpu_public_charge_output.py | study; main | define the 2 x 1 x 1 affine voltage fixture and independently verify V/J, residuals, and provenance | managed public charge gate |
 | Public charge managed recipe | justfile | verify-fdm-gpu-public-charge-runtime | compile the CUDA runtime and CLI through the container-backed managed path, run the fixture, and execute the oracle | actual RTX 4080 SUPER; unvalidated |
+| `fdm-gpu-public-charge-planner`: public pure-Neumann planner profile | crates/fullmag-plan/src/current_transport.rs | bounded_fdm_gpu_charge_boundary_profile | require two opposite balanced current-density faces, zero-mean gauge, and four insulating faces without relaxing the FDM/CUDA/FP64/strict scope | planner regression |
+| `fdm-gpu-public-charge-runner`: public pure-Neumann runner profile | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | validate_boundary_faces | map zero-mean gauge to the CUDA ABI and reject unbalanced, mixed, or gauge-incompatible boundary profiles before native execution | runner ABI regression |
+| `fdm-gpu-public-zero-mean-fixture` and `fdm-gpu-public-zero-mean-verifier`: public pure-Neumann fixture and analytic oracle | examples/fdm_gpu_charge_zero_mean_public.py; scripts/verify_fdm_gpu_public_charge_zero_mean_output.py | build_study; main | define the balanced 2 x 1 x 1 current-density fixture and verify sign, gauge, balances, and provenance | managed pure-Neumann gate |
+| Public pure-Neumann managed recipe | justfile | verify-fdm-gpu-public-charge-zero-mean-runtime | compile through the container-backed runtime, execute the public fixture, and run the independent oracle | managed actual-device gate |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |

@@ -1812,6 +1812,18 @@ Ogólna capability pozostaje `semantic_only`, `validation_state=unvalidated`,
 z `validated_workloads=[]`; managed actual-device contract proof nie jest
 kwalifikacją ani promocją ogólnej ścieżki.
 
+W tej bounded ścieżce planner i runner dopuszczają dwa, rozłączne profile
+ładunkowe. Profil Dirichleta wymaga dokładnie dwóch przeciwnych powierzchni
+`Voltage`, czterech `Insulating` i
+`gauge_policy=boundary_reference_per_component`. Profil czysto Neumanna wymaga
+`gauge_policy=zero_mean_per_free_component`, dokładnie dwóch przeciwnych
+powierzchni `NormalCurrentElectrode` o tym samym module gęstości
+`n·J_charge` i przeciwnym całkowitym strumieniu przez pełne powierzchnie
+siatki, oraz czterech `Insulating`. Profile mieszane, niezbilansowane, o
+różnych osiach lub z niezgodną gauge są odrzucane przed wywołaniem ABI. Nie
+wynika z tego obsługa częściowych elektrod, masek, domen nieprostokątnych ani
+ogólnego Neumanna; rozszerzenie wymaga osobnej specyfikacji i kwalifikacji.
+
 The ABI is separate from `fullmag_fdm_cpu_*` and from the LLG `Context`. It
 uses two opaque, non-interchangeable **handle types** whose names cannot also
 name a public descriptor or information record:

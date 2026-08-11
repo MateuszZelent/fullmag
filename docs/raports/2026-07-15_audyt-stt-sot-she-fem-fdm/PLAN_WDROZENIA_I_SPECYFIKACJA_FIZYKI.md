@@ -13088,3 +13088,50 @@ nieprostokątne, skalowanie dużych siatek, compute-sanitizer, mesh convergence,
 FDM CPU/GPU parity, pełne M1 spin/SHE, M2/M3, Oersted, publiczna ścieżka FEM,
 Standard Problem 5, cross-backend FEM/FDM oraz browser/UI proof. Do czasu tych
 bram capability pozostaje jawnie ograniczone i fail-closed.
+
+## 32.178. Publiczny profil czysto-Neumanna dla FDM GPU charge (2026-08-11)
+
+### Zakres i kontrakt fizyczny
+
+Do bounded ścieżki z §32.177 dodano drugi, rozłączny profil publicznego
+`CurrentTransport`. Nie zastępuje on profilu Dirichleta: przy
+`ChargePotentialGauge.zero_mean()` przyjmuje dokładnie dwie przeciwległe,
+pełnopowierzchniowe elektrody `NormalCurrentElectrode` oraz cztery
+`ChargeInsulating`. Gęstość autora oznacza zawsze zewnętrzny strumień
+normalny $J_n=\mathbf n\cdot\mathbf J_c$ w $\mathrm{A/m^2}$, gdzie
+$\mathbf J_c=-\sigma\nabla V$. Planner wyznacza pole powierzchni z fizycznej
+siatki, wymaga wspólnej osi, przeciwnych stron i zerowego całkowitego strumienia
+z tolerancją względną $10^{-12}$. Profile mieszane Voltage/CurrentDensity,
+niezbilansowane źródła, różne osie i gauge niezgodna z elektrodami są błędami
+IR lub fail-closed preflightu; nie dochodzą do CUDA ABI.
+
+Fixture `examples/fdm_gpu_charge_zero_mean_public.py` ma $2\times1\times1$
+komórki po $10\,\mathrm{nm}$, $\sigma=4.0\times10^6\,\mathrm{S/m}$,
+$J_n(x_{min})=+2.0\times10^{13}\,\mathrm{A/m^2}$ i
+$J_n(x_{max})=-2.0\times10^{13}\,\mathrm{A/m^2}$. Zatem w rosnącym porządku
+x obowiązuje $J_x=-2.0\times10^{13}\,\mathrm{A/m^2}$, a warunek zerowej
+średniej daje $V=(-0.025,+0.025)\,\mathrm{V}$ w środkach komórek. Jest to
+ważna korekta znaku: równe co do modułu, przeciwne $J_n$ po przeciwnych
+stronach oznaczają jednokierunkowy $J_x$, nie prąd o przeciwnych znakach w
+obu komórkach.
+
+### Dowód wykonania i granica
+
+Recepta `just verify-fdm-gpu-public-charge-zero-mean-runtime` wykonuje pełną
+ścieżkę Python -> ProblemIR -> planner -> runner -> CUDA ABI -> artefakty
+w kontenerze zarządzanym, przy jawnie wymuszonym GPU/FP64/strict i bez
+fallbacku. Niezależny weryfikator odrzuca niepoprawny znak, niewłaściwą gauge,
+brak provenance, fallback, residual lub bilans komponentu/elektrod większy niż
+$10^{-12}$. Bramka zakończyła się kodem 0 na RTX 4080 SUPER (UUID
+`fcb9fbf1828437c7af5b76bcbf2d2937`, CUDA runtime `12040`, driver `13010`,
+build digest `d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`):
+`iterations=1`, residual algebraiczny `4.1150157270026995e-17`, residual
+fizyczny `0.0`, balance komponentu/elektrod `0.0/0.0`,
+`V=[-0.025,+0.025] V`, `J_x=-2.0e13 A/m²`. Nie zmienia to
+`validation_state=unvalidated` ani
+`validated_workloads=[]` dla ogólnej capability.
+
+Ten profil jest jedynie elektrycznym warunkiem wstępnym dla przyszłego
+racetracku z prądem rozwiązywanym przez solver, SHE -> SOT/STT/Hall oraz
+Oersteda wyznaczanego z tego samego $J_c$. Nie realizuje jeszcze żadnego z tych
+modułów, nie stanowi modelu MTJ CPP/TMR/GMR i nie rozszerza funkcjonalności FEM.

@@ -83,3 +83,13 @@ recipe is the authoritative exact-source runtime gate. Task 4.3 remains
 Task 8.1 matrix-smoke evidence mode: complete (commits af33bed2..26f04b60, review clean; 94 executor/planner/runtime-verifier tests passed).
 Managed runtime SONAME evidence fix: complete (commits 26f04b60..087a7411, review clean; 64 canonical bundle tests and 95 SP4 matrix/runtime-verifier tests passed).
 Control Room Thin Film authoring slice: complete (commits 087a7411..bc6290a4, review clean; 93 targeted tests, typecheck, and zero-warning targeted ESLint passed).
+
+## FDM GPU public pure-Neumann charge (2026-08-11)
+
+- Branch: `codex/fdm-gpu-public-neumann`
+- Integrated base: `4bdfdd064fd937b92a3448008568807cf4a4f6c3`
+- Source plan: `docs/superpowers/plans/2026-08-11-fdm-gpu-public-neumann.md`
+
+| Task | Status | RED evidence | GREEN evidence | Reviews | Commit |
+|---:|---|---|---|---|---|
+| 1 | complete | planner: `charge_gauge=ZeroMean`; runner: boundary-reference-only guard | planner 9/9; runner 11/11; docs 16/16; managed CUDA E2E 0, $V=[-0.025,+0.025]$ V, $J_x=-2e13$ A/m² | pending independent review | pending commit |
