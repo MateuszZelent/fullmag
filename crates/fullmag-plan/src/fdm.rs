@@ -2734,24 +2734,25 @@ pub(crate) fn plan_fdm_multilayer(
             0
         }
     };
-    let estimated_kernel_bytes = match checked_multilayer_pair_kernel_footprint(
-        common_cells,
-        lowered_bodies.len(),
-    ) {
-        Ok(estimated_kernel_bytes) if estimated_kernel_bytes <= crate::FDM_GRID_MAX_BYTES => {
-            estimated_kernel_bytes
+    let estimated_kernel_bytes = if enable_demag {
+        match checked_multilayer_pair_kernel_footprint(common_cells, lowered_bodies.len()) {
+            Ok(estimated_kernel_bytes) if estimated_kernel_bytes <= crate::FDM_GRID_MAX_BYTES => {
+                estimated_kernel_bytes
+            }
+            Ok(estimated_kernel_bytes) => {
+                errors.push(format!(
+                    "multilayer_convolution kernel memory budget exceeded: estimated_bytes={estimated_kernel_bytes} max_bytes={}",
+                    crate::FDM_GRID_MAX_BYTES
+                ));
+                0
+            }
+            Err(error) => {
+                errors.extend(error.reasons);
+                0
+            }
         }
-        Ok(estimated_kernel_bytes) => {
-            errors.push(format!(
-                "multilayer_convolution kernel memory budget exceeded: estimated_bytes={estimated_kernel_bytes} max_bytes={}",
-                crate::FDM_GRID_MAX_BYTES
-            ));
-            0
-        }
-        Err(error) => {
-            errors.extend(error.reasons);
-            0
-        }
+    } else {
+        0
     };
     let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
 

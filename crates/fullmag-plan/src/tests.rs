@@ -6756,6 +6756,21 @@ fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
             && reason.contains("estimated_bytes=12884901888")));
 }
 
+#[test]
+fn multilayer_planner_skips_inactive_demag_kernel_payload_admission() {
+    let mut ir = eight_layer_multilayer_problem_for_kernel_budget();
+    ir.energy_terms
+        .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Demag { .. }));
+
+    let planned =
+        plan(&ir).expect("inactive demag must not admit the potential ABI v2 pair-kernel payload");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("eight-layer fixture must produce a multilayer plan");
+    };
+    assert!(!multilayer.enable_demag);
+    assert_eq!(multilayer.planner_summary.estimated_kernel_bytes, 0);
+}
+
 fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.energy_terms = vec![

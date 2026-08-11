@@ -496,13 +496,16 @@ pub(crate) fn validate_multilayer_grid_budget(
             });
         }
     }
-    let computed_kernel_bytes = fullmag_plan::checked_multilayer_pair_kernel_footprint(
-        plan.common_cells,
-        plan.layers.len(),
-    )
-    .map_err(|error| RunError {
-        message: format!("FDM multilayer kernel footprint rejected before allocation: {error}"),
-    })?;
+    let computed_kernel_bytes = if plan.enable_demag {
+        fullmag_plan::checked_multilayer_pair_kernel_footprint(plan.common_cells, plan.layers.len())
+            .map_err(|error| RunError {
+                message: format!(
+                    "FDM multilayer kernel footprint rejected before allocation: {error}"
+                ),
+            })?
+    } else {
+        0
+    };
     if plan.planner_summary.estimated_kernel_bytes != computed_kernel_bytes {
         return Err(RunError {
             message: format!(
@@ -652,6 +655,41 @@ mod tests {
         );
         assert!(
             error.message.contains("recomputed=3072"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn inactive_demag_accepts_zero_kernel_summary_without_payload_admission() {
+        let mut plan = valid_multilayer_plan();
+        plan.enable_demag = false;
+        plan.planner_summary.estimated_kernel_bytes = 0;
+
+        validate_multilayer_grid_budget(&plan)
+            .expect("inactive demag must not admit a pair-kernel payload");
+    }
+
+    #[test]
+    fn inactive_demag_rejects_stale_nonzero_kernel_summary() {
+        let mut plan = valid_multilayer_plan();
+        plan.enable_demag = false;
+        plan.planner_summary.estimated_kernel_bytes = 3_072;
+
+        let error = validate_multilayer_grid_budget(&plan)
+            .expect_err("inactive demag must reject stale nonzero kernel telemetry");
+        assert!(
+            error.message.contains("kernel estimate mismatch"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("summary=3072"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("recomputed=0"),
             "unexpected preflight error: {}",
             error.message
         );

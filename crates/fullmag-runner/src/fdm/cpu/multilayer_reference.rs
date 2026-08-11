@@ -1318,11 +1318,12 @@ mod tests {
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 3,
-                estimated_kernel_bytes: fullmag_plan::checked_multilayer_pair_kernel_footprint(
-                    [4, 4, 1],
-                    2,
-                )
-                .expect("test ABI v2 kernel footprint should be representable"),
+                estimated_kernel_bytes: if enable_demag {
+                    fullmag_plan::checked_multilayer_pair_kernel_footprint([4, 4, 1], 2)
+                        .expect("test ABI v2 kernel footprint should be representable")
+                } else {
+                    0
+                },
                 warnings: Vec::new(),
             },
         };
