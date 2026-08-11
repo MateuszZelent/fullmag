@@ -87,6 +87,8 @@ def test_production_recipe_aggregates_lanes_and_records_gpu_reason_code() -> Non
     for required in (
         "verify-fdm-multilayer-demag-runtime cpu-fp64",
         "verify-fdm-multilayer-airbox-runtime cpu-fp64",
+        "verify-fdm-multilayer-cuda-runtime cuda-fp64",
+        "verify-fdm-multilayer-cuda-runtime cuda-fp32",
         "cuda-fp64",
         "cuda-fp32",
         "reason_code",
@@ -94,3 +96,4 @@ def test_production_recipe_aggregates_lanes_and_records_gpu_reason_code() -> Non
         "not_qualified",
     ):
         assert required in recipe
+    assert "verify-fdm-multilayer-demag-runtime cuda-" not in recipe
