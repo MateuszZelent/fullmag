@@ -4679,8 +4679,13 @@ run-nanoflower-interactive-quadro-gpu:
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev -i examples/nanoflower_fem_quadro.py
 
 ensure-managed-fem-runtime:
-    bash scripts/prepare_managed_fem_runtime_storage.sh
     bash -euo pipefail -c '\
+      storage_selection_status="$(bash scripts/prepare_managed_fem_runtime_storage.sh)"; \
+      case "$storage_selection_status" in \
+        ready) storage_transition_required=0 ;; \
+        transition-required) storage_transition_required=1 ;; \
+        *) echo "Unknown managed FEM storage selection status: $storage_selection_status" >&2; exit 2 ;; \
+      esac; \
       identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
       trap '\''rm -f -- "$identity_file"'\'' EXIT; \
       python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$identity_file"; \
@@ -4696,15 +4701,22 @@ ensure-managed-fem-runtime:
           --require-worktree-state "$worktree_state" \
           --require-source-snapshot-sha256 "$source_snapshot"; \
       }; \
-      if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
+      if [ "$storage_transition_required" = "1" ]; then \
+        echo "Managed FEM storage transition is required; restoring the selected persistent build first." >&2; \
+        if bash scripts/restore_persistent_fem_runtime.sh; then \
+          storage_transition_required=0; \
+        fi; \
+      elif [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
         echo "Managed FEM runtime bundle is missing or incomplete; restoring the persistent build first." >&2; \
         bash scripts/restore_persistent_fem_runtime.sh || true; \
       fi; \
-      if ! validate_current >/dev/null 2>&1; then \
+      if [ "$storage_transition_required" = "1" ] || ! validate_current >/dev/null 2>&1; then \
         echo "Managed FEM runtime bundle is invalid; restoring the persistent build first. Exact source mismatch will rebuild." >&2; \
-        bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
-        if ! validate_current >/dev/null 2>&1; then \
-          if python3 scripts/runtime_source_change_policy.py \
+        if [ "$storage_transition_required" = "0" ]; then \
+          bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
+        fi; \
+        if [ "$storage_transition_required" = "1" ] || ! validate_current >/dev/null 2>&1; then \
+          if [ "$storage_transition_required" = "0" ] && python3 scripts/runtime_source_change_policy.py \
               --repo-root "{{repo_root}}" \
               --runtime-root .fullmag/runtimes/fem-gpu-host \
               --identity "$identity_file"; then \
@@ -4714,6 +4726,7 @@ ensure-managed-fem-runtime:
             runtime_reused_for_non_runtime_changes=1; \
           else \
             FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+            storage_transition_required=0; \
             runtime_rebuilt=1; \
           fi; \
         fi; \

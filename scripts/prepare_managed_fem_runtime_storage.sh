@@ -9,6 +9,7 @@ readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT FULLMAG_NATIVE_BUILD_IMAGE
 readonly FULLMAG_NATIVE_MOUNT_VIEW FULLMAG_PERSISTENT_RUNTIME_PARENT
 
 if [ "${FULLMAG_MANAGED_FEM_STORAGE_ROOT_EXPLICIT}" != "1" ]; then
+  echo "ready"
   exit 0
 fi
 
@@ -43,5 +44,20 @@ allowed_retarget_from=""
 if [ "${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" != "${MANAGED_FEM_CANONICAL_STORAGE_ROOT}" ]; then
   allowed_retarget_from="${canonical_variants_root}"
 fi
-select_managed_fem_runtime_variants_alias \
-  "${variants_alias}" "${runtime_variants_root}" "${allowed_retarget_from}"
+if [ -L "${variants_alias}" ]; then
+  if [ "$(readlink -f "${variants_alias}")" = "$(readlink -f "${runtime_variants_root}")" ]; then
+    echo "ready"
+    exit 0
+  fi
+  if [ -z "${allowed_retarget_from}" ] ||
+     [ "$(readlink "${variants_alias}")" != "${allowed_retarget_from}" ]; then
+    echo "managed FEM variants alias points to unexpected storage: ${variants_alias}" >&2
+    exit 2
+  fi
+elif [ -e "${variants_alias}" ] && [ ! -d "${variants_alias}" ]; then
+  echo "managed FEM variants path is neither a directory nor a symlink: ${variants_alias}" >&2
+  exit 2
+fi
+
+echo "[managed_fem_runtime_storage] transition-required: ${runtime_variants_root}" >&2
+echo "transition-required"

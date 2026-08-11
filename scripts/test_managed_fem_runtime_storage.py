@@ -162,6 +162,166 @@ def _fake_findmnt(tmp_path: Path, *, filesystem_type: str) -> Path:
     return fake_bin
 
 
+def _write_ensure_test_scripts(
+    repo: Path,
+    canonical_mount: Path,
+    restore_marker: Path,
+    build_marker: Path,
+) -> None:
+    scripts = repo / "scripts"
+    library = scripts / "lib"
+    library.mkdir(parents=True)
+    shutil.copy2(ENSURE_STORAGE_PREFLIGHT, scripts / ENSURE_STORAGE_PREFLIGHT.name)
+    prepare = scripts / ENSURE_STORAGE_PREFLIGHT.name
+    prepare.write_text(
+        prepare.read_text(encoding="utf-8").replace(
+            "resolve_managed_fem_runtime_storage_layout",
+            "resolve_managed_fem_runtime_storage_layout 1",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    helper = STORAGE_HELPER.read_text(encoding="utf-8").replace(
+        'readonly MANAGED_FEM_CANONICAL_MOUNT_VIEW="/mnt/fullmag-zfn2-native"',
+        f'readonly MANAGED_FEM_CANONICAL_MOUNT_VIEW="{canonical_mount}"',
+    )
+    (library / STORAGE_HELPER.name).write_text(helper, encoding="utf-8")
+    (scripts / "capture_source_snapshot_identity.py").write_text(
+        """#!/usr/bin/env python3
+import argparse, json
+p = argparse.ArgumentParser()
+p.add_argument('--repo-root')
+p.add_argument('--ignore-non-runtime-dirty', action='store_true')
+p.add_argument('--output')
+p.add_argument('--compare')
+p.add_argument('--allow-source-drift', action='store_true')
+a = p.parse_args()
+if a.output:
+    with open(a.output, 'w', encoding='utf-8') as stream:
+        json.dump({'head_commit_full': 'test', 'source_snapshot_dirty': False,
+                   'source_snapshot_sha256': 'test'}, stream)
+""",
+        encoding="utf-8",
+    )
+    (scripts / "validate_managed_fem_runtime_bundle.py").write_text(
+        """#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+p = argparse.ArgumentParser()
+p.add_argument('--runtime-root', type=Path, required=True)
+p.add_argument('--require-git-commit')
+p.add_argument('--require-worktree-state')
+p.add_argument('--require-source-snapshot-sha256')
+a = p.parse_args()
+if not (a.runtime_root / 'bin/fullmag-fem-gpu').is_file(): raise SystemExit(2)
+if not (a.runtime_root / 'manifest.json').is_file(): raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    (scripts / "runtime_source_change_policy.py").write_text(
+        "#!/usr/bin/env python3\nraise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    (scripts / "restore_persistent_fem_runtime.sh").write_text(
+        f"#!/bin/sh\n: > {restore_marker}\nexit 1\n",
+        encoding="utf-8",
+    )
+    (repo / "justfile").write_text(
+        "rebuild-fem-runtime:\n"
+        f"    touch {build_marker}\n"
+        "    exit 23\n",
+        encoding="utf-8",
+    )
+
+
+def test_failed_alternate_transition_preserves_runnable_canonical_aliases(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    canonical_mount = tmp_path / "canonical-mount"
+    alternate_root = tmp_path / "alternate"
+    restore_marker = tmp_path / "restore-attempted"
+    build_marker = tmp_path / "build-attempted"
+    _write_ensure_test_scripts(repo, canonical_mount, restore_marker, build_marker)
+
+    slug = re.sub(r"[^A-Za-z0-9._-]", "-", repo.name)
+    digest = hashlib.sha256(str(repo).encode()).hexdigest()
+    canonical_variants = (
+        canonical_mount
+        / "managed-fem-runtime"
+        / f"{slug}-{digest}"
+        / "runtime-variants"
+    )
+    canonical_variant = canonical_variants / "canonical"
+    (canonical_variant / "bin").mkdir(parents=True)
+    canonical_launcher = canonical_variant / "bin/fullmag-fem-gpu"
+    canonical_launcher.write_text("#!/bin/sh\necho canonical\n", encoding="utf-8")
+    canonical_launcher.chmod(0o755)
+    (canonical_variant / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+    runtime_parent = repo / ".fullmag/runtimes"
+    runtime_parent.mkdir(parents=True)
+    variants_alias = runtime_parent / "fem-gpu-variants"
+    variants_alias.symlink_to(canonical_variants, target_is_directory=True)
+    active_alias = runtime_parent / "fem-gpu-host"
+    active_alias.symlink_to("fem-gpu-variants/canonical", target_is_directory=True)
+    original_variants_target = os.readlink(variants_alias)
+    original_active_target = os.readlink(active_alias)
+
+    image = alternate_root / "build-volumes/fullmag-native.ext4"
+    image.parent.mkdir(parents=True)
+    image.touch()
+    (alternate_root / "build-volumes/fullmag-native.mount").mkdir()
+    fake_bin = _fake_findmnt(tmp_path, filesystem_type="ext4")
+    sysfs_root = tmp_path / "sys/class/block"
+    backing_file = sysfs_root / "loop99/loop/backing_file"
+    backing_file.parent.mkdir(parents=True)
+    backing_file.write_text(f"{image}\n", encoding="utf-8")
+    env = {
+        **os.environ,
+        "FULLMAG_MANAGED_FEM_STORAGE_ROOT": str(alternate_root),
+        "FULLMAG_LOOP_SYSFS_ROOT": str(sysfs_root),
+        "FULLMAG_RUNTIME_PRUNE": "0",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        [
+            "just",
+            "--justfile",
+            str(REPO_ROOT / "justfile"),
+            "--working-directory",
+            str(repo),
+            "--set",
+            "repo_root",
+            str(repo),
+            "ensure-managed-fem-runtime",
+        ],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert restore_marker.exists(), result.stderr
+    assert build_marker.exists(), result.stderr
+    assert "transition-required" in result.stderr
+    assert os.readlink(variants_alias) == original_variants_target
+    assert os.readlink(active_alias) == original_active_target
+    assert canonical_launcher.is_file()
+    runnable = subprocess.run(
+        [str(active_alias / "bin/fullmag-fem-gpu")],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert runnable.returncode == 0, runnable.stderr
+    assert runnable.stdout.strip() == "canonical"
+
+
 def test_explicit_ensure_preflight_rejects_missing_alternate_image_before_retarget(
     tmp_path: Path,
 ) -> None:
@@ -281,7 +441,11 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     restorer = (REPO_ROOT / "scripts/restore_persistent_fem_runtime.sh").read_text(
         encoding="utf-8"
     )
+    preflight = ENSURE_STORAGE_PREFLIGHT.read_text(encoding="utf-8")
 
+    assert "transition-required" in preflight
+    assert "select_managed_fem_runtime_variants_alias" not in preflight
+    assert "mv -Tf" not in preflight
     assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
@@ -289,6 +453,9 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     assert "validate_managed_fem_runtime_storage_target" in restorer
     assert restorer.index("validate_managed_fem_runtime_storage_target") < restorer.index(
         'tar -C "${staging}"'
+    )
+    assert restorer.rindex('--runtime-root "${variant_root}"') < restorer.index(
+        "migrate_managed_fem_runtime_variants"
     )
 
 

@@ -1742,7 +1742,13 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
 
     assert "Managed FEM runtime bundle is invalid; restoring the persistent build first." in ensure_recipe
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
-    assert "if ! validate_current >/dev/null 2>&1; then" in ensure_recipe
+    assert 'storage_selection_status="$(bash scripts/prepare_managed_fem_runtime_storage.sh)"' in ensure_recipe
+    assert 'transition-required) storage_transition_required=1' in ensure_recipe
+    assert (
+        'if [ "$storage_transition_required" = "1" ] || '
+        "! validate_current >/dev/null 2>&1; then"
+        in ensure_recipe
+    )
     assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime" in ensure_recipe
     assert (
         "FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 "

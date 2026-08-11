@@ -177,3 +177,47 @@ timeoutem i nie zwróciły wyniku, więc mount nie jest jeszcze dowodem poprawne
 ext4/loop/backing ani podstawą do uruchomienia builda CUDA. Poprzednia informacja
 o braku obrazu jest historycznym wynikiem pierwszego preflightu; bieżącym
 blockerem jest brak świeżo potwierdzonego, dostępnego mountu.
+
+## Korekta po re-review atomowości transition
+
+Kolejny review wykazał, że pierwszy wariant preflightu przepinał lokalny alias
+`fem-gpu-variants` natychmiast po walidacji alternate mountu, zanim alternate
+zawierał zweryfikowany wariant. Przy braku archiwum i późniejszej porażce
+builda aktywny `fem-gpu-host` mógł przez to stać się dangling. Poprzednie
+stwierdzenie o przepięciu aliasu w `prepare_managed_fem_runtime_storage.sh`
+jest więc historyczne i zostaje zastąpione następującym kontraktem:
+
+- `prepare_managed_fem_runtime_storage.sh` jest read-only względem lokalnych
+  aliasów; waliduje root, obraz, ext4/loop/backing i zwraca wyłącznie status
+  `ready` albo `transition-required`,
+- `ensure-managed-fem-runtime` konsumuje status przed `validate_current`;
+  `transition-required` nie pozwala zaakceptować starego canonical runtime,
+  tylko wymusza próbę restore, a po jej porażce rebuild,
+- restore i export pozostają jedynymi ścieżkami retargetu; oba przepinają
+  `fem-gpu-variants`, a następnie `fem-gpu-host`, dopiero po walidacji staged
+  albo nowego wariantu, a export także po walidacji trwałego archiwum,
+- porażka restore lub builda nie zmienia żadnego z lokalnych aliasów.
+
+Nowy test regresyjny uruchamia rzeczywistą receptę `ensure` w izolowanym
+repozytorium: canonical runtime jest wykonywalny, alternate ma poprawne
+metadane ext4/loop/backing, brakuje archiwum, restore failuje, a stub builda
+jest wywołany i również failuje. Po obu porażkach oba aliasy nadal wskazują
+canonical storage, a launcher nadal zwraca sukces.
+
+Świeża bramka po tej korekcie:
+
+```text
+python3 -m pytest -q \
+  scripts/test_managed_fem_runtime_target_mount.py \
+  scripts/test_managed_fem_runtime_storage.py \
+  scripts/test_restore_persistent_fem_runtime.py \
+  scripts/test_export_fem_gpu_runtime_copy_helpers.py
+
+101 passed in 7.62s
+```
+
+Dodatkowo przeszły `bash -n` czterech skryptów storage/export/restore/prepare,
+`git diff --check`, `just --dry-run ensure-managed-fem-runtime` oraz
+`just --dry-run rebuild-fem-runtime`. Skrypt prepare zachowuje tryb `100755`.
+Nie wykonano świeżego buildu CUDA: zewnętrzny mount alternate ext4 nadal nie
+ma świeżego, nieblokującego potwierdzenia.
