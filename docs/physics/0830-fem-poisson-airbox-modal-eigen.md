@@ -1,8 +1,8 @@
 # FEM Poisson-Airbox Modal Eigenproblem
 
-- Status: bounded CPU/GPU engine executable; independent field-sweep validation open
+- Status: bounded CPU/GPU engine executable; CPU window refinement certificate implemented; managed and independent field-sweep validation open
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-08-03
+- Last updated: 2026-08-11
 - Related physics notes:
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
@@ -111,6 +111,20 @@ For a pure-Neumann scalar block, the second row is augmented by `c eta` and
 | `$\beta$` | Robin coefficient | `$\mathrm{m^{-1}}$` |
 | `$P$` | scalar Poisson stiffness block | `$\mathrm{m}$` |
 | `$q$` | tangent-plane modal coefficients | `$1$` |
+| `$\Delta f$` | refinement-pass frequency spacing | `$\mathrm{Hz}$` |
+| `$f_{\min}$` | lower bound of the requested frequency window | `$\mathrm{Hz}$` |
+| `$f_{\max}$` | upper bound of the requested frequency window | `$\mathrm{Hz}$` |
+| `$f_a$` | frequency of the first candidate in a cluster comparison | `$\mathrm{Hz}$` |
+| `$f_b$` | frequency of the second candidate in a cluster comparison | `$\mathrm{Hz}$` |
+| `$U$` | orthonormal basis matrix for a base-pass frequency cluster | `$1$` |
+| `$V$` | orthonormal basis matrix for the paired refinement-pass frequency cluster | `$1$` |
+| `$u_i$` | base-pass orthonormal magnetic cluster vector | `$1$` |
+| `$v_j$` | refinement-pass orthonormal magnetic cluster vector | `$1$` |
+| `$i$` | base-pass cluster-basis index | `$1$` |
+| `$j$` | refinement-pass cluster-basis index | `$1$` |
+| `$u_i^{\ast}v_j$` | Hermitian inner product between paired magnetic cluster vectors | `$1$` |
+| `$r$` | rank of a paired frequency cluster | `$1$` |
+| `$s(U,V)$` | normalized invariant-subspace overlap for paired clusters | `$1$` |
 | `$\lambda$` | modal eigenvalue | `$\mathrm{s^{-1}}$` |
 | `$B_{qq}$` | gyrotropic tangent mass block | `$\mathrm{m^3}$` |
 | `$A_{qq},A_{q\phi},A_{\phi q}$` | magnetic and mixed descriptor blocks | `$\mathrm{m^3\,s^{-1}}$`, `$\mathrm{m^3\,(A)^{-1}\,s^{-1}}$`, `$\mathrm{A\,m}$` respectively |
@@ -177,6 +191,52 @@ tau = omega_target.
 `EPSSetTarget(tau)` is legal only on that named rotated pencil. A real scalar
 target `omega_target` on the original `lambda=i omega` pencil is invalid and
 must reject rather than approximate the imaginary-axis target.
+
+For `target="frequency_window"`, the CPU Schur realization uses the
+deterministic certificate `shift_nev_refinement_subspace_v1`. The base pass
+retains the 16 midpoint shifts. The refinement pass uses 32 half-step-shifted
+partitions plus one guard shift on each side of the requested interval:
+
+```{math}
+:label: eq-poisson-airbox-window-refinement-schedule
+\Delta f=\frac{f_{\max}-f_{\min}}{32}, \qquad
+\left[f_{\min}-\frac{\Delta f}{2},\,
+      f_{\max}+\frac{\Delta f}{2}\right].
+```
+
+Both reported edge-coverage margins therefore equal $\Delta f/2$ and must be
+strictly positive. The refinement
+nearest-frequency requests twice the requested mode count, subject to the same
+descriptor-dimension guard; its resolved `nev` must be greater than the base
+`nev`.
+
+Every nearest-frequency subsolve must return `ok`, and every accepted candidate
+must already pass the full original, unscaled descriptor residual described
+above. Accepted frequencies are clustered with tolerance
+$\max(1\,\mathrm{Hz},10^{-8}\max(|f_a|,|f_b|))$. Within each cluster,
+the magnetic $q$ components are reorthogonalized to determine rank. Given
+orthonormal bases $U=\{u_i\}_{i=1}^{r}$ and
+$V=\{v_j\}_{j=1}^{r}$ for equal-rank base and refinement clusters, the
+reported invariant-subspace overlap uses the Hermitian inner product
+$u_i^{\ast}v_j$:
+
+```{math}
+:label: eq-poisson-airbox-window-subspace-overlap
+s(U,V)=\left(\frac{1}{r}\sum_{i=1}^{r}\sum_{j=1}^{r}
+\left|u_i^{\ast}v_j\right|^2\right)^{1/2}.
+```
+
+The window is certified only when both schedules complete without failure or
+cancellation, the requested mode count is covered without splitting a
+degenerate cluster, paired clusters have stable frequencies and ranks,
+$\min s(U,V)\ge 1-10^{-6}$, both edge margins are positive, and neither schedule
+nor cluster JSON is truncated. A disagreement returns `solve_error`, keeps
+`window_complete=false`, publishes
+`frequency_window_refinement_disagreement`, and records a non-certified
+certificate. When the requested count would split a residual-certified
+cluster, that offending cluster frequency and rank remain visible in the
+certificate even though `accepted_mode_count` is zero. Cancellation remains
+`interrupted` with `cancel_requested`.
 
 ### 3.2 GPU
 
@@ -343,7 +403,7 @@ managed assembly and physics evidence.
 | Contract | Source/evidence |
 |---|---|
 | Shared-domain P1 blocks and reciprocal sign | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp`; `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` |
-| CPU Schur MatShell and executed target subwindows | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp`; `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` |
+| CPU Schur MatShell, two-pass window certificate, cluster rank and invariant-subspace comparison | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp`; `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` |
 | GPU device Schur PETSc/SLEPc realization | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp`; `backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp` |
 | Oracle-independent single-point request lowering | `crates/fullmag-runner/src/dispatch.rs`; `eigen_path_single_k_point_plan` |
 | Deferred physical K0-3 field sweep | Requires a separate physics-owned field-sweep request; the Kittel oracle cannot supply physical fields. |
@@ -370,7 +430,10 @@ Validation proceeds in this order:
 4. K0-1, K0-2 and K0-3 field sweeps establish Larmor, local stiffness and
    thin-film Kittel behavior respectively.
 5. Multi-mode selected-spectrum tests establish the target transformation.
-6. CPU/GPU parity applies only after both operate on the same real assembled
+6. CPU `frequency_window` tests perturb both shift schedule and `nev`, preserve
+   degenerate clusters by rank, compare invariant subspaces, and fail closed on
+   disagreement, cancellation, or diagnostic truncation.
+7. CPU/GPU parity applies only after both operate on the same real assembled
    blocks and both certify the original descriptor residual.
 
 (validation)=
@@ -389,6 +452,15 @@ matrix-free branch, damping, nonzero k, or release-wide negative/capability
 coverage. Those are explicit continuation gates, not implied by the Kittel
 fixture.
 
+The source-level CPU window contract is covered by deterministic synthetic
+tests for two separated modes, one rank-two degenerate cluster, disagreement
+when a request would split that cluster, and cancellation. On 2026-08-11 the
+focused target compiled and these four cases completed in the repository FEM
+container. This is implementation evidence only: the authoritative managed
+recipe could not materialize its runtime because its target below
+`/mnt/fullmag-zfn2-native/managed-fem-runtime/` was not writable. Therefore no
+fresh managed CPU solve or production qualification is claimed here.
+
 ## 10. Completeness checklist
 
 - [x] Real shared-domain FEM modal block assembly for the bounded P1 K0 CPU scope
@@ -396,6 +468,9 @@ fixture.
 - [x] ADR-017 `real_frequency_rotated` selected-spectrum transform with
   `tau=omega_target` for the managed real PETSc/SLEPc runtime
 - [x] Full original-block residual certification for the bounded CPU and GPU paths
+- [x] Source-level two-pass CPU window refinement certificate with cluster-rank
+  and invariant-subspace comparison
+- [ ] Fresh authoritative managed-runtime execution of the CPU window certificate
 - [ ] Independent K0-3 physical field sweep and managed CPU/GPU parity evidence
 - [x] Bounded device-resident GPU modal solver for the materialized Schur path
 - [ ] GPU matrix-free convergence and scaling beyond the materialized bound
@@ -409,6 +484,11 @@ qualification, arbitrary mesh-size coverage, GPU matrix-free convergence,
 large-problem scaling, an explicit physical K0 field-sweep request, and broad
 periodic-airbox release gates remain open.
 They must fail explicitly rather than reuse this bounded k=0 path.
+
+The two-pass window certificate establishes stability of the requested modal
+prefix under one deterministic shift-grid and `nev` perturbation. It is not a
+contour-integral eigenvalue count and must not be interpreted as a mathematical
+proof that every eigenvalue in an arbitrary interval was found.
 
 (scientific-bibliography)=
 ## 12. Scientific bibliography
@@ -426,6 +506,11 @@ They must fail explicitly rather than reuse this bounded k=0 path.
 |---|---|---|
 | Public stage construction | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` |
 | CPU shared-domain Schur solve | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` | `FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur` |
+| CPU two-pass window certificate contract | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` | `void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture` |
+| CPU degenerate-cluster subspace contract | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` | `void FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace` |
+| CPU degenerate-cluster disagreement contract | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` | `void FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster` |
+| CPU empty-failure flag and count contract | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` | `void FrequencyWindowEmptyFailurePreservesFlagsAndCounts` |
+| CPU cancellation flag contract | `backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp` | `void FrequencyWindowCancellationPreservesStopReason` |
 | GPU PETSc/SLEPc Schur solve | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` | `FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` |
 | Runner native shared-domain state | `crates/fullmag-runner/src/fem_eigen.rs` | `build_shared_domain_linearization_state` |
 | Oracle-independent single-k lowering | `crates/fullmag-runner/src/dispatch.rs` | `eigen_path_single_k_point_plan` |

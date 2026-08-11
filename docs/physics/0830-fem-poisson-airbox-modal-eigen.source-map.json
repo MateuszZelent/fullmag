@@ -53,6 +53,36 @@
         "source-cpu-schur",
         "source-gpu-petsc"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-window-refinement-schedule",
+      "symbols": [
+        "frequency_spacing",
+        "frequency_min",
+        "frequency_max"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-cpu-window-positive"
+      ]
+    },
+    {
+      "id": "eq-poisson-airbox-window-subspace-overlap",
+      "symbols": [
+        "U",
+        "V",
+        "u_i",
+        "v_j",
+        "basis_index_i",
+        "basis_index_j",
+        "hermitian_inner_product",
+        "cluster_rank",
+        "subspace_overlap"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-cpu-window-degenerate"
+      ]
     }
   ],
   "symbols": [
@@ -117,6 +147,90 @@
       "si_unit": "$1$"
     },
     {
+      "id": "frequency_spacing",
+      "latex": "$\\Delta f$",
+      "meaning": "refinement-pass frequency spacing",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "frequency_min",
+      "latex": "$f_{\\min}$",
+      "meaning": "lower bound of the requested frequency window",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "frequency_max",
+      "latex": "$f_{\\max}$",
+      "meaning": "upper bound of the requested frequency window",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "cluster_frequency_a",
+      "latex": "$f_a$",
+      "meaning": "frequency of the first candidate in a cluster comparison",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "cluster_frequency_b",
+      "latex": "$f_b$",
+      "meaning": "frequency of the second candidate in a cluster comparison",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "U",
+      "latex": "$U$",
+      "meaning": "orthonormal basis matrix for a base-pass frequency cluster",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "V",
+      "latex": "$V$",
+      "meaning": "orthonormal basis matrix for the paired refinement-pass frequency cluster",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "u_i",
+      "latex": "$u_i$",
+      "meaning": "base-pass orthonormal magnetic cluster vector",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "v_j",
+      "latex": "$v_j$",
+      "meaning": "refinement-pass orthonormal magnetic cluster vector",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "basis_index_i",
+      "latex": "$i$",
+      "meaning": "base-pass cluster-basis index",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "basis_index_j",
+      "latex": "$j$",
+      "meaning": "refinement-pass cluster-basis index",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "hermitian_inner_product",
+      "latex": "$u_i^{\\ast}v_j$",
+      "meaning": "Hermitian inner product between paired magnetic cluster vectors",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "cluster_rank",
+      "latex": "$r$",
+      "meaning": "rank of a paired frequency cluster",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "subspace_overlap",
+      "latex": "$s(U,V)$",
+      "meaning": "normalized invariant-subspace overlap for paired clusters",
+      "si_unit": "$1$"
+    },
+    {
       "id": "lambda",
       "latex": "$\\lambda$",
       "meaning": "modal eigenvalue",
@@ -146,7 +260,37 @@
       "id": "source-cpu-schur",
       "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
       "symbol": "FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur",
-      "responsibility": "Assemble and solve the bounded CPU shared-domain Schur modal problem."
+      "responsibility": "Assemble and solve the bounded CPU shared-domain Schur modal problem and certify frequency windows by two deterministic schedules, stable cluster rank, invariant-subspace overlap, and positive edge coverage."
+    },
+    {
+      "id": "source-cpu-window-positive",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture",
+      "responsibility": "Exercise the successful two-pass CPU window certificate and numerical nev refinement contract."
+    },
+    {
+      "id": "source-cpu-window-degenerate",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace",
+      "responsibility": "Exercise stable rank-two clustering and invariant-subspace overlap."
+    },
+    {
+      "id": "source-cpu-window-disagreement",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster",
+      "responsibility": "Exercise fail-closed disagreement when the requested count would split a degenerate cluster."
+    },
+    {
+      "id": "source-cpu-window-empty-failure",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowEmptyFailurePreservesFlagsAndCounts",
+      "responsibility": "Exercise failed-subwindow flags and planned/completed/failed count consistency when every subsolve fails."
+    },
+    {
+      "id": "source-cpu-window-cancellation",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "symbol": "void FrequencyWindowCancellationPreservesStopReason",
+      "responsibility": "Exercise interrupted status, cancellation flags, zero failure count, and the stable cancellation reason."
     },
     {
       "id": "source-gpu-petsc",

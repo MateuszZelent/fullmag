@@ -2329,9 +2329,52 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         struct WindowCandidate {
             PoissonAirboxModalEigenResult::AcceptedMode mode{};
             PoissonAirboxModalEigenResult source{};
+            std::uint32_t pass_index = 0;
         };
         std::vector<WindowCandidate> window_candidates;
-        constexpr std::uint32_t subwindow_count = 16u;
+        constexpr std::uint32_t base_subwindow_count = 16u;
+        constexpr std::uint32_t refinement_partition_count = 32u;
+        constexpr std::uint32_t refinement_subwindow_count =
+            refinement_partition_count + 2u;
+        constexpr std::uint32_t pass_count = 2u;
+        constexpr double cluster_frequency_relative_tolerance = 1.0e-8;
+        constexpr double cluster_frequency_absolute_tolerance_hz = 1.0;
+        constexpr double subspace_overlap_threshold = 1.0 - 1.0e-6;
+        const std::uint64_t split_dimension = 2u * problem.q_dof_count;
+        const std::uint64_t maximum_nev = split_dimension > 0u
+            ? split_dimension - 1u
+            : 0u;
+        const auto resolved_nev = [maximum_nev](std::uint32_t requested_count) {
+            return std::min<std::uint64_t>(
+                maximum_nev,
+                4u * static_cast<std::uint64_t>(requested_count));
+        };
+        if (problem.requested_mode_count >
+                std::numeric_limits<std::uint32_t>::max() / 4u ||
+            maximum_nev == 0u) {
+            return fail_production_schur(
+                problem,
+                out_result,
+                FrequencyDomainStatus::validation_error,
+                "production shared-domain K0 Schur frequency window cannot form a guarded nev",
+                "poisson_airbox_eigen_invalid_requested_mode_count");
+        }
+        const std::uint32_t refined_requested_mode_count =
+            std::min<std::uint32_t>(
+                std::numeric_limits<std::uint32_t>::max() / 4u,
+                problem.requested_mode_count <=
+                        std::numeric_limits<std::uint32_t>::max() / 2u
+                    ? 2u * problem.requested_mode_count
+                    : std::numeric_limits<std::uint32_t>::max() / 4u);
+        const std::uint64_t requested_nev = resolved_nev(problem.requested_mode_count);
+        const std::uint64_t refined_nev = resolved_nev(refined_requested_mode_count);
+        const bool refined_nev_increased = refined_nev > requested_nev;
+        std::array<std::uint32_t, pass_count> pass_planned_subwindow_count{
+            base_subwindow_count,
+            refinement_subwindow_count};
+        std::array<std::uint32_t, pass_count> pass_completed_subwindow_count{};
+        std::array<std::uint32_t, pass_count> pass_failed_subwindow_count{};
+        std::array<bool, pass_count> pass_cancelled{};
         std::uint64_t converged_total = 0;
         std::uint64_t finite_real_total = 0;
         std::uint64_t positive_total = 0;
@@ -2343,7 +2386,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         bool window_failed = false;
         char window_failure_reason[96]{};
         std::uint32_t window_empty_subwindow_count = 0;
-        out_result->window_subwindow_count = subwindow_count;
+        out_result->window_subwindow_count =
+            base_subwindow_count + refinement_subwindow_count;
         out_result->window_completed_subwindow_count = 0;
         out_result->window_failed_subwindow_count = 0;
         out_result->window_empty_subwindow_count = 0;
@@ -2385,138 +2429,186 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 executed_subwindows_json);
         };
         const double window_width = problem.frequency_max_hz - problem.frequency_min_hz;
-        for (std::uint32_t subwindow_index = 0;
-             subwindow_index < subwindow_count;
-             ++subwindow_index) {
-            PoissonAirboxEigenBlockProblem shifted_problem = problem;
-            shifted_problem.target_kind = "nearest_frequency";
-            shifted_problem.target_frequency_hz = problem.frequency_min_hz +
-                (static_cast<double>(subwindow_index) + 0.5) *
-                    window_width / static_cast<double>(subwindow_count);
-            shifted_problem.frequency_min_hz = 0.0;
-            shifted_problem.frequency_max_hz = 0.0;
-            PoissonAirboxModalEigenResult shifted_result{};
-            const FrequencyDomainStatus shifted_status =
-                solve_poisson_airbox_modal_eigen_cpu_schur(
-                    shifted_problem,
-                    &shifted_result);
-            std::vector<const PoissonAirboxModalEigenResult::AcceptedMode *>
-                in_window_modes;
-            in_window_modes.reserve(shifted_result.accepted_modes.size());
-            for (const PoissonAirboxModalEigenResult::AcceptedMode &mode :
-                 shifted_result.accepted_modes) {
-                if (mode.frequency_hz >= problem.frequency_min_hz &&
-                    mode.frequency_hz <= problem.frequency_max_hz) {
-                    in_window_modes.push_back(&mode);
+        const double refinement_spacing =
+            window_width / static_cast<double>(refinement_partition_count);
+        const double refinement_first_shift_hz =
+            problem.frequency_min_hz - 0.5 * refinement_spacing;
+        const double refinement_last_shift_hz =
+            problem.frequency_max_hz + 0.5 * refinement_spacing;
+        const double lower_coverage_margin_hz =
+            problem.frequency_min_hz - refinement_first_shift_hz;
+        const double upper_coverage_margin_hz =
+            refinement_last_shift_hz - problem.frequency_max_hz;
+        for (std::uint32_t pass_index = 0;
+             pass_index < pass_count && !window_interrupted;
+             ++pass_index) {
+            const std::uint32_t subwindow_count =
+                pass_planned_subwindow_count[pass_index];
+            for (std::uint32_t subwindow_index = 0;
+                 subwindow_index < subwindow_count;
+                 ++subwindow_index) {
+                PoissonAirboxEigenBlockProblem shifted_problem = problem;
+                shifted_problem.target_kind = "nearest_frequency";
+                shifted_problem.target_frequency_hz = pass_index == 0u
+                    ? problem.frequency_min_hz +
+                        (static_cast<double>(subwindow_index) + 0.5) *
+                            window_width /
+                            static_cast<double>(base_subwindow_count)
+                    : problem.frequency_min_hz +
+                        (static_cast<double>(subwindow_index) - 0.5) *
+                            refinement_spacing;
+                shifted_problem.requested_mode_count = pass_index == 0u
+                    ? problem.requested_mode_count
+                    : refined_requested_mode_count;
+                shifted_problem.frequency_min_hz = 0.0;
+                shifted_problem.frequency_max_hz = 0.0;
+                PoissonAirboxModalEigenResult shifted_result{};
+                const FrequencyDomainStatus shifted_status =
+                    solve_poisson_airbox_modal_eigen_cpu_schur(
+                        shifted_problem,
+                        &shifted_result);
+                std::vector<const PoissonAirboxModalEigenResult::AcceptedMode *>
+                    in_window_modes;
+                in_window_modes.reserve(shifted_result.accepted_modes.size());
+                for (const PoissonAirboxModalEigenResult::AcceptedMode &mode :
+                     shifted_result.accepted_modes) {
+                    if (mode.frequency_hz >= problem.frequency_min_hz &&
+                        mode.frequency_hz <= problem.frequency_max_hz) {
+                        in_window_modes.push_back(&mode);
+                    }
                 }
-            }
-            append_subwindow_json(
-                "%s{\"subwindow_index\":%u,\"shift_frequency_hz\":%.17g,"
-                "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
-                "\"candidate_mode_count\":%u,\"accepted_mode_count\":%zu,"
-                "\"stop_reason\":\"%s\",\"accepted_frequencies_hz\":[",
-                subwindow_index == 0u ? "" : ",",
-                subwindow_index,
-                shifted_problem.target_frequency_hz,
-                shifted_status == FrequencyDomainStatus::ok ? "ok" : "failed",
-                shifted_result.converged_eigenpair_count,
-                shifted_result.accepted_mode_count,
-                shifted_result.stop_reason[0] != '\0'
-                    ? shifted_result.stop_reason
-                    : (shifted_status == FrequencyDomainStatus::ok
-                           ? "converged"
-                           : "subwindow_failed"),
-                in_window_modes.size());
-            for (std::size_t accepted_index = 0;
-                 accepted_index < in_window_modes.size();
-                 ++accepted_index) {
                 append_subwindow_json(
-                    "%s%.17g",
-                    accepted_index == 0u ? "" : ",",
-                    in_window_modes[accepted_index]->frequency_hz);
-            }
-            append_subwindow_json("%s", "]}");
-            if (shifted_status != FrequencyDomainStatus::ok) {
-                if (shifted_status == FrequencyDomainStatus::interrupted) {
-                    window_interrupted = true;
-                } else {
-                    ++out_result->window_failed_subwindow_count;
-                    window_failed = true;
+                    "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
+                    "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
+                    "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
+                    "\"candidate_mode_count\":%u,\"accepted_mode_count\":%zu,"
+                    "\"stop_reason\":\"%s\",\"accepted_frequencies_hz\":[",
+                    pass_index == 0u && subwindow_index == 0u ? "" : ",",
+                    pass_index == 0u ? "base" : "refinement",
+                    subwindow_index,
+                    shifted_problem.target_frequency_hz,
+                    static_cast<unsigned long long>(
+                        pass_index == 0u ? requested_nev : refined_nev),
+                    shifted_status == FrequencyDomainStatus::ok ? "ok" : "failed",
+                    shifted_result.converged_eigenpair_count,
+                    shifted_result.accepted_mode_count,
+                    in_window_modes.size(),
+                    shifted_result.stop_reason[0] != '\0'
+                        ? shifted_result.stop_reason
+                        : (shifted_status == FrequencyDomainStatus::ok
+                               ? "converged"
+                               : "subwindow_failed"));
+                for (std::size_t accepted_index = 0;
+                     accepted_index < in_window_modes.size();
+                     ++accepted_index) {
+                    append_subwindow_json(
+                        "%s%.17g",
+                        accepted_index == 0u ? "" : ",",
+                        in_window_modes[accepted_index]->frequency_hz);
                 }
-                if (window_failure_reason[0] == '\0') {
-                    copy_message(
-                        window_failure_reason,
-                        sizeof(window_failure_reason),
-                        shifted_result.stop_reason[0] != '\0'
-                            ? shifted_result.stop_reason
-                            : (shifted_status == FrequencyDomainStatus::interrupted
-                                   ? "cancel_requested"
-                                   : "subwindow_failed"));
-                }
-                if (shifted_status == FrequencyDomainStatus::interrupted) {
-                    break;
-                }
-                continue;
-            }
-            ++out_result->window_completed_subwindow_count;
-            if (in_window_modes.empty()) {
-                ++window_empty_subwindow_count;
-            }
-            converged_total += shifted_result.converged_eigenpair_count;
-            finite_real_total += shifted_result.finite_real_eigenpair_count;
-            positive_total += shifted_result.positive_frequency_eigenpair_count;
-            residual_evaluated_total += shifted_result.action_residual_evaluated_count;
-            reconstructed_total += shifted_result.reconstructed_mode_count;
-            full_residual_accepted_total += shifted_result.full_residual_accepted_count;
-            outer_iterations_total += shifted_result.outer_iterations;
-            for (const PoissonAirboxModalEigenResult::AcceptedMode &mode :
-                 shifted_result.accepted_modes) {
-                if (mode.frequency_hz < problem.frequency_min_hz ||
-                    mode.frequency_hz > problem.frequency_max_hz) {
+                append_subwindow_json("%s", "]}");
+                if (shifted_status != FrequencyDomainStatus::ok) {
+                    if (shifted_status == FrequencyDomainStatus::interrupted) {
+                        window_interrupted = true;
+                        pass_cancelled[pass_index] = true;
+                    } else {
+                        ++out_result->window_failed_subwindow_count;
+                        ++pass_failed_subwindow_count[pass_index];
+                        window_failed = true;
+                    }
+                    if (window_failure_reason[0] == '\0') {
+                        copy_message(
+                            window_failure_reason,
+                            sizeof(window_failure_reason),
+                            shifted_result.stop_reason[0] != '\0'
+                                ? shifted_result.stop_reason
+                                : (shifted_status ==
+                                           FrequencyDomainStatus::interrupted
+                                       ? "cancel_requested"
+                                       : "subwindow_failed"));
+                    }
+                    if (shifted_status == FrequencyDomainStatus::interrupted) {
+                        break;
+                    }
                     continue;
                 }
-                const bool duplicate = std::any_of(
-                    window_candidates.begin(),
-                    window_candidates.end(),
-                    [&mode](const WindowCandidate &existing) {
-                        const double relative_frequency_difference =
-                            std::abs(existing.mode.frequency_hz - mode.frequency_hz) /
-                            std::max(
-                                {1.0,
-                                 std::abs(existing.mode.frequency_hz),
-                                 std::abs(mode.frequency_hz)});
-                        if (relative_frequency_difference > 1.0e-8 ||
-                            existing.mode.full_vector.size() != mode.full_vector.size()) {
-                            return false;
-                        }
-                        Complex overlap = 0.0;
-                        double existing_norm = 0.0;
-                        double candidate_norm = 0.0;
-                        for (std::size_t component = 0;
-                             component < mode.full_vector.size();
-                             ++component) {
-                            overlap += std::conj(existing.mode.full_vector[component]) *
-                                mode.full_vector[component];
-                            existing_norm += std::norm(existing.mode.full_vector[component]);
-                            candidate_norm += std::norm(mode.full_vector[component]);
-                        }
-                        const double normalized_overlap = std::abs(overlap) /
-                            (std::sqrt(existing_norm * candidate_norm) + 1.0e-300);
-                        return normalized_overlap >= 1.0 - 1.0e-6;
-                    });
-                if (!duplicate) {
-                    window_candidates.push_back(WindowCandidate{mode, shifted_result});
+                ++out_result->window_completed_subwindow_count;
+                ++pass_completed_subwindow_count[pass_index];
+                if (in_window_modes.empty()) {
+                    ++window_empty_subwindow_count;
                 }
-            }
-            if (poisson_airbox_modal_cancel_requested(problem)) {
-                window_interrupted = true;
-                if (window_failure_reason[0] == '\0') {
-                    copy_message(
-                        window_failure_reason,
-                        sizeof(window_failure_reason),
-                        "cancel_requested");
+                converged_total += shifted_result.converged_eigenpair_count;
+                finite_real_total += shifted_result.finite_real_eigenpair_count;
+                positive_total += shifted_result.positive_frequency_eigenpair_count;
+                residual_evaluated_total +=
+                    shifted_result.action_residual_evaluated_count;
+                reconstructed_total += shifted_result.reconstructed_mode_count;
+                full_residual_accepted_total +=
+                    shifted_result.full_residual_accepted_count;
+                outer_iterations_total += shifted_result.outer_iterations;
+                for (const PoissonAirboxModalEigenResult::AcceptedMode &mode :
+                     shifted_result.accepted_modes) {
+                    if (mode.frequency_hz < problem.frequency_min_hz ||
+                        mode.frequency_hz > problem.frequency_max_hz) {
+                        continue;
+                    }
+                    const bool duplicate = std::any_of(
+                        window_candidates.begin(),
+                        window_candidates.end(),
+                        [&mode, pass_index](const WindowCandidate &existing) {
+                            if (existing.pass_index != pass_index) {
+                                return false;
+                            }
+                            const double relative_frequency_difference =
+                                std::abs(
+                                    existing.mode.frequency_hz -
+                                    mode.frequency_hz) /
+                                std::max(
+                                    {1.0,
+                                     std::abs(existing.mode.frequency_hz),
+                                     std::abs(mode.frequency_hz)});
+                            if (relative_frequency_difference > 1.0e-8 ||
+                                existing.mode.full_vector.size() !=
+                                    mode.full_vector.size()) {
+                                return false;
+                            }
+                            Complex overlap = 0.0;
+                            double existing_norm = 0.0;
+                            double candidate_norm = 0.0;
+                            for (std::size_t component = 0;
+                                 component < mode.full_vector.size();
+                                 ++component) {
+                                overlap +=
+                                    std::conj(existing.mode.full_vector[component]) *
+                                    mode.full_vector[component];
+                                existing_norm +=
+                                    std::norm(existing.mode.full_vector[component]);
+                                candidate_norm +=
+                                    std::norm(mode.full_vector[component]);
+                            }
+                            const double normalized_overlap = std::abs(overlap) /
+                                (std::sqrt(existing_norm * candidate_norm) +
+                                 1.0e-300);
+                            return normalized_overlap >= 1.0 - 1.0e-6;
+                        });
+                    if (!duplicate) {
+                        window_candidates.push_back(WindowCandidate{
+                            mode,
+                            shifted_result,
+                            pass_index});
+                    }
                 }
-                break;
+                if (poisson_airbox_modal_cancel_requested(problem)) {
+                    window_interrupted = true;
+                    pass_cancelled[pass_index] = true;
+                    if (window_failure_reason[0] == '\0') {
+                        copy_message(
+                            window_failure_reason,
+                            sizeof(window_failure_reason),
+                            "cancel_requested");
+                    }
+                    break;
+                }
             }
         }
         out_result->window_empty_subwindow_count = window_empty_subwindow_count;
@@ -2530,31 +2622,85 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "subwindow_diagnostics_truncated");
             }
         }
+        const auto pass_state = [&](std::uint32_t pass_index) {
+            if (pass_cancelled[pass_index]) {
+                return "cancelled";
+            }
+            if (pass_failed_subwindow_count[pass_index] > 0u) {
+                return "failed";
+            }
+            if (pass_completed_subwindow_count[pass_index] ==
+                pass_planned_subwindow_count[pass_index]) {
+                return "completed";
+            }
+            return pass_completed_subwindow_count[pass_index] == 0u
+                ? "not_run"
+                : "incomplete";
+        };
         if (window_candidates.empty()) {
-            std::snprintf(
+            out_result->window_failed_subwindow = window_failed;
+            out_result->window_cancelled = window_interrupted;
+            const char *empty_stop_reason = window_interrupted
+                ? "cancel_requested"
+                : (window_failure_reason[0] != '\0'
+                       ? window_failure_reason
+                       : "frequency_window_no_accepted_mode");
+            const int empty_certificate_written = std::snprintf(
                 out_result->window_certificate_json,
                 sizeof(out_result->window_certificate_json),
                 "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
-                "\"status\":\"%s\",\"method\":\"bounded_shift_grid_presence_v1\","
+                "\"status\":\"%s\","
+                "\"method\":\"shift_nev_refinement_subspace_v1\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-                "\"requested_mode_count\":%u,\"discovered_mode_count\":0,"
-                "\"accepted_mode_count\":0,\"subwindow_count\":%u,"
-                "\"completed_subwindow_count\":%u,\"failed_subwindow_count\":%u,"
-                "\"empty_subwindow_count\":%u,\"coverage_status\":\"incomplete\","
+                "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
+                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+                "\"base_schedule\":{\"state\":\"%s\","
+                "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+                "\"failed_subwindow_count\":%u,\"cancelled\":%s},"
+                "\"refinement_schedule\":{\"state\":\"%s\","
+                "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+                "\"failed_subwindow_count\":%u,\"cancelled\":%s},"
+                "\"accepted_cluster_frequencies_hz\":[],\"cluster_ranks\":[],"
+                "\"coverage_margins_hz\":{\"lower\":%.17g,\"upper\":%.17g},"
+                "\"min_subspace_overlap\":0,"
+                "\"perturbation_result\":\"%s\","
+                "\"base_schedule_summary_ref\":\"executed_subwindows_json#pass=base\","
+                "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\","
                 "\"stop_reason\":\"%s\"}",
                 window_failed ? "failed" : "not_certified",
                 problem.frequency_min_hz,
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
-                subwindow_count,
-                out_result->window_completed_subwindow_count,
-                out_result->window_failed_subwindow_count,
-                out_result->window_empty_subwindow_count,
-                window_interrupted
-                    ? "cancel_requested"
-                    : (window_failure_reason[0] != '\0'
-                           ? window_failure_reason
-                           : "frequency_window_no_accepted_mode"));
+                static_cast<unsigned long long>(requested_nev),
+                refined_requested_mode_count,
+                static_cast<unsigned long long>(refined_nev),
+                pass_state(0u),
+                pass_planned_subwindow_count[0],
+                pass_completed_subwindow_count[0],
+                pass_failed_subwindow_count[0],
+                pass_cancelled[0] ? "true" : "false",
+                pass_state(1u),
+                pass_planned_subwindow_count[1],
+                pass_completed_subwindow_count[1],
+                pass_failed_subwindow_count[1],
+                pass_cancelled[1] ? "true" : "false",
+                lower_coverage_margin_hz,
+                upper_coverage_margin_hz,
+                window_interrupted ? "cancelled" : "no_accepted_mode",
+                empty_stop_reason);
+            if (empty_certificate_written <= 0 ||
+                static_cast<std::size_t>(empty_certificate_written) >=
+                    sizeof(out_result->window_certificate_json)) {
+                std::snprintf(
+                    out_result->window_certificate_json,
+                    sizeof(out_result->window_certificate_json),
+                    "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                    "\"status\":\"failed\","
+                    "\"method\":\"shift_nev_refinement_subspace_v1\","
+                    "\"truncated\":true,"
+                    "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
+                empty_stop_reason = "frequency_window_certificate_truncated";
+            }
             return fail_production_schur(
                 problem,
                 out_result,
@@ -2566,11 +2712,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     : (window_failure_reason[0] != '\0'
                            ? "production shared-domain K0 Schur multi-shift window failed"
                            : "production shared-domain K0 Schur multi-shift window found no accepted mode"),
-                window_interrupted
-                    ? "cancel_requested"
-                    : (window_failure_reason[0] != '\0'
-                           ? window_failure_reason
-                           : "frequency_window_no_accepted_mode"));
+                empty_stop_reason);
         }
         std::sort(
             window_candidates.begin(),
@@ -2581,11 +2723,406 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         const std::size_t requested_mode_count = static_cast<std::size_t>(
             std::max<std::uint32_t>(1u, problem.requested_mode_count));
         const std::size_t discovered_mode_count = window_candidates.size();
+        struct WindowCluster {
+            double frequency_sum_hz = 0.0;
+            std::size_t frequency_sample_count = 0;
+            std::vector<std::size_t> independent_candidate_indices{};
+            std::vector<std::vector<Complex>> orthonormal_basis{};
+
+            double frequency_hz() const noexcept
+            {
+                return frequency_sample_count > 0u
+                    ? frequency_sum_hz /
+                        static_cast<double>(frequency_sample_count)
+                    : 0.0;
+            }
+        };
+        const auto frequencies_match = [=](double left_hz, double right_hz) {
+            const double tolerance_hz = std::max(
+                cluster_frequency_absolute_tolerance_hz,
+                cluster_frequency_relative_tolerance *
+                    std::max(std::abs(left_hz), std::abs(right_hz)));
+            return std::abs(left_hz - right_hz) <= tolerance_hz;
+        };
+        const auto build_clusters = [&](std::uint32_t pass_index) {
+            std::vector<WindowCluster> clusters;
+            for (std::size_t candidate_index = 0;
+                 candidate_index < window_candidates.size();
+                 ++candidate_index) {
+                const WindowCandidate &candidate = window_candidates[candidate_index];
+                if (candidate.pass_index != pass_index ||
+                    candidate.mode.full_vector.size() <
+                        static_cast<std::size_t>(problem.q_dof_count)) {
+                    continue;
+                }
+                if (clusters.empty() ||
+                    !frequencies_match(
+                        clusters.back().frequency_hz(),
+                        candidate.mode.frequency_hz)) {
+                    clusters.emplace_back();
+                }
+                WindowCluster &cluster = clusters.back();
+                cluster.frequency_sum_hz += candidate.mode.frequency_hz;
+                ++cluster.frequency_sample_count;
+                std::vector<Complex> vector(
+                    candidate.mode.full_vector.begin(),
+                    candidate.mode.full_vector.begin() +
+                        static_cast<std::ptrdiff_t>(problem.q_dof_count));
+                for (int orthogonalization_pass = 0;
+                     orthogonalization_pass < 2;
+                     ++orthogonalization_pass) {
+                    for (const std::vector<Complex> &basis_vector :
+                         cluster.orthonormal_basis) {
+                        Complex projection = 0.0;
+                        for (std::size_t component = 0;
+                             component < vector.size();
+                             ++component) {
+                            projection += std::conj(basis_vector[component]) *
+                                vector[component];
+                        }
+                        for (std::size_t component = 0;
+                             component < vector.size();
+                             ++component) {
+                            vector[component] -=
+                                projection * basis_vector[component];
+                        }
+                    }
+                }
+                double norm_squared = 0.0;
+                for (const Complex value : vector) {
+                    norm_squared += std::norm(value);
+                }
+                const double norm = std::sqrt(norm_squared);
+                if (!(norm > 1.0e-8) || !std::isfinite(norm)) {
+                    continue;
+                }
+                for (Complex &value : vector) {
+                    value /= norm;
+                }
+                cluster.orthonormal_basis.push_back(std::move(vector));
+                cluster.independent_candidate_indices.push_back(candidate_index);
+            }
+            return clusters;
+        };
+        const std::vector<WindowCluster> base_clusters = build_clusters(0u);
+        const std::vector<WindowCluster> refinement_clusters = build_clusters(1u);
+        struct ClusterSelection {
+            std::vector<std::size_t> cluster_indices{};
+            std::size_t covered_mode_count = 0;
+            std::size_t split_cluster_index =
+                std::numeric_limits<std::size_t>::max();
+            bool complete = false;
+            bool splits_cluster = false;
+        };
+        const auto select_clusters = [requested_mode_count](
+            const std::vector<WindowCluster> &clusters) {
+            ClusterSelection selection{};
+            for (std::size_t cluster_index = 0;
+                 cluster_index < clusters.size();
+                 ++cluster_index) {
+                const std::size_t rank =
+                    clusters[cluster_index].orthonormal_basis.size();
+                if (rank == 0u) {
+                    continue;
+                }
+                if (selection.covered_mode_count + rank > requested_mode_count) {
+                    selection.splits_cluster = true;
+                    selection.split_cluster_index = cluster_index;
+                    break;
+                }
+                selection.cluster_indices.push_back(cluster_index);
+                selection.covered_mode_count += rank;
+                if (selection.covered_mode_count == requested_mode_count) {
+                    selection.complete = true;
+                    break;
+                }
+            }
+            return selection;
+        };
+        const ClusterSelection base_selection = select_clusters(base_clusters);
+        const ClusterSelection refinement_selection =
+            select_clusters(refinement_clusters);
+        const bool base_pass_complete =
+            pass_completed_subwindow_count[0] == pass_planned_subwindow_count[0] &&
+            pass_failed_subwindow_count[0] == 0u &&
+            !pass_cancelled[0];
+        const bool refinement_pass_complete =
+            pass_completed_subwindow_count[1] == pass_planned_subwindow_count[1] &&
+            pass_failed_subwindow_count[1] == 0u &&
+            !pass_cancelled[1];
+        const bool coverage_margins_positive =
+            std::isfinite(lower_coverage_margin_hz) &&
+            std::isfinite(upper_coverage_margin_hz) &&
+            lower_coverage_margin_hz > 0.0 &&
+            upper_coverage_margin_hz > 0.0;
+        bool refinement_disagreement = false;
+        const char *perturbation_result = "stable";
+        double min_subspace_overlap = 1.0;
+        if (!refined_nev_increased) {
+            refinement_disagreement = true;
+            perturbation_result = "refined_nev_not_greater";
+        } else if (base_selection.splits_cluster ||
+                   refinement_selection.splits_cluster) {
+            refinement_disagreement = true;
+            perturbation_result = "requested_count_splits_cluster";
+            min_subspace_overlap = 0.0;
+        } else if (base_selection.complete && refinement_selection.complete) {
+            if (base_selection.cluster_indices.size() !=
+                refinement_selection.cluster_indices.size()) {
+                refinement_disagreement = true;
+                perturbation_result = "cluster_count_mismatch";
+            } else {
+                for (std::size_t selected_cluster = 0;
+                     selected_cluster < base_selection.cluster_indices.size();
+                     ++selected_cluster) {
+                    const WindowCluster &base_cluster = base_clusters[
+                        base_selection.cluster_indices[selected_cluster]];
+                    const WindowCluster &refinement_cluster = refinement_clusters[
+                        refinement_selection.cluster_indices[selected_cluster]];
+                    const std::size_t base_rank =
+                        base_cluster.orthonormal_basis.size();
+                    const std::size_t refinement_rank =
+                        refinement_cluster.orthonormal_basis.size();
+                    if (!frequencies_match(
+                            base_cluster.frequency_hz(),
+                            refinement_cluster.frequency_hz())) {
+                        refinement_disagreement = true;
+                        perturbation_result = "cluster_frequency_mismatch";
+                        break;
+                    }
+                    if (base_rank != refinement_rank || base_rank == 0u) {
+                        refinement_disagreement = true;
+                        perturbation_result = "cluster_rank_mismatch";
+                        break;
+                    }
+                    double squared_overlap_sum = 0.0;
+                    for (const std::vector<Complex> &base_vector :
+                         base_cluster.orthonormal_basis) {
+                        for (const std::vector<Complex> &refinement_vector :
+                             refinement_cluster.orthonormal_basis) {
+                            Complex overlap = 0.0;
+                            for (std::size_t component = 0;
+                                 component < base_vector.size();
+                                 ++component) {
+                                overlap += std::conj(base_vector[component]) *
+                                    refinement_vector[component];
+                            }
+                            squared_overlap_sum += std::norm(overlap);
+                        }
+                    }
+                    const double subspace_overlap = std::sqrt(std::max(
+                        0.0,
+                        squared_overlap_sum / static_cast<double>(base_rank)));
+                    min_subspace_overlap = std::min(
+                        min_subspace_overlap,
+                        std::min(1.0, subspace_overlap));
+                    if (!std::isfinite(subspace_overlap) ||
+                        subspace_overlap < subspace_overlap_threshold) {
+                        refinement_disagreement = true;
+                        perturbation_result = "invariant_subspace_mismatch";
+                        break;
+                    }
+                }
+            }
+        } else {
+            min_subspace_overlap = 0.0;
+            if (base_selection.complete != refinement_selection.complete ||
+                base_selection.covered_mode_count !=
+                    refinement_selection.covered_mode_count) {
+                refinement_disagreement = true;
+                perturbation_result = "cluster_coverage_mismatch";
+            } else {
+                perturbation_result = "insufficient_requested_mode_coverage";
+            }
+        }
+        if (!coverage_margins_positive && !refinement_disagreement) {
+            refinement_disagreement = true;
+            perturbation_result = "nonpositive_coverage_margin";
+        }
         const bool mode_coverage_complete =
-            discovered_mode_count >= requested_mode_count &&
-            window_empty_subwindow_count == 0u;
-        if (window_candidates.size() > requested_mode_count) {
-            window_candidates.resize(requested_mode_count);
+            base_selection.complete && refinement_selection.complete;
+        std::vector<WindowCandidate> selected_base_candidates;
+        for (const std::size_t cluster_index : base_selection.cluster_indices) {
+            for (const std::size_t candidate_index :
+                 base_clusters[cluster_index].independent_candidate_indices) {
+                selected_base_candidates.push_back(window_candidates[candidate_index]);
+            }
+        }
+        if (selected_base_candidates.empty()) {
+            char observed_cluster_frequencies_json[128] = "[]";
+            char observed_cluster_ranks_json[64] = "[]";
+            if (base_selection.split_cluster_index < base_clusters.size()) {
+                const WindowCluster &split_cluster =
+                    base_clusters[base_selection.split_cluster_index];
+                std::snprintf(
+                    observed_cluster_frequencies_json,
+                    sizeof(observed_cluster_frequencies_json),
+                    "[%.17g]",
+                    split_cluster.frequency_hz());
+                std::snprintf(
+                    observed_cluster_ranks_json,
+                    sizeof(observed_cluster_ranks_json),
+                    "[%zu]",
+                    split_cluster.orthonormal_basis.size());
+            }
+            const char *empty_selection_stop_reason = window_interrupted
+                ? "cancel_requested"
+                : (!subwindow_json_complete
+                       ? "frequency_window_schedule_summary_truncated"
+                       : (window_failed ||
+                          !base_pass_complete ||
+                          !refinement_pass_complete
+                              ? "frequency_window_subwindow_failed"
+                              : (refinement_disagreement
+                                     ? "frequency_window_refinement_disagreement"
+                                     : "frequency_window_incomplete_mode_coverage")));
+            out_result->window_subwindow_count =
+                base_subwindow_count + refinement_subwindow_count;
+            out_result->window_failed_subwindow = window_failed;
+            out_result->window_cancelled = window_interrupted;
+            out_result->window_complete = false;
+            out_result->accepted_modes.clear();
+            out_result->accepted_mode_count = 0u;
+            copy_message(
+                out_result->executed_subwindows_json,
+                sizeof(out_result->executed_subwindows_json),
+                executed_subwindows_json);
+            const int empty_selection_certificate_written = std::snprintf(
+                out_result->window_certificate_json,
+                sizeof(out_result->window_certificate_json),
+                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                "\"status\":\"%s\","
+                "\"method\":\"shift_nev_refinement_subspace_v1\","
+                "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
+                "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
+                "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+                "\"discovered_mode_count\":%zu,\"accepted_mode_count\":0,"
+                "\"base_schedule\":{\"state\":\"%s\","
+                "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+                "\"failed_subwindow_count\":%u,\"cancelled\":%s},"
+                "\"refinement_schedule\":{\"state\":\"%s\","
+                "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+                "\"failed_subwindow_count\":%u,\"cancelled\":%s},"
+                "\"accepted_cluster_frequencies_hz\":%s,\"cluster_ranks\":%s,"
+                "\"coverage_margins_hz\":{\"lower\":%.17g,\"upper\":%.17g},"
+                "\"min_subspace_overlap\":%.17g,"
+                "\"subspace_overlap_threshold\":%.17g,"
+                "\"perturbation_result\":\"%s\","
+                "\"base_schedule_summary_ref\":\"executed_subwindows_json#pass=base\","
+                "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\","
+                "\"stop_reason\":\"%s\"}",
+                window_failed ? "failed" : "not_certified",
+                problem.frequency_min_hz,
+                problem.frequency_max_hz,
+                problem.requested_mode_count,
+                static_cast<unsigned long long>(requested_nev),
+                refined_requested_mode_count,
+                static_cast<unsigned long long>(refined_nev),
+                discovered_mode_count,
+                pass_state(0u),
+                pass_planned_subwindow_count[0],
+                pass_completed_subwindow_count[0],
+                pass_failed_subwindow_count[0],
+                pass_cancelled[0] ? "true" : "false",
+                pass_state(1u),
+                pass_planned_subwindow_count[1],
+                pass_completed_subwindow_count[1],
+                pass_failed_subwindow_count[1],
+                pass_cancelled[1] ? "true" : "false",
+                observed_cluster_frequencies_json,
+                observed_cluster_ranks_json,
+                lower_coverage_margin_hz,
+                upper_coverage_margin_hz,
+                min_subspace_overlap,
+                subspace_overlap_threshold,
+                window_interrupted ? "cancelled" : perturbation_result,
+                empty_selection_stop_reason);
+            if (empty_selection_certificate_written <= 0 ||
+                static_cast<std::size_t>(empty_selection_certificate_written) >=
+                    sizeof(out_result->window_certificate_json)) {
+                std::snprintf(
+                    out_result->window_certificate_json,
+                    sizeof(out_result->window_certificate_json),
+                    "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                    "\"status\":\"failed\","
+                    "\"method\":\"shift_nev_refinement_subspace_v1\","
+                    "\"truncated\":true,"
+                    "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
+                empty_selection_stop_reason =
+                    "frequency_window_certificate_truncated";
+            }
+            return fail_production_schur(
+                problem,
+                out_result,
+                window_interrupted
+                    ? FrequencyDomainStatus::interrupted
+                    : FrequencyDomainStatus::solve_error,
+                window_interrupted
+                    ? "production shared-domain K0 Schur window was cancelled before preserving a complete mode"
+                    : "production shared-domain K0 Schur window preserved no complete base cluster",
+                empty_selection_stop_reason);
+        }
+        window_candidates = std::move(selected_base_candidates);
+        char cluster_frequencies_json[2048]{};
+        char cluster_ranks_json[1024]{};
+        std::size_t cluster_frequencies_size = 1u;
+        std::size_t cluster_ranks_size = 1u;
+        cluster_frequencies_json[0] = '[';
+        cluster_ranks_json[0] = '[';
+        bool cluster_json_complete = true;
+        for (std::size_t selected_cluster = 0;
+             selected_cluster < base_selection.cluster_indices.size();
+             ++selected_cluster) {
+            const WindowCluster &cluster = base_clusters[
+                base_selection.cluster_indices[selected_cluster]];
+            const int frequency_written = std::snprintf(
+                cluster_frequencies_json + cluster_frequencies_size,
+                sizeof(cluster_frequencies_json) - cluster_frequencies_size,
+                "%s%.17g",
+                selected_cluster == 0u ? "" : ",",
+                cluster.frequency_hz());
+            const int rank_written = std::snprintf(
+                cluster_ranks_json + cluster_ranks_size,
+                sizeof(cluster_ranks_json) - cluster_ranks_size,
+                "%s%zu",
+                selected_cluster == 0u ? "" : ",",
+                cluster.orthonormal_basis.size());
+            if (frequency_written < 0 || rank_written < 0 ||
+                static_cast<std::size_t>(frequency_written) >=
+                    sizeof(cluster_frequencies_json) - cluster_frequencies_size ||
+                static_cast<std::size_t>(rank_written) >=
+                    sizeof(cluster_ranks_json) - cluster_ranks_size) {
+                cluster_json_complete = false;
+                break;
+            }
+            cluster_frequencies_size += static_cast<std::size_t>(frequency_written);
+            cluster_ranks_size += static_cast<std::size_t>(rank_written);
+        }
+        if (cluster_json_complete) {
+            const int frequency_closed = std::snprintf(
+                cluster_frequencies_json + cluster_frequencies_size,
+                sizeof(cluster_frequencies_json) - cluster_frequencies_size,
+                "]");
+            const int rank_closed = std::snprintf(
+                cluster_ranks_json + cluster_ranks_size,
+                sizeof(cluster_ranks_json) - cluster_ranks_size,
+                "]");
+            cluster_json_complete = frequency_closed == 1 && rank_closed == 1;
+        }
+        if (!cluster_json_complete) {
+            window_failed = true;
+            copy_message(
+                window_failure_reason,
+                sizeof(window_failure_reason),
+                "frequency_window_cluster_summary_truncated");
+            std::snprintf(
+                cluster_frequencies_json,
+                sizeof(cluster_frequencies_json),
+                "[]");
+            std::snprintf(
+                cluster_ranks_json,
+                sizeof(cluster_ranks_json),
+                "[]");
         }
         PoissonAirboxModalEigenResult aggregate = window_candidates.front().source;
         aggregate.accepted_modes.clear();
@@ -2643,14 +3180,20 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             std::min<std::uint64_t>(
                 outer_iterations_total,
                 std::numeric_limits<std::uint32_t>::max()));
-        aggregate.window_subwindow_count = subwindow_count;
+        aggregate.window_subwindow_count =
+            base_subwindow_count + refinement_subwindow_count;
         aggregate.window_completed_subwindow_count =
             out_result->window_completed_subwindow_count;
         aggregate.window_failed_subwindow_count =
             out_result->window_failed_subwindow_count;
         aggregate.window_empty_subwindow_count = window_empty_subwindow_count;
+        aggregate.window_failed_subwindow = window_failed;
+        aggregate.window_cancelled = window_interrupted;
         aggregate.window_complete =
-            !window_failed && !window_interrupted && mode_coverage_complete;
+            !window_failed && !window_interrupted &&
+            base_pass_complete && refinement_pass_complete &&
+            mode_coverage_complete && !refinement_disagreement &&
+            coverage_margins_positive && cluster_json_complete;
         const char *window_certificate_status = aggregate.window_complete
             ? "certified"
             : (window_failed ? "failed" : "not_certified");
@@ -2658,37 +3201,106 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             ? "window_complete"
             : (window_interrupted
                    ? "cancel_requested"
-                   : (window_failure_reason[0] != '\0'
-                          ? window_failure_reason
-                          : "frequency_window_incomplete_mode_coverage"));
+                   : (!subwindow_json_complete
+                          ? "frequency_window_schedule_summary_truncated"
+                          : (window_failed ||
+                             !base_pass_complete ||
+                             !refinement_pass_complete
+                                 ? "frequency_window_subwindow_failed"
+                                 : (refinement_disagreement
+                                        ? "frequency_window_refinement_disagreement"
+                                        : "frequency_window_incomplete_mode_coverage"))));
+        if (window_interrupted) {
+            perturbation_result = "cancelled";
+            min_subspace_overlap = 0.0;
+        } else if (window_failed || !base_pass_complete ||
+                   !refinement_pass_complete) {
+            perturbation_result = "pass_incomplete";
+            min_subspace_overlap = 0.0;
+        }
         copy_message(
             aggregate.stop_reason,
             sizeof(aggregate.stop_reason),
             window_stop_reason);
-        std::snprintf(
+        const int certificate_written = std::snprintf(
             aggregate.window_certificate_json,
             sizeof(aggregate.window_certificate_json),
             "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
             "\"status\":\"%s\","
-            "\"method\":\"bounded_shift_grid_presence_v1\","
+            "\"method\":\"shift_nev_refinement_subspace_v1\","
             "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
-            "\"requested_mode_count\":%u,\"discovered_mode_count\":%zu,"
-            "\"accepted_mode_count\":%u,\"subwindow_count\":%u,"
-            "\"completed_subwindow_count\":%u,\"failed_subwindow_count\":%u,"
-            "\"empty_subwindow_count\":%u,\"coverage_status\":\"%s\","
+            "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
+            "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+            "\"discovered_mode_count\":%zu,\"accepted_mode_count\":%u,"
+            "\"base_schedule\":{\"state\":\"%s\","
+            "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+            "\"failed_subwindow_count\":%u,\"cancelled\":%s,"
+            "\"first_shift_hz\":%.17g,\"last_shift_hz\":%.17g},"
+            "\"refinement_schedule\":{\"state\":\"%s\","
+            "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+            "\"failed_subwindow_count\":%u,\"cancelled\":%s,"
+            "\"first_shift_hz\":%.17g,\"last_shift_hz\":%.17g},"
+            "\"accepted_cluster_frequencies_hz\":%s,\"cluster_ranks\":%s,"
+            "\"coverage_margins_hz\":{\"lower\":%.17g,\"upper\":%.17g},"
+            "\"min_subspace_overlap\":%.17g,"
+            "\"subspace_overlap_threshold\":%.17g,"
+            "\"perturbation_result\":\"%s\","
+            "\"base_schedule_summary_ref\":\"executed_subwindows_json#pass=base\","
+            "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\","
             "\"stop_reason\":\"%s\"}",
             window_certificate_status,
             problem.frequency_min_hz,
             problem.frequency_max_hz,
             problem.requested_mode_count,
+            static_cast<unsigned long long>(requested_nev),
+            refined_requested_mode_count,
+            static_cast<unsigned long long>(refined_nev),
             discovered_mode_count,
             aggregate.accepted_mode_count,
-            aggregate.window_subwindow_count,
-            aggregate.window_completed_subwindow_count,
-            aggregate.window_failed_subwindow_count,
-            aggregate.window_empty_subwindow_count,
-            mode_coverage_complete ? "complete" : "incomplete",
+            pass_state(0u),
+            pass_planned_subwindow_count[0],
+            pass_completed_subwindow_count[0],
+            pass_failed_subwindow_count[0],
+            pass_cancelled[0] ? "true" : "false",
+            problem.frequency_min_hz +
+                0.5 * window_width / static_cast<double>(base_subwindow_count),
+            problem.frequency_max_hz -
+                0.5 * window_width / static_cast<double>(base_subwindow_count),
+            pass_state(1u),
+            pass_planned_subwindow_count[1],
+            pass_completed_subwindow_count[1],
+            pass_failed_subwindow_count[1],
+            pass_cancelled[1] ? "true" : "false",
+            refinement_first_shift_hz,
+            refinement_last_shift_hz,
+            cluster_frequencies_json,
+            cluster_ranks_json,
+            lower_coverage_margin_hz,
+            upper_coverage_margin_hz,
+            min_subspace_overlap,
+            subspace_overlap_threshold,
+            perturbation_result,
             window_stop_reason);
+        const bool certificate_complete = certificate_written > 0 &&
+            static_cast<std::size_t>(certificate_written) <
+                sizeof(aggregate.window_certificate_json);
+        if (!certificate_complete) {
+            aggregate.window_complete = false;
+            copy_message(
+                aggregate.stop_reason,
+                sizeof(aggregate.stop_reason),
+                "frequency_window_certificate_truncated");
+            std::snprintf(
+                aggregate.window_certificate_json,
+                sizeof(aggregate.window_certificate_json),
+                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                "\"status\":\"failed\","
+                "\"method\":\"shift_nev_refinement_subspace_v1\","
+                "\"truncated\":true,"
+                "\"perturbation_result\":\"certificate_truncated\","
+                "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
+            window_stop_reason = aggregate.stop_reason;
+        }
         aggregate.status = aggregate.window_complete
             ? FrequencyDomainStatus::ok
             : (window_interrupted

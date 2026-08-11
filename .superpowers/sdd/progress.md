@@ -162,3 +162,14 @@ compatibility diagnostics routing. Fresh verification on merge HEAD: Vitest
 93/93 and Control Room typecheck pass; targeted ESLint and diff-check were
 already green in the independent review. Managed/native/browser qualification
 is not claimed.
+
+Task N2-CW1 (CPU frequency-window completion certificate): complete source-level
+and focused-contract level; independent remediation re-review `APPROVE` with no
+findings. The CPU Schur frequency-window path now runs base and refinement shift
+schedules, compares frequencies, physical cluster ranks and invariant-subspace
+overlap, requires positive coverage margins, and fails closed on disagreement,
+truncation, cancellation or incomplete schedules. Focused container evidence
+passes the positive, rank-two degeneracy, split-cluster disagreement, empty
+failure and cancellation cases; documentation validation is green (21/21).
+Managed runtime, full legacy monolithic binary, GPU parity and production
+qualification remain explicitly open.
