@@ -26,7 +26,9 @@ use fullmag_ir::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
-use crate::fdm::gpu::cuda::native::{is_cuda_available, DeviceInfo, NativeFdmBackend};
+use crate::fdm::gpu::cuda::native::{
+    is_cuda_available, reject_cuda_multilayer_containment, DeviceInfo, NativeFdmBackend,
+};
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
 use crate::fdm::validate_multilayer_grid_budget;
@@ -219,6 +221,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
     validate_multilayer_grid_budget(plan)?;
     validate_cuda_multilayer_execution_contract(plan)?;
     if !is_cuda_available() {
@@ -322,14 +325,13 @@ fn resolve_cuda_multilayer_execution_shape(
 
 /// Validate the subset of the multilayer descriptor contract which the
 /// current native CUDA runner can execute without changing the physical
-/// operator.  The legacy two-dimensional stack remains an explicit
-/// CUDA-assisted lane; it does not enter the native D-07 descriptor path and
-/// therefore does not require the native common-grid certificate here.
+/// operator. Unqualified assisted operators fail before certificate checks,
+/// device probing, allocation, or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
-    if plan.mode == "two_d_stack" && plan.planner_summary.resolved_mode == "two_d_stack" {
-        return Ok(());
-    }
-    if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
+    reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+    if plan.enable_demag
+        && (plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d")
+    {
         return Err(RunError {
             message: format!(
                 "unsupported_gpu_multilayer_mode: native CUDA multilayer currently requires resolved_mode='three_d', got plan.mode='{}' resolved_mode='{}'",
@@ -364,10 +366,8 @@ fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Re
 }
 
 /// Return whether the native single-grid/v2 descriptor can represent every
-/// layer without a hidden transfer.  `push_pull` remains a valid explicit
-/// CUDA-assisted lane, but it is not promoted to the native production lane
-/// because the current ABI does not transport its canonical transfer
-/// descriptor/fingerprint.
+/// layer without a hidden transfer. `push_pull` is not promoted because the
+/// current CUDA runner does not consume its canonical transfer contract.
 fn native_cuda_identity_descriptor_eligible(plan: &FdmMultilayerPlanIR) -> Result<bool, RunError> {
     for layer in &plan.layers {
         match layer.transfer_kind.as_str() {
@@ -1227,6 +1227,9 @@ fn build_native_stacked_cuda_plan(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<Option<NativeStackedCudaPlan>, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if plan.planner_summary.requested_strategy == "multilayer_convolution" {
+        return Ok(None);
+    }
     if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
         return Ok(None);
     }
@@ -3505,6 +3508,15 @@ mod tests {
         plan
     }
 
+    fn make_auto_plan(
+        enable_demag: bool,
+        precision: ExecutionPrecision,
+    ) -> FdmMultilayerPlanIR {
+        let mut plan = make_plan(enable_demag, precision);
+        plan.planner_summary.requested_strategy = "auto".to_string();
+        plan
+    }
+
     #[test]
     fn cuda_assisted_entry_rejects_adaptive_before_cuda_probe() {
         let mut plan = make_assisted_plan(false, ExecutionPrecision::Double);
@@ -3515,6 +3527,102 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.message.contains("adaptive time stepping"));
+    }
+
+    #[test]
+    fn cuda_multilayer_containment_rejects_before_cuda_probe() {
+        let cases = [
+            {
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
+                plan.mode = "two_d_stack".to_string();
+                plan.planner_summary.requested_mode = "two_d_stack".to_string();
+                plan.planner_summary.resolved_mode = "two_d_stack".to_string();
+                (plan, "fdm_cuda_multilayer_two_d_stack_unqualified")
+            },
+            {
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
+                plan.layers[0].transfer_kind = "push_pull".to_string();
+                (plan, "fdm_cuda_multilayer_push_pull_unqualified")
+            },
+            {
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
+                plan.layers[1].native_cell_size[2] = 2e-9;
+                plan.layers[1].convolution_cell_size[2] = 2e-9;
+                (
+                    plan,
+                    "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified",
+                )
+            },
+            {
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
+                plan.layers[1].native_origin[0] += 2e-9;
+                plan.layers[1].convolution_origin[0] += 2e-9;
+                (plan, "fdm_cuda_multilayer_xy_offset_unqualified")
+            },
+        ];
+
+        for (plan, reason_code) in cases {
+            let error = execute_cuda_fdm_multilayer(&plan, 1e-13, &[])
+                .expect_err("unqualified CUDA multilayer plan must fail before probing CUDA");
+            assert!(
+                error.message.contains(reason_code),
+                "missing reason code {reason_code}: {}",
+                error.message
+            );
+            assert!(
+                !error.message.contains("CUDA backend is not available"),
+                "containment must run before CUDA availability probing"
+            );
+        }
+    }
+
+    #[test]
+    fn cuda_multilayer_containment_is_inactive_without_demag() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.mode = "two_d_stack".to_string();
+        plan.planner_summary.requested_mode = "two_d_stack".to_string();
+        plan.planner_summary.resolved_mode = "two_d_stack".to_string();
+        plan.layers[0].transfer_kind = "push_pull".to_string();
+        plan.layers[1].native_cell_size[2] = 2e-9;
+        plan.layers[1].convolution_cell_size[2] = 2e-9;
+        plan.layers[1].native_origin[0] += 2e-9;
+        plan.layers[1].convolution_origin[0] += 2e-9;
+
+        let error = validate_cuda_multilayer_execution_contract(&plan)
+            .expect_err("test plan still lacks the required grid certificate");
+        assert!(error.message.contains("fingerprint"), "{}", error.message);
+        for reason_code in [
+            "fdm_cuda_multilayer_two_d_stack_unqualified",
+            "fdm_cuda_multilayer_push_pull_unqualified",
+            "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified",
+            "fdm_cuda_multilayer_xy_offset_unqualified",
+        ] {
+            assert!(
+                !error.message.contains(reason_code),
+                "inactive demag must not emit {reason_code}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_multilayer_does_not_use_native_single_grid_fast_path() {
+        let explicit = make_plan(false, ExecutionPrecision::Double);
+        assert!(
+            build_native_stacked_cuda_plan(&explicit)
+                .expect("explicit multilayer shape classification")
+                .is_none(),
+            "explicit multilayer_convolution must not be reinterpreted as native single-grid"
+        );
+
+        let mut auto = explicit;
+        auto.planner_summary.requested_strategy = "auto".to_string();
+        assert!(
+            build_native_stacked_cuda_plan(&auto)
+                .expect("auto strategy shape classification")
+                .is_some(),
+            "auto strategy must preserve the existing legal native fast path"
+        );
     }
 
     #[test]
@@ -3530,26 +3638,17 @@ mod tests {
     }
 
     #[test]
-    fn cuda_multilayer_two_d_mode_preserves_assisted_lane_without_d07() {
+    fn cuda_multilayer_two_d_mode_fails_closed_before_d07_or_probe() {
         let mut plan = make_plan(true, ExecutionPrecision::Double);
         plan.mode = "two_d_stack".to_string();
         plan.planner_summary.requested_mode = "two_d_stack".to_string();
         plan.planner_summary.resolved_mode = "two_d_stack".to_string();
 
-        validate_cuda_multilayer_execution_contract(&plan)
-            .expect("2-D stack must retain the CUDA-assisted lane");
-        assert!(
-            resolve_cuda_multilayer_execution_shape(&plan)
-                .expect("2-D stack shape resolution")
-                .is_none(),
-            "2-D stack must not choose native stacked D-07"
-        );
-        assert!(
-            build_native_multilayer_demag_operator(&plan)
-                .expect("2-D native demag eligibility")
-                .is_none(),
-            "2-D stack must not publish native D-07 stage telemetry"
-        );
+        let error = validate_cuda_multilayer_execution_contract(&plan)
+            .expect_err("2-D stack must fail before D-07 or CUDA probing");
+        assert!(error
+            .message
+            .contains("fdm_cuda_multilayer_two_d_stack_unqualified"));
     }
 
     #[test]
@@ -3594,14 +3693,19 @@ mod tests {
     }
 
     #[test]
-    fn native_cuda_push_pull_stays_explicitly_cuda_assisted() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+    fn native_cuda_push_pull_fails_containment_before_assisted_execution() {
+        let mut plan = make_plan(true, ExecutionPrecision::Double);
         plan.layers[0].transfer_kind = "push_pull".to_string();
         assert_eq!(
             native_cuda_identity_descriptor_eligible(&plan)
                 .expect("push_pull is a known non-native descriptor"),
             false
         );
+        let error = reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)
+            .expect_err("push_pull must not enter CUDA-assisted execution");
+        assert!(error
+            .message
+            .contains("fdm_cuda_multilayer_push_pull_unqualified"));
     }
 
     fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
@@ -3734,7 +3838,7 @@ mod tests {
 
     #[test]
     fn native_stacked_cuda_plan_preserves_global_dmi_constants() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
         add_global_dmi_texture(&mut plan);
 
         let native = build_native_stacked_cuda_plan(&plan)
@@ -3747,7 +3851,8 @@ mod tests {
 
     #[test]
     fn native_stacked_cuda_plan_disables_inter_body_exchange_pairs() {
-        let plan = make_touching_plan(ExecutionPrecision::Double);
+        let mut plan = make_touching_plan(ExecutionPrecision::Double);
+        plan.planner_summary.requested_strategy = "auto".to_string();
 
         let native = build_native_stacked_cuda_plan(&plan)
             .expect("native stacked plan should build")
@@ -3762,7 +3867,7 @@ mod tests {
 
     #[test]
     fn staged_v2_cuda_allows_fixed_step_rk23_but_rejects_rk45() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
         plan.integrator = IntegratorChoice::Rk45;
 
         let native = resolve_cuda_multilayer_execution_shape(&plan)
@@ -3797,7 +3902,7 @@ mod tests {
 
     #[test]
     fn native_stacked_observables_include_layer_dmi_outputs() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
         add_global_dmi_texture(&mut plan);
         let native = build_native_stacked_cuda_plan(&plan)
             .expect("native stacked plan should build")
@@ -3836,7 +3941,7 @@ mod tests {
 
     #[test]
     fn native_stacked_zeeman_energy_has_no_self_field_half_factor() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
         let applied_field = [2.0e3, 2.0e3, 0.0];
         plan.external_field = Some(applied_field);
         let native = build_native_stacked_cuda_plan(&plan)
@@ -3873,7 +3978,7 @@ mod tests {
 
     #[test]
     fn native_stacked_observables_include_layer_anisotropy_outputs() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
         add_uniaxial_anisotropy_texture(&mut plan);
         let native = build_native_stacked_cuda_plan(&plan)
             .expect("native stacked plan should build")
@@ -3996,7 +4101,7 @@ mod tests {
             return;
         }
 
-        let plan = make_plan(true, ExecutionPrecision::Double);
+        let plan = make_auto_plan(true, ExecutionPrecision::Double);
         let cpu =
             multilayer_reference::execute_reference_fdm_multilayer(&plan, 2e-13, &[], None, None)
                 .expect("cpu multilayer");
@@ -4026,7 +4131,8 @@ mod tests {
             return;
         }
 
-        let plan = make_touching_plan(ExecutionPrecision::Double);
+        let mut plan = make_touching_plan(ExecutionPrecision::Double);
+        plan.planner_summary.requested_strategy = "auto".to_string();
         let cpu =
             multilayer_reference::execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
                 .expect("cpu multilayer");
@@ -4067,8 +4173,8 @@ mod tests {
             return;
         }
 
-        let double_plan = make_plan(true, ExecutionPrecision::Double);
-        let single_plan = make_plan(true, ExecutionPrecision::Single);
+        let double_plan = make_auto_plan(true, ExecutionPrecision::Double);
+        let single_plan = make_auto_plan(true, ExecutionPrecision::Single);
         let double_run =
             execute_cuda_fdm_multilayer(&double_plan, 2e-13, &[]).expect("double multilayer");
         let single_run =

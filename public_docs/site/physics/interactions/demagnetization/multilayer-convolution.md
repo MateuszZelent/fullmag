@@ -418,21 +418,21 @@ the same time. For the simplest identity transfer, choose a common grid equal to
 native grid. Different grids activate `push_pull` and require a separate transfer-error
 assessment.
 
-### 5.4. Rzeczywiste scenariusze testowe i interpretacja
+### 5.4. Real test scenarios and interpretation
 
-Poniższe przypadki są kopiowalnymi odpowiednikami fixture'ów z
-`tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/`. Są to scenariusze
-SP4-derived, nie kanoniczny µMAG Standard Problem 4.
+The cases below are copyable counterparts of the fixtures in
+`tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/`. They are
+SP4-derived scenarios, not the canonical µMAG Standard Problem 4.
 
 #### L=3, `three_d`, transfer `identity`
 
-Ten przypadek ma trzy warstwy o rozmiarze `31.25 nm × 15.625 nm × 6 nm`, natywną
-komórkę `(3.90625 nm, 3.90625 nm, 3 nm)` i wspólną siatkę `(8, 4, 2)`. Każda warstwa
-ma ten sam grid, więc planner może użyć `identity`; translacje Z pozostają częścią
-fizycznego offsetu par.
+This case has three layers of size `31.25 nm × 15.625 nm × 6 nm`, native cell
+`(3.90625 nm, 3.90625 nm, 3 nm)`, and common grid `(8, 4, 2)`. Every layer has
+the same grid, so the planner can use `identity`; Z translations remain part of
+the physical pair offset.
 
 ```python
-# %% L=3 identity fixture (fragment odpowiada scenario_l3_identity_3d_small.py)
+# %% L=3 identity fixture (corresponds to scenario_l3_identity_3d_small.py)
 import fullmag as fm
 
 CELL = (3.90625e-9, 3.90625e-9, 3e-9)
@@ -467,19 +467,21 @@ study.demag(enabled=True)
 study.stages.add_run(until=1e-14, stage_id="l3_identity_three_d_small")
 ```
 
-Test `test_l3_identity_three_d_scenario_preserves_common_identity_grid` sprawdza
-po loweringu dokładnie `strategy`, `mode`, `common_cells` i trzy wpisy `per_magnet`.
-Nie mierzy pola; jest dowodem authoringu i ProblemIR.
+The test `test_l3_identity_three_d_scenario_preserves_common_identity_grid`
+checks the exact lowered `strategy`, `mode`, `common_cells`, and three
+`per_magnet` entries. It does not measure fields; it is authoring and ProblemIR
+evidence.
 
-#### L=2, nierówna grubość przez `three_d`
+#### L=2, unequal thickness through `three_d`
 
-`scenario_unequal_small.py` używa dolnej warstwy o wysokości `3 nm`, górnej `6 nm`,
-tej samej komórki natywnej i `common_cells=(16, 8, 2)`. Natywne liczności Z to
-odpowiednio `1` i `2`. To jest właściwy publiczny sposób zapisania tekstury przez
-grubość: nie wymuszamy `two_d_stack` i nie udajemy średniej Z.
+`scenario_unequal_small.py` uses a lower layer of height `3 nm`, an upper layer
+of `6 nm`, the same native cell, and `common_cells=(16, 8, 2)`. The native Z
+counts are `1` and `2`, respectively. This is the correct public way to encode
+through-thickness texture: do not force `two_d_stack` or pretend that a Z
+average was performed.
 
 ```python
-# %% Unequal-Z fixture (fragment odpowiada scenario_unequal_small.py)
+# %% Unequal-Z fixture (corresponds to scenario_unequal_small.py)
 import fullmag as fm
 
 cell = (3.90625e-9, 3.90625e-9, 3e-9)
@@ -518,36 +520,36 @@ study.demag(enabled=True)
 study.stages.add_run(until=1e-14, stage_id="l2_unequal_small")
 ```
 
-#### Supercell i `push_pull`
+#### Supercell and `push_pull`
 
-W fixture `scenario_l3_heterogeneous_small.py` warstwy mają natywne liczności Z
-`1/2/1`, ale wspólną siatkę roboczą `(16, 8, 2)`. To wymusza jawny transfer
-`native → scratch → native`; nie tworzy jednego ferromagnetycznego meshu
-obejmującego wszystkie warstwy. Testy `multilayer_engine` sprawdzają przy tym,
-że regularny stos dziewięciu uporządkowanych par materializuje pięć unikalnych
-kerneli, a nieregularny stos nie wykonuje niedozwolonego reuse.
+In `scenario_l3_heterogeneous_small.py`, the layers have native Z counts
+`1/2/1` but share a working grid `(16, 8, 2)`. This requires explicit
+`native → scratch → native` transfer; it does not create one ferromagnetic mesh
+covering all layers. The `multilayer_engine` tests also check that a regular
+stack of nine ordered pairs materializes five unique kernels and that an
+irregular stack does not perform forbidden reuse.
 
-Mały test deskryptora używa jeszcze prostszych liczb: źródło `[3,2,1]`, cel
-`[5,4,1]`, więc liniowy extent to `[7,5,1]`; crop i insertion offset są zapisane
-oddzielnie. `CommonTransformLayout` ma `physical_mesh=false`. Pole w takim
-scratchu nie jest obserwowalnym polem materiałowym i nie może być renderowane
-jako warstwa.
+The small descriptor test uses simpler numbers: source `[3,2,1]`, target
+`[5,4,1]`, hence linear extent `[7,5,1]`; crop and insertion offset are stored
+separately. `CommonTransformLayout` has `physical_mesh=false`. A field in this
+scratch grid is not an observable material field and must not be rendered as a
+layer.
 
-| Test | Wynik w bieżącym `master` | Interpretacja |
+| Test | Result on current `master` | Interpretation |
 |---|---:|---|
-| `descriptors.rs` — layout i liniowy extent | 19/19 | kontrakt supercell, maski, crop, padding, reuse; bez dowodu pola |
-| `irregular_shifted_kernel.rs` | 7/7 | GL8 dla nierównego $h_z$, osobna parzystość dla offsetów $+z/-z$, inverse FFT, reciprocity i fail-closed unequal XY |
-| `shifted_newell_oracle.rs` | 7/7 | niezależna cubature, parzystość i bounded far-field |
-| `fullmag-engine` `multilayer` | 16/16 (1 benchmark `ignored`) | CPU catalog/workspace i transfer contracts |
-| `fullmag-plan` `multilayer` | 25/25 | planner mode, identity/push-pull, PBC i unsupported interactions |
-| `fullmag-fdm-demag` transfer unit tests | 4/4 (filtr `volume_weighted_transfer`) | moment Z, adjointność z maską, reused buffers i fail-closed PBC |
-| Python fixture tests | 21/21 | stage-first authoring, lowering i fail-closed API; nie field parity |
+| `descriptors.rs` — layout and linear extent | 19/19 | supercell, mask, crop, padding, and reuse contract; no field proof |
+| `irregular_shifted_kernel.rs` | 7/7 | GL8 for unequal $h_z$, separate parity for $+z/-z$ offsets, inverse FFT, reciprocity, and unequal-XY fail-closed behavior |
+| `shifted_newell_oracle.rs` | 7/7 | independent cubature, parity, and bounded far-field |
+| `fullmag-engine` `multilayer` | 16/16 (one benchmark `ignored`) | CPU catalog/workspace and transfer contracts |
+| `fullmag-plan` `multilayer` | 25/25 | planner mode, identity/push-pull, PBC, and unsupported interactions |
+| `fullmag-fdm-demag` transfer unit tests | 4/4 (filter `volume_weighted_transfer`) | Z moment, masked adjointness, reused buffers, and fail-closed PBC |
+| Python fixture tests | 21/21 | stage-first authoring, lowering, and fail-closed API; no field parity |
 
-Powyższe wyniki są testami kontraktowymi i lokalnymi oraklami. Nie podnoszą CUDA
-do `runtime-verified`: bieżący CUDA-assisted heterogeneous path nie używa tego
-samego descriptorowego operatora pair co CPU, a pełny krok pozostaje
-host-authoritative. Dla nierównych native-cell thickness nadal brakuje
-niezależnego continuum/native-cell oracla złożonego transferu.
+These results are contract tests and local oracles. They do not promote CUDA to
+`runtime-verified`: the current CUDA-assisted heterogeneous path does not use
+the same descriptor pair operator as CPU, and the complete step remains
+host-authoritative. For unequal native-cell thicknesses, an independent
+continuum/native-cell oracle for composed transfer is still missing.
 
 (multilayer-convolution-problem-ir)=
 ## 6. ProblemIR, planner, and provenance
