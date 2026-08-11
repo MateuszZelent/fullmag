@@ -310,13 +310,11 @@ fn bounded_fdm_gpu_charge_boundary_profile(
             if !voltage.is_empty() || current.len() != 2 || insulating != 4 {
                 return Err("two_opposite_balanced_current_density_electrodes_plus_insulating");
             }
-            let Some((first_axis, first_side, first_area, first_density)) =
-                current_boundary_geometry(current[0], context)
+            let Some((first_axis, first_side)) = current_boundary_geometry(current[0], context)
             else {
                 return Err("current_density_electrode_geometry");
             };
-            let Some((second_axis, second_side, second_area, second_density)) =
-                current_boundary_geometry(current[1], context)
+            let Some((second_axis, second_side)) = current_boundary_geometry(current[1], context)
             else {
                 return Err("current_density_electrode_geometry");
             };
@@ -326,24 +324,15 @@ fn bounded_fdm_gpu_charge_boundary_profile(
             {
                 return Err("current_density_electrodes_must_be_on_opposite_faces_of_one_axis");
             }
-            let Some(first_current_a) = finite_terminal_current(first_area, first_density) else {
-                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
-            };
-            let Some(second_current_a) = finite_terminal_current(second_area, second_density)
+            let Some((rhs_sum_a, rhs_l1_a)) =
+                native_assembled_charge_rhs_balance(current.as_slice(), context)
             else {
                 return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
             };
-            let Some(flux_a) = finite_sum(first_current_a, second_current_a) else {
-                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
-            };
-            let Some(flux_scale_a) = finite_sum(first_current_a.abs(), second_current_a.abs())
-            else {
-                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
-            };
-            let compatibility_tolerance_a = 64.0 * f64::EPSILON * flux_scale_a;
+            let compatibility_tolerance_a = 64.0 * f64::EPSILON * rhs_l1_a;
             if !compatibility_tolerance_a.is_finite()
-                || (flux_scale_a == 0.0 && flux_a != 0.0)
-                || (flux_scale_a != 0.0 && flux_a.abs() > compatibility_tolerance_a)
+                || (rhs_l1_a == 0.0 && rhs_sum_a != 0.0)
+                || (rhs_l1_a != 0.0 && rhs_sum_a.abs() > compatibility_tolerance_a)
             {
                 return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
             }
@@ -352,30 +341,109 @@ fn bounded_fdm_gpu_charge_boundary_profile(
     }
 }
 
-fn finite_terminal_current(area_m2: f64, density_apm2: f64) -> Option<f64> {
-    let current_a = area_m2 * density_apm2;
-    current_a.is_finite().then_some(current_a)
-}
-
-fn finite_sum(left: f64, right: f64) -> Option<f64> {
-    let sum = left + right;
-    sum.is_finite().then_some(sum)
-}
-
 fn current_boundary_geometry(
     boundary: &fullmag_ir::ResolvedChargeBoundaryFaceIR,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
-) -> Option<(u8, i8, f64, f64)> {
+) -> Option<(u8, i8)> {
     use fullmag_ir::ResolvedChargeBoundaryConditionIR as Condition;
 
-    let (axis, side, area_m2) = boundary_face_geometry(boundary, context)?;
-    let Condition::OutwardNormalCurrentDensity {
-        current_density_apm2,
-    } = boundary.condition
-    else {
+    let (axis, side, _) = boundary_face_geometry(boundary, context)?;
+    let Condition::OutwardNormalCurrentDensity { .. } = boundary.condition else {
         return None;
     };
-    Some((axis, side, area_m2, current_density_apm2))
+    Some((axis, side))
+}
+
+fn native_assembled_charge_rhs_balance(
+    current_boundaries: &[&fullmag_ir::ResolvedChargeBoundaryFaceIR],
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+) -> Option<(f64, f64)> {
+    use fullmag_ir::{ResolvedChargeBoundaryConditionIR as Condition, StructuredBoundaryFaceIR};
+
+    let [nx_u32, ny_u32, nz_u32] = context.grid_cells;
+    let nx = usize::try_from(nx_u32).ok()?;
+    let ny = usize::try_from(ny_u32).ok()?;
+    let nz = usize::try_from(nz_u32).ok()?;
+    let cell_count = nx.checked_mul(ny)?.checked_mul(nz)?;
+    if cell_count == 0 || context.region_mask.len() != cell_count {
+        return None;
+    }
+    let face_area_m2 = [
+        context.cell_size_m[1] * context.cell_size_m[2],
+        context.cell_size_m[0] * context.cell_size_m[2],
+        context.cell_size_m[0] * context.cell_size_m[1],
+    ];
+    if face_area_m2
+        .iter()
+        .any(|area_m2| !area_m2.is_finite() || *area_m2 <= 0.0)
+    {
+        return None;
+    }
+    let mut rhs = vec![0.0; cell_count];
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let cell = x + nx * (y + ny * z);
+                for axis in 0..3 {
+                    for side in [-1_i8, 1_i8] {
+                        let coordinate = match axis {
+                            0 => x,
+                            1 => y,
+                            _ => z,
+                        };
+                        let extent = match axis {
+                            0 => nx,
+                            1 => ny,
+                            _ => nz,
+                        };
+                        if (side < 0 && coordinate != 0) || (side > 0 && coordinate + 1 != extent) {
+                            continue;
+                        }
+                        let face = match (axis, side) {
+                            (0, -1) => StructuredBoundaryFaceIR::XMin,
+                            (0, 1) => StructuredBoundaryFaceIR::XMax,
+                            (1, -1) => StructuredBoundaryFaceIR::YMin,
+                            (1, 1) => StructuredBoundaryFaceIR::YMax,
+                            (2, -1) => StructuredBoundaryFaceIR::ZMin,
+                            (2, 1) => StructuredBoundaryFaceIR::ZMax,
+                            _ => unreachable!("loop only emits valid FDM exterior faces"),
+                        };
+                        let Some(boundary) = current_boundaries
+                            .iter()
+                            .find(|boundary| boundary.face == face)
+                        else {
+                            continue;
+                        };
+                        let Condition::OutwardNormalCurrentDensity {
+                            current_density_apm2,
+                        } = boundary.condition
+                        else {
+                            return None;
+                        };
+                        let term_a = face_area_m2[axis] * current_density_apm2;
+                        if !term_a.is_finite() {
+                            return None;
+                        }
+                        let source_a = rhs[cell] - term_a;
+                        if !source_a.is_finite() {
+                            return None;
+                        }
+                        rhs[cell] = source_a;
+                    }
+                }
+            }
+        }
+    }
+    let mut rhs_sum_a = 0.0;
+    let mut rhs_l1_a = 0.0;
+    for source_a in rhs {
+        rhs_sum_a += source_a;
+        rhs_l1_a += source_a.abs();
+        if !rhs_sum_a.is_finite() || !rhs_l1_a.is_finite() {
+            return None;
+        }
+    }
+    Some((rhs_sum_a, rhs_l1_a))
 }
 
 fn boundary_face_geometry(
@@ -448,6 +516,8 @@ fn fdm_gpu_charge_scope_error(reasons: Vec<String>) -> PlanError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use fullmag_ir::{
         BackendPlanIR, BackendTarget, ChargeBoundaryIR, ChargePotentialGaugeIR,
         ChargeSolverPolicyIR, ChargeTransportDefinitionIR, ChargeTransportMaterialAssignmentIR,
@@ -559,6 +629,65 @@ mod tests {
             "expected {expected:?} in {:?}",
             error.reasons,
         );
+    }
+
+    fn one_cell_zero_mean_boundary_profile(x_max_density_apm2: f64) -> Result<(), &'static str> {
+        let mut problem = bounded_gpu_charge_problem();
+        let charge = charge_definition_mut(&mut problem);
+        charge.gauge = ChargePotentialGaugeIR::ZeroMean;
+        for boundary in &mut charge.boundaries {
+            let ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } = boundary else {
+                continue;
+            };
+            let outward_current_density_apm2 = if id == "x_min" {
+                1.0
+            } else {
+                x_max_density_apm2
+            };
+            *boundary = ChargeBoundaryIR::NormalCurrentElectrode {
+                id: std::mem::take(id),
+                surfaces: std::mem::take(surfaces),
+                outward_current_density_apm2,
+            };
+        }
+
+        let owner_names = ["strip"];
+        let region_mask = [0_u32];
+        let magnetization = [[1.0, 0.0, 0.0]];
+        let saturation_magnetization_apm = [800e3];
+        let region_index_by_id = BTreeMap::from([("strip".to_string(), 0_u32)]);
+        let context = crate::spin_transport::FdmSpinTransportResolutionContext {
+            owner_names: &owner_names,
+            grid_cells: [1, 1, 1],
+            origin_m: [0.0; 3],
+            cell_size_m: [1.0; 3],
+            active_mask: None,
+            region_mask: &region_mask,
+            region_index_by_id: &region_index_by_id,
+            initial_magnetization: &magnetization,
+            saturation_magnetization_apm: &saturation_magnetization_apm,
+            gamma0_m_per_a_s: 2.211e5,
+        };
+        let descriptor = crate::spin_transport::materialize_fdm_gpu_charge_descriptor(
+            "charge",
+            charge_definition_mut(&mut problem),
+            &context,
+        )
+        .expect("one-cell public charge descriptor");
+        bounded_fdm_gpu_charge_boundary_profile(&descriptor, &context)
+    }
+
+    #[test]
+    fn bounded_public_fdm_gpu_zero_mean_rejects_one_cell_native_rhs_imbalance() {
+        assert_eq!(
+            one_cell_zero_mean_boundary_profile(-1.0 + 1.0e-15),
+            Err("current_density_electrodes_must_have_finite_area_weighted_balance"),
+        );
+    }
+
+    #[test]
+    fn bounded_public_fdm_gpu_zero_mean_accepts_exactly_balanced_one_cell_rhs() {
+        assert_eq!(one_cell_zero_mean_boundary_profile(-1.0), Ok(()));
     }
 
     #[test]

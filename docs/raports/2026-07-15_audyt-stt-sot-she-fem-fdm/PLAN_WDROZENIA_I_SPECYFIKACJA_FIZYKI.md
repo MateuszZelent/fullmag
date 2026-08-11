@@ -13100,12 +13100,15 @@ pełnopowierzchniowe elektrody `NormalCurrentElectrode` oraz cztery
 `ChargeInsulating`. Gęstość autora oznacza zawsze zewnętrzny strumień
 normalny $J_n=\mathbf n\cdot\mathbf J_c$ w $\mathrm{A/m^2}$, gdzie
 $\mathbf J_c=-\sigma\nabla V$. Planner wyznacza pole powierzchni z fizycznej
-siatki, wymaga wspólnej osi, przeciwnych stron i zerowego całkowitego strumienia
-z regułą $|\sum_f I_f|\le64\,\epsilon_{\mathrm{f64}}\sum_f|I_f|$, gdzie
-$I_f=A_fJ_{n,f}$ w amperach; przy zerowej skali legalne jest wyłącznie dokładne
-zero. Runner odtwarza wszystkie $2(n_y n_z+n_x n_z+n_x n_y)$ zewnętrzne rekordy
-i fail-closed sprawdza ich pełne pokrycie, `axis`, `side`,
-`canonical_face_index` oraz `adjacent_cell`. Profile mieszane Voltage/CurrentDensity,
+siatki, wymaga wspólnej osi i przeciwnych stron, po czym składa dokładnie jak
+owner CUDA każdy skończony termin $-A_fJ_{n,f}$ do `rhs` komórki sąsiadującej.
+Dopiero po złożeniu stosuje regułę
+$|\sum_i rhs_i|\le64\,\epsilon_{\mathrm{f64}}\sum_i|rhs_i|$; przy zerowej
+skali legalne jest wyłącznie dokładne zero. Runner odtwarza wszystkie
+$2(n_y n_z+n_x n_z+n_x n_y)$ zewnętrzne rekordy i fail-closed sprawdza ich
+pełne pokrycie, `axis`, `side`, `canonical_face_index`, `adjacent_cell` oraz
+canonical `area_m2` wyprowadzone z `cell_size` ($hy*hz$, $hx*hz$, $hx*hy$)
+z relatywną tolerancją $10^{-12}$. Profile mieszane Voltage/CurrentDensity,
 niezbilansowane źródła, różne osie i gauge niezgodna z elektrodami są błędami
 IR lub fail-closed preflightu; nie dochodzą do CUDA ABI.
 

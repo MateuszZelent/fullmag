@@ -233,14 +233,33 @@ fn validate_materials_and_cells(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ExpectedExteriorFaceGeometry {
+    side: i32,
+    adjacent_cell: u64,
+    area_m2: f64,
+}
+
 fn expected_exterior_face_geometry(
-    grid: [u64; 3],
-) -> Result<BTreeMap<(u32, u64), (i32, u64)>, GpuChargeTransportError> {
-    let [nx, ny, nz] = grid;
+    input: &GpuChargeTransportInput,
+) -> Result<BTreeMap<(u32, u64), ExpectedExteriorFaceGeometry>, GpuChargeTransportError> {
+    let [nx, ny, nz] = input.grid;
+    let face_area_m2 = [
+        checked_face_area_m2(input.cell_size[1], input.cell_size[2])?,
+        checked_face_area_m2(input.cell_size[0], input.cell_size[2])?,
+        checked_face_area_m2(input.cell_size[0], input.cell_size[1])?,
+    ];
     let mut expected = BTreeMap::new();
     let mut insert = |axis, canonical_face_index, side, adjacent_cell| {
         if expected
-            .insert((axis, canonical_face_index), (side, adjacent_cell))
+            .insert(
+                (axis, canonical_face_index),
+                ExpectedExteriorFaceGeometry {
+                    side,
+                    adjacent_cell,
+                    area_m2: face_area_m2[axis as usize],
+                },
+            )
             .is_some()
         {
             Err(GpuChargeTransportError::validation(
@@ -277,6 +296,19 @@ fn expected_exterior_face_geometry(
     Ok(expected)
 }
 
+fn checked_face_area_m2(
+    first_extent_m: f64,
+    second_extent_m: f64,
+) -> Result<f64, GpuChargeTransportError> {
+    let area_m2 = first_extent_m * second_extent_m;
+    if !area_m2.is_finite() || area_m2 <= 0.0 {
+        return Err(GpuChargeTransportError::validation(
+            "canonical exterior face areas must be finite and positive",
+        ));
+    }
+    Ok(area_m2)
+}
+
 fn record_terminal_source(
     sources: &mut BTreeMap<u64, (u32, i32)>,
     face: &GpuChargeBoundaryFace,
@@ -298,7 +330,7 @@ fn record_terminal_source(
 }
 
 fn validate_terminal_surface_partition(
-    expected: &BTreeMap<(u32, u64), (i32, u64)>,
+    expected: &BTreeMap<(u32, u64), ExpectedExteriorFaceGeometry>,
     actual: &BTreeMap<(u32, u64), &GpuChargeBoundaryFace>,
     sources: &BTreeMap<u64, (u32, i32)>,
     terminal_kind: GpuChargeBoundaryKind,
@@ -314,11 +346,11 @@ fn validate_terminal_surface_partition(
             ));
         }
     }
-    for (&(axis, canonical_face_index), &(side, _)) in expected {
+    for (&(axis, canonical_face_index), geometry) in expected {
         let face = actual
             .get(&(axis, canonical_face_index))
             .expect("complete exterior coverage was checked before terminal partitioning");
-        match source_by_orientation.get(&(axis, side)) {
+        match source_by_orientation.get(&(axis, geometry.side)) {
             Some(&source_id) if face.kind == terminal_kind && face.source_id == source_id => {}
             Some(_) => {
                 return Err(GpuChargeTransportError::validation(
@@ -336,16 +368,88 @@ fn validate_terminal_surface_partition(
     Ok(())
 }
 
-fn finite_sum(left: f64, right: f64) -> Option<f64> {
-    let sum = left + right;
-    sum.is_finite().then_some(sum)
+fn canonical_face_index(grid: [u64; 3], axis: u32, side: i32, x: u64, y: u64, z: u64) -> u64 {
+    let [nx, ny, nz] = grid;
+    match (axis, side) {
+        (0, -1) => (nx + 1) * (y + ny * z),
+        (0, 1) => nx + (nx + 1) * (y + ny * z),
+        (1, -1) => x + nx * ((ny + 1) * z),
+        (1, 1) => x + nx * (ny + (ny + 1) * z),
+        (2, -1) => x + nx * y,
+        (2, 1) => x + nx * (y + ny * nz),
+        _ => unreachable!("boundary axis and side were validated before canonical indexing"),
+    }
+}
+
+fn native_assembled_rhs_balance(
+    input: &GpuChargeTransportInput,
+    actual: &BTreeMap<(u32, u64), &GpuChargeBoundaryFace>,
+    cell_count: usize,
+) -> Result<(f64, f64), GpuChargeTransportError> {
+    let [nx, ny, nz] = input.grid;
+    let mut rhs = vec![0.0; cell_count];
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let adjacent_cell = (x + nx * (y + ny * z)) as usize;
+                for axis in 0..3 {
+                    for side in [-1, 1] {
+                        let coordinate = match axis {
+                            0 => x,
+                            1 => y,
+                            _ => z,
+                        };
+                        let extent = match axis {
+                            0 => nx,
+                            1 => ny,
+                            _ => nz,
+                        };
+                        if (side < 0 && coordinate != 0) || (side > 0 && coordinate + 1 != extent) {
+                            continue;
+                        }
+                        let face = actual
+                            .get(&(axis, canonical_face_index(input.grid, axis, side, x, y, z)))
+                            .expect("complete exterior coverage was checked before RHS assembly");
+                        if face.kind != GpuChargeBoundaryKind::ExactCurrentDensity {
+                            continue;
+                        }
+                        let term_a = face.area_m2 * face.value;
+                        if !term_a.is_finite() {
+                            return Err(GpuChargeTransportError::validation(
+                                "current-density electrodes require finite assembled RHS terms",
+                            ));
+                        }
+                        let source_a = rhs[adjacent_cell] - term_a;
+                        if !source_a.is_finite() {
+                            return Err(GpuChargeTransportError::validation(
+                                "current-density electrodes require finite assembled RHS terms",
+                            ));
+                        }
+                        rhs[adjacent_cell] = source_a;
+                    }
+                }
+            }
+        }
+    }
+    let mut rhs_sum_a = 0.0;
+    let mut rhs_l1_a = 0.0;
+    for source_a in rhs {
+        rhs_sum_a += source_a;
+        rhs_l1_a += source_a.abs();
+        if !rhs_sum_a.is_finite() || !rhs_l1_a.is_finite() {
+            return Err(GpuChargeTransportError::validation(
+                "current-density electrodes require finite assembled RHS balance",
+            ));
+        }
+    }
+    Ok((rhs_sum_a, rhs_l1_a))
 }
 
 fn validate_boundary_faces(
     input: &GpuChargeTransportInput,
     cell_count: usize,
 ) -> Result<(), GpuChargeTransportError> {
-    let expected = expected_exterior_face_geometry(input.grid)?;
+    let expected = expected_exterior_face_geometry(input)?;
     if input.boundary_faces.len() != expected.len() {
         return Err(GpuChargeTransportError::validation(
             "the bounded public charge lane requires a complete external boundary face set",
@@ -353,7 +457,6 @@ fn validate_boundary_faces(
     }
     let mut voltage_sources = BTreeMap::new();
     let mut current_sources = BTreeMap::new();
-    let mut current_terms_a = Vec::new();
     let mut actual = BTreeMap::new();
     for face in &input.boundary_faces {
         if face.axis > 2
@@ -368,14 +471,16 @@ fn validate_boundary_faces(
                 "boundary faces require valid orientation, adjacent cell, finite area, and finite value",
             ));
         }
-        let Some(&(expected_side, expected_cell)) =
-            expected.get(&(face.axis, face.canonical_face_index))
-        else {
+        let Some(expected_geometry) = expected.get(&(face.axis, face.canonical_face_index)) else {
             return Err(GpuChargeTransportError::validation(
                 "boundary faces must use canonical exterior geometry",
             ));
         };
-        if face.side != expected_side || face.adjacent_cell != expected_cell {
+        if face.side != expected_geometry.side
+            || face.adjacent_cell != expected_geometry.adjacent_cell
+            || (face.area_m2 - expected_geometry.area_m2).abs()
+                > 1.0e-12 * expected_geometry.area_m2
+        {
             return Err(GpuChargeTransportError::validation(
                 "boundary faces must use canonical exterior geometry",
             ));
@@ -401,13 +506,6 @@ fn validate_boundary_faces(
             }
             GpuChargeBoundaryKind::ExactCurrentDensity => {
                 record_terminal_source(&mut current_sources, face, "current-density")?;
-                let current_a = face.area_m2 * face.value;
-                if !current_a.is_finite() {
-                    return Err(GpuChargeTransportError::validation(
-                        "current-density electrodes require finite integrated terminal currents",
-                    ));
-                }
-                current_terms_a.push(current_a);
             }
         }
     }
@@ -462,23 +560,12 @@ fn validate_boundary_faces(
                 &current_sources,
                 GpuChargeBoundaryKind::ExactCurrentDensity,
             )?;
-            let (current_flux_a, flux_scale_a) = current_terms_a
-                .into_iter()
-                .try_fold((0.0, 0.0), |(flux_a, scale_a), current_a| {
-                    Some((
-                        finite_sum(flux_a, current_a)?,
-                        finite_sum(scale_a, current_a.abs())?,
-                    ))
-                })
-                .ok_or_else(|| {
-                    GpuChargeTransportError::validation(
-                        "current-density electrodes require finite integrated terminal currents",
-                    )
-                })?;
-            let compatibility_tolerance_a = 64.0 * f64::EPSILON * flux_scale_a;
+            let (current_flux_a, rhs_l1_a) =
+                native_assembled_rhs_balance(input, &actual, cell_count)?;
+            let compatibility_tolerance_a = 64.0 * f64::EPSILON * rhs_l1_a;
             if !compatibility_tolerance_a.is_finite()
-                || (flux_scale_a == 0.0 && current_flux_a != 0.0)
-                || (flux_scale_a != 0.0 && current_flux_a.abs() > compatibility_tolerance_a)
+                || (rhs_l1_a == 0.0 && current_flux_a != 0.0)
+                || (rhs_l1_a != 0.0 && current_flux_a.abs() > compatibility_tolerance_a)
             {
                 return Err(GpuChargeTransportError::validation(format!(
                     "the bounded public zero-mean charge lane requires area-weighted outward current balance; net flux is {current_flux_a:e} A",
@@ -1705,6 +1792,40 @@ mod tests {
     }
 
     #[test]
+    fn bounded_public_zero_mean_contract_rejects_one_cell_native_rhs_imbalance_before_abi() {
+        let mut input = one_cell_zero_mean_input();
+        input.boundary_faces[1].value = -1.0 + 1.0e-15;
+        let mut abi = MockAbi::default();
+
+        let error = execute_with_abi(&mut abi, &input)
+            .expect_err("one-cell imbalance must fail before the ABI with the native RHS L1");
+
+        assert!(error
+            .message
+            .contains("area-weighted outward current balance"));
+        assert!(abi.calls.is_empty());
+    }
+
+    #[test]
+    fn bounded_public_zero_mean_contract_accepts_exactly_balanced_one_cell_rhs() {
+        validate_input(&one_cell_zero_mean_input())
+            .expect("exactly balanced one-cell RHS must remain a legal public profile");
+    }
+
+    #[test]
+    fn bounded_public_zero_mean_contract_rejects_noncanonical_area_before_abi() {
+        let mut input = bounded_zero_mean_input();
+        input.boundary_faces[2].area_m2 *= 2.0;
+        let mut abi = MockAbi::default();
+
+        let error = execute_with_abi(&mut abi, &input)
+            .expect_err("noncanonical exterior area must fail before the ABI");
+
+        assert!(error.message.contains("canonical exterior geometry"));
+        assert!(abi.calls.is_empty());
+    }
+
+    #[test]
     fn bounded_public_zero_mean_contract_rejects_mixed_voltage_and_current_faces() {
         let mut input = bounded_zero_mean_input();
         input.boundary_faces[1].kind = GpuChargeBoundaryKind::Voltage;
@@ -2056,6 +2177,83 @@ mod tests {
         input.boundary_faces[0].value = 2.0e13;
         input.boundary_faces[1].kind = GpuChargeBoundaryKind::ExactCurrentDensity;
         input.boundary_faces[1].value = -2.0e13;
+        input
+    }
+
+    fn one_cell_zero_mean_input() -> GpuChargeTransportInput {
+        let mut input = bounded_input();
+        input.grid = [1, 1, 1];
+        input.cell_size = [1.0; 3];
+        input.cells.truncate(1);
+        input.boundary_faces = vec![
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::ExactCurrentDensity,
+                axis: 0,
+                side: -1,
+                outward_sign: -1,
+                adjacent_cell: 0,
+                canonical_face_index: 0,
+                area_m2: 1.0,
+                value: 1.0,
+                source_id: 10,
+            },
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::ExactCurrentDensity,
+                axis: 0,
+                side: 1,
+                outward_sign: 1,
+                adjacent_cell: 0,
+                canonical_face_index: 1,
+                area_m2: 1.0,
+                value: -1.0,
+                source_id: 11,
+            },
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::Insulating,
+                axis: 1,
+                side: -1,
+                outward_sign: -1,
+                adjacent_cell: 0,
+                canonical_face_index: 0,
+                area_m2: 1.0,
+                value: 0.0,
+                source_id: 12,
+            },
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::Insulating,
+                axis: 1,
+                side: 1,
+                outward_sign: 1,
+                adjacent_cell: 0,
+                canonical_face_index: 1,
+                area_m2: 1.0,
+                value: 0.0,
+                source_id: 13,
+            },
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::Insulating,
+                axis: 2,
+                side: -1,
+                outward_sign: -1,
+                adjacent_cell: 0,
+                canonical_face_index: 0,
+                area_m2: 1.0,
+                value: 0.0,
+                source_id: 14,
+            },
+            GpuChargeBoundaryFace {
+                kind: GpuChargeBoundaryKind::Insulating,
+                axis: 2,
+                side: 1,
+                outward_sign: 1,
+                adjacent_cell: 0,
+                canonical_face_index: 1,
+                area_m2: 1.0,
+                value: 0.0,
+                source_id: 15,
+            },
+        ];
+        input.gauge = GpuChargeGauge::ZeroMeanPerFreeComponent;
         input
     }
 }

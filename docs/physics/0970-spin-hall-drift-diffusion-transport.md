@@ -1832,8 +1832,9 @@ is explicit FDM/CUDA, FP64, strict, one-way OhmicPoisson and a full rectangular
 active grid. The first profile uses two opposite voltage faces, four insulating
 faces and `boundary_reference_per_component`. The second uses exactly two
 opposite, single-surface `NormalCurrentElectrode` faces on one axis, four
-insulating faces, `zero_mean_per_free_component`, and the scale-aware
-compatibility condition $\sum_f |f|J_{n,f}=0$. The runner adapter
+insulating faces, `zero_mean_per_free_component`, and the native-equivalent
+compatibility condition obtained after assembling every exterior
+$-A_fJ_{n,f}$ term into its adjacent-cell RHS. The runner adapter
 `execute_public_gpu_charge_only` maps both profiles to the append-only CUDA M1
 charge ABI and publishes `V_electric`, `J_charge`, and a transport provenance
 artifact. CPU, `auto`, unknown execution values, partial masks, PBC,
@@ -1872,11 +1873,16 @@ cell-centre oracle in increasing x order is
 $V=(-0.025,+0.025)\,\mathrm{V}$. Publiczny preflight odtwarza każdy rekord
 zewnętrznej ściany pełnej siatki (łącznie
 $2(n_y n_z+n_x n_z+n_x n_y)$), wymaga dokładnego pokrycia bez duplikatów oraz
-sprawdza zgodność `axis`, `side`, `canonical_face_index` i `adjacent_cell`.
-Po wyliczeniu skończonych prądów terminali
-$I_f=A_fJ_{n,f}$ stosuje tę samą wymiarową regułę kompatybilności co owner
-CUDA: $|\sum_f I_f|\le64\,\epsilon_{\mathrm{f64}}\sum_f|I_f|$; przy zerowej
-skali legalne jest wyłącznie dokładne zero. The verifier also requires finite,
+sprawdza zgodność `axis`, `side`, `canonical_face_index`, `adjacent_cell` i
+`area_m2=hy*hz`, `hx*hz` albo `hx*hy` z relatywną tolerancją $10^{-12}$.
+Następnie planner i runner wykonują tę samą kolejność składania ownera CUDA:
+dla każdej komórki i jej zewnętrznych ścian odejmują skończony termin
+$A_fJ_{n,f}$ od $rhs_i$, a dopiero potem liczą
+$r=\sum_i rhs_i$ i $\|rhs\|_1=\sum_i|rhs_i|$. Warunek kompatybilności brzmi
+$|r|\le64\,\epsilon_{\mathrm{f64}}\|rhs\|_1$; przy zerowej skali legalne jest
+wyłącznie dokładne zero. Dzięki temu przypadek $1\times1\times1$, w którym
+dwie przeciwne elektrody trafiają do tej samej komórki, ma identyczną decyzję
+Rust i CUDA. The verifier also requires finite,
 non-negative physical, component and electrode balances below $10^{-12}$ and
 provenance `gauge_policy=zero_mean_per_free_component`. This is an electrical prerequisite
 for later solved-current racetrack/SHE-to-SOT/STT/Hall and current-derived
