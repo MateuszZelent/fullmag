@@ -1370,8 +1370,23 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
             }
     };
 
-    let mut prescribed_sot_ids = BTreeSet::new();
+    let mut canonical_torque_ids = BTreeSet::new();
     for (index, module) in problem.spin_torque_modules.iter().enumerate() {
+        let canonical_id = match module {
+            SpinTorqueModuleIR::Slonczewski { id, .. } | SpinTorqueModuleIR::ZhangLi { id, .. } => {
+                id.as_deref()
+            }
+            SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, .. }
+            | SpinTorqueModuleIR::PrescribedSot { id, .. } => Some(id.as_str()),
+            _ => None,
+        };
+        if let Some(id) = canonical_id.filter(|id| !id.trim().is_empty()) {
+            if !canonical_torque_ids.insert(id) {
+                errors.push(format!(
+                    "spin_torque_modules[{index}] canonical torque id '{id}' is a duplicate"
+                ));
+            }
+        }
         match module {
             SpinTorqueModuleIR::Slonczewski {
                 schema_version,
@@ -1701,10 +1716,6 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 if id.trim().is_empty() {
                     errors.push(format!(
                         "spin_torque_modules[{index}] prescribed_sot id must not be empty"
-                    ));
-                } else if !prescribed_sot_ids.insert(id.as_str()) {
-                    errors.push(format!(
-                        "spin_torque_modules[{index}] prescribed_sot has duplicate id '{id}'"
                     ));
                 }
                 let validate_target = |target: &crate::RegionRefIR, errors: &mut Vec<String>| {
