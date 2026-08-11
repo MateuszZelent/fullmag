@@ -2,8 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { KernelApi } from "@/kernel/types";
+import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "@/kernel/visualization/analysisFieldOverlayCommandContributions";
 import type { FrequencyDomainFieldResource } from "@/kernel/api/apiTypes";
 
 import {
@@ -11,6 +14,7 @@ import {
 } from "./ModeVisualizationInspectorPanel";
 import { resolveInspectorPanel } from "../inspectorRegistry";
 import { buildModeVisualizationBreadcrumbs } from "./mode-visualization/ModeVisualizationBreadcrumbs";
+import { ModeVisualizationPhaseControl } from "./mode-visualization/ModeVisualizationViewPanel";
 
 const metadataCalls = vi.hoisted(() => ({ eigen: 0, response: 0 }));
 const executeMock = vi.fn(() => Promise.resolve({ status: "success" }));
@@ -42,6 +46,7 @@ const mockKernel = {
     get: () => null,
     set: () => {},
   },
+  analysisFieldOverlay: new AnalysisFieldOverlayController(),
   visualizationSync: {
     queuePatch: queuePatchMock,
     subscribe: () => () => {},
@@ -205,12 +210,12 @@ describe("ModeVisualizationInspectorPanel", () => {
       objectId: "film",
       ref: {
         fieldId: "field-a",
-        fieldIds: ["field-a", "field-b"],
         kind: "object.mode_visualization",
         source: "eigen-mode",
         type: "mode-visualization",
       },
     });
+    expect(mode?.selection.ref).not.toHaveProperty("fieldIds");
     expect(current).toMatchObject({ current: true, label: "Eigenmodes" });
   });
 
@@ -249,6 +254,77 @@ describe("ModeVisualizationInspectorPanel", () => {
     expect(html).not.toContain("Resource key");
     expect(html).not.toContain("Published field");
   });
+
+  it("renders an interactive phase control instead of a static command default", () => {
+    const html = renderModeOwner("object.mode_visualization.view");
+
+    expect(html).toContain('aria-label="Mode visualization phase"');
+    expect(html).not.toContain("0 rad command default");
+  });
+
+  it.each([
+    ["eigen-mode", "analysis.eigen.set-mode-3d-phase"],
+    ["frequency-response", "analysis.frequency-domain.set-3d-phase"],
+  ] as const)(
+    "executes the %s phase command with phaseRad and updates the overlay",
+    async (source, commandId) => {
+      const panelModule = await import("./ModeVisualizationInspectorPanel");
+      const executePhase = (
+        panelModule as unknown as {
+          executeModeVisualizationPhase?: (options: {
+            kernel: KernelApi;
+            sourceDetail: string;
+            target: { source: "eigen-mode" | "frequency-response" };
+            phaseRad: number;
+          }) => Promise<{ status: string }>;
+        }
+      ).executeModeVisualizationPhase;
+
+      expect(executePhase).toBeTypeOf("function");
+      if (!executePhase) return;
+
+      const overlay = new AnalysisFieldOverlayController();
+      overlay.set({
+        fieldId: "field-mode-123",
+        label: "Mode 5",
+        query: { phase_rad: 0, view: "phase_rotated_real" },
+        source,
+        visualizationPhaseRad: 0,
+      });
+      const commands = new CommandRegistry();
+      for (const command of ANALYSIS_FIELD_OVERLAY_COMMANDS) {
+        if (command.id === commandId) commands.register(command);
+      }
+
+      const phaseKernel = {
+        ...mockKernel,
+        analysisFieldOverlay: overlay,
+        commands,
+      } as unknown as KernelApi;
+      const result = await executePhase({
+        kernel: phaseKernel,
+        sourceDetail: "Mode visualization phase test",
+        target: { source },
+        phaseRad: 1.25,
+      });
+
+      expect(result.status).toBe("completed");
+      expect(overlay.getSnapshot()).toMatchObject({
+        source,
+        visualizationPhaseRad: 1.25,
+      });
+      const phaseHtml = renderToStaticMarkup(
+        <ModeVisualizationPhaseControl
+          disabled={false}
+          onChange={() => undefined}
+          onSetPhase={() => undefined}
+          phaseRad={String(overlay.getSnapshot()?.visualizationPhaseRad ?? 0)}
+        />,
+      );
+      expect(phaseHtml).toContain('aria-label="Mode visualization phase"');
+      expect(phaseHtml).toContain('value="1.25"');
+    },
+  );
 
   it("executes the canonical mode overlay command through the view action", async () => {
     const panelModule = await import("./ModeVisualizationInspectorPanel");

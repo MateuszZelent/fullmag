@@ -227,6 +227,51 @@ const airboxSelection: Selection = {
   },
 };
 
+const airboxDebugSelection: Selection = {
+  kind: "airbox.visualization.debug",
+  label: "Airbox visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:airbox:visualization:debug",
+  objectId: null,
+  ref: {
+    kind: "airbox.visualization.debug",
+    nodeId: "model:airbox:visualization:debug",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+};
+
+const objectDebugSelection: Selection = {
+  kind: "object.visualization.debug",
+  label: "Film visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:object:film:visualization:debug",
+  objectId: "film",
+  ref: {
+    kind: "object.visualization.debug",
+    nodeId: "model:object:film:visualization:debug",
+    objectId: "film",
+    type: "scene-object",
+    visualizationTargetId: "object:film",
+  },
+};
+
+const objectRegionDebugSelection: Selection = {
+  kind: "object.region.visualization.debug",
+  label: "Film core visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:object:film:regions:core:visualization:debug",
+  objectId: "film",
+  ref: {
+    kind: "object.region.visualization.debug",
+    nodeId: "model:object:film:regions:core:visualization:debug",
+    objectId: "film",
+    regionId: "core",
+    type: "scene-object",
+    visualizationTargetId: "region:film:core",
+  },
+};
+
 const meshPartSelection: Selection = {
   kind: "mesh-part",
   label: "Film volume",
@@ -295,6 +340,54 @@ describe("ObjectVisualizationPanel lane routing", () => {
       "Object Visualization Debug",
       "Region Visualization Debug",
     ]);
+  });
+
+  it("renders route-specific debug owner contracts around the shared diagnostic body", () => {
+    testState.discretization = "fdm";
+
+    const routes = [
+      {
+        action: "Inspect Airbox render adoption and export bounded evidence",
+        capability:
+          "Airbox FEM viewport snapshots, field carriers, and exact transport metadata",
+        owner: "airbox.visualization.debug",
+        selection: airboxDebugSelection,
+        target: "Airbox target (airbox)",
+        title: "Airbox Visualization Debug",
+      },
+      {
+        action: "Inspect object render adoption and export bounded evidence",
+        capability:
+          "Object-scoped FEM viewport snapshots, field carriers, and exact transport metadata",
+        owner: "object.visualization.debug",
+        selection: objectDebugSelection,
+        target: "Magnetic object target (object:film)",
+        title: "Object Visualization Debug",
+      },
+      {
+        action: "Inspect region overlay adoption and export bounded evidence",
+        capability:
+          "Region overlay snapshots with part-scoped carriers and exact transport metadata",
+        owner: "object.region.visualization.debug",
+        selection: objectRegionDebugSelection,
+        target: "Object region target (region:film:core)",
+        title: "Region Visualization Debug",
+      },
+    ] as const;
+
+    for (const route of routes) {
+      const html = renderResolvedInspector(route.selection);
+
+      expect(html).toContain(`data-inspector-owner="${route.owner}"`);
+      expect(html).toContain(`<h2>${route.title}</h2>`);
+      expect(html).toContain(`Owner:${route.owner}`);
+      expect(html).toContain(`Target:${route.target}`);
+      expect(html).toContain(`Capabilities:${route.capability}`);
+      expect(html).toContain(`Actions:${route.action}`);
+      expect(html).toContain(
+        "Visualization debug is not applicable for the FDM structured-grid lane.",
+      );
+    }
   });
 
   it("keeps a normal explicit-FDM object visualization route on the object target", () => {

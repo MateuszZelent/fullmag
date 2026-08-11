@@ -187,6 +187,14 @@ export function visualizationTargetIdForSceneObject(
   return `region:${targetObjectId}:${encodeURIComponent(regionId)}`;
 }
 
+export function modeVisualizationTargetId(
+  objectId: string,
+  source: AnalysisFieldOverlaySource,
+  fieldId: string,
+): `mode:${string}:${AnalysisFieldOverlaySource}:${string}` {
+  return `mode:${objectId}:${source}:${encodeURIComponent(fieldId)}`;
+}
+
 export function canonicalVisualizationSceneObjectId(objectId: string): string {
   return objectId.endsWith("_geom") ? objectId.slice(0, -5) : objectId;
 }
@@ -585,6 +593,8 @@ export type SelectionRef =
         | "object.mode_visualization.field"
         | "object.mode_visualization.view";
       modeIndex?: number;
+      modeVisualizationRootFieldId?: string;
+      modeVisualizationRootSource?: AnalysisFieldOverlaySource;
       nodeId: string;
       objectId: string;
       sampleIndex?: number;
@@ -1002,6 +1012,14 @@ export function selectionRefEquals(
         left.objectId === right.objectId &&
         left.fieldId === right.fieldId &&
         arrayEquals(left.fieldIds, right.fieldIds) &&
+        nullableStringEquals(
+          left.modeVisualizationRootFieldId,
+          right.modeVisualizationRootFieldId,
+        ) &&
+        nullableStringEquals(
+          left.modeVisualizationRootSource,
+          right.modeVisualizationRootSource,
+        ) &&
         left.source === right.source &&
         left.frequencyIndex === right.frequencyIndex &&
         left.modeIndex === right.modeIndex &&

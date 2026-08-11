@@ -40,6 +40,11 @@ interface ModeVisualizationFieldNode {
   sampleIndex?: number;
   source: "eigen-mode" | "frequency-response";
 }
+
+interface ModeVisualizationRootIdentity {
+  fieldId: string;
+  source: "eigen-mode" | "frequency-response";
+}
 export function buildObjectExplorerNode(
   object: ModelTreeObjectSnapshot,
   resources: ModelTreeResources = {},
@@ -225,6 +230,10 @@ function modeVisualizationNode(
         field.fieldId === activeOverlay.fieldId &&
         field.source === activeOverlay.source,
     ) ?? fields[0];
+  const rootIdentity: ModeVisualizationRootIdentity = {
+    fieldId: primaryField.fieldId,
+    source: primaryField.source,
+  };
   return {
     id: nodeId,
     kind: "object.mode_visualization",
@@ -234,10 +243,18 @@ function modeVisualizationNode(
     analysisFieldSource: primaryField.source,
     ...(activeOverlay.query.view ? { analysisFieldView: activeOverlay.query.view } : {}),
     fieldId: primaryField.fieldId,
+    modeVisualizationRootFieldId: rootIdentity.fieldId,
+    modeVisualizationRootSource: rootIdentity.source,
     icon: "wave",
     objectId: object.id,
     status: "ready",
-    children: modeVisualizationGroupNodes(nodeId, object.id, fields, activeOverlay),
+    children: modeVisualizationGroupNodes(
+      nodeId,
+      object.id,
+      fields,
+      activeOverlay,
+      rootIdentity,
+    ),
   };
 }
 
@@ -246,6 +263,7 @@ function modeVisualizationGroupNodes(
   objectId: string,
   fields: readonly ModeVisualizationFieldNode[],
   activeOverlay: AnalysisFieldOverlayState,
+  rootIdentity: ModeVisualizationRootIdentity,
 ): ExplorerNode[] {
   const eigenFields = fields.filter((field) => field.source === "eigen-mode");
   const responseFields = fields.filter(
@@ -259,6 +277,7 @@ function modeVisualizationGroupNodes(
       label: "Driven response",
       objectId,
       parentId,
+      rootIdentity,
     }),
     modeVisualizationGroupNode({
       activeOverlay,
@@ -267,6 +286,7 @@ function modeVisualizationGroupNodes(
       label: "Eigenmodes",
       objectId,
       parentId,
+      rootIdentity,
     }),
   ]);
 }
@@ -278,6 +298,7 @@ function modeVisualizationGroupNode({
   label,
   objectId,
   parentId,
+  rootIdentity,
 }: {
   activeOverlay: AnalysisFieldOverlayState;
   fields: readonly ModeVisualizationFieldNode[];
@@ -285,6 +306,7 @@ function modeVisualizationGroupNode({
   label: string;
   objectId: string;
   parentId: string;
+  rootIdentity: ModeVisualizationRootIdentity;
 }): ExplorerNode | null {
   if (fields.length === 0) return null;
   const firstField = fields[0];
@@ -297,11 +319,19 @@ function modeVisualizationGroupNode({
     analysisFieldSource: firstField.source,
     fieldId: firstField.fieldId,
     fieldIds: fields.map((field) => field.fieldId),
+    modeVisualizationRootFieldId: rootIdentity.fieldId,
+    modeVisualizationRootSource: rootIdentity.source,
     icon: "folder",
     objectId,
     status: "ready",
     children: fields.map((field) =>
-      modeVisualizationFieldNode(id, objectId, field, activeOverlay),
+      modeVisualizationFieldNode(
+        id,
+        objectId,
+        field,
+        activeOverlay,
+        rootIdentity,
+      ),
     ),
   };
 }
@@ -311,6 +341,7 @@ function modeVisualizationFieldNode(
   objectId: string,
   field: ModeVisualizationFieldNode,
   activeOverlay: AnalysisFieldOverlayState,
+  rootIdentity: ModeVisualizationRootIdentity,
 ): ExplorerNode {
   const active = activeOverlay.fieldId === field.fieldId &&
     activeOverlay.source === field.source;
@@ -324,6 +355,8 @@ function modeVisualizationFieldNode(
     badge: field.badge,
     analysisFieldSource: field.source,
     fieldId: field.fieldId,
+    modeVisualizationRootFieldId: rootIdentity.fieldId,
+    modeVisualizationRootSource: rootIdentity.source,
     ...(field.frequencyIndex !== undefined
       ? { frequencyIndex: field.frequencyIndex }
       : {}),
@@ -333,7 +366,14 @@ function modeVisualizationFieldNode(
     ...(field.sampleIndex !== undefined ? { sampleIndex: field.sampleIndex } : {}),
     status: "ready",
     children: MODE_VISUALIZATION_VIEWS.map((view) =>
-      modeVisualizationViewNode(id, objectId, field, view, activeOverlay),
+      modeVisualizationViewNode(
+        id,
+        objectId,
+        field,
+        view,
+        activeOverlay,
+        rootIdentity,
+      ),
     ),
   };
 }
@@ -344,6 +384,7 @@ function modeVisualizationViewNode(
   field: ModeVisualizationFieldNode,
   view: string,
   activeOverlay: AnalysisFieldOverlayState,
+  rootIdentity: ModeVisualizationRootIdentity,
 ): ExplorerNode {
   const active =
     activeOverlay.fieldId === field.fieldId &&
@@ -358,6 +399,8 @@ function modeVisualizationViewNode(
     analysisFieldSource: field.source,
     analysisFieldView: view,
     fieldId: field.fieldId,
+    modeVisualizationRootFieldId: rootIdentity.fieldId,
+    modeVisualizationRootSource: rootIdentity.source,
     ...(field.frequencyIndex !== undefined
       ? { frequencyIndex: field.frequencyIndex }
       : {}),

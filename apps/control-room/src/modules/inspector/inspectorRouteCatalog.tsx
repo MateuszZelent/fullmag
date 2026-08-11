@@ -129,6 +129,8 @@ import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
+import { FieldRow } from "./primitives/FieldRow";
+import { InspectorGroup } from "./primitives/InspectorGroup";
 import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import {
   EigenmodesBoundaryStageInspectorPanel,
@@ -475,36 +477,92 @@ const frequencyDomainPanels: InspectorPanelContribution[] =
     component: FREQUENCY_DOMAIN_DEDICATED_PANELS[kind] ?? requireFrequencyDomainNamedPanel(kind),
   }));
 
-function AirboxVisualizationDebugOwner(props: InspectorPanelProps) {
+interface VisualizationDebugInspectorOwner {
+  actionSummary: string;
+  capabilityDescription: string;
+  id: string;
+  targetLabel: string;
+  title: string;
+}
+
+const AIRBOX_VISUALIZATION_DEBUG_OWNER: VisualizationDebugInspectorOwner = {
+  actionSummary: "Inspect Airbox render adoption and export bounded evidence",
+  capabilityDescription:
+    "Airbox FEM viewport snapshots, field carriers, and exact transport metadata",
+  id: "airbox.visualization.debug",
+  targetLabel: "Airbox target",
+  title: "Airbox Visualization Debug",
+};
+
+const OBJECT_VISUALIZATION_DEBUG_OWNER: VisualizationDebugInspectorOwner = {
+  actionSummary: "Inspect object render adoption and export bounded evidence",
+  capabilityDescription:
+    "Object-scoped FEM viewport snapshots, field carriers, and exact transport metadata",
+  id: "object.visualization.debug",
+  targetLabel: "Magnetic object target",
+  title: "Object Visualization Debug",
+};
+
+const OBJECT_REGION_VISUALIZATION_DEBUG_OWNER: VisualizationDebugInspectorOwner = {
+  actionSummary: "Inspect region overlay adoption and export bounded evidence",
+  capabilityDescription:
+    "Region overlay snapshots with part-scoped carriers and exact transport metadata",
+  id: "object.region.visualization.debug",
+  targetLabel: "Object region target",
+  title: "Region Visualization Debug",
+};
+
+function visualizationDebugTargetId(selection: InspectorPanelProps["selection"]): string {
+  const ref = selection.ref;
+  return ref && "visualizationTargetId" in ref
+    ? String(ref.visualizationTargetId)
+    : "unresolved";
+}
+
+function VisualizationDebugOwnerPanel({
+  owner,
+  selection,
+}: InspectorPanelProps & { owner: VisualizationDebugInspectorOwner }) {
   return (
-    <div
-      className="fm-inspector-panel"
-      data-inspector-owner="airbox.visualization.debug"
-    >
-      <VisualizationDebugPanel {...props} />
+    <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
+      <InspectorGroup title={owner.title}>
+        <FieldRow label="Owner" value={owner.id} />
+        <FieldRow
+          label="Target"
+          value={`${owner.targetLabel} (${visualizationDebugTargetId(selection)})`}
+        />
+        <FieldRow label="Capabilities" value={owner.capabilityDescription} />
+        <FieldRow label="Actions" value={owner.actionSummary} />
+      </InspectorGroup>
+      <VisualizationDebugPanel selection={selection} />
     </div>
   );
 }
 
-function ObjectVisualizationDebugOwner(props: InspectorPanelProps) {
+function AirboxVisualizationDebugOwner({ selection }: InspectorPanelProps) {
   return (
-    <div
-      className="fm-inspector-panel"
-      data-inspector-owner="object.visualization.debug"
-    >
-      <VisualizationDebugPanel {...props} />
-    </div>
+    <VisualizationDebugOwnerPanel
+      owner={AIRBOX_VISUALIZATION_DEBUG_OWNER}
+      selection={selection}
+    />
   );
 }
 
-function ObjectRegionVisualizationDebugOwner(props: InspectorPanelProps) {
+function ObjectVisualizationDebugOwner({ selection }: InspectorPanelProps) {
   return (
-    <div
-      className="fm-inspector-panel"
-      data-inspector-owner="object.region.visualization.debug"
-    >
-      <VisualizationDebugPanel {...props} />
-    </div>
+    <VisualizationDebugOwnerPanel
+      owner={OBJECT_VISUALIZATION_DEBUG_OWNER}
+      selection={selection}
+    />
+  );
+}
+
+function ObjectRegionVisualizationDebugOwner({ selection }: InspectorPanelProps) {
+  return (
+    <VisualizationDebugOwnerPanel
+      owner={OBJECT_REGION_VISUALIZATION_DEBUG_OWNER}
+      selection={selection}
+    />
   );
 }
 

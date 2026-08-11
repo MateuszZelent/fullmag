@@ -312,6 +312,8 @@ export interface ExplorerNode {
   frequencyIndex?: number;
   analysisFieldSource?: "eigen-mode" | "frequency-response";
   analysisFieldView?: string;
+  modeVisualizationRootFieldId?: string;
+  modeVisualizationRootSource?: "eigen-mode" | "frequency-response";
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;

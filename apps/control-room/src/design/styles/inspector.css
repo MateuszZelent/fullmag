@@ -524,32 +524,6 @@
   flex: 1;
 }
 
-.fm-mode-field-diagnostics__toolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding: var(--fm-space-1) var(--fm-space-2);
-}
-
-.fm-mode-field-diagnostics__button.fm-button {
-  gap: var(--fm-space-1);
-}
-
-.fm-mode-field-diagnostics {
-  display: grid;
-  gap: var(--fm-space-1);
-  margin: 0 var(--fm-space-2) var(--fm-space-2);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: color-mix(in srgb, var(--fm-bg-panel-raised) 72%, transparent);
-  padding: var(--fm-space-1) 0;
-}
-
-.fm-mode-field-diagnostics .fm-inspector-field-row__value {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
 .fm-inspector-form-section {
   display: flex;
   flex-direction: column;

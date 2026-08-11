@@ -42,6 +42,14 @@ function modeVisualizationCommandId(
     : "analysis.frequency-response.plot-response-field-3d";
 }
 
+export function modeVisualizationPhaseCommandId(
+  target: Pick<ModeVisualizationSelectionRef, "source">,
+): string {
+  return target.source === "eigen-mode"
+    ? "analysis.eigen.set-mode-3d-phase"
+    : "analysis.frequency-domain.set-3d-phase";
+}
+
 function modeVisualizationIndexLabel(target: ModeVisualizationSelectionRef): string {
   if (target.source === "frequency-response" && target.frequencyIndex !== undefined) {
     return `frequency ${target.frequencyIndex}`;
@@ -212,6 +220,24 @@ export function executeModeVisualizationActivation({
       source: target.source,
       view,
     },
+  );
+}
+
+export function executeModeVisualizationPhase({
+  kernel,
+  sourceDetail,
+  target,
+  phaseRad,
+}: {
+  kernel: KernelApi;
+  sourceDetail: string;
+  target: Pick<ModeVisualizationSelectionRef, "source">;
+  phaseRad: number;
+}) {
+  return kernel.commands.execute(
+    modeVisualizationPhaseCommandId(target),
+    createCommandContext("inspector", kernel, { sourceDetail }),
+    { phaseRad },
   );
 }
 

@@ -26,6 +26,7 @@ import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnecti
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
+import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
@@ -37,6 +38,7 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
+import { buildModeVisualizationBreadcrumbs } from "@/modules/inspector/panels/mode-visualization/ModeVisualizationBreadcrumbs";
 import { viewportSelectionForFdmTarget } from "@/modules/viewport-3d/viewport3dSelection";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
@@ -1117,6 +1119,48 @@ describe("selectExplorerNode", () => {
           "mode:film:frequency-response:analysis%3Afrequency-response%3Afield-0001",
       },
     });
+  });
+
+  it("keeps the mode visualization breadcrumb root equal to the Explorer root", () => {
+    const kernel = makeKernel();
+    const rootNode: ExplorerNode = {
+      analysisFieldSource: "eigen-mode",
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      id: "model:object:film:visualization:mode-visualization",
+      kind: "object.mode_visualization",
+      label: "Mode visualization",
+      modeVisualizationRootFieldId: "analysis:eigen:sample-0000:mode-0002",
+      modeVisualizationRootSource: "eigen-mode",
+      objectId: "film",
+      parentId: "model:object:film:visualization",
+    };
+    const childNode: ExplorerNode = {
+      analysisFieldSource: "frequency-response",
+      fieldId: "analysis:frequency-response:field-0001",
+      fieldIds: [
+        "analysis:frequency-response:field-0000",
+        "analysis:frequency-response:field-0001",
+      ],
+      frequencyIndex: 1,
+      id: "model:object:film:visualization:mode-visualization:response:frequency:1",
+      kind: "object.mode_visualization.field",
+      label: "10.5 GHz",
+      modeVisualizationRootFieldId: "analysis:eigen:sample-0000:mode-0002",
+      modeVisualizationRootSource: "eigen-mode",
+      objectId: "film",
+      parentId: "model:object:film:visualization:mode-visualization:response",
+    };
+
+    selectExplorerNode(kernel, rootNode, "explorer");
+    const rootRef = kernel.selection.get().ref;
+    selectExplorerNode(kernel, childNode, "explorer");
+    const breadcrumbs = buildModeVisualizationBreadcrumbs(kernel.selection.get());
+    const breadcrumbRef = breadcrumbs[1]?.selection.ref ?? null;
+
+    if (!rootRef || !breadcrumbRef) {
+      throw new Error("Expected both Explorer and breadcrumb mode refs");
+    }
+    expect(selectionRefEquals(rootRef, breadcrumbRef)).toBe(true);
   });
 
   it("preserves every canonical field id in a mode visualization group selection", () => {

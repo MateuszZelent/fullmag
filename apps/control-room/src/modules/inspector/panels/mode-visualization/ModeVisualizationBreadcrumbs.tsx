@@ -1,7 +1,11 @@
 "use client";
 
 import { useKernel } from "@/kernel/KernelContext";
-import type { Selection, SelectionRef } from "@/kernel/selection/selectionTypes";
+import {
+  modeVisualizationTargetId,
+  type Selection,
+  type SelectionRef,
+} from "@/kernel/selection/selectionTypes";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 
@@ -43,11 +47,25 @@ function modeRootRef(
   target: ModeVisualizationSelectionRef,
   nodeId: string,
 ): ModeVisualizationSelectionRef {
+  const rootFieldId =
+    target.modeVisualizationRootFieldId ?? target.fieldId;
+  const rootSource =
+    target.modeVisualizationRootSource ?? target.source;
   return {
-    ...target,
+    fieldId: rootFieldId,
     kind: "object.mode_visualization",
+    modeVisualizationRootFieldId: rootFieldId,
+    modeVisualizationRootSource: rootSource,
     nodeId,
+    objectId: target.objectId,
+    source: rootSource,
+    type: "mode-visualization",
     view: undefined,
+    visualizationTargetId: modeVisualizationTargetId(
+      target.objectId,
+      rootSource,
+      rootFieldId,
+    ),
   };
 }
 

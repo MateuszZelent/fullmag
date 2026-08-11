@@ -4,7 +4,10 @@ import type {
   RegionVisualizationTargetId,
   SelectionRef,
 } from "@/kernel/selection/selectionTypes";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import {
+  modeVisualizationTargetId,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
@@ -129,14 +132,6 @@ function modeVisualizationViewFromNode(node: ExplorerNode): string | undefined {
   const marker = ":view:";
   const markerIndex = node.id.lastIndexOf(marker);
   return markerIndex >= 0 ? node.id.slice(markerIndex + marker.length) : undefined;
-}
-
-function modeVisualizationTargetId(
-  objectId: string,
-  source: "eigen-mode" | "frequency-response",
-  fieldId: string,
-): `mode:${string}:${typeof source}:${string}` {
-  return `mode:${objectId}:${source}:${encodeURIComponent(fieldId)}`;
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
@@ -287,6 +282,12 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         : {}),
       kind: node.kind,
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      ...(node.modeVisualizationRootFieldId
+        ? { modeVisualizationRootFieldId: node.modeVisualizationRootFieldId }
+        : {}),
+      ...(node.modeVisualizationRootSource
+        ? { modeVisualizationRootSource: node.modeVisualizationRootSource }
+        : {}),
       nodeId: node.id,
       objectId: node.objectId,
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
