@@ -521,8 +521,8 @@ export function buildEigenSpectrumChartModel(
         label: "Eigen frequency",
         points: points.map((point, rowIndex) => ({
           rowIndex,
-          x: point.frequencyHz / frequencyScale.divisor,
-          y: point.rawModeIndex,
+          x: point.rawModeIndex,
+          y: point.frequencyHz / frequencyScale.divisor,
         })),
         quantity: "frequency",
         source: {
@@ -532,7 +532,7 @@ export function buildEigenSpectrumChartModel(
         },
         status: artifactStatus(resource),
         unit: frequencyScale.unit,
-        xUnit: frequencyScale.unit,
+        xUnit: "1",
       },
     ],
   };

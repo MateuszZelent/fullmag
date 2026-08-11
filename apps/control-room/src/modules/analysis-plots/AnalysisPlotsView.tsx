@@ -14,11 +14,12 @@ import { AnalysisSurfaceTabs } from "./components/AnalysisSurfaceTabs";
 import { AnalysisTableSurface } from "./components/AnalysisTableSurface";
 import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
 import { SpinWaveGammaView } from "./SpinWaveGammaView";
-import { formatXAxisLabel, surfaceTitle, tableRowsLike, tableWindowTableId } from "./analysisWorkbenchModel";
+import { formatXAxisLabel, tableRowsLike, tableWindowTableId } from "./analysisWorkbenchModel";
 import type { ChartSeries } from "./chartTableModel";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartValueRange } from "./chartTableModel";
+import { descriptorForSurface } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 
 type AnalysisPlotsViewInput = {
   activeSurface: AnalysisSurface;
@@ -77,6 +78,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   const resolvedDatasetRef = selectedDatasetRef;
   const resolvedTableStatus = tableStatus;
   const surface = activeSurface;
+  const surfaceDescriptor = descriptorForSurface(surface);
   const chartSeries = useMemo(() => {
     const rows = tableRowsLike(resolvedTable);
     return rows && resolvedTable ? buildScalarChartSeries(rows, {
@@ -119,9 +121,12 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
 
   return <div className="fm-analysis-plots">
     <AnalysisSurfaceTabs active={surface} onChange={onSurfaceChange} />
-    <section className="fm-analysis-plots__panel fm-analysis-plots__panel--primary">
+    <section
+      className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"
+      data-analysis-surface={surfaceDescriptor.surface}
+    >
       <header className="fm-analysis-plots__header">
-        <div><h3>{surfaceTitle(surface)}</h3>{provenance ? <span>Dataset provenance: {provenance}</span> : null}</div>
+        <div><h3>{surfaceDescriptor.title}</h3>{provenance ? <span>Dataset provenance: {provenance}</span> : null}</div>
         <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
           <SelectTrigger aria-label="Analysis dataset"><SelectValue placeholder="Select a dataset" /></SelectTrigger>
           <SelectContent>{datasetRefs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent>

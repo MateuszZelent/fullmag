@@ -54,6 +54,8 @@ describe("AnalysisFrequencySurface", () => {
 
     expect(html).toContain("9.5 THz");
     expect(html).toContain('aria-label="Response, unit dimensionless, latest 0.5');
+    expect(html).toContain('data-analysis-handoff="response-overlay"');
+    expect(html).toContain('data-analysis-inspector-route="chart"');
   });
 
   it("renders an explicit empty selection instead of restoring all frequency series", () => {

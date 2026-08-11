@@ -2,6 +2,10 @@ import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { chartTableWindowValue, type ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
+import {
+  descriptorForFrequencyTable,
+  descriptorForSurface,
+} from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import {
   chartValueExtrema,
@@ -11,15 +15,7 @@ import {
 import type { ChartSeries, ChartValueRange, TableRowsLike } from "./chartTableModel";
 
 export function surfaceTitle(surface: AnalysisSurface): string {
-  switch (surface) {
-    case "dynamics": return "Magnetization dynamics";
-    case "spectrum": return "Spectrum";
-    case "frequency-response": return "Frequency response";
-    case "eigenmodes": return "Eigenmodes";
-    case "dispersion": return "Spin-wave dispersion";
-    case "hysteresis": return "Hysteresis";
-    case "comparison": return "Comparison";
-  }
+  return descriptorForSurface(surface).title;
 }
 
 
@@ -127,9 +123,11 @@ export function buildFrequencyDomainCursorSummary(
     point.unit,
     chartValueExtrema(iterateSeriesValues(series, "y")),
   );
-  if (point.source.tableId === "frequency-domain:eigen-spectrum") return { inspectorTarget: chartTitle.toLowerCase().startsWith("fmr") ? "FMR mode inspector and 3D overlay controls" : "Mode inspector and 3D mode controls", title: chartTitle.toLowerCase().startsWith("fmr") ? "FMR mode" : "eigen mode", xLabel: "mode", xValue, yLabel: point.quantity || "frequency", yValue };
-  if (point.source.tableId === "frequency-domain:eigen-dispersion") return { inspectorTarget: "Dispersion inspector", linewidthValue: point.point.linewidthHz != null ? formatFrequencyHz(point.point.linewidthHz) : null, title: "dispersion point", xLabel: point.point.label ? "k-label" : "path_s", xValue: point.point.label ?? xValue, yLabel: point.quantity || "frequency", yValue };
-  if (point.source.tableId === "frequency-domain:response-sweep") return { inspectorTarget: chartTitle.toLowerCase().startsWith("fmr") ? "FMR response point inspector and 3D response overlay" : "Response point inspector and 3D response controls", title: chartTitle.toLowerCase().startsWith("fmr") ? "FMR response point" : "response point", xLabel: "frequency", xValue, yLabel: point.quantity || "response", yValue };
+  const descriptor = descriptorForFrequencyTable(point.source.tableId);
+  const yAxisLabel = descriptor.yAxes[0]?.label ?? point.quantity ?? "value";
+  if (point.source.tableId === "frequency-domain:eigen-spectrum") return { inspectorTarget: chartTitle.toLowerCase().startsWith("fmr") ? "FMR mode inspector and 3D overlay controls" : "Mode inspector and 3D mode controls", title: chartTitle.toLowerCase().startsWith("fmr") ? "FMR mode" : "eigen mode", xLabel: descriptor.xAxis.label, xValue, yLabel: yAxisLabel, yValue };
+  if (point.source.tableId === "frequency-domain:eigen-dispersion") return { inspectorTarget: "Dispersion inspector", linewidthValue: point.point.linewidthHz != null ? formatFrequencyHz(point.point.linewidthHz) : null, title: "dispersion point", xLabel: point.point.label ? "k-label" : descriptor.xAxis.label, xValue: point.point.label ?? xValue, yLabel: yAxisLabel, yValue };
+  if (point.source.tableId === "frequency-domain:response-sweep") return { inspectorTarget: chartTitle.toLowerCase().startsWith("fmr") ? "FMR response point inspector and 3D response overlay" : "Response point inspector and 3D response controls", title: chartTitle.toLowerCase().startsWith("fmr") ? "FMR response point" : "response point", xLabel: descriptor.xAxis.label, xValue, yLabel: point.quantity || descriptor.yAxes[0]?.label || "response", yValue };
   return { inspectorTarget: "Frequency-domain inspector", title: "frequency-domain point", xLabel: "x", xValue, yLabel: point.quantity || "value", yValue };
 }
 
@@ -139,16 +137,17 @@ export function resourceStatusFromString(status: string): ResourceStatus {
 }
 
 function frequencyDomainChartKind(tableId: string, chartTitle: string): string {
-  if (tableId === "frequency-domain:eigen-spectrum") return chartTitle.toLowerCase().startsWith("fmr") ? "FMR modal spectrum" : "modal spectrum";
-  if (tableId === "frequency-domain:eigen-dispersion") return "dispersion";
-  if (tableId === "frequency-domain:response-sweep") return chartTitle.toLowerCase().startsWith("fmr") ? "FMR driven sweep" : "response sweep";
-  return "frequency-domain";
+  const descriptor = descriptorForFrequencyTable(tableId);
+  if (tableId === "frequency-domain:eigen-spectrum") return chartTitle.toLowerCase().startsWith("fmr") ? "FMR modal spectrum" : descriptor.title;
+  if (tableId === "frequency-domain:response-sweep") return chartTitle.toLowerCase().startsWith("fmr") ? "FMR driven sweep" : descriptor.title;
+  return descriptor.title;
 }
 
 function frequencyDomainFieldHandoff(tableId: string, chartTitle: string): string {
-  if (tableId === "frequency-domain:eigen-spectrum") return chartTitle.toLowerCase().startsWith("fmr") ? "select mode -> FMR 3D overlay" : "select mode -> 3D overlay";
-  if (tableId === "frequency-domain:eigen-dispersion") return "select branch point -> mode overlay";
-  if (tableId === "frequency-domain:response-sweep") return chartTitle.toLowerCase().startsWith("fmr") ? "select frequency -> FMR response overlay" : "select frequency -> response overlay";
+  const descriptor = descriptorForFrequencyTable(tableId);
+  if (descriptor.handoff === "mode-overlay") return chartTitle.toLowerCase().startsWith("fmr") ? "select mode -> FMR 3D overlay" : "select mode -> 3D overlay";
+  if (descriptor.handoff === "branch-overlay") return "select branch point -> mode overlay";
+  if (descriptor.handoff === "response-overlay") return chartTitle.toLowerCase().startsWith("fmr") ? "select frequency -> FMR response overlay" : "select frequency -> response overlay";
   return "select point -> inspector";
 }
 

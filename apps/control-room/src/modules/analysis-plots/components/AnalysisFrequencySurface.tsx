@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
@@ -56,6 +57,11 @@ export function AnalysisFrequencySurface({
   title: string;
   unavailableReason: string | null;
 }) {
+  const descriptor = useMemo(
+    () => descriptorForFrequencyTable(series[0]?.source.tableId ?? "frequency-domain"),
+    [series],
+  );
+  const surfaceTitle = title || descriptor.title;
   const workflow = useMemo(() => buildFrequencyDomainWorkflowSummary(title), [title]);
   const workbench = useMemo(
     () => buildFrequencyDomainWorkbenchSummary(series, title, status),
@@ -69,7 +75,7 @@ export function AnalysisFrequencySurface({
   if (series.length === 0) {
     return (
       <ChartSection
-        title={title}
+        title={surfaceTitle}
         status={{ primary: status, trust: "unknown" }}
       >
         <div className="fm-analysis-plots__empty" role="status">
@@ -187,6 +193,8 @@ export function AnalysisFrequencySurface({
     >
       {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
       <div
+        data-analysis-handoff={descriptor.handoff}
+        data-analysis-inspector-route={descriptor.inspectorRouteId}
         aria-label="Frequency-domain workbench"
         className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workbench"
       >

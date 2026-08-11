@@ -2,6 +2,7 @@ import type {
   FrequencyDomainChartBuildResult,
   FrequencyDomainChartSeries,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 import { finiteFrequencySeries } from "@/shared/analysis-charts/frequencyRenderModels";
 
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
@@ -23,14 +24,9 @@ export function frequencyDomainXAxisLabel(
 ): string {
   const first = series.find((entry) => entry.points.length > 0) ?? series[0];
   if (!first) return "x";
-  switch (first.source.tableId) {
-    case "frequency-domain:eigen-spectrum":
-      return "mode index";
-    case "frequency-domain:eigen-dispersion":
-      return first.xUnit ? `path_s [${first.xUnit}]` : "path_s";
-    case "frequency-domain:response-sweep":
-      return first.xUnit ? `frequency [${first.xUnit}]` : "frequency";
-    default:
-      return first.xUnit ? `x [${first.xUnit}]` : "x";
+  const descriptor = descriptorForFrequencyTable(first.source.tableId);
+  if (descriptor.xAxis.unit === "1" || descriptor.xAxis.unit === "series-defined") {
+    return descriptor.xAxis.label;
   }
+  return first.xUnit ? `${descriptor.xAxis.label} [${first.xUnit}]` : descriptor.xAxis.label;
 }
