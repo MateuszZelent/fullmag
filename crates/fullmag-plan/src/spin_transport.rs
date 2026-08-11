@@ -2165,7 +2165,7 @@ fn materialize_fdm_descriptor(
         &charge_active_cells,
         context,
     )?;
-    let (spin_boundaries, inserted_default_spin_boundaries) =
+    let spin_boundaries =
         resolve_spin_boundaries(&module.boundaries, &spin_active_cells, context)?;
     let interfaces = resolve_interfaces(module, context)?;
 
@@ -2247,12 +2247,6 @@ fn materialize_fdm_descriptor(
     if has_magnetic_sink && torque_formula_version.is_none() {
         return Err(vec![format!(
             "spin transport '{}' has magnetic spin sinks but no DriftDiffusionSpinTorque target",
-            module.id
-        )]);
-    }
-    if inserted_default_spin_boundaries && !module.boundaries.is_empty() {
-        return Err(vec![format!(
-            "spin transport '{}' may insert default insulating boundaries only when no spin boundary is authored",
             module.id
         )]);
     }
@@ -3290,21 +3284,7 @@ fn resolve_spin_boundaries(
     boundaries: &[SpinBoundaryIR],
     spin_active_cells: &[bool],
     context: &FdmSpinTransportResolutionContext<'_>,
-) -> Result<(Vec<ResolvedSpinBoundaryFaceIR>, bool), Vec<String>> {
-    if boundaries.is_empty() {
-        return Ok((
-            all_boundary_faces()
-                .into_iter()
-                .map(|face| ResolvedSpinBoundaryFaceIR {
-                    source_id: "default:spin_insulating".to_string(),
-                    face,
-                    condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
-                })
-                .collect(),
-            true,
-        ));
-    }
-
+) -> Result<Vec<ResolvedSpinBoundaryFaceIR>, Vec<String>> {
     let mut claims = BTreeMap::<StructuredBoundaryFaceIR, Vec<SpinSurfaceClaim>>::new();
     let mut exact_surfaces = BTreeMap::<(String, StructuredBoundaryFaceIR), String>::new();
     for boundary in boundaries {
@@ -3390,6 +3370,17 @@ fn resolve_spin_boundaries(
         }
     }
 
+    if claims.is_empty() {
+        return Ok(all_boundary_faces()
+            .into_iter()
+            .map(|face| ResolvedSpinBoundaryFaceIR {
+                source_id: "default:spin_insulating".to_string(),
+                face,
+                condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            })
+            .collect());
+    }
+
     let mut resolved = Vec::with_capacity(6);
     for face in all_boundary_faces() {
         let external = external_boundary_cells(face, context.grid_cells, context.cell_size_m)?;
@@ -3450,7 +3441,7 @@ fn resolve_spin_boundaries(
             condition: first_claim.condition.clone(),
         });
     }
-    Ok((resolved, false))
+    Ok(resolved)
 }
 
 fn all_boundary_faces() -> [StructuredBoundaryFaceIR; 6] {

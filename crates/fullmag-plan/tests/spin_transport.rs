@@ -67,6 +67,20 @@ fn set_module_graph(problem: &mut ProblemIR, modules: Value) {
     }));
 }
 
+fn set_relaxation(problem: &mut ProblemIR) {
+    problem.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+        dynamics: Some(problem.study.dynamics().clone()),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1.0e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_relaxation_time_s: None,
+        },
+        sampling: problem.study.sampling().clone(),
+    };
+}
+
 #[test]
 fn transport_domain_drives_common_grid_while_llg_stays_on_magnetic_cells() {
     let problem = racetrack_problem();
@@ -505,6 +519,63 @@ fn zero_boundary_on_owner_without_face_cells_is_a_noop_but_nonzero_fails() {
 }
 
 #[test]
+fn neutral_spin_boundaries_without_owned_face_cells_use_default_insulating_faces() {
+    let no_owned_cells = surface("fm", "z-", [0.0, 0.0, -1.0]);
+    let neutral_boundaries = [
+        SpinBoundaryIR::SpinInsulating {
+            id: "noop_insulating".into(),
+            surfaces: vec![no_owned_cells.clone()],
+        },
+        SpinBoundaryIR::SpecifiedSpinFlux {
+            id: "noop_zero_flux".into(),
+            surfaces: vec![no_owned_cells.clone()],
+            normal_spin_flux_apm2: [0.0; 3],
+        },
+        SpinBoundaryIR::SpecifiedSpinPotential {
+            id: "noop_zero_potential".into(),
+            surfaces: vec![no_owned_cells],
+            spin_potential_v: [0.0; 3],
+        },
+    ];
+
+    for boundary in neutral_boundaries {
+        let mut problem = racetrack_problem();
+        problem.spin_transport_modules[0].boundaries = vec![boundary];
+        let plan = fdm_plan(&problem);
+        let descriptor = plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_ref()
+            .expect("CPU transport descriptor");
+        assert_eq!(descriptor.spin_boundaries.len(), 6);
+        assert!(descriptor.spin_boundaries.iter().all(|boundary| {
+            boundary.source_id == "default:spin_insulating"
+                && boundary.condition == fullmag_ir::ResolvedSpinBoundaryConditionIR::SpinInsulating
+        }));
+    }
+}
+
+#[test]
+fn nonzero_spin_boundary_without_owned_face_cells_fails_closed() {
+    let mut problem = racetrack_problem();
+    problem.spin_transport_modules[0].boundaries = vec![SpinBoundaryIR::SpecifiedSpinFlux {
+        id: "fm_bottom_nonzero_flux".into(),
+        surfaces: vec![surface("fm", "z-", [0.0, 0.0, -1.0])],
+        normal_spin_flux_apm2: [1.0, 0.0, 0.0],
+    }];
+
+    let error = fullmag_plan::plan(&problem)
+        .expect_err("nonzero spin boundary without owned face cells must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("fm_bottom_nonzero_flux")
+                && reason.contains("no active owned FDM face cells")
+        }),
+        "unexpected errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
 fn inactive_transport_graph_does_not_expand_the_magnetic_grid() {
     let mut problem = racetrack_problem();
     set_module_graph(
@@ -533,6 +604,62 @@ fn inactive_transport_graph_does_not_expand_the_magnetic_grid() {
         plan.grid_certificate.as_ref().unwrap().object_ids,
         vec!["fm".to_string()]
     );
+}
+
+#[test]
+fn inactive_transport_torque_is_provenance_only_during_relaxation() {
+    let mut problem = racetrack_problem();
+    set_relaxation(&mut problem);
+    set_module_graph(
+        &mut problem,
+        json!([
+            {
+                "id": "charge", "kind": "current_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            },
+            {
+                "id": "spin", "kind": "spin_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            },
+            {
+                "id": "transport_torque", "kind": "spin_torque", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            }
+        ]),
+    );
+
+    fullmag_plan::plan(&problem)
+        .expect("inactive transport torque must not invalidate conservative relaxation");
+}
+
+#[test]
+fn active_transport_torque_is_rejected_during_relaxation() {
+    let mut problem = racetrack_problem();
+    set_relaxation(&mut problem);
+    set_module_graph(
+        &mut problem,
+        json!([
+            {
+                "id": "charge", "kind": "current_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "active"
+            },
+            {
+                "id": "spin", "kind": "spin_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": ["charge"], "activation": "active"
+            },
+            {
+                "id": "transport_torque", "kind": "spin_torque", "applies_to": [],
+                "solve_domain": [], "depends_on": ["spin"], "activation": "active"
+            }
+        ]),
+    );
+
+    let error = fullmag_plan::plan(&problem)
+        .expect_err("active transport torque must invalidate conservative relaxation");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("drift_diffusion_spin_torque")
+            && reason.contains("conservative equilibrium")
+    }));
 }
 
 #[test]

@@ -154,7 +154,7 @@ fn spin_torque_module_id(module: &SpinTorqueModuleIR) -> Option<&str> {
     }
 }
 
-fn executable_spin_torque_modules<'a>(
+pub(crate) fn executable_spin_torque_modules<'a>(
     problem: &'a ProblemIR,
 ) -> Result<Vec<&'a SpinTorqueModuleIR>, PlanError> {
     if problem.physics_graph.is_none() {

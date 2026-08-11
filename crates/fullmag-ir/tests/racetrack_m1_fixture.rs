@@ -10,6 +10,13 @@ fn fixture() -> Value {
     .expect("racetrack fixture must be valid JSON")
 }
 
+fn python_problem_ir() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../tests/standard_problems/transport/racetrack_m1_v1/python_problem_ir.v1.json"
+    ))
+    .expect("Python Problem.to_ir golden must be valid JSON")
+}
+
 #[test]
 fn spin_transport_resolved_target_mask_round_trips_exact_identity() {
     let target = ResolvedFdmTorqueTargetMaskIR {
@@ -121,37 +128,12 @@ fn racetrack_expected_lowering_parses_with_current_problem_ir_types() {
 }
 
 #[test]
-fn python_style_hm_object_region_and_boundary_deserialize_and_validate() {
-    let fixture = fixture();
-    let mut lowering = fixture["normalized_problem_ir_contract"]["expected_lowering"].clone();
-    lowering["object_regions"] = serde_json::json!([{
-        "region_id": "hm:transport",
-        "owner_object": "hm",
-        "name": "transport",
-        "shape": {
-            "kind": "box",
-            "size": [512.0e-9, 128.0e-9, 3.0e-9],
-            "center": [0.0, 0.0, 0.0]
-        },
-        "frame": "object",
-        "enabled": true,
-        "priority": 0,
-        "material_overrides": [],
-        "realization_policy": "inherit"
-    }]);
-    lowering["current_modules"][0]["domain"][0]["region_id"] = serde_json::json!("hm:transport");
-    lowering["current_modules"][0]["materials"][0]["region"]["region_id"] =
-        serde_json::json!("hm:transport");
-    lowering["spin_transport_modules"][0]["domain"][0]["region_id"] =
-        serde_json::json!("hm:transport");
-    lowering["spin_transport_modules"][0]["materials"][0]["region"]["region_id"] =
-        serde_json::json!("hm:transport");
-
-    let problem: ProblemIR = serde_json::from_value(lowering)
-        .expect("canonical Python-shaped HM payload must deserialize as ProblemIR");
+fn live_python_problem_ir_golden_deserializes_and_validates() {
+    let problem: ProblemIR = serde_json::from_value(python_problem_ir())
+        .expect("live Python Problem.to_ir golden must deserialize as ProblemIR");
     problem
         .validate()
-        .expect("canonical Python-shaped HM payload must pass ProblemIR validation");
+        .expect("live Python Problem.to_ir golden must pass ProblemIR validation");
     assert!(problem
         .object_regions
         .iter()
@@ -168,4 +150,10 @@ fn python_style_hm_object_region_and_boundary_deserialize_and_validate() {
         .iter()
         .flat_map(|boundary| boundary.surfaces())
         .any(|surface| surface.object_id == "hm" && surface.surface_id == "x-"));
+    assert_eq!(problem.spin_transport_modules[0].id, "spin_solve");
+    assert_eq!(
+        serde_json::to_value(&problem.spin_torque_modules[0]).expect("torque must serialize")
+            ["target"],
+        serde_json::json!({"object_id": "fm", "region_id": "fm:torque"})
+    );
 }

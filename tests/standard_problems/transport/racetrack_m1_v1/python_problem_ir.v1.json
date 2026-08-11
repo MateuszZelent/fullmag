@@ -1,0 +1,889 @@
+{
+  "backend_policy": {
+    "discretization_hints": null,
+    "execution_precision": "double",
+    "requested_backend": "auto"
+  },
+  "couplings": [],
+  "current_modules": [
+    {
+      "boundaries": [
+        {
+          "id": "ground",
+          "kind": "voltage_electrode",
+          "potential_V": 0.0,
+          "surfaces": [
+            {
+              "object_id": "hm",
+              "orientation": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "surface_id": "x-"
+            }
+          ]
+        }
+      ],
+      "coupling": "one_way",
+      "domain": [
+        {
+          "object_id": "hm",
+          "region_id": "hm:transport"
+        },
+        {
+          "object_id": "fm",
+          "region_id": "fm:transport"
+        }
+      ],
+      "gauge": "dirichlet_reference",
+      "kind": "current_transport",
+      "materials": [
+        {
+          "material": {
+            "sigma_Spm": 5000000.0
+          },
+          "region": {
+            "object_id": "hm",
+            "region_id": "hm:transport"
+          }
+        },
+        {
+          "material": {
+            "sigma_Spm": 4000000.0
+          },
+          "region": {
+            "object_id": "fm",
+            "region_id": "fm:transport"
+          }
+        }
+      ],
+      "model": "ohmic_poisson",
+      "name": "charge",
+      "solver": {
+        "engine": "cg",
+        "linear": {
+          "absolute_tolerance": 0.0,
+          "max_iterations": 10000,
+          "relative_tolerance": 1e-10
+        },
+        "operator_version": "fv_charge_harmonic_v1",
+        "physical_residual_version": "charge_balance_integrated_l2.v1"
+      }
+    }
+  ],
+  "elastic_bodies": [],
+  "elastic_materials": [],
+  "energy_terms": [
+    {
+      "kind": "exchange"
+    }
+  ],
+  "excitation_analysis": null,
+  "field_drives": [],
+  "geometry": {
+    "entries": [
+      {
+        "kind": "box",
+        "name": "fm_geometry",
+        "size": [
+          1e-08,
+          1e-08,
+          2e-09
+        ]
+      },
+      {
+        "kind": "box",
+        "name": "hm",
+        "size": [
+          1e-08,
+          1e-08,
+          2e-09
+        ]
+      }
+    ]
+  },
+  "geometry_assets": null,
+  "ir_version": "0.3.0",
+  "magnetostriction_laws": [],
+  "magnets": [
+    {
+      "absorbing_boundary": null,
+      "initial_magnetization": {
+        "kind": "uniform",
+        "value": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "material": "Py",
+      "mesh_recipe": null,
+      "name": "fm",
+      "region": "fm_magnetic"
+    }
+  ],
+  "material_parameter_fields": [],
+  "materials": [
+    {
+      "a_field": null,
+      "alpha_field": null,
+      "anisotropy_axis": null,
+      "bulk_dmi": null,
+      "cubic_anisotropy_axis1": null,
+      "cubic_anisotropy_axis2": null,
+      "cubic_anisotropy_kc1": null,
+      "cubic_anisotropy_kc2": null,
+      "cubic_anisotropy_kc3": null,
+      "damping": 0.01,
+      "dbulk_field": null,
+      "dind_field": null,
+      "exchange_stiffness": 1.3e-11,
+      "interfacial_dmi": null,
+      "kc1_field": null,
+      "kc2_field": null,
+      "kc3_field": null,
+      "ku2_field": null,
+      "ku_field": null,
+      "ms_field": null,
+      "name": "Py",
+      "saturation_magnetisation": 800000.0,
+      "uniaxial_anisotropy": null,
+      "uniaxial_anisotropy_k2": null
+    }
+  ],
+  "mechanical_bcs": [],
+  "mechanical_loads": [],
+  "object_regions": [
+    {
+      "enabled": true,
+      "frame": "object",
+      "material_overrides": [],
+      "name": "transport",
+      "owner_object": "hm",
+      "priority": 0,
+      "realization_policy": "inherit",
+      "region_id": "hm:transport",
+      "shape": {
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "kind": "box",
+        "size": [
+          1e-08,
+          1e-08,
+          2e-09
+        ]
+      }
+    },
+    {
+      "enabled": true,
+      "frame": "object",
+      "material_overrides": [],
+      "name": "transport",
+      "owner_object": "fm",
+      "priority": 0,
+      "realization_policy": "inherit",
+      "region_id": "fm:transport",
+      "shape": {
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "kind": "box",
+        "size": [
+          1e-08,
+          1e-08,
+          2e-09
+        ]
+      }
+    },
+    {
+      "enabled": true,
+      "frame": "object",
+      "material_overrides": [],
+      "name": "torque",
+      "owner_object": "fm",
+      "priority": 0,
+      "realization_policy": "inherit",
+      "region_id": "fm:torque",
+      "shape": {
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "kind": "box",
+        "size": [
+          5e-09,
+          5e-09,
+          2e-09
+        ]
+      }
+    }
+  ],
+  "physics_graph": {
+    "edges": [
+      {
+        "kind": "current_to_spin_transport",
+        "source_id": "charge",
+        "status": "active",
+        "target_id": "spin_solve"
+      },
+      {
+        "kind": "current_to_torque",
+        "source_id": "spin_solve",
+        "status": "active",
+        "target_id": "tr"
+      }
+    ],
+    "modules": [
+      {
+        "activation": "active",
+        "applies_to": [
+          {
+            "kind": "cross_object",
+            "object_ids": [
+              "fm",
+              "hm"
+            ]
+          }
+        ],
+        "authored_state": "authored",
+        "capability": "semantic_only",
+        "depends_on": [],
+        "family_payload": {
+          "boundaries": [
+            {
+              "id": "ground",
+              "kind": "voltage_electrode",
+              "potential_V": 0.0,
+              "surfaces": [
+                {
+                  "object_id": "hm",
+                  "orientation": [
+                    -1.0,
+                    0.0,
+                    0.0
+                  ],
+                  "surface_id": "x-"
+                }
+              ]
+            }
+          ],
+          "coupling": "one_way",
+          "domain": [
+            {
+              "object_id": "hm",
+              "region_id": "hm:transport"
+            },
+            {
+              "object_id": "fm",
+              "region_id": "fm:transport"
+            }
+          ],
+          "gauge": "dirichlet_reference",
+          "kind": "current_transport",
+          "materials": [
+            {
+              "material": {
+                "sigma_Spm": 5000000.0
+              },
+              "region": {
+                "object_id": "hm",
+                "region_id": "hm:transport"
+              }
+            },
+            {
+              "material": {
+                "sigma_Spm": 4000000.0
+              },
+              "region": {
+                "object_id": "fm",
+                "region_id": "fm:transport"
+              }
+            }
+          ],
+          "model": "ohmic_poisson",
+          "name": "charge",
+          "solver": {
+            "engine": "cg",
+            "linear": {
+              "absolute_tolerance": 0.0,
+              "max_iterations": 10000,
+              "relative_tolerance": 1e-10
+            },
+            "operator_version": "fv_charge_harmonic_v1",
+            "physical_residual_version": "charge_balance_integrated_l2.v1"
+          }
+        },
+        "id": "charge",
+        "kind": "current_transport",
+        "solve_domain": [
+          {
+            "object_id": "hm",
+            "region_id": "hm:transport"
+          },
+          {
+            "object_id": "fm",
+            "region_id": "fm:transport"
+          }
+        ],
+        "source_path": "/current_modules/0"
+      },
+      {
+        "activation": "active",
+        "applies_to": [
+          {
+            "kind": "cross_object",
+            "object_ids": [
+              "fm",
+              "hm"
+            ]
+          }
+        ],
+        "authored_state": "authored",
+        "capability": "semantic_only",
+        "depends_on": [
+          "charge"
+        ],
+        "family_payload": {
+          "boundaries": [],
+          "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
+          "current_source_id": "charge",
+          "domain": [
+            {
+              "object_id": "hm",
+              "region_id": "hm:transport"
+            },
+            {
+              "object_id": "fm",
+              "region_id": "fm:transport"
+            }
+          ],
+          "id": "spin_solve",
+          "interfaces": [],
+          "materials": [
+            {
+              "material": {
+                "lambda_j_m": "disabled",
+                "lambda_phi_m": "disabled",
+                "lambda_sf_m": 5e-09,
+                "polarization_p": 0.0,
+                "sigma_s_Spm": 5000000.0,
+                "theta_sh": 0.1
+              },
+              "region": {
+                "object_id": "hm",
+                "region_id": "hm:transport"
+              }
+            },
+            {
+              "material": {
+                "lambda_j_m": "disabled",
+                "lambda_phi_m": "disabled",
+                "lambda_sf_m": 5e-09,
+                "polarization_p": 0.4,
+                "sigma_s_Spm": 4000000.0,
+                "theta_sh": 0.0
+              },
+              "region": {
+                "object_id": "fm",
+                "region_id": "fm:transport"
+              }
+            }
+          ],
+          "mode": "steady",
+          "requested_execution": {
+            "device": "cpu",
+            "discretization": "fdm",
+            "execution_mode": "strict",
+            "precision": "double"
+          },
+          "schema_version": "spin_transport.v1",
+          "solver": {
+            "default_external_boundary": "spin_insulating",
+            "engine": "auto",
+            "linear": {
+              "absolute_tolerance": 0.0,
+              "max_iterations": 500,
+              "relative_tolerance": 1e-08
+            },
+            "operator_version": "fv_spin_upwind_v1",
+            "physical_residual_version": "transport_balance_integrated_l2.v1"
+          }
+        },
+        "id": "spin_solve",
+        "kind": "spin_transport",
+        "solve_domain": [
+          {
+            "object_id": "hm",
+            "region_id": "hm:transport"
+          },
+          {
+            "object_id": "fm",
+            "region_id": "fm:transport"
+          }
+        ],
+        "source_path": "/spin_transports/0"
+      },
+      {
+        "activation": "active",
+        "applies_to": [
+          {
+            "kind": "region",
+            "object_id": "fm",
+            "region_id": "fm:torque"
+          }
+        ],
+        "authored_state": "authored",
+        "capability": "semantic_only",
+        "depends_on": [
+          "spin_solve"
+        ],
+        "family_payload": {
+          "formula_version": "transport_torque_angular_momentum.fullmag.v1",
+          "id": "tr",
+          "kind": "drift_diffusion_spin_torque",
+          "schema_version": "drift_diffusion_spin_torque.v1",
+          "solve_id": "spin_solve",
+          "target": {
+            "object_id": "fm",
+            "region_id": "fm:torque"
+          }
+        },
+        "id": "tr",
+        "kind": "spin_torque",
+        "solve_domain": [
+          {
+            "object_id": "fm",
+            "region_id": "fm:torque"
+          }
+        ],
+        "source_path": "/spin_torques/0"
+      }
+    ],
+    "scene_revision": 0,
+    "schema_version": "physics_graph.v1"
+  },
+  "planar_monitors": [],
+  "problem_meta": {
+    "backend_revision": null,
+    "description": null,
+    "entrypoint_kind": "direct",
+    "name": "m1",
+    "runtime_metadata": {
+      "domain_frame": {
+        "declared_universe": null,
+        "effective_center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "effective_extent": [
+          1e-08,
+          1e-08,
+          2e-09
+        ],
+        "effective_source": "object_union_bounds",
+        "mesh_bounds_max": null,
+        "mesh_bounds_min": null,
+        "object_bounds_max": [
+          5e-09,
+          5e-09,
+          1e-09
+        ],
+        "object_bounds_min": [
+          -5e-09,
+          -5e-09,
+          -1e-09
+        ]
+      },
+      "model_builder": {
+        "canonical_script_strategy": "canonical_rewrite",
+        "editable_scopes": [
+          "runtime",
+          "geometry",
+          "materials",
+          "energies",
+          "study",
+          "outputs",
+          "current_transport",
+          "spin_transport",
+          "spin_torque"
+        ],
+        "editable_via_ui": true,
+        "entrypoint_kind": "direct",
+        "problem": {
+          "current_modules": [
+            {
+              "boundaries": [
+                {
+                  "id": "ground",
+                  "kind": "voltage_electrode",
+                  "potential_V": 0.0,
+                  "surfaces": [
+                    {
+                      "object_id": "hm",
+                      "orientation": [
+                        -1.0,
+                        0.0,
+                        0.0
+                      ],
+                      "surface_id": "x-"
+                    }
+                  ]
+                }
+              ],
+              "coupling": "one_way",
+              "domain": [
+                {
+                  "object_id": "hm",
+                  "region_id": "hm:transport"
+                },
+                {
+                  "object_id": "fm",
+                  "region_id": "fm:transport"
+                }
+              ],
+              "gauge": "dirichlet_reference",
+              "kind": "current_transport",
+              "materials": [
+                {
+                  "material": {
+                    "sigma_Spm": 5000000.0
+                  },
+                  "region": {
+                    "object_id": "hm",
+                    "region_id": "hm:transport"
+                  }
+                },
+                {
+                  "material": {
+                    "sigma_Spm": 4000000.0
+                  },
+                  "region": {
+                    "object_id": "fm",
+                    "region_id": "fm:transport"
+                  }
+                }
+              ],
+              "model": "ohmic_poisson",
+              "name": "charge",
+              "solver": {
+                "engine": "cg",
+                "linear": {
+                  "absolute_tolerance": 0.0,
+                  "max_iterations": 10000,
+                  "relative_tolerance": 1e-10
+                },
+                "operator_version": "fv_charge_harmonic_v1",
+                "physical_residual_version": "charge_balance_integrated_l2.v1"
+              }
+            }
+          ],
+          "description": null,
+          "discretization": null,
+          "domain_frame": {
+            "declared_universe": null,
+            "effective_center": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "effective_extent": [
+              1e-08,
+              1e-08,
+              2e-09
+            ],
+            "effective_source": "object_union_bounds",
+            "mesh_bounds_max": null,
+            "mesh_bounds_min": null,
+            "object_bounds_max": [
+              5e-09,
+              5e-09,
+              1e-09
+            ],
+            "object_bounds_min": [
+              -5e-09,
+              -5e-09,
+              -1e-09
+            ]
+          },
+          "energy_terms": [
+            {
+              "kind": "exchange"
+            }
+          ],
+          "excitation_analysis": null,
+          "field_drives": [],
+          "geometry": [
+            {
+              "kind": "box",
+              "name": "fm_geometry",
+              "size": [
+                1e-08,
+                1e-08,
+                2e-09
+              ]
+            },
+            {
+              "kind": "box",
+              "name": "hm",
+              "size": [
+                1e-08,
+                1e-08,
+                2e-09
+              ]
+            }
+          ],
+          "magnets": [
+            {
+              "absorbing_boundary": null,
+              "initial_magnetization": {
+                "kind": "uniform",
+                "value": [
+                  1.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "material": "Py",
+              "mesh_recipe": null,
+              "name": "fm",
+              "region": "fm_magnetic"
+            }
+          ],
+          "materials": [
+            {
+              "a_field": null,
+              "alpha_field": null,
+              "anisotropy_axis": null,
+              "bulk_dmi": null,
+              "cubic_anisotropy_axis1": null,
+              "cubic_anisotropy_axis2": null,
+              "cubic_anisotropy_kc1": null,
+              "cubic_anisotropy_kc2": null,
+              "cubic_anisotropy_kc3": null,
+              "damping": 0.01,
+              "dbulk_field": null,
+              "dind_field": null,
+              "exchange_stiffness": 1.3e-11,
+              "interfacial_dmi": null,
+              "kc1_field": null,
+              "kc2_field": null,
+              "kc3_field": null,
+              "ku2_field": null,
+              "ku_field": null,
+              "ms_field": null,
+              "name": "Py",
+              "saturation_magnetisation": 800000.0,
+              "uniaxial_anisotropy": null,
+              "uniaxial_anisotropy_k2": null
+            }
+          ],
+          "mesh_workflow": null,
+          "name": "m1",
+          "planar_monitors": [],
+          "regions": [
+            {
+              "geometry": "fm_geometry",
+              "name": "fm_magnetic"
+            }
+          ],
+          "runtime": {
+            "backend": "auto",
+            "cpu_threads": null,
+            "device": "auto",
+            "device_index": null,
+            "execution_mode": "strict",
+            "execution_precision": "double",
+            "gpu_count": 0
+          },
+          "spin_torque": null,
+          "spin_torque_modules": [
+            {
+              "formula_version": "transport_torque_angular_momentum.fullmag.v1",
+              "id": "tr",
+              "kind": "drift_diffusion_spin_torque",
+              "schema_version": "drift_diffusion_spin_torque.v1",
+              "solve_id": "spin_solve",
+              "target": {
+                "object_id": "fm",
+                "region_id": "fm:torque"
+              }
+            }
+          ],
+          "study": {
+            "dynamics": {
+              "fixed_timestep": null,
+              "gyromagnetic_ratio": 221100.0,
+              "integrator": "auto",
+              "kind": "llg"
+            },
+            "kind": "time_evolution",
+            "sampling": {
+              "outputs": [
+                {
+                  "every_seconds": 1e-12,
+                  "kind": "scalar",
+                  "name": "E_total"
+                }
+              ]
+            }
+          },
+          "temperature": null,
+          "universe": null
+        },
+        "schema_version": "model_builder.v1",
+        "script_api_surface": null,
+        "source_kind": "problem_model"
+      },
+      "runtime_selection": {
+        "backend": "auto",
+        "cpu_threads": null,
+        "device": "auto",
+        "device_index": null,
+        "execution_mode": "strict",
+        "execution_precision": "double",
+        "gpu_count": 0
+      },
+      "script_sync": {
+        "editable_scopes": [
+          "runtime",
+          "geometry",
+          "materials",
+          "energies",
+          "study",
+          "outputs",
+          "current_transport",
+          "spin_transport",
+          "spin_torque"
+        ],
+        "entrypoint_kind": "direct",
+        "phase": "round_trip_canonical_sync",
+        "rewrite_strategy": "canonical_rewrite",
+        "schema_version": "script_sync.v1",
+        "source_kind": "problem_model",
+        "source_of_truth": "model_builder"
+      }
+    },
+    "script_api_version": "0.3.0",
+    "script_language": "python",
+    "script_source": null,
+    "seeds": [],
+    "serializer_version": "0.3.0",
+    "source_hash": null
+  },
+  "regions": [
+    {
+      "geometry": "fm_geometry",
+      "name": "fm_magnetic"
+    }
+  ],
+  "spin_torque_modules": [
+    {
+      "formula_version": "transport_torque_angular_momentum.fullmag.v1",
+      "id": "tr",
+      "kind": "drift_diffusion_spin_torque",
+      "schema_version": "drift_diffusion_spin_torque.v1",
+      "solve_id": "spin_solve",
+      "target": {
+        "object_id": "fm",
+        "region_id": "fm:torque"
+      }
+    }
+  ],
+  "spin_transport_modules": [
+    {
+      "boundaries": [],
+      "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
+      "current_source_id": "charge",
+      "domain": [
+        {
+          "object_id": "hm",
+          "region_id": "hm:transport"
+        },
+        {
+          "object_id": "fm",
+          "region_id": "fm:transport"
+        }
+      ],
+      "id": "spin_solve",
+      "interfaces": [],
+      "materials": [
+        {
+          "material": {
+            "lambda_j_m": "disabled",
+            "lambda_phi_m": "disabled",
+            "lambda_sf_m": 5e-09,
+            "polarization_p": 0.0,
+            "sigma_s_Spm": 5000000.0,
+            "theta_sh": 0.1
+          },
+          "region": {
+            "object_id": "hm",
+            "region_id": "hm:transport"
+          }
+        },
+        {
+          "material": {
+            "lambda_j_m": "disabled",
+            "lambda_phi_m": "disabled",
+            "lambda_sf_m": 5e-09,
+            "polarization_p": 0.4,
+            "sigma_s_Spm": 4000000.0,
+            "theta_sh": 0.0
+          },
+          "region": {
+            "object_id": "fm",
+            "region_id": "fm:transport"
+          }
+        }
+      ],
+      "mode": "steady",
+      "requested_execution": {
+        "device": "cpu",
+        "discretization": "fdm",
+        "execution_mode": "strict",
+        "precision": "double"
+      },
+      "schema_version": "spin_transport.v1",
+      "solver": {
+        "default_external_boundary": "spin_insulating",
+        "engine": "auto",
+        "linear": {
+          "absolute_tolerance": 0.0,
+          "max_iterations": 500,
+          "relative_tolerance": 1e-08
+        },
+        "operator_version": "fv_spin_upwind_v1",
+        "physical_residual_version": "transport_balance_integrated_l2.v1"
+      }
+    }
+  ],
+  "study": {
+    "dynamics": {
+      "fixed_timestep": null,
+      "gyromagnetic_ratio": 221100.0,
+      "integrator": "auto",
+      "kind": "llg"
+    },
+    "kind": "time_evolution",
+    "sampling": {
+      "outputs": [
+        {
+          "every_seconds": 1e-12,
+          "kind": "scalar",
+          "name": "E_total"
+        }
+      ]
+    }
+  },
+  "validation_profile": {
+    "execution_mode": "strict"
+  }
+}

@@ -1690,6 +1690,37 @@ fn validate_descriptor(
             "spin transport '{module_id}' descriptor fields do not match the FDM grid"
         )));
     }
+    for (name, mask) in [
+        ("transport_active_mask", &descriptor.transport_active_mask),
+        ("magnetic_active_mask", &descriptor.magnetic_active_mask),
+    ] {
+        if !mask.is_empty() && mask.len() != count {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' resolved mask '{name}' does not match the FDM grid"
+            )));
+        }
+    }
+    for target in &descriptor.torque_target_masks {
+        if !target.active_mask.is_empty() && target.active_mask.len() != count {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' resolved mask for torque target '{}' does not match the FDM grid",
+                target.torque_module_id
+            )));
+        }
+    }
+    if !descriptor.torque_target_masks.is_empty() {
+        let mut union = vec![false; count];
+        for target in &descriptor.torque_target_masks {
+            for (aggregate, selected) in union.iter_mut().zip(&target.active_mask) {
+                *aggregate |= *selected;
+            }
+        }
+        if union != descriptor.torque_target_cells {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' torque target mask union does not match torque_target_cells"
+            )));
+        }
+    }
     if descriptor.charge_boundaries.len() != 6 || descriptor.spin_boundaries.len() != 6 {
         return Err(run_error(format!(
             "spin transport '{module_id}' descriptor must resolve all six charge and spin boundary faces"
@@ -4996,6 +5027,83 @@ mod tests {
         assert!(error.message.contains("enclosing strict mode"));
     }
 
+    #[test]
+    fn resolved_mask_lengths_must_match_the_fdm_grid() {
+        type Mutation = fn(&mut ResolvedFdmSpinTransportIR);
+        let cases: [(&str, Mutation); 3] = [
+            ("transport", |descriptor| {
+                descriptor.transport_active_mask.pop();
+            }),
+            ("magnetic", |descriptor| {
+                descriptor.magnetic_active_mask.pop();
+            }),
+            ("torque target", |descriptor| {
+                descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
+                    torque_module_id: "torque".into(),
+                    target: RegionRefIR {
+                        object_id: "fm".into(),
+                        region_id: None,
+                    },
+                    active_mask: vec![false; 3],
+                }];
+            }),
+        ];
+
+        for (field, mutate) in cases {
+            let mut invalid = plan();
+            let descriptor = invalid.spin_transport_plans[0]
+                .fdm_cpu_double
+                .as_mut()
+                .expect("one-way descriptor");
+            mutate(descriptor);
+            let error = FdmSpinTransportWorkflow::from_plan(&invalid)
+                .expect_err("nonempty resolved masks must match the FDM grid");
+            assert!(
+                error.message.contains("resolved mask"),
+                "missing {field} mask diagnostic: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn torque_target_mask_union_must_match_the_aggregate_mask() {
+        let mut invalid = plan();
+        let descriptor = invalid.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor");
+        descriptor.torque_target_masks = vec![ResolvedFdmTorqueTargetMaskIR {
+            torque_module_id: "torque".into(),
+            target: RegionRefIR {
+                object_id: "fm".into(),
+                region_id: None,
+            },
+            active_mask: vec![true, false, false, false],
+        }];
+        descriptor.torque_target_cells = vec![false; 4];
+
+        let error = FdmSpinTransportWorkflow::from_plan(&invalid)
+            .expect_err("per-target union must equal the aggregate torque mask");
+        assert!(error.message.contains("torque target mask union"));
+    }
+
+    #[test]
+    fn empty_legacy_resolved_masks_remain_compatible() {
+        let mut legacy = plan();
+        let descriptor = legacy.spin_transport_plans[0]
+            .fdm_cpu_double
+            .as_mut()
+            .expect("one-way descriptor");
+        descriptor.transport_active_mask.clear();
+        descriptor.magnetic_active_mask.clear();
+        descriptor.torque_target_masks.clear();
+
+        assert!(FdmSpinTransportWorkflow::from_plan(&legacy)
+            .expect("empty legacy masks must remain accepted")
+            .is_some());
+    }
+
     #[cfg(not(feature = "fdm-native-cpu"))]
     #[test]
     fn native_m1_v1_plan_never_falls_back_when_runner_feature_is_absent() {
@@ -5094,6 +5202,7 @@ mod tests {
         let mut plan = plan();
         plan.grid.cells = [nx as u32, 1, nz as u32];
         plan.cell_size = [1.0, 1.0, thickness_m / nz as f64];
+        plan.active_mask = Some(vec![true; cell_count]);
         plan.initial_magnetization = vec![[0.0, 0.0, 1.0]; cell_count];
 
         let resolved = &mut plan.spin_transport_plans[0];
@@ -5102,6 +5211,8 @@ mod tests {
             .fdm_cpu_double
             .as_mut()
             .expect("one-way FDM descriptor");
+        descriptor.transport_active_mask = vec![true; cell_count];
+        descriptor.magnetic_active_mask = vec![true; cell_count];
         descriptor.charge_active_cells = vec![true; cell_count];
         descriptor.charge_conductivity_spm = vec![sigma_spm; cell_count];
         descriptor.charge_boundaries = vec![

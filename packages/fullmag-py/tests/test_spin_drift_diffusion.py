@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
 import fullmag as fm
-from fullmag._core import validate_ir
 
 
 class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
@@ -560,8 +560,13 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         )
         ir = problem.to_ir(include_geometry_assets=False)
         canonical_ir = json.loads(json.dumps(ir, sort_keys=True, allow_nan=False))
-        native_validation = validate_ir(canonical_ir)
-        self.assertIsNot(native_validation, False)
+        golden_path = (
+            Path(__file__).resolve().parents[3]
+            / "tests/standard_problems/transport/racetrack_m1_v1/python_problem_ir.v1.json"
+        )
+        with golden_path.open(encoding="utf-8") as golden_file:
+            golden_ir = json.load(golden_file)
+        self.assertEqual(canonical_ir, golden_ir)
         ir = canonical_ir
         self.assertEqual(ir["spin_transport_modules"], [solve.to_ir()])
         self.assertEqual(ir["spin_torque_modules"][0]["solve_id"], "spin_solve")
