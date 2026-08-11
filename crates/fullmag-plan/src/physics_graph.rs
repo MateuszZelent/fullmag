@@ -64,6 +64,32 @@ fn valid_typed_torque_family(family: &str) -> bool {
     )
 }
 
+fn known_physics_graph_module_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "current_transport"
+            | "spin_transport"
+            | "spin_interface"
+            | "spin_torque"
+            | "oersted_field"
+            | "regional_field_drive"
+            | "external_field"
+    )
+}
+
+fn typed_torque_module_id(module: &SpinTorqueModuleIR) -> Option<&str> {
+    match module {
+        SpinTorqueModuleIR::Slonczewski { id, .. } | SpinTorqueModuleIR::ZhangLi { id, .. } => {
+            id.as_deref()
+        }
+        SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, .. }
+        | SpinTorqueModuleIR::PrescribedSot { id, .. } => Some(id),
+        SpinTorqueModuleIR::InterfaceCpp { .. }
+        | SpinTorqueModuleIR::DriftDiffusion { .. }
+        | SpinTorqueModuleIR::SpinOrbitTorque { .. } => None,
+    }
+}
+
 fn typed_torque_contract<'a>(
     problem: &'a ProblemIR,
     module_id: &str,
@@ -204,6 +230,14 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
                 "unsupported"
             }
         };
+        if !module_kind.is_some_and(known_physics_graph_module_kind)
+            && !matches!(activation, "unsupported" | "unresolved")
+        {
+            errors.push(format!(
+                "physics_graph module '{id}' has unknown kind '{}' and must be explicitly unsupported or unresolved",
+                module_kind.unwrap_or("<missing or non-string>")
+            ));
+        }
         statuses.insert(id.to_string(), activation.to_string());
         if let Some(kind) = module_kind {
             module_kinds.insert(id.to_string(), kind.to_string());
@@ -309,6 +343,27 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
                     ));
                 }
             }
+        }
+    }
+    for torque in &problem.spin_torque_modules {
+        let Some(module_id) = typed_torque_module_id(torque) else {
+            continue;
+        };
+        let matching_nodes = modules
+            .iter()
+            .filter(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
+            .collect::<Vec<_>>();
+        if matching_nodes.len() != 1 {
+            errors.push(format!(
+                "canonical typed spin_torque_modules record '{module_id}' must match exactly one physics_graph module, found {}",
+                matching_nodes.len()
+            ));
+            continue;
+        }
+        if matching_nodes[0].get("kind").and_then(Value::as_str) != Some("spin_torque") {
+            errors.push(format!(
+                "canonical typed spin_torque_modules record '{module_id}' physics_graph module kind must be the string 'spin_torque'"
+            ));
         }
     }
     for module in modules {
@@ -546,7 +601,7 @@ pub fn resolve_physics_modules(
         let mut reason = None;
         if requested_lane != "auto"
             && requested_lane != resolved_lane.as_str()
-            && status == "active"
+            && matches!(status.as_str(), "active" | "configured")
         {
             status = "unsupported".to_string();
             reason = Some(format!(

@@ -541,6 +541,190 @@ fn typed_torque_cardinality_is_enforced_by_direct_and_primary_planners() {
 }
 
 #[test]
+fn canonical_typed_torque_requires_one_graph_node_with_exact_spin_torque_kind() {
+    let torque = drift_diffusion_torque("torque", "spin");
+    let payload = serde_json::to_value(&torque).expect("serialize typed torque");
+    let baseline = typed_torque_graph_problem(torque, payload, "spin", "spin_transport_to_torque");
+
+    for case in [
+        "missing node",
+        "missing kind",
+        "null kind",
+        "unknown kind",
+        "wrong known kind",
+        "duplicate node",
+    ] {
+        let mut problem = baseline.clone();
+        let graph = problem
+            .physics_graph
+            .as_mut()
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("typed graph");
+        let modules = graph["modules"]
+            .as_array_mut()
+            .expect("typed graph modules");
+        match case {
+            "missing node" => {
+                modules.retain(|module| {
+                    module.get("id").and_then(serde_json::Value::as_str) != Some("torque")
+                });
+                graph["edges"]
+                    .as_array_mut()
+                    .expect("typed graph edges")
+                    .retain(|edge| {
+                        edge.get("target_id").and_then(serde_json::Value::as_str) != Some("torque")
+                    });
+            }
+            "duplicate node" => {
+                let duplicate = modules
+                    .iter()
+                    .find(|module| {
+                        module.get("id").and_then(serde_json::Value::as_str) == Some("torque")
+                    })
+                    .expect("typed torque graph node")
+                    .clone();
+                modules.push(duplicate);
+            }
+            kind_case => {
+                let module = modules
+                    .iter_mut()
+                    .find(|module| {
+                        module.get("id").and_then(serde_json::Value::as_str) == Some("torque")
+                    })
+                    .and_then(serde_json::Value::as_object_mut)
+                    .expect("typed torque graph node");
+                match kind_case {
+                    "missing kind" => {
+                        module.remove("kind");
+                    }
+                    "null kind" => {
+                        module.insert("kind".to_string(), serde_json::Value::Null);
+                    }
+                    "unknown kind" => {
+                        module.insert("kind".to_string(), serde_json::json!("banana"));
+                    }
+                    "wrong known kind" => {
+                        module.insert("kind".to_string(), serde_json::json!("current_transport"));
+                    }
+                    _ => unreachable!("covered case"),
+                }
+            }
+        }
+
+        let direct = resolve_physics_graph(&problem)
+            .expect_err(&format!("{case} must fail direct graph resolution"));
+        assert!(
+            direct.iter().any(|error| {
+                error.contains("canonical typed spin_torque_modules record 'torque'")
+                    && error.contains("physics_graph module")
+            }),
+            "{case} must identify the missing or mistyped canonical graph node: {direct:?}"
+        );
+
+        let planned =
+            fullmag_plan::plan(&problem).expect_err(&format!("{case} must fail primary planning"));
+        assert!(
+            planned.reasons.iter().any(|error| {
+                error.contains("canonical typed spin_torque_modules record 'torque'")
+                    && error.contains("physics_graph module")
+            }),
+            "{case} primary error must retain the canonical graph-node contract: {planned:?}"
+        );
+    }
+}
+
+#[test]
+fn unknown_graph_records_are_provenance_only_or_fail_closed() {
+    for activation in ["active", "configured", "inactive", "blocked"] {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 48,
+            "modules": [{
+                "id": "future:module",
+                "kind": "banana",
+                "applies_to": [{"kind": "object", "object_id": "strip"}],
+                "solve_domain": [{"object_id": "strip"}],
+                "depends_on": [],
+                "activation": activation,
+                "source_path": "/future/0",
+                "family_payload": {}
+            }],
+            "edges": []
+        }));
+
+        let direct = resolve_physics_graph(&problem).expect_err(&format!(
+            "unknown {activation} record must fail direct resolution"
+        ));
+        assert!(
+            direct.iter().any(|error| {
+                error.contains("future:module")
+                    && error.contains("unknown kind 'banana'")
+                    && error.contains("unsupported or unresolved")
+            }),
+            "unknown {activation} record must report its provenance-only contract: {direct:?}"
+        );
+        let planned = fullmag_plan::plan(&problem).expect_err(&format!(
+            "unknown {activation} record must fail primary planning"
+        ));
+        assert!(planned.reasons.iter().any(|error| {
+            error.contains("future:module")
+                && error.contains("unknown kind 'banana'")
+                && error.contains("unsupported or unresolved")
+        }));
+    }
+
+    for activation in ["unsupported", "unresolved"] {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 48,
+            "modules": [{
+                "id": "future:module",
+                "kind": "banana",
+                "applies_to": [{"kind": "object", "object_id": "strip"}],
+                "solve_domain": [{"object_id": "strip"}],
+                "depends_on": [],
+                "activation": activation,
+                "source_path": "/future/0",
+                "family_payload": {}
+            }],
+            "edges": []
+        }));
+
+        assert!(resolve_physics_graph(&problem)
+            .unwrap_or_else(|errors| panic!("{activation} unknown record must resolve: {errors:?}"))
+            .is_some());
+        let modules =
+            resolve_physics_modules(&problem, BackendTarget::Fdm).unwrap_or_else(|errors| {
+                panic!("{activation} unknown record must resolve: {errors:?}")
+            });
+        assert_eq!(modules[0].status, activation);
+        assert!(modules[0].fdm_cell_mask_id.is_none());
+
+        let plan = fullmag_plan::plan(&problem)
+            .unwrap_or_else(|error| panic!("{activation} unknown record must plan: {error:?}"));
+        let provenance = plan
+            .provenance
+            .physics_graph
+            .as_ref()
+            .expect("graph provenance");
+        assert_eq!(provenance.modules[0].status, activation);
+        assert!(provenance.modules[0].fdm_cell_mask_id.is_none());
+        let realization = provenance.realization.as_ref().expect("graph realization");
+        assert!(realization.resolved_module_ids.is_empty());
+        assert_eq!(
+            realization.modules[0].state,
+            PhysicsGraphRealizationStateIR::SemanticOnly
+        );
+        assert!(realization.modules[0].realized_fdm_mask_digest.is_none());
+        assert_eq!(realization.modules[0].realized_cell_count, 0);
+    }
+}
+
+#[test]
 fn typed_torque_rejects_unknown_graph_family_in_direct_and_primary_planners() {
     let torque = drift_diffusion_torque("torque", "spin");
     let mut payload = serde_json::to_value(&torque).expect("serialize typed torque");
@@ -931,6 +1115,85 @@ fn planned_graph_has_typed_runtime_provenance_with_scene_and_mesh_revisions() {
     assert_eq!(module.resolved_lane, BackendTarget::Fdm);
     assert_eq!(module.status, "unsupported");
     assert!(module.depends_on.is_empty());
+}
+
+#[test]
+fn lane_mismatch_degrades_active_and_configured_without_changing_other_states() {
+    for activation in [
+        "active",
+        "configured",
+        "inactive",
+        "blocked",
+        "unsupported",
+        "unresolved",
+    ] {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 49,
+            "modules": [{
+                "id": "current:film",
+                "kind": "current_transport",
+                "applies_to": [{"kind": "object", "object_id": "strip"}],
+                "solve_domain": [{"object_id": "strip"}],
+                "depends_on": [],
+                "activation": activation,
+                "source_path": "/current_modules/0",
+                "family_payload": {
+                    "requested_execution": {
+                        "discretization": "fem",
+                        "device": "cpu",
+                        "precision": "double",
+                        "execution_mode": "strict"
+                    }
+                }
+            }],
+            "edges": []
+        }));
+
+        let expected_status = if matches!(activation, "active" | "configured") {
+            "unsupported"
+        } else {
+            activation
+        };
+        let resolved = resolve_physics_modules(&problem, BackendTarget::Fdm)
+            .unwrap_or_else(|errors| panic!("{activation} lane mismatch must resolve: {errors:?}"));
+        assert_eq!(resolved[0].status, expected_status);
+        assert!(resolved[0].fdm_cell_mask_id.is_none());
+        if matches!(activation, "active" | "configured") {
+            assert!(resolved[0]
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("requests lane 'fem'")
+                    && reason.contains("resolved lane is 'fdm'")));
+        } else {
+            assert!(resolved[0].reason.as_deref().is_some_and(
+                |reason| reason.contains(&format!("activation status '{activation}' retained"))
+            ));
+        }
+
+        let plan = fullmag_plan::plan(&problem)
+            .unwrap_or_else(|error| panic!("{activation} lane mismatch must plan: {error:?}"));
+        let provenance = plan
+            .provenance
+            .physics_graph
+            .as_ref()
+            .expect("graph provenance");
+        let module = &provenance.modules[0];
+        assert_eq!(module.requested_lane, BackendTarget::Fem);
+        assert_eq!(module.resolved_lane, BackendTarget::Fdm);
+        assert_eq!(module.status, expected_status);
+        assert!(module.fdm_cell_mask_id.is_none());
+        let realization = provenance.realization.as_ref().expect("graph realization");
+        assert!(realization.resolved_module_ids.is_empty());
+        assert_eq!(
+            realization.modules[0].state,
+            PhysicsGraphRealizationStateIR::SemanticOnly
+        );
+        assert!(realization.modules[0].realized_fdm_mask_digest.is_none());
+        assert_eq!(realization.modules[0].realized_cell_count, 0);
+    }
 }
 
 #[test]
