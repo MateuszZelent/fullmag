@@ -48,12 +48,23 @@ def _variant(root: Path, name: str, payload: str = "payload") -> Path:
     return variant
 
 
-def _migrate(alias: Path, durable: Path, validator: Path) -> subprocess.CompletedProcess[str]:
+def _migrate(
+    alias: Path,
+    durable: Path,
+    validator: Path,
+    *,
+    retarget_from: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash", "-euo", "pipefail", "-c",
-            'source "$1"; migrate_managed_fem_runtime_variants "$2" "$3" "$4"',
-            "bash", str(STORAGE_HELPER), str(alias), str(durable), str(validator),
+            'source "$1"; migrate_managed_fem_runtime_variants "$2" "$3" "$4" "$5"',
+            "bash",
+            str(STORAGE_HELPER),
+            str(alias),
+            str(durable),
+            str(validator),
+            str(retarget_from) if retarget_from is not None else "",
         ],
         text=True,
         capture_output=True,
@@ -448,8 +459,10 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     assert "mv -Tf" not in preflight
     assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in exporter
+    assert '"${VARIANTS_ALIAS_RETARGET_FROM}"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in restorer
+    assert '"${variants_alias_retarget_from}"' in restorer
     assert "validate_managed_fem_runtime_storage_target" in restorer
     assert restorer.index("validate_managed_fem_runtime_storage_target") < restorer.index(
         'tar -C "${staging}"'

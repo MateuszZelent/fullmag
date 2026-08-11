@@ -17,6 +17,7 @@ CANONICAL_STORAGE_ROOT = "/zfn2/mateuszz/git/fullmag"
 CANONICAL_IMAGE = f"{CANONICAL_STORAGE_ROOT}/build-volumes/fullmag-native.ext4"
 MOUNT_VIEW = "/mnt/fullmag-zfn2-native"
 TARGET_ROOT = f"{MOUNT_VIEW}/managed-fem-runtime"
+STORAGE_ROOT_ENV = "FULLMAG_MANAGED_FEM_STORAGE_ROOT"
 REMOUNT_COMMAND = (
     "wsl.exe -d Ubuntu2 -u root -- mount -o remount,rw,noatime "
     f"{MOUNT_VIEW}"

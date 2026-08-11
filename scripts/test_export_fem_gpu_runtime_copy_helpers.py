@@ -1545,9 +1545,10 @@ def test_export_defaults_to_exact_persistent_build_root() -> None:
     ).read_text(encoding="utf-8")
 
     assert (
-        'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
-        in exporter
+        'readonly MANAGED_FEM_CANONICAL_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
+        in storage_helper
     )
+    assert "resolve_managed_fem_runtime_storage_layout" in exporter
     assert 'readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"' in exporter
     assert (
         'readonly FULLMAG_CONTAINER_TARGET_ROOT='

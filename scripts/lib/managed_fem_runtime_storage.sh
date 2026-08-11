@@ -236,6 +236,7 @@ migrate_managed_fem_runtime_variants() {
   local variants_alias="$1"
   local durable_variants_root="$2"
   local validator="$3"
+  local allowed_retarget_from="${4:-}"
   local next_alias="${variants_alias}.next.$$"
 
   mkdir -p "$(dirname "${variants_alias}")" "${durable_variants_root}"

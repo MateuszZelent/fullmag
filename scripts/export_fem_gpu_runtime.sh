@@ -118,16 +118,24 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 print_container_target_remount_guidance() {
-  echo "Canonical durable build-storage root: ${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" >&2
+  echo "Selected durable build-storage root: ${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" >&2
   echo "Expected native ext4 backing image: ${FULLMAG_NATIVE_BUILD_IMAGE}" >&2
   echo "Docker-bindable mount view: ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
+  if [ "${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" != "${MANAGED_FEM_CANONICAL_STORAGE_ROOT}" ]; then
+    echo "Direct 9p cannot be used as the managed FEM build target; it stores the durable image and runtime archives only." >&2
+    echo "Provision an ext4 image at the expected path; the exporter will not create or format it automatically." >&2
+    echo "Create the Linux mount point from Windows with:" >&2
+    echo "  wsl.exe -d Ubuntu2 -u root -- mkdir -p ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
+  fi
   echo "If the expected image is already mounted read-only, remount it from Windows with:" >&2
   echo "  wsl.exe -d Ubuntu2 -u root -- mount -o remount,rw,noatime ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
-  echo "After a WSL restart, restore the mount view from the canonical image with:" >&2
+  echo "After a WSL restart, restore the mount view from the selected image with:" >&2
   echo "  wsl.exe -d Ubuntu2 -u root -- mount -o loop,rw,noatime ${FULLMAG_NATIVE_BUILD_IMAGE} ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
 }
 
 validate_container_target_dir() {
+  validate_managed_fem_runtime_storage_layout \
+    print_container_target_remount_guidance
   validate_managed_fem_runtime_storage_target \
     "${FULLMAG_CONTAINER_TARGET_DIR}" \
     "${FULLMAG_NATIVE_BUILD_IMAGE}" \
@@ -140,11 +148,17 @@ cd "${SOURCE_ROOT}"
 
 readonly FULLMAG_CONTAINER_TARGET_ROOT="${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"
 readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"
-readonly PERSISTENT_RUNTIME_PARENT="${FULLMAG_BUILD_ROOT}/runtimes"
+readonly PERSISTENT_RUNTIME_PARENT="${FULLMAG_PERSISTENT_RUNTIME_PARENT}"
 readonly PERSISTENT_LATEST_ARCHIVE="${PERSISTENT_RUNTIME_PARENT}/fem-gpu-host-latest.tar"
 readonly FULLMAG_WORKTREE_TARGET_SLUG="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
 readonly FULLMAG_WORKTREE_TARGET_DIGEST="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 readonly FULLMAG_WORKTREE_TARGET_ID="${FULLMAG_WORKTREE_TARGET_SLUG}-${FULLMAG_WORKTREE_TARGET_DIGEST}"
+VARIANTS_ALIAS_RETARGET_FROM=""
+if [ "${FULLMAG_MANAGED_FEM_STORAGE_ROOT_EXPLICIT}" = "1" ] &&
+   [ "${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" != "${MANAGED_FEM_CANONICAL_STORAGE_ROOT}" ]; then
+  VARIANTS_ALIAS_RETARGET_FROM="${MANAGED_FEM_CANONICAL_MOUNT_VIEW}/managed-fem-runtime/${FULLMAG_WORKTREE_TARGET_ID}/runtime-variants"
+fi
+readonly VARIANTS_ALIAS_RETARGET_FROM
 FULLMAG_COMPOSE_PROJECT_NAME="fullmag-fem-${FULLMAG_WORKTREE_TARGET_DIGEST:0:16}"
 export COMPOSE_PROJECT_NAME="${FULLMAG_COMPOSE_PROJECT_NAME}"
 readonly FULLMAG_CONTAINER_TARGET_DIR="${FULLMAG_CONTAINER_TARGET_ROOT}/${FULLMAG_WORKTREE_TARGET_ID}"
@@ -174,11 +188,19 @@ case "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" in
   *) echo "[export_fem_gpu_runtime] FULLMAG_FEM_RUNTIME_REUSE_BUILD must be 0 or 1" >&2; exit 2 ;;
 esac
 validate_container_target_dir
-if [ ! -d "${FULLMAG_BUILD_ROOT}" ] || [ ! -w "${FULLMAG_BUILD_ROOT}" ]; then
-  echo "[export_fem_gpu_runtime] persistent build root is missing or not writable: ${FULLMAG_BUILD_ROOT}" >&2
+if [ ! -w "${FULLMAG_BUILD_ROOT}" ]; then
+  echo "[export_fem_gpu_runtime] persistent build root is not writable: ${FULLMAG_BUILD_ROOT}" >&2
+  exit 2
+fi
+if [ -L "${PERSISTENT_RUNTIME_PARENT}" ]; then
+  echo "[export_fem_gpu_runtime] persistent runtime archive root must not be a symbolic link: ${PERSISTENT_RUNTIME_PARENT}" >&2
   exit 2
 fi
 mkdir -p "${PERSISTENT_RUNTIME_PARENT}"
+if [ ! -d "${PERSISTENT_RUNTIME_PARENT}" ]; then
+  echo "[export_fem_gpu_runtime] persistent runtime archive root is not a regular directory: ${PERSISTENT_RUNTIME_PARENT}" >&2
+  exit 2
+fi
 mkdir -p "${VARIANTS_ROOT}" "${FULLMAG_CONTAINER_TARGET_DIR}/tmp" \
   "${FULLMAG_CONTAINER_TARGET_DIR}/cargo-home"
 
@@ -1177,7 +1199,8 @@ publish_runtime_bundle() {
       bash "${SOURCE_SNAPSHOT_ROOT}/scripts/prune_managed_fem_runtimes.sh"
   fi
   migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}" \
-    "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
+    "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py" \
+    "${VARIANTS_ALIAS_RETARGET_FROM}"
   verify_source_snapshot_identity
   ln -sfn "${alias_target}" "${repo_next_alias}"
   mv -Tf "${repo_next_alias}" "${RUNTIME_ROOT}"
