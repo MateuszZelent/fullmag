@@ -35,8 +35,10 @@ uporządkowane iloczyny tensorowe i odwrotne transformacje celów:
 \qquad d=1,\ldots,L .
 ```
 
-Minus pozostaje częścią iloczynu widmowego i jest stosowany dokładnie raz.
-Równania opisują obserwowalny kontrakt wejść i wyjść; nie są dowodem zgodności BORIS z Fullmag.
+Konwencja pola zawiera minus dokładnie raz. W Fullmag akumulacja par nie stosuje
+znaku; `negate_field` stosuje go do widma celu przed inverse FFT. Obserwacja
+BORIS nie narzuca miejsca tej operacji w Fullmag. Równania opisują obserwowalny
+kontrakt wejść i wyjść; nie są dowodem zgodności BORIS z Fullmag.
 
 (symbols-and-si-units)=
 ## Symbole i jednostki SI
@@ -117,6 +119,9 @@ for layer in (bottom, top):
     layer.alpha = 0.02
     layer.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.exchange(enabled=True)
+study.demag(enabled=True)
+study.save("H_demag", every=1.0e-13)
+study.solver(integrator="rk4", fix_dt=1.0e-14, gamma=2.211e5)
 study.stages.add_run(until=1e-12, stage_id="traceability_run")
 ```
 

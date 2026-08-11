@@ -373,17 +373,17 @@
         "validation": "exclusive with default_cell; three positive values when present",
         "meaning": "legacy/default native cell size",
         "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
-        "problem_ir": "discretization.fdm.cell"
+        "problem_ir": "backend_policy.discretization_hints.fdm.cell"
       },
       {
         "python": "FDM.default_cell",
         "type": "Sequence[float] or None",
         "default": "None",
         "si_unit": "\\mathrm m",
-        "validation": "three positive values when present",
+        "validation": "three positive values when present; needed when per_magnet is incomplete and for the current common-scratch policy",
         "meaning": "default native cell size",
         "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
-        "problem_ir": "discretization.fdm.default_cell"
+        "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
       },
       {
         "python": "FDM.per_magnet",
@@ -393,17 +393,17 @@
         "validation": "non-empty names and FDMGrid values",
         "meaning": "per-object native grid overrides",
         "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
-        "problem_ir": "discretization.fdm.per_magnet"
+        "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"
       },
       {
         "python": "FDM.demag",
         "type": "FDMDemag or None",
         "default": "None",
         "si_unit": "1",
-        "validation": "FDMDemag instance",
+        "validation": "no explicit type check in FDM.__init__; a valid FDMDemag is required during lowering",
         "meaning": "demagnetization policy wrapper",
         "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
-        "problem_ir": "discretization.fdm.demag"
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag"
       },
       {
         "python": "FDMGrid.cell",
@@ -413,7 +413,7 @@
         "validation": "three positive values",
         "meaning": "native cell size",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "discretization.fdm.per_magnet.*.cell"
+        "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet.*.cell"
       },
       {
         "python": "FDMDemag.strategy",
@@ -423,7 +423,7 @@
         "validation": "auto, single_grid, multilayer_convolution",
         "meaning": "requested demag realization",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "discretization.fdm.demag.strategy"
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.strategy"
       },
       {
         "python": "FDMDemag.mode",
@@ -433,7 +433,7 @@
         "validation": "auto, two_d_stack, three_d",
         "meaning": "requested multilayer mode",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "discretization.fdm.demag.mode"
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.mode"
       },
       {
         "python": "FDMDemag.common_cells",
@@ -443,7 +443,7 @@
         "validation": "three positive ints",
         "meaning": "explicit 3D working cell count",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "discretization.fdm.demag.common_cells"
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells"
       },
       {
         "python": "FDMDemag.common_cells_xy",
@@ -453,17 +453,27 @@
         "validation": "two positive ints",
         "meaning": "explicit 2D working XY count",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "discretization.fdm.demag.common_cells_xy"
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells_xy"
       },
       {
         "python": "FDMDemag.explain",
         "type": "bool",
         "default": "True",
         "si_unit": "1",
-        "validation": "boolean",
+        "validation": "raw script builder requires bool; constructor does not type-check it",
         "meaning": "planner explanation request",
         "backend_support": "FDM CPU/GPU authoring",
-        "problem_ir": "discretization.fdm.demag.explain (authoring metadata; no lowered physics field)"
+        "problem_ir": "not serialized by FDMDemag.to_ir"
+      },
+      {
+        "python": "FDMDemag.allow_single_grid_fallback",
+        "type": "bool or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "every non-None value raises ValueError",
+        "meaning": "removed compatibility input; silent fallback is forbidden",
+        "backend_support": "unsupported",
+        "problem_ir": "not serialized"
       }
     ],
     "excluded_parameters": [
