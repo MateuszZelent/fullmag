@@ -7,6 +7,7 @@ import {
   applyViewport3DPerspectiveCameraPose,
   applyViewport3DOrthographicCameraPose,
   resolveViewport3DProjectionCameraClip,
+  shouldApplyViewport3DProjectionCameraClip,
   resolveViewport3DEffectiveCameraState,
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
@@ -217,6 +218,33 @@ describe("Viewport3DScene scale helpers", () => {
     );
 
     expect(clip.far).toBeGreaterThan(1.2e-3);
+  });
+
+  it("does not reapply an unchanged projection clip during demand rendering", () => {
+    const camera = new PerspectiveCamera(42, 4 / 3, 1e-12, 1e-3);
+    const clip = { far: 1e-3, near: 1e-12 };
+
+    expect(
+      shouldApplyViewport3DProjectionCameraClip({
+        camera,
+        clip,
+        previous: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyViewport3DProjectionCameraClip({
+        camera,
+        clip,
+        previous: { camera, clip },
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyViewport3DProjectionCameraClip({
+        camera,
+        clip: { ...clip, far: 2e-3 },
+        previous: { camera, clip },
+      }),
+    ).toBe(true);
   });
 
   it("keeps bounds visible when the orthographic target is off center", () => {

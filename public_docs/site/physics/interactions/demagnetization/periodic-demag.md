@@ -63,6 +63,67 @@ FDM `periodic_airbox_k0` are not interchangeable.
 (demag-periodic-python-api)=
 ## Python API
 
+The complete stage-first scenario below requests an FDM film that is periodic in-plane and uses
+four translated demagnetization images on each periodic axis. The relaxation stage records both
+the demagnetization energy and field so that increasing `images` can be treated as a convergence
+study rather than as an undocumented solver setting.
+
+```python
+# %% Imports and units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Study, execution lane, and periodic grid
+study = fm.study("periodic_demag_convergence")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.pbc(
+    x=True,
+    y=True,
+    z=False,
+    demag="truncated_images",
+    images=(4, 4, 0),
+)
+study.fdm(default_cell=(3 * nm, 3 * nm, 4 * nm))
+
+# %% Geometry, material, initial state, and interactions
+film = study.geometry(
+    fm.Box(size=(96 * nm, 48 * nm, 4 * nm), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+study.exchange()
+study.demag()
+
+# %% Ordered relaxation stage and reproducible observables
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=500,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=[
+                "step",
+                "mx",
+                "my",
+                "mz",
+                "e_demag",
+                "e_total",
+                "max_torque_T",
+            ],
+        ),
+        fields=[fm.FieldAutosave("H_demag", every_steps=20)],
+    )
+)
+```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

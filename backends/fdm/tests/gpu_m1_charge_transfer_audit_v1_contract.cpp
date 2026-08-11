@@ -115,6 +115,8 @@ uint32_t expected_flags(const char *scope, uint64_t index) {
         if (index >= 4 && index <= 10)
             return ((index == 5 || index == 8 || index == 10) ? sync : transfer) |
                 provisional;
+        if (index == 11) return transfer | commit;
+        if (index == 12) return sync | commit;
         return ((index & 1) == 1 ? transfer : sync) | cadence;
     }
     if (index == 0 || index == 2) return transfer;
@@ -437,7 +439,10 @@ int main() {
                 solved.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
             "charge solve failed");
     const uint64_t solve_state_bytes = cells * (sizeof(uint8_t) + sizeof(double));
-    constexpr uint64_t metrics_bytes = 128;
+    require(solved.transfer_bytes > solve_state_bytes + 32 + sizeof(uint32_t),
+            "charge solve transfer ledger is too small for metrics readback");
+    const uint64_t metrics_bytes =
+        solved.transfer_bytes - solve_state_bytes - 32 - sizeof(uint32_t);
     constexpr uint32_t provisional_transfer =
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
@@ -489,6 +494,47 @@ int main() {
         require(fullmag_fdm_gpu_transport_context_destroy_v1(
                     fault_context.context_handle) == 0,
                 "solve fault context retained provisional state");
+    }
+
+    const uint64_t warm_copy_bytes = cells * sizeof(double);
+    const std::vector<ExpectedEvent> accept_fault_boundaries{{
+        {FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+         warm_copy_bytes, 1,
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER},
+        {FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS, 0, 1,
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION},
+    }};
+    for (uint32_t boundary = 70; boundary <= 71; ++boundary) {
+        fullmag_fdm_gpu_transport_context_create_result_v1 fault_context{};
+        init_record(fault_context);
+        require(fullmag_fdm_gpu_transport_context_create_v1(&create, &fault_context) == 0 &&
+                    fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                        fault_context.context_handle, &descriptor) == 0,
+                "accept fault context setup failed");
+        auto fault_solve = solve;
+        fault_solve.context_handle = fault_context.context_handle;
+        fullmag_fdm_gpu_charge_solve_result_v1 fault_result{};
+        init_record(fault_result, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+        require(fullmag_fdm_gpu_transport_solve_charge_v1(&fault_solve, &fault_result) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                    fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
+                        fault_context.context_handle, boundary) == 0,
+                "accept fault solve setup failed");
+        fullmag_fdm_gpu_charge_snapshot_info_v1 rejected_snapshot{};
+        init_record(rejected_snapshot, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+        require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                    fault_context.context_handle, fault_result.provisional_generation,
+                    &rejected_snapshot) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR,
+                "accept boundary fault did not fail transactionally");
+        verify_fault_suffix(fault_context.context_handle, 11,
+                            failed_prefix(accept_fault_boundaries, boundary - 70));
+        require(fullmag_fdm_gpu_transport_context_destroy_v1(
+                    fault_context.context_handle) == 0,
+                "accept fault context retained partial state");
     }
 
     fullmag_fdm_gpu_charge_snapshot_info_v1 snapshot{};
@@ -612,6 +658,11 @@ int main() {
               FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H, 32, 1),
         event(FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
               FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE, 0, 1),
+        event(FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+              potential_bytes, 1),
+        event(FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE, 0, 1),
         event(FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
               FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
               potential_bytes, 1),
@@ -633,7 +684,7 @@ int main() {
               FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE, 0, 1),
     }, "source");
 
-    uint64_t source_fault_cursor = 19;
+    uint64_t source_fault_cursor = 21;
     const uint32_t cadence_transfer =
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED;

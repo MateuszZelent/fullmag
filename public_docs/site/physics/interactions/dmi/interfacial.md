@@ -149,8 +149,70 @@ natural boundary physics. Adding a separate identical DMI boundary term would do
 ## Python API
 
 The constructor and IR contract are in
-{doc}`../../../python-api/interactions/interfacial-dmi`; that page does not publish a standalone
-Python cell because the stage builder has no DMI registration method. The public interaction matrix is:
+{doc}`../../../python-api/interactions/interfacial-dmi`. In the stage-first body API, assigning
+`Dind` activates the interfacial-DMI term. This complete thin-film scenario starts from a Neel
+skyrmion texture, declares the canonical FDM interface orientation implicitly as $+\hat{\mathbf z}$,
+and records the realized DMI field and energy during relaxation.
+
+```python
+# %% Imports and units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Thin-film FDM study
+study = fm.study("interfacial_dmi_neel_skyrmion")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.fdm(default_cell=(2 * nm, 2 * nm, 1 * nm))
+
+# %% Geometry, material, initial texture, and interactions
+film = study.geometry(
+    fm.Box(size=(128 * nm, 128 * nm, 1 * nm), name="film"),
+    name="film",
+)
+film.Ms = 5.8e5
+film.Aex = 15.0e-12
+film.Dind = 3.0e-3
+film.alpha = 0.3
+film.m = fm.texture.neel_skyrmion(
+    radius=24 * nm,
+    wall_width=8 * nm,
+    chirality=1,
+    core_polarity=-1,
+)
+study.exchange()
+study.demag()
+
+# %% Ordered relaxation stage and DMI observables
+study.stages.add_relax(
+    stage_id="relax_skyrmion",
+    algorithm="projected_gradient_bb",
+    max_steps=2_000,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=20,
+            quantities=[
+                "step",
+                "mx",
+                "my",
+                "mz",
+                "e_ex",
+                "e_demag",
+                "e_dmi",
+                "e_total",
+                "max_torque_T",
+            ],
+        ),
+        fields=[fm.FieldAutosave("H_dmi", every_steps=50)],
+    )
+)
+```
+
+The public interaction matrix is:
 
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |

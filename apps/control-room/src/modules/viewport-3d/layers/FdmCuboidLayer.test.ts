@@ -16,12 +16,21 @@ import {
   buildFdmVectorSegments,
   fdmCuboidSurfaceMeshKey,
   hasAnyEffectiveFdmPass,
+  handleFdmCuboidContextLost,
   resolveFdmCuboidPassPlan,
   resolveFdmVectorGlyphScale,
   recordFdmCuboidSurfaceAdoption,
   resolveFdmCuboidGeometryScopeInstanceOrdinals,
   resolveFdmCuboidSourceInstanceOrdinal,
+  resolveFdmCuboidPreparedSourceOrdinal,
+  prepareFdmCuboidInstanceMatrices,
+  estimateFdmCuboidCarrierPeakBytes,
+  uploadFdmCuboidAttribute,
+  visibleFdmCuboidInspectTargets,
+  resolveFdmCuboidColorUploadRevision,
+  shouldAttachFdmCuboidInspectListener,
 } from "./FdmCuboidLayer";
+import { BoxGeometry, InstancedBufferAttribute, InstancedMesh, MeshBasicMaterial } from "three";
 import type { FdmCuboidInstanceModelOptions } from "./fdmCuboidBuildModel";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
@@ -92,6 +101,188 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("prepares Three column-major matrices atomically for a target view", () => {
+    const model = buildFdmCuboidInstanceModel(domainFixture());
+    const prepared = prepareFdmCuboidInstanceMatrices(
+      model!,
+      Uint32Array.from([3, 1]),
+      "topology:7:target:bottom",
+    );
+
+    expect(prepared.contentRevision).toMatch(
+      /^topology:7:target:bottom:matrix:64:[0-9a-f]+:2:[0-9a-f]+$/,
+    );
+    expect(prepared.count).toBe(2);
+    expect(Array.from(prepared.ordinals)).toEqual([3, 1]);
+    expect(Array.from(prepared.cellIndices)).toEqual([
+      model!.cellIndices[3],
+      model!.cellIndices[1],
+    ]);
+    expect(Array.from(prepared.matrices.slice(12, 16))).toEqual([
+      model!.centers[9],
+      model!.centers[10],
+      model!.centers[11],
+      1,
+    ]);
+    expect(prepared.matrices).toHaveLength(2 * 16);
+  });
+
+  it("changes prepared content revision when transforms change with identical membership", () => {
+    const original = buildFdmCuboidInstanceModel(domainFixture());
+    const translated = buildFdmCuboidInstanceModel(
+      domainFixture({ origin: [10, 0, 0] }),
+    );
+    const ordinals = Uint32Array.from([3, 1]);
+
+    const before = prepareFdmCuboidInstanceMatrices(original!, ordinals, "target");
+    const after = prepareFdmCuboidInstanceMatrices(translated!, ordinals, "target");
+
+    expect(after.cellIndices).toEqual(before.cellIndices);
+    expect(after.contentRevision).not.toBe(before.contentRevision);
+    expect(after.matrices).not.toEqual(before.matrices);
+  });
+
+  it("maps reordered picks through the atomic prepared ordinals", () => {
+    const model = buildFdmCuboidInstanceModel(domainFixture());
+    const prepared = prepareFdmCuboidInstanceMatrices(
+      model!,
+      Uint32Array.from([3, 1]),
+      "target",
+    );
+
+    expect(resolveFdmCuboidPreparedSourceOrdinal(prepared, 0)).toBe(3);
+    expect(resolveFdmCuboidPreparedSourceOrdinal(prepared, 1)).toBe(1);
+    expect(resolveFdmCuboidPreparedSourceOrdinal(prepared, 2)).toBeNull();
+  });
+
+  it("keeps color upload revision stable across matrix-only changes", () => {
+    const original = buildFdmCuboidInstanceModel(domainFixture());
+    const translated = buildFdmCuboidInstanceModel(
+      domainFixture({ origin: [10, 0, 0] }),
+    );
+    const ordinals = Uint32Array.from([3, 1]);
+    const before = prepareFdmCuboidInstanceMatrices(original!, ordinals, "target");
+    const after = prepareFdmCuboidInstanceMatrices(translated!, ordinals, "target");
+    const scalar = {
+      buildKey: "scalar:r1|range:1|palette:viridis",
+      colors: new Float32Array(6),
+      range: { max: 1, min: -1 },
+    };
+
+    expect(before.contentRevision).not.toBe(after.contentRevision);
+    expect(resolveFdmCuboidColorUploadRevision(before, scalar)).toBe(
+      resolveFdmCuboidColorUploadRevision(after, scalar),
+    );
+    expect(
+      resolveFdmCuboidColorUploadRevision(after, {
+        ...scalar,
+        buildKey: "scalar:r2|range:2|palette:viridis",
+      }),
+    ).not.toBe(resolveFdmCuboidColorUploadRevision(after, scalar));
+  });
+
+  it("reduces active raw inspect listeners from two to one to zero on hide", () => {
+    const active = (visible: readonly boolean[]) =>
+      visible.filter((targetVisible) =>
+        shouldAttachFdmCuboidInspectListener({
+          inspectEnabled: true,
+          prepared: true,
+          surfaceVisible: targetVisible,
+          targetVisible,
+          wireframeVisible: false,
+        }),
+      ).length;
+
+    expect(active([true, true])).toBe(2);
+    expect(active([true, false])).toBe(1);
+    expect(active([false, false])).toBe(0);
+  });
+
+  it("bulk uploads exactly one owned attribute range per content revision", () => {
+    const source = Float32Array.from({ length: 32 }, (_, index) => index + 1);
+    const left = new InstancedBufferAttribute(new Float32Array(32), 16);
+    const right = new InstancedBufferAttribute(new Float32Array(32), 16);
+
+    expect(uploadFdmCuboidAttribute(left, source, "geometry:1", null)).toBe(
+      "geometry:1",
+    );
+    expect(Array.from(left.array)).toEqual(Array.from(source));
+    expect(left.version).toBe(1);
+    expect(uploadFdmCuboidAttribute(left, source, "geometry:1", "geometry:1")).toBe(
+      "geometry:1",
+    );
+    expect(left.version).toBe(1);
+    expect(uploadFdmCuboidAttribute(right, source, "geometry:1", null)).toBe(
+      "geometry:1",
+    );
+    expect(right.array).not.toBe(left.array);
+    expect(right.version).toBe(1);
+  });
+
+  it("keeps the conservative 153600-cell carrier peak below 72 MiB", () => {
+    const bytes = estimateFdmCuboidCarrierPeakBytes(153_600);
+    expect(bytes).toBe(65_740_800);
+    expect(bytes).toBeLessThanOrEqual(72 * 1024 * 1024);
+  });
+
+  it("prevents default context loss before invalidating uploaded revisions", () => {
+    const event = new Event("webglcontextlost", { cancelable: true });
+    let invalidated = false;
+
+    handleFdmCuboidContextLost(event, () => {
+      expect(event.defaultPrevented).toBe(true);
+      invalidated = true;
+    });
+
+    expect(invalidated).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("excludes retained hidden carriers from raw inspect raycasts", () => {
+    const geometry = new BoxGeometry();
+    const material = new MeshBasicMaterial();
+    const surface = new InstancedMesh(geometry, material, 1);
+    const wireframe = new InstancedMesh(geometry, material, 1);
+    surface.visible = false;
+    wireframe.visible = true;
+
+    expect(visibleFdmCuboidInspectTargets([surface, wireframe])).toEqual([
+      wireframe,
+    ]);
+    surface.visible = true;
+    wireframe.visible = false;
+    expect(visibleFdmCuboidInspectTargets([surface, wireframe])).toEqual([
+      surface,
+    ]);
+
+    surface.dispose();
+    wireframe.dispose();
+    geometry.dispose();
+    material.dispose();
+  });
+
+  it("keeps both cuboid carriers mounted and detaches hidden pointer handlers", () => {
+    const source = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(source).toContain("visible={renderPlan.surface.visible}");
+    expect(source).toContain("visible={renderPlan.wireframe.visible}");
+    expect(source).toContain(
+      "onPointerMove={renderPlan.surface.visible ? onPointerMove : undefined}",
+    );
+    expect(source).toContain(
+      "onPointerMove={renderPlan.wireframe.visible ? onPointerMove : undefined}",
+    );
+    expect(source).not.toContain("mesh.setMatrixAt(");
+    expect(source).not.toContain("mesh.setColorAt(");
+    expect(source).toContain('canvas.addEventListener("webglcontextlost"');
+    expect(source).toContain('canvas.addEventListener("webglcontextrestored"');
+    expect(source).toContain('canvas.removeEventListener("webglcontextlost"');
+    expect(source).toContain('canvas.removeEventListener("webglcontextrestored"');
+    expect(source).toContain("event.preventDefault();");
+    expect(source).toContain("visibleFdmCuboidInspectTargets([");
+    expect(source).toContain("resolveFdmCuboidPreparedSourceOrdinal(");
+    expect(source).toContain("resolveViewport3DScalarColorBufferKey(surfaceColors)");
+  });
   it("maps rendered target instances back to the shared sampled model", () => {
     const instanceOrdinals = Uint32Array.from([3, 1]);
 
@@ -209,6 +400,30 @@ describe("FdmCuboidLayer model", () => {
     expect(sceneModelSource).toContain("fdmAirboxInstanceModel");
     expect(sceneSource).toContain("fdmAirboxInstanceModel: FdmCuboidInstanceModel");
     expect(sceneSource).toContain("settings={fdmUniverseOutsideSupportSettings}");
+  });
+
+  it("keeps native multilayer and Airbox surface colors independent from shader visibility", () => {
+    const source = readFileSync(viewport3DSceneModelPath, "utf8");
+    const nativeBlock = source.slice(
+      source.indexOf("const fdmNativeLayerViews"),
+      source.indexOf("const fdmMultilayerAirboxView"),
+    );
+    const airboxBlock = source.slice(
+      source.indexOf("const fdmMultilayerAirboxView"),
+      source.indexOf("const fdmSurfaceColors"),
+    );
+
+    for (const block of [nativeBlock, airboxBlock]) {
+      expect(block).toContain("memoizeViewport3DFdmSurfaceColors({");
+      expect(block).toContain("buildKey: surfaceColorKey");
+      expect(block).toContain("model?.membershipRevision");
+      expect(block).not.toContain("model?.matrixContentRevision");
+      const surfaceModeBlock = block.slice(
+        block.indexOf("const surfaceMode"),
+        block.indexOf("const surfaceColorKey"),
+      );
+      expect(surfaceModeBlock).not.toContain("shaderVisible");
+    }
   });
 
   it("reconstructs the surface mesh when field colors become available", () => {
@@ -708,25 +923,28 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("color.fill(1)");
   });
 
-  it("re-uploads FDM matrices when the surface mesh identity changes", () => {
+  it("keys FDM matrix uploads by prepared content rather than render mode", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const matrixUploadBlock = layerSource.slice(
-      layerSource.indexOf("interface FdmCuboidMatrixUploadOptions"),
-      layerSource.indexOf("interface FdmCuboidColorUploadOptions"),
+      layerSource.indexOf("const uploadPreparedCarriers = useCallback"),
+      layerSource.indexOf("useEffect(() => {\n    uploadPreparedCarriers();"),
     );
 
-    expect(matrixUploadBlock).toContain("surfaceMeshKey");
+    expect(matrixUploadBlock).toContain("preparedInstances.contentRevision");
+    expect(matrixUploadBlock).not.toContain("renderPlan.surface.visible");
+    expect(matrixUploadBlock).not.toContain("renderPlan.wireframe.visible");
   });
 
-  it("reconstructs the FDM surface mesh when scalar coloring changes", () => {
+  it("retains the FDM surface mesh when scalar coloring changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const surfaceMeshBlock = layerSource.slice(
       layerSource.indexOf("<instancedMesh"),
       layerSource.indexOf("ref={surfaceRef}"),
     );
 
-    expect(surfaceMeshBlock).toContain(
-      "key={surfaceMeshKey}",
+    expect(surfaceMeshBlock).not.toContain("key=");
+    expect(layerSource).toContain(
+      "surface.instanceColor = new InstancedBufferAttribute(",
     );
   });
 

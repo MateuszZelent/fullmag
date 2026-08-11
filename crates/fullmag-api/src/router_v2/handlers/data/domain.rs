@@ -3,15 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
+use super::multilayer_identity::correlate_multilayer_layers;
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
@@ -21,7 +23,8 @@ use crate::router_v2::handlers::sessions::status::{
 };
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
-use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
+
+const FMBM_HEADER_LEN: usize = 104;
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -148,6 +151,7 @@ pub async fn get_domain_meta(
     responses(
         (status = 200, description = "FDM multilayer native and common transform layouts", body = FdmMultilayerLayoutResource),
         (status = 404, description = "No active workspace"),
+        (status = 409, description = "Artifact and execution-plan layers are missing, malformed, disagree in identity, native geometry, fingerprint, counts, or active-mask materialization, or cannot be correlated one-to-one"),
     ),
     tag = "data"
 )]
@@ -158,10 +162,144 @@ pub async fn get_fdm_multilayer_layout(
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    Ok(Json(fdm_multilayer_layout_resource(snapshot)))
+    Ok(Json(fdm_multilayer_layout_resource(snapshot)?))
 }
 
-fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultilayerLayoutResource {
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask",
+    params(
+        ("layer_id" = String, Path, description = "Stable native multilayer layer identity"),
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous FMBM response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for the FMBM payload")
+    ),
+    responses(
+        (status = 200, description = "Bit-packed native-layer active mask (FMBM v1)", content_type = "application/octet-stream", headers(
+            ("x-fullmag-grid-fingerprint" = String, description = "Exact native grid fingerprint"),
+            ("x-fullmag-mask-hash" = String, description = "SHA-256 identity of the packed active mask"),
+            ("x-fullmag-layout-revision" = String, description = "Current multilayer layout revision")
+        )),
+        (status = 206, description = "Partial FMBM payload", content_type = "application/octet-stream"),
+        (status = 304, description = "FMBM payload not modified for the supplied ETag"),
+        (status = 404, description = "Layer or materialized native active mask is not applicable"),
+        (status = 409, description = "Native active mask disagrees with the published layer layout"),
+        (status = 416, description = "Requested FMBM byte range is not satisfiable")
+    ),
+    tag = "data"
+)]
+pub async fn get_fdm_multilayer_layer_active_mask(
+    State(state): State<Arc<AppState>>,
+    Path(layer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let layout = fdm_multilayer_layout_resource(snapshot)?;
+    if !layout.available {
+        return Err(ApiError::not_found(
+            "FDM multilayer active mask is not applicable to the active backend",
+        ));
+    }
+    let descriptor = layout
+        .layers
+        .iter()
+        .find(|layer| layer.layer_id == layer_id)
+        .ok_or_else(|| {
+            ApiError::not_found(format!("FDM multilayer layer '{layer_id}' not found"))
+        })?;
+    if !descriptor.active_mask_present {
+        return Err(ApiError::not_found(format!(
+            "FDM multilayer layer '{layer_id}' has no materialized native active mask"
+        )));
+    }
+    let mask = planned_native_active_mask(snapshot, &layer_id)?.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "FDM multilayer layer '{layer_id}' has no materialized native active mask"
+        ))
+    })?;
+    let total_cells = descriptor
+        .native_grid
+        .iter()
+        .map(|value| u64::from(*value))
+        .product::<u64>();
+    if mask.len() as u64 != total_cells {
+        return Err(ApiError::conflict(format!(
+            "FDM multilayer layer '{layer_id}' active mask length does not match its native grid"
+        )));
+    }
+    let grid_fingerprint = descriptor
+        .native_grid_fingerprint
+        .as_deref()
+        .and_then(canonical_sha256_hex)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "FDM multilayer layer '{layer_id}' has no canonical native grid fingerprint"
+            ))
+        })?;
+    let packed = pack_native_active_mask(&mask);
+    let mask_hash = format!("{:x}", Sha256::digest(&packed));
+    let expected_hash = descriptor
+        .active_mask_hash
+        .as_deref()
+        .and_then(canonical_sha256_hex)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "FDM multilayer layer '{layer_id}' has no canonical active mask hash"
+            ))
+        })?;
+    if expected_hash != mask_hash {
+        return Err(ApiError::conflict(format!(
+            "FDM multilayer layer '{layer_id}' active mask hash does not match its layout"
+        )));
+    }
+    let cell_count = u32::try_from(total_cells)
+        .map_err(|_| ApiError::conflict("FDM multilayer native active mask exceeds FMBM u32"))?;
+    let packed_len = u32::try_from(packed.len())
+        .map_err(|_| ApiError::conflict("FDM multilayer native active mask exceeds FMBM u32"))?;
+    let mut payload = vec![0u8; FMBM_HEADER_LEN];
+    payload[..4].copy_from_slice(b"FMBM");
+    payload[4] = 1;
+    payload[5] = 1;
+    for (axis, count) in descriptor.native_grid.into_iter().enumerate() {
+        let offset = 8 + axis * 4;
+        payload[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
+    }
+    payload[20..24].copy_from_slice(&cell_count.to_le_bytes());
+    payload[24..28].copy_from_slice(&packed_len.to_le_bytes());
+    payload[28..36].copy_from_slice(&layout.layout_revision.to_le_bytes());
+    payload[36..68].copy_from_slice(&decode_sha256_hex(&grid_fingerprint)?);
+    payload[68..100].copy_from_slice(&decode_sha256_hex(&mask_hash)?);
+    payload.extend_from_slice(&packed);
+
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "fdm-multilayer-active-mask:{}:{}:{}:{}",
+        layer_id, layout.layout_revision, grid_fingerprint, mask_hash,
+    ));
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, payload);
+    insert_response_header(
+        &mut response,
+        "x-fullmag-grid-fingerprint",
+        &format!("sha256:{grid_fingerprint}"),
+    );
+    insert_response_header(
+        &mut response,
+        "x-fullmag-mask-hash",
+        &format!("sha256:{mask_hash}"),
+    );
+    insert_response_header(
+        &mut response,
+        "x-fullmag-layout-revision",
+        &layout.layout_revision.to_string(),
+    );
+    Ok(response)
+}
+
+fn fdm_multilayer_layout_resource(
+    snapshot: &SessionStateResponse,
+) -> Result<FdmMultilayerLayoutResource, ApiError> {
     let generation = domain_generation_id(snapshot);
     let revisions = (
         domain_generation_revision(snapshot),
@@ -172,13 +310,17 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
     let artifact = metadata
         .and_then(|value| value.get("artifact_layout"))
         .filter(|value| value.get("backend").and_then(Value::as_str) == Some("fdm_multilayer"));
-    let backend_plan = metadata
+    let raw_backend_plan = metadata
         .and_then(|value| value.get("execution_plan"))
-        .and_then(|value| value.get("backend_plan"))
-        .filter(|value| value.get("layers").is_some() && value.get("common_cells").is_some());
+        .and_then(|value| value.get("backend_plan"));
+    let backend_plan = raw_backend_plan.filter(|value| {
+        artifact.is_some()
+            || value.get("kind").and_then(Value::as_str) == Some("fdm_multilayer")
+            || (value.get("layers").is_some() && value.get("common_cells").is_some())
+    });
     let available = artifact.is_some() || backend_plan.is_some();
     if !available {
-        return FdmMultilayerLayoutResource {
+        return Ok(FdmMultilayerLayoutResource {
             schema_version: "fdm-multilayer-layout.v1".into(),
             domain_generation_id: generation,
             available: false,
@@ -194,7 +336,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
             common_transform_layout: None,
             layers: Vec::new(),
             airbox: unavailable_fdm_multilayer_airbox_resource("not_fdm_multilayer"),
-        };
+        });
     }
 
     let plan_summary = backend_plan.and_then(|value| value.get("planner_summary"));
@@ -266,106 +408,39 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
             provenance: "planner.grid_certificate;fft-scratch-only".into(),
         });
 
-    let plan_layers = backend_plan
-        .and_then(|value| value.get("layers"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let artifact_layers = artifact
-        .and_then(|value| value.get("layers"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let plan_layers = required_multilayer_layers(backend_plan, "execution plan")?;
+    let artifact_layers = required_multilayer_layers(artifact, "artifact layout")?;
     let transfer_provenance = metadata
         .and_then(|value| value.get("mesh"))
         .and_then(|value| value.get("transfer_provenance"))
         .and_then(Value::as_array);
-    let layer_count = plan_layers.len().max(artifact_layers.len());
-    let layers = (0..layer_count)
-        .filter_map(|index| {
-            let plan_layer = plan_layers.get(index);
-            let artifact_layer = artifact_layers.get(index);
-            let source = plan_layer.or(artifact_layer)?;
-            let magnet_name = value_string(source, "magnet_name")
-                .or_else(|| artifact_layer.and_then(|value| value_string(value, "magnet_name")))?;
-            let native_grid = plan_layer
-                .and_then(|value| value.get("native_grid"))
-                .or_else(|| artifact_layer.and_then(|value| value.get("native_grid")))
-                .and_then(value_array3_u32)?;
-            let native_cell_size = plan_layer
-                .and_then(|value| value.get("native_cell_size"))
-                .or_else(|| artifact_layer.and_then(|value| value.get("native_cell_size")))
-                .and_then(value_array3_f64)?;
-            let native_origin = plan_layer
-                .and_then(|value| value.get("native_origin"))
-                .or_else(|| artifact_layer.and_then(|value| value.get("native_origin")))
-                .and_then(value_array3_f64)?;
-            let convolution_grid = artifact_layer
-                .and_then(|value| value.get("convolution_grid"))
-                .or_else(|| plan_layer.and_then(|value| value.get("convolution_grid")))
-                .and_then(value_array3_u32)
-                .unwrap_or(common_shape);
-            let convolution_cell_size = artifact_layer
-                .and_then(|value| value.get("convolution_cell_size"))
-                .or_else(|| plan_layer.and_then(|value| value.get("convolution_cell_size")))
-                .and_then(value_array3_f64)
-                .unwrap_or(common_cell_size);
-            let layer_id = value_string(source, "layer_id")
-                .or_else(|| value_string(source, "object_id").map(|id| format!("layer:{id}")))
-                .unwrap_or_else(|| format!("layer:{index}:{magnet_name}"));
-            let object_id = value_string(source, "object_id")
-                .unwrap_or_else(|| format!("object:{magnet_name}"));
-            let active_mask = plan_layer
-                .and_then(|value| value.get("native_active_mask"))
-                .and_then(Value::as_array);
-            let total_cells = native_grid
-                .iter()
-                .map(|value| u64::from(*value))
-                .product::<u64>();
-            let active_cell_count = active_mask
-                .map(|mask| {
-                    mask.iter()
-                        .filter(|value| value.as_bool() == Some(true))
-                        .count() as u64
-                })
-                .or_else(|| {
-                    artifact_layer
-                        .and_then(|value| value.get("active_cell_count"))
-                        .and_then(Value::as_u64)
-                })
-                .unwrap_or(total_cells);
-            let source_grid_fingerprint = transfer_provenance
-                .and_then(|entries| {
-                    entries.iter().find(|entry| {
-                        value_string(entry, "magnet_name").as_deref() == Some(magnet_name.as_str())
-                    })
-                })
-                .and_then(|entry| value_string(entry, "source_grid_fingerprint"));
-            Some(FdmLayerLayoutResource {
-                layer_id,
-                object_id,
-                magnet_name,
-                native_grid,
-                native_cell_size,
-                native_origin,
-                native_grid_fingerprint: source_grid_fingerprint,
-                convolution_grid,
-                convolution_cell_size,
-                transfer_kind: value_string(source, "transfer_kind")
-                    .unwrap_or_else(|| "identity".into()),
-                active_mask_present: active_mask.is_some()
-                    || artifact_layer
-                        .and_then(|value| value.get("active_mask_present"))
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                active_cell_count,
-                inactive_cell_count: total_cells.saturating_sub(active_cell_count),
-                mask_provenance: active_mask
-                    .is_some()
-                    .then(|| "execution_plan.layers.native_active_mask".into()),
-            })
+    let correlated_layers = if !plan_layers.is_empty() && !artifact_layers.is_empty() {
+        correlate_multilayer_layers(&artifact_layers, &plan_layers)?
+            .into_iter()
+            .map(|(artifact, plan)| (Some(artifact), Some(plan)))
+            .collect::<Vec<_>>()
+    } else if !plan_layers.is_empty() {
+        plan_layers.iter().map(|plan| (None, Some(plan))).collect()
+    } else {
+        artifact_layers
+            .iter()
+            .map(|artifact| (Some(artifact), None))
+            .collect()
+    };
+    let layers = correlated_layers
+        .into_iter()
+        .enumerate()
+        .map(|(index, (artifact_layer, plan_layer))| {
+            build_fdm_multilayer_layer_layout(
+                index,
+                artifact_layer,
+                plan_layer,
+                transfer_provenance,
+                common_shape,
+                common_cell_size,
+            )
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiError>>()?;
     let layout_fingerprint = artifact.or(backend_plan).and_then(|value| {
         serde_json::to_vec(value).ok().map(|bytes| {
             let mut hasher = Sha256::new();
@@ -374,7 +449,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
         })
     });
 
-    FdmMultilayerLayoutResource {
+    Ok(FdmMultilayerLayoutResource {
         schema_version: "fdm-multilayer-layout.v1".into(),
         domain_generation_id: generation,
         available: true,
@@ -390,7 +465,7 @@ fn fdm_multilayer_layout_resource(snapshot: &SessionStateResponse) -> FdmMultila
         common_transform_layout: common_layout,
         layers,
         airbox: fdm_multilayer_airbox_resource(snapshot, revisions.1),
-    }
+    })
 }
 
 fn unavailable_fdm_multilayer_airbox_resource(reason: &str) -> FdmMultilayerAirboxResource {
@@ -419,9 +494,13 @@ fn fdm_multilayer_airbox_resource(
     observation_revision: u64,
 ) -> FdmMultilayerAirboxResource {
     match load_fdm_multilayer_airbox_carrier(snapshot) {
-        Ok(Some(carrier)) => fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision),
+        Ok(Some(carrier)) => {
+            fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision)
+        }
         Ok(None) => unavailable_fdm_multilayer_airbox_resource("airbox_carrier_missing"),
-        Err(reason) => unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}")),
+        Err(reason) => {
+            unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}"))
+        }
     }
 }
 
@@ -459,8 +538,435 @@ fn value_string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
+fn required_multilayer_layers(
+    owner: Option<&Value>,
+    owner_label: &str,
+) -> Result<Vec<Value>, ApiError> {
+    let Some(owner) = owner else {
+        return Ok(Vec::new());
+    };
+    let layers = owner
+        .get("layers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "multilayer FDM {owner_label} has no valid native layer array"
+            ))
+        })?;
+    if layers.is_empty() {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM {owner_label} has no native layers"
+        )));
+    }
+    Ok(layers.clone())
+}
+
+fn build_fdm_multilayer_layer_layout(
+    index: usize,
+    artifact_layer: Option<&Value>,
+    plan_layer: Option<&Value>,
+    transfer_provenance: Option<&Vec<Value>>,
+    common_shape: [u32; 3],
+    common_cell_size: [f64; 3],
+) -> Result<FdmLayerLayoutResource, ApiError> {
+    let source = plan_layer.or(artifact_layer).ok_or_else(|| {
+        ApiError::conflict("multilayer FDM correlated layer has no source descriptor")
+    })?;
+    let magnet_name = value_string(source, "magnet_name")
+        .or_else(|| artifact_layer.and_then(|value| value_string(value, "magnet_name")))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "multilayer FDM layer at index {index} has no magnet_name"
+            ))
+        })?;
+    let layer_id = value_string(source, "layer_id")
+        .or_else(|| value_string(source, "object_id").map(|id| format!("layer:{id}")))
+        .unwrap_or_else(|| format!("layer:{index}:{magnet_name}"));
+    let object_id =
+        value_string(source, "object_id").unwrap_or_else(|| format!("object:{magnet_name}"));
+
+    let native_grid =
+        resolve_required_layer_array3_u32(artifact_layer, plan_layer, "native_grid", &layer_id)?;
+    if native_grid.iter().any(|value| *value == 0) {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_grid must be positive"
+        )));
+    }
+    let native_cell_size = resolve_required_layer_array3_f64(
+        artifact_layer,
+        plan_layer,
+        "native_cell_size",
+        &layer_id,
+    )?;
+    if native_cell_size
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_cell_size must be finite and positive"
+        )));
+    }
+    let native_origin =
+        resolve_required_layer_array3_f64(artifact_layer, plan_layer, "native_origin", &layer_id)?;
+    if native_origin.iter().any(|value| !value.is_finite()) {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_origin must be finite"
+        )));
+    }
+    let total_cells = native_grid
+        .iter()
+        .try_fold(1u64, |total, count| total.checked_mul(u64::from(*count)))
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' native_grid cell count overflows u64"
+            ))
+        })?;
+
+    let active_mask = parse_planned_native_active_mask(plan_layer, &layer_id, total_cells)?;
+    let active_mask_present = active_mask.is_some();
+    validate_declared_mask_presence(artifact_layer, plan_layer, &layer_id, active_mask_present)?;
+    let active_cell_count = active_mask
+        .as_ref()
+        .map(|mask| mask.iter().filter(|active| **active).count() as u64)
+        .unwrap_or(total_cells);
+    let inactive_cell_count = total_cells - active_cell_count;
+    validate_declared_layer_counts(
+        artifact_layer,
+        plan_layer,
+        &layer_id,
+        total_cells,
+        active_cell_count,
+        inactive_cell_count,
+        active_mask_present,
+    )?;
+
+    let convolution_grid = artifact_layer
+        .and_then(|value| value.get("convolution_grid"))
+        .or_else(|| plan_layer.and_then(|value| value.get("convolution_grid")))
+        .map(|value| {
+            value_array3_u32(value).ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' has invalid convolution_grid"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(common_shape);
+    let convolution_cell_size = artifact_layer
+        .and_then(|value| value.get("convolution_cell_size"))
+        .or_else(|| plan_layer.and_then(|value| value.get("convolution_cell_size")))
+        .map(|value| {
+            value_array3_f64(value).ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' has invalid convolution_cell_size"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(common_cell_size);
+
+    let transfer_fingerprint = transfer_provenance
+        .and_then(|entries| {
+            entries.iter().find(|entry| {
+                value_string(entry, "magnet_name").as_deref() == Some(magnet_name.as_str())
+            })
+        })
+        .and_then(|entry| value_string(entry, "source_grid_fingerprint"))
+        .map(|value| validate_layer_fingerprint(value, &layer_id))
+        .transpose()?;
+    let artifact_fingerprint =
+        optional_layer_fingerprint(artifact_layer, "native_grid_fingerprint", &layer_id)?;
+    let plan_fingerprint =
+        optional_layer_fingerprint(plan_layer, "native_grid_fingerprint", &layer_id)?;
+    ensure_optional_strings_agree(
+        artifact_fingerprint.as_deref(),
+        plan_fingerprint.as_deref(),
+        "native_grid_fingerprint",
+        &layer_id,
+    )?;
+    ensure_optional_strings_agree(
+        artifact_fingerprint
+            .as_deref()
+            .or(plan_fingerprint.as_deref()),
+        transfer_fingerprint.as_deref(),
+        "native_grid_fingerprint",
+        &layer_id,
+    )?;
+    let declared_grid_fingerprint = transfer_fingerprint
+        .or(plan_fingerprint)
+        .or(artifact_fingerprint);
+    let source_grid_fingerprint = match declared_grid_fingerprint {
+        Some(fingerprint) => fingerprint,
+        None => prefixed_fingerprint(
+            fullmag_ir::FdmGridCertificateIR::new(
+                native_origin,
+                native_grid,
+                native_cell_size,
+                active_cell_count,
+                1,
+            )
+            .map_err(|error| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' cannot establish a native grid fingerprint: {error}"
+                ))
+            })?
+            .grid_fingerprint,
+        ),
+    };
+
+    Ok(FdmLayerLayoutResource {
+        layer_id: layer_id.clone(),
+        object_id,
+        magnet_name,
+        native_grid,
+        native_cell_size,
+        native_origin,
+        native_grid_fingerprint: Some(source_grid_fingerprint),
+        convolution_grid,
+        convolution_cell_size,
+        transfer_kind: value_string(source, "transfer_kind")
+            .or_else(|| artifact_layer.and_then(|value| value_string(value, "transfer_kind")))
+            .unwrap_or_else(|| "identity".into()),
+        active_mask_present,
+        active_cell_count,
+        inactive_cell_count,
+        active_mask_hash: active_mask
+            .as_ref()
+            .map(|mask| format!("sha256:{:x}", Sha256::digest(pack_native_active_mask(mask)))),
+        mask_ref: active_mask.as_ref().map(|_| {
+            format!(
+                "/v2/sessions/current/data/domain/fdm-multilayer-layers/{}/active-mask",
+                percent_encode_path_segment(&layer_id),
+            )
+        }),
+        mask_provenance: active_mask
+            .is_some()
+            .then(|| "execution_plan.layers.native_active_mask".into()),
+    })
+}
+
+fn resolve_required_layer_array3_u32(
+    artifact_layer: Option<&Value>,
+    plan_layer: Option<&Value>,
+    key: &str,
+    layer_id: &str,
+) -> Result<[u32; 3], ApiError> {
+    let artifact = optional_layer_array3_u32(artifact_layer, key, layer_id)?;
+    let plan = optional_layer_array3_u32(plan_layer, key, layer_id)?;
+    if let (Some(artifact), Some(plan)) = (artifact, plan) {
+        if artifact != plan {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' artifact and execution plan {key} disagree"
+            )));
+        }
+    }
+    plan.or(artifact).ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has no valid {key}"
+        ))
+    })
+}
+
+fn resolve_required_layer_array3_f64(
+    artifact_layer: Option<&Value>,
+    plan_layer: Option<&Value>,
+    key: &str,
+    layer_id: &str,
+) -> Result<[f64; 3], ApiError> {
+    let artifact = optional_layer_array3_f64(artifact_layer, key, layer_id)?;
+    let plan = optional_layer_array3_f64(plan_layer, key, layer_id)?;
+    if let (Some(artifact), Some(plan)) = (artifact, plan) {
+        if artifact != plan {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' artifact and execution plan {key} disagree"
+            )));
+        }
+    }
+    plan.or(artifact).ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has no valid {key}"
+        ))
+    })
+}
+
+fn optional_layer_array3_u32(
+    layer: Option<&Value>,
+    key: &str,
+    layer_id: &str,
+) -> Result<Option<[u32; 3]>, ApiError> {
+    let Some(value) = layer.and_then(|layer| layer.get(key)) else {
+        return Ok(None);
+    };
+    value_array3_u32(value).map(Some).ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has invalid {key}"
+        ))
+    })
+}
+
+fn optional_layer_array3_f64(
+    layer: Option<&Value>,
+    key: &str,
+    layer_id: &str,
+) -> Result<Option<[f64; 3]>, ApiError> {
+    let Some(value) = layer.and_then(|layer| layer.get(key)) else {
+        return Ok(None);
+    };
+    value_array3_f64(value).map(Some).ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has invalid {key}"
+        ))
+    })
+}
+
+fn parse_planned_native_active_mask(
+    plan_layer: Option<&Value>,
+    layer_id: &str,
+    total_cells: u64,
+) -> Result<Option<Vec<bool>>, ApiError> {
+    let Some(mask_value) = plan_layer.and_then(|layer| layer.get("native_active_mask")) else {
+        return Ok(None);
+    };
+    let values = mask_value.as_array().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_active_mask must be a boolean array"
+        ))
+    })?;
+    let mask = value_bool_mask(values).ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_active_mask contains non-boolean values"
+        ))
+    })?;
+    if mask.len() as u64 != total_cells {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_active_mask length disagrees with native_grid"
+        )));
+    }
+    Ok(Some(mask))
+}
+
+fn validate_declared_mask_presence(
+    artifact_layer: Option<&Value>,
+    plan_layer: Option<&Value>,
+    layer_id: &str,
+    materialized: bool,
+) -> Result<(), ApiError> {
+    for (owner, owner_label) in [(artifact_layer, "artifact"), (plan_layer, "execution plan")] {
+        let Some(value) = owner.and_then(|layer| layer.get("active_mask_present")) else {
+            continue;
+        };
+        let declared = value.as_bool().ok_or_else(|| {
+            ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' {owner_label} active_mask_present is not boolean"
+            ))
+        })?;
+        if declared != materialized {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' {owner_label} active_mask_present disagrees with materialized native_active_mask"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_declared_layer_counts(
+    artifact_layer: Option<&Value>,
+    plan_layer: Option<&Value>,
+    layer_id: &str,
+    total_cells: u64,
+    active_cell_count: u64,
+    inactive_cell_count: u64,
+    active_mask_present: bool,
+) -> Result<(), ApiError> {
+    for (key, expected) in [
+        ("total_cell_count", total_cells),
+        ("active_cell_count", active_cell_count),
+        ("inactive_cell_count", inactive_cell_count),
+    ] {
+        for (owner, owner_label) in [(artifact_layer, "artifact"), (plan_layer, "execution plan")] {
+            let Some(value) = owner.and_then(|layer| layer.get(key)) else {
+                continue;
+            };
+            let declared = value.as_u64().ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' {owner_label} {key} is not a non-negative integer"
+                ))
+            })?;
+            if declared != expected {
+                return Err(ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' {owner_label} {key} disagrees with native geometry and active mask"
+                )));
+            }
+        }
+    }
+    if !active_mask_present && active_cell_count != total_cells {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has partial counts without a materialized native_active_mask"
+        )));
+    }
+    Ok(())
+}
+
+fn optional_layer_fingerprint(
+    layer: Option<&Value>,
+    key: &str,
+    layer_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = layer.and_then(|layer| layer.get(key)) else {
+        return Ok(None);
+    };
+    let value = value.as_str().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has invalid {key}"
+        ))
+    })?;
+    Ok(Some(validate_layer_fingerprint(
+        value.to_owned(),
+        layer_id,
+    )?))
+}
+
+fn validate_layer_fingerprint(value: String, layer_id: &str) -> Result<String, ApiError> {
+    canonical_sha256_hex(&value)
+        .map(|hex| format!("sha256:{hex}"))
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' native_grid_fingerprint must be canonical SHA-256"
+            ))
+        })
+}
+
+fn ensure_optional_strings_agree(
+    left: Option<&str>,
+    right: Option<&str>,
+    key: &str,
+    layer_id: &str,
+) -> Result<(), ApiError> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(());
+    };
+    if left != right {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' {key} declarations disagree"
+        )));
+    }
+    Ok(())
+}
+
+fn prefixed_fingerprint(fingerprint: String) -> String {
+    if fingerprint.starts_with("sha256:") {
+        fingerprint
+    } else {
+        format!("sha256:{fingerprint}")
+    }
+}
+
 fn value_array3_u32(value: &Value) -> Option<[u32; 3]> {
     let values = value.as_array()?;
+    if values.len() != 3 {
+        return None;
+    }
     Some([
         u32::try_from(values.first()?.as_u64()?).ok()?,
         u32::try_from(values.get(1)?.as_u64()?).ok()?,
@@ -470,11 +976,104 @@ fn value_array3_u32(value: &Value) -> Option<[u32; 3]> {
 
 fn value_array3_f64(value: &Value) -> Option<[f64; 3]> {
     let values = value.as_array()?;
+    if values.len() != 3 {
+        return None;
+    }
     Some([
         values.first()?.as_f64()?,
         values.get(1)?.as_f64()?,
         values.get(2)?.as_f64()?,
     ])
+}
+
+fn value_bool_mask(values: &[Value]) -> Option<Vec<bool>> {
+    values.iter().map(Value::as_bool).collect()
+}
+
+fn planned_native_active_mask(
+    snapshot: &SessionStateResponse,
+    requested_layer_id: &str,
+) -> Result<Option<Vec<bool>>, ApiError> {
+    let layers = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("backend_plan"))
+        .and_then(|value| value.get("layers"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::not_found("FDM multilayer execution plan has no native layer masks")
+        })?;
+    for (index, layer) in layers.iter().enumerate() {
+        let magnet_name =
+            value_string(layer, "magnet_name").unwrap_or_else(|| format!("layer-{index}"));
+        let layer_id = value_string(layer, "layer_id")
+            .or_else(|| value_string(layer, "object_id").map(|id| format!("layer:{id}")))
+            .unwrap_or_else(|| format!("layer:{index}:{magnet_name}"));
+        if layer_id != requested_layer_id {
+            continue;
+        }
+        let Some(values) = layer.get("native_active_mask").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        return value_bool_mask(values).map(Some).ok_or_else(|| {
+            ApiError::conflict(format!(
+                "FDM multilayer layer '{requested_layer_id}' active mask contains non-boolean values"
+            ))
+        });
+    }
+    Ok(None)
+}
+
+fn pack_native_active_mask(mask: &[bool]) -> Vec<u8> {
+    let mut packed = vec![0u8; mask.len().div_ceil(8)];
+    for (cell_index, active) in mask.iter().copied().enumerate() {
+        if active {
+            packed[cell_index / 8] |= 1 << (cell_index % 8);
+        }
+    }
+    packed
+}
+
+fn canonical_sha256_hex(value: &str) -> Option<String> {
+    let hex = value.strip_prefix("sha256:").unwrap_or(value);
+    (hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| hex.to_ascii_lowercase())
+}
+
+fn decode_sha256_hex(value: &str) -> Result<[u8; 32], ApiError> {
+    let canonical = canonical_sha256_hex(value)
+        .ok_or_else(|| ApiError::conflict("invalid SHA-256 fingerprint in FMBM identity"))?;
+    let mut decoded = [0u8; 32];
+    for (index, target) in decoded.iter_mut().enumerate() {
+        *target = u8::from_str_radix(&canonical[index * 2..index * 2 + 2], 16)
+            .map_err(|_| ApiError::conflict("invalid SHA-256 fingerprint in FMBM identity"))?;
+    }
+    Ok(decoded)
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn insert_response_header(
+    response: &mut axum::response::Response,
+    name: &'static str,
+    value: &str,
+) {
+    if let Ok(value) = HeaderValue::from_str(value) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static(name), value);
+    }
 }
 
 fn fem_element_type(mesh: &fullmag_runner::FemMeshPayload) -> Option<String> {

@@ -17,9 +17,10 @@ $\mathbf H_{\mathrm{ext}}=\mathbf B_{\mathrm{ext}}/\mu_0$ in $\mathrm{A\,m^{-1}}
 lane consumes that resolved field. No implementation may silently treat the Python input as an
 H-field.
 
-This page owns the physical interaction and its four numerical lanes. The Python constructor,
-validation, canonical serialization, and copyable authoring examples are documented separately in
-{doc}`../../../python-api/interactions/zeeman`.
+This page owns the physical interaction and its four numerical lanes. Detailed constructor,
+validation, and canonical serialization reference material is documented separately in
+{doc}`../../../python-api/interactions/zeeman`; the complete stage-first workflow below shows the
+interaction in an executable study.
 
 :::{admonition} Scope boundary
 :class: note
@@ -182,6 +183,55 @@ examples are owned by {doc}`../../../python-api/interactions/zeeman`. The essent
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Zeeman.B` | `Sequence[float]` | `required` | $\mathrm{T}$ | `length 3; all components finite` | `uniform external magnetic flux density` | `FDM/FEM CPU/GPU` | `energy[].B` (serialized key `B`) |
+
+### Complete uniform-field stage
+
+This copyable study declares the requested external flux density in tesla
+through the stage-first builder. Planning converts it once to
+$\mathbf H_{\mathrm{ext}}$; the authoring script keeps the original
+$\mathbf B_{\mathrm{ext}}$ intent.
+
+```python
+# %% Imports and SI units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Study and execution lane
+study = fm.study("zeeman_uniform_field")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+
+# %% Geometry, material, initial state, and interactions
+film = study.geometry(
+    fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"),
+    name="film",
+)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+study.exchange()
+study.b_ext(0.0, 0.0, 0.1)  # B_ext = (0, 0, 0.1) T
+
+# %% Fixed-step dynamics, outputs, and ordered stage
+study.solver(integrator="heun", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(
+    stage_id="precess",
+    until=1.0e-12,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            t_sampl=1.0e-13,
+            quantities=["step", "t", "mx", "my", "mz", "e_ext", "e_total"],
+        ),
+        fields=[fm.FieldAutosave("H_ext", every=1.0e-13)],
+    )
+)
+```
 
 The key is uppercase `B` in the canonical serialized representation. The planner then resolves
 the native field as `[B_x / MU0, B_y / MU0, B_z / MU0]` in A/m. This preserves requested intent

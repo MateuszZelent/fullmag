@@ -161,6 +161,47 @@ not require a demagnetization solve or an interaction boundary condition.
 | `Material.Kc3_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
 
 
+### Executable user workflow: study and stages
+
+The normal user-facing script assigns the cubic constants and crystal axes to the geometry
+material, then registers an explicit stage pipeline. This example exercises the FDM CPU reference
+lane; device and precision are resolved from the declared study intent.
+
+```python
+# %% Copyable Python/Jupyter example: cubic anisotropy study pipeline
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("cubic-anisotropy-example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 1 * nm)
+
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.01
+body.Kc1 = 0.2e6
+body.Kc2 = 0.0
+body.Kc3 = 0.0
+body.anisC1 = (1.0, 0.0, 0.0)
+body.anisC2 = (0.0, 1.0, 0.0)
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolT=1.0e-6,
+)
+```
+
+The compatibility constructor `fm.CubicAnisotropy` is a lowering/inspection form; the stage
+workflow above is the public simulation authoring path. A GPU request or spatial cubic fields
+requires the corresponding planner capability and is not implied by this CPU reference example.
+
 (cubic-problem-ir)=
 ## ProblemIR and planner contract
 

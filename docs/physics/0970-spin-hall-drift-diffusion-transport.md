@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-10
+- Last updated: 2026-08-11
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -705,16 +705,17 @@ model. CPU and GPU use the same signs, SI units, formula and operator IDs,
 face orientation, interface observations, and balance identities. They do not
 share mutable solver state or implementation workspaces.
 
-Capability pozostaje `semantic_only`, ponieważ publiczna ścieżka
-`ProblemIR`--planner--runner nie uruchamia tego ABI. Agregat FDM GPU M1 ma
-`implementation_state=partial`: zaimplementowany jest wyłącznie ograniczony
-charge-only FP64 slice, natomiast steady spin, direct SHE, mixing i torque z
-tego kontraktu nadal nie mają realizacji CUDA. Stan walidacji pozostaje
-`validation_state=unvalidated`, z `validated_workloads=[]`. Świeży managed
-device proof poniżej jest dowodem wykonania testów kontraktowych, nie promocją
-capability ani kwalifikacją produkcyjną.
+Ogólny agregat pozostaje `semantic_only`, ponieważ poza bounded
+`CurrentTransport` charge-only nie ma jeszcze publicznej ścieżki dla tego ABI.
+Agregat FDM GPU M1 ma `implementation_state=partial`: zaimplementowany jest
+wyłącznie ograniczony charge-only FP64 slice, natomiast steady spin, direct
+SHE, mixing i torque z tego kontraktu nadal nie mają realizacji CUDA. Stan
+walidacji pozostaje `validation_state=unvalidated`, z
+`validated_workloads=[]`. Świeży managed device proof poniżej jest dowodem
+wykonania testów kontraktowych, nie promocją capability ani kwalifikacją
+produkcyjną.
 
-#### Stan ograniczonej implementacji M1 charge z 2026-08-10
+#### Stan ograniczonej implementacji M1 charge z 2026-08-11
 
 Właściciel `backends/fdm/gpu/cuda/transport/charge/**` realizuje rzeczywisty
 FP64 charge solve na urządzeniu: konserwatywny operator FV z harmoniczną
@@ -752,6 +753,43 @@ insulating nie wnosi składnika do $A$ ani $b$, a komórki nieaktywne nie tworz�
 połączeń przewodzących. To równanie opisuje wyłącznie ograniczony slice charge;
 nie obejmuje strumienia spinowego $Q$, SHE, mixing ani torque.
 
+#### Zero-mean gauge dla swobodnych komponentów Neumanna
+
+Dla komponentu przewodzącego bez żadnej ściany voltage operator jest
+semidefinitny i jego jądrem jest stała na tym komponencie. Solver nie może
+wybrać stałej przez przypadkowy pivot ani przez niejawny fallback CPU. Wymagana
+jest najpierw zgodność Neumanna
+
+```{math}
+:label: fdm-gpu-m1-neumann-compatibility
+\sum_{K\in C} b_K = 0,
+\qquad
+\bar V_C = \frac{1}{|C|}\sum_{K\in C} V_K = 0
+\quad\text{dla każdego komponentu bez voltage datum}.
+```
+
+W implementacji `label_reference_components_kernel` buduje graf wyłącznie z
+dodatnich przewodności ścian wewnętrznych, oznacza komponenty zakotwiczone
+przez voltage BC i sprawdza `|sum b| <= 64 eps ||b||_1` dla każdego wolnego
+komponentu. Niespełnienie zgodności kończy solve statusem
+`FULLMAG_FDM_GPU_TRANSPORT_ERROR_BALANCE_FAILURE`. Dla polityki
+`ZERO_MEAN_PER_FREE_COMPONENT` device PCG stosuje ortogonalną projekcję na
+podprzestrzeń zerowej średniej po inicjalizacji $V$, prawej stronie, residuale,
+preconditionerze, kierunku $p$ i iloczynie $Ap$. Dzięki temu rozwiązywany jest
+układ $PAP\,V=Pb$ bez sztucznego usuwania jednego węzła; komponenty z voltage
+datum zachowują ich wartość referencyjną. `BOUNDARY_REFERENCE_PER_COMPONENT`
+pozostaje osobną polityką i odrzuca wolny komponent.
+
+To jest obecnie bounded, device-side realization: identyfikacja grafu i
+projekcja są deterministyczne, lecz celowo serializowane w jednym bloku CUDA.
+Nie jest to jeszcze dowód skalowalności dla dużych rozłącznych domen ani
+kwalifikacja publicznego runnera. Test uniform zawiera trzy nowe kontrakty:
+niezerowy, zbilansowany pure-Neumann solve z odczytem średniej $V$,
+niezbilansowany strumień, który musi zakończyć się `BALANCE_FAILURE`, oraz
+typed mixed anchored/free fixture z wewnętrznym charge-insulating interfejsem,
+który sprawdza niezależną średnią komponentu swobodnego i zachowanie datum
+komponentu zakotwiczonego.
+
 Zarządzana bramka
 `just verify-fdm-gpu-m1-charge-native-contract` zakończyła się kodem 0 na GPU
 o UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, dla build digest
@@ -781,16 +819,55 @@ buildzie wyniosło
 odczytane $V$ i $J_c$ są bitowo równe stanowi przed eksportem. SHA toru B nie
 jest stałym oraclem między buildami i nie może być utożsamiane z SHA toru A.
 
-Otwarte granice są blokujące dla szerszego M1: nie ma jeszcze swobodnego,
-zgodnego Neumannowskiego komponentu z narzuconą zerową średnią; bieżące
-workloady charge są zakotwiczone przez voltage BC. Zaimportowany iterate jest
+Powyższe liczby opisują wcześniejszy run bazowy; jego otwarte granice były
+blokujące dla szerszego M1: implementacja swobodnego, zgodnego Neumannowskiego
+komponentu z narzuconą zerową średnią nie miała wtedy managed device proof.
+Zaimportowany iterate jest
 odtwarzany jako accepted snapshot, ale następny solve nie konsumuje jeszcze
 tego stanu jako persistent Krylov warm start. Nie ma publicznego runnera,
 ProblemIR stage ani stabilnych artefaktów/proweniencji tego slice'u. Nie ma też
 CUDA steady spin, SHE, mixing, torque, FP32, periodic, multi-device, konwergencji
-siatkowej ani kwalifikacji wydajnościowej. Wiersze `component_gauge_v1`,
-`determinism_restart_v1`, `public_path_v1`, spin/SHE/mixing/torque,
+siatkowej ani kwalifikacji wydajnościowej. W historycznym runie wiersze
+`component_gauge_v1`, `determinism_restart_v1`, `public_path_v1`, spin/SHE/mixing/torque,
 `convergence_v1` i `performance_v1` pozostają niezamknięte.
+
+### Aktualizacja managed zero-mean (2026-08-11)
+
+Ponowna bramka
+`just verify-fdm-gpu-m1-charge-native-contract` zakończyła się kodem 0 po
+przebudowie w tym samym managed container-backed runtime. Urządzenie to NVIDIA
+GeForce RTX 4080 SUPER, UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, CC 8.9,
+CUDA runtime `12040`, driver `13010`, build digest
+`d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`.
+
+Wraz z dotychczasowymi uniform/layered/snapshot/mutation/strict-residency
+workloadami uruchomiono trzy kontrakty gauge w tym samym executable:
+
+- pure Neumann, zbilansowany: `zero_mean_pure_mean =
+  -8.131516293641283e-19 V`, `zero_mean_pure_max_abs =
+  0.03149999999999938 V`;
+- pure Neumann, niezbilansowany: solve kończy się kodem ABI
+  `ERROR_BALANCE_FAILURE = 8`;
+- typed mixed anchored/free: średnia komponentu zakotwiczonego
+  `0.12499999999999592 V`, średnia komponentu swobodnego
+  `-2.710505431213761e-20 V`, maksimum bezwzględne komponentu swobodnego
+  `0.0015000000000000352 V`, dwa rozłączne komponenty.
+
+Pozostałe obserwable tego runu pozostały zgodne z bazowym kontraktem:
+uniform ma 26 iteracji, residual algebraiczny
+`4.4700700269648826e-15`, fizyczny `3.6043853964842183e-14`,
+`hierarchy_levels=2`, jeden build, jeden cache hit i `host_fallback_count=0`;
+layered ma skok strumienia `5.46875e-14`, a strict-residency potwierdza
+19 zdarzeń źródłowych, 14 restore i dokładną kolejność. Komunikat o PCG
+przerwanym po jednej iteracji pochodzi z celowej fault-injection w transfer-audit
+i nie jest błędem bramki.
+
+Ten wynik zamyka managed proof bounded zero-mean realization, ale nie zmienia
+granic publicznej kwalifikacji: publiczny przepływ charge-only jest opisany
+osobno w sekcji 7.3, natomiast nie ma jeszcze publicznego zero-mean gauge,
+persistent Krylov warm start w tym przepływie, CUDA steady spin/SHE/mixing/
+torque, compute-sanitizer, mesh convergence, cross-backend parity ani
+produkcyjnego statusu. Ogólna capability pozostaje `semantic_only`.
 
 #### Ownership, lifecycle, and immutable charge state
 
@@ -1120,7 +1197,7 @@ evidence.
 | `charge_uniform_v1` | `fdm_gpu_m1_charge_uniform_v1`: $64\times4\times2$, $\Delta x=1\,\mathrm{nm}$, $\sigma=5\times10^6\,\mathrm{S/m}$, $V(0)=64\,\mathrm{mV}$, $V(64\,\mathrm{nm})=0$ | `oracle.charge_uniform_linear_v1`: $E_x=10^6\,\mathrm{V/m}$ and every positive-x face $J_c=5\times10^{12}\,\mathrm{A/m^2}$ | $V,J_c$ `rtol<=1e-12`, charge balance `<=1e-10` of flux scale | non-skipped managed FP64 run with GPU UUID and `fdm-gpu-m1-charge-uniform-v1.json` containing fields, residuals and snapshot digest |
 | `charge_layered_v1` | `fdm_gpu_m1_charge_layered_v1`: two $32\,\mathrm{nm}$ layers, $\sigma_1=2\times10^6$, $\sigma_2=8\times10^6\,\mathrm{S/m}$, $\Delta V=50\,\mathrm{mV}$ | `oracle.charge_layered_series_v1`: $R_A=2.0\times10^{-14}\,\Omega\,\mathrm{m^2}$, every oriented face $J_c=2.5\times10^{12}\,\mathrm{A/m^2}$ and analytic piecewise-linear $V$ | current and $V$ `rtol<=1e-10`; interface flux jump `<=1e-12` of $J_c$ | non-skipped managed CPU/GPU FP64 run with GPU UUID and `fdm-gpu-m1-charge-layered-v1.json` |
 | `density_face_bc_v1` | `fdm_gpu_m1_density_face_bc_v1`: $4\times2\times1$ grid with four ordered external faces, areas $[1,1,2,2]\times10^{-18}\,\mathrm{m^2}$ and outward densities $[1,-2,3,-4]\times10^{11}\,\mathrm{A/m^2}$ | `oracle.density_face_descriptor_v1`: accepted values match descriptor order and $I=\sum_f A_f j_f=-3\times10^{-7}\,\mathrm{A}$; internal, duplicate, inactive, wrong-area and wrong-sign mutations are rejected | each face value/sign/identity exact; integrated $I$ `rtol<=1e-12`; 100% invalid mutations reject | non-skipped managed run with GPU UUID and `fdm-gpu-m1-density-face-bc-v1.json` containing the authored and accepted face lists |
-| `component_gauge_v1` | `fdm_gpu_m1_component_gauge_v1`: two disconnected four-cell conductors separated only by a transverse-only contact; component A has one voltage datum at linear cell 0 with $V=0.125\,\mathrm{V}$, while free component B has no voltage datum and has exact zero net Neumann flux | `oracle.component_graph_gauge_v1`: component labels `[0,0,0,0,1,1,1,1]`, no charge edge across the transverse-only contact, component A preserves its datum, and component B has arithmetic mean $\frac14\sum_{i\in B}V_i=0$ | labels and datum exact; recomputed null residual `<=1e-12`; component-B mean `atol<=1e-14 V` | non-skipped managed run with GPU UUID and `fdm-gpu-m1-component-gauge-v1.json` containing labels, accepted values and graph/gauge digests |
+| `component_gauge_v1` | `fdm_gpu_m1_component_gauge_v1` bounded fixture in `fdm_gpu_m1_charge_uniform_v1_contract`: two disconnected 512-cell conductors separated by a transverse-only charge-insulating interface; left component has $V=0.125\,\mathrm{V}$ datum, while free component B has no voltage datum and has balanced exact-density Neumann flux | `oracle.component_graph_gauge_v1`: typed graph has two components, no charge edge across the interface, left datum is preserved, and right component has arithmetic mean zero | anchored mean `atol<=1e-10 V`; free mean `atol<=1e-14 V` relative to its nonzero profile; unbalanced pure-Neumann returns `ERROR_BALANCE_FAILURE` | non-skipped managed run with GPU UUID; `fdm-gpu-m1-charge-uniform-v1.json` records `zero_mean_pure_mean`, `zero_mean_unbalanced_status`, mixed anchored/free means, and `host_fallback_count=0` |
 | `charge_snapshot_v1` | `fdm_gpu_m1_charge_snapshot_v1`: validate the synthetic frozen IDs 1--9/18/20 sequence-7 payload as codec oracle A and reject its identity in the actual context; separately solve/export an actual-runtime sequence-7 one-cell payload B, then import B in a fresh exact-matching context | `oracle.snapshot_registry_checkpoint_v1`: A has length=4352 bytes, SHA-256=ae8d3c13853297760f2d9b19156067b52a502dfcb3e006e82ac590310200f6d5 and embedded hash `bc3bcc1b51314fe46e0bbd2f71e94f1517f8e438943853e33b8e79b1495c7b60`; B has the same canonical length/sections but an identity-dependent SHA | A byte grammar and SHA exact plus cross-identity `checkpoint_incompatible`; B length exactly 4352 bytes, identity exact, committed SHA self-consistent, fresh-context $V/J_c$ bitwise exact without re-solve; failed operations leave accepted state unchanged | non-skipped managed lifecycle run with GPU UUID and `fdm-gpu-m1-charge-snapshot-v1.json` containing both A-oracle and B-runtime results |
 | `spin_diffusion_v1` | `fdm_gpu_m1_spin_diffusion_v1`: $L=100\,\mathrm{nm}$, $\lambda_{sf}=10\,\mathrm{nm}$, $\mu_s(0)=(1,0,0)\,\mathrm{mV}$, $\mu_s(L)=0$, grids 64/128/256 | `oracle.spin_diffusion_sinh_v1`: $\mu_x(x)=1\,\mathrm{mV}\,\sinh((L-x)/\lambda_{sf})/\sinh(L/\lambda_{sf})$, other components exact zero | profile `rtol<=1e-9`; local/global balance `<=1e-10`; forbidden components exact zero | non-skipped managed CPU/GPU FP64 run with GPU UUID and `fdm-gpu-m1-spin-diffusion-v1.json` containing three grids |
 | `direct_she_six_signs_v1` | `fdm_gpu_m1_direct_she_six_signs_v1`: six one-gradient cases with $E_k=10^5\,\mathrm{V/m}$, $\theta_{SH}=0.1$, $\sigma=5\times10^6\,\mathrm{S/m}$ plus $\theta_{SH}=0$ | `oracle.levi_civita_six_v1`: amplitude $5\times10^{10}\,\mathrm{A/m^2}$ with signs $xyz,yzx,zxy=+1$ and $xzy,zyx,yxz=-1$; all other components zero | active component `rtol<=1e-12`; sign and zero components exact | non-skipped managed kernel run with GPU UUID and `fdm-gpu-m1-direct-she-six-signs-v1.json` containing seven outputs |
@@ -1745,6 +1822,41 @@ The native ABI contract additionally executes the affine cube oracle described
 in section 5.2. It is deliberately a separate `just` target so a zero-gradient
 ABI smoke cannot mask a constitutive sign or `G=-\nabla\mu_s/2` factor error.
 
+### 7.3 Bounded public FDM GPU charge-only path
+
+The public `CurrentTransport` path now has one deliberately bounded executable
+realization. `resolve_fdm_gpu_charge_transports` lowers the Python/ProblemIR
+module to a versioned `ResolvedFdmGpuChargeTransportIR` descriptor only when
+the request is explicit FDM/CUDA, FP64, strict, one-way OhmicPoisson, a full
+rectangular active grid, two opposite voltage faces, and four insulating faces.
+The runner adapter `execute_public_gpu_charge_only` maps that descriptor to the
+append-only CUDA M1 charge ABI and publishes `V_electric`, `J_charge`, and a
+transport provenance artifact. CPU, `auto`, unknown execution values, partial
+masks, current-density electrodes, zero-mean public gauge, PBC, spin/SHE/STT/SOT
+and implicit fallback are rejected before execution.
+
+The managed gate `just verify-fdm-gpu-public-charge-runtime` executes the
+fixture `examples/fdm_gpu_charge_public.py` on a 2 x 1 x 1 grid. An independent
+oracle script checks the cell-centred affine solution
+$V=(0.025,0.075)\,\mathrm{V}$ and
+$J_x=-\sigma\,\partial_xV=-2.0\times10^{13}\,\mathrm{A/m^2}$ for
+$\sigma=4.0\times10^6\,\mathrm{S/m}$ and a 0.1 V drop over 20 nm; the
+transverse current is zero. The run completes on the identified RTX 4080
+SUPER with no fallback, algebraic residual
+`8.201001214742106e-21`, physical residual
+`1.3810679320049756e-16`, and `iterations=2`. This is a bounded executable
+reference slice with actual-device evidence, not a `validated_workloads`
+entry or general production qualification.
+
+The first managed attempt exposed an ABI indexing error: `canonical_face_index`
+is local to each flux axis (`Jx`, `Jy`, `Jz`), not a globally offset index
+stream. The Rust adapter now uses axis-local formulas and validates uniqueness
+on `(axis, canonical_face_index)`; the regression test
+`expanded_boundary_faces_use_axis_local_canonical_indices` freezes this rule.
+The remaining public charge work includes zero-mean gauge and current-density
+electrodes, larger and masked domains, convergence and sanitizer gates,
+cross-backend parity, and the complete spin/SHE/M2/M3/FEM paths.
+
 (source-code-index)=
 ## 8. Source-code index
 
@@ -1786,10 +1898,15 @@ a qualified workload without the validation gates above.
 | M2 FDM/FEM common-limit oracle | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles | compare matched reciprocal FDM cell centres with FEM plane averages over three z resolutions | `just verify-fem-steady-transport-m2-common-limit-contract` |
 | FDM M2 heterogeneous-interface gate | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance | exercise an anisotropic N/F region jump and a companion mixing/SML closure with explicit torque accounting | `just verify-fdm-m2-heterogeneous-interface-contract` |
 | M2 3-D SHE/iSHE/AHE common-limit gate | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles | compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE | `just verify-fem-steady-transport-m2-3d-common-limit-contract` |
+| Public CurrentTransport charge planner | crates/fullmag-plan/src/current_transport.rs | resolve_fdm_gpu_charge_transports | lower the bounded Python/ProblemIR charge descriptor with fail-closed FDM/CUDA/FP64/strict constraints | public bounded path; unvalidated |
+| Public FDM GPU charge runner | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_public_gpu_charge_only | map the resolved descriptor to the CUDA M1 charge ABI, read back V/J, and publish provenance without fallback | `just verify-fdm-gpu-public-charge-runtime`; bounded actual-device E2E |
+| Public charge fixture and analytic oracle | examples/fdm_gpu_charge_public.py; scripts/verify_fdm_gpu_public_charge_output.py | study; main | define the 2 x 1 x 1 affine voltage fixture and independently verify V/J, residuals, and provenance | managed public charge gate |
+| Public charge managed recipe | justfile | verify-fdm-gpu-public-charge-runtime | compile the CUDA runtime and CLI through the container-backed managed path, run the fixture, and execute the oracle | actual RTX 4080 SUPER; unvalidated |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |
 | FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with linear-cost geometric `2 x 2 x 2` aggregation and exact device RAP | uniform/layered/scalability actual-device gates |
+| FDM GPU M1 component gauge | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | label_reference_components_kernel; project_free_component_means; charge_pcg_device_amg_kernel | label conductive components, enforce Neumann compatibility, and project free components to zero mean without CPU fallback | managed actual-device proof in `fdm-gpu-m1-charge-uniform-v1` evidence; public path and scalability remain open |
 | FDM GPU M1 checkpoint codec | backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp | build_checkpoint; parse_checkpoint | encode and decode canonical charge-only FMGPUTR1 sections 1--9/18/20 | frozen codec oracle plus runtime identity A/B gate |
 | FDM GPU M1 Rust ABI mirror | crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs | fullmag_fdm_gpu_transport_solve_charge_v1 | mirror append-only C layouts and symbols without adding a public runner | Rust layout tests |
 | FDM GPU M1 uniform regression | backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp | main | check analytic FP64 field/current, AMG/cache audit, transfer bounds and zero fallback on a physical GPU | `just verify-fdm-gpu-m1-charge-native-contract` |

@@ -1,5 +1,5 @@
 ---
-title: Prescribed spin-orbit torque
+title: Spin-orbit torque
 status: partial
 doc_kind: reference
 audience: user

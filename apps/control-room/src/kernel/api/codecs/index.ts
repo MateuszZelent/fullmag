@@ -13,6 +13,13 @@ export {
   type DecodedPeriodicPairsStatus,
 } from "./periodicPairsCodec";
 export {
+  decodeFdmMultilayerActiveMask,
+  FMBM_HEADER_LEN,
+  validateFdmMultilayerActiveMaskContract,
+  type DecodedFdmMultilayerActiveMask,
+  type FdmMultilayerActiveMaskContractResult,
+} from "./fdmMultilayerActiveMaskCodec";
+export {
   decodeFdmRegionMembership,
   FMRM_INACTIVE_REGION_ID,
   FMRM_HEADER_LEN,

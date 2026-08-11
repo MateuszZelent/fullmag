@@ -6684,6 +6684,7 @@ mod tests {
         let plan = test_fem_execution_plan();
         let context = build_field_context(&problem, &plan);
         let provenance = crate::types::ExecutionProvenance {
+            charge_transport: None,
             transport_modules: Vec::new(),
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
@@ -7566,6 +7567,7 @@ mod tests {
             true, true, false, false, true, false, true, false,
         ]));
         let provenance = ExecutionProvenance {
+            charge_transport: None,
             transport_modules: Vec::new(),
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),

@@ -1,0 +1,186 @@
+{
+  "document": {
+    "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "clean-room behavioral traceability only",
+      "qualification": "not-qualified",
+      "evidence": "source-map validation; no numerical oracle"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "CUDA behavioral traceability only",
+      "qualification": "not-qualified",
+      "evidence": "source-map validation; no device parity"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The note records the FDM convolution behavior, not a FEM operator."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The note records the FDM convolution behavior, not a FEM operator."
+    }
+  ],
+  "equations": [
+    {
+      "id": "boris-ordered-field",
+      "symbols": ["H_d", "N_ds", "M_s", "L"],
+      "sources": ["fullmag_kernel_reuse", "fullmag_demag_mode"],
+      "publication_anchor": "ordered source-to-destination field contract"
+    },
+    {
+      "id": "boris-fft-decomposition",
+      "symbols": ["Mhat_s", "Nhat_ds", "Hhat_d", "L"],
+      "sources": ["fullmag_kernel_reuse"],
+      "publication_anchor": "forward, ordered pair, and inverse transform decomposition"
+    }
+  ],
+  "symbols": [
+    {"id": "H_d", "latex": "\\mathbf H_d", "meaning": "pole demagnetyzujące w siatce celu $d$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "N_ds", "latex": "\\mathsf N_{d\\leftarrow s}", "meaning": "tensor demagnetyzujący pary źródło--cel", "si_unit": "1"},
+    {"id": "M_s", "latex": "\\mathbf M_s", "meaning": "magnetyzacja źródła $s$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "L", "latex": "L", "meaning": "liczba uczestniczących warstw/siatek", "si_unit": "1"},
+    {"id": "Mhat_s", "latex": "\\widehat{\\mathbf M}_s", "meaning": "widmo magnetyzacji źródła", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Nhat_ds", "latex": "\\widehat{\\mathsf N}_{d\\leftarrow s}", "meaning": "widmowy tensor pary", "si_unit": "1"},
+    {"id": "Hhat_d", "latex": "\\widehat{\\mathbf H}_d", "meaning": "widmowe pole celu", "si_unit": "\\mathrm{A\\,m^{-1}}"}
+  ],
+  "sources": [
+    {
+      "id": "fullmag_fdmdemag",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMDemag",
+      "responsibility": "Validate public FDM demag hints and reject the removed fallback input."
+    },
+    {
+      "id": "fullmag_script_export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_fdm",
+      "responsibility": "Preserve the authoring-only explain value in the FDM script-builder payload."
+    },
+    {
+      "id": "fullmag_demag_mode",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "resolve_mode",
+      "responsibility": "Resolve requested auto mode only after native layer Z resolution is known."
+    },
+    {
+      "id": "fullmag_kernel_reuse",
+      "path": "crates/fullmag-fdm-demag/src/descriptors.rs",
+      "symbol": "from_layers_with_layout",
+      "responsibility": "Construct the Fullmag kernel cache identity from oriented layers, full transform layout, representation, precision, and boundary."
+    }
+  ],
+  "behavioral_reference_sources": [
+    {
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection_Calc.cpp",
+      "symbol": "DemagKernelCollection::KernelAlreadyComputed",
+      "sha256": "17004571392be0421635d4bd82de06b2270492c7fd55b4db6c0b677467b89e57",
+      "observation": "Observed lookup inputs are shift, h_src, and h_dst only; this is not a complete cache-identity claim."
+    },
+    {
+      "path": "external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp",
+      "symbol": "DemagKernelCollection::KernelMultiplication_2D",
+      "sha256": "7bc8de857c3aede345284a471075c6937f9e1e82f8387f55c3fc06cc3db5c1c1",
+      "observation": "Observed ordered 2-D source accumulation behavior."
+    },
+    {
+      "path": "external_solvers/BORIS/Boris/SDemag.cpp",
+      "symbol": "SDemag::Set_n_common",
+      "sha256": "2aeba6beb159c32b7d7b24a57e5ffc5125fa2471a51d6608ad37104ab0710049",
+      "observation": "Observed explicit common-count configuration behavior."
+    },
+    {
+      "path": "external_solvers/BORIS/Boris/DemagTFunc.h",
+      "symbol": "DemagTFunc::CalcDiagTens2D_Shifted_Irregular",
+      "sha256": "dec68a7f20c7b4710a9f2adda18eabe602ae72b05bc2db1415e3e53fe209f64f",
+      "observation": "Observed declaration of the irregular source/destination thickness tensor contract."
+    },
+    {
+      "path": "external_solvers/BORIS/Boris/DemagTFunc_Irregular.cpp",
+      "symbol": "DemagTFunc::CalcDiagTens2D_Shifted_Irregular",
+      "sha256": "fea1c38de2ba2ce194a553c829e141140dc55b4bfe25460d46bcbb0271e93fdd",
+      "observation": "Observed implementation of diagonal 2-D irregular tensor evaluation."
+    },
+    {
+      "path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp",
+      "symbol": "SDemag::UpdateField_MConv_Demag",
+      "sha256": "51a2293c8725a49a33cd86c1c03aebbf9cb4bad799c64a6238a8470305d2ac89",
+      "observation": "Observed forward-transform, ordered accumulation, and inverse-transform phases."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FDMDemag.strategy",
+        "type": "Literal[str]",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "`auto`, `single_grid`, `multilayer_convolution`",
+        "meaning": "żądana realizacja demag",
+        "backend_support": "FDM CPU/GPU; lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.strategy"
+      },
+      {
+        "python": "FDMDemag.mode",
+        "type": "Literal[\"auto\", \"two_d_stack\", \"three_d\"]",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "`auto`, `two_d_stack` lub `three_d`; explicite `two_d_stack` odrzuca `common_cells`, a explicite `three_d` odrzuca `common_cells_xy`",
+        "meaning": "żądany model wymiaru native warstw; `auto` jest rozwiązywane przez planner",
+        "backend_support": "FDM CPU/GPU; z ograniczeniami",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.mode"
+      },
+      {
+        "python": "FDMDemag.common_cells",
+        "type": "tuple[int,int,int] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "dokładnie trzy dodatnie `int`; wzajemnie wyłączne z `common_cells_xy`; dozwolone z `auto` lub `three_d`, odrzucane z `two_d_stack`",
+        "meaning": "jawny pełny 3-D rozmiar common scratch gridu; nie jest meshem fizycznym",
+        "backend_support": "FDM; lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells"
+      },
+      {
+        "python": "FDMDemag.common_cells_xy",
+        "type": "tuple[int,int] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "dodatnie $N_x,N_y$; dozwolone z `auto` lub `two_d_stack`, wzajemnie wyłączne z `common_cells`",
+        "meaning": "hint liczby komórek scratch XY; przy `auto` rozwiązuje `two_d_stack`",
+        "backend_support": "FDM; nie jest meshem fizycznym",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells_xy"
+      },
+      {
+        "python": "FDMDemag.explain",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "konstruktor `FDMDemag` nie waliduje runtime typu; raw script builder odrzuca wartość nie-`bool`",
+        "meaning": "żądanie wyjaśnienia planu dla autora; nie zmienia fizyki ani wyboru strategii",
+        "backend_support": "Python authoring/UI",
+        "problem_ir": "nie jest lowerowane przez `FDMDemag.to_ir()`"
+      },
+      {
+        "python": "FDMDemag.allow_single_grid_fallback",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "tylko `None`; każda wartość nie-`None` powoduje `ValueError`",
+        "meaning": "usunięty input kompatybilności; publiczny DSL nie dopuszcza cichego fallbacku",
+        "backend_support": "nieobsługiwane",
+        "problem_ir": "odrzucone przed `ProblemIR`; brak destination"
+      }
+    ]
+  }
+}

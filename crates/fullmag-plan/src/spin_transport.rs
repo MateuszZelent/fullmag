@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use fullmag_ir::{
     BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision,
     FdmCpuTransportRealizationIR, FemMeshPartIR, FemObjectSegmentIR, MeshIR, ProblemIR,
-    ReactionLengthIR, RegionRefIR, ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
-    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
+    ReactionLengthIR, RegionRefIR, RequestedTransportExecutionIR,
+    ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
+    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmGpuChargeTransportIR, ResolvedFdmSpinTransportIR,
     ResolvedFdmStructuredCurrentClosureIR, ResolvedFdmStructuredCurrentSourceCutIR,
     ResolvedFdmTransientSpinTransportIR, ResolvedFemSpinTransportIR, ResolvedReciprocalMaterialIR,
     ResolvedSpecifiedCurrentFaceIR, ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR,
@@ -12,9 +13,9 @@ use fullmag_ir::{
     ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR,
     StructuredBoundaryFaceIR, StructuredInternalFaceIR,
 };
-use sha2::{Digest, Sha256};
 #[cfg(test)]
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
+use sha2::{Digest, Sha256};
 
 use crate::surface_selectors::resolve_fem_surface_selector;
 use crate::PlanError;
@@ -2110,6 +2111,91 @@ fn materialize_fdm_descriptor(
         spin_solver: module.solver.clone(),
         torque_formula_version,
         oersted_source_bound,
+    })
+}
+
+pub(crate) fn materialize_fdm_gpu_charge_descriptor(
+    module_id: &str,
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    context: &FdmSpinTransportResolutionContext<'_>,
+) -> Result<ResolvedFdmGpuChargeTransportIR, Vec<String>> {
+    let count = context.region_mask.len();
+    if count == 0
+        || context
+            .active_mask
+            .is_some_and(|active| active.len() != count)
+    {
+        return Err(vec![format!(
+            "FDM GPU charge transport '{module_id}' planner context does not match the resolved FDM grid"
+        )]);
+    }
+
+    let charge_active_cells = union_region_masks(&charge.domain, context, "charge domain")?;
+    let mut charge_conductivity_spm = vec![0.0; count];
+    let mut assigned = vec![false; count];
+    for assignment in &charge.materials {
+        assign_scalar_field(
+            &assignment.region,
+            assignment.material.sigma_spm,
+            &charge_active_cells,
+            context,
+            &mut charge_conductivity_spm,
+            &mut assigned,
+            "charge material",
+        )?;
+    }
+    require_complete_assignment(&charge_active_cells, &assigned, "charge material")?;
+
+    let descriptor_schema = "fullmag.fdm.gpu_charge_transport_descriptor.v1".to_string();
+    let descriptor_revision = 1_u64;
+    let source_revision = 1_u64;
+    let implementation_version = "fullmag_fdm_gpu_charge_abi_v1".to_string();
+    let charge_boundaries = resolve_charge_boundaries(&charge.boundaries, context)?;
+    let descriptor_payload = serde_json::to_vec(&(
+        descriptor_schema.as_str(),
+        descriptor_revision,
+        source_revision,
+        implementation_version.as_str(),
+        module_id,
+        &charge_active_cells,
+        &charge_conductivity_spm,
+        &charge_boundaries,
+        charge.gauge,
+        &charge.solver,
+        context.region_mask,
+    ))
+    .map_err(|error| vec![format!("failed to serialize FDM GPU charge descriptor: {error}")])?;
+    let descriptor_sha256 = format!("sha256:{:x}", Sha256::digest(descriptor_payload));
+
+    Ok(ResolvedFdmGpuChargeTransportIR {
+        descriptor_schema,
+        descriptor_revision,
+        source_revision,
+        implementation_version,
+        validation_state: "source_contract_only".into(),
+        descriptor_sha256,
+        module_id: module_id.into(),
+        requested_execution: RequestedTransportExecutionIR {
+            discretization: BackendTarget::Fdm,
+            device: ExecutionDevice::Gpu,
+            precision: ExecutionPrecision::Double,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+        },
+        resolved_discretization: BackendTarget::Fdm,
+        resolved_device: ExecutionDevice::Gpu,
+        resolved_precision: ExecutionPrecision::Double,
+        resolved_execution_mode: fullmag_ir::ExecutionMode::Strict,
+        capabilities: vec![
+            "transport.charge.ohmic".into(),
+            "transport.charge.fdm_gpu_double".into(),
+            "transport.coupling.one_way".into(),
+        ],
+        charge_active_cells,
+        charge_conductivity_spm,
+        charge_boundaries,
+        charge_gauge: charge.gauge,
+        charge_solver: charge.solver.clone(),
+        region_ids: context.region_mask.to_vec(),
     })
 }
 

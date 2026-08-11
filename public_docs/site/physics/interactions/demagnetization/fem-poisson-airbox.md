@@ -196,10 +196,78 @@ separate objects and all three must be recorded.
 
 ### Executable stage workflow
 
-The complete copyable FEM stage workflow is maintained on the demagnetization owner page
-{doc}`../index`. This implementation page intentionally does not duplicate a second Python
-workflow or show isolated `Demag`/`FEM` constructors. The owner-page scenario records the
-realization, mesh policy, linear solver, solver timestep policy, and ordered stage.
+This complete workflow declares the shared airbox domain, magnetic mesh, canonical airbox model,
+Robin variant, FEM linear-solver policy, ordered relaxation stage, and scientific outputs. It is
+directly copyable into a Python script or notebook with `# %%` cell support.
+
+```python
+# %% Imports and FEM Poisson study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("demag_fem_poisson_robin")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+# %% Shared magnetic-plus-air domain and graded airbox mesh
+study.universe(
+    mode="manual",
+    size=(1200 * nm, 600 * nm, 550 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    minimum_element_size=10 * nm,
+    maximum_element_size=110 * nm,
+    maximum_element_growth_rate=1.9,
+    grading="geometric",
+)
+
+# %% Magnetic film, material, initial state, and body mesh
+film = study.geometry(
+    fm.Box(size=(500 * nm, 125 * nm, 3 * nm), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+film.mesh.thin_film(
+    minimum_element_size=3 * nm,
+    maximum_element_size=3 * nm,
+    layers=1,
+    topology="prismatic",
+    exact_layers=True,
+    transition="pyramid_to_tetrahedra",
+    order=1,
+)
+
+# %% Poisson–Robin interaction and FEM linear solver
+study.demag(model="airbox", variant="robin")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1.0e-12,
+    max_iterations=600,
+)
+
+# %% Ordered stage and scientific outputs
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolT=5.0e-9,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "e_demag", "e_total", "max_torque_T"],
+        ),
+        fields=[fm.FieldAutosave("H_demag", every_steps=100)],
+    )
+)
+```
 
 ### `Demag` parameters
 

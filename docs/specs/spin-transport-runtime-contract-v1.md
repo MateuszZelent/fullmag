@@ -1805,10 +1805,12 @@ the exact missing semantic fields.
 Ten podrozdział pozostaje normatywnym kontraktem ABI PR-15. Header, C11/Rust
 mirror oraz ograniczona realizacja CUDA charge-only istnieją, dlatego agregat
 FDM GPU M1 ma `implementation_state=partial`. Nie istnieją jeszcze CUDA steady
-spin/direct-SHE, mixing ani torque, a publiczny planner/runner nie wywołuje tego
-ABI. Capability pozostaje `semantic_only`, `validation_state=unvalidated`, z
-`validated_workloads=[]`; managed actual-device contract proof nie jest
-kwalifikacją ani promocją publicznej ścieżki.
+spin/direct-SHE, mixing ani torque. Publiczny planner/runner wywołuje ten ABI
+wyłącznie dla osobno opisanej, bounded `CurrentTransport` charge-only ścieżki
+FDM/CUDA/FP64/strict; pozostałe moduły nadal nie mają publicznego wywołania.
+Ogólna capability pozostaje `semantic_only`, `validation_state=unvalidated`,
+z `validated_workloads=[]`; managed actual-device contract proof nie jest
+kwalifikacją ani promocją ogólnej ścieżki.
 
 The ABI is separate from `fullmag_fdm_cpu_*` and from the LLG `Context`. It
 uses two opaque, non-interchangeable **handle types** whose names cannot also
@@ -1930,7 +1932,11 @@ The frozen FP64 layouts are x-fastest SoA: `V[N]`,
 `Jx[(nx+1)ny nz]`, `Jy[nx(ny+1)nz]`, `Jz[nx ny(nz+1)]`, three spin-potential
 arrays, three-vector face-spin arrays per flow axis, and three torque arrays.
 Public tensor artifacts remain `row_major_Q_ia`; internal SoA does not change
-that order. Every size is derived with checked integer arithmetic. Misaligned,
+that order. A `canonical_face_index` is local to its flux axis: the same
+numeric index may occur once in each of the `Jx`, `Jy`, and `Jz` streams and is
+identified by the pair `(axis, canonical_face_index)`. It is not a single
+globally offset index across the three streams. Every size is derived with
+checked integer arithmetic. Misaligned,
 undersized, overlapping where forbidden, wrong-device, or wrong-space views
 return `invalid_descriptor`.
 

@@ -393,7 +393,7 @@ verify-fdm-multilayer-demag-production:
       report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; mkdir -p "$report_parent"; run_root="$(mktemp -d "$report_parent/production.run.XXXXXXXX")"; status_file="$run_root/status.json"; \
       write_status() { printf "{\"status\":\"not_qualified\",\"reason_code\":\"%s\"}\n" "$1" > "$status_file"; }; finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; trap finish EXIT INT TERM; \
       if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then write_status "cuda_managed_artifact_missing"; echo "not_qualified: cuda_managed_artifact_missing" >&2; exit 3; fi; if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi -L >/dev/null 2>&1; then write_status "cuda_device_unavailable"; echo "not_qualified: cuda_device_unavailable" >&2; exit 3; fi; \
-      just verify-fdm-multilayer-demag-runtime cpu-fp64; if [ -z "${FULLMAG_FDM_MULTILAYER_DEMAG_REPORT:-}" ] || [ -z "${FULLMAG_FDM_MULTILAYER_AIRBOX_CARRIER:-}" ]; then write_status "airbox_carrier_missing"; echo "not_qualified: airbox_carrier_missing" >&2; exit 3; fi; just verify-fdm-multilayer-airbox-runtime cpu-fp64; just verify-fdm-multilayer-demag-runtime cuda-fp64; just verify-fdm-multilayer-demag-runtime cuda-fp32; write_status "cuda_lane_not_qualified"; echo "not_qualified: cuda_lane_not_qualified" >&2; exit 3'
+      just verify-fdm-multilayer-demag-runtime cpu-fp64; if [ -z "${FULLMAG_FDM_MULTILAYER_DEMAG_REPORT:-}" ] || [ -z "${FULLMAG_FDM_MULTILAYER_AIRBOX_CARRIER:-}" ]; then write_status "airbox_carrier_missing"; echo "not_qualified: airbox_carrier_missing" >&2; exit 3; fi; just verify-fdm-multilayer-airbox-runtime cpu-fp64; just verify-fdm-multilayer-cuda-runtime cuda-fp64; just verify-fdm-multilayer-cuda-runtime cuda-fp32; write_status "cuda_lane_not_qualified"; echo "not_qualified: cuda_lane_not_qualified" >&2; exit 3'
 
 # Managed FEM CPU graph-realization gate.  The native MFEM runtime is built in
 # the managed fem-gpu image, while the fixture requests the CPU FEM lane and
@@ -633,6 +633,13 @@ verify-fdm-gpu-m1-charge-native-contract:
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-charge; mkdir -p "$build_dir"; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; uniform="$build_dir/fdm-gpu-m1-charge-uniform-v1.json"; layered="$build_dir/fdm-gpu-m1-charge-layered-v1.json"; snapshot="$build_dir/fdm-gpu-m1-charge-snapshot-v1.json"; mutation="$build_dir/fdm-gpu-m1-charge-boundary-mutation-v1.json"; transfer="$build_dir/fdm-gpu-m1-charge-transfer-audit-v1.json"; rm -f "$uniform" "$uniform.tmp" "$layered" "$layered.tmp" "$snapshot" "$snapshot.tmp" "$mutation" "$mutation.tmp" "$transfer" "$transfer.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_charge_uniform_v1_contract fdm_gpu_m1_charge_layered_v1_contract fdm_gpu_m1_charge_snapshot_v1_contract fdm_gpu_m1_charge_boundary_mutation_v1_contract fdm_gpu_m1_charge_transfer_audit_v1_contract; FULLMAG_FDM_GPU_M1_CHARGE_EVIDENCE_PATH="$uniform.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_uniform_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_LAYERED_EVIDENCE_PATH="$layered.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_layered_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_SNAPSHOT_EVIDENCE_PATH="$snapshot.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_snapshot_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_MUTATION_EVIDENCE_PATH="$mutation.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_boundary_mutation_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_TRANSFER_AUDIT_EVIDENCE_PATH="$transfer.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_transfer_audit_v1_contract"; test -s "$uniform.tmp"; test -s "$layered.tmp"; test -s "$snapshot.tmp"; test -s "$mutation.tmp"; test -s "$transfer.tmp"; python3 -m json.tool "$uniform.tmp" >/dev/null; python3 -m json.tool "$layered.tmp" >/dev/null; python3 -m json.tool "$snapshot.tmp" >/dev/null; python3 -m json.tool "$mutation.tmp" >/dev/null; python3 -m json.tool "$transfer.tmp" >/dev/null; mv "$uniform.tmp" "$uniform"; mv "$layered.tmp" "$layered"; mv "$snapshot.tmp" "$snapshot"; mv "$mutation.tmp" "$mutation"; mv "$transfer.tmp" "$transfer"; python3 -m json.tool "$uniform"; python3 -m json.tool "$layered"; python3 -m json.tool "$snapshot"; python3 -m json.tool "$mutation"; python3 -m json.tool "$transfer"'
+
+verify-fdm-gpu-public-charge-runtime:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-public-charge; native_dir="$build_dir/native"; cargo_home="$build_dir/cargo-home"; cargo_target="$build_dir/cargo-target"; output_dir="$build_dir/output"; mkdir -p "$build_dir" "$cargo_home" "$cargo_target" "$output_dir"; cmake -S native -B "$native_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$native_dir" --target fullmag_fdm; fdm_lib="$native_dir/backends/fdm"; CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" FULLMAG_FDM_LIB_DIR="$fdm_lib" cargo +nightly build -p fullmag-cli --features cuda; FULLMAG_FDM_EXECUTION=gpu FULLMAG_FDM_GPU_INDEX=0 FULLMAG_PYTHON=/usr/bin/python3 FULLMAG_FDM_LIB_DIR="$fdm_lib" LD_LIBRARY_PATH="$fdm_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$cargo_target" "$cargo_target/debug/fullmag" examples/fdm_gpu_charge_public.py --backend fdm --headless --json --output-dir "$output_dir"; test -s "$output_dir"/metadata.json; python3 -m json.tool "$output_dir"/metadata.json >/dev/null; python3 scripts/verify_fdm_gpu_public_charge_output.py "$output_dir"'
 
 verify-fdm-gpu-m1-charge-scalability-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
@@ -4134,6 +4141,87 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
       CONTROL_ROOM_SMOKE_DISPOSABLE_SCRIPT_PATH="$smoke_script" \
       CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN="$token" \
       $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
+
+run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
+    bash -euo pipefail -c '\
+      report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; \
+      mkdir -p "$report_parent"; \
+      run_root="$(mktemp -d "$report_parent/webgl-matrix-cpu.run.XXXXXXXX")"; \
+      scenario="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario.py"; \
+      evidence="$run_root/fdm-multilayer-webgl-matrix.json"; \
+      manifest="$run_root/manifest.json"; \
+      build_log="$run_root/fullmag-build.log"; \
+      cargo_target_root="/tmp/fullmag-zfn2-build/cargo-targets"; \
+      cargo_target_dir="$cargo_target_root/fdm-multilayer-webgl-matrix-cpu-$(basename "$run_root")"; \
+      sim_pid=""; \
+      web_port=""; api_port=""; \
+      finish() { \
+        status=$?; trap - EXIT INT TERM; \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; \
+        outcome=failed; if [ "$status" -eq 0 ]; then outcome=passed; fi; \
+        if [ ! -e "$evidence" ]; then printf "{\"schema_version\":\"fdm_multilayer_webgl_matrix_recipe.v1\",\"qualification_status\":\"blocked\",\"exit_code\":%s,\"artifact_root\":\"%s\"}\\n" "$status" "$run_root" > "$evidence"; fi; \
+        web_port_json=null; if [ -n "$web_port" ]; then web_port_json="$web_port"; fi; \
+        api_port_json=null; if [ -n "$api_port" ]; then api_port_json="$api_port"; fi; \
+        printf "{\"schema_version\":\"fdm_multilayer_webgl_matrix_recipe.v1\",\"status\":\"%s\",\"exit_code\":%s,\"web_port\":%s,\"api_port\":%s,\"artifact_root\":\"%s\",\"evidence\":\"%s\"}\\n" "$outcome" "$status" "$web_port_json" "$api_port_json" "$run_root" "$evidence" > "$manifest"; \
+        exit "$status"; \
+      }; \
+      trap finish EXIT INT TERM; \
+      mkdir -p "$cargo_target_dir" > "$build_log" 2>&1; \
+      just ensure-python >> "$build_log" 2>&1; \
+      FULLMAG_CARGO_TARGET_DIR="$cargo_target_dir" just build fullmag 1 >> "$build_log" 2>&1; \
+      select_free_port() { python3 -c "import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); sock.bind((\"127.0.0.1\", 0)); print(sock.getsockname()[1]); sock.close()"; }; \
+      web_port="{{web_port}}"; api_port="{{api_port}}"; \
+      case "$web_port" in web_port=*) web_port="$(printf "%s" "$web_port" | cut -d= -f2-)" ;; esac; \
+      case "$api_port" in api_port=*) api_port="$(printf "%s" "$api_port" | cut -d= -f2-)" ;; esac; \
+      if [ -z "$web_port" ]; then web_port="$(select_free_port)"; fi; \
+      if [ -z "$api_port" ]; then api_port="$(select_free_port)"; fi; \
+      while [ "$api_port" = "$web_port" ]; do api_port="$(select_free_port)"; done; \
+      assert_owned_listener() { \
+        port="$1"; label="$2"; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then echo "owned fullmag process exited before $label readiness" >&2; return 1; fi; \
+        listener_pids="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"; \
+        if [ -z "$listener_pids" ]; then return 1; fi; \
+        for listener_pid in $listener_pids; do \
+          listener_sid="$(ps -o sid= -p "$listener_pid" | tr -d " " || true)"; \
+          if [ -z "$listener_sid" ] || [ "$listener_sid" != "$sim_sid" ]; then echo "refusing $label listener pid=$listener_pid sid=$listener_sid; expected owned sid=$sim_sid" >&2; return 1; fi; \
+        done; \
+      }; \
+      if ! command -v pnpm >/dev/null 2>&1 || ! command -v lsof >/dev/null 2>&1 || ! command -v setsid >/dev/null 2>&1; then echo "pnpm, lsof, and setsid are required for owned WebGL qualification" >&2; exit 127; fi; \
+      setsid env \
+      PATH="{{local_bin}}:$PATH" \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_API_PORT="$api_port" \
+      FULLMAG_FDM_EXECUTION=cpu \
+      fullmag --dev -i "$scenario" --backend fdm --mode strict --precision double --web-port "$web_port" \
+        > "$run_root/fullmag.log" 2>&1 & \
+      sim_pid=$!; \
+      sim_sid="$(ps -o sid= -p "$sim_pid" | tr -d " ")"; \
+      if [ -z "$sim_sid" ]; then echo "cannot resolve owned fullmag session id" >&2; exit 1; fi; \
+      api_url="http://localhost:$api_port"; \
+      web_url="http://localhost:$web_port/workspace"; \
+      ready=""; \
+      for _ in $(seq 1 600); do \
+        if assert_owned_listener "$api_port" "API status" && \
+          curl -fsS "$api_url/v2/sessions/current/status" > "$run_root/api-status.json" 2>/dev/null && \
+          assert_owned_listener "$api_port" "multilayer layout" && \
+          curl -fsS "$api_url/v2/sessions/current/data/domain/fdm-multilayer-layout" > "$run_root/fdm-multilayer-layout.json" 2>/dev/null && \
+          assert_owned_listener "$web_port" "workspace UI" && \
+          curl -fsS "$web_url" > "$run_root/workspace.html" 2>/dev/null && \
+          python3 -c '"'"'import json, sys; layout = json.load(open(sys.argv[1], encoding="utf-8")); assert layout.get("available") is True; assert layout.get("schema_version") == "fdm-multilayer-layout.v1"'"'"' "$run_root/fdm-multilayer-layout.json"; then ready=1; break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 120 "$run_root/fullmag.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      if [ "$ready" != 1 ]; then echo "FDM multilayer API/layout did not become ready" >&2; exit 1; fi; \
+      assert_owned_listener "$api_port" "smoke API"; \
+      assert_owned_listener "$web_port" "smoke UI"; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_FDM_MULTILAYER_DIAGNOSTIC_READBACK_MODE=per-case \
+      CONTROL_ROOM_FDM_MULTILAYER_MATRIX_ARTIFACT_DIR="$run_root/screenshots" \
+      CONTROL_ROOM_FDM_MULTILAYER_MATRIX_EVIDENCE="$evidence" \
+      pnpm --dir apps/control-room smoke:fdm-multilayer-webgl-matrix; \
+      python3 -c '"'"'import json, sys; evidence = json.load(open(sys.argv[1], encoding="utf-8")); assert evidence.get("qualification_status") == "passed_cpu_fp64_browser_fallback"; assert evidence.get("diagnostic_only") is not True'"'"' "$evidence"; \
+      find "$run_root/screenshots" -name "*.png" -print -quit | grep -q .'
 
 run-headless script:
     just ensure-python

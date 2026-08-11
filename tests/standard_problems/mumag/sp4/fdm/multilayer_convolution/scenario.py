@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import fullmag as fm
+
+
+SCENARIO_PATH = Path(__file__).resolve()
+REPOSITORY_ROOT = SCENARIO_PATH.parents[6]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from tests.standard_problems.mumag.sp4.fdm.multilayer_convolution.common import (
     FILM_CELL_M,
@@ -13,7 +20,6 @@ from tests.standard_problems.mumag.sp4.fdm.multilayer_convolution.common import 
 )
 
 
-SCENARIO_PATH = Path(__file__).resolve()
 SCENARIO_ID = "mumag_sp4_fdm_multilayer_convolution_cpu_reference"
 
 # Deliberately changed target-only Airbox mesh: 160 x 40 in XY, 9 cells below

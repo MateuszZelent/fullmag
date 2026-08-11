@@ -155,6 +155,58 @@ closed; FEM carries it through the weak residual.
 (bulk-dmi-python-api)=
 ## 5. Python API
 
+The current stage-first body API exposes the scalar bulk-DMI route as `body.Dbulk`. The builder
+lowers it to a `BulkDMI` energy term. The FDM planner requires all three axes to be periodic, so
+the complete helical-state scenario declares that policy explicitly and disables demagnetization
+to isolate the bulk-DMI field and energy.
+
+```python
+# %% Imports and units
+import math
+
+import fullmag as fm
+
+nm = 1.0e-9
+period = 40 * nm
+wave_number = 2.0 * math.pi / period
+
+# %% Fully periodic FDM study required by bulk DMI
+study = fm.study("bulk_dmi_helical_state")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.pbc(x=True, y=True, z=True)
+study.fdm(default_cell=(2 * nm, 2 * nm, 2 * nm))
+
+# %% Geometry, B20 material, transverse helix, and interactions
+crystal = study.geometry(
+    fm.Box(size=(80 * nm, 16 * nm, 16 * nm), name="crystal"),
+    name="crystal",
+)
+crystal.Ms = 3.84e5
+crystal.Aex = 8.78e-12
+crystal.Dbulk = 1.58e-3
+crystal.alpha = 0.02
+crystal.m = fm.texture.helical(
+    wavevector=(wave_number, 0.0, 0.0),
+    e1=(0.0, 1.0, 0.0),
+    e2=(0.0, 0.0, 1.0),
+)
+study.exchange()
+study.demag(enabled=False)
+study.solver(integrator="rk4", fix_dt=1.0e-14)
+
+# %% Ordered measurement stage
+study.stages.add_run(stage_id="measure_bulk_dmi", until=1.0e-12).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            t_sampl=1.0e-13,
+            quantities=["t", "mx", "my", "mz", "e_ex", "e_dmi", "e_total"],
+        ),
+        fields=[fm.FieldAutosave("H_dmi_bulk", every=2.0e-13)],
+    )
+)
+```
 
 | Python parameter | Type | Default | SI unit | Validation domain | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|

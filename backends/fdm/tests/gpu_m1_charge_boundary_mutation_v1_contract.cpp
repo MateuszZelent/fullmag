@@ -361,7 +361,13 @@ int main() {
         for (auto &record : oversized_views)
             record = view(reinterpret_cast<const void *>(uintptr_t{1}), 0, 1,
                           FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
-        oversized_views[0] = view(reinterpret_cast<const void *>(uintptr_t{1}), 1024, 1,
+        // Keep the descriptor structurally valid so the allocator guard is
+        // reached before any payload pointer can be dereferenced.  The
+        // sentinel address is intentionally invalid; only the metadata is
+        // inspected on this fail-closed path.
+        oversized_views[0] = view(reinterpret_cast<const void *>(uintptr_t{1}), 1, 1024,
+                                  FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+        oversized_views[3] = view(reinterpret_cast<const void *>(uintptr_t{1}), 6, 1,
                                   FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
         fullmag_fdm_gpu_transport_static_descriptor_v1 oversized{};
         init_record(oversized, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);

@@ -108,6 +108,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let mut step_count = 0u64;
     let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let provenance = ExecutionProvenance {
+        charge_transport: None,
         transport_modules: Vec::new(),
         executed_physics_kinds: Vec::new(),
         executed_physics_module_ids: Vec::new(),

@@ -59,6 +59,55 @@ scales are insufficient for near-zero fields.
 (demag-validation-python-api)=
 ## Python API
 
+This stage-first FDM scenario fixes the geometry, grid, precision, boundary policy, initial state,
+and output cadence needed by a demagnetization validation artifact. A refinement study should rerun
+the same script with successively smaller cells while preserving every other requested setting.
+
+```python
+# %% Imports and units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Study and reference execution lane
+study = fm.study("demag_rectangular_prism_validation")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.fdm(default_cell=(2 * nm, 2 * nm, 4 * nm))
+
+# %% Geometry, material, state, and isolated demagnetization term
+prism = study.geometry(
+    fm.Box(size=(80 * nm, 40 * nm, 4 * nm), name="prism"),
+    name="prism",
+)
+prism.Ms = 8.0e5
+prism.Aex = 1.3e-11
+prism.alpha = 0.02
+prism.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange(enabled=False)
+study.demag()
+study.solver(integrator="rk4", fix_dt=5.0e-15)
+
+# %% Ordered measurement stage
+study.stages.add_run(stage_id="measure_demag", until=1.0e-12).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            t_sampl=1.0e-13,
+            quantities=[
+                "t",
+                "mx",
+                "my",
+                "mz",
+                "e_demag",
+                "e_total",
+                "max_h_demag",
+            ],
+        ),
+        fields=[fm.FieldAutosave("H_demag", every=2.0e-13)],
+    )
+)
+```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

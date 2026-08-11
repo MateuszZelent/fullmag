@@ -344,7 +344,7 @@ export function runComputePerformanceAudit() {
   checkTopologyIndexBufferCache();
   checkVectorSurfaceNormalCache();
   checkMeshQualityVertexColorCache();
-  checkFdmCuboidChunkedUpload();
+  checkFdmCuboidRetainedCarrierBulkUpload();
   checkVectorGlyphChunkedUpload();
   checkFdmVectorSegmentCache();
   checkFdmCuboidSceneModelReuse();
@@ -1546,19 +1546,70 @@ function checkMeshQualityVertexColorCache() {
   ]);
 }
 
-function checkFdmCuboidChunkedUpload() {
+function checkFdmCuboidRetainedCarrierBulkUpload() {
   const source = readFileSync(fdmCuboidLayerPath, "utf8");
-  requireTokens(source, "FdmCuboidLayer chunked upload", [
-    "export const FDM_CUBOID_UPLOAD_BATCH_SIZE",
-    "export function buildFdmCuboidUploadBatches",
-    "requestFdmUploadTask",
-    "cancelFdmUploadTask",
+  const preparedPayload = blockBetween(
+    source,
+    "export interface FdmCuboidPreparedInstances",
+    "export function resolveFdmCuboidPreparedSourceOrdinal",
+  );
+  const attributeUpload = blockBetween(
+    source,
+    "export function uploadFdmCuboidAttribute",
+    "export function handleFdmCuboidContextLost",
+  );
+  const carrierUpload = blockBetween(
+    source,
+    "const uploadPreparedCarriers = useCallback",
+    "useEffect(() => {\n    uploadPreparedCarriers();",
+  );
+
+  requireTokens(preparedPayload, "FdmCuboidLayer atomic prepared payload", [
+    "cellIndices: Uint32Array;",
+    "contentRevision: string;",
+    "matrices: Float32Array;",
+    "membershipRevision: string;",
+    "ordinals: Uint32Array;",
+    "prepareFdmCuboidInstanceMatrices",
+    "model.matrixContentRevision",
+    "resolveFdmCuboidMembershipRevision(cellIndices)",
+  ]);
+  requireTokens(attributeUpload, "FdmCuboidLayer bulk attribute upload", [
+    "if (uploadedRevision === contentRevision) return uploadedRevision;",
+    "(attribute.array as Float32Array).set(source);",
+    "attribute.clearUpdateRanges();",
+    "attribute.addUpdateRange(0, source.length);",
+    "attribute.needsUpdate = true;",
+  ]);
+  forbidTokens(attributeUpload, "FdmCuboidLayer revision-hit upload", [
+    "invalidate(",
+    "recordDirtyFrame(",
+  ]);
+  requireTokens(carrierUpload, "FdmCuboidLayer retained carrier revision gate", [
+    "surfaceMatrixRevisionRef.current !== preparedInstances.contentRevision",
+    "wireframeMatrixRevisionRef.current !== preparedInstances.contentRevision",
+    "resolveFdmCuboidColorUploadRevision(",
+    "if (matrixChanged || colorChanged)",
+    'tracker.recordDirtyFrame("fdm-cuboids")',
+    "invalidate();",
+  ]);
+  requireTokens(source, "FdmCuboidLayer retained carrier lifecycle", [
+    "createFdmCuboidBatchBuildController",
+    "const abortController = new AbortController();",
+    "active.controller.abort();",
+    "signal: abortController.signal",
+    "rawInspectListenerEnabled",
+    'canvas.removeEventListener("pointermove", handleInspectPointerMove)',
+    'canvas.removeEventListener("pointerleave", handleInspectPointerLeave)',
+    "event.preventDefault();",
+    'canvas.addEventListener("webglcontextlost", handleContextLost)',
+    'canvas.addEventListener("webglcontextrestored", restore)',
     "fullmag.viewport3d.uploadFdmCuboidMatrices",
     "fullmag.viewport3d.uploadFdmCuboidColors",
-    "mesh.setMatrixAt(index, matrix)",
-    "mesh.setColorAt(index, color)",
   ]);
-  forbidTokens(source, "FdmCuboidLayer chunked upload", [
+  forbidTokens(source, "FdmCuboidLayer retained carrier bulk upload", [
+    "setMatrixAt(",
+    "setColorAt(",
     `for (let index = 0; index < model.count; index += 1) {
           const offset = index * 3;
           position.set(`,

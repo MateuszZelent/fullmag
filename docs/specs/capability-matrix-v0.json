@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-10",
+  "updated_at": "2026-08-11",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -326,7 +326,11 @@
     },
     {
       "id":"transport.charge.ohmic.fullmag.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_harmonic_v1","fem_charge_spin_broken_h1_mortar.v1"],
-      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 uniform/layered conductor with explicit BC and gauge.", "implementation_state":"partial", "validation_state":"unvalidated", "validated_workloads":[], "notes":"A bounded native CUDA FP64 charge-only FV/CG/strength-graph-AMG slice passes managed actual-device uniform, layered, snapshot and boundary-mutation contract gates with zero fallback. It has no public ProblemIR/planner/runner path, free-component zero-mean gauge, next-solve Krylov warm-start continuation, mesh-convergence or production qualification; the public lane therefore remains semantic_only."
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M1 uniform/layered conductor with explicit BC and gauge.", "implementation_state":"partial", "validation_state":"unvalidated", "validated_workloads":[], "notes":"A bounded native CUDA FP64 charge-only FV/CG/strength-graph-AMG slice passes managed actual-device uniform, layered, snapshot, boundary-mutation and strict-residency contract gates with zero fallback. The zero-mean-per-free-component gauge now has managed actual-device proof for balanced pure-Neumann, fail-closed unbalanced Neumann, and typed mixed anchored/free components. The general capability still lacks mesh-convergence and production qualification; its public lane remains semantic_only. The bounded public Python -> ProblemIR -> planner -> runner -> CUDA charge-only slice is tracked separately below."
+    },
+    {
+      "id":"transport.charge.ohmic.fdm_gpu_bounded_m1.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_harmonic_v1"],
+      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"partial_production_executable","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Bounded public Python -> ProblemIR -> planner -> runner -> CUDA FP64 2x1x1 full rectangular FDM conductor with two voltage electrodes and four insulating faces.", "implementation_state":"partial", "validation_state":"unvalidated", "validated_workloads":[], "notes":"Managed actual-device E2E passes the analytic V/J oracle, provenance and no-fallback checks on RTX 4080 SUPER. The lane is executable only for this explicitly documented bounded workload; public zero-mean gauge, current-density electrodes, partial masks, non-rectangular domains, scaling, compute-sanitizer, mesh convergence, CPU/GPU parity, spin/SHE/STT/SOT, FEM/cross-backend parity and production qualification remain open."
     },
     {
       "id":"transport.charge.magnetoresistive.fullmag.v1", "capability_id":"transport.charge.magnetoresistive", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",

@@ -1054,7 +1054,7 @@ impl InteractiveFdmPreviewRuntime {
                         .to_string(),
             });
         };
-        let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+        let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
         Self::from_fdm_plan(fdm, resolution.engine, resolution.fallback)
     }
 
@@ -1062,7 +1062,7 @@ impl InteractiveFdmPreviewRuntime {
         problem: &ProblemIR,
         plan: &FdmPlanIR,
     ) -> Result<Self, RunError> {
-        let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+        let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, plan)?;
         Self::from_fdm_plan(plan, resolution.engine, resolution.fallback)
     }
 
@@ -5098,6 +5098,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         };
 
     Ok(ExecutionProvenance {
+        charge_transport: None,
         transport_modules: Vec::new(),
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
@@ -5201,6 +5202,7 @@ fn cuda_execution_provenance(
             )?)
         };
     Ok(ExecutionProvenance {
+        charge_transport: None,
         transport_modules: Vec::new(),
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
@@ -5324,6 +5326,7 @@ fn fem_gpu_execution_provenance(
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {
+        charge_transport: None,
         transport_modules: Vec::new(),
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {

@@ -12637,3 +12637,454 @@ source-only review. Merge jest zakończony, ale aktualny honest status celu pozo
 `implementation_state=partial`, `validation_state=unvalidated`;
 managed GPU/FEM, browser smoke i pozostałe bramy produkcyjne nadal wymagają
 osobnego wykonania i nie zostały promowane przez ten merge.
+
+## 32.171. Świeża kwalifikacja managed FDM GPU po korekcie charge (2026-08-11)
+
+Ten wpis zastępuje historyczne blokady wykonawcze z §32.170 dla bounded
+FDM GPU/FP64 M1 spin i charge. Dowody pochodzą z repozytorium w pełnym SHA
+`4a00eb9cd77d7d6634cbb122940aac72ad81251a` i zostały wykonane przez
+container-backed `just` na rzeczywistym urządzeniu NVIDIA GeForce RTX 4080
+SUPER, UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, CC 8.9, CUDA runtime 12.4.0,
+driver 13.0.10, build digest
+`fe1a5dc52ab005f7c0d1a5a6341fa2538f6b46ffbda7285b18bb28276436184e`.
+
+### Spin
+
+`just verify-fdm-gpu-m1-spin-native-contract` zakończył się kodem 0. Przeszły:
+
+- niezależny oracle dyfuzji, complete CPU--GPU operator parity i direct SHE dla
+  sześciu znaków;
+- typed cell/material/formula payloads, public dispatch i
+  `skip_forbidden=true`;
+- actual-device sparse dispatch z cache hit, invalidation, NaN rollback i
+  restore; `host_fallback_count=0`;
+- `memory_policy=auto`: `first_required_bytes=1909033128` jako
+  `cold_upper_bound`, `warm_required_bytes=2011579768` jako post-cache exact,
+  `resolved_context_limit_bytes=14897829580`, `cache_hits_after_warm=1`,
+  `failed_rollbacks=2`, `passed=true`;
+- workload 1 048 576 komórek: `first_solve_seconds=0.868809`,
+  `warm_solve_seconds=0.840731`, `peak_bytes=1752353056`,
+  `external_envelope_bytes=483034008`, bez przekroczenia envelope.
+
+### Charge
+
+`just verify-fdm-gpu-m1-charge-native-contract` zakończył się kodem 0. Fresh
+actual-device evidence obejmuje uniform, layered, snapshot, boundary mutation
+i strict-residency/transfer audit:
+
+- uniform: 26 iteracji, algebraic residual
+  `4.4700700269648826e-15`, physical residual
+  `3.6043853964842183e-14`, `hierarchy_levels=2`, cache hit 1, fallback 0;
+- layered: interface flux jump `5.46875e-14`, fallback 0;
+- snapshot: restore bez re-solve dla pełnego i one-cell checkpointu;
+- boundary mutation: 16 mutacji, `rejected_state_unchanged=true`;
+- strict residency: 19 source i 14 restore events, exact order verified,
+  fallback 0;
+- transfer audit: `PASS`; komunikat o celowo przerwanym PCG po jednej
+  iteracji jest oczekiwaną gałęzią fault-injection i nie jest błędem testu.
+
+W toku tej korekty zamknięto trzy błędy kontraktowe:
+
+1. Rozmiar `DeviceSolveMetrics` jest pobierany przez wspólny symbol
+   `solve_metrics_bytes()` i używany zarówno w ścieżce success, jak i
+   early-fault; `SolveOutput::transfer_bytes` jest inicjalizowane przed
+   dereferencją payloadu.
+2. Oversized boundary fixture zachowuje poprawny metadany descriptor, aby
+   allocator guard był osiągany przed sentinel pointer dereference.
+3. `fine_unknown_count` jest redukcją aktywnych fizycznych unknownów na GPU;
+   nie raportuje nieaktywnych komórek bufora jako unknownów. Dzięki temu
+   przypadki inactive i empty interior aggregate nie maskują rozjazdu między
+   geometrią a fizycznym układem równań.
+
+### Skalowalność
+
+`just verify-fdm-gpu-m1-charge-scalability-contract` zakończył się kodem 0.
+Sześć workloadów M/I/F dla dwóch rozmiarów przeszło niezależny exact RAP
+oracle, readback conservation i strict counters. Każdy przypadek ma
+`hierarchy_build_count=1`, `hierarchy_cache_hit_count=1`, brak host fallbacku,
+`hierarchy_levels=2`, dodatni digest hierarchii oraz residua fizyczne poniżej
+`1e-10`. Seria I potwierdza poprawne raportowanie inactive cells:
+`1561/1575` i `6077/6097` aktywnych unknownów. Zmierzony warm-solve log slope
+wyniósł odpowiednio M `1.0058`, I `0.9618`, F `1.0105`; są to dane
+skalowalności dla tego bounded operatora, nie obietnica złożoności dla całego
+solvera.
+
+### Granica promocji
+
+Powyższe bramy są teraz świeżym, odtwarzalnym runtime evidence dla ograniczonych
+FDM GPU M1 spin/charge. Nie zmieniają capability matrix ani statusu celu:
+
+- agregat pozostaje `implementation_state=partial`,
+  `validation_state=unvalidated`, `validated_workloads=[]`;
+- charge native/scalability i spin actual-device nie dowodzą publicznego
+  ProblemIR--planner--runner path;
+- nadal otwarte są zero-mean gauge dla swobodnego Neumanna, persistent Krylov
+  warm start, compute-sanitizer, publiczny FDM Oersted z aktualnym managed
+  bundle, pełny reciprocal SHE/iSHE, FEM CPU/GPU RT0/H(div)/airbox i
+  FEM--FDM convergence, cross-backend parity, browser visual smoke oraz
+  standard problem 5;
+- nie wolno oznaczać tej pracy jako produkcyjnego solvera STT/SOT/SHE ani jako
+  pełnej kwalifikacji FEM/FDM na podstawie tych trzech bram.
+
+## 32.172. Świeża managed kwalifikacja FEM M2 i limit wspólny z FDM (2026-08-11)
+
+Po §32.171 wykonano na tym samym checkoutcie (`HEAD=
+397fc12be78f756eb2cf343d2ec4bfc7c58b4bb8`) cztery rozdzielne bramy wzajemnego
+transportu M2. Wszystkie użyły repozytoryjnych, container-backed `just`
+recipes, tego samego obrazu `fem-gpu` oraz MFEM native stack; nie użyto
+hostowego builda ani fallbacku CPU zamiast backendu FEM.
+
+### Wyniki
+
+| Brama | Dowód runtime | Wynik |
+|---|---|---|
+| M2 affine ABI | `just verify-fem-steady-transport-m2-affine-contract`; `fem_steady_transport_abi_contract` | `PASS` |
+| M2 mesh convergence | `just verify-fem-steady-transport-m2-convergence-contract`; conforming MFEM tetrahedra `nx=8,16,32` | `PASS`; błędy potencjału coarse/medium `1.72849e-4/3.42662e-5 V`, spin `2.08109e-3/4.12567e-4` |
+| M2 1-D common SI limit | `just verify-fem-steady-transport-m2-common-limit-contract`; FEM kontra FDM dla `Nz=8,16,32` | `PASS`; potencjał `5.60270e-4`, `1.62324e-4`, `4.35987e-5`, spin `6.72230e-3`, `1.94772e-3`, `5.23159e-4` |
+| M2 3-D SHE/iSHE common limit | `just verify-fem-steady-transport-m2-3d-common-limit-contract`; `nxy=2,4,8`, `Nz=4,8,16` | `PASS`; potencjał `1.14404e-4`, `1.59387e-4`, `5.65483e-5`, spin `1.93287e-2`, `6.51759e-3`, `1.88431e-3` |
+
+Testy sprawdzają niezerową konstytutywną reakcję wzajemną, znaki SHE/iSHE,
+jednostki SI, skończony spin-flip, przestrzenną konwergencję oraz zgodność
+profilu z referencją FDM. 3-D fixture nie zastępuje jeszcze ogólnego testu
+heterogenicznych materiałów, interfejsów N/F/T ani pełnego obszaru airbox.
+
+### Interpretacja i pozostała granica
+
+Wynik odtwarza ścieżkę referencyjnego executable dla ograniczonych fixture'ów
+kontraktowych, ale nie uzasadnia zmiany capability matrix ani statusu
+produkcyjnego. Nadal wymagają implementacji i dowodu:
+
+1. publiczny ProblemIR--Python--planner--runner path dla FEM M2 i GPU, z
+   provenance oraz bez ukrytego fallbacku;
+2. RT0/H(div), rzeczywiste interfejsy N/F/T, niejednorodne `sigma` i
+   heterogeniczny spin-flip w FEM oraz równoważny FDM;
+3. niezależny audit bilansów Onsagera, normalizacji $\mu_s/S$ i znaku tensora
+   Levi-Civity w całym łańcuchu, nie tylko w fixture;
+4. compute-sanitizer, restart/rollback i długie przebiegi na urządzeniu dla
+   FEM GPU;
+5. cross-backend parity dla dynamicznego pola Oersteda, sprzężenia z LLG,
+   STT/SOT oraz standard problem 5.
+
+Dlatego aktualny agregat pozostaje bez zmian:
+`implementation_state=partial`, `validation_state=unvalidated`,
+`validated_workloads=[]`. Powyższe cztery wyniki są świeżym dowodem
+wykonywalności i zgodności ograniczonej fizyki M2, a nie deklaracją
+produkcyjnego solvera SHE/STT/SOT.
+
+## 32.173. Persistent accepted Krylov warm-start FDM GPU M1 (2026-08-11)
+
+W tej iteracji zaimplementowano ograniczony, wewnętrzny mechanizm ponownego
+użycia zaakceptowanego rozwiązania charge w solverze CUDA FDM M1. Zmiana jest
+świadomie niższego poziomu niż publiczny kontrakt fizyczny: nie dodaje nowego
+modułu Python, węzła ProblemIR, capability ani ścieżki UI.
+
+### Zakres implementacji
+
+- `HierarchyCache` posiada trwały bufor FP64 na urządzeniu dla ostatniego
+  zaakceptowanego potencjału oraz rewizje deskryptora/source; rezerwacja i
+  rozmiar tego bufora są uwzględniane w preflight, cache bytes i peak bytes.
+- Cold solve zachowuje `x0=0, r=b`. Warm solve używa
+  `x0=warm_potential` i wylicza `r=b-Ax0` przez ten sam cache'owany operator
+  FV. Warm state jest używany wyłącznie przy zgodności liczby komórek oraz
+  rewizji deskryptora i źródła.
+- Kandydat bieżącego solve nie nadpisuje warm state. Promocja następuje
+  dopiero po `accept_charge_snapshot`: najpierw rezerwowany jest slot
+  snapshotu, następnie wykonywany jest D2D copy i synchronizacja; dopiero po
+  pomyślnym zakończeniu oznaczany jest stan jako ważny. Odrzucony kandydat,
+  rollback, brak slotu lub błąd transferu nie mogą częściowo zmienić
+  zaakceptowanego wektora.
+- Transfer audit obejmuje D2D promotion i synchronizację: sukces zapisuje
+  `SCIENTIFIC_COMMIT`, a błędy mają jawne granice `FAILED` (70: enqueue D2D,
+  71: synchronizacja). Odczyt wektora warm jest dostępny tylko przez
+  test-only ABI.
+
+### Weryfikacja źródła i kontraktu
+
+Implementacja znajduje się w commitach
+`992a2ab67a62f23d75a1aea54cc1e410d0688ec7` oraz
+`603234926d291160368026559c8b1c1624bfa1b0`. Pierwszy niezależny review
+wykrył brak dowodu zachowania wektora oraz brak pełnej telemetrii promocji;
+drugi commit uzupełnił oba punkty, poprawił mapowanie `cudaSetDevice` na
+`CUDA_RUNTIME_ERROR` i usunął duplikat deklaracji hooka. Re-review zakończył
+się `APPROVED`, bez uwag Critical/Important/Minor, dla poziomu
+źródło/kontrakt.
+
+RED przed implementacją był odtwarzalny jako brak symbolu
+`fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1` podczas linkowania.
+Po zmianie testy statyczne i dokumentacyjne zakończyły się:
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs scripts.test_fdm_gpu_m1_charge_scalability_contract
+16 tests, OK
+git diff --check
+git show --check
+```
+
+Nie uzyskano jeszcze świeżego managed CUDA GREEN dla tej wersji. Próba
+`just verify-fdm-gpu-m1-charge-native-contract` została zablokowana przez
+brak dostępu procesu do Docker API; eskalowana próba automatycznej zgody
+również wygasła przed utworzeniem procesu. Nie wolno więc liczyć tej zmiany
+do device/runtime qualification ani deklarować poprawy czasu solve.
+
+### Następny gate i status
+
+Po przywróceniu dostępu do managed runtime trzeba wykonać kolejno:
+
+1. `just verify-fdm-gpu-m1-charge-native-contract`;
+2. `just verify-fdm-gpu-m1-charge-scalability-contract`;
+3. `just verify-fdm-gpu-m1-charge-boundary-compute-sanitizer`.
+
+Do czasu tych wyników agregat pozostaje bez zmian:
+`implementation_state=partial`, `validation_state=unvalidated`,
+`validated_workloads=[]`. Ta zmiana jest zaakceptowana na poziomie
+implementacji i kontraktu, lecz pozostaje niezwalidowana na rzeczywistym
+urządzeniu.
+
+## 32.174. Closure atomowej promocji warm-startu FDM GPU (2026-08-11)
+
+Re-review po §32.173 wykrył błąd P0 w fault-injection: granica synchronizacji
+71 była raportowana dopiero po wykonaniu rzeczywistego
+`cudaStreamSynchronize`, a kopia D2D zapisywała bezpośrednio do zaakceptowanego
+bufora. Taki kod mógł unieważnić warm state po częściowym zapisie i nie
+spełniał reguły injection-before-operation.
+
+Commit `9d265013c` naprawia oba punkty:
+
+- `HierarchyCache` posiada osobny `warm_potential_staging`; pamięć obu buforów
+  jest uwzględniona w preflight/peak (`9 -> 10 * fine_bytes`) i zwalniana
+  symetrycznie;
+- promocja kopiuje wyłącznie do staging, a wskaźnik zaakceptowanego bufora,
+  rewizje, `warm_valid` i licznik promocji zmieniają się dopiero po udanej
+  synchronizacji i `std::swap`;
+- fault boundary 70 nie kolejkuje D2D, a boundary 71 zwraca błąd przed
+  synchronizacją. Ewentualny niedokończony transfer dotyka tylko stagingu;
+- test uniform odczytuje bitowy wektor zaakceptowany przed faultem, sprawdza
+  `memcmp` po obu granicach 70/71, a następnie wykonuje retry tego samego
+  `provisional_generation` i poprawny commit.
+
+Niezależny re-review zakończył się `APPROVE` bez findingów blokujących na
+poziomie źródło/kontrakt. `git diff --check` oraz testy dokumentacyjne
+`scripts.test_fdm_gpu_m1_contract_docs` i
+`scripts.test_fdm_gpu_m1_charge_scalability_contract` (16/16) przechodzą.
+Managed CUDA dla tej wersji nadal nie został uruchomiony, dlatego poprawka nie
+awansuje `validated_workloads` ani statusu produkcyjnego.
+
+## 32.175. Zero-mean gauge dla swobodnych komponentów Neumanna FDM GPU (2026-08-11)
+
+Poniższy wpis opisuje stan implementacji przed świeżą bramką managed zamkniętą
+w §32.176; jego historyczna granica „proof pending” została zaktualizowana
+przez ten kolejny wpis.
+
+Zrealizowano kolejny bounded slice planu: solver charge CUDA rozróżnia teraz
+komponenty przewodzące zakotwiczone przez voltage BC od komponentów swobodnych.
+Zmiana nie tworzy jeszcze publicznego węzła `CurrentTransport` ani ścieżki
+ProblemIR--planner--runner; rozszerza istniejący natywny ABI M1 wyłącznie o
+wykonalną politykę `ZERO_MEAN_PER_FREE_COMPONENT`.
+
+### Zakres fizyczny
+
+Dla każdego komponentu $C$ bez voltage datum układ Neumanna ma stałą w jądrze.
+Solver wymaga zgodności
+
+$$
+\left|\sum_{K\in C} b_K\right|
+\le 64\,\epsilon_{\mathrm{mach}}\,\|b_C\|_1,
+\qquad
+\bar V_C=|C|^{-1}\sum_{K\in C}V_K=0.
+$$
+
+`label_reference_components_kernel` buduje graf z dodatnich przewodności
+wewnętrznych, wykrywa voltage datum i dla wolnych komponentów sprawdza pierwszy
+warunek. Niezbilansowany przypadek kończy się jawnie
+`FULLMAG_FDM_GPU_TRANSPORT_ERROR_BALANCE_FAILURE`; nie ma pivotowania jednego
+węzła ani cichego przełączenia na CPU. Dla komponentów zakotwiczonych działa
+dotychczasowa polityka `BOUNDARY_REFERENCE_PER_COMPONENT`.
+
+### Implementacja numeryczna
+
+- `backends/fdm/gpu/cuda/transport/charge/device_solver.cu` przechowuje etykiety
+  komponentów, flagi zakotwiczenia i licznik komponentów w pamięci urządzenia;
+  ich rozmiar jest uwzględniony w preflight/workspace accounting.
+- `project_free_component_means` wykonuje deterministyczną ortogonalną
+  projekcję każdego wolnego komponentu. PCG stosuje ją po inicjalizacji $V$ i
+  $r$, po każdym device AMG, na $Ap$, po aktualizacji $V/r$ i na kierunku $p$.
+  Jest to równoważne rozwiązaniu $PAPV=Pb$ na podprzestrzeni zerowej średniej.
+- `backends/fdm/gpu/cuda/transport/context.cu` przekazuje politykę gauge do
+  solvera i przestaje odrzucać legalną politykę zero-mean jako `UNSUPPORTED`.
+- `backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp` zawiera niezerowy,
+  zbilansowany pure-Neumann fixture z readbackiem $V$ i kontrolą średniej,
+  niezbilansowany fixture oczekujący `BALANCE_FAILURE` oraz typed mixed
+  anchored/free fixture z charge-insulating interfejsem i osobną kontrolą
+  średniej komponentu swobodnego.
+
+### Weryfikacja i granica kwalifikacji
+
+Przeszły lokalne bramy źródłowe:
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs scripts.test_fdm_gpu_m1_charge_scalability_contract
+16 tests, OK
+g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsyntax-only backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp ...
+git diff --check
+```
+
+Nie ma jeszcze świeżego managed CUDA GREEN dla tego rozszerzenia. Wymagane
+następne uruchomienie to `just verify-fdm-gpu-m1-charge-native-contract` na
+rzeczywistym urządzeniu, a następnie osobna brama dla `component_gauge_v1` z
+logiem UUID/build digest i dowodem `host_fallback_count=0`. Do tego czasu
+`component_gauge_v1` pozostaje `implementation_state=partial`,
+`validation_state=unvalidated`, `validated_workloads=[]`; nie wolno używać
+tego wyniku jako dowodu produkcyjnego publicznego GPU solvera.
+
+## 32.176. Managed closure zero-mean gauge i obserwabli komponentowych (2026-08-11)
+
+Uwaga historyczna: poniższa ocena została zapisana przed implementacją i
+zarządzanym E2E opisanymi w §32.177. Nie należy jej czytać jako aktualnego
+stanu publicznej ścieżki charge-only; aktualną granicę kwalifikacji definiuje
+§32.177.
+
+### Zakres wykonany
+
+Po korekcie cyklu życia snapshotów w kontrakcie uniform uruchomiono ponownie
+`just verify-fdm-gpu-m1-charge-native-contract` przez container-backed runtime.
+Test nie zwiększa limitów pamięci i nie zmienia polityki błędów: wcześniejszy
+`OUT_OF_RESOURCES` wynikał z czterech aktywnych slotów rejestru (dwa stare
+accepted snapshoty, kontekst bazowy i nowy kontekst), a nie z braku pamięci
+solvera. Snapshoty bazowe są teraz jawnie zwalniane przed otwarciem nowych
+kontekstów. Artefakt uniform JSON zapisuje także liczby gauge, a nie tylko kod
+`PASS`.
+
+### Dowód urządzenia
+
+Managed gate zakończył się kodem 0 w tym samym kontrolowanym obrazie CUDA na:
+
+- NVIDIA GeForce RTX 4080 SUPER, UUID
+  `fcb9fbf1828437c7af5b76bcbf2d2937`, CC 8.9;
+- CUDA runtime `12040`, driver `13010`;
+- build digest `d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`;
+- `host_fallback_count=0` dla uniform, layered, snapshot, mutation i
+  strict-residency/transfer audit.
+
+### Wyniki gauge
+
+Artefakt `fdm-gpu-m1-charge-uniform-v1.json` zawiera:
+
+| obserwabla | wartość | znaczenie |
+|---|---:|---|
+| `zero_mean_pure_mean` | `-8.131516293641283e-19 V` | średnia zbilansowanego pure-Neumann |
+| `zero_mean_pure_max_abs` | `0.03149999999999938 V` | niezerowe pole po projekcji |
+| `zero_mean_unbalanced_status` | `8` | `ERROR_BALANCE_FAILURE`, fail-closed |
+| `zero_mean_mixed_anchored_mean` | `0.12499999999999592 V` | datum komponentu zakotwiczonego |
+| `zero_mean_mixed_free_mean` | `-2.710505431213761e-20 V` | średnia komponentu swobodnego |
+| `zero_mean_mixed_free_max_abs` | `0.0015000000000000352 V` | niezerowy profil komponentu swobodnego |
+| `zero_mean_mixed_component_count` | `2` | rozdzielenie grafu przez charge-insulating interface |
+
+Uniform nadal osiąga 26 iteracji, residual algebraiczny
+`4.4700700269648826e-15`, fizyczny `3.6043853964842183e-14`, poziomy
+hierarchii `512 -> 64`, jeden build, jeden cache hit i zero fallbacku. Layered
+ma interface flux jump `5.46875e-14`; transfer audit potwierdza 19 zdarzeń
+źródłowych, 14 restore i dokładną kolejność. Jedyny komunikat o przerwanym
+PCG pochodzi z zamierzonej fault-injection w teście transferowym.
+
+### Ocena planu po zamknięciu
+
+`component_gauge_v1` ma teraz wykonawczy bounded native CUDA proof oraz
+obserwable zapisane w artefakcie; §32.175 nie pozostaje już aktualnym
+blockerem. Nadal nie wykonano:
+
+1. publicznego Python → ProblemIR → planner → runner → ABI → artifact path,
+   z wymuszonym GPU i bez fallbacku CPU;
+2. publicznego persistent Krylov warm start, compute-sanitizer i skalowalności
+   zero-mean dla dużych rozłącznych domen;
+3. steady spin/SHE, mixing, torque, reciprocal SHE/iSHE oraz pełnego M2/M3;
+4. FEM RT0/H(div)/airbox, cross-backend FEM↔FDM convergence, browser smoke i
+   standard problem 5.
+
+Wobec tego capability `transport.charge.ohmic` pozostaje
+`semantic_only`, `implementation_state=partial`,
+`validation_state=unvalidated`, `validated_workloads=[]`. Zamknięty jest
+bounded native/device contract, nie produkcyjny publiczny solver.
+
+## 32.177. Publiczna ścieżka CurrentTransport -> FDM GPU charge (2026-08-11)
+
+### Zakres zrealizowany
+
+Zamknięto kolejny, jawnie ograniczony wycinek planu: moduł
+`CurrentTransport` z `OhmicPoisson` i `coupling=one_way` może przejść pełną
+ścieżkę Python -> ProblemIR -> planner -> runner -> natywny CUDA ABI ->
+artefakty. Wycinek jest dostępny wyłącznie dla FDM, urządzenia GPU CUDA,
+FP64, `execution_mode=strict`, bez fallbacku i dla pełnego prostokątnego
+maskowanego obszaru. Nie obejmuje jeszcze spin drift-diffusion, SHE/iSHE,
+STT/SOT, Oersteda, FEM ani ogólnego solvera prądu.
+
+Planner materializuje deskryptor
+`ResolvedFdmGpuChargeTransportIR` z niezmiennymi wersjami operatora
+`fv_charge_harmonic_v1`, solvera `cg_device_amg_v1`, gauge
+`boundary_reference_per_component`, fizycznego residualu
+`charge_balance_integrated_l2.v1` i SHA-256 deskryptora. Dopuszczone są
+dokładnie dwie przeciwległe powierzchnie `Voltage` oraz cztery powierzchnie
+`Insulating`; `CurrentDensity`, zero-mean w publicznym deskryptorze, częściowa
+siatka, PBC, wielomodułowość i ustawienia niejawnego urządzenia są odrzucane.
+Runner wymaga `requested_device=gpu`, `resolved_device=CudaFdm` i
+`fallback_policy=forbidden`. Brak CUDA, `auto`, CPU lub próba ukrytego
+przełączenia kończy się błędem przed wykonaniem.
+
+### Korekta ABI i istotna własność indeksowania
+
+W trakcie pierwszego E2E wykryto błąd w mapowaniu powierzchni bocznych. ABI
+FDM definiuje `canonical_face_index` lokalnie dla każdej osi, a nie jako jeden
+globalny strumień `Jx || Jy || Jz`. Adapter Rust został poprawiony tak, aby
+indeksy dla `x`, `y` i `z` były liczone w odpowiednich lokalnych układach;
+walidacja unikalności używa teraz pary `(axis, canonical_face_index)`. Test
+regresyjny `expanded_boundary_faces_use_axis_local_canonical_indices` wymusza
+ten przypadek dla siatki `2 x 1 x 1` i zapobiega powrotowi do błędnego offsetu.
+
+### Zarządzany dowód wykonania
+
+Wykonano:
+
+```text
+just verify-fdm-gpu-public-charge-runtime
+```
+
+Jest to recepta container-backed `just`; kompilacja natywna i artefakty są
+prowadzone przez zarządzany runtime z trwałym magazynem `/zfn2/mateuszz/git/fullmag`
+i widokiem `/mnt/fullmag-zfn2-native`. Gate zakończył się kodem 0 na
+rzeczywistym NVIDIA RTX 4080 SUPER (UUID
+`fcb9fbf1828437c7af5b76bcbf2d2937`, compute capability 8.9, CUDA runtime
+12040, driver 13010). Build digest runtime'u to
+`d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`.
+
+Fixture `examples/fdm_gpu_charge_public.py` ma rozmiar fizyczny
+`20 x 10 x 10 nm`, komórkę `10 x 10 x 10 nm`, więc dokładnie `2 x 1 x 1`
+komórek, przewodność `4e6 S/m`, `V(x_min)=0 V` i `V(x_max)=0.1 V`.
+Niezależny skrypt `scripts/verify_fdm_gpu_public_charge_output.py` sprawdza
+metadata, provenance, pola i artefakt transportu. Wynik analityczny dla
+środków komórek jest zgodny bitowo w granicy zapisu:
+
+| obserwabla | wynik | oracle |
+|---|---:|---:|
+| `V_electric` [V] | `[0.025, 0.075]` | `0.025`, `0.075` |
+| `J_charge.x` [A/m²] | `[-2.0e13, -2.0e13]` | `-sigma*dV/dx = -2.0e13` |
+| `J_charge.y`, `J_charge.z` [A/m²] | `0`, `0` | `0`, `0` |
+| algebraic residual | `8.201001214742106e-21` | gate `< 1e-12` |
+| physical residual | `1.3810679320049756e-16` | gate `< 1e-12` |
+| component/electrode balance | `9.765625e-17` / `1.953125e-16` | fail-closed gate |
+
+Provenance potwierdza `execution_engine=cuda_fdm_charge_only`, brak fallbacku,
+`iterations=2`, pięć transferów, `transfer_bytes=190` i `peak_bytes=2550`.
+Wykonanie nie zmieniło magnetyzacji i nie wykonało kroków LLG; komunikat o
+zerowym momencie jest oczekiwanym skutkiem fixture charge-only, a nie brakiem
+rozwiązania pola elektrycznego.
+
+### Granica kwalifikacji i następne bramy
+
+Ten wynik zamyka bounded executable reference slice oraz rzeczywisty dowód
+urządzenia dla opisanej siatki i BC. Nie awansuje ogólnego
+`transport.charge.ohmic` do `validated` ani do statusu produkcyjnego i nie
+dodaje wpisu do `validated_workloads`. Pozostają otwarte: zero-mean gauge w
+publicznym ProblemIR, elektrody `CurrentDensity`, częściowe maski i domeny
+nieprostokątne, skalowanie dużych siatek, compute-sanitizer, mesh convergence,
+FDM CPU/GPU parity, pełne M1 spin/SHE, M2/M3, Oersted, publiczna ścieżka FEM,
+Standard Problem 5, cross-backend FEM/FDM oraz browser/UI proof. Do czasu tych
+bram capability pozostaje jawnie ograniczone i fail-closed.

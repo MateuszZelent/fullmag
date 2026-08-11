@@ -10,6 +10,12 @@ const evidencePath = process.env.CONTROL_ROOM_FDM_MULTILAYER_MATRIX_EVIDENCE ??
   ".superpowers/sdd/evidence/fdm-multilayer-webgl-matrix.json";
 const timeoutMs = Number(process.env.CONTROL_ROOM_FDM_MULTILAYER_MATRIX_TIMEOUT_MS ?? 180_000);
 const vectorBudget = Number(process.env.CONTROL_ROOM_FDM_MULTILAYER_MATRIX_VECTOR_BUDGET ?? 256);
+const diagnosticReadbackMode = process.env.CONTROL_ROOM_FDM_MULTILAYER_DIAGNOSTIC_READBACK_MODE ?? "per-case";
+const diagnosticTracePath = process.env.CONTROL_ROOM_FDM_MULTILAYER_DIAGNOSTIC_TRACE_PATH ?? null;
+const selfTestOnly = process.env.CONTROL_ROOM_FDM_MULTILAYER_SELF_TEST_ONLY === "1";
+if (!["per-case", "none", "deferred"].includes(diagnosticReadbackMode)) {
+  throw new Error(`Unsupported diagnostic readback mode: ${diagnosticReadbackMode}`);
+}
 const canvasSelector = ".fm-viewport-3d canvas";
 const quantities = ["m", "H_demag"];
 const geometries = ["surface", "wireframe", "points"];
@@ -28,6 +34,15 @@ const attemptState = {
 
 async function main() {
   attemptState.stage = "artifact preparation";
+  assertLayerFieldRequestMatcherSelfTest();
+  assertAirboxFieldRequestMatcherSelfTest();
+  assertExactListenerMatcherSelfTest();
+  assertAirboxIsolationPatchSelfTest();
+  assertDiagnosticQualificationSelfTest();
+  if (selfTestOnly) {
+    console.log("FDM multilayer WebGL smoke self-tests passed.");
+    return;
+  }
   await mkdir(artifactDir, { recursive: true });
   attemptState.stage = "active-session preflight";
   const status = await getJson("/v2/sessions/current/status");
@@ -40,6 +55,17 @@ async function main() {
   attemptState.stage = "runtime-origin field proof";
   const originProof = await assertRuntimeOriginFields(layers, layout);
 
+  // The native-layer gate must not concurrently upload the target-only Airbox
+  // carrier (153600 cells in the qualification scenario). Airbox fidelity is
+  // exercised independently by the four dedicated cases below.
+  await patchJson(
+    "/v2/sessions/current/visualization/state",
+    buildAirboxIsolationPatch(false),
+  );
+  assertAirboxHiddenBeforeNativeGate(
+    await getJson("/v2/sessions/current/visualization/state"),
+  );
+
   attemptState.stage = "browser startup";
   const playwright = await loadPlaywright();
   if (!playwright?.chromium) {
@@ -47,6 +73,17 @@ async function main() {
   }
   const browser = await playwright.chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page.setDefaultTimeout(timeoutMs);
+  page.setDefaultNavigationTimeout(timeoutMs);
+  const cdp = diagnosticTracePath ? await page.context().newCDPSession(page) : null;
+  const traceEvents = [];
+  if (cdp) {
+    cdp.on("Tracing.dataCollected", ({ value }) => traceEvents.push(...value));
+    await cdp.send("Tracing.start", {
+      categories: "devtools.timeline,v8,blink.user_timing,disabled-by-default-devtools.timeline,disabled-by-default-v8.cpu_profiler",
+      options: "sampling-frequency=10000",
+    });
+  }
   const consoleErrors = [];
   const fieldRequests = [];
   const geometryRequests = [];
@@ -60,7 +97,9 @@ async function main() {
     if (request.method() !== "GET") return;
     const url = new URL(request.url());
     if (/\/data\/fields\/[^/]+\/samples\/vector$/.test(url.pathname)) {
-      fieldRequests.push({ path: url.pathname, search: url.search, timestamp: Date.now() });
+      const fieldRequest = { path: url.pathname, search: url.search, timestamp: Date.now() };
+      fieldRequests.push(fieldRequest);
+      console.log(`FDM multilayer browser field request: ${JSON.stringify(fieldRequest)}`);
     }
     if (
       url.pathname.includes("/meshing/meshes/") ||
@@ -92,9 +131,21 @@ async function main() {
     );
     attemptState.stage = "native target preflight";
     const nativeTargetSurface = await assertNativeLayerTargetSurface(page, layers);
+    attemptState.stage = "dual-visible native layer gate";
+    await cdp?.send("Tracing.recordClockSyncMarker", { syncId: "dual-visible-start" });
+    const dualVisibleBaseline = await runDualVisibleNativeLayerGate({ fieldRequests, layers, page });
+    await cdp?.send("Tracing.recordClockSyncMarker", { syncId: "dual-visible-end" });
     attemptState.stage = "native layer matrix";
     const matrix = [];
+    const diagnosticReadbacks = [];
     for (const layer of layers) {
+      // Qualify the selected native carrier at full fidelity without making
+      // the other physical layer part of the same render workload.  This is
+      // target isolation, not decimation: every cell of the selected layer
+      // remains rendered and both layers receive the complete 12-case matrix.
+      for (const candidate of layers) {
+        await setNativeLayerVisibility(page, candidate, candidate.layer_id === layer.layer_id);
+      }
       for (const geometry of geometries) {
         for (const quantity of quantities) {
           for (const presentation of presentations) {
@@ -111,6 +162,15 @@ async function main() {
           }
         }
       }
+      if (diagnosticReadbackMode === "deferred") {
+        console.log(`FDM multilayer diagnostic marker: deferred-fidelity-start ${layer.layer_id}`);
+        diagnosticReadbacks.push({
+          fidelity: await assertCanvasHasFidelity(page),
+          layer_id: layer.layer_id,
+          screenshot: await captureCanvas(page, `${artifactDir}/${slug(layer.layer_id)}-deferred-fidelity.png`),
+        });
+        console.log(`FDM multilayer diagnostic marker: deferred-fidelity-end ${layer.layer_id}`);
+      }
     }
     attemptState.stage = "Airbox matrix";
     const airbox = [];
@@ -122,9 +182,13 @@ async function main() {
     if (consoleErrors.length > 0) throw new Error(`Browser console errors: ${JSON.stringify(consoleErrors)}`);
     if (networkFailures.length > 0) throw new Error(`Browser HTTP failures: ${JSON.stringify(networkFailures)}`);
     assertNoScratchCarrierRequests(fieldRequests, layout);
+    const qualification = qualificationEvidenceForReadbackMode(
+      diagnosticReadbackMode,
+    );
+    const diagnosticOnly = qualification.qualification_status === "diagnostic_only";
     const evidence = {
       schema_version: "fdm_multilayer_webgl_matrix.v1",
-      qualification_status: "passed_cpu_fp64_browser_fallback",
+      ...qualification,
       browser: "playwright-chromium-fallback",
       compute_fields: computeFields,
       console_errors: consoleErrors,
@@ -133,9 +197,12 @@ async function main() {
       interaction,
       layout: layoutEvidence(layout, layers),
       matrix,
+      diagnostic_readback_mode: diagnosticReadbackMode,
+      diagnostic_readbacks: diagnosticReadbacks,
       airbox,
       network_failures: networkFailures,
       native_target_surface: nativeTargetSurface,
+      dual_visible_baseline: dualVisibleBaseline,
       runtime_origin: originProof,
       runtime_provenance: runtimeProvenance,
       session_id: status?.session?.session_id ?? status?.session_id ?? null,
@@ -143,10 +210,58 @@ async function main() {
     };
     attemptState.stage = "evidence write";
     await writeEvidenceAtomically(evidencePath, evidence);
-    console.log(`FDM multilayer WebGL matrix passed: ${JSON.stringify({ airbox: airbox.length, cases: matrix.length, evidencePath })}`);
+    console.log(`FDM multilayer WebGL matrix ${diagnosticOnly ? "diagnostic-only run completed" : "passed"}: ${JSON.stringify({ airbox: airbox.length, cases: matrix.length, evidencePath })}`);
   } finally {
+    if (cdp && diagnosticTracePath) {
+      const complete = new Promise((resolve) => cdp.once("Tracing.tracingComplete", resolve));
+      await cdp.send("Tracing.end");
+      await complete;
+      await writeFile(diagnosticTracePath, JSON.stringify({ traceEvents }));
+    }
     await browser.close();
   }
+}
+
+async function runDualVisibleNativeLayerGate({ fieldRequests, layers, page }) {
+  const fieldRequestCountBefore = fieldRequests.length;
+  const targetSettings = [];
+  for (const layer of layers) {
+    targetSettings.push(await setNativeLayerPresentation(page, layer, "surface", "field", "m"));
+  }
+  await patchJson("/v2/sessions/current/visualization/state", buildGlobalQuantityPatch("m"));
+  const requestProofs = [];
+  for (const layer of layers) {
+    requestProofs.push(await waitForLayerRequest(fieldRequests, fieldRequestCountBefore, layer, "m"));
+  }
+  const runtime = await poll("dual-visible native layer listeners", async () => {
+    const snapshot = await pageAuditSnapshot(page);
+    return layers.every((layer) => exactLayerListenerCount(snapshot, layer, "m") > 0)
+      ? snapshot
+      : null;
+  });
+  const canvas = await ensureHealthyCanvas(page);
+  return {
+    canvas,
+    field_request_count_after: fieldRequests.length,
+    field_request_count_before: fieldRequestCountBefore,
+    listener_counts: Object.fromEntries(layers.map((layer) => [
+      layer.layer_id,
+      exactLayerListenerCount(runtime, layer, "m"),
+    ])),
+    request_proofs: requestProofs,
+    target_settings: targetSettings,
+  };
+}
+
+function exactLayerListenerCount(runtime, layer, quantity) {
+  return Object.entries(runtime.listenerCounts ?? {})
+    .filter(([key]) => resourceKeyHasExactFieldScope(
+      key,
+      quantity,
+      "layer",
+      layer.layer_id,
+    ))
+    .reduce((sum, [, count]) => sum + Number(count), 0);
 }
 
 async function assertNativeLayerTargetSurface(page, layers) {
@@ -157,7 +272,7 @@ async function assertNativeLayerTargetSurface(page, layers) {
     const inspector = page.locator(".fm-inspector");
     const inspectorText = await inspector.innerText();
     const controls = {
-      quantity: await inspector.getByLabel("Quantity Source", { exact: true }).count(),
+      quantity: await inspector.locator('select[aria-label="Quantity Source"]').count(),
       render_mode: await inspector.locator('[role="radiogroup"][aria-label="Render mode"]').count(),
       target_visibility: await inspector.getByRole("button", { name: "Toggle target visibility", exact: true }).count(),
     };
@@ -192,13 +307,13 @@ async function setNativeLayerPresentation(page, layer, geometry, presentation, q
   const inspector = page.locator(".fm-inspector");
   const visible = inspector.getByRole("button", { name: "Toggle target visibility", exact: true });
   if ((await visible.getAttribute("aria-pressed")) !== "true") await visible.click();
-  const modeLabel = geometry === "surface" ? "Surface" : geometry === "wireframe" ? "Wireframe" : "Points";
+  const modeLabel = geometry === "surface" ? "Shaded" : geometry === "wireframe" ? "Wireframe" : "Points";
   const mode = inspector.locator('[role="radiogroup"][aria-label="Render mode"]').getByRole("radio", { name: modeLabel, exact: true });
   if ((await mode.getAttribute("aria-checked")) !== "true") await mode.click();
   const vectors = inspector.getByRole("button", { name: "Toggle vector field arrows", exact: true });
   const vectorsExpected = presentation === "vector";
   if ((await vectors.getAttribute("aria-pressed")) !== String(vectorsExpected)) await vectors.click();
-  const quantitySelect = inspector.getByLabel("Quantity Source", { exact: true });
+  const quantitySelect = inspector.locator('select[aria-label="Quantity Source"]');
   await quantitySelect.selectOption(quantity);
   return poll(`native layer presentation ${layer.layer_id}`, async () => {
     const settings = await readNativeLayerSettings(inspector);
@@ -224,7 +339,7 @@ async function setNativeLayerVisibility(page, layer, visibleExpected) {
 
 async function readNativeLayerSettings(inspector) {
   const mode = inspector.locator('[role="radiogroup"][aria-label="Render mode"] [role="radio"][aria-checked="true"]');
-  const quantity = inspector.getByLabel("Quantity Source", { exact: true });
+  const quantity = inspector.locator('select[aria-label="Quantity Source"]');
   const visibility = inspector.getByRole("button", { name: "Toggle target visibility", exact: true });
   const vectors = inspector.getByRole("button", { name: "Toggle vector field arrows", exact: true });
   return {
@@ -236,7 +351,7 @@ async function readNativeLayerSettings(inspector) {
 }
 
 function assertNativeLayerPresentation(settings, layer, geometry, presentation, quantity) {
-  const expectedGeometry = geometry === "surface" ? "Surface" : geometry === "wireframe" ? "Wireframe" : "Points";
+  const expectedGeometry = geometry === "surface" ? "Shaded" : geometry === "wireframe" ? "Wireframe" : "Points";
   if (
     settings.geometry !== expectedGeometry ||
     normalizeToken(settings.quantity) !== normalizeToken(quantity) ||
@@ -274,19 +389,29 @@ async function runLayerMatrixCase({ fieldRequests, geometry, geometryRequests, l
   const fieldRequestCountBefore = fieldRequests.length;
   const targetSettings = await setNativeLayerPresentation(page, layer, geometry, presentation, quantity);
   await patchJson("/v2/sessions/current/visualization/state", buildGlobalQuantityPatch(quantity));
-  await waitForLayerRequest(fieldRequests, fieldRequestCountBefore, layer, quantity);
+  const fieldRequestProof = await waitForLayerRequest(
+    fieldRequests,
+    fieldRequestCountBefore,
+    layer,
+    quantity,
+  );
   assertNativeLayerPresentation(targetSettings, layer, geometry, presentation, quantity);
   const canvas = await ensureHealthyCanvas(page);
   const runtime = await pageAuditSnapshot(page);
   assertNoGeometryRequestsAfterSwitch(geometryRequests, geometryRequestCountBefore, caseId);
-  const fidelity = await assertCanvasHasFidelity(page);
-  const screenshot = await captureCanvas(page, `${artifactDir}/${caseId}.png`);
+  console.log(`FDM multilayer diagnostic marker: case-controls-healthy ${caseId}`);
+  const fidelity = diagnosticReadbackMode === "per-case" ? await assertCanvasHasFidelity(page) : null;
+  if (diagnosticReadbackMode === "per-case") console.log(`FDM multilayer diagnostic marker: case-fidelity-complete ${caseId}`);
+  const screenshot = diagnosticReadbackMode === "per-case"
+    ? await captureCanvas(page, `${artifactDir}/${caseId}.png`)
+    : null;
   return {
     case_id: caseId,
     canvas,
     carrier_fingerprint: layer.native_grid_fingerprint,
     field_request_count_after: fieldRequests.length,
     field_request_count_before: fieldRequestCountBefore,
+    field_request_proof: fieldRequestProof,
     fidelity,
     fingerprint: layout.layout_fingerprint,
     geometry,
@@ -333,12 +458,19 @@ async function runAirboxCase({ fieldRequests, geometryRequests, layout, mode, pa
     }],
     quantity: { active_quantity_id: "H_demag" },
   });
-  await waitForAirboxRequest(fieldRequests, fieldRequestCountBefore);
+  const fieldRequestProof = await waitForAirboxRequest(
+    fieldRequests,
+    fieldRequestCountBefore,
+  );
   const state = await getJson("/v2/sessions/current/visualization/state");
   const settings = state.targets?.airbox?.settings;
   assertAirboxPresentation(settings, mode, display);
   const canvas = await ensureHealthyCanvas(page);
   const runtime = await pageAuditSnapshot(page);
+  const listenerCount = exactAirboxListenerCount(runtime);
+  if (!fieldRequestProof.observed_after_case_start && listenerCount <= 0) {
+    throw new Error(`Cached Airbox H_demag request has no positive current listener proof: ${JSON.stringify(fieldRequestProof)}`);
+  }
   assertNoGeometryRequestsAfterSwitch(geometryRequests, geometryRequestCountBefore, `airbox-${mode}`);
   const fidelity = await assertCanvasHasFidelity(page);
   return {
@@ -347,12 +479,14 @@ async function runAirboxCase({ fieldRequests, geometryRequests, layout, mode, pa
     carrier_fingerprint: layout.airbox.carrier_fingerprint,
     field_request_count_after: fieldRequests.length,
     field_request_count_before: fieldRequestCountBefore,
+    field_request_proof: fieldRequestProof,
     fidelity,
     fingerprint: layout.layout_fingerprint,
     geometry_request_count_after: geometryRequests.length,
     geometry_request_count_before: geometryRequestCountBefore,
     mode,
     runtime,
+    listener_count: listenerCount,
     screenshot: await captureCanvas(page, `${artifactDir}/airbox-${mode}.png`),
   };
 }
@@ -546,7 +680,7 @@ async function assertRuntimeOriginFields(layers, layout) {
   const proof = [];
   for (const layer of layers) {
     for (const quantity of quantities) {
-      const response = await fetchBinaryField(quantity, { component: "full", max_samples: vectorBudget, scope_id: layer.magnet_name, scope_kind: "layer" });
+      const response = await fetchBinaryField(quantity, { component: "full", max_samples: vectorBudget, scope_id: layer.layer_id, scope_kind: "layer" });
       const layoutResponseFingerprint = response.headers.get("x-fullmag-layout-fingerprint") ?? response.headers.get("x-fullmag-domain-fingerprint");
       if (layoutResponseFingerprint && layoutResponseFingerprint !== layout.layout_fingerprint) throw new Error(`Field ${quantity}/${layer.layer_id} layout fingerprint mismatch: ${layoutResponseFingerprint} != ${layout.layout_fingerprint}`);
       const carrierFingerprint = readRequiredCarrierFingerprint(response, layer.native_grid_fingerprint, `${quantity}/${layer.layer_id}`);
@@ -567,17 +701,206 @@ function readRequiredCarrierFingerprint(response, expected, label) {
 }
 
 async function waitForLayerRequest(fieldRequests, countBefore, layer, quantity) {
-  await poll(`layer field request ${layer.layer_id}/${quantity}`, () => fieldRequests.slice(countBefore).some((request) =>
-    request.path.includes(`/data/fields/${encodeURIComponent(quantity)}/samples/vector`) &&
-    request.search.includes(`scope_kind=layer`) &&
-    request.search.includes(`scope_id=${encodeURIComponent(layer.magnet_name)}`)
-  ) ? true : null);
+  // The viewport resource cache may have issued the exact scoped request
+  // during startup or an earlier presentation case.  Requiring a duplicate
+  // GET after every geometry-only switch would reject correct cache reuse.
+  // Keep the guard strict on canonical layer identity and quantity while
+  // accepting a request observed anywhere in this browser run.
+  return poll(
+    `layer field request ${layer.layer_id}/${quantity}`,
+    () => findLayerFieldRequest(fieldRequests, countBefore, layer.layer_id, quantity),
+  );
+}
+
+function findLayerFieldRequest(fieldRequests, countBefore, layerId, quantity) {
+  const index = fieldRequests.findIndex((request) => {
+    const params = new URLSearchParams(request.search);
+    return request.path.includes(`/data/fields/${encodeURIComponent(quantity)}/samples/vector`) &&
+      params.get("scope_kind") === "layer" &&
+      params.get("scope_id") === layerId;
+  });
+  if (index < 0) return null;
+  return {
+    observed_after_case_start: index >= countBefore,
+    request: fieldRequests[index],
+    request_index: index,
+  };
+}
+
+function assertLayerFieldRequestMatcherSelfTest() {
+  const requests = [
+    { path: "/v2/sessions/current/data/fields/m/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Abottom" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Atop" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Atop-shell" },
+  ];
+  const cached = findLayerFieldRequest(requests, 1, "layer:bottom", "m");
+  const fresh = findLayerFieldRequest(requests, 1, "layer:top", "H_demag");
+  const wrongLayer = findLayerFieldRequest(requests, 0, "layer:top", "m");
+  if (
+    cached?.observed_after_case_start !== false ||
+    fresh?.observed_after_case_start !== true ||
+    wrongLayer !== null ||
+    findLayerFieldRequest(requests.slice(2), 0, "layer:top", "H_demag") !== null
+  ) {
+    throw new Error("Layer field request matcher self-test failed.");
+  }
+}
+
+function buildAirboxIsolationPatch(visible) {
+  return {
+    overrides: [{
+      display: { visible },
+      quantity: { active_quantity_id: "H_demag" },
+      scope: "airbox",
+      scope_id: "airbox",
+      visible,
+    }],
+  };
+}
+
+function assertAirboxIsolationPatchSelfTest() {
+  const hidden = buildAirboxIsolationPatch(false);
+  const shown = buildAirboxIsolationPatch(true);
+  if (
+    hidden.overrides.length !== 1 ||
+    hidden.overrides[0]?.scope !== "airbox" ||
+    hidden.overrides[0]?.scope_id !== "airbox" ||
+    hidden.overrides[0]?.visible !== false ||
+    hidden.overrides[0]?.display?.visible !== false ||
+    shown.overrides[0]?.visible !== true
+  ) {
+    throw new Error("Airbox isolation patch self-test failed.");
+  }
+}
+
+function qualificationEvidenceForReadbackMode(mode) {
+  return mode === "per-case"
+    ? {
+        qualification_claim: "cpu_fp64_browser_fallback",
+        qualification_status: "passed_cpu_fp64_browser_fallback",
+      }
+    : {
+        diagnostic_only: true,
+        qualification_claim: null,
+        qualification_status: "diagnostic_only",
+      };
+}
+
+function assertDiagnosticQualificationSelfTest() {
+  for (const mode of ["none", "deferred"]) {
+    const evidence = qualificationEvidenceForReadbackMode(mode);
+    if (
+      evidence.diagnostic_only !== true ||
+      evidence.qualification_claim !== null ||
+      evidence.qualification_status !== "diagnostic_only"
+    ) {
+      throw new Error(`Diagnostic readback mode ${mode} can emit a qualification claim.`);
+    }
+  }
+  if (
+    qualificationEvidenceForReadbackMode("per-case").qualification_status !==
+    "passed_cpu_fp64_browser_fallback"
+  ) {
+    throw new Error("Formal per-case qualification status was weakened.");
+  }
+}
+
+function assertAirboxHiddenBeforeNativeGate(state) {
+  const settings = state?.targets?.airbox?.settings;
+  if (!settings || settings.visible !== false) {
+    throw new Error(`Airbox isolation was not adopted before the native-layer gate: ${JSON.stringify(settings ?? null)}`);
+  }
+}
+
+function findAirboxFieldRequest(fieldRequests, countBefore) {
+  const index = fieldRequests.findIndex((request) => {
+    const params = new URLSearchParams(request.search);
+    return request.path.includes("/data/fields/H_demag/samples/vector") &&
+      params.get("scope_kind") === "airbox" &&
+      params.get("scope_id") === "airbox";
+  });
+  if (index < 0) return null;
+  return {
+    observed_after_case_start: index >= countBefore,
+    request: fieldRequests[index],
+    request_index: index,
+  };
+}
+
+function assertAirboxFieldRequestMatcherSelfTest() {
+  const requests = [
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=airbox&scope_id=airbox" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Atop" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=airbox&scope_id=airbox-shell" },
+  ];
+  const cached = findAirboxFieldRequest(requests, 1);
+  const fresh = findAirboxFieldRequest(requests, 0);
+  if (
+    cached?.observed_after_case_start !== false ||
+    fresh?.observed_after_case_start !== true ||
+    findAirboxFieldRequest(requests.slice(1), 0) !== null
+  ) {
+    throw new Error("Airbox field request matcher self-test failed.");
+  }
 }
 
 async function waitForAirboxRequest(fieldRequests, countBefore) {
-  await poll("Airbox H_demag field request", () => fieldRequests.slice(countBefore).some((request) =>
-    request.path.includes("/data/fields/H_demag/samples/vector") && request.search.includes("scope_kind=airbox")
-  ) ? true : null);
+  return poll(
+    "Airbox H_demag field request",
+    () => findAirboxFieldRequest(fieldRequests, countBefore),
+  );
+}
+
+function exactAirboxListenerCount(runtime) {
+  return Object.entries(runtime.listenerCounts ?? {})
+    .filter(([key]) => resourceKeyHasExactFieldScope(
+      key,
+      "H_demag",
+      "airbox",
+      "airbox",
+    ))
+    .reduce((sum, [, count]) => sum + Number(count), 0);
+}
+
+function resourceKeyHasExactFieldScope(key, quantity, scopeKind, scopeId) {
+  return String(key).split("|").some((entry) => {
+    const queryIndex = entry.indexOf("?");
+    if (queryIndex < 0) return false;
+    const path = entry.slice(0, queryIndex);
+    const params = new URLSearchParams(entry.slice(queryIndex + 1));
+    return path.includes(`/data/fields/${encodeURIComponent(quantity)}/samples/vector`) &&
+      params.get("scope_kind") === scopeKind &&
+      params.get("scope_id") === scopeId;
+  });
+}
+
+function resourceKeyHasExactScope(key, scopeKind, scopeId) {
+  return String(key).split("|").some((entry) => {
+    const queryIndex = entry.indexOf("?");
+    if (queryIndex < 0) return false;
+    const path = entry.slice(0, queryIndex);
+    const params = new URLSearchParams(entry.slice(queryIndex + 1));
+    return /\/data\/fields\/[^/]+\/samples\/vector$/.test(path) &&
+      params.get("scope_kind") === scopeKind &&
+      params.get("scope_id") === scopeId;
+  });
+}
+
+function assertExactListenerMatcherSelfTest() {
+  const exactAirbox = "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox";
+  const airboxShell = "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox-shell";
+  const exactLayer = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=layer&scope_id=layer%3Atop";
+  const layerShell = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=layer&scope_id=layer%3Atop-shell";
+  if (
+    !resourceKeyHasExactFieldScope(`${airboxShell}|${exactAirbox}`, "H_demag", "airbox", "airbox") ||
+    resourceKeyHasExactFieldScope(airboxShell, "H_demag", "airbox", "airbox") ||
+    !resourceKeyHasExactFieldScope(exactLayer, "m", "layer", "layer:top") ||
+    resourceKeyHasExactFieldScope(layerShell, "m", "layer", "layer:top") ||
+    !resourceKeyHasExactScope(exactLayer, "layer", "layer:top") ||
+    resourceKeyHasExactScope(layerShell, "layer", "layer:top")
+  ) {
+    throw new Error("Exact listener scope matcher self-test failed.");
+  }
 }
 
 async function ensureHealthyCanvas(page) {
@@ -605,7 +928,11 @@ function assertNoGeometryRequestsAfterSwitch(requests, countBefore, label) {
 }
 
 function assertHiddenLayerHasNoListener(runtime, layer) {
-  const leaked = Object.entries(runtime.listenerCounts ?? {}).filter(([key, count]) => key.includes(`scope_kind=layer`) && key.includes(`scope_id=${encodeURIComponent(layer.magnet_name)}`) && Number(count) > 0);
+  const leaked = Object.entries(runtime.listenerCounts ?? {}).filter(
+    ([key, count]) =>
+      resourceKeyHasExactScope(key, "layer", layer.layer_id) &&
+      Number(count) > 0,
+  );
   if (leaked.length > 0) throw new Error(`Hidden native layer retained field listener: ${JSON.stringify(leaked)}`);
 }
 

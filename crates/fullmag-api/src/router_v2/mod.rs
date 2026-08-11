@@ -502,6 +502,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_fdm_multilayer_layout),
         )
         .route(
+            "/v2/sessions/current/data/domain/fdm-multilayer-layers/:layer_id/active-mask",
+            get(handlers::data::get_fdm_multilayer_layer_active_mask),
+        )
+        .route(
             "/v2/sessions/current/data/domain/topology",
             get(handlers::data::get_domain_topology),
         )

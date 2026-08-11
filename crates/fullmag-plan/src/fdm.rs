@@ -9,7 +9,9 @@ use fullmag_ir::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
-use crate::current_transport::{resolve_current_transports, CurrentTransportExecutableLane};
+use crate::current_transport::{
+    resolve_current_transports, resolve_fdm_gpu_charge_transports, CurrentTransportExecutableLane,
+};
 use crate::error::PlanError;
 use crate::geometry::{
     cell_for_magnet, checked_fdm_grid_cost, extract_multilayer_geometry, fdm_default_cell,
@@ -1354,6 +1356,8 @@ pub(crate) fn plan_fdm(
         resolved_backend,
         &spin_transport_context,
     )?;
+    let fdm_gpu_charge_transports =
+        resolve_fdm_gpu_charge_transports(problem, resolved_backend, &spin_transport_context)?;
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
@@ -1363,6 +1367,7 @@ pub(crate) fn plan_fdm(
         region_mask,
         active_mask: active_mask.clone(),
         spin_transport_plans,
+        fdm_gpu_charge_transports,
         initial_magnetization,
         material: FdmMaterialIR {
             name: material.name.clone(),
