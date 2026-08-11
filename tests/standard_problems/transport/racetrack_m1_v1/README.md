@@ -23,8 +23,9 @@ odwraca znaki wielkości zorientowanych, lecz nie zmienia fizycznego torque na F
 
 Fixture obejmuje siatkę `256 × 64 × 4`, osobne maski domeny transportowej,
 magnetycznej i targetu torque, zeroprądową relaksację istniejącego modułu oraz
-symetryczny sweep sześciu niezerowych prądów. Oersted, prescribed SOT/STT,
-FP32, PBC, termika, M2/M3 i fallback CPU są poza zakresem.
+symetryczny sweep sześciu niezerowych prądów. Oersted, inverse SHE,
+prescribed SOT/STT, MTJ, FP32, PBC, termika, M2/M3, multi-GPU i fallback CPU
+są poza zakresem.
 
 HM zajmuje dokładnie warstwy komórek `z=[0,3)`, a FM `z=[3,4)`.
 `transport_active` obejmuje wszystkie `65536` komórek, natomiast
@@ -43,6 +44,21 @@ Każdy drive wraca do checkpointu `relaxed_zero_current`, trwa `2e-9 s`,
 używa kroku `1e-13 s` i próbkowania `5e-12 s`. JSON zapisuje konkretne
 outward densities obu terminali dla każdej z sześciu amplitud, więc pełny
 harmonogram i znaki nie zależą od późniejszych defaultów.
+
+`normalized_problem_ir_contract.expected_lowering` zawiera kompletne bieżące
+rekordy `CurrentTransport`, steady `SpinDriftDiffusion`,
+`DriftDiffusionSpinTorque`, materiał, energy terms, oba `StudyIR`,
+`BackendPolicyIR`, validation profile i runtime selection. Test Python porównuje
+je z publicznymi konstruktorami `to_ir()`, a test Rust parsuje bieżącymi typami
+`fullmag-ir`. Konkretne mutacje drive celują w istniejące indeksy terminali
+`current_modules[0].boundaries[0]` i `[1]`; `boundaries[current_sweep]` nie jest
+polem ProblemIR.
+
+Pełny sześcioprzebiegowy workload nie jest jeszcze lowerowalny jako jeden
+publiczny `Problem`: obiekt HM i jego materiały charge/spin są reprezentowalne,
+ale brakuje mutacji BC między etapami i restartu każdego drive z nazwanego
+checkpointu. Te dwie luki są jawnie zapisane w `public_lowering_boundary`; harmonogram pozostaje
+kontraktem workflow fixture, a nie deklaracją bieżącej wykonywalności.
 
 `she_1d_film_v1` jest analitycznym oraklem direct-SHE/steady-spin, natomiast
 `skyrmion_hall_angle_v1` jest wersją algorytmu trajektorii, okna ruchu ustalonego

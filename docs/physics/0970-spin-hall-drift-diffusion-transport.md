@@ -433,11 +433,11 @@ The machine-readable symbol contract used by the source map is:
 | e | e | positive elementary charge | \mathrm{C} |
 | q_abs | q_{\mathrm{abs},\perp} | transversely absorbed interface spin-current density | \mathrm{A\,m^{-2}} |
 | T_tr_G | T_{\mathrm{tr},G} | transport-derived Gilbert-source torque | \mathrm{s^{-1}} |
-| m | m | reduced magnetization direction | $1$ |
-| alpha | \alpha | Gilbert damping | $1$ |
-| B_eff | B_{\mathrm{eff}} | effective magnetic induction | \mathrm{T} |
-| T_P | T_P | polarization-driven contribution to transport torque | \mathrm{s^{-1}} |
-| T_SHE | T_{\mathrm{SHE}} | direct-SHE contribution to transport torque | \mathrm{s^{-1}} |
+| m | $m$ | reduced magnetization direction | $1$ |
+| alpha | $\alpha$ | Gilbert damping | $1$ |
+| B_eff | $B_{\mathrm{eff}}$ | effective magnetic induction | $\mathrm{T}$ |
+| T_P | $T_P$ | polarization-driven contribution to transport torque | $\mathrm{s^{-1}}$ |
+| T_SHE | $T_{\mathrm{SHE}}$ | direct-SHE contribution to transport torque | $\mathrm{s^{-1}}$ |
 
 ```{math}
 :label: m1-constitutive-block
@@ -710,12 +710,25 @@ aktualizuje transport przy każdej ewaluacji RHS LLG. Dla każdego $J_x$ JSON
 zapisuje obie konkretne outward densities, więc znak terminali nie jest
 wyprowadzany później z nazwy powierzchni.
 
-`normalized_problem_ir_contract` zamraża kolejność geometrii `[hm,fm]` oraz
-równość rozmiarów HM i FM w osiach $x,y$, moduł
-charge `charge`, steady-spin `spin`, torque `transport_torque`, pełne region
-references, BC, maski, etapy i requested tuple
-`fdm/gpu/double/strict`. Żaden z tych elementów nie może zostać pominięty i
-uzupełniony backendowym defaultem.
+`normalized_problem_ir_contract` jest typowanym `expected_lowering` dla pól,
+które istnieją dzisiaj: pełnego `CurrentTransport`, steady
+`SpinDriftDiffusion`, `DriftDiffusionSpinTorque`, materiału magnetycznego,
+energy terms `Exchange`, `Demag` i `InterfacialDMI(D=3e-3,
+interface_normal=(0,0,1))`, obu wariantów `StudyIR`, `BackendPolicyIR`, profilu
+walidacji i runtime selection. Test Python porównuje te rekordy z rzeczywistym
+wynikiem publicznych `to_ir()`, a test Rust parsuje je bieżącymi typami
+`fullmag-ir`. Kolejność BC jest normatywna: terminale mają indeksy `0` i `1`,
+a zewnętrzny charge-insulating boundary indeks `2`.
+
+Pełny workload nie jest jeszcze publicznie lowerowalny jako jeden `Problem`.
+Obiekt HM i jego charge/spin material assignments są reprezentowalne, ale
+brakuje mutacji wartości BC pomiędzy etapami oraz restartu każdego drive z
+nazwanego checkpointu. Dlatego maski i sześcioprzebiegowy harmonogram pozostają jawnym kontraktem
+workflow fixture, a nie fikcyjnymi polami `ProblemIR`. Każdy drive zapisuje
+konkretne istniejące cele `current_modules[0].boundaries[0|1].outward_current_density_Apm2`;
+nie istnieje cel `boundaries[current_sweep]`. Granica ta jest zamrożona w
+`public_lowering_boundary` i nie może zostać uznana za implementację ani
+kwalifikację `fdm/gpu/double/strict`.
 
 #### 2.9.4 Pełna tabela liczb fixture
 
@@ -737,22 +750,22 @@ oznacza przypisania zestawu jednemu materiałowi.
 | `fm.A` | $A$ | $\mathrm{J\,m^{-1}}$ | `15e-12` | finite, $>0$ | `materials[fm].exchange_stiffness` | Sampaio paper-scale |
 | `fm.alpha` | $\alpha$ | $1$ | `0.3` | finite, $\ge0$ | `materials[fm].damping` | deterministic relaxation scale |
 | `fm.Ku` | $K_u$ | $\mathrm{J\,m^{-3}}$ | `0.8e6` | finite, axis $+z$ | `materials[fm].uniaxial_anisotropy` | Sampaio paper-scale |
-| `fm.D` | $D$ | $\mathrm{J\,m^{-2}}$ | `3e-3` | finite, Fullmag DMI sign | `materials[fm].interfacial_dmi` | Sampaio paper-scale |
-| `hm.sigma_charge` | $\sigma_{HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `current_modules[charge].materials[hm].material.sigma_Spm` | metallic benchmark |
-| `hm.sigma_spin` | $\sigma_{s,HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `spin_transport_modules[spin].materials[hm].material.sigma_s_Spm` | unpolarized HM benchmark |
-| `hm.theta_SH` | $\theta_{SH,HM}$ | $1$ | `0.2` | finite, signed | `spin_transport_modules[spin].materials[hm].material.theta_sh` | sign-sensitive SHE benchmark |
-| `hm.lambda_sf` | $\lambda_{sf,HM}$ | $\mathrm m$ | `1.5e-9` | finite, $>0$ | `spin_transport_modules[spin].materials[hm].material.lambda_sf_m` | short metallic scale |
-| `fm.sigma_charge` | $\sigma_{FM}$ | $\mathrm{S\,m^{-1}}$ | `1e6` | finite, $>0$ | `current_modules[charge].materials[fm].material.sigma_Spm` | HM/FM contrast benchmark |
-| `fm.sigma_spin` | $\sigma_{s,FM}$ | $\mathrm{S\,m^{-1}}$ | `1e6` | finite, $>0$ | `spin_transport_modules[spin].materials[fm].material.sigma_s_Spm` | FM transport benchmark |
-| `fm.P` | $P_{FM}$ | $1$ | `0.4` | finite in $[-1,1]$ | `spin_transport_modules[spin].materials[fm].material.polarization_p` | moderate polarization |
-| `fm.lambda_sf` | $\lambda_{sf,FM}$ | $\mathrm m$ | `5e-9` | finite, $>0$ | `spin_transport_modules[spin].materials[fm].material.lambda_sf_m` | longitudinal reaction coverage |
-| `fm.lambda_J` | $\lambda_{J,FM}$ | $\mathrm m$ | `1e-9` | finite, $>0$ | `spin_transport_modules[spin].materials[fm].material.lambda_j_m` | transverse exchange coverage |
-| `fm.lambda_phi` | $\lambda_{\phi,FM}$ | $\mathrm m$ | `1e-9` | finite, $>0$ | `spin_transport_modules[spin].materials[fm].material.lambda_phi_m` | dephasing coverage |
-| `interface.G_up` | $G_\uparrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[spin].interfaces[hm_fm].g_up_Spm2` | symmetric longitudinal branch |
-| `interface.G_down` | $G_\downarrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[spin].interfaces[hm_fm].g_down_Spm2` | symmetric longitudinal branch |
-| `interface.G_r` | $G_r$ | $\mathrm{S\,m^{-2}}$ | `5e14` | finite, $\ge0$ | `spin_transport_modules[spin].interfaces[hm_fm].g_r_Spm2` | damping-like branch coverage |
-| `interface.G_i` | $G_i$ | $\mathrm{S\,m^{-2}}$ | `5e13` | finite, signed | `spin_transport_modules[spin].interfaces[hm_fm].g_i_Spm2` | field-like branch coverage |
-| `drive.J_minus_1_5` | $J_x^{(-1.5)}$ | $\mathrm{A\,m^{-2}}$ | `-1.5e12` | balanced signed terminals | `current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2` | symmetric sweep |
+| `fm.D` | $D$ | $\mathrm{J\,m^{-2}}$ | `3e-3` | finite, Fullmag DMI sign, interface normal $+z$ | `energy_terms[2].D` | Sampaio paper-scale |
+| `hm.sigma_charge` | $\sigma_{HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `current_modules[0].materials[0].material.sigma_Spm` | metallic benchmark |
+| `hm.sigma_spin` | $\sigma_{s,HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `spin_transport_modules[0].materials[0].material.sigma_s_Spm` | unpolarized HM benchmark |
+| `hm.theta_SH` | $\theta_{SH,HM}$ | $1$ | `0.2` | finite, signed | `spin_transport_modules[0].materials[0].material.theta_sh` | sign-sensitive SHE benchmark |
+| `hm.lambda_sf` | $\lambda_{sf,HM}$ | $\mathrm m$ | `1.5e-9` | finite, $>0$ | `spin_transport_modules[0].materials[0].material.lambda_sf_m` | short metallic scale |
+| `fm.sigma_charge` | $\sigma_{FM}$ | $\mathrm{S\,m^{-1}}$ | `1e6` | finite, $>0$ | `current_modules[0].materials[1].material.sigma_Spm` | HM/FM contrast benchmark |
+| `fm.sigma_spin` | $\sigma_{s,FM}$ | $\mathrm{S\,m^{-1}}$ | `1e6` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.sigma_s_Spm` | FM transport benchmark |
+| `fm.P` | $P_{FM}$ | $1$ | `0.4` | finite in $[-1,1]$ | `spin_transport_modules[0].materials[1].material.polarization_p` | moderate polarization |
+| `fm.lambda_sf` | $\lambda_{sf,FM}$ | $\mathrm m$ | `5e-9` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.lambda_sf_m` | longitudinal reaction coverage |
+| `fm.lambda_J` | $\lambda_{J,FM}$ | $\mathrm m$ | `1e-9` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.lambda_j_m` | transverse exchange coverage |
+| `fm.lambda_phi` | $\lambda_{\phi,FM}$ | $\mathrm m$ | `1e-9` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.lambda_phi_m` | dephasing coverage |
+| `interface.G_up` | $G_\uparrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_up_Spm2` | symmetric longitudinal branch |
+| `interface.G_down` | $G_\downarrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_down_Spm2` | symmetric longitudinal branch |
+| `interface.G_r` | $G_r$ | $\mathrm{S\,m^{-2}}$ | `5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_r_Spm2` | damping-like branch coverage |
+| `interface.G_i` | $G_i$ | $\mathrm{S\,m^{-2}}$ | `5e13` | finite, signed | `spin_transport_modules[0].interfaces[0].g_i_Spm2` | field-like branch coverage |
+| `drive.J_minus_1_5` | $J_x^{(-1.5)}$ | $\mathrm{A\,m^{-2}}$ | `-1.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep; paired x-minus override is explicit in `current_schedule` |
 | `drive.J_minus_1_0` | $J_x^{(-1.0)}$ | $\mathrm{A\,m^{-2}}$ | `-1.0e12` | balanced signed terminals | same as above | symmetric sweep |
 | `drive.J_minus_0_5` | $J_x^{(-0.5)}$ | $\mathrm{A\,m^{-2}}$ | `-0.5e12` | balanced signed terminals | same as above | symmetric sweep |
 | `drive.J_plus_0_5` | $J_x^{(+0.5)}$ | $\mathrm{A\,m^{-2}}$ | `0.5e12` | balanced signed terminals | same as above | symmetric sweep |

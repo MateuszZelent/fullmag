@@ -167,3 +167,119 @@ wykonania FDM GPU, implementacji `SkyrmionTrajectoryV1` ani
 racetrack. Te statusy pozostają `planned_not_implemented`/`unsupported` do
 czasu przejścia własnych zarządzanych bramek runtime na dokładnym requested
 tuple.
+
+## Korekty po drugim niezależnym review
+
+### Rozstrzygnięcie findingów
+
+1. **Critical — niepełny `normalized_problem_ir_contract`: zamknięty.**
+   `fixture.v1.json` zawiera teraz `contract_kind=typed_expected_lowering_map`
+   oraz pełny `expected_lowering` dla bieżących serializowanych typów:
+   `CurrentModuleIR::CurrentTransport` z modelem `ohmic_poisson`, coupling
+   `one_way`, kompletną domeną, materiałami, trzema BC, gauge i solverem;
+   `SpinTransportModuleIR` z `current_source_id`, mode `steady`, solverem,
+   requested execution i wersją konstytutywną; oraz
+   `DriftDiffusionSpinTorque` z `solve_id`, targetem i wersją formuły.
+   Kontrakt obejmuje też materiał FM, energy terms `Exchange`, `Demag` i
+   `InterfacialDMI` z normalną `+z`, oba `StudyIR`, integrator `rk4`,
+   `BackendPolicyIR`, validation profile i runtime selection.
+
+   Test Python buduje te rekordy bieżącymi publicznymi konstruktorami i wymaga
+   dokładnej równości ich `to_ir()`. Nowy test integracyjny `fullmag-ir` parsuje
+   ten sam JSON bieżącymi typami Rust i sprawdza krytyczne pola po ponownej
+   serializacji. Nie utworzono fikcyjnego pola `definition`: charge definition
+   pozostaje zgodnie z serde spłaszczona w `CurrentTransport`.
+
+2. **Critical — nieistniejące cele harmonogramu: zamknięty.** Wszystkie ścieżki
+   materiałów i interfejsu używają rzeczywistych indeksów tablic ProblemIR.
+   Każdy drive zapisuje osobne `problem_ir_overrides` dla
+   `current_modules[0].boundaries[0].outward_current_density_Apm2` oraz
+   `current_modules[0].boundaries[1].outward_current_density_Apm2`. Usunięto
+   `boundaries[current_sweep]`. Indeksy etapów `1..6`, `entrypoint_kind=flat_run`,
+   czas, krok i sampling pozostają częścią jawnego kontraktu workflow.
+
+   Publiczne rekordy charge/spin/torque i obiekt pomocniczy HM są dziś
+   reprezentowalne, natomiast publiczny `Problem` nie potrafi jeszcze wyrazić
+   mutacji BC pomiędzy etapami ani restartu każdego drive z nazwanego
+   checkpointu. `public_lowering_boundary` zamraża dokładnie te dwie luki;
+   sześcioprzebiegowy harmonogram nie udaje pola bieżącego ProblemIR.
+
+3. **Important — niedostatecznie dokładne testy semantyki: zamknięty.** Testy
+   wymagają teraz literalnie charge continuity i znaku `E=-grad V`, kolejności
+   indeksów `epsilon_ika` direct SHE i implikacji `Q_zy>0`, wszystkich trzech
+   steady reactions, orientacji `n=+e_z`, definicji skoków i znaków mixing BC,
+   ujemnego prefaktora torque bez `R_sf` oraz pełnego jawnego Gilbert RHS.
+   Zakres forbidden jest dokładnie zamrożony dla CPU, FP32, prescribed torque,
+   prescribed current density, Oersted, iSHE, M2, M3, MTJ, PBC, thermal noise i
+   multi-GPU.
+
+4. **Important — surowe tokeny SI w nowych wierszach: zamknięty.** Nowe wiersze
+   `m`, `alpha`, `B_eff`, `T_P` i `T_SHE` w 0970 używają `$...$` zarówno dla
+   symbolu, jak i jednostki. Jeden test pilnuje nowych tabel maszynowych 0940 i
+   0970 bez globalnego odrzucania legalnego MathJax w pozostałej, starszej
+   treści.
+
+### TDD RED drugiego review
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests
+Ran 10 tests
+FAILED (failures=6, errors=2)
+
+KeyError: 'contract_kind'
+KeyError: 'stage_index'
+forbidden_fallbacks: brak iSHE/M2/M3/MTJ/PBC/thermal/multi-GPU
+raw math cells: m, alpha, B_eff, T_P, T_SHE
+
+cargo test -p fullmag-ir --test racetrack_m1_fixture
+FAILED: contract_kind left None, right typed_expected_lowering_map
+```
+
+RED był kontrolowany: oba testy skompilowały się i zatrzymały dokładnie na
+brakujących polach fixture, nie na błędzie importu, składni ani zależności.
+
+### GREEN drugiego review
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests
+Ran 10 tests; OK
+
+cargo test -p fullmag-ir --test racetrack_m1_fixture
+1 passed; 0 failed
+
+python3 scripts/test_fdm_gpu_m1_contract_docs.py
+Ran 22 tests; OK
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0940-topological-charge-observable.source-map.json --repo-root .
+PASS
+
+python3 -m unittest discover \
+  -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+Ran 22 tests; OK
+
+python3 -m pytest scripts/test_validate_topological_charge_runtime.py -q
+4 passed
+
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+Public documentation Python examples passed
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py \
+  --base ccd22952b8422814999d44bfca5874a2d59fabda --head HEAD --repo-root .
+PASS
+
+git show --check --oneline --no-renames HEAD
+PASS
+```
+
+### Granica dowodu po korekcie
+
+Korekta dowodzi dokładności bieżących nazw i kształtów wire przez publiczne
+lowering Python oraz parser Rust. Nie dowodzi publicznej wykonywalności pełnego
+workflow, materializacji masek, mutacji etapów, restartu, działania GPU ani
+kwalifikacji fizycznej. Status pozostaje kontraktowy do przejścia dalszych
+bramek Tasks 2--12.

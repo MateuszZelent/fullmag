@@ -28,7 +28,14 @@
       "single",
       "prescribed_torque",
       "prescribed_current_density",
-      "oersted"
+      "oersted",
+      "inverse_spin_hall_effect",
+      "reciprocal_m2",
+      "transient_m3",
+      "mtj",
+      "periodic_boundaries",
+      "thermal_noise",
+      "multi_gpu"
     ]
   },
   "structured_grid": {
@@ -179,60 +186,96 @@
     "drive_cases": [
       {
         "order": 0,
+        "stage_index": 1,
+        "entrypoint_kind": "flat_run",
         "id": "drive_minus_1_5",
         "parameter_id": "drive.J_minus_1_5",
         "current_density_Apm2": -1.5e12,
         "terminal_outward_Apm2": {"terminal_x_minus": 1.5e12, "terminal_x_plus": -1.5e12},
+        "problem_ir_overrides": {
+          "current_modules[0].boundaries[0].outward_current_density_Apm2": 1.5e12,
+          "current_modules[0].boundaries[1].outward_current_density_Apm2": -1.5e12
+        },
         "duration_s": 2e-9,
         "fixed_time_step_s": 1e-13,
         "sample_interval_s": 5e-12
       },
       {
         "order": 1,
+        "stage_index": 2,
+        "entrypoint_kind": "flat_run",
         "id": "drive_minus_1_0",
         "parameter_id": "drive.J_minus_1_0",
         "current_density_Apm2": -1.0e12,
         "terminal_outward_Apm2": {"terminal_x_minus": 1.0e12, "terminal_x_plus": -1.0e12},
+        "problem_ir_overrides": {
+          "current_modules[0].boundaries[0].outward_current_density_Apm2": 1.0e12,
+          "current_modules[0].boundaries[1].outward_current_density_Apm2": -1.0e12
+        },
         "duration_s": 2e-9,
         "fixed_time_step_s": 1e-13,
         "sample_interval_s": 5e-12
       },
       {
         "order": 2,
+        "stage_index": 3,
+        "entrypoint_kind": "flat_run",
         "id": "drive_minus_0_5",
         "parameter_id": "drive.J_minus_0_5",
         "current_density_Apm2": -0.5e12,
         "terminal_outward_Apm2": {"terminal_x_minus": 0.5e12, "terminal_x_plus": -0.5e12},
+        "problem_ir_overrides": {
+          "current_modules[0].boundaries[0].outward_current_density_Apm2": 0.5e12,
+          "current_modules[0].boundaries[1].outward_current_density_Apm2": -0.5e12
+        },
         "duration_s": 2e-9,
         "fixed_time_step_s": 1e-13,
         "sample_interval_s": 5e-12
       },
       {
         "order": 3,
+        "stage_index": 4,
+        "entrypoint_kind": "flat_run",
         "id": "drive_plus_0_5",
         "parameter_id": "drive.J_plus_0_5",
         "current_density_Apm2": 0.5e12,
         "terminal_outward_Apm2": {"terminal_x_minus": -0.5e12, "terminal_x_plus": 0.5e12},
+        "problem_ir_overrides": {
+          "current_modules[0].boundaries[0].outward_current_density_Apm2": -0.5e12,
+          "current_modules[0].boundaries[1].outward_current_density_Apm2": 0.5e12
+        },
         "duration_s": 2e-9,
         "fixed_time_step_s": 1e-13,
         "sample_interval_s": 5e-12
       },
       {
         "order": 4,
+        "stage_index": 5,
+        "entrypoint_kind": "flat_run",
         "id": "drive_plus_1_0",
         "parameter_id": "drive.J_plus_1_0",
         "current_density_Apm2": 1.0e12,
         "terminal_outward_Apm2": {"terminal_x_minus": -1.0e12, "terminal_x_plus": 1.0e12},
+        "problem_ir_overrides": {
+          "current_modules[0].boundaries[0].outward_current_density_Apm2": -1.0e12,
+          "current_modules[0].boundaries[1].outward_current_density_Apm2": 1.0e12
+        },
         "duration_s": 2e-9,
         "fixed_time_step_s": 1e-13,
         "sample_interval_s": 5e-12
       },
       {
         "order": 5,
+        "stage_index": 6,
+        "entrypoint_kind": "flat_run",
         "id": "drive_plus_1_5",
         "parameter_id": "drive.J_plus_1_5",
         "current_density_Apm2": 1.5e12,
         "terminal_outward_Apm2": {"terminal_x_minus": -1.5e12, "terminal_x_plus": 1.5e12},
+        "problem_ir_overrides": {
+          "current_modules[0].boundaries[0].outward_current_density_Apm2": -1.5e12,
+          "current_modules[0].boundaries[1].outward_current_density_Apm2": 1.5e12
+        },
         "duration_s": 2e-9,
         "fixed_time_step_s": 1e-13,
         "sample_interval_s": 5e-12
@@ -289,6 +332,7 @@
   },
   "normalized_problem_ir_contract": {
     "schema_version": "problem_ir.racetrack_m1_v1",
+    "contract_kind": "typed_expected_lowering_map",
     "geometry_entry_order": ["hm", "fm"],
     "geometry_equalities": [
       "geometry.entries[fm].size[0] == geometry.entries[hm].size[0]",
@@ -304,7 +348,251 @@
       "magnetic_domain": [{"object_id": "fm"}],
       "torque_target": {"object_id": "fm"}
     },
-    "canonicalization_rule": "all arrays above are ordered; no omitted boundary, mask, stage, or execution field may be defaulted"
+    "expected_lowering": {
+      "current_transport": {
+        "kind": "current_transport",
+        "name": "charge",
+        "model": "ohmic_poisson",
+        "coupling": "one_way",
+        "domain": [{"object_id": "hm"}, {"object_id": "fm"}],
+        "materials": [
+          {
+            "region": {"object_id": "hm"},
+            "material": {"sigma_Spm": 5000000.0}
+          },
+          {
+            "region": {"object_id": "fm"},
+            "material": {"sigma_Spm": 1000000.0}
+          }
+        ],
+        "boundaries": [
+          {
+            "kind": "normal_current_electrode",
+            "id": "terminal_x_minus",
+            "surfaces": [
+              {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+              {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]}
+            ],
+            "outward_current_density_Apm2": 0.0
+          },
+          {
+            "kind": "normal_current_electrode",
+            "id": "terminal_x_plus",
+            "surfaces": [
+              {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+              {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]}
+            ],
+            "outward_current_density_Apm2": 0.0
+          },
+          {
+            "kind": "insulating",
+            "id": "insulating_outer",
+            "surfaces": [
+              {"object_id": "hm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+              {"object_id": "hm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+              {"object_id": "hm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+              {"object_id": "fm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+              {"object_id": "fm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+              {"object_id": "fm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]}
+            ]
+          }
+        ],
+        "gauge": "zero_mean",
+        "solver": {
+          "engine": "cg",
+          "linear": {
+            "relative_tolerance": 1e-10,
+            "absolute_tolerance": 0.0,
+            "max_iterations": 10000
+          },
+          "physical_residual_version": "charge_balance_integrated_l2.v1",
+          "operator_version": "fv_charge_harmonic_v1"
+        }
+      },
+      "spin_transport": {
+        "schema_version": "spin_transport.v1",
+        "id": "spin",
+        "current_source_id": "charge",
+        "domain": [{"object_id": "hm"}, {"object_id": "fm"}],
+        "mode": "steady",
+        "materials": [
+          {
+            "region": {"object_id": "hm"},
+            "material": {
+              "sigma_s_Spm": 5000000.0,
+              "polarization_p": 0.0,
+              "theta_sh": 0.2,
+              "lambda_sf_m": 1.5e-9,
+              "lambda_j_m": "disabled",
+              "lambda_phi_m": "disabled"
+            }
+          },
+          {
+            "region": {"object_id": "fm"},
+            "material": {
+              "sigma_s_Spm": 1000000.0,
+              "polarization_p": 0.4,
+              "theta_sh": 0.0,
+              "lambda_sf_m": 5e-9,
+              "lambda_j_m": 1e-9,
+              "lambda_phi_m": 1e-9
+            }
+          }
+        ],
+        "interfaces": [
+          {
+            "kind": "mixing_conductance",
+            "id": "hm_fm",
+            "normal_to_ferromagnet": [0.0, 0.0, 1.0],
+            "normal_side": {"object_id": "hm"},
+            "ferromagnet_side": {"object_id": "fm"},
+            "g_up_Spm2": 250000000000000.0,
+            "g_down_Spm2": 250000000000000.0,
+            "g_r_Spm2": 500000000000000.0,
+            "g_i_Spm2": 50000000000000.0,
+            "absorption": "full_absorption",
+            "formula_version": "magnetoelectronic.fullmag.v2"
+          }
+        ],
+        "boundaries": [
+          {
+            "kind": "spin_insulating",
+            "id": "spin_insulating_outer",
+            "surfaces": [
+              {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+              {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+              {"object_id": "hm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+              {"object_id": "hm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+              {"object_id": "hm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+              {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+              {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+              {"object_id": "fm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+              {"object_id": "fm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+              {"object_id": "fm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]}
+            ]
+          }
+        ],
+        "solver": {
+          "engine": "auto",
+          "linear": {
+            "relative_tolerance": 1e-8,
+            "absolute_tolerance": 0.0,
+            "max_iterations": 500
+          },
+          "physical_residual_version": "transport_balance_integrated_l2.v1",
+          "operator_version": "fv_spin_upwind_v1",
+          "default_external_boundary": "spin_insulating"
+        },
+        "requested_execution": {
+          "discretization": "fdm",
+          "device": "gpu",
+          "precision": "double",
+          "execution_mode": "strict"
+        },
+        "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+      },
+      "spin_torque": {
+        "kind": "drift_diffusion_spin_torque",
+        "schema_version": "drift_diffusion_spin_torque.v1",
+        "id": "transport_torque",
+        "solve_id": "spin",
+        "target": {"object_id": "fm"},
+        "formula_version": "transport_torque_angular_momentum.fullmag.v1"
+      },
+      "magnetic_material": {
+        "name": "fm_material",
+        "saturation_magnetisation": 580000.0,
+        "exchange_stiffness": 1.5e-11,
+        "damping": 0.3,
+        "uniaxial_anisotropy": 800000.0,
+        "uniaxial_anisotropy_k2": null,
+        "anisotropy_axis": [0.0, 0.0, 1.0],
+        "cubic_anisotropy_kc1": null,
+        "cubic_anisotropy_kc2": null,
+        "cubic_anisotropy_kc3": null,
+        "cubic_anisotropy_axis1": null,
+        "cubic_anisotropy_axis2": null,
+        "interfacial_dmi": null,
+        "bulk_dmi": null,
+        "ms_field": null,
+        "a_field": null,
+        "alpha_field": null,
+        "ku_field": null,
+        "ku2_field": null,
+        "kc1_field": null,
+        "kc2_field": null,
+        "kc3_field": null,
+        "dind_field": null,
+        "dbulk_field": null
+      },
+      "energy_terms": [
+        {"kind": "exchange"},
+        {"kind": "demag", "realization": "auto"},
+        {
+          "kind": "interfacial_dmi",
+          "D": 0.003,
+          "interface_normal": [0.0, 0.0, 1.0]
+        }
+      ],
+      "relax_study": {
+        "kind": "relaxation",
+        "algorithm": "llg_overdamped",
+        "stop": {
+          "torque_tolerance_apm": 0.7957747154594766,
+          "max_steps": 50000
+        },
+        "sampling": {"outputs": []},
+        "dynamics": {
+          "kind": "llg",
+          "gyromagnetic_ratio": 221100.0,
+          "integrator": "rk4",
+          "fixed_timestep": 1e-13
+        }
+      },
+      "drive_study": {
+        "kind": "time_evolution",
+        "dynamics": {
+          "kind": "llg",
+          "gyromagnetic_ratio": 221100.0,
+          "integrator": "rk4",
+          "fixed_timestep": 1e-13
+        },
+        "sampling": {
+          "outputs": [{"kind": "field", "name": "m", "every_seconds": 5e-12}]
+        }
+      },
+      "backend_policy": {
+        "requested_backend": "fdm",
+        "execution_precision": "double",
+        "discretization_hints": {
+          "fdm": {
+            "cell": [2e-9, 2e-9, 1e-9],
+            "default_cell": [2e-9, 2e-9, 1e-9]
+          },
+          "fem": null,
+          "hybrid": null
+        }
+      },
+      "validation_profile": {"execution_mode": "strict"},
+      "runtime_selection": {
+        "backend": "fdm",
+        "device": "gpu",
+        "gpu_count": 1,
+        "device_index": 0,
+        "cpu_threads": null,
+        "execution_mode": "strict",
+        "execution_precision": "double"
+      }
+    },
+    "public_lowering_boundary": {
+      "status": "not_publicly_lowerable_as_one_problem",
+      "missing_capabilities": [
+        "per_stage_current_boundary_mutation",
+        "restart_each_drive_from_named_checkpoint"
+      ],
+      "rule": "typed records are current ProblemIR; the six-case restart schedule remains an external fixture workflow until both stage capabilities exist"
+    },
+    "canonicalization_rule": "expected_lowering arrays and top-level fixture boundary, mask, and stage arrays are ordered; no field may be backend-defaulted; workflow-only fields are not ProblemIR"
   },
   "sources": [
     {
@@ -469,7 +757,7 @@
       "value": 0.003,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite interfacial DMI coefficient using the canonical Fullmag DMI sign convention.",
-      "problem_ir_path": "materials[fm].interfacial_dmi",
+      "problem_ir_path": "energy_terms[2].D",
       "motivation": {"source_ids": ["sampaio2013"], "claim": "published stable-skyrmion benchmark scale; chirality still follows Fullmag sign convention"}
     },
     {
@@ -479,7 +767,7 @@
       "value": 5000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive scalar charge conductivity in HM.",
-      "problem_ir_path": "current_modules[charge].materials[hm].material.sigma_Spm",
+      "problem_ir_path": "current_modules[0].materials[0].material.sigma_Spm",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "metallic diffusive-transport benchmark scale"}
     },
     {
@@ -489,7 +777,7 @@
       "value": 5000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive scalar spin conductivity in HM.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[hm].material.sigma_s_Spm",
+      "problem_ir_path": "spin_transport_modules[0].materials[0].material.sigma_s_Spm",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "unpolarized metallic benchmark with sigma_spin equal to sigma_charge"}
     },
     {
@@ -499,7 +787,7 @@
       "value": 0.2,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed direct-SHE coefficient under transport_constitutive.one_way.fullmag.v1.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[hm].material.theta_sh",
+      "problem_ir_path": "spin_transport_modules[0].materials[0].material.theta_sh",
       "motivation": {"source_ids": ["abert2015"], "claim": "large but bounded sign-sensitive SHE benchmark; not a fitted Pt value"}
     },
     {
@@ -509,7 +797,7 @@
       "value": 1.5e-9,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive spin-flip length, resolved relative to the 1 nm z spacing.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[hm].material.lambda_sf_m",
+      "problem_ir_path": "spin_transport_modules[0].materials[0].material.lambda_sf_m",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015", "benchmark_grid"], "claim": "short metallic spin-diffusion benchmark scale"}
     },
     {
@@ -519,7 +807,7 @@
       "value": 1000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive scalar charge conductivity in FM.",
-      "problem_ir_path": "current_modules[charge].materials[fm].material.sigma_Spm",
+      "problem_ir_path": "current_modules[0].materials[1].material.sigma_Spm",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "conductivity-contrast benchmark selected to exercise HM/FM current continuity"}
     },
     {
@@ -529,7 +817,7 @@
       "value": 1000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive scalar spin conductivity in FM.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.sigma_s_Spm",
+      "problem_ir_path": "spin_transport_modules[0].materials[1].material.sigma_s_Spm",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "ferromagnetic spin-transport benchmark scale"}
     },
     {
@@ -539,7 +827,7 @@
       "value": 0.4,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed polarization in the closed interval [-1, 1].",
-      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.polarization_p",
+      "problem_ir_path": "spin_transport_modules[0].materials[1].material.polarization_p",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "moderate ferromagnetic polarization benchmark"}
     },
     {
@@ -549,7 +837,7 @@
       "value": 5e-9,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive FM spin-flip length.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.lambda_sf_m",
+      "problem_ir_path": "spin_transport_modules[0].materials[1].material.lambda_sf_m",
       "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "finite longitudinal spin-relaxation benchmark"}
     },
     {
@@ -559,7 +847,7 @@
       "value": 1e-9,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive transverse exchange length.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.lambda_j_m",
+      "problem_ir_path": "spin_transport_modules[0].materials[1].material.lambda_j_m",
       "motivation": {"source_ids": ["abert2015", "benchmark_grid"], "claim": "one-cell transverse-exchange branch coverage"}
     },
     {
@@ -569,7 +857,7 @@
       "value": 1e-9,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive transverse dephasing length.",
-      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.lambda_phi_m",
+      "problem_ir_path": "spin_transport_modules[0].materials[1].material.lambda_phi_m",
       "motivation": {"source_ids": ["abert2015", "benchmark_grid"], "claim": "one-cell transverse-dephasing branch coverage"}
     },
     {
@@ -579,7 +867,7 @@
       "value": 250000000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and nonnegative majority-channel interface conductance.",
-      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_up_Spm2",
+      "problem_ir_path": "spin_transport_modules[0].interfaces[0].g_up_Spm2",
       "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "symmetric longitudinal channel benchmark"}
     },
     {
@@ -589,7 +877,7 @@
       "value": 250000000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and nonnegative minority-channel interface conductance.",
-      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_down_Spm2",
+      "problem_ir_path": "spin_transport_modules[0].interfaces[0].g_down_Spm2",
       "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "symmetric longitudinal channel benchmark"}
     },
     {
@@ -599,7 +887,7 @@
       "value": 500000000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and nonnegative real spin-mixing conductance.",
-      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_r_Spm2",
+      "problem_ir_path": "spin_transport_modules[0].interfaces[0].g_r_Spm2",
       "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "nonzero damping-like absorption branch"}
     },
     {
@@ -609,7 +897,7 @@
       "value": 50000000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed imaginary spin-mixing conductance.",
-      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_i_Spm2",
+      "problem_ir_path": "spin_transport_modules[0].interfaces[0].g_i_Spm2",
       "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "nonzero field-like absorption branch at one tenth of the real coefficient"}
     },
     {
@@ -619,7 +907,7 @@
       "value": -1500000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
-      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "problem_ir_path": "current_modules[0].boundaries[1].outward_current_density_Apm2",
       "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "largest negative sign/amplitude validation point"}
     },
     {
@@ -629,7 +917,7 @@
       "value": -1000000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
-      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "problem_ir_path": "current_modules[0].boundaries[1].outward_current_density_Apm2",
       "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "middle negative sign/amplitude validation point"}
     },
     {
@@ -639,7 +927,7 @@
       "value": -500000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
-      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "problem_ir_path": "current_modules[0].boundaries[1].outward_current_density_Apm2",
       "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "smallest negative sign/amplitude validation point"}
     },
     {
@@ -649,7 +937,7 @@
       "value": 500000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
-      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "problem_ir_path": "current_modules[0].boundaries[1].outward_current_density_Apm2",
       "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "smallest positive sign/amplitude validation point"}
     },
     {
@@ -659,7 +947,7 @@
       "value": 1000000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
-      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "problem_ir_path": "current_modules[0].boundaries[1].outward_current_density_Apm2",
       "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "middle positive sign/amplitude validation point"}
     },
     {
@@ -669,7 +957,7 @@
       "value": 1500000000000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
-      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "problem_ir_path": "current_modules[0].boundaries[1].outward_current_density_Apm2",
       "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "largest positive sign/amplitude validation point"}
     }
   ]
