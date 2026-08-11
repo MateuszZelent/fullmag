@@ -1562,6 +1562,382 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         ):
             self.assertIn(required, transport_page + topological_page + readme)
 
+    def test_racetrack_fixture_freezes_one_complete_normalized_problem(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            {
+                "discretization": "fdm",
+                "device": "gpu",
+                "precision": "double",
+                "execution_mode": "strict",
+            },
+            fixture["execution_intent"]["requested_tuple"],
+        )
+        self.assertEqual(
+            [
+                "cpu",
+                "single",
+                "prescribed_torque",
+                "prescribed_current_density",
+                "oersted",
+            ],
+            fixture["execution_intent"]["forbidden_fallbacks"],
+        )
+        self.assertEqual(
+            {
+                "counts": [256, 64, 4],
+                "cell_size_m": [2e-9, 2e-9, 1e-9],
+                "extent_m": [512e-9, 128e-9, 4e-9],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_order": "x_fastest_then_y_then_z",
+            },
+            fixture["structured_grid"],
+        )
+        self.assertEqual(
+            {
+                "hm": {
+                    "object_id": "hm",
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "size_m": [512e-9, 128e-9, 3e-9],
+                    "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [0, 3]},
+                },
+                "fm": {
+                    "object_id": "fm",
+                    "origin_m": [0.0, 0.0, 3e-9],
+                    "size_m": [512e-9, 128e-9, 1e-9],
+                    "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [3, 4]},
+                },
+                "interface_z_m": 3e-9,
+                "overlap_rule": "disjoint_half_open_cell_bounds_with_one_shared_geometric_face",
+            },
+            fixture["layer_placement"],
+        )
+
+        charge = fixture["charge_boundary_contract"]
+        self.assertEqual("zero_mean", charge["gauge"])
+        self.assertEqual("every_external_surface_exactly_once", charge["coverage_rule"])
+        boundaries = {row["id"]: row for row in charge["boundaries"]}
+        self.assertEqual(
+            {"terminal_x_minus", "terminal_x_plus", "insulating_outer"},
+            set(boundaries),
+        )
+        self.assertEqual(-1.0, boundaries["terminal_x_minus"]["current_multiplier"])
+        self.assertEqual(1.0, boundaries["terminal_x_plus"]["current_multiplier"])
+        self.assertEqual(
+            [
+                {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+                {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+            ],
+            boundaries["terminal_x_minus"]["surfaces"],
+        )
+        self.assertEqual(
+            [
+                {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+                {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+            ],
+            boundaries["terminal_x_plus"]["surfaces"],
+        )
+        insulating_surfaces = [
+            {"object_id": "hm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+            {"object_id": "hm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+            {"object_id": "hm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+            {"object_id": "fm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+            {"object_id": "fm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+            {"object_id": "fm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]},
+        ]
+        self.assertEqual(insulating_surfaces, boundaries["insulating_outer"]["surfaces"])
+        self.assertEqual(
+            {
+                "id": "spin_insulating_outer",
+                "kind": "spin_insulating",
+                "coverage_rule": "every_external_surface_exactly_once",
+                "surfaces": [
+                    {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+                    {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+                    *insulating_surfaces[:3],
+                    {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+                    {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+                    *insulating_surfaces[3:],
+                ],
+            },
+            fixture["spin_boundary_contract"],
+        )
+
+        self.assertEqual(
+            {
+                "id": "hm_fm",
+                "kind": "mixing_conductance",
+                "normal_side": {"object_id": "hm"},
+                "ferromagnet_side": {"object_id": "fm"},
+                "normal_to_ferromagnet": [0.0, 0.0, 1.0],
+                "normal_surface": {
+                    "object_id": "hm",
+                    "surface_id": "z+",
+                    "orientation": [0.0, 0.0, 1.0],
+                },
+                "ferromagnet_surface": {
+                    "object_id": "fm",
+                    "surface_id": "z-",
+                    "orientation": [0.0, 0.0, -1.0],
+                },
+                "interface_z_m": 3e-9,
+            },
+            fixture["interface_contract"],
+        )
+
+        masks = fixture["mask_contract"]
+        self.assertEqual([256, 64, 4], masks["shape"])
+        self.assertEqual("x_fastest_then_y_then_z", masks["cell_order"])
+        self.assertEqual(65_536, masks["transport_active"]["active_cell_count"])
+        self.assertEqual([0, 4], masks["transport_active"]["cell_bounds"]["z"])
+        for mask_id in ("magnetic_active", "torque_target"):
+            self.assertEqual(16_384, masks[mask_id]["active_cell_count"])
+            self.assertEqual([3, 4], masks[mask_id]["cell_bounds"]["z"])
+        self.assertEqual(
+            "torque_target subset magnetic_active subset transport_active",
+            masks["subset_invariant"],
+        )
+
+        stages = fixture["stage_contract"]
+        self.assertEqual(
+            {
+                "order": 0,
+                "id": "relax_zero_current",
+                "kind": "relax",
+                "transport_module_present": True,
+                "current_density_Apm2": 0.0,
+                "transport_torque_enabled": False,
+                "output_checkpoint": "relaxed_zero_current",
+            },
+            stages[0],
+        )
+        self.assertEqual(1, stages[1]["order"])
+        self.assertEqual("drive_solved_current", stages[1]["id"])
+        self.assertEqual("independent_fixed_step_runs", stages[1]["kind"])
+        self.assertTrue(stages[1]["transport_module_present"])
+        self.assertTrue(stages[1]["transport_torque_enabled"])
+        self.assertEqual("relaxed_zero_current", stages[1]["restart_from"])
+        self.assertEqual(
+            [
+                "drive.J_minus_1_5",
+                "drive.J_minus_1_0",
+                "drive.J_minus_0_5",
+                "drive.J_plus_0_5",
+                "drive.J_plus_1_0",
+                "drive.J_plus_1_5",
+            ],
+            [case["parameter_id"] for case in fixture["current_schedule"]["drive_cases"]],
+        )
+        schedule = fixture["current_schedule"]
+        self.assertEqual("racetrack_current_schedule.v1", schedule["schema_version"])
+        self.assertEqual("relax_zero_current", schedule["preparation_stage"])
+        self.assertEqual("relaxed_zero_current", schedule["relaxed_checkpoint"])
+        self.assertTrue(schedule["reset_to_relaxed_checkpoint_before_each_case"])
+        self.assertEqual("every_llg_rhs_evaluation", schedule["transport_update"])
+        for order, case in enumerate(schedule["drive_cases"]):
+            self.assertEqual(order, case["order"])
+            self.assertEqual(-case["current_density_Apm2"], case["terminal_outward_Apm2"]["terminal_x_minus"])
+            self.assertEqual(case["current_density_Apm2"], case["terminal_outward_Apm2"]["terminal_x_plus"])
+            self.assertEqual(2e-9, case["duration_s"])
+            self.assertEqual(1e-13, case["fixed_time_step_s"])
+            self.assertEqual(5e-12, case["sample_interval_s"])
+
+        normalized = fixture["normalized_problem_ir_contract"]
+        self.assertEqual(["hm", "fm"], normalized["geometry_entry_order"])
+        self.assertEqual(
+            [
+                "geometry.entries[fm].size[0] == geometry.entries[hm].size[0]",
+                "geometry.entries[fm].size[1] == geometry.entries[hm].size[1]",
+            ],
+            normalized["geometry_equalities"],
+        )
+        self.assertEqual(["charge"], normalized["current_module_order"])
+        self.assertEqual(["spin"], normalized["spin_transport_module_order"])
+        self.assertEqual(["transport_torque"], normalized["spin_torque_module_order"])
+        self.assertEqual(
+            {
+                "hm": {"object_id": "hm"},
+                "fm": {"object_id": "fm"},
+                "transport_domain": [{"object_id": "hm"}, {"object_id": "fm"}],
+                "magnetic_domain": [{"object_id": "fm"}],
+                "torque_target": {"object_id": "fm"},
+            },
+            normalized["region_refs"],
+        )
+        self.assertEqual(
+            "all arrays above are ordered; no omitted boundary, mask, stage, or execution field may be defaulted",
+            normalized["canonicalization_rule"],
+        )
+
+    def test_theta_sh_reversal_separates_polarized_and_pure_she_responses(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        page = PAGE.read_text(encoding="utf-8")
+        oracle = fixture["sign_contract"]["reverse_theta_sh"]
+
+        self.assertEqual(0.4, oracle["production_fixture_polarization"])
+        self.assertEqual(
+            "T(+theta_SH)=T_P+T_SHE; T(-theta_SH)=T_P-T_SHE",
+            oracle["torque_decomposition"],
+        )
+        self.assertEqual({"fm.P": 0.0}, oracle["pure_she_oracle"]["parameter_overrides"])
+        self.assertEqual(
+            ["mu_s", "Q_spin", "T_tr_G"],
+            oracle["pure_she_oracle"]["exactly_odd_observables"],
+        )
+        self.assertEqual(
+            "no exact oddness claim for nonlinear trajectory velocity",
+            oracle["pure_she_oracle"]["velocity_semantics"],
+        )
+        for fragment in (
+            r"T(+\theta_{\mathrm{SH}})=T_P+T_{\mathrm{SHE}}",
+            r"T(-\theta_{\mathrm{SH}})=T_P-T_{\mathrm{SHE}}",
+            r"P=0",
+            "nie jest ogólnie odd",
+            "no exact oddness claim for nonlinear trajectory velocity",
+        ):
+            self.assertIn(fragment, page)
+        reverse_row = next(
+            line for line in page.splitlines() if line.startswith("| `reverse_theta_SH` |")
+        )
+        self.assertIn(r"$T_P+T_{\mathrm{SHE}}\to T_P-T_{\mathrm{SHE}}$", reverse_row)
+        self.assertNotIn("$(-v_x,-v_y)$", reverse_row)
+
+    def test_skyrmion_hall_angle_v1_is_fully_deterministic(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        contract = fixture["analysis_contract"]
+
+        self.assertEqual("skyrmion_hall_angle_v1", contract["algorithm_version"])
+        self.assertEqual("signed_topological_density_first_moment", contract["centre"]["method"])
+        self.assertEqual(0.5, contract["centre"]["minimum_abs_charge"])
+        windows = contract["candidate_windows"]
+        self.assertEqual("all_contiguous_intervals", windows["enumeration"])
+        self.assertEqual(21, windows["minimum_samples"])
+        self.assertEqual(1e-10, windows["minimum_duration_s"])
+        self.assertEqual(0.05, windows["maximum_relative_charge_deviation"])
+        self.assertEqual(16e-9, windows["minimum_edge_distance_m"])
+        self.assertEqual(1.0, windows["minimum_mean_speed_mps"])
+        self.assertEqual(4e-9, windows["minimum_net_displacement_m"])
+        self.assertEqual(0.10, windows["maximum_speed_coefficient_of_variation"])
+        self.assertEqual(
+            ["maximum_duration", "minimum_start_index", "minimum_end_index"],
+            windows["selection_tie_break"],
+        )
+        regression = contract["regression"]
+        self.assertEqual(1e-18, regression["position_variance_floor_m2"])
+        self.assertEqual(
+            "1/max(sigma_x_m2+sigma_y_m2,position_variance_floor_m2)",
+            regression["common_weight"],
+        )
+        self.assertEqual("N-2", regression["residual_degrees_of_freedom"])
+        self.assertEqual(
+            [
+                "topology_lost",
+                "edge_contaminated",
+                "insufficient_samples",
+                "no_motion",
+                "no_stationary_window",
+            ],
+            contract["reason_code_precedence"],
+        )
+        for equation_id in (
+            "skyrmion-signed-density-centre",
+            "skyrmion-candidate-speed-statistics",
+            "skyrmion-hall-weighted-regression",
+            "skyrmion-hall-weighted-covariance",
+            "skyrmion-hall-angle",
+            "skyrmion-hall-angle-variance",
+        ):
+            self.assertIn(f":label: {equation_id}", page)
+        for fragment in (
+            r"\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi}",
+            r"\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}",
+            r"c_v=\frac{\sqrt{\frac{1}{N-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}",
+            r"\chi_{ab}=\frac{1}{N-2}\sum_nw_nr_{a,n}r_{b,n}",
+            r"\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}",
+        ):
+            self.assertIn(fragment, page)
+        self.assertIn(
+            "`topology_lost` → `edge_contaminated` → `insufficient_samples` → "
+            "`no_motion` → `no_stationary_window`",
+            page,
+        )
+
+    def test_topological_source_map_covers_equations_and_numerical_claims(self) -> None:
+        source_map = json.loads(TOPOLOGICAL_SOURCE_MAP.read_text(encoding="utf-8"))
+        equations = {row["id"]: row for row in source_map["equations"]}
+        self.assertEqual(
+            {
+                "topological-support-frame",
+                "topological-normalized-magnetization",
+                "topological-charge-density",
+                "topological-charge-integral",
+                "topological-solid-angle",
+                "topological-discrete-charge",
+                "fdm-thickness-weighted-charge",
+                "fem-midpoint-thickness-average",
+                "skyrmion-signed-density-centre",
+                "skyrmion-candidate-speed-statistics",
+                "skyrmion-hall-weighted-regression",
+                "skyrmion-hall-weighted-covariance",
+                "skyrmion-hall-angle",
+                "skyrmion-hall-angle-variance",
+                "belavin-polyakov-texture",
+            },
+            set(equations),
+        )
+        self.assertEqual(["topological-charge-kernel"], equations["topological-solid-angle"]["sources"])
+        self.assertEqual(["topological-fdm-weighting"], equations["fdm-thickness-weighted-charge"]["sources"])
+        self.assertEqual(["topological-fem-weighting"], equations["fem-midpoint-thickness-average"]["sources"])
+        for equation_id in (
+            "skyrmion-signed-density-centre",
+            "skyrmion-candidate-speed-statistics",
+            "skyrmion-hall-weighted-regression",
+            "skyrmion-hall-weighted-covariance",
+            "skyrmion-hall-angle",
+            "skyrmion-hall-angle-variance",
+        ):
+            self.assertEqual(["skyrmion-hall-contract"], equations[equation_id]["sources"])
+
+        claims = {row["id"]: row for row in source_map["claims"]}
+        self.assertEqual(
+            {
+                "scaled-vector-normalization",
+                "exceptional-triangle-thresholds",
+                "under-resolution-threshold",
+                "support-topology-qualification",
+                "boundary-uniformity-threshold",
+                "fdm-cell-thickness-weighting",
+                "fem-auto-profile-count",
+            },
+            set(claims),
+        )
+        source_ids = {row["id"] for row in source_map["sources"]}
+        for claim in claims.values():
+            self.assertTrue(claim["sources"])
+            self.assertTrue(set(claim["sources"]).issubset(source_ids))
+            self.assertIn(claim["evidence_status"], {"source_and_tests", "planned_contract"})
+        sources = {row["id"]: row for row in source_map["sources"]}
+        self.assertEqual("compute_oriented_charge", sources["topological-charge-kernel"]["symbol"])
+        self.assertEqual("fem_midpoint_weights", sources["topological-fem-weighting"]["symbol"])
+        self.assertEqual(
+            "resolved_profile_sample_count",
+            sources["topological-profile-sampling"]["symbol"],
+        )
+        self.assertEqual("planned_contract", sources["skyrmion-hall-contract"]["evidence_status"])
+
+    def test_new_topological_tables_use_myst_inline_math(self) -> None:
+        page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        for row in (
+            r"| $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |",
+            r"| $w_n$ | $w_n$ | inverse position-variance regression weight | $\mathrm{m^{-2}}$ |",
+            r"| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |",
+            r"| $\sigma_{r,n}^2$ | $\sigma_{r,n}^2$ | summed centre-coordinate variance before flooring | $\mathrm{m^2}$ |",
+        ):
+            self.assertIn(row, page)
+        self.assertNotIn("| t_n | t_n | accepted trajectory time sample | \\mathrm{s} |", page)
+
 
 if __name__ == "__main__":
     unittest.main()

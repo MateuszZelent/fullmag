@@ -30,26 +30,139 @@
   ],
   "equations": [
     {
+      "id": "topological-support-frame",
+      "symbols": ["support_frame"],
+      "sources": ["topological-continuum-contract"]
+    },
+    {
+      "id": "topological-normalized-magnetization",
+      "symbols": ["M", "m_hat"],
+      "sources": ["topological-charge-kernel"]
+    },
+    {
+      "id": "topological-charge-density",
+      "symbols": ["q", "u_v", "m_hat"],
+      "sources": ["topological-continuum-contract"]
+    },
+    {
+      "id": "topological-charge-integral",
+      "symbols": ["Q", "Sigma", "q", "u_v"],
+      "sources": ["topological-continuum-contract"]
+    },
+    {
+      "id": "topological-solid-angle",
+      "symbols": ["Omega", "a_b_c"],
+      "sources": ["topological-charge-kernel"]
+    },
+    {
+      "id": "topological-discrete-charge",
+      "symbols": ["Q_h", "T_h", "Omega"],
+      "sources": ["topological-charge-kernel"]
+    },
+    {
+      "id": "fdm-thickness-weighted-charge",
+      "symbols": ["Q_bar", "Q_si", "delta_s_i"],
+      "sources": ["topological-fdm-weighting"]
+    },
+    {
+      "id": "fem-midpoint-thickness-average",
+      "symbols": ["Q_bar", "Q_si", "N", "i"],
+      "sources": ["topological-fem-weighting"]
+    },
+    {
+      "id": "skyrmion-signed-density-centre",
+      "symbols": ["delta_Q_nk", "Omega_nk", "c_nk", "r_nk_l", "r_n", "Q_n", "x_n", "y_n"],
+      "sources": ["skyrmion-hall-contract"]
+    },
+    {
+      "id": "skyrmion-candidate-speed-statistics",
+      "symbols": ["t_n", "r_n", "s_k", "s_bar", "c_v", "N"],
+      "sources": ["skyrmion-hall-contract"]
+    },
+    {
       "id": "skyrmion-hall-weighted-regression",
-      "symbols": ["t_n", "w_n", "x_n", "y_n", "v_x", "v_y"],
+      "symbols": ["t_n", "w_n", "x_n", "y_n", "v_x", "v_y", "b_x", "b_y", "W", "S_tt", "t_bar_w", "xy_bar_w", "sigma_xy", "sigma_r", "sigma_floor"],
+      "sources": ["skyrmion-hall-contract"]
+    },
+    {
+      "id": "skyrmion-hall-weighted-covariance",
+      "symbols": ["w_n", "r_a_n", "a_b_index", "chi_ab", "velocity_covariance", "S_tt", "N"],
       "sources": ["skyrmion-hall-contract"]
     },
     {
       "id": "skyrmion-hall-angle",
       "symbols": ["v_x", "v_y", "Theta_H"],
       "sources": ["skyrmion-hall-contract"]
+    },
+    {
+      "id": "skyrmion-hall-angle-variance",
+      "symbols": ["v_x", "v_y", "velocity_covariance", "Theta_variance"],
+      "sources": ["skyrmion-hall-contract"]
+    },
+    {
+      "id": "belavin-polyakov-texture",
+      "symbols": ["m_hat", "x_y", "lambda"],
+      "sources": ["topological-validation-contract"]
     }
   ],
   "symbols": [
+    {"id": "support_frame", "latex": "\\mathbf e_u,\\mathbf e_v,\\mathbf n", "meaning": "ordered orthonormal support-frame directions", "si_unit": "$1$"},
+    {"id": "M", "latex": "\\mathbf M", "meaning": "magnetization vector before normalization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "m_hat", "latex": "\\hat{\\mathbf m}", "meaning": "normalized magnetization direction", "si_unit": "$1$"},
+    {"id": "a_b_c", "latex": "\\mathbf a,\\mathbf b,\\mathbf c", "meaning": "ordered unit-magnetization samples of one triangle", "si_unit": "$1$"},
+    {"id": "u_v", "latex": "u,v", "meaning": "physical in-plane coordinates", "si_unit": "\\mathrm{m}"},
+    {"id": "Sigma", "latex": "\\Sigma", "meaning": "oriented planar integration support; unit refers to its measure", "si_unit": "\\mathrm{m^2}"},
+    {"id": "q", "latex": "q", "meaning": "continuum topological-charge density", "si_unit": "\\mathrm{m^{-2}}"},
+    {"id": "Q", "latex": "Q,Q_h", "meaning": "continuum and discrete topological charge", "si_unit": "$1$"},
+    {"id": "Q_h", "latex": "Q,Q_h", "meaning": "continuum and discrete topological charge", "si_unit": "$1$"},
+    {"id": "Omega", "latex": "\\Omega", "meaning": "signed solid angle", "si_unit": "\\mathrm{rad}"},
+    {"id": "T_h", "latex": "\\mathcal T_h", "meaning": "oriented support triangulation", "si_unit": "$1$"},
+    {"id": "Q_bar", "latex": "\\bar Q", "meaning": "full-thickness averaged topological charge", "si_unit": "$1$"},
+    {"id": "Q_si", "latex": "Q(s_i)", "meaning": "topological charge at physical cut $s_i$", "si_unit": "$1$"},
+    {"id": "delta_s_i", "latex": "\\Delta s_i", "meaning": "physical thickness weight owned by FDM cut $i$", "si_unit": "\\mathrm{m}"},
+    {"id": "N", "latex": "N", "meaning": "number of samples in a candidate window", "si_unit": "$1$"},
+    {"id": "i", "latex": "i", "meaning": "deterministic layer or profile-cut index", "si_unit": "$1$"},
     {"id": "t_n", "latex": "t_n", "meaning": "accepted trajectory time sample", "si_unit": "\\mathrm{s}"},
     {"id": "w_n", "latex": "w_n", "meaning": "inverse position-variance regression weight", "si_unit": "\\mathrm{m^{-2}}"},
     {"id": "x_n", "latex": "x_n", "meaning": "signed-density centre coordinate along the track", "si_unit": "\\mathrm{m}"},
     {"id": "y_n", "latex": "y_n", "meaning": "signed-density centre coordinate along the transverse axis", "si_unit": "\\mathrm{m}"},
     {"id": "v_x", "latex": "v_x", "meaning": "fitted longitudinal velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
     {"id": "v_y", "latex": "v_y", "meaning": "fitted transverse velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
-    {"id": "Theta_H", "latex": "\\Theta_H", "meaning": "signed skyrmion Hall angle in the reported frame", "si_unit": "\\mathrm{rad}"}
+    {"id": "Theta_H", "latex": "\\Theta_H", "meaning": "signed skyrmion Hall angle in the reported frame", "si_unit": "\\mathrm{rad}"},
+    {"id": "delta_Q_nk", "latex": "\\Delta Q_{n,k}", "meaning": "signed triangle contribution to charge sample $n$", "si_unit": "$1$"},
+    {"id": "Omega_nk", "latex": "\\Omega_{n,k}", "meaning": "signed solid angle of triangle $k$ at sample $n$", "si_unit": "\\mathrm{rad}"},
+    {"id": "c_nk", "latex": "\\mathbf c_{n,k}", "meaning": "physical centroid of support triangle $k$", "si_unit": "\\mathrm{m}"},
+    {"id": "r_nk_l", "latex": "\\mathbf r_{n,k,\\ell}", "meaning": "physical position of support vertex $\\ell$ on triangle $k$", "si_unit": "\\mathrm{m}"},
+    {"id": "r_n", "latex": "\\mathbf r_n", "meaning": "signed-density skyrmion centre", "si_unit": "\\mathrm{m}"},
+    {"id": "Q_n", "latex": "Q_n", "meaning": "signed topological charge at trajectory sample $n$", "si_unit": "$1$"},
+    {"id": "s_k", "latex": "s_k", "meaning": "adjacent secant speed", "si_unit": "\\mathrm{m\\,s^{-1}}"},
+    {"id": "s_bar", "latex": "\\bar s", "meaning": "arithmetic mean of adjacent secant speeds", "si_unit": "\\mathrm{m\\,s^{-1}}"},
+    {"id": "c_v", "latex": "c_v", "meaning": "coefficient of variation of adjacent speeds", "si_unit": "$1$"},
+    {"id": "W", "latex": "W", "meaning": "sum of common inverse-position-variance weights", "si_unit": "\\mathrm{m^{-2}}"},
+    {"id": "S_tt", "latex": "S_{tt}", "meaning": "centred weighted time normal-matrix entry", "si_unit": "\\mathrm{m^{-2}\\,s^2}"},
+    {"id": "t_bar_w", "latex": "\\bar t_w", "meaning": "weighted mean trajectory time", "si_unit": "\\mathrm{s}"},
+    {"id": "xy_bar_w", "latex": "\\bar x_w,\\bar y_w", "meaning": "weighted mean centre coordinates", "si_unit": "\\mathrm{m}"},
+    {"id": "b_x", "latex": "b_x", "meaning": "fitted longitudinal intercept", "si_unit": "\\mathrm{m}"},
+    {"id": "b_y", "latex": "b_y", "meaning": "fitted transverse intercept", "si_unit": "\\mathrm{m}"},
+    {"id": "r_a_n", "latex": "r_{a,n}", "meaning": "coordinate-$a$ regression residual", "si_unit": "\\mathrm{m}"},
+    {"id": "a_b_index", "latex": "a,b", "meaning": "coordinate indices taking values $x$ or $y$", "si_unit": "$1$"},
+    {"id": "chi_ab", "latex": "\\chi_{ab}", "meaning": "weighted residual cross-coordinate scale", "si_unit": "$1$"},
+    {"id": "sigma_xy", "latex": "\\sigma_{x,n}^2,\\sigma_{y,n}^2", "meaning": "supplied centre-coordinate variances", "si_unit": "\\mathrm{m^2}"},
+    {"id": "sigma_r", "latex": "\\sigma_{r,n}^2", "meaning": "summed centre-coordinate variance before flooring", "si_unit": "\\mathrm{m^2}"},
+    {"id": "sigma_floor", "latex": "\\sigma_{\\mathrm{floor}}^2", "meaning": "fixed common-weight variance floor", "si_unit": "\\mathrm{m^2}"},
+    {"id": "velocity_covariance", "latex": "\\operatorname{Cov}(v_a,v_b)", "meaning": "fitted velocity covariance entry", "si_unit": "\\mathrm{m^2\\,s^{-2}}"},
+    {"id": "Theta_variance", "latex": "\\operatorname{Var}(\\Theta_H)", "meaning": "delta-method Hall-angle variance", "si_unit": "\\mathrm{rad^2}"},
+    {"id": "x_y", "latex": "x,y", "meaning": "Cartesian coordinates of the analytic validation texture", "si_unit": "\\mathrm{m}"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "scale parameter of the analytic Belavin-Polyakov texture", "si_unit": "\\mathrm{m}"}
   ],
   "sources": [
+    {
+      "id": "topological-continuum-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:governing-equations",
+      "responsibility": "Own the accepted continuum frame, normalized magnetization, density, and integral definitions without presenting the documentation anchor as executable evidence.",
+      "evidence_status": "planned_contract"
+    },
     {
       "id": "topological-charge-kernel",
       "path": "crates/fullmag-api/src/analysis/topological_charge.rs",
@@ -75,6 +188,18 @@
       "responsibility": "Compute thickness-weighted FDM layer summaries."
     },
     {
+      "id": "topological-fem-weighting",
+      "path": "crates/fullmag-api/src/analysis/topological_charge.rs",
+      "symbol": "fem_midpoint_weights",
+      "responsibility": "Compute the equal physical bin-midpoint weights used by FEM profile summaries."
+    },
+    {
+      "id": "topological-profile-sampling",
+      "path": "crates/fullmag-api/src/schemas/analysis_extensions.rs",
+      "symbol": "resolved_profile_sample_count",
+      "responsibility": "Resolve the automatic FEM profile request to exactly 33 cuts."
+    },
+    {
       "id": "topological-cache-key",
       "path": "crates/fullmag-api/src/quantity_data_plane.rs",
       "symbol": "topological_charge_cache_key",
@@ -87,11 +212,55 @@
       "responsibility": "Reject incomplete FDM/FEM managed-runtime evidence."
     },
     {
+      "id": "topological-validation-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:validation",
+      "responsibility": "Own the independent Belavin-Polyakov continuum validation target without claiming it is the production triangle kernel.",
+      "evidence_status": "planned_contract"
+    },
+    {
       "id": "skyrmion-hall-contract",
       "path": "docs/physics/0940-topological-charge-observable.md",
       "symbol": "DOC-ANCHOR:skyrmion-hall-angle-v1-contract",
       "responsibility": "Freeze signed-density centre, steady-window, weighted-regression, covariance, angle, and reason-code semantics without claiming implementation.",
       "evidence_status": "planned_contract"
+    }
+  ],
+  "claims": [
+    {
+      "id": "scaled-vector-normalization",
+      "sources": ["topological-charge-kernel"],
+      "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "exceptional-triangle-thresholds",
+      "sources": ["topological-charge-kernel"],
+      "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "under-resolution-threshold",
+      "sources": ["topological-charge-kernel"],
+      "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "support-topology-qualification",
+      "sources": ["topological-support-gate"],
+      "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "boundary-uniformity-threshold",
+      "sources": ["topological-boundary-gate"],
+      "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "fdm-cell-thickness-weighting",
+      "sources": ["topological-fdm-weighting"],
+      "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "fem-auto-profile-count",
+      "sources": ["topological-profile-sampling", "topological-fem-weighting"],
+      "evidence_status": "source_and_tests"
     }
   ],
   "planned_symbols": [

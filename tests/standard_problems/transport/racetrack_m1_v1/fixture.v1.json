@@ -16,10 +16,12 @@
     "positive_conventional_current": "+x"
   },
   "execution_intent": {
-    "backend": "fdm",
-    "device": "gpu",
-    "precision": "double",
-    "mode": "strict",
+    "requested_tuple": {
+      "discretization": "fdm",
+      "device": "gpu",
+      "precision": "double",
+      "execution_mode": "strict"
+    },
     "qualification_status": "planned_not_implemented",
     "forbidden_fallbacks": [
       "cpu",
@@ -29,6 +31,113 @@
       "oersted"
     ]
   },
+  "structured_grid": {
+    "counts": [256, 64, 4],
+    "cell_size_m": [2e-9, 2e-9, 1e-9],
+    "extent_m": [512e-9, 128e-9, 4e-9],
+    "origin_m": [0.0, 0.0, 0.0],
+    "cell_order": "x_fastest_then_y_then_z"
+  },
+  "layer_placement": {
+    "hm": {
+      "object_id": "hm",
+      "origin_m": [0.0, 0.0, 0.0],
+      "size_m": [512e-9, 128e-9, 3e-9],
+      "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [0, 3]}
+    },
+    "fm": {
+      "object_id": "fm",
+      "origin_m": [0.0, 0.0, 3e-9],
+      "size_m": [512e-9, 128e-9, 1e-9],
+      "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [3, 4]}
+    },
+    "interface_z_m": 3e-9,
+    "overlap_rule": "disjoint_half_open_cell_bounds_with_one_shared_geometric_face"
+  },
+  "charge_boundary_contract": {
+    "gauge": "zero_mean",
+    "coverage_rule": "every_external_surface_exactly_once",
+    "current_sign_rule": "outward density is -J_x on x- and +J_x on x+",
+    "boundaries": [
+      {
+        "id": "terminal_x_minus",
+        "kind": "normal_current_electrode",
+        "current_multiplier": -1.0,
+        "surfaces": [
+          {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+          {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]}
+        ]
+      },
+      {
+        "id": "terminal_x_plus",
+        "kind": "normal_current_electrode",
+        "current_multiplier": 1.0,
+        "surfaces": [
+          {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+          {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]}
+        ]
+      },
+      {
+        "id": "insulating_outer",
+        "kind": "insulating",
+        "surfaces": [
+          {"object_id": "hm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+          {"object_id": "hm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+          {"object_id": "hm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+          {"object_id": "fm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+          {"object_id": "fm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+          {"object_id": "fm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]}
+        ]
+      }
+    ]
+  },
+  "spin_boundary_contract": {
+    "id": "spin_insulating_outer",
+    "kind": "spin_insulating",
+    "coverage_rule": "every_external_surface_exactly_once",
+    "surfaces": [
+      {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+      {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+      {"object_id": "hm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+      {"object_id": "hm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+      {"object_id": "hm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+      {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+      {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+      {"object_id": "fm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+      {"object_id": "fm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+      {"object_id": "fm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]}
+    ]
+  },
+  "interface_contract": {
+    "id": "hm_fm",
+    "kind": "mixing_conductance",
+    "normal_side": {"object_id": "hm"},
+    "ferromagnet_side": {"object_id": "fm"},
+    "normal_to_ferromagnet": [0.0, 0.0, 1.0],
+    "normal_surface": {"object_id": "hm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]},
+    "ferromagnet_surface": {"object_id": "fm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+    "interface_z_m": 3e-9
+  },
+  "mask_contract": {
+    "shape": [256, 64, 4],
+    "cell_order": "x_fastest_then_y_then_z",
+    "transport_active": {
+      "active_cell_count": 65536,
+      "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [0, 4]},
+      "region_refs": [{"object_id": "hm"}, {"object_id": "fm"}]
+    },
+    "magnetic_active": {
+      "active_cell_count": 16384,
+      "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [3, 4]},
+      "region_refs": [{"object_id": "fm"}]
+    },
+    "torque_target": {
+      "active_cell_count": 16384,
+      "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [3, 4]},
+      "region_refs": [{"object_id": "fm"}]
+    },
+    "subset_invariant": "torque_target subset magnetic_active subset transport_active"
+  },
   "initial_state": {
     "kind": "canonical_neel_skyrmion_seed",
     "target": "fm",
@@ -36,14 +145,20 @@
   },
   "stage_contract": [
     {
+      "order": 0,
       "id": "relax_zero_current",
+      "kind": "relax",
       "transport_module_present": true,
       "current_density_Apm2": 0.0,
-      "transport_torque_enabled": false
+      "transport_torque_enabled": false,
+      "output_checkpoint": "relaxed_zero_current"
     },
     {
+      "order": 1,
       "id": "drive_solved_current",
+      "kind": "independent_fixed_step_runs",
       "transport_module_present": true,
+      "restart_from": "relaxed_zero_current",
       "current_parameter_ids": [
         "drive.J_minus_1_5",
         "drive.J_minus_1_0",
@@ -55,6 +170,142 @@
       "transport_torque_enabled": true
     }
   ],
+  "current_schedule": {
+    "schema_version": "racetrack_current_schedule.v1",
+    "preparation_stage": "relax_zero_current",
+    "relaxed_checkpoint": "relaxed_zero_current",
+    "reset_to_relaxed_checkpoint_before_each_case": true,
+    "transport_update": "every_llg_rhs_evaluation",
+    "drive_cases": [
+      {
+        "order": 0,
+        "id": "drive_minus_1_5",
+        "parameter_id": "drive.J_minus_1_5",
+        "current_density_Apm2": -1.5e12,
+        "terminal_outward_Apm2": {"terminal_x_minus": 1.5e12, "terminal_x_plus": -1.5e12},
+        "duration_s": 2e-9,
+        "fixed_time_step_s": 1e-13,
+        "sample_interval_s": 5e-12
+      },
+      {
+        "order": 1,
+        "id": "drive_minus_1_0",
+        "parameter_id": "drive.J_minus_1_0",
+        "current_density_Apm2": -1.0e12,
+        "terminal_outward_Apm2": {"terminal_x_minus": 1.0e12, "terminal_x_plus": -1.0e12},
+        "duration_s": 2e-9,
+        "fixed_time_step_s": 1e-13,
+        "sample_interval_s": 5e-12
+      },
+      {
+        "order": 2,
+        "id": "drive_minus_0_5",
+        "parameter_id": "drive.J_minus_0_5",
+        "current_density_Apm2": -0.5e12,
+        "terminal_outward_Apm2": {"terminal_x_minus": 0.5e12, "terminal_x_plus": -0.5e12},
+        "duration_s": 2e-9,
+        "fixed_time_step_s": 1e-13,
+        "sample_interval_s": 5e-12
+      },
+      {
+        "order": 3,
+        "id": "drive_plus_0_5",
+        "parameter_id": "drive.J_plus_0_5",
+        "current_density_Apm2": 0.5e12,
+        "terminal_outward_Apm2": {"terminal_x_minus": -0.5e12, "terminal_x_plus": 0.5e12},
+        "duration_s": 2e-9,
+        "fixed_time_step_s": 1e-13,
+        "sample_interval_s": 5e-12
+      },
+      {
+        "order": 4,
+        "id": "drive_plus_1_0",
+        "parameter_id": "drive.J_plus_1_0",
+        "current_density_Apm2": 1.0e12,
+        "terminal_outward_Apm2": {"terminal_x_minus": -1.0e12, "terminal_x_plus": 1.0e12},
+        "duration_s": 2e-9,
+        "fixed_time_step_s": 1e-13,
+        "sample_interval_s": 5e-12
+      },
+      {
+        "order": 5,
+        "id": "drive_plus_1_5",
+        "parameter_id": "drive.J_plus_1_5",
+        "current_density_Apm2": 1.5e12,
+        "terminal_outward_Apm2": {"terminal_x_minus": -1.5e12, "terminal_x_plus": 1.5e12},
+        "duration_s": 2e-9,
+        "fixed_time_step_s": 1e-13,
+        "sample_interval_s": 5e-12
+      }
+    ]
+  },
+  "sign_contract": {
+    "reverse_theta_sh": {
+      "production_fixture_polarization": 0.4,
+      "torque_decomposition": "T(+theta_SH)=T_P+T_SHE; T(-theta_SH)=T_P-T_SHE",
+      "fixed_inputs": ["magnetization", "accepted_charge_snapshot", "all_non-theta_SH_parameters"],
+      "pure_she_oracle": {
+        "parameter_overrides": {"fm.P": 0.0},
+        "additional_invariant": "interface.G_up equals interface.G_down",
+        "exactly_odd_observables": ["mu_s", "Q_spin", "T_tr_G"],
+        "velocity_semantics": "no exact oddness claim for nonlinear trajectory velocity"
+      }
+    }
+  },
+  "analysis_contract": {
+    "algorithm_version": "skyrmion_hall_angle_v1",
+    "centre": {
+      "method": "signed_topological_density_first_moment",
+      "triangle_charge": "delta_Q_nk=Omega_nk/(4*pi)",
+      "triangle_position": "arithmetic centroid of the three physical support vertices",
+      "minimum_abs_charge": 0.5,
+      "required_sign": "one nonzero sign over the complete trajectory"
+    },
+    "candidate_windows": {
+      "enumeration": "all_contiguous_intervals",
+      "minimum_samples": 21,
+      "minimum_duration_s": 1e-10,
+      "maximum_relative_charge_deviation": 0.05,
+      "minimum_edge_distance_m": 16e-9,
+      "minimum_mean_speed_mps": 1.0,
+      "minimum_net_displacement_m": 4e-9,
+      "maximum_speed_coefficient_of_variation": 0.10,
+      "selection_tie_break": ["maximum_duration", "minimum_start_index", "minimum_end_index"]
+    },
+    "regression": {
+      "position_variance_floor_m2": 1e-18,
+      "common_weight": "1/max(sigma_x_m2+sigma_y_m2,position_variance_floor_m2)",
+      "fit": "weighted_intercept_and_slope_for_x_and_y_with_one_common_sample_mask",
+      "residual_degrees_of_freedom": "N-2",
+      "angle_branch": "atan2(v_y,v_x) in (-pi,pi]"
+    },
+    "reason_code_precedence": [
+      "topology_lost",
+      "edge_contaminated",
+      "insufficient_samples",
+      "no_motion",
+      "no_stationary_window"
+    ]
+  },
+  "normalized_problem_ir_contract": {
+    "schema_version": "problem_ir.racetrack_m1_v1",
+    "geometry_entry_order": ["hm", "fm"],
+    "geometry_equalities": [
+      "geometry.entries[fm].size[0] == geometry.entries[hm].size[0]",
+      "geometry.entries[fm].size[1] == geometry.entries[hm].size[1]"
+    ],
+    "current_module_order": ["charge"],
+    "spin_transport_module_order": ["spin"],
+    "spin_torque_module_order": ["transport_torque"],
+    "region_refs": {
+      "hm": {"object_id": "hm"},
+      "fm": {"object_id": "fm"},
+      "transport_domain": [{"object_id": "hm"}, {"object_id": "fm"}],
+      "magnetic_domain": [{"object_id": "fm"}],
+      "torque_target": {"object_id": "fm"}
+    },
+    "canonicalization_rule": "all arrays above are ordered; no omitted boundary, mask, stage, or execution field may be defaulted"
+  },
   "sources": [
     {
       "id": "sampaio2013",
@@ -108,7 +359,7 @@
       "value": 5.12e-7,
       "value_kind": "numerical_validation_fixture",
       "validity": "Exact positive FDM domain length; 256 cells at the frozen cell.x.",
-      "problem_ir_path": "geometry.entries[racetrack].size[0]",
+      "problem_ir_path": "geometry.entries[hm].size[0]",
       "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "nanotrack-scale benchmark extent"}
     },
     {
@@ -118,7 +369,7 @@
       "value": 1.28e-7,
       "value_kind": "numerical_validation_fixture",
       "validity": "Exact positive FDM domain width; 64 cells at the frozen cell.y.",
-      "problem_ir_path": "geometry.entries[racetrack].size[1]",
+      "problem_ir_path": "geometry.entries[hm].size[1]",
       "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "bounded racetrack width with edge-distance margin"}
     },
     {

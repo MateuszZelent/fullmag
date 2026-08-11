@@ -436,6 +436,8 @@ The machine-readable symbol contract used by the source map is:
 | m | m | reduced magnetization direction | $1$ |
 | alpha | \alpha | Gilbert damping | $1$ |
 | B_eff | B_{\mathrm{eff}} | effective magnetic induction | \mathrm{T} |
+| T_P | T_P | polarization-driven contribution to transport torque | \mathrm{s^{-1}} |
+| T_SHE | T_{\mathrm{SHE}} | direct-SHE contribution to transport torque | \mathrm{s^{-1}} |
 
 ```{math}
 :label: m1-constitutive-block
@@ -630,15 +632,92 @@ Tabela opisuje model liniowy M1 przed nieliniową odpowiedzią trajektorii.
 $m$. Kąt Halla jest surowo zdefiniowany przez `atan2(v_y,v_x)`; po odwróceniu
 obu składowych prędkości zmienia gałąź o $\pi$, a nie po prostu znak.
 
+Produkcyjny fixture ma $P=0.4$, dlatego odwrócenie samego
+$\theta_{\mathrm{SH}}$ nie odwraca całej $\mu_s$, całego $Q$ ani całego
+torque. Dla ustalonego $m$, zaakceptowanego snapshotu charge i wszystkich
+pozostałych parametrów odpowiedź rozdziela się na część polaryzacyjną oraz
+SHE. Dla torque zapis jest następujący:
+
+```{math}
+:label: racetrack-theta-sh-torque-decomposition
+T(+\theta_{\mathrm{SH}})=T_P+T_{\mathrm{SHE}},
+\qquad
+T(-\theta_{\mathrm{SH}})=T_P-T_{\mathrm{SHE}}.
+```
+
+Tak samo rozkładają się $\mu_s$ i $Q$. Ich całkowita odpowiedź przy $P=0.4$
+nie jest ogólnie odd. Dokładny oracle odwrócenia czystego SHE używa kopii
+fixture z jedyną zmianą $P=0$; zachowuje $G_\uparrow=G_\downarrow$, ten sam
+$m$ i ten sam charge snapshot. Wtedy $\mu_s$, $Q$ i $T_{\mathrm{tr},G}$ muszą
+być dokładnie odd względem $\theta_{\mathrm{SH}}$ w tolerancji numerycznej
+orakla. Dla pełnej nieliniowej dynamiki obowiązuje jawne ograniczenie:
+`no exact oddness claim for nonlinear trajectory velocity`.
+
 | Operacja | $J_c$ | $Q^{SHE}$, $\mu_s$, oriented flux | $T_{tr,G}$ | $(v_x,v_y)$ w granicy liniowej | $\Theta_H$ | Warunek legalności |
 |---|---:|---:|---:|---:|---:|---|
 | `identity` | bez zmiany | bez zmiany | bez zmiany | bez zmiany | bez zmiany | osie jak wyżej |
 | `reverse_J` | odd | odd | odd | $(-v_x,-v_y)$ | `wrap(Theta_H +/- pi)` | odwrócić oba zbilansowane terminale; moduł nadal istnieje |
-| `reverse_theta_SH` | bez zmiany | odd dla części SHE | odd dla odpowiedzi SHE | $(-v_x,-v_y)$ dla czystego drive SHE | `wrap(Theta_H +/- pi)` | nie zmieniać charge snapshotu |
+| `reverse_theta_SH` | bez zmiany | część polaryzacyjna bez zmiany, część SHE odd | $T_P+T_{\mathrm{SHE}}\to T_P-T_{\mathrm{SHE}}$ | brak dokładnego prawa dla pełnej trajektorii; w oracle $P=0$ odd jest transport przy ustalonym $m$ | brak ogólnego prawa | nie zmieniać charge snapshotu; dokładny oracle czystego SHE ustawia wyłącznie $P=0$ |
 | `reverse_normal` | bez zmiany | oriented flux zmienia znak | fizyczny torque bez zmiany | bez zmiany | bez zmiany | tylko spójna zamiana HM↔FM, $n\to-n$ i $\Delta\to-\Delta$; sam flip normalnej fail-closed |
 | `reverse_transverse_axis` | bez zmiany | składowe z indeksem $y$ zmieniają znak prezentacji | fizyczny torque bez zmiany | $(v_x,-v_y)$ | $-\Theta_H$ w gałęzi głównej | jest to zmiana osi raportowania, nie lewoskrętny frame solvera |
 
-#### 2.9.3 Pełna tabela liczb fixture
+#### 2.9.3 Znormalizowany deskryptor geometrii, BC, masek i etapów
+
+Normatywny JSON zamraża jedną reprezentację bez domyślnych pól. Siatka ma
+dokładnie `counts=[256,64,4]`, `cell_size_m=[2e-9,2e-9,1e-9]`, początek
+`[0,0,0]` i porządek `x_fastest_then_y_then_z`. HM zajmuje półotwarty zakres
+komórek $[0,256)\times[0,64)\times[0,3)$, czyli
+$0\le z<3\,\mathrm{nm}$. FM zajmuje
+$[0,256)\times[0,64)\times[3,4)$, czyli
+$3\,\mathrm{nm}\le z<4\,\mathrm{nm}$. Wspólna płaszczyzna interfejsu ma
+$z=3\,\mathrm{nm}$.
+
+Charge BC ma gauge `zero_mean` i pokrywa każdą zewnętrzną powierzchnię
+dokładnie raz. Terminal `terminal_x_minus` zawiera `hm:x-` i `fm:x-`, obie z
+orientacją $(-1,0,0)$, a jego outward density wynosi $-J_x$. Terminal
+`terminal_x_plus` zawiera `hm:x+` i `fm:x+`, obie z orientacją $(1,0,0)$, a
+jego outward density wynosi $+J_x$. `insulating_outer` obejmuje dokładnie
+`hm:y-`, `hm:y+`, `hm:z-`, `fm:y-`, `fm:y+` i `fm:z+` z odpowiadającymi
+zewnętrznymi orientacjami. Spin BC `spin_insulating_outer` obejmuje wszystkie
+dziesięć zewnętrznych powierzchni HM i FM, łącznie z czterema powierzchniami
+terminali charge.
+
+Interfejs `hm_fm` ma `kind=mixing_conductance`, `normal_side=hm`,
+`ferromagnet_side=fm`, `normal_to_ferromagnet=[0,0,1]`, stronę HM `hm:z+` o
+orientacji $+z$ i stronę FM `fm:z-` o orientacji $-z$. Sam wektor normalny bez
+tej pary stron i powierzchni nie jest kompletnym deskryptorem.
+
+Trzy maski używają tego samego kształtu i porządku komórek:
+
+| Maska | Aktywny zakres $z$ | Liczba aktywnych komórek | Własność |
+|---|---:|---:|---|
+| `transport_active` | $[0,4)$ | `65536` | HM i FM |
+| `magnetic_active` | $[3,4)$ | `16384` | tylko FM |
+| `torque_target` | $[3,4)$ | `16384` | tylko FM |
+
+Obowiązuje `torque_target subset magnetic_active subset transport_active`.
+Deskryptor `cell_bounds` wraz z `shape` i `cell_order` wyznacza każdy bit maski;
+runtime nie może rekonstruować maski z $M_s$, z amplitudy prądu ani z samej
+obecności materiału.
+
+Etap `relax_zero_current` zachowuje moduł transportu, ustawia $J_x=0$, wyłącza
+transportowy torque i publikuje checkpoint `relaxed_zero_current`. Etap
+`drive_solved_current` wykonuje sześć niezależnych przebiegów w porządku
+$(-1.5,-1.0,-0.5,+0.5,+1.0,+1.5)\times10^{12}\,\mathrm{A\,m^{-2}}$.
+Każdy przebieg zaczyna się od tego samego checkpointu, trwa $2\,\mathrm{ns}$,
+używa stałego kroku $0.1\,\mathrm{ps}$, zapisuje próbkę co $5\,\mathrm{ps}$ i
+aktualizuje transport przy każdej ewaluacji RHS LLG. Dla każdego $J_x$ JSON
+zapisuje obie konkretne outward densities, więc znak terminali nie jest
+wyprowadzany później z nazwy powierzchni.
+
+`normalized_problem_ir_contract` zamraża kolejność geometrii `[hm,fm]` oraz
+równość rozmiarów HM i FM w osiach $x,y$, moduł
+charge `charge`, steady-spin `spin`, torque `transport_torque`, pełne region
+references, BC, maski, etapy i requested tuple
+`fdm/gpu/double/strict`. Żaden z tych elementów nie może zostać pominięty i
+uzupełniony backendowym defaultem.
+
+#### 2.9.4 Pełna tabela liczb fixture
 
 Każdy wiersz ma status `numerical_validation_fixture`; pole `ProblemIR` jest
 ścieżką semantyczną zweryfikowaną względem obecnych konstruktorów Python,
@@ -647,8 +726,8 @@ oznacza przypisania zestawu jednemu materiałowi.
 
 | id | symbol | si_unit | value | validity | problem_ir_path | motivation |
 |---|---|---|---:|---|---|---|
-| `track.length` | $L_x$ | $\mathrm m$ | `512e-9` | 256 cells | `geometry.entries[racetrack].size[0]` | Sampaio scale + bounded grid |
-| `track.width` | $L_y$ | $\mathrm m$ | `128e-9` | 64 cells | `geometry.entries[racetrack].size[1]` | Sampaio scale + edge margin |
+| `track.length` | $L_x$ | $\mathrm m$ | `512e-9` | 256 cells; FM must equal HM | `geometry.entries[hm].size[0]` | Sampaio scale + bounded grid |
+| `track.width` | $L_y$ | $\mathrm m$ | `128e-9` | 64 cells; FM must equal HM | `geometry.entries[hm].size[1]` | Sampaio scale + edge margin |
 | `hm.thickness` | $t_{HM}$ | $\mathrm m$ | `3e-9` | 3 z cells | `geometry.entries[hm].size[2]` | diffusive HM benchmark |
 | `fm.thickness` | $t_{FM}$ | $\mathrm m$ | `1e-9` | 1 z cell | `geometry.entries[fm].size[2]` | ultrathin DMI benchmark |
 | `cell.x` | $h_x$ | $\mathrm m$ | `2e-9` | exact divisor of $L_x$ | `backend_policy.discretization_hints.fdm.cell[0]` | bounded in-plane resolution |
@@ -680,7 +759,7 @@ oznacza przypisania zestawu jednemu materiałowi.
 | `drive.J_plus_1_0` | $J_x^{(+1.0)}$ | $\mathrm{A\,m^{-2}}$ | `1.0e12` | balanced signed terminals | same as above | symmetric sweep |
 | `drive.J_plus_1_5` | $J_x^{(+1.5)}$ | $\mathrm{A\,m^{-2}}$ | `1.5e12` | balanced signed terminals | same as above | symmetric sweep |
 
-#### 2.9.4 Kryteria kwalifikacji fixture
+#### 2.9.5 Kryteria kwalifikacji fixture
 
 Task 1 zamraża wyłącznie kontrakt. `she_1d_film_v1` musi później przejść
 analityczny profil, residual, zbieżność i odwrócenia znaków. Racetrack wymaga

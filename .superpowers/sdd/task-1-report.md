@@ -1,355 +1,169 @@
-# Task 1 report: dimensionless chart scaling
+# Raport Task 1: zamrożona fizyka racetrack M1
 
-## Implementation
+## Wynik
 
-- Added `chartScalePolicy.ts`, the shared dimension-aware display boundary.
-  `resolveChartScalePolicy("1")` selects a dimensionless transform with factor
-  `1` and no display unit before any SI magnitude calculation. Physical units
-  retain their magnitude-derived SI display scale.
-- Routed renderer axes, ticks, ECharts tooltip values, rendered series names,
-  and exported PNG axis names through that transform. A normalized value of
-  `0.10317` remains `0.10317`; its axis is `magnetization`, not `m1`.
-- Retained CSV/TSV serialization unchanged: it uses raw point values and
-  canonical `xAxis.unit`/`series.unit` metadata.
-- Added descriptor coverage rejecting physical `M` (`A/m`) on a normalized
-  magnetization (`1`) axis.
+Zamrożono kontrakt `racetrack_m1_v1` dla osi `x=track`, `y=transverse`,
+`z=HM→FM`, dodatniego conventional current `+x` i normalnej HM→FM `+z`.
+Fixture jest jawnie syntetyczny i nie jest przypisany jednemu rzeczywistemu
+materiałowi. Nie zmieniono statusu kwalifikacji żadnej ścieżki GPU.
 
-## Files
-
-- `apps/control-room/src/shared/analysis-charts/chartScalePolicy.ts`
-- `apps/control-room/src/shared/analysis-charts/chartScalePolicy.test.ts`
-- `apps/control-room/src/shared/analysis-charts/chartRenderer.ts`
-- `apps/control-room/src/shared/analysis-charts/chartRenderer.test.ts`
-- `apps/control-room/src/shared/analysis-charts/scientificChartFormatting.ts`
-- `apps/control-room/src/shared/analysis-charts/scientificChartFormatting.test.ts`
-- `apps/control-room/src/shared/domain/analysis/chartUnits.test.ts`
-- `apps/control-room/src/shared/domain/analysis/chartContracts.test.ts`
-
-`chartUnits.ts` itself did not need a behavior change: it already resolves
-`"1"` and `""` as canonical dimensionless units, which the new policy consumes.
-
-## RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
-
-Output (exit 1):
+Commit:
 
 ```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-❯ src/shared/analysis-charts/chartScalePolicy.test.ts (0 test)
-❯ src/shared/analysis-charts/chartRenderer.test.ts (4 tests | 1 failed) 16ms
-     × keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider 8ms
-
-FAIL  src/shared/analysis-charts/chartScalePolicy.test.ts
-Error: Cannot find module './chartScalePolicy' imported from /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room/src/shared/analysis-charts/chartScalePolicy.test.ts
-
-FAIL  src/shared/analysis-charts/chartRenderer.test.ts > chart renderer owner > keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider
-AssertionError: expected axis name "magnetization"; received "magnetization [m1]"
-
-Test Files  2 failed | 3 passed (5)
-Tests  1 failed | 41 passed (42)
-Duration  493ms
+125c9afec02dbce994a702a2693b4de78c1e5732
+docs(physics): freeze solved-current racetrack contract
 ```
 
-This was expected: the required policy module had not been implemented, and
-the previous magnitude-only renderer applied the milli prefix to unit `1`.
+## Zmiany
 
-## GREEN
+- Dodano pełne równania charge continuity, direct SHE, steady-spin reactions,
+  mixing boundary, torque balance i Gilbert LLG oraz kompletną tabelę znaków.
+- Dodano wersjonowany fixture z 32 dokładnymi wartościami, jednostkami,
+  ograniczeniami, ścieżkami ProblemIR i motywacją literaturową lub benchmarkową.
+- Dodano kontrakt `skyrmion_hall_angle_v1`: signed-density centre, dobór okna
+  według stabilności prędkości, ważona regresja, covariance,
+  `Theta_H=atan2(v_y,v_x)` i reason codes fail-closed.
+- Dodano source map obserwabli topological charge oraz jawne
+  `planned_not_implemented` symbole Tasks 2–8. Wpisy planowane nie udają
+  istniejących deklaracji źródłowych.
+- Rozszerzono kanoniczny test dokumentacyjny
+  `scripts/test_fdm_gpu_m1_contract_docs.py` o dokładne wartości, równania,
+  znaki i ownership przyszłych symboli.
 
-Command:
+## Korekta ścieżki testu z briefu
 
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
+Brief wskazywał nieistniejący plik `scripts/test_validate_physics_docs.py`.
+Repozytorium posiada kanoniczny, page-specific gate
+`scripts/test_fdm_gpu_m1_contract_docs.py`; rozszerzono właśnie ten test.
+Nie utworzono drugiego, konkurencyjnego walidatora o podobnej roli.
 
-Output (exit 0):
+## TDD RED
 
 ```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-Test Files  5 passed (5)
-Tests  49 passed (49)
-Start at  18:55:54
-Duration  591ms (transform 1.31s, setup 0ms, import 1.72s, tests 44ms, environment 1ms)
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+12 passed, 1 failed, 70 subtests passed
 ```
 
-The first green invocation completed all assertions but the sandbox wrapper
-then failed during mount cleanup. The exact same command was rerun outside that
-wrapper and exited 0 with the output above.
+Oczekiwany błąd RED: `FileNotFoundError` dla nieistniejącego jeszcze
+`tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json`.
 
-## Typecheck
-
-Command:
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0):
+## GREEN i walidacja
 
 ```text
-> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-> node scripts/typecheck-control-room.mjs
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+13 passed, 102 subtests passed in 0.35s
 
-Generating route types...
-✓ Types generated successfully
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0940-topological-charge-observable.source-map.json --repo-root .
+PASS
+
+python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+Ran 22 tests; OK
+
+python3 -m pytest scripts/test_validate_topological_charge_runtime.py -q
+4 passed in 0.05s
+
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+Public documentation Python examples passed: public_docs/site
+
+git diff --check
+PASS
+
+git show --check --oneline --no-renames HEAD
+125c9afec docs(physics): freeze solved-current racetrack contract; PASS
 ```
 
 ## Self-review
 
-- Dimensionless policy is selected from the resolved unit dimension before
-  extrema are used, preventing all SI prefixes for unit `1`.
-- Physical `A/m` keeps SI magnitude scaling and a physical display unit.
-- Axis labels, tick formatters, tooltip values, series names, and PNG output
-  share the same axis transform.
-- CSV/TSV still serializes raw values and canonical units; no export change was
-  required.
-- `git diff --check` passed.
+- Staging sprawdzono osobnym `git diff --cached --name-only`; commit zawiera
+  wyłącznie siedem plików Task 1.
+- Niezależna, wcześniejsza zmiana `.superpowers/sdd/progress.md` nie została
+  wystage'owana ani zmodyfikowana w ramach Task 1.
+- Wszystkie mapowane bieżące źródła mają realną ścieżkę i stabilny symbol;
+  przyszłe nazwy są oddzielone w `planned_symbols` z owner task i evidence gate.
+- Kontrakt odróżnia implementację, wykonywalność, walidację i kwalifikację.
+  Obecność dokumentu, fixture lub testu nie promuje FDM GPU.
 
-## Concerns
+## Ograniczenia i dalsze bramki
 
-None. The only observed issue was the sandbox cleanup failure after the first
-otherwise-green test run; the rerun exited successfully.
+Task 1 zamraża kontrakt i dane wejściowe. Nie dostarcza publicznego runnera,
+bindingu kontekstu, stage checkpointu, provenance, GPU trajectory ani
+kwalifikacji workloadu. Te elementy pozostają jawnie przypisane Tasks 2–12 i
+wymagają świeżych zarządzanych testów exact-tuple oraz rzeczywistego GPU.
 
-## Review-fix follow-up
+## Korekty po niezależnym review
 
-### Implementation
+### Wynik
 
-- Preserved the unit carried by scalar values while still selecting SI prefixes
-  in canonical space. For example, raw `9.5` with source unit `GHz` now gets a
-  raw-space factor of `1` and display unit `GHz`, rather than being labelled as
-  `9.5 Hz`.
-- Added shared one-pass y-axis transforms and reused them in the renderer,
-  accessible points table, `AnalysisTableSurface` cursor and legend summaries,
-  and export provenance. Dimensionless values retain factor `1`, an empty
-  display unit, and unscaled canonical values.
-- Export provenance now supplies deterministic display units when no non-empty
-  caller override exists: `x` and one `y:<series-id>` entry per series. CSV and
-  TSV row values and canonical unit columns remain unchanged.
-- The plan-mandated `fixed` policy variant remains supported but intentionally
-  unselected by the current resolver. It is not removed merely to make the
-  union exhaustive; future explicit fixed-unit policy can select it.
+Zamknięto wszystkie wskazane findingi Critical i Important bez rozszerzania
+Task 1 na implementację runtime. Fixture określa teraz jeden kanoniczny wariant
+`ProblemIR`: dokładny requested tuple `fdm/gpu/double/strict`, siatkę
+`256x64x4`, rozłączne połówotwarte placementy HM/FM, jawnie zorientowane
+powierzchnie terminali i izolacji, gauge `zero_mean`, obie strony interfejsu,
+trzy deterministyczne maski oraz pełny harmonogram sześciu niezależnych
+przebiegów ze wspólnego checkpointu. Równe wymiary HM i FM w osiach `x,y` są
+częścią normalizacji, a żadne pole BC, maski, etapu ani execution intent nie
+może zostać uzupełnione backendowym defaultem.
 
-### Review-fix files
+Korekta znaku `theta_SH` rozdziela odpowiedź produkcyjnego fixture z `P=0.4`
+na `T_P + T_SHE -> T_P - T_SHE`. Dokładna nieparzystość jest testowana tylko
+w oracle czystego SHE z jedynym override `P=0`; dokumentacja nie przypisuje
+pełnej nieliniowej prędkości dokładnego prawa parzystości.
 
-- `apps/control-room/src/shared/analysis-charts/chartScalePolicy.ts`
-- `apps/control-room/src/shared/analysis-charts/chartRenderer.ts`
-- `apps/control-room/src/shared/analysis-charts/PointsTableDialog.tsx`
-- `apps/control-room/src/shared/analysis-charts/chartExport.ts`
-- `apps/control-room/src/modules/analysis-plots/components/AnalysisTableSurface.tsx`
-- `apps/control-room/src/shared/analysis-charts/frequencyRenderModels.test.ts`
-- `apps/control-room/src/shared/analysis-charts/PointsTableDialog.test.tsx`
-- `apps/control-room/src/shared/analysis-charts/chartExport.test.ts`
-- `apps/control-room/src/modules/analysis-plots/AnalysisPlotsModule.test.tsx`
+`skyrmion_hall_angle_v1` zamraża signed-density centre, wszystkie ciągłe okna,
+dokładne progi i tie-break, wspólne wagi z podłogą wariancji `1e-18 m2`,
+ważoną regresję z interceptem, pełną dwuwymiarową covariance prędkości z
+`N-2`, główną gałąź `atan2` i jednoznaczną kolejność reason codes. Nota 0940
+ma etykiety i source-map dla wszystkich 15 kanonicznych równań, jawne źródła
+path+symbol lub `DOC-ANCHOR` oraz mapę twierdzeń numerycznych. Nowe komórki
+symboli i jednostek SI używają składni MyST `$...$`.
 
-### Review-fix RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
-
-Output (exit 1):
+### TDD RED review-fix
 
 ```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-FAIL  src/modules/analysis-plots/AnalysisPlotsModule.test.tsx
-  keeps normalized legend readings dimensionless
-  Expected aria-label "mx, unit dimensionless, latest 4.447e-6"
-  Received aria-label "mx, unit 1, latest 4.447e-6"
-
-FAIL  src/shared/analysis-charts/PointsTableDialog.test.tsx
-  keeps dimensionless table values and headers free of SI prefixes
-  Expected "Normalized magnetization m"
-  Received "my [1]" and "4.447 µ"
-
-FAIL  src/shared/analysis-charts/chartExport.test.ts
-  records resolved display units while retaining canonical CSV values
-  Expected { x: "ns", "y:my": "" }
-  Received {}
-
-FAIL  src/shared/analysis-charts/frequencyRenderModels.test.ts
-  keeps supplied GHz values physically correct at the renderer boundary
-  Expected axis name "frequency [GHz]"
-  Received axis name "frequency [Hz]"
-
-Test Files  4 failed | 5 passed (9)
-Tests  4 failed | 121 passed (125)
-Start at  19:07:07
-Duration  1.59s
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+5 failed, 13 passed, 102 subtests passed
 ```
 
-The failures are the requested reproductions: unit conversion was lost at the
-renderer boundary, and the three summary/export consumers had independent or
-absent display policy.
+Pięć nowych testów odtworzyło niezależnie: niepełny fixture/IR, błędny oracle
+`theta_SH`, niedeterministyczny kontrakt Hall angle, niepełną source-map 0940
+oraz surowe tokeny SI w nowych tabelach.
 
-### Review-fix GREEN
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
-
-Output (exit 0):
+### GREEN i bramki po korekcie
 
 ```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+18 passed, 102 subtests passed in 0.29s
 
-Test Files  9 passed (9)
-Tests  125 passed (125)
-Start at  19:16:26
-Duration  1.69s (transform 2.23s, setup 0ms, import 3.11s, tests 309ms, environment 1ms)
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0940-topological-charge-observable.source-map.json --repo-root .
+PASS
+
+python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+Ran 22 tests; OK
+
+python3 -m pytest scripts/test_validate_topological_charge_runtime.py -q
+4 passed in 0.05s
+
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+Public documentation Python examples passed: public_docs/site
+
+git diff --check
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py --base 125c9afec02dbce994a702a2693b4de78c1e5732 --head HEAD --repo-root .
+PASS
 ```
 
-### Review-fix typecheck
+### Granica kwalifikacji
 
-Command:
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0):
-
-```text
-> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-> node scripts/typecheck-control-room.mjs
-
-Generating route types...
-✓ Types generated successfully
-```
-
-### Review-fix concern
-
-`npx -y react-doctor@latest . --verbose --diff` could not complete: the
-sandbox first returned npm DNS error `EAI_AGAIN`; the elevated retry downloaded
-the package but failed to load the optional native module
-`@oxc-parser/binding-linux-x64-gnu`. No project dependency files were changed.
-
-## Second re-review follow-up
-
-### Implementation
-
-- `m`, `mx`, `my`, and `mz` with unit `1` now use the exact y-axis label
-  `Normalized magnetization m` for both single- and multi-series charts.
-  Physical magnetization in `A/m` retains its physical quantity label.
-- The frequency and energy analysis surfaces now derive legend units and latest
-  readings from the shared chart display transforms. Frequency cursor and
-  workbench-range summaries use the same policy, including correct handling of
-  input data already expressed in a prefixed unit such as `GHz`.
-- Partial export display-unit overrides now merge over deterministic defaults,
-  retaining unspecified axis units in provenance.
-
-### Second re-review RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/analysis-plots/components/EChartsSurface.test.tsx src/modules/analysis-plots/components/AnalysisEnergySurface.test.tsx src/modules/analysis-plots/components/AnalysisFrequencySurface.test.tsx src/modules/analysis-plots/analysisWorkbenchModel.test.ts
-```
-
-Output (exit 1):
-
-```text
-Test Files  5 failed | 8 passed (13)
-Tests  5 failed | 135 passed (140)
-Start at  19:28:29
-Duration  1.74s
-```
-
-The failures captured the missing normalized-magnetization title, unscaled
-energy/frequency legends, raw `9500 GHz` frequency summaries instead of
-`9.5 THz`, and loss of default export units when a partial override was given.
-
-### Second re-review GREEN
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/analysis-plots/components/EChartsSurface.test.tsx src/modules/analysis-plots/components/AnalysisEnergySurface.test.tsx src/modules/analysis-plots/components/AnalysisFrequencySurface.test.tsx src/modules/analysis-plots/analysisWorkbenchModel.test.ts
-```
-
-Output (exit 0):
-
-```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-Test Files  13 passed (13)
-Tests  140 passed (140)
-Start at  19:30:53
-Duration  1.56s (transform 3.37s, setup 0ms, import 4.58s, tests 445ms, environment 2ms)
-```
-
-### Second re-review typecheck
-
-Command:
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0):
-
-```text
-> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-> node scripts/typecheck-control-room.mjs
-
-Generating route types...
-✓ Types generated successfully
-```
-
-### Second re-review concerns
-
-No new concerns. The prior React Doctor environment limitation remains recorded
-above and was not retried for this narrowly scoped follow-up.
-
-## Zero-inclusive frequency-range follow-up
-
-### RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/modules/analysis-plots/analysisWorkbenchModel.test.ts
-```
-
-Output (exit 1):
-
-```text
-Test Files  1 failed (1)
-Tests  1 failed | 3 passed (4)
-Expected: "0 THz-9.5 THz"
-Received: "0 Hz-9.5000e+12 Hz"
-```
-
-The workbench range included zero in a hand-built minimum-magnitude extrema
-pair, which selected the `Hz` scale instead of the shared renderer scale.
-
-### GREEN
-
-`formatFrequencyDomainWorkbenchRange` now uses `chartValueExtrema([min, max])`.
-That policy ignores zero when finite nonzero frequency values are present, just
-as the renderer does.
-
-```text
-Test Files  1 passed (1)
-Tests  4 passed (4)
-Start at  19:39:33
-Duration  465ms
-```
-
-### Typecheck
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0): route types generated successfully.
+Korekta pozostaje kontraktem dokumentacyjnym i fixture. Nie stanowi dowodu
+wykonania FDM GPU, implementacji `SkyrmionTrajectoryV1` ani
+`SkyrmionHallAngleV1`, kalibracji niepewności lub produkcyjnej kwalifikacji
+racetrack. Te statusy pozostają `planned_not_implemented`/`unsupported` do
+czasu przejścia własnych zarządzanych bramek runtime na dokładnym requested
+tuple.

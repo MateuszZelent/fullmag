@@ -96,6 +96,11 @@
       "id": "racetrack-gilbert-llg",
       "symbols": ["m", "alpha", "gamma_e", "B_eff", "T_tr_G"],
       "sources": ["racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-theta-sh-torque-decomposition",
+      "symbols": ["theta_SH", "T_P", "T_SHE"],
+      "sources": ["racetrack-m1-v1-contract"]
     }
   ],
   "symbols": [
@@ -137,7 +142,9 @@
     {"id": "T_tr_G", "latex": "T_{\\mathrm{tr},G}", "meaning": "transport-derived Gilbert-source torque", "si_unit": "\\mathrm{s^{-1}}"},
     {"id": "m", "latex": "m", "meaning": "reduced magnetization direction", "si_unit": "$1$"},
     {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "$1$"},
-    {"id": "B_eff", "latex": "B_{\\mathrm{eff}}", "meaning": "effective magnetic induction", "si_unit": "\\mathrm{T}"}
+    {"id": "B_eff", "latex": "B_{\\mathrm{eff}}", "meaning": "effective magnetic induction", "si_unit": "\\mathrm{T}"},
+    {"id": "T_P", "latex": "T_P", "meaning": "polarization-driven contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "T_SHE", "latex": "T_{\\mathrm{SHE}}", "meaning": "direct-SHE contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"}
   ],
   "sources": [
     {"id": "fem-m1-charge", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_charge", "responsibility": "Assemble and solve the bounded conforming H1/P1 charge equation for M1."},

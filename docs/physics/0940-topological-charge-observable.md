@@ -45,19 +45,22 @@ qualification gates pass.
 Let `Sigma` be an oriented planar support with an ordered orthonormal frame
 `(e_u, e_v, n)` satisfying
 
-```math
+```{math}
+:label: topological-support-frame
 \mathbf n = \mathbf e_u \times \mathbf e_v .
 ```
 
 For a finite, nonzero magnetization field `M`, define
 
-```math
+```{math}
+:label: topological-normalized-magnetization
 \hat{\mathbf m} = \frac{\mathbf M}{\lVert\mathbf M\rVert} .
 ```
 
 The continuum topological-charge density and charge are
 
-```math
+```{math}
+:label: topological-charge-density
 q(u,v) = \frac{1}{4\pi}
 \hat{\mathbf m}\cdot
 \left(
@@ -67,7 +70,8 @@ q(u,v) = \frac{1}{4\pi}
 \right),
 ```
 
-```math
+```{math}
+:label: topological-charge-integral
 Q(\Sigma) = \int_\Sigma q(u,v)\,du\,dv .
 ```
 
@@ -75,7 +79,8 @@ Fullmag evaluates `Q` geometrically on an oriented triangle support. For unit
 magnetization samples `a`, `b`, and `c` ordered consistently with the support
 frame, the signed solid angle is
 
-```math
+```{math}
+:label: topological-solid-angle
 \Omega(a,b,c) =
 2\,\operatorname{atan2}\!\left(
 a\cdot(b\times c),
@@ -85,7 +90,8 @@ a\cdot(b\times c),
 
 and the discrete charge is
 
-```math
+```{math}
+:label: topological-discrete-charge
 Q_h = \frac{1}{4\pi}
 \sum_{\triangle\in\mathcal T_h}\Omega_\triangle .
 ```
@@ -119,16 +125,25 @@ resolved plane.
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| `M` | magnetization vector before normalization | `A/m` when dimensional |
-| `hat(m)` | normalized magnetization direction | `1` |
-| `u`, `v` | physical in-plane coordinates | `m` |
-| `s` | physical coordinate along the canonical support normal | `m` |
-| `Sigma` | oriented two-dimensional support | no unit; its measure has `m^2` |
-| `q` | continuum topological-charge density | `1/m^2` |
-| `Q`, `Q_h` | continuum and discrete topological charge | `1` |
-| `Omega` | signed solid angle | `rad`, dimensionally `1` |
-| `T_h` | oriented support triangulation | no unit |
-| `h` | characteristic support-mesh length | `m` |
+| $\mathbf e_u,\mathbf e_v,\mathbf n$ | ordered orthonormal support-frame directions | $1$ |
+| $\mathbf M$ | magnetization vector before normalization | $\mathrm{A\,m^{-1}}$ |
+| $\hat{\mathbf m}$ | normalized magnetization direction | $1$ |
+| $\mathbf a,\mathbf b,\mathbf c$ | ordered unit-magnetization samples of one triangle | $1$ |
+| $u,v$ | physical in-plane coordinates | $\mathrm{m}$ |
+| $s$ | physical coordinate along the canonical support normal | $\mathrm{m}$ |
+| $\Sigma$ | oriented planar integration support; unit refers to its measure | $\mathrm{m^2}$ |
+| $q$ | continuum topological-charge density | $\mathrm{m^{-2}}$ |
+| $Q,Q_h$ | continuum and discrete topological charge | $1$ |
+| $\Omega$ | signed solid angle | $\mathrm{rad}$ |
+| $\mathcal T_h$ | oriented support triangulation | $1$ |
+| $h$ | characteristic support-mesh length | $\mathrm{m}$ |
+| $\bar Q$ | full-thickness averaged topological charge | $1$ |
+| $Q(s_i)$ | topological charge at physical cut $s_i$ | $1$ |
+| $\Delta s_i$ | physical thickness weight owned by FDM cut $i$ | $\mathrm{m}$ |
+| $N$ | number of uniformly weighted FEM profile cuts | $1$ |
+| $i$ | deterministic layer or profile-cut index | $1$ |
+| $x,y$ | Cartesian coordinates of the analytic validation texture | $\mathrm{m}$ |
+| $\lambda$ | scale parameter of the analytic Belavin-Polyakov texture | $\mathrm{m}$ |
 
 FDM layer indices are not physical coordinates. A response containing a layer
 profile must return both `index` and `coordinate_m`; it must never place a grid
@@ -294,7 +309,8 @@ For a layer profile, `Q(s_i)` is computed on each object-scoped native plane.
 FDM samples are cell-centred, so the scalar thickness summary is the
 cell-thickness-weighted mean
 
-```math
+```{math}
+:label: fdm-thickness-weighted-charge
 \bar Q = \frac{\sum_i \Delta s_i Q(s_i)}{\sum_i \Delta s_i}.
 ```
 
@@ -351,7 +367,8 @@ The FEM scalar summary is a thickness average over the full interval
 `[s_min,s_max]`. Each interior bin-midpoint cut owns its complete bin width, so
 uniform `N`-cut profiles use
 
-```math
+```{math}
+:label: fem-midpoint-thickness-average
 \bar Q = \frac{1}{N}\sum_{i=0}^{N-1}Q(s_i).
 ```
 
@@ -425,52 +442,155 @@ different object, a different plane, or a fixed frame interval.
 `skyrmion_hall_angle_v1` is a planned analysis over an accepted sequence of
 signed topological-density samples. It is not implemented or qualified by this
 note. Each sample first passes the existing support, topology, boundary,
-resolution, and provenance gates. Its centre is the signed first moment of
-`q`; the signed charge in the denominator must retain one nonzero sign
-throughout the candidate interval. A renderer centroid, an unsigned density
-centre, or a maximum-amplitude pixel is not an admissible substitute.
+resolution, and provenance gates. On triangle $k$ at time $t_n$, the exact
+discrete density moment uses its signed solid-angle charge and the arithmetic
+centroid of its three physical support vertices:
 
-The steady interval is selected from speed stability, not from a hard-coded
-number of final frames. Candidate windows require finite monotone times,
-nonzero displacement, stable charge, qualified boundary distance, and a
-coefficient of speed variation below the versioned threshold. Within the
-accepted window, weighted least squares estimates both velocity components:
+```{math}
+:label: skyrmion-signed-density-centre
+\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi},\qquad
+\mathbf c_{n,k}=\frac{\mathbf r_{n,k,0}+\mathbf r_{n,k,1}+\mathbf r_{n,k,2}}{3},
+\qquad
+Q_n=\sum_k\Delta Q_{n,k},\qquad
+\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}
+=(x_n,y_n).
+```
+
+The denominator is signed. Every $Q_n$ must have one nonzero sign over the
+complete trajectory and satisfy $|Q_n|\ge0.5$. A renderer centroid, an
+unsigned-density centre, a maximum-amplitude pixel, or a centre computed after
+discarding negative triangle contributions is not admissible.
+
+The steady interval is selected from all contiguous sample intervals $[i,j]$.
+Times must be finite and strictly increasing. For $N=j-i+1$, adjacent secant
+speeds, their mean, and the population coefficient of variation are
+
+```{math}
+:label: skyrmion-candidate-speed-statistics
+s_k=\frac{\lVert\mathbf r_{k+1}-\mathbf r_k\rVert}{t_{k+1}-t_k},
+\qquad
+\bar s=\frac{1}{N-1}\sum_{k=i}^{j-1}s_k,\qquad
+c_v=\frac{\sqrt{\frac{1}{N-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}.
+```
+
+A candidate requires all of the following exact `skyrmion_hall_angle_v1`
+thresholds:
+
+- at least $N=21$ samples and duration $t_j-t_i\ge100\,\mathrm{ps}$;
+- one charge sign, $|Q_n|\ge0.5$, and
+  $\max_n|Q_n-Q_{\mathrm{med}}|\le0.05|Q_{\mathrm{med}}|$, where the
+  deterministic median is the sorted middle value or the arithmetic mean of
+  the two sorted middle values for even $N$;
+- distance from the centre to every track edge of at least $16\,\mathrm{nm}$;
+- net displacement at least $4\,\mathrm{nm}$ and $\bar s\ge1\,\mathrm{m\,s^{-1}}$;
+- $c_v\le0.10$.
+
+Enumerate every interval in increasing start index and then increasing end
+index. Among passing candidates select maximum duration; an exact duration tie
+selects the minimum start index, then the minimum end index. This is the only
+candidate-window selection and tie-break rule.
+
+Each sample supplies finite nonnegative centre-coordinate variances
+$\sigma_{x,n}^2$ and $\sigma_{y,n}^2$. Both regressions use the same sample
+mask. Define $\sigma_{r,n}^2=\sigma_{x,n}^2+\sigma_{y,n}^2$ and use the same
+weight $w_n=1/\max(\sigma_{r,n}^2,10^{-18}\,\mathrm{m^2})$.
+Define $W=\sum_nw_n$, the weighted means, and the centred normal-matrix entry
+$S_{tt}$. Weighted least squares with an intercept is exactly
 
 ```{math}
 :label: skyrmion-hall-weighted-regression
-\bar t_w=\frac{\sum_n w_nt_n}{\sum_nw_n},\qquad
-v_x=\frac{\sum_nw_n(t_n-\bar t_w)(x_n-\bar x_w)}
-{\sum_nw_n(t_n-\bar t_w)^2},\qquad
-v_y=\frac{\sum_nw_n(t_n-\bar t_w)(y_n-\bar y_w)}
-{\sum_nw_n(t_n-\bar t_w)^2}.
+W=\sum_nw_n,\quad
+\bar t_w=\frac{\sum_nw_nt_n}{W},\quad
+\bar x_w=\frac{\sum_nw_nx_n}{W},\quad
+\bar y_w=\frac{\sum_nw_ny_n}{W},\quad
+S_{tt}=\sum_nw_n(t_n-\bar t_w)^2,
+\qquad
+v_x=\frac{\sum_nw_n(t_n-\bar t_w)(x_n-\bar x_w)}{S_{tt}},\quad
+v_y=\frac{\sum_nw_n(t_n-\bar t_w)(y_n-\bar y_w)}{S_{tt}},\quad
+b_x=\bar x_w-v_x\bar t_w,\quad b_y=\bar y_w-v_y\bar t_w.
 ```
 
-Weights `w_n` are inverse trajectory-position variances after a positive
-finite floor; the same accepted sample mask is used for both regressions. The
-reported covariance comes from the weighted residuals and the regression
-normal matrix. The signed Hall angle is
+The fit is invalid when $S_{tt}\le0$ or $N-2\le0$. For $a,b\in\{x,y\}$,
+$r_{a,n}=a_n-(b_a+v_at_n)$ and the cross-coordinate weighted residual scale
+uses exactly $N-2$ degrees of freedom. The complete reported two-coordinate
+velocity covariance is
+
+```{math}
+:label: skyrmion-hall-weighted-covariance
+r_{a,n}=a_n-(b_a+v_at_n),\qquad
+\chi_{ab}=\frac{1}{N-2}\sum_nw_nr_{a,n}r_{b,n},\qquad
+\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}.
+```
+
+The signed Hall angle uses the principal branch
 
 ```{math}
 :label: skyrmion-hall-angle
-\Theta_H=\operatorname{atan2}(v_y,v_x).
+\Theta_H=\operatorname{atan2}(v_y,v_x)\in(-\pi,\pi].
+```
+
+Its uncertainty uses the full fitted velocity covariance, including the
+off-diagonal term:
+
+```{math}
+:label: skyrmion-hall-angle-variance
+\operatorname{Var}(\Theta_H)=
+\frac{v_y^2\operatorname{Cov}(v_x,v_x)
++v_x^2\operatorname{Cov}(v_y,v_y)
+-2v_xv_y\operatorname{Cov}(v_x,v_y)}
+{(v_x^2+v_y^2)^2}.
 ```
 
 | id | latex | meaning | si_unit |
 |---|---|---|---|
-| t_n | t_n | accepted trajectory time sample | \mathrm{s} |
-| w_n | w_n | inverse position-variance regression weight | \mathrm{m^{-2}} |
-| x_n | x_n | signed-density centre coordinate along the track | \mathrm{m} |
-| y_n | y_n | signed-density centre coordinate along the transverse axis | \mathrm{m} |
-| v_x | v_x | fitted longitudinal velocity | \mathrm{m\,s^{-1}} |
-| v_y | v_y | fitted transverse velocity | \mathrm{m\,s^{-1}} |
-| Theta_H | \Theta_H | signed skyrmion Hall angle in the reported frame | \mathrm{rad} |
+| $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |
+| $w_n$ | $w_n$ | inverse position-variance regression weight | $\mathrm{m^{-2}}$ |
+| $x_n$ | $x_n$ | signed-density centre coordinate along the track | $\mathrm{m}$ |
+| $y_n$ | $y_n$ | signed-density centre coordinate along the transverse axis | $\mathrm{m}$ |
+| $v_x$ | $v_x$ | fitted longitudinal velocity | $\mathrm{m\,s^{-1}}$ |
+| $v_y$ | $v_y$ | fitted transverse velocity | $\mathrm{m\,s^{-1}}$ |
+| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |
+| $\Delta Q_{n,k}$ | $\Delta Q_{n,k}$ | signed triangle contribution to charge sample $n$ | $1$ |
+| $\Omega_{n,k}$ | $\Omega_{n,k}$ | signed solid angle of triangle $k$ at sample $n$ | $\mathrm{rad}$ |
+| $\mathbf c_{n,k}$ | $\mathbf c_{n,k}$ | physical centroid of support triangle $k$ | $\mathrm{m}$ |
+| $\mathbf r_{n,k,\ell}$ | $\mathbf r_{n,k,\ell}$ | physical position of support vertex $\ell$ on triangle $k$ | $\mathrm{m}$ |
+| $\mathbf r_n$ | $\mathbf r_n$ | signed-density skyrmion centre | $\mathrm{m}$ |
+| $Q_n$ | $Q_n$ | signed topological charge at trajectory sample $n$ | $1$ |
+| $Q_{\mathrm{med}}$ | $Q_{\mathrm{med}}$ | deterministic median charge in a candidate window | $1$ |
+| $s_k$ | $s_k$ | adjacent secant speed | $\mathrm{m\,s^{-1}}$ |
+| $\bar s$ | $\bar s$ | arithmetic mean of adjacent secant speeds | $\mathrm{m\,s^{-1}}$ |
+| $c_v$ | $c_v$ | coefficient of variation of adjacent speeds | $1$ |
+| $N$ | $N$ | number of samples in a candidate window | $1$ |
+| $W$ | $W$ | sum of common inverse-position-variance weights | $\mathrm{m^{-2}}$ |
+| $S_{tt}$ | $S_{tt}$ | centred weighted time normal-matrix entry | $\mathrm{m^{-2}\,s^2}$ |
+| $\bar t_w$ | $\bar t_w$ | weighted mean trajectory time | $\mathrm{s}$ |
+| $\bar x_w,\bar y_w$ | $\bar x_w,\bar y_w$ | weighted mean centre coordinates | $\mathrm{m}$ |
+| $b_x$ | $b_x$ | fitted longitudinal intercept | $\mathrm{m}$ |
+| $b_y$ | $b_y$ | fitted transverse intercept | $\mathrm{m}$ |
+| $r_{a,n}$ | $r_{a,n}$ | coordinate-$a$ regression residual | $\mathrm{m}$ |
+| $a,b$ | $a,b$ | coordinate indices taking values $x$ or $y$ | $1$ |
+| $\chi_{ab}$ | $\chi_{ab}$ | weighted residual cross-coordinate scale | $1$ |
+| $\sigma_{x,n}^2,\sigma_{y,n}^2$ | $\sigma_{x,n}^2,\sigma_{y,n}^2$ | supplied centre-coordinate variances | $\mathrm{m^2}$ |
+| $\sigma_{r,n}^2$ | $\sigma_{r,n}^2$ | summed centre-coordinate variance before flooring | $\mathrm{m^2}$ |
+| $\sigma_{\mathrm{floor}}^2$ | $\sigma_{\mathrm{floor}}^2$ | fixed common-weight variance floor | $\mathrm{m^2}$ |
+| $\operatorname{Cov}(v_a,v_b)$ | $\operatorname{Cov}(v_a,v_b)$ | fitted velocity covariance entry | $\mathrm{m^2\,s^{-2}}$ |
+| $\operatorname{Var}(\Theta_H)$ | $\operatorname{Var}(\Theta_H)$ | delta-method Hall-angle variance | $\mathrm{rad^2}$ |
 
-The method returns no angle and one stable reason code when qualification
-fails: `no_motion`, `topology_lost`, `edge_contaminated`,
-`no_stationary_window`, or `insufficient_samples`. `reverse_transverse_axis`
-is a reporting-frame transformation: it maps `(v_x,v_y)` to `(v_x,-v_y)` and
-therefore maps the principal-branch `Theta_H` to `-Theta_H`; it does not alter
-the solver frame or physical trajectory.
+The method returns no angle and exactly one stable reason code. Precedence is
+`topology_lost` → `edge_contaminated` → `insufficient_samples` → `no_motion` → `no_stationary_window`.
+`topology_lost` wins for any
+nonfinite/unqualified sample, $|Q_n|<0.5$, or charge-sign change;
+`edge_contaminated` wins next for any centre closer than $16\,\mathrm{nm}$ to
+an edge; `insufficient_samples` wins next when fewer than 21 base-qualified
+samples remain; `no_motion` means no enumerated interval reaches both the
+$4\,\mathrm{nm}$ displacement and $1\,\mathrm{m\,s^{-1}}$ mean-speed gates;
+`no_stationary_window` is the remaining case in which motion exists but no
+interval passes duration, charge-stability, and $c_v$ gates.
+
+`reverse_transverse_axis` is a reporting-frame transformation: it maps
+`(v_x,v_y)` to `(v_x,-v_y)` and therefore maps the principal-branch
+`Theta_H` to `-Theta_H`; it does not alter the solver frame or physical
+trajectory.
 
 The current CPU topological-charge resource and its managed FDM/FEM checks are
 prerequisites only. They do not prove `SkyrmionTrajectoryV1`,
@@ -622,7 +742,8 @@ Convergence error is measured against an independent continuum reference on
 the same finite physical support, not blindly against an infinite-domain
 integer. The primary smooth oracle is the Belavin-Polyakov texture
 
-```math
+```{math}
+:label: belavin-polyakov-texture
 \hat{\mathbf m}(x,y)=
 \frac{(2\lambda x,\ 2\lambda y,\ x^2+y^2-\lambda^2)}
 {x^2+y^2+\lambda^2},
@@ -756,15 +877,20 @@ host-only build.
 (source-code-index)=
 ## 10. Source-code index
 
-The first six rows identify current source. The final row is a documentation
-anchor for the planned Hall-angle contract and is not implementation evidence.
+Rows marked as current source identify implemented CPU/resource contracts.
+Documentation anchors own accepted or planned equations but are not executable
+evidence. The Hall-angle row remains planned and unqualified.
 
 | Claim | Path | Symbol | Responsibility | Evidence |
 |---|---|---|---|---|
+| Continuum topological-charge contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:governing-equations | own the accepted frame, normalization, density, and continuum integral definitions | documentation contract; not executable evidence |
 | Oriented charge kernel | crates/fullmag-api/src/analysis/topological_charge.rs | compute_oriented_charge | integrate signed solid angles over an oriented triangle support | current CPU source and focused unit tests |
 | Support topology gate | crates/fullmag-api/src/analysis/topological_charge.rs | qualify_support_topology | reject duplicate, nonmanifold, or disconnected supports | current CPU source and focused unit tests |
 | Boundary trust gate | crates/fullmag-api/src/analysis/topological_charge.rs | qualify_boundary | qualify boundary uniformity separately from the charge value | current CPU source and focused unit tests |
 | FDM profile weighting | crates/fullmag-api/src/analysis/topological_charge.rs | fdm_weighted_mean | compute thickness-weighted FDM layer summaries | current CPU source and focused unit tests |
+| FEM profile weighting | crates/fullmag-api/src/analysis/topological_charge.rs | fem_midpoint_weights | compute equal physical bin-midpoint weights for FEM profile summaries | current CPU source and focused unit tests |
+| Automatic FEM profile count | crates/fullmag-api/src/schemas/analysis_extensions.rs | resolved_profile_sample_count | resolve `auto` to exactly 33 physical cuts | current schema source and focused unit tests |
 | Cache identity | crates/fullmag-api/src/quantity_data_plane.rs | topological_charge_cache_key | bind object, field, support, method, mesh, domain, and snapshot identity | router cache-key regression |
 | Managed evidence validator | scripts/validate_topological_charge_runtime.py | validate_evidence | reject incomplete FDM/FEM managed-runtime evidence | managed cross-backend recipes |
+| Belavin-Polyakov validation contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:validation | own the independent continuum validation target | documentation contract; not production-kernel evidence |
 | Planned trajectory and Hall angle | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-angle-v1-contract | freeze signed-density centre, steady-window, regression, covariance, angle, and reason-code semantics | planned contract only; not implemented or qualified |
