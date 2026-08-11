@@ -23,6 +23,19 @@ import {
 import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
 
+const UNKNOWN_FREQUENCY_SOURCE_IDENTITY = {
+  artifactPath: null,
+  backend: null,
+  contentDigest: null,
+  device: null,
+  precision: null,
+  provenance: null,
+  qualification: "unknown",
+  runId: null,
+  schemaVersion: null,
+  stageId: null,
+} as const;
+
 export function AnalysisFrequencySurface({
   chartId,
   displayUnits,
@@ -70,7 +83,11 @@ export function AnalysisFrequencySurface({
     return (
       <ChartSection
         title={title}
-        status={{ primary: status, trust: "unknown" }}
+        status={{
+          primary: status,
+          sourceIdentity: UNKNOWN_FREQUENCY_SOURCE_IDENTITY,
+          trust: "unknown",
+        }}
       >
         <div className="fm-analysis-plots__empty" role="status">
           {unavailableReason ?? formatFrequencyDomainEmptyState(status)}
@@ -180,6 +197,8 @@ export function AnalysisFrequencySurface({
         // The current frequency-domain resources do not carry qualification.
         trust: "unknown",
         pointSummary: formatSeriesCount(series.length),
+        sourceIdentity:
+          series[0]?.sourceIdentity ?? UNKNOWN_FREQUENCY_SOURCE_IDENTITY,
       }}
       subtitle={workbenchSubtitle}
       title={title}

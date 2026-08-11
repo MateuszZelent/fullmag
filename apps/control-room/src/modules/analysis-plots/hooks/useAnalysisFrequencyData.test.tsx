@@ -8,5 +8,6 @@ describe("useAnalysisFrequencyData utilities", () => {
     expect(frequencyDomainChartTitle("modal-spectrum", "free_modes")).toBe("Frequency-domain modal spectrum");
     expect(frequencyDomainChartTitle("response-sweep", "fmr_response")).toBe("FMR response sweep");
     expect(frequencyDomainChartTitle("dispersion", "dispersion_modal")).toBe("Frequency-domain dispersion");
+    expect(frequencyDomainChartTitle("field-sweep", "free_modes")).toBe("Eigen Field Sweep (unsupported)");
   });
 });

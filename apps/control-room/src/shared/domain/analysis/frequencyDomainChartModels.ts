@@ -1,4 +1,5 @@
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
+import type { ChartSeriesSourceIdentity } from "./chartSeries";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -6,7 +7,10 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
-import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
+import type {
+  FrequencyDomainJsonArtifactResource,
+  FrequencyDomainKPathMetadataResource,
+} from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { DecodedComplexFieldVector } from "@/kernel/api/codecs/types";
 
@@ -22,6 +26,7 @@ export interface FrequencyDomainChartRoute {
   mode: FrequencyDomainCalculationMode;
   primaryChart:
     | "dispersion"
+    | "field-sweep"
     | "modal-spectrum"
     | "response-map"
     | "response-sweep";
@@ -41,6 +46,9 @@ export function frequencyDomainChartRouteOverrideFromSelection(
   if (!kind) return null;
   if (kind === "results.frequency_domain.fmr_modal_spectrum") {
     return { mode: "fmr_modal", primaryChart: "modal-spectrum" };
+  }
+  if (kind === "results.eigen.field_sweep") {
+    return { mode: "free_modes", primaryChart: "field-sweep" };
   }
   if (
     kind.startsWith("results.frequency_response") ||
@@ -77,12 +85,20 @@ export function frequencyDomainChartRouteOverrideFromSelection(
 
 export interface FrequencyDomainJsonArtifactLike {
   artifact_path?: string | null;
+  content_digest?: string | null;
   payload?: unknown;
+  revision?: string | null;
+  schema_version?: string | null;
   status: string;
 }
 
 export interface FrequencyDomainTextArtifactLike {
+  artifact_path?: string | null;
+  content_digest?: string | null;
   path_metadata?: FrequencyDomainKPathMetadataResource | null;
+  revision?: string | null;
+  resource_key?: string | null;
+  schema_version?: string | null;
   status: string;
   text?: string | null;
 }
@@ -99,6 +115,7 @@ export interface FrequencyDomainChartBuildResult<TPoint> {
   diagnostics: string[];
   droppedPointCount: number;
   points: TPoint[];
+  selectionPoints?: TPoint[];
   series: FrequencyDomainChartSeries[];
 }
 
@@ -111,11 +128,13 @@ export interface FrequencyDomainChartPoint {
 }
 
 export interface FrequencyDomainChartSeries {
+  dataRevision?: string | number | null;
   id: string;
   label: string;
   points: readonly FrequencyDomainChartPoint[];
   quantity: string;
   source: AnalysisChartResourceRef;
+  sourceIdentity?: ChartSeriesSourceIdentity;
   status: ResourceStatus;
   unit: string;
   xUnit: string;
@@ -266,15 +285,22 @@ export interface FmrPeakPoint {
   linewidthHz: number | null;
   modeRef: { rawModeIndex: number; sampleIndex: number } | null;
   phaseRad: number | null;
-  source: "driven_response" | "modal";
+  source: "driven_response";
   validationStatus: "fail" | "pass" | "unavailable" | "warn";
   overlap?: number | null;
+}
+
+export interface FmrModalFrequencyMarker {
+  fieldId: string | null;
+  fieldResourceKey: string | null;
+  frequencyHz: number;
+  modeRef: { rawModeIndex: number; sampleIndex: number };
 }
 
 export interface FmrModalDrivenComparisonPoint {
   detuningHz: number;
   drivenPeak: FmrPeakPoint;
-  modalPeak: FmrPeakPoint;
+  modalMarker: FmrModalFrequencyMarker;
 }
 
 export interface FmrModalDrivenComparisonModel {
@@ -283,9 +309,11 @@ export interface FmrModalDrivenComparisonModel {
   pairs: FmrModalDrivenComparisonPoint[];
   readiness:
     | "driven-only"
+    | "incompatible"
     | "missing-peaks"
     | "modal-and-driven"
-    | "modal-only";
+    | "modal-only"
+    | "unsupported";
 }
 
 export interface FrequencyDomainSelectionContext {
@@ -344,23 +372,29 @@ function frequencyChartScale(valuesHz: readonly number[]): FrequencyChartScale {
   return { divisor: 1, unit: "Hz" };
 }
 
-function fieldVectorResourceKey(fieldId: string): string {
-  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
+function frequencyDomainArtifactSourceIdentity(
+  resource:
+    | FrequencyDomainJsonArtifactLike
+    | FrequencyDomainTextArtifactLike
+    | null
+    | undefined,
+): ChartSeriesSourceIdentity {
+  return {
+    artifactPath: resource?.artifact_path ?? null,
+    backend: null,
+    contentDigest: resource?.content_digest ?? null,
+    device: null,
+    precision: null,
+    provenance: null,
+    qualification: "unknown",
+    runId: null,
+    schemaVersion: resource?.schema_version ?? null,
+    stageId: null,
+  };
 }
 
-function susceptibilityValues(value: unknown): number[] {
-  const direct = finiteNumberList(value);
-  if (direct.length > 0) return direct;
-  const values: number[] = [];
-  for (const pair of array(value)) {
-    const pairValues = finiteNumberList(pair);
-    if (pairValues.length >= 2) {
-      values.push(Math.hypot(pairValues[0] ?? 0, pairValues[1] ?? 0));
-    } else {
-      values.push(...pairValues);
-    }
-  }
-  return values;
+function fieldVectorResourceKey(fieldId: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
 }
 
 function finiteInteger(value: unknown, fallback = 0): number {
@@ -614,6 +648,7 @@ export function buildEigenSpectrumChartModel(
     points,
     series: [
       {
+        dataRevision: resource?.revision ?? resource?.content_digest ?? null,
         id: "analysis.frequency-domain:eigen:spectrum:frequency",
         label: "Eigen frequency",
         points: points.map((point, rowIndex) => ({
@@ -627,6 +662,7 @@ export function buildEigenSpectrumChartModel(
           resourceKey: FREQUENCY_DOMAIN_EIGEN_SPECTRUM_RESOURCE_KEY,
           tableId: "frequency-domain:eigen-spectrum",
         },
+        sourceIdentity: frequencyDomainArtifactSourceIdentity(resource),
         status: artifactStatus(resource),
         unit: "Hz",
         xUnit: "1",
@@ -684,6 +720,7 @@ export function buildEigenDispersionChartModel(
   const series = [...branchIds].flatMap((branchId) => {
     const branchLabel = branchId === "raw" ? "Raw modes" : `Branch ${branchId}`;
     const numericalSeries = {
+      dataRevision: null,
       id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
       label: branchLabel,
       points: points.flatMap((point, rowIndex) =>
@@ -701,6 +738,7 @@ export function buildEigenDispersionChartModel(
       ),
       quantity: "frequency",
       source,
+      sourceIdentity: frequencyDomainArtifactSourceIdentity(resource),
       status,
       unit: frequencyScale.unit,
       xUnit: "rad/m",
@@ -721,11 +759,13 @@ export function buildEigenDispersionChartModel(
     return [
       numericalSeries,
       {
+        dataRevision: null,
         id: `analysis.frequency-domain:eigen:dispersion:${branchId}:analytic`,
         label: `${branchLabel} analytic`,
         points: analyticPoints,
         quantity: "analytic_frequency",
         source,
+        sourceIdentity: frequencyDomainArtifactSourceIdentity(resource),
         status,
         unit: frequencyScale.unit,
         xUnit: "rad/m",
@@ -944,103 +984,42 @@ export function buildFrequencyResponseChartModel(
   manifestPayload?: unknown,
 ): FrequencyDomainChartBuildResult<FrequencyResponsePoint> {
   const dataSourceVersion = responseDataSourceVersion(resource);
-  const diagnostics: string[] = [];
   const responseFieldResources = new Map(
     responseFieldResourcesFromManifest(manifestPayload).map((entry) => [
       entry.frequencyIndex,
       entry.fieldResourceId,
     ]),
   );
-  const rows = responseRows(resource?.payload);
-  const points: FrequencyResponsePoint[] = [];
-  let droppedPointCount = 0;
-
-  if (dataSourceVersion === "response.v2" && resource?.payload && rows.length === 0) {
-    diagnostics.push("response.v2 artifact is present but contains no readable points");
-  }
-
-  rows.forEach((row, rowIndex) => {
+  const selectionPoints = responseRows(resource?.payload).flatMap((row, rowIndex) => {
     const item = record(row);
     const frequencyHz = finiteNumber(item?.frequency_hz ?? item?.frequencyHz);
-    if (frequencyHz == null) {
-      droppedPointCount += 1;
-      return;
-    }
+    if (frequencyHz == null) return [];
     const frequencyIndex =
       finiteNumber(item?.frequency_index ?? item?.frequencyIndex) ??
       (dataSourceVersion === "response.v2" ? rowIndex : null);
-    const susceptibility = susceptibilityValues(
-      item?.susceptibility ?? item?.susceptibility_tensor ?? item?.susceptibilityTensor,
-    );
-    points.push({
-      absorbedPowerDensity: finiteNumber(
-        item?.absorbed_power_density ?? item?.absorbedPowerDensity,
-      ),
-      amplitude: finiteNumber(
-        item?.amplitude ?? item?.response_amplitude ?? item?.max_response_amplitude,
-      ),
+    return [{
+      absorbedPowerDensity: null,
+      amplitude: null,
       fieldId:
-        (frequencyIndex == null
-          ? null
-          : responseFieldResources.get(frequencyIndex)) ??
+        (frequencyIndex == null ? null : responseFieldResources.get(frequencyIndex)) ??
         stringValue(item?.field_id ?? item?.fieldId),
       frequencyIndex,
       frequencyHz,
       observableId: stringValue(item?.observable_id ?? item?.observableId) ?? "response",
-      phaseRad: finiteNumber(item?.phase_rad ?? item?.phaseRad ?? item?.response_phase),
-      residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
-      susceptibility: susceptibility.length ? susceptibility : null,
-      overlap: finiteNumber(item?.overlap_score ?? item?.overlapScore ?? item?.overlap),
-    });
+      phaseRad: null,
+      residualNorm: null,
+      susceptibility: null,
+    }];
   });
-
-  const frequencyScale = frequencyChartScale(
-    points.map((point) => point.frequencyHz),
-  );
-
   return {
     dataSourceVersion,
-    diagnostics,
-    droppedPointCount,
-    points,
-    series: [
-      responseSeries(
-        points,
-        resource,
-        frequencyScale,
-        "amplitude",
-        "Amplitude",
-        "a.u.",
-        (point) => point.amplitude,
-      ),
-      responseSeries(
-        points,
-        resource,
-        frequencyScale,
-        "phase",
-        "Phase",
-        "rad",
-        (point) => point.phaseRad,
-      ),
-      responseSeries(
-        points,
-        resource,
-        frequencyScale,
-        "absorbed-power-density",
-        "Absorbed power density",
-        "W/m^3",
-        (point) => point.absorbedPowerDensity,
-      ),
-      responseSeries(
-        points,
-        resource,
-        frequencyScale,
-        "susceptibility-max-abs",
-        "Max |susceptibility|",
-        "a.u.",
-        (point) => maxAbsSusceptibility(point.susceptibility),
-      ),
-    ].filter((series) => series.points.length > 0),
+    diagnostics: [
+      "Driven Response is unsupported until typed A2 publishes exact observable kind, unit, and provenance",
+    ],
+    droppedPointCount: 0,
+    points: [],
+    selectionPoints,
+    series: [],
   };
 }
 
@@ -1064,114 +1043,62 @@ export function buildFrequencyResponsePointSelectionRef(
 }
 
 export function buildFmrPeakTableModel({
-  manifestPayload,
-  responseSweep,
-  spectrum,
+  publishedPeaks,
+  publishedPeaksRevision,
+  selectedPeaksRevision,
 }: {
   manifestPayload?: unknown;
+  publishedPeaks?: FrequencyDomainJsonArtifactResource | null;
+  publishedPeaksRevision?: string | number | null;
   responseSweep?: FrequencyDomainJsonArtifactLike | null;
+  selectedPeaksRevision?: string | number | null;
   spectrum?: FrequencyDomainJsonArtifactLike | null;
 }): {
   diagnostics: string[];
   peaks: FmrPeakPoint[];
+  readiness: "incompatible" | "unsupported";
 } {
-  const diagnostics: string[] = [];
-  const modal = buildEigenSpectrumChartModel(spectrum);
-  const response = buildFrequencyResponseChartModel(responseSweep, manifestPayload);
-  const peaks: FmrPeakPoint[] = [
-    ...modal.points.map((point) => ({
-      absorbedPowerDensity: null,
-      amplitude: null,
-      fieldId: point.modeFieldId,
-      fieldResourceKey: point.modeFieldResourceKey,
-      frequencyHz: point.frequencyHz,
-      frequencyPointIndex: null,
-      linewidthHz: null,
-      modeRef: {
-        rawModeIndex: point.rawModeIndex,
-        sampleIndex: point.sampleIndex,
-      },
-      phaseRad: null,
-      source: "modal" as const,
-      validationStatus: "unavailable" as const,
-      overlap: null,
-    })),
-    ...localResponsePeaks(response.points).map((point) => ({
-      absorbedPowerDensity: point.absorbedPowerDensity,
-      amplitude: point.amplitude,
-      fieldId: point.fieldId,
-      fieldResourceKey: point.fieldId ? fieldVectorResourceKey(point.fieldId) : null,
-      frequencyHz: point.frequencyHz,
-      frequencyPointIndex: point.frequencyIndex,
-      linewidthHz: null,
-      modeRef: null,
-      phaseRad: point.phaseRad,
-      source: "driven_response" as const,
-      validationStatus: "unavailable" as const,
-      overlap: point.overlap,
-    })),
-  ].sort((left, right) => left.frequencyHz - right.frequencyHz);
-
-  if (modal.droppedPointCount > 0) {
-    diagnostics.push(`${modal.droppedPointCount} modal point(s) dropped`);
-  }
-  if (response.droppedPointCount > 0) {
-    diagnostics.push(`${response.droppedPointCount} response point(s) dropped`);
-  }
-  diagnostics.push(...modal.diagnostics, ...response.diagnostics);
-
-  return { diagnostics, peaks };
-}
-
-export function buildFmrModalDrivenComparisonModel({
-  manifestPayload,
-  responseSweep,
-  spectrum,
-}: {
-  manifestPayload?: unknown;
-  responseSweep?: FrequencyDomainJsonArtifactLike | null;
-  spectrum?: FrequencyDomainJsonArtifactLike | null;
-}): FmrModalDrivenComparisonModel {
-  const peakModel = buildFmrPeakTableModel({
-    manifestPayload,
-    responseSweep,
-    spectrum,
-  });
-  const modalPeaks = peakModel.peaks.filter((peak) => peak.source === "modal");
-  const drivenPeaks = peakModel.peaks.filter(
-    (peak) => peak.source === "driven_response",
-  );
-
-  if (modalPeaks.length === 0 || drivenPeaks.length === 0) {
+  if (
+    selectedPeaksRevision != null &&
+    publishedPeaksRevision != null &&
+    String(selectedPeaksRevision) !== String(publishedPeaksRevision)
+  ) {
     return {
-      diagnostics: peakModel.diagnostics,
-      nearestComparison: null,
-      pairs: [],
-      readiness:
-        modalPeaks.length > 0
-          ? "modal-only"
-          : drivenPeaks.length > 0
-            ? "driven-only"
-            : "missing-peaks",
+      diagnostics: ["Selected FMR peaks revision does not match the published resource revision"],
+      peaks: [],
+      readiness: "incompatible",
     };
   }
 
-  const pairs = drivenPeaks
-    .map((drivenPeak): FmrModalDrivenComparisonPoint => {
-      const modalPeak = nearestPeakByFrequency(drivenPeak, modalPeaks);
-      return {
-        detuningHz: drivenPeak.frequencyHz - modalPeak.frequencyHz,
-        drivenPeak,
-        modalPeak,
-      };
-    })
-    .sort((left, right) => Math.abs(left.detuningHz) - Math.abs(right.detuningHz));
+  const detail = publishedPeaks
+    ? "The typed fmr/peaks.v1 payload does not publish peak unit, algorithm version, or parameters"
+    : "FMR peaks require the published fmr/peaks.v1 resource";
+  return { diagnostics: [detail], peaks: [], readiness: "unsupported" };
+}
 
+export function buildFmrModalDrivenComparisonModel({
+  publishedPeaksRevision,
+  selectedPeaksRevision,
+}: {
+  manifestPayload?: unknown;
+  publishedPeaksRevision?: string | number | null;
+  responseSweep?: FrequencyDomainJsonArtifactLike | null;
+  selectedPeaksRevision?: string | number | null;
+  spectrum?: FrequencyDomainJsonArtifactLike | null;
+}): FmrModalDrivenComparisonModel {
+  const incompatible =
+    selectedPeaksRevision != null &&
+    publishedPeaksRevision != null &&
+    String(selectedPeaksRevision) !== String(publishedPeaksRevision);
   return {
-    diagnostics: peakModel.diagnostics,
-    nearestComparison: pairs[0] ?? null,
-    pairs,
-    readiness: "modal-and-driven",
+    diagnostics: [
+      incompatible
+        ? "Selected FMR peaks revision does not match the published resource revision"
+        : "Modal-driven comparison requires a typed compatibility certificate",
+    ],
+    nearestComparison: null,
+    pairs: [],
+    readiness: incompatible ? "incompatible" : "unsupported",
   };
 }
 
@@ -1181,54 +1108,6 @@ function cleanFrequencyDomainSelectionRef(
   return Object.fromEntries(
     Object.entries(ref).filter(([, value]) => value !== undefined),
   ) as SelectionRef;
-}
-
-function localResponsePeaks(
-  points: readonly FrequencyResponsePoint[],
-): FrequencyResponsePoint[] {
-  const byObservable = new Map<string, FrequencyResponsePoint[]>();
-  for (const point of points) {
-    if (point.amplitude == null && point.absorbedPowerDensity == null) continue;
-    const existing = byObservable.get(point.observableId) ?? [];
-    existing.push(point);
-    byObservable.set(point.observableId, existing);
-  }
-
-  const peaks: FrequencyResponsePoint[] = [];
-  for (const observablePoints of byObservable.values()) {
-    const sorted = observablePoints.toSorted(
-      (left, right) => left.frequencyHz - right.frequencyHz,
-    );
-    if (sorted.length === 1) {
-      peaks.push(sorted[0]!);
-      continue;
-    }
-    for (let index = 1; index < sorted.length - 1; index++) {
-      const value = peakMetric(sorted[index]!);
-      const previous = peakMetric(sorted[index - 1]!);
-      const next = peakMetric(sorted[index + 1]!);
-      if (value > previous && value > next) {
-        peaks.push(sorted[index]!);
-      }
-    }
-  }
-  return peaks;
-}
-
-function peakMetric(point: FrequencyResponsePoint): number {
-  return point.amplitude ?? point.absorbedPowerDensity ?? -Infinity;
-}
-
-function nearestPeakByFrequency(
-  drivenPeak: FmrPeakPoint,
-  modalPeaks: readonly FmrPeakPoint[],
-): FmrPeakPoint {
-  return modalPeaks.reduce((best, candidate) =>
-    Math.abs(candidate.frequencyHz - drivenPeak.frequencyHz) <
-    Math.abs(best.frequencyHz - drivenPeak.frequencyHz)
-      ? candidate
-      : best,
-  );
 }
 
 function frequencyDomainModeNodeId(point: EigenSpectrumPoint): string {
@@ -1477,47 +1356,6 @@ function parseDispersionCsv(csv: string): {
   }
 
   return { droppedPointCount, points };
-}
-
-function responseSeries(
-  points: readonly FrequencyResponsePoint[],
-  resource: FrequencyDomainJsonArtifactLike | null | undefined,
-  frequencyScale: FrequencyChartScale,
-  quantity: string,
-  label: string,
-  unit: string,
-  selector: (point: FrequencyResponsePoint) => number | null,
-): FrequencyDomainChartSeries {
-  return {
-    id: `analysis.frequency-domain:response:${quantity}`,
-    label,
-    points: points.flatMap((point, rowIndex) => {
-      const y = selector(point);
-      return y == null
-        ? []
-        : [{ rowIndex, x: point.frequencyHz / frequencyScale.divisor, y }];
-    }),
-    quantity,
-    source: {
-      kind: "analysis.frequency_domain",
-      resourceKey: FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY,
-      tableId: "frequency-domain:response-sweep",
-    },
-    status: artifactStatus(resource),
-    unit,
-    xUnit: frequencyScale.unit,
-  };
-}
-
-function maxAbsSusceptibility(values: readonly number[] | null): number | null {
-  if (!values || values.length === 0) return null;
-  let maxValue: number | null = null;
-  for (const value of values) {
-    const absValue = Math.abs(value);
-    if (!Number.isFinite(absValue)) continue;
-    maxValue = maxValue == null ? absValue : Math.max(maxValue, absValue);
-  }
-  return maxValue;
 }
 
 export function calculateSpatialOverlap(

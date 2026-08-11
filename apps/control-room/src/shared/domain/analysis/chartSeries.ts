@@ -10,6 +10,19 @@ export interface ChartPoint {
   y: number;
 }
 
+export interface ChartSeriesSourceIdentity {
+  artifactPath: string | null;
+  backend: string | null;
+  contentDigest: string | null;
+  device: string | null;
+  precision: string | null;
+  provenance: string | null;
+  qualification: string;
+  runId: string | null;
+  schemaVersion: string | null;
+  stageId: string | null;
+}
+
 export interface ChartSeries {
   dataRevision?: string | number | null;
   id: string;
@@ -17,6 +30,7 @@ export interface ChartSeries {
   points: readonly ChartPoint[];
   quantity: string;
   source: AnalysisChartResourceRef;
+  sourceIdentity?: ChartSeriesSourceIdentity;
   status: ResourceStatus;
   unit: string;
   xUnit: string;

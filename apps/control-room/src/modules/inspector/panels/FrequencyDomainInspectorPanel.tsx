@@ -93,8 +93,6 @@ import {
   formatFrequency,
   arrayLength,
   formatRecordField,
-  susceptibilityPairCount,
-  maxAbsComplexPairs,
   formatScalar,
   analysisFieldViewOptions,
   selectedField3DPlotStatus,
@@ -420,9 +418,6 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
   const selectedObservableAmplitudes = selectedObservablePoints.flatMap((point) =>
     point.amplitude == null ? [] : [point.amplitude],
   );
-  const modalPeakCount = fmrPeakModel.peaks.filter(
-    (peak) => peak.source === "modal",
-  ).length;
   const drivenPeakCount = fmrPeakModel.peaks.filter(
     (peak) => peak.source === "driven_response",
   ).length;
@@ -433,9 +428,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
   const activeFmrPeak =
     fmrPeakModel.peaks.find((peak) => fmrPeakKey(peak) === selectedFmrPeakKey) ??
     firstFmrPeak;
-  const activeFmrPeakMode = activeFmrPeak?.modeRef
-    ? `sample ${activeFmrPeak.modeRef.sampleIndex}, mode ${activeFmrPeak.modeRef.rawModeIndex}`
-    : "not a modal peak";
+  const activeFmrPeakMode = "modal frequencies are separate markers";
   const activeFmrPeakResponsePoint =
     activeFmrPeak?.frequencyPointIndex == null
       ? "not a driven peak"
@@ -478,7 +471,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
   const nearestFmrComparison = fmrComparisonModel.nearestComparison;
   const nearestFmrDetuning =
     nearestFmrComparison != null
-      ? `${formatFrequency(nearestFmrComparison.detuningHz)} driven-modal; modal ${formatFrequency(nearestFmrComparison.modalPeak.frequencyHz)}, driven ${formatFrequency(nearestFmrComparison.drivenPeak.frequencyHz)}`
+      ? `${formatFrequency(nearestFmrComparison.detuningHz)} driven-marker; marker ${formatFrequency(nearestFmrComparison.modalMarker.frequencyHz)}, driven ${formatFrequency(nearestFmrComparison.drivenPeak.frequencyHz)}`
       : fmrComparisonModel.readiness === "modal-only"
         ? "driven response missing"
         : fmrComparisonModel.readiness === "driven-only"
@@ -2677,43 +2670,27 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="Absorbed power density"
-          value={formatNumber(
-            responseFrequencyPointPayload?.absorbed_power_density,
-            " W/m^3",
-          )}
+          value="unsupported: exact observable unit and provenance are not published by typed A2"
         />
         <FieldRow
           label="Absorbed power provenance"
-          value={formatRecordField(
-            responseFrequencyPointPayload?.absorbed_power_density_provenance,
-            "kind",
-          )}
+          value="unsupported: typed provenance contract is not published by A2"
         />
         <FieldRow
           label="Susceptibility pairs"
-          value={susceptibilityPairCount(
-            responseFrequencyPointPayload?.susceptibility_tensor,
-          )}
+          value="unsupported: exact observable kind and unit are not published by typed A2"
         />
         <FieldRow
           label="Max susceptibility magnitude"
-          value={formatScalar(
-            maxAbsComplexPairs(responseFrequencyPointPayload?.susceptibility_tensor),
-          )}
+          value="unsupported: exact observable kind and unit are not published by typed A2"
         />
         <FieldRow
           label="Susceptibility provenance"
-          value={formatRecordField(
-            responseFrequencyPointPayload?.susceptibility_tensor_provenance,
-            "kind",
-          )}
+          value="unsupported: typed provenance contract is not published by A2"
         />
         <FieldRow
           label="Full susceptibility tensor"
-          value={formatRecordField(
-            responseFrequencyPointPayload?.susceptibility_tensor_provenance,
-            "full_tensor",
-          )}
+          value="unsupported: typed observable contract is not published by A2"
         />
         <FieldRow
           label="Tangent leakage status"
@@ -2819,7 +2796,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="FMR peaks"
-          value={`${modalPeakCount} modal, ${drivenPeakCount} driven`}
+          value={`${drivenPeakCount} published driven`}
         />
         <FieldRow
           label="Field readiness"
@@ -2847,7 +2824,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       {showFmrPeaks ? (
       <InspectorGroup title="FMR Peaks" badge={fmrPeakModel.peaks.length > 0 ? "ready" : "missing"}>
         <FieldRow label="Peak count" value={String(fmrPeakModel.peaks.length)} />
-        <FieldRow label="Modal peaks" value={String(modalPeakCount)} />
+        <FieldRow label="Modal markers" value="kept in the modal spectrum" />
         <FieldRow label="Driven peaks" value={String(drivenPeakCount)} />
         <FieldRow
           label="First peak source"

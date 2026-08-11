@@ -37,6 +37,29 @@ describe("EChartsSurface", () => {
     expect(model.provenance?.descriptorId).toBe("analysis:data-table:default");
   });
 
+  it("preserves typed artifact and execution identity in export provenance", () => {
+    const seriesWithIdentity = series.map((entry) => ({
+      ...entry,
+      sourceIdentity: {
+        artifactPath: "eigen/spectrum.v2.json",
+        backend: null,
+        contentDigest: "sha256:spectrum",
+        device: null,
+        precision: null,
+        provenance: null,
+        qualification: "unknown",
+        runId: "run-7",
+        schemaVersion: "frequency_domain_eigen_spectrum.v2",
+        stageId: "stage-3",
+      },
+    }));
+
+    expect(
+      tableSeriesRenderModel(seriesWithIdentity, seriesWithIdentity, "mode index")
+        .provenance,
+    ).toMatchObject(seriesWithIdentity[0]!.sourceIdentity);
+  });
+
   it("labels one or many normalized magnetization components consistently", () => {
     const single = tableSeriesRenderModel(series, series, "step");
     const multiTable = {

@@ -18,6 +18,7 @@ import {
   buildEigenSpectrumChartModel,
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
+  buildFmrModalDrivenComparisonModel,
   buildFmrPeakTableModel,
   readEigenSpectrumPayload,
   routeFrequencyDomainCalculationMode,
@@ -786,56 +787,18 @@ describe("frequencyDomainChartModels", () => {
     expect(model.sampleRange).toEqual({ max: 1, min: 0 });
   });
 
-  it("builds driven response amplitude, phase, absorbed-power, and susceptibility series", () => {
-    const model = buildFrequencyResponseChartModel(
-      jsonResource({
-        points: [
-          {
-            absorbed_power_density: 4.5,
-            amplitude: 2.0,
-            field_id: "response-field-0",
-            frequency_hz: 9.5e9,
-            observable_id: "mx",
-            phase_rad: 1.25,
-            residual_norm: 1e-5,
-            susceptibility_tensor: [[1, 2], [3, 4]],
-          },
-          { amplitude: 3.0, frequency_hz: Number.NaN },
-        ],
-        schema_version: "magnetic_response_sweep.v1",
-      }),
-    );
-
-    expect(model.droppedPointCount).toBe(1);
-    expect(model.dataSourceVersion).toBe("response.v1");
-    expect(model.points[0]).toEqual(
-      expect.objectContaining({
-        fieldId: "response-field-0",
-        frequencyHz: 9.5e9,
-        observableId: "mx",
-      }),
-    );
-    expect(model.series.map((series) => series.quantity)).toEqual([
-      "amplitude",
-      "phase",
-      "absorbed-power-density",
-      "susceptibility-max-abs",
-    ]);
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 2 }]);
-    expect(model.series[3]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 5 }]);
-  });
-
-  it("builds canonical frequency-domain selection refs for response frequency points", () => {
+  it("fails closed when the typed response artifact omits observable kind, exact unit, and provenance", () => {
     const model = buildFrequencyResponseChartModel(
       jsonResource(
         {
           points: [
             {
-              amplitude: 0.75,
-              field_id: "response-field-7",
-              frequency_hz: 12.5e9,
-              frequency_index: 7,
+              absorbed_power_density: 4.5,
+              amplitude: 2.0,
+              frequency_hz: 9.5e9,
               observable_id: "mx",
+              phase_rad: 1.25,
+              susceptibility_tensor: [[1, 2], [3, 4]],
             },
           ],
           schema_version: "magnetic_response_sweep.v2",
@@ -844,7 +807,27 @@ describe("frequencyDomainChartModels", () => {
       ),
     );
 
-    expect(buildFrequencyResponsePointSelectionRef(model.points[0]!, {
+    expect(model.points).toEqual([]);
+    expect(model.series).toEqual([]);
+    expect(model.diagnostics).toContain(
+      "Driven Response is unsupported until typed A2 publishes exact observable kind, unit, and provenance",
+    );
+  });
+
+  it("builds canonical frequency-domain selection refs for response frequency points", () => {
+    const point = {
+      absorbedPowerDensity: null,
+      amplitude: null,
+      fieldId: "response-field-7",
+      frequencyHz: 12.5e9,
+      frequencyIndex: 7,
+      observableId: "mx",
+      phaseRad: null,
+      residualNorm: null,
+      susceptibility: null,
+    };
+
+    expect(buildFrequencyResponsePointSelectionRef(point, {
       analysisRunId: "run-response",
       artifactPath: "response/magnetic_response_sweep.v2.json",
     })).toEqual({
@@ -861,151 +844,7 @@ describe("frequencyDomainChartModels", () => {
     });
   });
 
-  it("prefers manifest response field resources for response point field ids", () => {
-    const model = buildFrequencyResponseChartModel(
-      jsonResource(
-        {
-          points: [
-            {
-              field_id: "response-field-from-sweep",
-              frequency_hz: 12.5e9,
-              frequency_index: 7,
-              max_response_amplitude: 0.75,
-              observable_id: "mx",
-            },
-          ],
-          schema_version: "magnetic_response_sweep.v2",
-        },
-        "response/magnetic_response_sweep.v2.json",
-      ),
-      {
-        resources: {
-          response_field_resources: [
-            {
-              field_resource_id: "analysis:frequency-response:frequency-0042",
-              frequency_index: 7,
-              payload_path:
-                "response/field_payloads/frequency_0007/vector_xyz.bin",
-            },
-          ],
-        },
-        schema_version: "frequency_domain_manifest.v1",
-      },
-    );
-
-    expect(model.points[0]).toEqual(
-      expect.objectContaining({
-        fieldId: "analysis:frequency-response:frequency-0042",
-        frequencyIndex: 7,
-      }),
-    );
-    expect(
-      buildFrequencyResponsePointSelectionRef(model.points[0]!),
-    ).toMatchObject({
-      fieldId: "analysis:frequency-response:frequency-0042",
-      frequencyIndex: 7,
-      kind: "results.frequency_response.frequency_point",
-    });
-  });
-
-  it("builds driven response charts from v2 point summaries with provenance", () => {
-    const model = buildFrequencyResponseChartModel(
-      jsonResource(
-        {
-          points: [
-            {
-              absorbed_power_density: 8.5,
-              frequency_hz: 12.5e9,
-              frequency_index: 7,
-              max_response_amplitude: 0.75,
-              phase_rad: 1.125,
-              relative_residual_l2_norm: 2e-5,
-              response_field_payload_path:
-                "response/field_payloads/frequency_0007/vector.bin",
-            },
-          ],
-          schema_version: "magnetic_response_sweep.v2",
-        },
-        "response/magnetic_response_sweep.v2.json",
-      ),
-    );
-
-    expect(model.dataSourceVersion).toBe("response.v2");
-    expect(model.diagnostics).toEqual([]);
-    expect(model.points[0]).toEqual(
-      expect.objectContaining({
-        amplitude: 0.75,
-        fieldId: null,
-        frequencyHz: 12.5e9,
-        frequencyIndex: 7,
-      }),
-    );
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 12.5, y: 0.75 }]);
-    expect(model.series.find((series) => series.quantity === "phase")?.points).toEqual([
-      { rowIndex: 0, x: 12.5, y: 1.125 },
-    ]);
-  });
-
-  it("derives response frequency identity from v2 row order when native artifacts omit per-point indices", () => {
-    const model = buildFrequencyResponseChartModel(
-      jsonResource(
-        {
-          points: [
-            {
-              frequency_hz: 9.5e9,
-              response_amplitude: 0.5,
-            },
-            {
-              frequency_hz: 10.5e9,
-              response_amplitude: 0.75,
-            },
-          ],
-          response_field_payload_paths: [
-            "response/field_payloads/frequency_0000/vector.bin",
-            "response/field_payloads/frequency_0001/vector.bin",
-          ],
-          schema_version: "magnetic_response_sweep.v2",
-        },
-        "response/magnetic_response_sweep.v2.json",
-      ),
-    );
-
-    expect(model.points[1]).toEqual(
-      expect.objectContaining({
-        fieldId: null,
-        frequencyIndex: 1,
-      }),
-    );
-    expect(buildFrequencyResponsePointSelectionRef(model.points[1]!)).toEqual(
-      expect.not.objectContaining({
-        fieldId: expect.any(String),
-      }),
-    );
-    expect(buildFrequencyResponsePointSelectionRef(model.points[1]!)).toEqual(
-      expect.objectContaining({
-        frequencyIndex: 1,
-      }),
-    );
-  });
-
-  it("reports a visible diagnostic when a v2 response artifact has no readable points", () => {
-    const model = buildFrequencyResponseChartModel(
-      jsonResource(
-        {
-          points: [],
-          schema_version: "magnetic_response_sweep.v2",
-        },
-        "response/magnetic_response_sweep.v2.json",
-      ),
-    );
-
-    expect(model.dataSourceVersion).toBe("response.v2");
-    expect(model.diagnostics).toContain(
-      "response.v2 artifact is present but contains no readable points",
-    );
-  });
-
-  it("builds FMR peak rows from modal resonances and driven response local maxima", () => {
+  it("never converts modal resonance frequencies or driven response maxima into FMR peaks", () => {
     const model = buildFmrPeakTableModel({
       responseSweep: jsonResource(
         {
@@ -1046,25 +885,83 @@ describe("frequencyDomainChartModels", () => {
       }),
     });
 
-    expect(model.diagnostics).toEqual([]);
-    expect(model.peaks).toEqual([
-      expect.objectContaining({
-        fieldId: "analysis:eigen:sample-0000:mode-0002",
-        frequencyHz: 8.0e9,
-        modeRef: { rawModeIndex: 2, sampleIndex: 0 },
-        source: "modal",
-      }),
-      expect.objectContaining({
-        amplitude: 1.2,
-        frequencyHz: 10.5e9,
-        frequencyPointIndex: 1,
-        phaseRad: 0.25,
-        source: "driven_response",
-      }),
-    ]);
+    expect(model.peaks).toEqual([]);
+    expect(model.diagnostics).toContain(
+      "FMR peaks require the published fmr/peaks.v1 resource",
+    );
   });
 
-  it("links driven FMR peaks to manifest response field resources", () => {
+  it("does not classify a single driven response point as an FMR peak", () => {
+    const model = buildFmrPeakTableModel({
+      responseSweep: jsonResource(
+        {
+          points: [
+            {
+              frequency_hz: 10.5e9,
+              frequency_index: 1,
+              max_response_amplitude: 1.2,
+              observable_id: "mx",
+            },
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        "response/magnetic_response_sweep.v2.json",
+      ),
+    });
+
+    expect(model.peaks).toEqual([]);
+  });
+
+  it("reports missing published peaks as unsupported", () => {
+    const model = buildFmrPeakTableModel({});
+
+    expect(model.peaks).toEqual([]);
+    expect(model.readiness).toBe("unsupported");
+  });
+
+  it("does not create modal-driven agreement without a compatibility certificate", () => {
+    const model = buildFmrModalDrivenComparisonModel({
+      responseSweep: jsonResource(
+        {
+          points: [
+            {
+              frequency_hz: 10.5e9,
+              frequency_index: 1,
+              max_response_amplitude: 1.2,
+              observable_id: "mx",
+            },
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        "response/magnetic_response_sweep.v2.json",
+      ),
+      spectrum: jsonResource({
+        modes: [
+          {
+            frequency_hz: 10.5e9,
+            raw_mode_index: 2,
+            sample_index: 0,
+          },
+        ],
+      }),
+    });
+
+    expect(model.pairs).toEqual([]);
+    expect(model.readiness).toBe("unsupported");
+  });
+
+  it("rejects a selection binding whose resource revision does not match", () => {
+    const input = {
+      publishedPeaksRevision: "peaks:revision-2",
+      selectedPeaksRevision: "peaks:revision-1",
+    };
+    const model = buildFmrModalDrivenComparisonModel(input);
+
+    expect(model.pairs).toEqual([]);
+    expect(model.readiness).toBe("incompatible");
+  });
+
+  it("does not infer field links for published FMR peaks from response maxima", () => {
     const model = buildFmrPeakTableModel({
       manifestPayload: {
         resources: {
@@ -1107,16 +1004,7 @@ describe("frequencyDomainChartModels", () => {
       ),
     });
 
-    expect(model.peaks).toContainEqual(
-      expect.objectContaining({
-        fieldId: "analysis:frequency-response:frequency-0001",
-        fieldResourceKey: fieldVectorResourceKey(
-          "analysis:frequency-response:frequency-0001",
-        ),
-        frequencyPointIndex: 1,
-        source: "driven_response",
-      }),
-    );
+    expect(model.peaks).toEqual([]);
   });
 
   it("routes fmr_response manifests to response sweep charts", () => {

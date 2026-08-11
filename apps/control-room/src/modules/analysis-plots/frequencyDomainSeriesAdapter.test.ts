@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH } from "@/kernel/api/apiPaths";
 import {
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
@@ -16,7 +15,7 @@ import {
 } from "./frequencyDomainSeriesAdapter";
 
 describe("frequencyDomainSeriesAdapter", () => {
-  it("adapts frequency-domain model series to the existing analysis plot series shape", () => {
+  it("does not adapt untyped driven-response payloads into chart series", () => {
     const model = buildFrequencyResponseChartModel({
       artifact_path: "response/magnetic_response_sweep.v2.json",
       payload: {
@@ -37,42 +36,10 @@ describe("frequencyDomainSeriesAdapter", () => {
 
     const series = frequencyDomainChartSeriesForAnalysisPlots(model);
 
-    expect(series.map((entry) => entry.quantity)).toEqual([
-      "amplitude",
-      "phase",
-      "absorbed-power-density",
-      "susceptibility-max-abs",
-    ]);
-    expect(series[0]).toEqual(
-      expect.objectContaining({
-        id: "analysis.frequency-domain:response:amplitude",
-        source: {
-          kind: "analysis.frequency_domain",
-          resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-          tableId: "frequency-domain:response-sweep",
-        },
-        unit: "a.u.",
-        xUnit: "GHz",
-      }),
+    expect(series).toEqual([]);
+    expect(model.diagnostics).toContain(
+      "Driven Response is unsupported until typed A2 publishes exact observable kind, unit, and provenance",
     );
-    expect(series[0]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 2 }]);
-    expect(series.slice(0, 1).map((entry) => ({
-      dataRevision: entry.dataRevision ?? null,
-      id: entry.id,
-      points: entry.points,
-      source: entry.source,
-      status: entry.status,
-      unit: entry.unit,
-      xUnit: entry.xUnit,
-    }))).toEqual([{
-      dataRevision: null,
-      id: "analysis.frequency-domain:response:amplitude",
-      points: [{ rowIndex: 0, x: 9.5, y: 2 }],
-      source: { kind: "analysis.frequency_domain", resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH, tableId: "frequency-domain:response-sweep" },
-      status: "ready",
-      unit: "a.u.",
-      xUnit: "GHz",
-    }]);
   });
 
   it("filters invalid chart points before handing data to chart primitives", () => {
@@ -189,10 +156,10 @@ describe("frequencyDomainSeriesAdapter", () => {
 
     expect(frequencyDomainXAxisLabel(spectrum)).toBe("mode index");
     expect(frequencyDomainXAxisLabel(dispersion)).toBe("path_s [rad/m]");
-    expect(frequencyDomainXAxisLabel(response)).toBe("frequency [GHz]");
+    expect(frequencyDomainXAxisLabel(response)).toBe("x");
   });
 
-  it("uses MHz axis units for sub-GHz frequency-response sweeps", () => {
+  it("does not infer MHz axes for untyped sub-GHz response payloads", () => {
     const series = frequencyDomainChartSeriesForAnalysisPlots(
       buildFrequencyResponseChartModel({
         payload: {
@@ -202,13 +169,8 @@ describe("frequencyDomainSeriesAdapter", () => {
       }),
     );
 
-    expect(series[0]).toEqual(
-      expect.objectContaining({
-        xUnit: "MHz",
-      }),
-    );
-    expect(series[0]?.points).toEqual([{ rowIndex: 0, x: 500, y: 2 }]);
-    expect(frequencyDomainXAxisLabel(series)).toBe("frequency [MHz]");
+    expect(series).toEqual([]);
+    expect(frequencyDomainXAxisLabel(series)).toBe("x");
   });
 
   it("keeps eigen spectrum frequency values in canonical Hz", () => {

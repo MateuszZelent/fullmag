@@ -6,10 +6,27 @@ import { finiteFrequencySeries } from "@/shared/analysis-charts/frequencyRenderM
 
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
+interface FrequencyDomainSeriesSelectionIdentity {
+  analysisRunId?: string | null;
+  analysisStageId?: string | null;
+}
+
 export function frequencyDomainChartSeriesForAnalysisPlots<TPoint>(
   model: FrequencyDomainChartBuildResult<TPoint>,
+  selectionIdentity?: FrequencyDomainSeriesSelectionIdentity | null,
 ): ChartSeries[] {
-  return finiteFrequencySeries(model);
+  return finiteFrequencySeries(model).map((series) => ({
+    ...series,
+    sourceIdentity: series.sourceIdentity
+      ? {
+          ...series.sourceIdentity,
+          runId:
+            selectionIdentity?.analysisRunId ?? series.sourceIdentity.runId,
+          stageId:
+            selectionIdentity?.analysisStageId ?? series.sourceIdentity.stageId,
+        }
+      : undefined,
+  }));
 }
 
 export function frequencyDomainPrimarySeries(

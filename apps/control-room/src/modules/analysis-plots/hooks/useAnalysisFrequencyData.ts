@@ -25,6 +25,7 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import {
   useFrequencyDomainEigenBranchesResource,
   useFrequencyDomainEigenDispersionResource,
+  useFrequencyDomainEigenFieldSweepResource,
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainManifestResource,
   useFrequencyDomainResponseSweepResource,
@@ -77,6 +78,9 @@ export function useAnalysisFrequencyData(
   const frequencyDomainRouteOverride = useSelectionSelector(
     frequencyDomainChartRouteOverrideFromSelection,
   );
+  const frequencyDomainSelectionIdentity = useSelectionSelector((selection) =>
+    selection?.ref?.type === "frequency-domain" ? selection.ref : null,
+  );
   const frequencyDomainRoute = {
     ...frequencyDomainManifestRoute,
     ...frequencyDomainRouteOverride,
@@ -89,7 +93,8 @@ export function useAnalysisFrequencyData(
   const manifestReady = frequencyDomainManifest.status === "ready" &&
     frequencyDomainRoute.status === "available";
   const surfaceMismatch = manifestReady && expectedChart !== null &&
-    frequencyDomainRoute.primaryChart !== expectedChart;
+    frequencyDomainRoute.primaryChart !== expectedChart &&
+    !(activeSurface === "eigenmodes" && frequencyDomainRoute.primaryChart === "field-sweep");
   const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
 
   // Load only the sub-resource required by the active route
@@ -101,6 +106,9 @@ export function useAnalysisFrequencyData(
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
     enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion",
+  });
+  const frequencyDomainFieldSweep = useFrequencyDomainEigenFieldSweepResource({
+    enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "field-sweep",
   });
   const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
     enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "response-sweep",
@@ -138,16 +146,20 @@ export function useAnalysisFrequencyData(
       case "dispersion":
         return frequencyDomainChartSeriesForAnalysisPlots(
           frequencyDomainDispersionModel,
+          frequencyDomainSelectionIdentity,
         );
       case "modal-spectrum":
         return frequencyDomainChartSeriesForAnalysisPlots(
           frequencyDomainSpectrumModel,
+          frequencyDomainSelectionIdentity,
         );
       case "response-sweep":
         return frequencyDomainChartSeriesForAnalysisPlots(
           frequencyDomainResponseModel,
+          frequencyDomainSelectionIdentity,
         );
       case "response-map":
+      case "field-sweep":
         return [];
       default:
         return [];
@@ -155,6 +167,7 @@ export function useAnalysisFrequencyData(
   }, [
     frequencyDomainDispersionModel,
     frequencyDomainRoute.primaryChart,
+    frequencyDomainSelectionIdentity,
     frequencyDomainResponseModel,
     frequencyDomainSpectrumModel,
     surfaceMismatch,
@@ -163,14 +176,24 @@ export function useAnalysisFrequencyData(
   const frequencyDomainResourceStatus =
     frequencyDomainRoute.primaryChart === "dispersion"
       ? frequencyDomainDispersion.status
+      : frequencyDomainRoute.primaryChart === "field-sweep"
+        ? frequencyDomainFieldSweep.status
       : frequencyDomainRoute.primaryChart === "response-sweep"
         ? frequencyDomainResponse.status
         : frequencyDomainRoute.primaryChart === "modal-spectrum"
           ? frequencyDomainSpectrum.status
           : frequencyDomainManifest.status;
+  const responseContractUnsupported =
+    frequencyDomainRoute.primaryChart === "response-sweep" &&
+    frequencyDomainResponse.status === "ready" &&
+    frequencyDomainResponseModel.series.length === 0;
 
   const frequencyDomainStatus =
     surfaceMismatch ? "unsupported"
+      : frequencyDomainRoute.primaryChart === "field-sweep"
+        ? "unsupported"
+      : responseContractUnsupported
+        ? "unsupported"
       : frequencyDomainRoute.primaryChart === "response-map"
       ? "error"
       : frequencyDomainRoute.status === "available"
@@ -187,6 +210,8 @@ export function useAnalysisFrequencyData(
   const frequencyDomainUnavailableReason =
     surfaceMismatch
       ? `This artifact does not publish the ${activeSurface === "frequency-response" ? "frequency-response" : "eigenmode"} resource required by this surface.`
+      : frequencyDomainRoute.primaryChart === "field-sweep"
+      ? "Field Sweep is unsupported until typed A2 publishes frequency, unit, branch/tracking, and per-sample result fields."
       : frequencyDomainRoute.primaryChart === "response-map"
       ? "response-map chart adapter is not available yet"
       : frequencyDomainRoute.unavailableReason ??
@@ -225,6 +250,9 @@ export function frequencyDomainChartTitle(
   }
   if (primaryChart === "response-map") {
     return "FMR Response Map (unavailable)";
+  }
+  if (primaryChart === "field-sweep") {
+    return "Eigen Field Sweep (unsupported)";
   }
   return "Frequency Domain";
 }

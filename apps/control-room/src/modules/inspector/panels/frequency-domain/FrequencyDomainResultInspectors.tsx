@@ -20,6 +20,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
@@ -38,6 +39,7 @@ import {
   useFrequencyDomainEigenModeFieldMetaResource,
   useFrequencyDomainEigenModeResource,
   useFrequencyDomainFmrKittelFitResource,
+  useFrequencyDomainFmrPeaksResource,
   useFrequencyDomainFmrResonanceFitsResource,
   useFrequencyDomainManifestResource,
   useFrequencyDomainResponseCancelRequestedResource,
@@ -105,6 +107,14 @@ import {
   periodicStatusView,
   type FrequencyDomainCalculationModeRow,
 } from "../frequencyDomainInspectorModel";
+import { frequencyDomainPublishedState } from "./FrequencyDomainPublishedState";
+import {
+  FrequencyDomainComparisonContractRows,
+} from "./FrequencyDomainComparisonStateInspectors";
+import { FrequencyDomainDrivenResponseContractRows } from "./FrequencyDomainDrivenInspectors";
+import { FrequencyDomainFmrFitContractRows } from "./FrequencyDomainFmrFitInspectors";
+import { FrequencyDomainFmrPeakContractRows } from "./FrequencyDomainFmrPeakInspectors";
+import { FrequencyDomainModalMarkerRows } from "./FrequencyDomainModalInspectors";
 
 // ---------------------------------------------------------------------------
 // Primary result inspector panels — these are referenced by name in the
@@ -393,14 +403,13 @@ function FmrComparisonPairTable({
         <tbody>
           {pairs.map((pair) => (
             <tr
-              key={`${pair.modalPeak.frequencyHz}:${pair.modalPeak.modeRef?.sampleIndex ?? "sample"}:${pair.modalPeak.modeRef?.rawModeIndex ?? "mode"}:${pair.drivenPeak.frequencyHz}:${pair.drivenPeak.frequencyPointIndex ?? "point"}`}
+              key={`${pair.modalMarker.frequencyHz}:${pair.modalMarker.modeRef.sampleIndex}:${pair.modalMarker.modeRef.rawModeIndex}:${pair.drivenPeak.frequencyHz}:${pair.drivenPeak.frequencyPointIndex ?? "point"}`}
             >
               <td>{formatFmrModalPairLabel(pair)}</td>
               <td>{formatFmrDrivenPairLabel(pair)}</td>
               <td>{formatFrequency(pair.detuningHz)}</td>
               <td>
-                {pair.modalPeak.validationStatus} modal,{" "}
-                {pair.drivenPeak.validationStatus} driven
+                modal marker, {pair.drivenPeak.validationStatus} driven peak
               </td>
               <td>{formatFmrPairFieldHandoff(pair)}</td>
             </tr>
@@ -906,9 +915,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
   const plotPeak = (peak: FmrPeakPoint): void => {
     if (!peak.fieldId) return;
     void kernel.commands.execute(
-      peak.source === "modal"
-        ? "analysis.eigen.plot-mode-3d"
-        : "analysis.frequency-response.plot-response-field-3d",
+      "analysis.frequency-response.plot-response-field-3d",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_domain.fmr",
       }),
@@ -916,7 +923,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
         fieldId: peak.fieldId,
         label: `${peak.source} peak ${formatFrequency(peak.frequencyHz)}`,
         phaseRad: 0,
-        source: peak.source === "modal" ? "eigen-mode" : "frequency-response",
+        source: "frequency-response",
         view: "phase_rotated_real",
       },
     );
@@ -940,7 +947,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
         />
         <FieldRow
           label="Peak comparison"
-          value={`${summary.modalPeakCount} modal peak(s), ${summary.drivenPeakCount} driven peak(s); ${summary.comparisonState}`}
+          value={`${summary.drivenPeakCount} published driven peak(s); ${summary.comparisonState}`}
         />
         <FieldRow
           label="Nearest modal-driven detuning"
@@ -1810,9 +1817,11 @@ export function EigenDiagnosticsInspectorPanel(props: InspectorPanelProps) {
   );
 }
 
-export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrResultSummary();
+export function FmrModalSpectrumInspectorContent({
+  summary,
+}: {
+  summary: ReturnType<typeof useFmrResultSummary>;
+}) {
   const kernel = useKernel();
   const selectMode = (point: EigenSpectrumPoint): void => {
     const nodeId = `results:eigen:sample:${point.sampleIndex}:mode:${point.rawModeIndex}`;
@@ -1869,6 +1878,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
           label="Mode workflow"
           value="modal k=0 eigenmodes -> resonances -> 3D mode field"
         />
+        <FrequencyDomainModalMarkerRows />
         <FieldRow label="Spectrum resource" value={summary.spectrumResource} />
         <FieldRow
           label="Mode rows"
@@ -2035,9 +2045,11 @@ function FmrResonanceBrowser({
   );
 }
 
-export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrResultSummary();
+export function FmrResponseSweepInspectorContent({
+  summary,
+}: {
+  summary: ReturnType<typeof useFmrResultSummary>;
+}) {
   const kernel = useKernel();
   const drivenPeaks = summary.peaks.filter(
     (peak) => peak.source === "driven_response",
@@ -2129,6 +2141,7 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           label="Sweep workflow"
           value="driven FMR sweep -> frequency point -> 3D response field"
         />
+        <FrequencyDomainDrivenResponseContractRows />
         <FieldRow label="Sweep resource" value={summary.responseResource} />
         <FieldRow
           label="Frequency points"
@@ -2245,23 +2258,19 @@ function FmrResponsePointBrowser({
           <div className="fm-frequency-domain-response-card__grid">
             <FieldRow
               label="Amplitude"
-              value={formatNumberOrUnavailable(point.amplitude)}
+              value="unsupported: exact observable kind and unit not published"
             />
             <FieldRow
               label="Phase"
-              value={
-                point.phaseRad == null
-                  ? "not available"
-                  : `${formatNumber(point.phaseRad)} rad`
-              }
+              value="unsupported: exact observable unit not published"
             />
             <FieldRow
               label="Absorbed power"
-              value={formatPowerDensity(point.absorbedPowerDensity)}
+              value="unsupported: exact observable unit and provenance not published"
             />
             <FieldRow
               label="Susceptibility"
-              value={formatMaxAbsSusceptibility(point.susceptibility)}
+              value="unsupported: exact observable kind and unit not published"
             />
             <FieldRow label="Residual" value={formatResidual(point.residualNorm)} />
             <FieldRow
@@ -2304,9 +2313,11 @@ function FmrResponsePointBrowser({
   );
 }
 
-export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrResultSummary();
+export function FmrPeaksInspectorContent({
+  summary,
+}: {
+  summary: ReturnType<typeof useFmrResultSummary>;
+}) {
   const kernel = useKernel();
   const selectPeak = (peak: FmrPeakPoint): void => {
     const peakIndex = summary.peaks.indexOf(peak);
@@ -2332,9 +2343,7 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
   const plotPeak = (peak: FmrPeakPoint): void => {
     if (!peak.fieldId) return;
     void kernel.commands.execute(
-      peak.source === "modal"
-        ? "analysis.eigen.plot-mode-3d"
-        : "analysis.frequency-response.plot-response-field-3d",
+      "analysis.frequency-response.plot-response-field-3d",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_domain.fmr_peaks",
       }),
@@ -2342,7 +2351,7 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
         fieldId: peak.fieldId,
         label: `${peak.source} peak ${formatFrequency(peak.frequencyHz)}`,
         phaseRad: 0,
-        source: peak.source === "modal" ? "eigen-mode" : "frequency-response",
+        source: "frequency-response",
         view: "phase_rotated_real",
       },
     );
@@ -2351,13 +2360,21 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
   return (
     <div data-inspector-surface="fmr-peaks">
       <InspectorGroup title="FMR Peak Control" badge={summary.peakBadge}>
+        <FrequencyDomainFmrPeakContractRows state={summary.publishedState} />
+        <FieldRow label="Resource state" value={summary.resourceState} />
+        <FieldRow label="Artifact state" value={summary.artifactState} />
+        <FieldRow label="Qualification state" value={summary.qualificationState} />
+        <FieldRow label="Selection binding" value={summary.bindingState} />
+        <FieldRow label="Published resource" value={summary.peaksResource} />
+        <FieldRow label="Published revision" value={summary.peaksRevision} />
         <FieldRow
-          label="Peak workflow"
-          value="select peak -> compare modal/driven provenance -> plot field"
+          label="Last-valid snapshot"
+          value={summary.retainedLastValid ? "retained during refresh/error" : "not retained"}
         />
+        <FieldRow label="Availability" value={summary.peakReason} />
         <FieldRow
           label="Peak rows"
-          value={`${summary.peakCount} total, ${summary.modalPeakCount} modal, ${summary.drivenPeakCount} driven`}
+          value={`${summary.peakCount} published driven peak(s)`}
         />
         <FieldRow
           label="Overlay-ready peaks"
@@ -2405,6 +2422,9 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
         title="FMR Modal-Driven Difference Table"
         badge={summary.comparisonState}
       >
+        <div className="fm-frequency-domain-table-empty" role="status">
+          Modal-driven comparison requires a typed compatibility certificate.
+        </div>
         <FmrComparisonPairTable pairs={summary.comparisonPairs} />
       </InspectorGroup>
     </div>
@@ -2423,7 +2443,7 @@ function FmrPeakBrowser({
   if (peaks.length === 0) {
     return (
       <div className="fm-frequency-domain-table-empty" role="status">
-        No modal or driven FMR peaks available.
+        No published FMR peaks available.
       </div>
     );
   }
@@ -2444,7 +2464,7 @@ function FmrPeakBrowser({
           <div className="fm-frequency-domain-peak-card__header">
             <div>
               <span className="fm-frequency-domain-peak-card__eyebrow">
-                {formatFmrPeakSourceLabel(peak)}
+                {formatFmrPeakSourceLabel()}
               </span>
               <h4>{formatFrequency(peak.frequencyHz)}</h4>
             </div>
@@ -2455,7 +2475,7 @@ function FmrPeakBrowser({
           <div className="fm-frequency-domain-peak-card__grid">
             <FieldRow label="Target" value={formatFmrPeakTarget(peak)} />
             <FieldRow label="Amplitude" value={formatNumberOrUnavailable(peak.amplitude)} />
-            <FieldRow label="Power density" value={formatPowerDensity(peak.absorbedPowerDensity)} />
+            <FieldRow label="Power density" value="unsupported: exact unit not published" />
             <FieldRow label="Linewidth" value={formatFrequency(peak.linewidthHz)} />
             <FieldRow label="Q factor" value={formatFmrPeakQualityFactor(peak)} />
             <FieldRow
@@ -2498,13 +2518,6 @@ function FmrPeakBrowser({
   );
 }
 
-type FmrPublishedArtifactState =
-  | "loading"
-  | "missing"
-  | "partial"
-  | "corrupt"
-  | "ready";
-
 interface ResonanceFitView {
   fitId: string;
   linewidthHz: number | null;
@@ -2530,17 +2543,24 @@ interface KittelPointView {
   status: string;
 }
 
-export function FmrResonanceFitsInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrResonanceFitsSummary();
-
+export function FmrResonanceFitsInspectorContent({
+  summary,
+}: {
+  summary: ReturnType<typeof useFmrResonanceFitsSummary>;
+}) {
   return (
     <div
+      data-artifact-status={summary.artifactState}
       data-inspector-surface="fmr-resonance-fits"
+      data-resource-status={summary.resourceState}
       data-status={summary.state}
     >
       <InspectorGroup title="FMR Resonance Fits" badge={summary.state}>
-        <FieldRow label="Artifact state" value={summary.state} />
+        <FieldRow label="Resource state" value={summary.resourceState} />
+        <FieldRow label="Artifact state" value={summary.artifactState} />
+        <FieldRow label="Qualification state" value={summary.qualificationState} />
+        <FieldRow label="Selection binding" value={summary.bindingState} />
+        <FieldRow label="Last-valid snapshot" value={summary.lastValidState} />
         <FieldRow label="Reason" value={summary.reason} />
         <FieldRow
           label="Published source revision"
@@ -2548,6 +2568,10 @@ export function FmrResonanceFitsInspectorPanel(props: InspectorPanelProps) {
         />
         <FieldRow label="Resource revision" value={summary.resourceRevision} />
         <FieldRow label="Resource" value={summary.resourceKey} />
+        <FrequencyDomainFmrFitContractRows
+          fitKind="resonance"
+          state={summary.publishedState}
+        />
         <FieldRow label="Frequency unit" value={summary.frequencyUnit} />
         <FieldRow label="Linewidth unit" value={summary.linewidthUnit} />
         <FieldRow label="Q factor unit" value={summary.qFactorUnit} />
@@ -2592,14 +2616,24 @@ export function FmrResonanceFitsInspectorPanel(props: InspectorPanelProps) {
   );
 }
 
-export function FmrKittelFitInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrKittelFitSummary();
-
+export function FmrKittelFitInspectorContent({
+  summary,
+}: {
+  summary: ReturnType<typeof useFmrKittelFitSummary>;
+}) {
   return (
-    <div data-inspector-surface="fmr-kittel-fit" data-status={summary.state}>
+    <div
+      data-artifact-status={summary.artifactState}
+      data-inspector-surface="fmr-kittel-fit"
+      data-resource-status={summary.resourceState}
+      data-status={summary.state}
+    >
       <InspectorGroup title="FMR Kittel Fit" badge={summary.state}>
-        <FieldRow label="Artifact state" value={summary.state} />
+        <FieldRow label="Resource state" value={summary.resourceState} />
+        <FieldRow label="Artifact state" value={summary.artifactState} />
+        <FieldRow label="Qualification state" value={summary.qualificationState} />
+        <FieldRow label="Selection binding" value={summary.bindingState} />
+        <FieldRow label="Last-valid snapshot" value={summary.lastValidState} />
         <FieldRow label="Reason" value={summary.reason} />
         <FieldRow
           label="Published source revision"
@@ -2607,6 +2641,10 @@ export function FmrKittelFitInspectorPanel(props: InspectorPanelProps) {
         />
         <FieldRow label="Resource revision" value={summary.resourceRevision} />
         <FieldRow label="Resource" value={summary.resourceKey} />
+        <FrequencyDomainFmrFitContractRows
+          fitKind="kittel"
+          state={summary.publishedState}
+        />
         <FieldRow label="Model" value={summary.model} />
         <FieldRow label="Validation state" value={summary.validationStatus} />
         <FieldRow label="Frequency unit" value={summary.frequencyUnit} />
@@ -2800,13 +2838,14 @@ function FmrPeakActions({
   );
 }
 
-export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
-  void props;
-  const summary = useFmrComparisonSummary();
+export function FmrComparisonInspectorContent({
+  summary,
+}: {
+  summary: ReturnType<typeof useFmrComparisonSummary>;
+}) {
   const kernel = useKernel();
   const openModalPair = (pair: FmrModalDrivenComparisonPoint): void => {
-    const modeRef = pair.modalPeak.modeRef;
-    if (!modeRef) return;
+    const modeRef = pair.modalMarker.modeRef;
     const nodeId = `results:eigen:sample:${modeRef.sampleIndex}:mode:${modeRef.rawModeIndex}`;
     kernel.selection.set(
       {
@@ -2815,11 +2854,11 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
         nodeId,
         objectId: null,
         ref: {
-          fieldId: pair.modalPeak.fieldId ?? undefined,
+          fieldId: pair.modalMarker.fieldId ?? undefined,
           kind: "results.eigen.mode",
           modeIndex: modeRef.rawModeIndex,
           nodeId,
-          resourceRef: pair.modalPeak.fieldResourceKey ?? undefined,
+          resourceRef: pair.modalMarker.fieldResourceKey ?? undefined,
           sampleIndex: modeRef.sampleIndex,
           type: "frequency-domain",
         },
@@ -2850,14 +2889,14 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
     );
   };
   const plotModalPair = (pair: FmrModalDrivenComparisonPoint): void => {
-    if (!pair.modalPeak.fieldId) return;
+    if (!pair.modalMarker.fieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_domain.comparison",
       }),
       {
-        fieldId: pair.modalPeak.fieldId,
+        fieldId: pair.modalMarker.fieldId,
         label: formatFmrModalPairLabel(pair),
         phaseRad: 0,
         source: "eigen-mode",
@@ -2890,8 +2929,9 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
       >
         <FieldRow
           label="Canonical comparison"
-          value="Eigenmodes resonance vs FrequencyResponse peak"
+          value="server-published modal-driven compatibility certificate only"
         />
+        <FrequencyDomainComparisonContractRows />
         <FieldRow label="Comparison readiness" value={summary.readiness} />
         <FieldRow label="Modal resonance" value={summary.modalResonance} />
         <FieldRow label="Driven peak" value={summary.drivenPeak} />
@@ -2940,7 +2980,7 @@ function FmrComparisonActions({
 }) {
   const kernel = useKernel();
   const openModal = (): void => {
-    const modeRef = summary.modalPeakPoint?.modeRef;
+    const modeRef = summary.modalMarkerPoint?.modeRef;
     if (!modeRef) return;
     const nodeId = `results:eigen:sample:${modeRef.sampleIndex}:mode:${modeRef.rawModeIndex}`;
     kernel.selection.set(
@@ -2950,11 +2990,11 @@ function FmrComparisonActions({
         nodeId,
         objectId: null,
         ref: {
-          fieldId: summary.modalPeakPoint?.fieldId ?? undefined,
+          fieldId: summary.modalMarkerPoint?.fieldId ?? undefined,
           kind: "results.eigen.mode",
           modeIndex: modeRef.rawModeIndex,
           nodeId,
-          resourceRef: summary.modalPeakPoint?.fieldResourceKey ?? undefined,
+          resourceRef: summary.modalMarkerPoint?.fieldResourceKey ?? undefined,
           sampleIndex: modeRef.sampleIndex,
           type: "frequency-domain",
         },
@@ -2985,14 +3025,14 @@ function FmrComparisonActions({
     );
   };
   const plotModal = (): void => {
-    if (!summary.modalPeakPoint?.fieldId) return;
+    if (!summary.modalMarkerPoint?.fieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_domain.comparison",
       }),
       {
-        fieldId: summary.modalPeakPoint.fieldId,
+        fieldId: summary.modalMarkerPoint.fieldId,
         label: summary.modalActionTarget,
         phaseRad: 0,
         source: "eigen-mode",
@@ -3021,10 +3061,10 @@ function FmrComparisonActions({
     <div className="fm-frequency-domain-table__actions">
       <Button
         className="fm-inspector-action-button"
-        disabled={!summary.modalPeakPoint?.modeRef}
+        disabled={!summary.modalMarkerPoint?.modeRef}
         size="sm"
         title={
-          summary.modalPeakPoint?.modeRef
+          summary.modalMarkerPoint?.modeRef
             ? "Open the modal eigenmode behind this comparison"
             : "No modal eigenmode is linked to this comparison"
         }
@@ -3053,10 +3093,10 @@ function FmrComparisonActions({
       </Button>
       <Button
         className="fm-inspector-action-button"
-        disabled={!summary.modalPeakPoint?.fieldId}
+        disabled={!summary.modalMarkerPoint?.fieldId}
         size="sm"
         title={
-          summary.modalPeakPoint?.fieldId
+          summary.modalMarkerPoint?.fieldId
             ? "Plot the modal comparison field in 3D"
             : "Modal comparison field is missing"
         }
@@ -3114,11 +3154,11 @@ function FmrComparisonPairBrowser({
         <article
           className="fm-frequency-domain-comparison-card"
           data-status={
-            pair.modalPeak.fieldId && pair.drivenPeak.fieldId
+            pair.modalMarker.fieldId && pair.drivenPeak.fieldId
               ? "ready"
               : "partial"
           }
-          key={`${pair.modalPeak.frequencyHz}:${pair.modalPeak.modeRef?.sampleIndex ?? "sample"}:${pair.modalPeak.modeRef?.rawModeIndex ?? "mode"}:${pair.drivenPeak.frequencyHz}:${pair.drivenPeak.frequencyPointIndex ?? "point"}`}
+          key={`${pair.modalMarker.frequencyHz}:${pair.modalMarker.modeRef.sampleIndex}:${pair.modalMarker.modeRef.rawModeIndex}:${pair.drivenPeak.frequencyHz}:${pair.drivenPeak.frequencyPointIndex ?? "point"}`}
         >
           <div className="fm-frequency-domain-comparison-card__header">
             <div>
@@ -3128,7 +3168,7 @@ function FmrComparisonPairBrowser({
               <h4>{formatFrequency(pair.detuningHz)}</h4>
             </div>
             <Badge variant="secondary">
-              {pair.modalPeak.validationStatus}/{pair.drivenPeak.validationStatus}
+              marker/{pair.drivenPeak.validationStatus}
             </Badge>
           </div>
           <div className="fm-frequency-domain-comparison-card__grid">
@@ -3136,7 +3176,7 @@ function FmrComparisonPairBrowser({
             <FieldRow label="Driven" value={formatFmrDrivenPairLabel(pair)} />
             <FieldRow
               label="Modal field"
-              value={pair.modalPeak.fieldId ? "field-ready" : "missing"}
+              value={pair.modalMarker.fieldId ? "field-ready" : "missing"}
             />
             <FieldRow
               label="Driven field"
@@ -3144,7 +3184,7 @@ function FmrComparisonPairBrowser({
             />
             <FieldRow
               label="Amplitude ratio"
-              value={formatFmrPairAmplitudeRatio(pair)}
+              value={formatFmrPairAmplitudeRatio()}
             />
             <FieldRow
               label="Field handoff"
@@ -3154,10 +3194,10 @@ function FmrComparisonPairBrowser({
           <div className="fm-frequency-domain-comparison-card__actions">
             <Button
               className="fm-inspector-action-button"
-              disabled={!pair.modalPeak.modeRef}
+              disabled={!pair.modalMarker.modeRef}
               size="sm"
               title={
-                pair.modalPeak.modeRef
+                pair.modalMarker.modeRef
                   ? "Open the modal eigenmode in the inspector"
                   : "This comparison has no linked modal eigenmode"
               }
@@ -3186,10 +3226,10 @@ function FmrComparisonPairBrowser({
             </Button>
             <Button
               className="fm-inspector-action-button"
-              disabled={!pair.modalPeak.fieldId}
+              disabled={!pair.modalMarker.fieldId}
               size="sm"
               title={
-                pair.modalPeak.fieldId
+                pair.modalMarker.fieldId
                   ? "Plot the modal comparison field in 3D"
                   : "Modal comparison field is missing"
               }
@@ -4625,10 +4665,23 @@ export function FrequencyResponseDiagnosticsResourceInspectorPanel(
   return <FrequencyResponseDiagnosticsInspectorPanel {...props} />;
 }
 
-function useFmrResultSummary() {
+export function useFmrResultSummary(props?: InspectorPanelProps) {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
+  const publishedPeaks = useFrequencyDomainFmrPeaksResource();
+  const selectionRef = props?.selection.ref?.type === "frequency-domain"
+    ? props.selection.ref
+    : null;
+  const publishedState = frequencyDomainPublishedState({
+    data: publishedPeaks.data,
+    publishedRevision: publishedPeaks.revision,
+    resourceStatus: publishedPeaks.status,
+    runId: selectionRef?.analysisRunId,
+    selectedResourceKey: selectionRef?.resourceRef,
+    selectedRevision: selectionRef?.artifactRevision,
+    stageId: selectionRef?.analysisStageId,
+  });
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const responseModel = buildFrequencyResponseChartModel(
@@ -4636,14 +4689,13 @@ function useFmrResultSummary() {
     manifestPayload,
   );
   const peakModel = buildFmrPeakTableModel({
-    manifestPayload,
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
+    publishedPeaks: publishedPeaks.data,
+    publishedPeaksRevision: publishedPeaks.revision,
+    selectedPeaksRevision: selectionRef?.artifactRevision,
   });
   const comparisonModel = buildFmrModalDrivenComparisonModel({
-    manifestPayload,
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
+    publishedPeaksRevision: publishedPeaks.revision,
+    selectedPeaksRevision: selectionRef?.artifactRevision,
   });
   const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   const responseFieldCount =
@@ -4659,9 +4711,6 @@ function useFmrResultSummary() {
     (point) => point.dampingRateHz != null || point.imaginaryFrequencyHz != null,
   ).length;
   const firstModalPoint = spectrumModel.points[0] ?? null;
-  const modalPeakCount = peakModel.peaks.filter(
-    (peak) => peak.source === "modal",
-  ).length;
   const drivenPeakCount = peakModel.peaks.filter(
     (peak) => peak.source === "driven_response",
   ).length;
@@ -4686,21 +4735,14 @@ function useFmrResultSummary() {
     activeChartRoute: `${chartRoute.mode} -> ${chartRoute.primaryChart}`,
     capabilitySummary: `reference_cpu: ${modalReferenceCpu}; magnetic_cpu: ${responseMagneticCpu}`,
     comparisonPairs: comparisonModel.pairs,
-    comparisonState:
-      modalPeakCount > 0 && drivenPeakCount > 0
-        ? "modal and driven peaks available"
-        : modalPeakCount > 0
-          ? "modal-only FMR"
-          : drivenPeakCount > 0
-            ? "driven-only FMR"
-            : "no peaks available",
+    artifactState: publishedState.artifact,
+    bindingState: publishedState.binding,
+    comparisonState: comparisonModel.readiness,
     detuningSummary: nearestComparison
-      ? `${formatFrequency(nearestComparison.detuningHz)} driven-modal; modal ${formatFrequency(nearestComparison.modalPeak.frequencyHz)}, driven ${formatFrequency(nearestComparison.drivenPeak.frequencyHz)}`
+      ? `${formatFrequency(nearestComparison.detuningHz)} driven-marker; marker ${formatFrequency(nearestComparison.modalMarker.frequencyHz)}, driven ${formatFrequency(nearestComparison.drivenPeak.frequencyHz)}`
       : comparisonModel.readiness === "modal-only"
         ? "driven response missing"
-        : comparisonModel.readiness === "driven-only"
-          ? "modal spectrum missing"
-          : "not available",
+        : comparisonModel.diagnostics[0] ?? "not available",
     drivenPeakCount,
     firstPeakLabel: firstPeak
       ? `${firstPeak.source}, ${formatFrequency(firstPeak.frequencyHz)}`
@@ -4715,13 +4757,21 @@ function useFmrResultSummary() {
       spectrumModel.points.map((point) => point.frequencyHz),
     ),
     modalModeCount: spectrumModel.points.length,
-    modalPeakCount,
     modalChartRoute: "fmr_modal -> eigen-spectrum",
     modalResidualCoverage: `${modalResidualCount}/${spectrumModel.points.length} mode(s)`,
-    peakBadge: `${peakModel.peaks.length} peak(s)`,
+    peakBadge: peakModel.readiness,
     peakCount: peakModel.peaks.length,
     peakFieldCount,
     peaks: peakModel.peaks,
+    peakReason: peakModel.diagnostics[0] ?? "not available",
+    publishedState,
+    peaksResource:
+      publishedPeaks.data?.resource_key ?? ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+    peaksRevision:
+      publishedPeaks.revision == null ? "not published" : String(publishedPeaks.revision),
+    qualificationState: "unsupported",
+    retainedLastValid: publishedState.retainedLastValid,
+    resourceState: publishedPeaks.status,
     linkedFieldHandoff: `${peakFieldCount}/${peakModel.peaks.length} peak(s) have 3D field payloads`,
     primaryModalResonance: firstModalPoint
       ? `mode ${firstModalPoint.rawModeIndex} at ${formatFrequency(firstModalPoint.frequencyHz)}`
@@ -4745,325 +4795,81 @@ function useFmrResultSummary() {
   };
 }
 
-function useFmrResonanceFitsSummary() {
+export function useFmrResonanceFitsSummary(props: InspectorPanelProps) {
   const resource = useFrequencyDomainFmrResonanceFitsResource();
-  const envelope = publishedFmrArtifactEnvelope({
+  const ref = props.selection.ref?.type === "frequency-domain"
+    ? props.selection.ref
+    : null;
+  const publishedState = frequencyDomainPublishedState({
     data: resource.data,
-    error: resource.error,
-    expectedSchema: "resonance_fits",
-    kind: "resonance-fits",
-    resourceRevision: resource.revision,
+    publishedRevision: resource.revision,
     resourceStatus: resource.status,
+    runId: ref?.analysisRunId,
+    selectedResourceKey: ref?.resourceRef,
+    selectedRevision: ref?.artifactRevision,
+    stageId: ref?.analysisStageId,
   });
-  const units = record(envelope.payload?.units);
-  const fits = Array.isArray(envelope.payload?.fits)
-    ? envelope.payload.fits.flatMap((entry): ResonanceFitView[] => {
-        const fit = record(entry);
-        const fitId = stringValue(fit?.fit_id);
-        if (!fit || !fitId) return [];
-        return [
-          {
-            fitId,
-            linewidthHz: finiteOptionalNumber(fit.linewidth_hz),
-            model: stringValue(fit.model) ?? "not published",
-            peakFrequencyHz: finiteOptionalNumber(fit.peak_frequency_hz),
-            qFactor: finiteOptionalNumber(fit.q_factor),
-            sourcePeakRevision:
-              stringValue(fit.source_peak_revision) ?? "not published",
-            status: stringValue(fit.status) ?? "not published",
-            uncertainty: formatPublishedFitUncertainty(fit.uncertainty),
-          },
-        ];
-      })
-    : [];
 
   return {
-    covarianceUnit: stringValue(units?.covariance) ?? "not published",
-    fits,
-    frequencyUnit: stringValue(units?.frequency) ?? "not published",
-    linewidthUnit: stringValue(units?.linewidth) ?? "not published",
-    qFactorUnit: stringValue(units?.q_factor) ?? "not published",
-    reason: envelope.reason,
-    resourceKey:
-      stringValue(envelope.artifact?.resource_key) ??
-      ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
-    resourceRevision: envelope.resourceRevision,
-    sourceRevision:
-      stringValue(envelope.payload?.source_revision) ?? "not published",
-    state: envelope.state,
+    artifactState: publishedState.artifact,
+    bindingState: publishedState.binding,
+    covarianceUnit: "not published by typed A2",
+    fits: [] as ResonanceFitView[],
+    frequencyUnit: "not published by typed A2",
+    lastValidState: publishedState.retainedLastValid ? "retained" : "not retained",
+    linewidthUnit: "not published by typed A2",
+    qFactorUnit: "not published by typed A2",
+    qualificationState: "unsupported",
+    publishedState,
+    reason: publishedState.binding === "incompatible"
+      ? "Selected resonance-fit identity or revision is incompatible with the loaded resource."
+      : "Typed A2 resonance fits omit units, source revision, uncertainty, covariance, conditioning, and exclusions.",
+    resourceKey: resource.data?.resource_key ?? ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    resourceRevision: resource.revision == null ? "not published" : String(resource.revision),
+    resourceState: resource.status,
+    sourceRevision: "not published by typed A2",
+    state: "unsupported",
   };
 }
 
-function useFmrKittelFitSummary() {
+export function useFmrKittelFitSummary(props: InspectorPanelProps) {
   const resource = useFrequencyDomainFmrKittelFitResource();
-  const envelope = publishedFmrArtifactEnvelope({
+  const ref = props.selection.ref?.type === "frequency-domain"
+    ? props.selection.ref
+    : null;
+  const publishedState = frequencyDomainPublishedState({
     data: resource.data,
-    error: resource.error,
-    expectedSchema: "kittel_fit",
-    kind: "kittel",
-    resourceRevision: resource.revision,
+    publishedRevision: resource.revision,
     resourceStatus: resource.status,
+    runId: ref?.analysisRunId,
+    selectedResourceKey: ref?.resourceRef,
+    selectedRevision: ref?.artifactRevision,
+    stageId: ref?.analysisStageId,
   });
-  const units = record(envelope.payload?.units);
-  const parameters = Array.isArray(envelope.payload?.parameters)
-    ? envelope.payload.parameters.flatMap((entry): KittelParameterView[] => {
-        const parameter = record(entry);
-        const name = stringValue(parameter?.name);
-        if (!parameter || !name) return [];
-        return [
-          {
-            name,
-            unit: stringValue(parameter.unit) ?? "not published",
-            value: finiteOptionalNumber(parameter.value),
-          },
-        ];
-      })
-    : [];
-  const points = Array.isArray(envelope.payload?.points)
-    ? envelope.payload.points.flatMap((entry): KittelPointView[] => {
-        const point = record(entry);
-        const sampleId = stringValue(point?.sample_id);
-        if (!point || !sampleId) return [];
-        return [
-          {
-            biasField: numericArray(point.bias_field_a_per_m),
-            relativeFrequencyError: finiteOptionalNumber(
-              point.relative_frequency_error,
-            ),
-            sampleId,
-            solvedFrequencyHz: finiteOptionalNumber(point.solved_frequency_hz),
-            status: stringValue(point.status) ?? "not published",
-          },
-        ];
-      })
-    : [];
 
   return {
-    biasFieldUnit: stringValue(units?.bias_field) ?? "not published",
-    conditioning: formatNumberOrUnavailable(
-      finiteOptionalNumber(envelope.payload?.conditioning),
-    ),
-    covariance: formatPublishedCovariance(
-      envelope.payload?.covariance,
-      stringValue(units?.covariance),
-    ),
-    frequencyUnit: stringValue(units?.frequency) ?? "not published",
-    model: stringValue(envelope.payload?.model) ?? "not published",
-    parameters,
-    points,
-    reason: envelope.reason,
-    resourceKey:
-      stringValue(envelope.artifact?.resource_key) ??
-      ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
-    resourceRevision: envelope.resourceRevision,
-    sourceRevision:
-      stringValue(envelope.payload?.source_revision) ?? "not published",
-    state: envelope.state,
-    validationStatus:
-      stringValue(envelope.payload?.validation_status) ?? "not published",
+    artifactState: publishedState.artifact,
+    biasFieldUnit: "not published by typed A2",
+    bindingState: publishedState.binding,
+    conditioning: "not published by typed A2",
+    covariance: "not published by typed A2",
+    frequencyUnit: "not published by typed A2",
+    lastValidState: publishedState.retainedLastValid ? "retained" : "not retained",
+    model: "not published by typed A2",
+    parameters: [] as KittelParameterView[],
+    points: [] as KittelPointView[],
+    publishedState,
+    qualificationState: "unsupported",
+    reason: publishedState.binding === "incompatible"
+      ? "Selected Kittel-fit identity or revision is incompatible with the loaded resource."
+      : "Typed A2 Kittel fit omits units, parameters, covariance, conditioning, exclusions, and source revision.",
+    resourceKey: resource.data?.resource_key ?? ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+    resourceRevision: resource.revision == null ? "not published" : String(resource.revision),
+    resourceState: resource.status,
+    sourceRevision: "not published by typed A2",
+    state: "unsupported",
+    validationStatus: "unsupported",
   };
-}
-
-function publishedFmrArtifactEnvelope({
-  data,
-  error,
-  expectedSchema,
-  kind,
-  resourceRevision,
-  resourceStatus,
-}: {
-  data: unknown;
-  error: unknown;
-  expectedSchema: "kittel_fit" | "resonance_fits";
-  kind: "kittel" | "resonance-fits";
-  resourceRevision: string | number | null;
-  resourceStatus: string;
-}): {
-  artifact: Record<string, unknown> | null;
-  payload: Record<string, unknown> | null;
-  reason: string;
-  resourceRevision: string;
-  state: FmrPublishedArtifactState;
-} {
-  const artifact = record(data);
-  const payload = record(artifact?.payload);
-  const artifactStatus = normalizedPublishedStatus(artifact?.status);
-  const payloadStatus = normalizedPublishedStatus(payload?.status);
-  const missingReason = stringValue(artifact?.missing_reason);
-  const stopReason = stringValue(payload?.stop_reason);
-  const revision =
-    resourceRevision == null ? "not published" : String(resourceRevision);
-
-  if (resourceStatus === "loading") {
-    return {
-      artifact,
-      payload,
-      reason: "Artifact resource is loading.",
-      resourceRevision: revision,
-      state: "loading",
-    };
-  }
-  if (error) {
-    return {
-      artifact,
-      payload,
-      reason: "Artifact resource could not be decoded.",
-      resourceRevision: revision,
-      state: "corrupt",
-    };
-  }
-  if (!artifact) {
-    return {
-      artifact,
-      payload,
-      reason: "Artifact was not published.",
-      resourceRevision: revision,
-      state: "missing",
-    };
-  }
-  if (isCorruptPublishedStatus(artifactStatus)) {
-    return {
-      artifact,
-      payload,
-      reason: missingReason ?? "Artifact payload is corrupt.",
-      resourceRevision: revision,
-      state: "corrupt",
-    };
-  }
-  if (
-    artifactStatus === "missing" ||
-    artifactStatus === "absent" ||
-    artifactStatus === "not_found" ||
-    (missingReason && artifactStatus !== "partial")
-  ) {
-    return {
-      artifact,
-      payload,
-      reason: missingReason ?? "Artifact was not published.",
-      resourceRevision: revision,
-      state: "missing",
-    };
-  }
-  if (
-    !payload ||
-    !stringValue(payload.schema_version)?.includes(expectedSchema) ||
-    isCorruptPublishedStatus(payloadStatus) ||
-    !hasPublishedFitCollections(payload, kind)
-  ) {
-    return {
-      artifact,
-      payload,
-      reason: "Artifact payload is corrupt.",
-      resourceRevision: revision,
-      state: "corrupt",
-    };
-  }
-  if (
-    artifactStatus === "partial" ||
-    payloadStatus === "partial" ||
-    payloadStatus === "incomplete" ||
-    payload.complete !== true ||
-    !stringValue(payload.source_revision) ||
-    !stringValue(record(payload.units)?.frequency)
-  ) {
-    return {
-      artifact,
-      payload,
-      reason:
-        missingReason ?? stopReason ?? "Artifact publication is incomplete.",
-      resourceRevision: revision,
-      state: "partial",
-    };
-  }
-
-  return {
-    artifact,
-    payload,
-    reason: "none",
-    resourceRevision: revision,
-    state: "ready",
-  };
-}
-
-function normalizedPublishedStatus(value: unknown): string {
-  return stringValue(value)?.trim().toLowerCase().replace(/[-\s]+/g, "_") ?? "";
-}
-
-function isCorruptPublishedStatus(value: string): boolean {
-  return ["corrupt", "error", "failed", "invalid", "malformed"].includes(
-    value,
-  );
-}
-
-function hasPublishedFitCollections(
-  payload: Record<string, unknown>,
-  kind: "kittel" | "resonance-fits",
-): boolean {
-  if (kind === "resonance-fits") {
-    if (!Array.isArray(payload.fits)) return false;
-    return payload.fits.every((entry) => {
-      const fit = record(entry);
-      return Boolean(
-        stringValue(fit?.fit_id) &&
-          stringValue(fit?.source_peak_revision) &&
-          record(fit?.uncertainty),
-      );
-    });
-  }
-  if (!Array.isArray(payload.parameters) || !Array.isArray(payload.points)) {
-    return false;
-  }
-  const parametersAreValid = payload.parameters.every((entry) => {
-    const parameter = record(entry);
-    return Boolean(
-      stringValue(parameter?.name) &&
-        stringValue(parameter?.unit) &&
-        finiteOptionalNumber(parameter?.value) != null,
-    );
-  });
-  const pointsAreValid = payload.points.every((entry) => {
-    const point = record(entry);
-    return Boolean(
-      stringValue(point?.sample_id) &&
-        numericArray(point?.bias_field_a_per_m).length > 0 &&
-        finiteOptionalNumber(point?.solved_frequency_hz) != null,
-    );
-  });
-  return parametersAreValid && pointsAreValid;
-}
-
-function formatPublishedFitUncertainty(value: unknown): string {
-  const uncertainty = record(value);
-  if (!uncertainty) return "not published";
-  const parts = [
-    stringValue(uncertainty.kind),
-    finiteOptionalNumber(uncertainty.frequency_hz) == null
-      ? null
-      : `frequency ${formatFrequency(
-          finiteOptionalNumber(uncertainty.frequency_hz),
-        )}`,
-    finiteOptionalNumber(uncertainty.amplitude) == null
-      ? null
-      : `amplitude ${formatCompactNumberOrUnavailable(
-          finiteOptionalNumber(uncertainty.amplitude),
-        )}`,
-    stringValue(uncertainty.reason),
-  ].filter((part): part is string => Boolean(part));
-  return parts.length > 0 ? parts.join("; ") : "not published";
-}
-
-function formatPublishedCovariance(
-  value: unknown,
-  unit: string | null,
-): string {
-  if (!Array.isArray(value) || value.length === 0) {
-    return "not published";
-  }
-  const columnCount = Array.isArray(value[0]) ? value[0].length : 0;
-  if (columnCount === 0 || value.some((row) => !Array.isArray(row))) {
-    return "corrupt";
-  }
-  return `${unit ?? "unit not published"}; ${value.length} x ${columnCount}`;
 }
 
 function formatRelativeError(value: number | null): string {
@@ -5074,6 +4880,7 @@ function useFrequencyDomainOverviewSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
+  const publishedPeaks = useFrequencyDomainFmrPeaksResource();
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const responseModel = buildFrequencyResponseChartModel(
@@ -5081,9 +4888,8 @@ function useFrequencyDomainOverviewSummary() {
     manifestPayload,
   );
   const peakModel = buildFmrPeakTableModel({
-    manifestPayload,
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
+    publishedPeaks: publishedPeaks.data,
+    publishedPeaksRevision: publishedPeaks.revision,
   });
   const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
@@ -5334,48 +5140,33 @@ function useFrequencyDomainRunSummary() {
   };
 }
 
-function useFmrComparisonSummary() {
-  const summary = useFmrResultSummary();
-  const manifest = useFrequencyDomainManifestResource();
-  const spectrum = useFrequencyDomainEigenSpectrumResource();
-  const responseSweep = useFrequencyDomainResponseSweepResource();
+export function useFmrComparisonSummary(props: InspectorPanelProps) {
+  const summary = useFmrResultSummary(props);
   const comparisonModel = buildFmrModalDrivenComparisonModel({
-    manifestPayload: frequencyDomainManifestPayload(manifest.data),
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
+    publishedPeaksRevision: summary.peaksRevision === "not published"
+      ? null
+      : summary.peaksRevision,
+    selectedPeaksRevision:
+      props.selection.ref?.type === "frequency-domain"
+        ? props.selection.ref.artifactRevision
+        : null,
   });
   const nearestComparison = comparisonModel.nearestComparison;
-  const modalPeak = nearestComparison?.modalPeak ?? null;
+  const modalMarker = nearestComparison?.modalMarker ?? null;
   const drivenPeak = nearestComparison?.drivenPeak ?? null;
   const frequencyOffset = nearestComparison?.detuningHz ?? null;
-  const amplitudeRatio =
-    modalPeak?.amplitude != null &&
-    drivenPeak?.amplitude != null &&
-    modalPeak.amplitude !== 0
-      ? drivenPeak.amplitude / modalPeak.amplitude
-      : null;
 
   return {
     actionBadge:
-      modalPeak?.fieldId && drivenPeak?.fieldId
+      modalMarker?.fieldId && drivenPeak?.fieldId
         ? "both fields ready"
-        : modalPeak?.fieldId
+        : modalMarker?.fieldId
           ? "modal field ready"
           : drivenPeak?.fieldId
             ? "driven field ready"
             : "fields missing",
-    amplitudeRatio:
-      amplitudeRatio == null
-        ? "not available"
-        : `${formatNumber(amplitudeRatio)} driven/modal`,
-    badge:
-      modalPeak && drivenPeak
-        ? "ready"
-        : modalPeak
-          ? "modal-only"
-          : drivenPeak
-            ? "driven-only"
-            : "missing peaks",
+    amplitudeRatio: "unsupported: modal markers do not publish peak amplitude",
+    badge: comparisonModel.readiness,
     drivenOverlay: drivenPeak?.fieldId
       ? `${drivenPeak.fieldId}; response field ready`
       : drivenPeak
@@ -5392,27 +5183,27 @@ function useFmrComparisonSummary() {
       frequencyOffset == null
         ? "not available"
         : `${formatNumber(frequencyOffset)} Hz (${formatFrequency(frequencyOffset)})`,
-    modalOverlay: modalPeak?.fieldId
-      ? `${modalPeak.fieldId}; mode field ready`
+    modalOverlay: modalMarker?.fieldId
+      ? `${modalMarker.fieldId}; mode field ready`
       : `${summary.modalFieldCount} mode field artifact(s)`,
-    modalActionTarget: modalPeak
-      ? `modal mode ${modalPeak.modeRef?.rawModeIndex ?? "?"} ${formatFrequency(modalPeak.frequencyHz)}`
+    modalActionTarget: modalMarker
+      ? `modal mode ${modalMarker.modeRef.rawModeIndex} ${formatFrequency(modalMarker.frequencyHz)}`
       : "not available",
-    modalPeakPoint: modalPeak,
-    modalResonance: modalPeak
-      ? `${formatFrequency(modalPeak.frequencyHz)}; mode ${
-          modalPeak.modeRef?.rawModeIndex ?? "?"
+    modalMarkerPoint: modalMarker,
+    modalResonance: modalMarker
+      ? `${formatFrequency(modalMarker.frequencyHz)}; mode ${
+          modalMarker.modeRef.rawModeIndex
         }`
       : "not available",
     pairs: comparisonModel.pairs,
-    readiness: summary.comparisonState,
-    resources: `${summary.spectrumResource}; ${summary.responseResource}`,
-    validationState: modalPeak && drivenPeak
-      ? `${modalPeak.validationStatus} modal, ${drivenPeak.validationStatus} driven`
-      : "requires both modal and driven peaks",
+    readiness: comparisonModel.diagnostics[0] ?? summary.comparisonState,
+    resources: `${summary.peaksResource}; compatibility certificate not published by typed A2`,
+    validationState: modalMarker && drivenPeak
+      ? `modal marker, ${drivenPeak.validationStatus} driven peak`
+      : "unsupported without compatibility certificate",
     spatialOverlap: nearestComparison?.drivenPeak?.overlap != null
       ? formatNumber(nearestComparison.drivenPeak.overlap)
-      : (!modalPeak?.fieldId || !drivenPeak?.fieldId
+      : (!modalMarker?.fieldId || !drivenPeak?.fieldId
           ? "degraded (field payload missing; request link)"
           : "degraded (field payload missing; request link)"),
   };
@@ -6159,45 +5950,31 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
 function useFmrPeakSummary({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const peakIndex = ref?.fmrPeakIndex ?? null;
-  const manifest = useFrequencyDomainManifestResource();
-  const spectrum = useFrequencyDomainEigenSpectrumResource();
-  const responseSweep = useFrequencyDomainResponseSweepResource();
+  const publishedPeaks = useFrequencyDomainFmrPeaksResource();
   const peakModel = buildFmrPeakTableModel({
-    manifestPayload: frequencyDomainManifestPayload(manifest.data),
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
+    publishedPeaks: publishedPeaks.data,
+    publishedPeaksRevision: publishedPeaks.revision,
+    selectedPeaksRevision: ref?.artifactRevision,
   });
   const peak = peakIndex == null ? null : peakModel.peaks[peakIndex] ?? null;
   const source = peak?.source ?? null;
-  const isModal = source === "modal";
   const modeRef = peak?.modeRef ?? null;
   const frequencyPointIndex = peak?.frequencyPointIndex ?? null;
   const fieldResource = peak?.fieldResourceKey ?? null;
-  const sourceResource = isModal
-    ? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH
-    : ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH;
+  const sourceResource = ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH;
   const resource =
     ref?.resourceRef ??
     fieldResource ??
     sourceResource;
-  const sourceInspectorKind = isModal
-    ? "results.frequency_domain.fmr_modal_spectrum"
-    : "results.frequency_domain.fmr_response_sweep";
-  const sourceInspectorLabel = isModal
-    ? "FMR Modal Spectrum"
-    : "FMR Response Sweep";
-  const sourceInspectorNodeId = isModal
-    ? "results:frequency-domain:fmr:modal-spectrum"
-    : "results:frequency-domain:fmr:response-sweep";
+  const sourceInspectorKind = "results.frequency_domain.fmr_response_sweep";
+  const sourceInspectorLabel = "FMR Response Sweep";
+  const sourceInspectorNodeId = "results:frequency-domain:fmr:response-sweep";
 
   return {
-    absorbedPowerDensity:
-      peak?.absorbedPowerDensity == null
-        ? "not available"
-        : `${formatNumber(peak.absorbedPowerDensity)} W/m^3`,
-    amplitude: formatNumberOrUnavailable(peak?.amplitude),
+    absorbedPowerDensity: "unsupported: exact unit not published",
+    amplitude: "unsupported: exact observable kind and unit not published",
     actionBadge: peak?.fieldId ? "3D-ready" : "metadata",
-    artifactFamily: isModal ? "eigen/spectrum.v2.json" : "response/magnetic-sweep",
+    artifactFamily: "fmr/peaks.v1",
     badge:
       peakIndex == null
         ? "unselected"
@@ -6210,11 +5987,9 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
     frequency: formatFrequency(peak?.frequencyHz),
     frequencyPointIndex,
     hasLinkedTarget: Boolean(modeRef || frequencyPointIndex != null),
-    interpretation: isModal
-      ? "modal resonance from the eigen spectrum"
-      : source === "driven_response"
-        ? "driven-response peak from the FMR sweep"
-        : "peak metadata is unavailable",
+    interpretation: source === "driven_response"
+      ? "published driven-response peak from the FMR sweep"
+      : "peak metadata is unavailable",
     linewidth: formatFrequency(peak?.linewidthHz),
     missingSpectralValues: missingValueSummary([
       ["amplitude", peak?.amplitude],
@@ -6223,21 +5998,11 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
       ["linewidth", peak?.linewidthHz],
     ]),
     modeRef,
-    phase: peak?.phaseRad == null ? "not available" : `${formatNumber(peak.phaseRad)} rad`,
+    phase: "unsupported: exact unit not published",
     provenanceBadge: peak?.fieldId ? "field-linked" : "metadata",
     resource,
-    source:
-      source === "modal"
-        ? "modal eigenmode"
-        : source === "driven_response"
-          ? "driven response"
-          : "not available",
-    sourceBadge:
-      source === "modal"
-        ? "modal"
-        : source === "driven_response"
-          ? "driven"
-          : "missing",
+    source: source === "driven_response" ? "driven response" : "not available",
+    sourceBadge: source === "driven_response" ? "driven" : "missing",
     sourceInspectorKind,
     sourceInspectorLabel,
     sourceInspectorNodeId,
@@ -6250,13 +6015,9 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
             )
           ? "partial"
           : "metadata-only",
-    target: isModal
-      ? modeRef
-        ? `sample ${modeRef.sampleIndex}, mode ${modeRef.rawModeIndex}`
-        : "mode not available"
-      : frequencyPointIndex == null
-        ? "frequency point not available"
-        : `frequency point ${frequencyPointIndex}`,
+    target: frequencyPointIndex == null
+      ? "frequency point not available"
+      : `frequency point ${frequencyPointIndex}`,
     validation: peak?.validationStatus ?? "not available",
     visualizationReadiness: peak?.fieldId
       ? "field id is published; plot command can use the linked field id"
@@ -6267,65 +6028,20 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
 function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const frequencyIndex = ref?.frequencyIndex ?? null;
-  const manifest = useFrequencyDomainManifestResource();
-  const responseSweep = useFrequencyDomainResponseSweepResource();
   const frequencyPoint =
     useFrequencyDomainResponseFrequencyPointResource(frequencyIndex);
   const fieldMeta = useFrequencyDomainResponseFieldMetaResource(frequencyIndex);
-  const responseModel = buildFrequencyResponseChartModel(
-    responseSweep.data,
-    frequencyDomainManifestPayload(manifest.data),
-  );
-  const matchingPoints = responseModel.points.filter(
-    (point) => point.frequencyIndex === frequencyIndex,
-  );
-  const firstPoint = matchingPoints[0] ?? null;
-  const payload = record(frequencyPoint.data?.payload);
-  const frequencyHz =
-    finiteNumber(payload?.frequency_hz) ?? firstPoint?.frequencyHz ?? null;
-  const amplitude =
-    finiteNumber(payload?.response_amplitude) ??
-    finiteNumber(payload?.amplitude) ??
-    firstPoint?.amplitude ??
-    null;
-  const phase =
-    finiteNumber(payload?.response_phase) ??
-    finiteNumber(payload?.phase_rad) ??
-    firstPoint?.phaseRad ??
-    null;
-  const absorbedPowerDensity =
-    finiteNumber(payload?.absorbed_power_density) ??
-    firstPoint?.absorbedPowerDensity ??
-    null;
-  const residual =
-    finiteNumber(payload?.relative_residual_l2_norm) ??
-    finiteNumber(payload?.relative_residual_norm) ??
-    finiteNumber(payload?.residual_l2_norm) ??
-    firstPoint?.residualNorm ??
-    null;
   const fieldId =
-    ref?.fieldId ?? fieldMeta.data?.field_id ?? firstPoint?.fieldId ?? null;
+    ref?.fieldId ?? fieldMeta.data?.field_id ?? null;
   const fieldResource = ref?.resourceRef ?? fieldMeta.data?.resource_key ?? null;
   const availableViews = fieldMeta.data?.available_views ?? [];
   const defaultView = fieldMeta.data?.default_view ?? availableViews[0] ?? null;
-  const defaultPhaseRad =
-    finiteNumber(fieldMeta.data?.default_phase_rad) ?? firstPoint?.phaseRad ?? 0;
-  const absorptionProvenance = record(payload?.absorbed_power_density_provenance);
-  const susceptibilityProvenance = record(payload?.susceptibility_tensor_provenance);
-  const provenance = [
-    stringValue(absorptionProvenance?.kind),
-    stringValue(susceptibilityProvenance?.kind),
-  ]
-    .filter((item): item is string => item != null)
-    .join("; ");
+  const defaultPhaseRad = finiteNumber(fieldMeta.data?.default_phase_rad) ?? 0;
 
   return {
     actionBadge: fieldId ? "3D field ready" : "field missing",
-    absorbedPowerDensity:
-      absorbedPowerDensity == null
-        ? "not available"
-        : `${formatNumber(absorbedPowerDensity)} W/m^3`,
-    amplitude: formatNumberOrUnavailable(amplitude),
+    absorbedPowerDensity: "unsupported: exact observable unit not published",
+    amplitude: "unsupported: exact observable kind and unit not published",
     artifactPath: frequencyPoint.data?.artifact_path ?? "not available",
     availableViews: availableViews.length ? availableViews.join(", ") : "not available",
     availableViewValues: normalizedAnalysisFieldViewOptions(
@@ -6340,7 +6056,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
           : frequencyPoint.status,
     componentBasis: fieldMeta.data?.component_basis ?? null,
     componentCount: finiteNumber(fieldMeta.data?.component_count),
-    defaultPhaseLabel: `${formatNumber(defaultPhaseRad)} rad`,
+    defaultPhaseLabel: "typed field phase; display unit provenance unavailable",
     defaultPhaseRad,
     defaultView: normalizeAnalysisFieldView(defaultView),
     defaultViewLabel: defaultView ? analysisFieldViewLabel(defaultView) : "not available",
@@ -6348,11 +6064,11 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     fieldIdLabel: fieldId ?? "not available",
     fieldResource: fieldResource ?? "not available",
     fieldStatus: fieldId ? `${fieldId}; field-ready` : "field artifact missing",
-    frequencyDisplay: formatFrequency(frequencyHz),
-    observableRows: `${matchingPoints.length} sweep row(s)`,
-    phase: phase == null ? "not available" : `${formatNumber(phase)} rad`,
-    provenance: provenance || "not available",
-    residual: formatNumberOrUnavailable(residual),
+    frequencyDisplay: "unsupported: typed observable contract incomplete",
+    observableRows: "0 verified observable row(s)",
+    phase: "unsupported: exact observable unit not published",
+    provenance: frequencyPoint.data?.content_digest ?? "unknown",
+    residual: "unsupported: response-point provenance incomplete",
     resourceKey:
       frequencyIndex == null
         ? "not available"
@@ -6443,55 +6159,25 @@ function useFrequencyResponseCancelRequestedSummary() {
 
 function useFrequencyResponseObservableSummary({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
-  const manifest = useFrequencyDomainManifestResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
-  const responseModel = buildFrequencyResponseChartModel(
-    responseSweep.data,
-    frequencyDomainManifestPayload(manifest.data),
-  );
   const observableId = ref?.observableId ?? selection.label ?? null;
-  const points = responseModel.points.filter(
-    (point) => point.observableId === observableId,
-  );
-  const frequencies = points.map((point) => point.frequencyHz);
-  const amplitudes = points.flatMap((point) =>
-    point.amplitude == null ? [] : [point.amplitude],
-  );
-  const phases = points.flatMap((point) =>
-    point.phaseRad == null ? [] : [point.phaseRad],
-  );
-  const absorbedPowers = points.flatMap((point) =>
-    point.absorbedPowerDensity == null ? [] : [point.absorbedPowerDensity],
-  );
-  const fieldOverlayCount = points.filter((point) => point.fieldId).length;
-  const chartSeries = responseModel.series.filter(
-    (series) => series.quantity === observableId || series.id.includes(String(observableId)),
-  );
 
   return {
     badge:
       observableId == null
         ? "unselected"
         : responseSweep.status === "ready"
-          ? `${points.length} point(s)`
+          ? "unsupported"
           : responseSweep.status,
-    chartSeriesStatus: chartSeries.length
-      ? `${chartSeries.length} series, ${chartSeries.map((series) => series.label).join(", ")}`
-      : "not available",
-    fieldOverlayStatus: `${fieldOverlayCount}/${points.length} point(s) field-ready`,
-    frequencyRange: formatFrequencyRange(frequencies),
-    maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
-      ? "not available"
-      : `${formatNumber(maxFinite(absorbedPowers)!)} W/m^3`,
-    meanAmplitude: meanFinite(amplitudes) == null
-      ? "not available"
-      : formatNumber(meanFinite(amplitudes)!),
+    chartSeriesStatus: "unsupported: typed observable contract incomplete",
+    fieldOverlayStatus: "unsupported",
+    frequencyRange: "unsupported",
+    maxAbsorbedPowerDensity: "unsupported: exact unit not published",
+    meanAmplitude: "unsupported: exact observable kind and unit not published",
     observableId: observableId ?? "not selected",
-    peakAmplitude: maxFinite(amplitudes) == null
-      ? "not available"
-      : formatNumber(maxFinite(amplitudes)!),
-    phaseRange: formatNumberRange(phases, " rad"),
-    pointCount: String(points.length),
+    peakAmplitude: "unsupported: published fmr/peaks.v1 required",
+    phaseRange: "unsupported: exact unit not published",
+    pointCount: "0 verified",
     resourceKey:
       ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   };
@@ -6506,52 +6192,33 @@ function useFrequencyResponseSweepSummary() {
     responseSweep.data,
     frequencyDomainManifestPayload(manifest.data),
   );
-  const fmrPeakModel = buildFmrPeakTableModel({
-    manifestPayload: frequencyDomainManifestPayload(manifest.data),
-    responseSweep: responseSweep.data,
-    spectrum: null,
-  });
-  const frequencies = responseModel.points.map((point) => point.frequencyHz);
-  const phases = responseModel.points.flatMap((point) =>
-    point.phaseRad == null ? [] : [point.phaseRad],
-  );
-  const absorbedPowers = responseModel.points.flatMap((point) =>
-    point.absorbedPowerDensity == null ? [] : [point.absorbedPowerDensity],
-  );
-  const fieldOverlayCount = responseModel.points.filter((point) => point.fieldId).length;
-  const peak = fmrPeakModel.peaks.find((item) => item.source === "driven_response");
 
   return {
     badge:
       responseSweep.status === "ready"
-        ? `${responseModel.points.length} point(s)`
+        ? "unsupported"
         : responseSweep.status,
     cancellationState: cancelRequested.data
       ? `${cancelRequested.data.status}; ${cancelRequested.data.completed_frequency_points}/${cancelRequested.data.total_frequency_points}`
       : "not requested",
-    fieldOverlayStatus: `${fieldOverlayCount}/${responseModel.points.length} point(s) field-ready`,
-    frequencyRange: formatFrequencyRange(frequencies),
-    maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
-      ? "not available"
-      : `${formatNumber(maxFinite(absorbedPowers)!)} W/m^3`,
-    peakResponse: peak
-      ? `${formatFrequency(peak.frequencyHz)}; amplitude ${formatNumberOrUnavailable(peak.amplitude)}`
-      : "not available",
+    fieldOverlayStatus: "unsupported",
+    frequencyRange: "unsupported",
+    maxAbsorbedPowerDensity: "unsupported: exact unit not published",
+    peakResponse: "requires published fmr/peaks.v1",
     pointCount: String(responseModel.points.length),
     progressState: progress.data
       ? `${progress.data.status}; ${progress.data.completed_frequency_points}/${progress.data.total_frequency_points}`
       : "not available",
-    phaseCoverage: `${phases.length}/${responseModel.points.length} point(s)`,
-    responseSeriesControls:
-      "Amplitude, Phase, Absorbed power density, Max |susceptibility|",
+    phaseCoverage: "unsupported: exact unit not published",
+    responseSeriesControls: "unsupported until typed observable contracts are published",
     resourceKey: responseSweep.data?.resource_key ??
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
     responseModel,
     seriesStatus: responseModel.series.length
       ? `${responseModel.series.length} series: ${responseModel.series.map((series) => series.label).join(", ")}`
       : "not available",
-    absorbedPowerCoverage: `${absorbedPowers.length}/${responseModel.points.length} point(s)`,
-    susceptibilityComponent: "max |χ| from response tensor",
+    absorbedPowerCoverage: "unsupported: exact unit and provenance not published",
+    susceptibilityComponent: "unsupported: exact observable kind and unit not published",
   };
 }
 
@@ -7300,8 +6967,7 @@ function formatNumberOrUnavailable(value: number | null | undefined): string {
 }
 
 function formatFmrModalPairLabel(pair: FmrModalDrivenComparisonPoint): string {
-  const mode = pair.modalPeak.modeRef?.rawModeIndex ?? "?";
-  return `mode ${mode} @ ${formatFrequency(pair.modalPeak.frequencyHz)}`;
+  return `mode ${pair.modalMarker.modeRef.rawModeIndex} marker @ ${formatFrequency(pair.modalMarker.frequencyHz)}`;
 }
 
 function formatFmrDrivenPairLabel(pair: FmrModalDrivenComparisonPoint): string {
@@ -7311,32 +6977,19 @@ function formatFmrDrivenPairLabel(pair: FmrModalDrivenComparisonPoint): string {
 function formatFmrPairFieldHandoff(
   pair: FmrModalDrivenComparisonPoint,
 ): string {
-  const modal = pair.modalPeak.fieldId ? "mode field ready" : "mode field missing";
+  const modal = pair.modalMarker.fieldId ? "mode field ready" : "mode field missing";
   const driven = pair.drivenPeak.fieldId
     ? "driven field ready"
     : "driven field missing";
   return `${modal}; ${driven}`;
 }
 
-function formatFmrPairAmplitudeRatio(
-  pair: FmrModalDrivenComparisonPoint,
-): string {
-  const modalAmplitude = pair.modalPeak.amplitude;
-  const drivenAmplitude = pair.drivenPeak.amplitude;
-  if (
-    modalAmplitude == null ||
-    drivenAmplitude == null ||
-    modalAmplitude === 0 ||
-    !Number.isFinite(modalAmplitude) ||
-    !Number.isFinite(drivenAmplitude)
-  ) {
-    return "not available";
-  }
-  return `${formatCompactNumberOrUnavailable(drivenAmplitude / modalAmplitude)} driven/modal`;
+function formatFmrPairAmplitudeRatio(): string {
+  return "unsupported: modal markers do not publish peak amplitude";
 }
 
-function formatFmrPeakSourceLabel(peak: FmrPeakPoint): string {
-  return peak.source === "modal" ? "Modal eigenmode" : "Driven response";
+function formatFmrPeakSourceLabel(): string {
+  return "Driven response";
 }
 
 function formatFmrPeakTarget(peak: FmrPeakPoint): string {
@@ -7360,23 +7013,6 @@ function formatFmrPeakQualityFactor(peak: FmrPeakPoint): string {
   return formatCompactNumberOrUnavailable(peak.frequencyHz / peak.linewidthHz);
 }
 
-function formatPowerDensity(value: number | null | undefined): string {
-  return value == null || !Number.isFinite(value)
-    ? "not available"
-    : `${formatCompactNumberOrUnavailable(value)} W/m^3`;
-}
-
-function formatMaxAbsSusceptibility(
-  values: readonly number[] | null | undefined,
-): string {
-  if (!values?.length) return "not available";
-  const finiteValues = values.filter((value) => Number.isFinite(value));
-  if (!finiteValues.length) return "not available";
-  return formatCompactNumberOrUnavailable(
-    Math.max(...finiteValues.map((value) => Math.abs(value))),
-  );
-}
-
 function formatCompactNumberOrUnavailable(
   value: number | null | undefined,
 ): string {
@@ -7393,11 +7029,6 @@ function formatResidual(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "-";
   if (value !== 0 && Math.abs(value) < 1e-3) return value.toExponential(2);
   return `${Number(value.toPrecision(6))}`;
-}
-
-function meanFinite(values: readonly number[]): number | null {
-  if (!values.length) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function maxFinite(values: readonly number[]): number | null {
