@@ -1,231 +1,65 @@
-# Projekt priorytetowych scenariuszy transportu spinowego
+# Roadmapa priorytetowych scenariuszy transportu spinowego
 
-**Status:** zatwierdzony kierunek; oczekuje na przegląd zapisanej specyfikacji
+**Status:** zatwierdzona kolejność; etap 1 jest jedynym aktywnym programem
 
 **Data:** 2026-08-11
 
-**Zakres:** racetrack ze skyrmionem, spójny Oersted oraz pełny CPP-MTJ
+## 1. Kolejność
 
-**Pierwsza bramka wykonawcza:** FDM / CUDA / FP64 / strict
+Rozwój jest podzielony na trzy niezależne programy produkcyjne:
 
-## 1. Cel
+1. racetrack ze skyrmionem pobudzanym rozwiązanym prądem, transportowym
+   SOT/STT i pomiarem kąta Halla;
+2. pole Oersteda obliczane z zaakceptowanego pola prądu;
+3. pełny CPP-MTJ z TMR/GMR, akumulacją spinową i mixing conductance.
 
-Celem jest uzyskanie trzech produkcyjnych scenariuszy, które korzystają z
-jednego kontraktu transportu ładunku i spinu:
+Etap 1 jest zamykany od Python/UI i `ProblemIR`, przez solver charge/spin i
+LLG, aż po managed CUDA runtime, walidację fizyczną oraz porównanie z MuMax3.
+Nie rozpoczynamy wdrażania etapu 2 ani 3 przed produkcyjnym zamknięciem etapu
+1. Dokumenty wspólnej fizyki mogą zachowywać przyszłe kontrakty, ale nie wolno
+na tej podstawie traktować Oersteda albo MTJ jako aktywnych zadań.
 
-1. racetrack ze skyrmionem pobudzanym rozwiązanym prądem, z direct SHE,
-   akumulacją spinową, transportowym SOT/STT i pomiarem kąta Halla;
-2. pole Oersteda obliczane z dokładnie tego samego zaakceptowanego pola
-   gęstości prądu `J_c`, które zasila transport spinowy i torque;
-3. wielowarstwowy CPP-MTJ z TMR/GMR, akumulacją spinową i interfejsowym
-   mixing conductance.
+Szczegółowy projekt etapu 1 znajduje się w
+[2026-08-11-solved-current-skyrmion-racetrack-design.md](./2026-08-11-solved-current-skyrmion-racetrack-design.md).
 
-Pierwszym wykonawczym celem jest ograniczona, jawna ścieżka
-FDM/CUDA/FP64/strict. FEM nie otrzymuje odmiennego modelu fizycznego. Po
-kwalifikacji ścieżki FDM realizuje ten sam kontrakt na wspólnej domenie FEM.
+## 2. Wspólna zasada fizyczna
 
-## 2. Decyzja architektoniczna
+Rozwiązany charge transport tworzy niezmienny zaakceptowany snapshot `V` i
+konserwatywnego pola `J_c`. W etapie 1 snapshot zasila direct SHE, steady spin,
+transportowy torque i LLG. W przyszłości ten sam kontrakt źródła zostanie
+wykorzystany przez Oersteda i CPP-MTJ; nie oznacza to jednak wspólnego
+harmonogramu wdrożenia.
 
-Wspólnym stanem źródłowym jest niezmienny, zaakceptowany snapshot transportu
-ładunku. Zawiera potencjał `V`, konserwatywne prądy ścianowe `J_c`, geometrię,
-maski przewodników, materiały, interfejsy, warunki brzegowe, rewizje operatorów
-oraz kryteria akceptacji. Snapshot jest tworzony tylko po przejściu residual,
-bilansu elektrod, zgodności gauge i kontroli topologii przewodzącej.
+Prescribed SOT/STT pozostaje osobnym modelem pomocniczym. Nie jest dowodem
+wykonania ścieżki solved-current ani podstawą promocji capability transportu.
 
-```text
-Python/UI
-  -> ProblemIR
-  -> planner i capability gate
-  -> solved charge snapshot: V, J_c, topology, provenance
-       |-> steady spin + direct SHE -> mu_s, Q -> torque -> LLG
-       |-> Oersted[J_c] -> H_Oe -> ten sam krok LLG
-       `-> CPP-MTJ interfaces -> TMR/GMR, mixing, torque
-  -> artefakty, obserwable i kwalifikacja
-```
+## 3. Kryterium przejścia do etapu 2
 
-Nie wolno tworzyć drugiego pola prądu dla Oersteda ani przeliczać CPP-MTJ na
-homogenizowany lokalny torque Slonczewskiego. Torque transportowy konsumuje
-bilans spinowego momentu pędu: objętościowe reakcje spinu oraz poprzeczną
-absorpcję na zorientowanym interfejsie.
+Etap 1 musi mieć jednocześnie status:
 
-## 3. Etap A: racetrack FDM/CUDA/FP64
+- publicznie wykonywalny w Python DSL i Control Room;
+- wykonany w FDM/CUDA/FP64/strict bez fallbacku;
+- zgodny z niezależnymi oraklami charge, SHE, spin i torque;
+- zbieżny względem siatki oraz kroku czasu;
+- porównany z MuMax3 w jawnie wspólnym limicie dynamiki;
+- wyposażony w wersjonowany pomiar trajektorii i kąta Halla;
+- odtwarzalny z artefaktów, checkpointu i pełnej proweniencji;
+- oznaczony jako produkcyjnie kwalifikowany dla dokładnie wymienionego
+  workloadu.
 
-### 3.1. Problem fizyczny
+Dopiero spełnienie wszystkich warunków pozwala przygotować osobną
+specyfikację i plan pola Oersteda.
 
-Warstwa heavy-metal i ferromagnetyczny racetrack tworzą jedną zorientowaną
-strukturę. Solver charge wyznacza `J_c`. Direct SHE generuje tensor prądu
-spinowego `Q`, a steady drift-diffusion wyznacza wektorową akumulację spinową
-`mu_s`. Oddziaływanie wymiany i dephasing w ferromagnetyku oraz absorpcja
-poprzeczna na interfejsie przekazują moment pędu do LLG.
+## 4. Zakres odroczony
 
-Nie należy utożsamiać tej ścieżki z prescribed SOT. Prescribed SOT może
-pozostać osobnym modelem pomocniczym, ale nie jest dowodem wykonania solved
-SHE/SOT/STT.
+### 4.1. Pole Oersteda
 
-### 3.2. Pierwszy ograniczony workload
+Odroczone w całości do etapu 2. Nie jest częścią kryteriów ani kodu racetracku
+etapu 1. Przyszła realizacja musi konsumować ten sam zaakceptowany snapshot
+`J_c`, ale otrzyma własny projekt, plan, bramki i kwalifikację.
 
-Pierwsza publiczna bramka obejmuje:
+### 4.2. CPP-MTJ
 
-- FDM, jawnie `device=gpu`, `precision=double`, `mode=strict`;
-- pełny prostokątny grid bez PBC i bez nieaktywnych komórek;
-- jeden zaakceptowany transport charge z elektrodami prądowymi albo
-  napięciowymi i jednoznacznym gauge;
-- materiały HM/FM o stałych współczynnikach w każdej części;
-- direct SHE w warstwie HM;
-- steady spin M1, bez iSHE i bez transient spin;
-- jeden zorientowany interfejs HM/FM z jawnym mixing conductance;
-- torque przekazany device-to-device do RHS LLG;
-- deterministyczną dynamikę FP64 bez termicznego szumu w pierwszym teście;
-- śledzenie środka skyrmionu oraz estymację kąta Halla ze składowych prędkości.
-
-Każde rozszerzenie, w tym PBC, maski częściowe, FP32, M2/iSHE, transient spin,
-szum termiczny i wiele urządzeń, pozostaje fail-closed do czasu osobnej bramki.
-
-### 3.3. Obserwable
-
-Scenariusz publikuje co najmniej `V`, `J_c`, `mu_s`, `Q`, torque transportowy,
-`H_eff`, `m`, położenie skyrmionu, ładunek topologiczny oraz kąt Halla.
-Definicja kąta Halla używa regresji liniowej zaakceptowanego odcinka trajektorii:
-
-```math
-\Theta_H = \operatorname{atan2}(v_\perp, v_\parallel).
-```
-
-Kierunki równoległy i poprzeczny wynikają z podpisanego kierunku średniego
-prądu w racetracku. Artefakt zapisuje przedział czasu regresji, kryteria
-odrzucenia transientu, niepewność dopasowania oraz konwencję znaku.
-
-## 4. Etap B: Oersted z tego samego prądu
-
-Oersted jest drugim konsumentem snapshotu charge, a nie niezależnym źródłem
-prądu. Identyfikatory snapshotu, rewizji źródła, siatki i etapu muszą być
-identyczne w torze spinowym, torque i `H_Oe`.
-
-Dla FDM docelowym operatorem jest open-boundary FFT/Biot-Savart z jawnym
-modelem domknięcia obwodu i przewodów doprowadzających. Pierwsza bramka może
-użyć ograniczonej, analitycznie sprawdzalnej geometrii przewodnika, lecz nie
-może pomijać powrotu prądu, jeżeli powodowałoby to zależność wyniku od
-arbitralnego ucięcia domeny.
-
-`H_Oe` jest materializowane dla każdego zaakceptowanego źródła prądu zgodnie z
-polityką refresh. Odrzucony krok adaptacyjny nie publikuje nowego snapshotu ani
-nie pozostawia pola obliczonego z odrzuconego `J_c`.
-
-## 5. Etap C: pełny CPP-MTJ
-
-CPP-MTJ jest osobnym workloadem wielowarstwowym. Wymaga pionowego transportu
-przez stos, zorientowanych interfejsów i zachowania nieciągłych śladów
-potencjału oraz akumulacji spinowej.
-
-Minimalny model obejmuje:
-
-- pinned layer, barrier/spacer i free layer;
-- CPP charge transport z zależnością rezystancji od konfiguracji magnetycznej;
-- przewodnictwa kanałów spinowych albo równoważny jawny tensor
-  magnetorezystywny dla TMR/GMR;
-- wektorową akumulację spinową po obu stronach interfejsu;
-- `G_up`, `G_down` oraz zespolone mixing conductance `G_r + iG_i`;
-- konserwatywny prąd ładunku, longitudinal spin injection/backflow,
-  poprzeczną absorpcję i torque interfejsowy;
-- obserwable `R_P`, `R_AP`, TMR/GMR, `mu_s`, prąd spinowy i torque;
-- coupling do LLG free layer przy nieruchomej albo dynamicznej pinned layer,
-  zależnie od jawnej konfiguracji.
-
-Model thin-layer homogenized Slonczewski pozostaje osobną aproksymacją i nie
-kwalifikuje pełnego CPP-MTJ.
-
-## 6. Kontrakt warstw produktu
-
-### 6.1. Python, UI i ProblemIR
-
-Brak modułu transportu w Python DSL albo UI oznacza brak węzła transportu w
-ProblemIR i brak transportowych węzłów Explorer. `J_c=0` nie służy do
-decydowania o obecności modułu.
-
-Python i UI muszą round-tripować wszystkie materiały, interfejsy, BC, gauge,
-modele SHE, solver policies, coupling, Oersted closure, outputy oraz żądanie
-wykonania. UI nie może posiadać alternatywnego modelu fizycznego ani
-automatycznie dodawać spin transportu do każdego obiektu magnetycznego.
-
-### 6.2. Planner i runtime
-
-Planner sprawdza kompletność grafu, kompatybilność modeli i dokładny tuple
-backend/device/precision/mode. Wymuszone GPU failuje bez fallbacku. Runner
-materializuje deskryptory, wywołuje natywne ABI, publikuje artefakty i
-proweniencję; nie implementuje operatorów transportowych.
-
-### 6.3. Własność solverów
-
-Produkcja FDM należy do `backends/fdm`, a FEM do `backends/fem`. CPU i GPU są
-odrębnymi realizacjami wspólnej fizyki. Przeniesienie do FEM następuje przez
-tożsamość kontraktu fizycznego i porównanie zbieżności, nie przez kopiowanie
-dyskretyzacji FDM.
-
-## 7. Warunki błędów i fail-closed
-
-Wykonanie kończy się przed uruchomieniem kerneli lub publikacją wyników, gdy:
-
-- snapshot charge jest niezaakceptowany, obcy, nieaktualny albo ma inną rewizję;
-- torque i Oersted wskazują różne źródła `J_c`;
-- topologia, orientacja interfejsu, BC albo gauge są niepełne;
-- model wymaga capability nieobsługiwanej przez wybrany tuple;
-- residual lokalny, bilans elektrod, bilans spinu lub bilans momentu pędu nie
-  spełniają normatywnych tolerancji;
-- żądany model CPP jest zastępowany aproksymacją homogenizowaną;
-- krok LLG lub transportu został odrzucony, a callback nie przywrócił całego
-  wspólnego stanu.
-
-Nie publikuje się częściowych pól jako zaakceptowanego wyniku.
-
-## 8. Walidacja i definicja ukończenia
-
-### 8.1. Racetrack
-
-Wymagane są: analityczny profil direct SHE w ograniczeniu 1D, CPU-reference ↔
-CUDA FP64 parity, zbieżność `mu_s` i torque, symetrie znaku po odwróceniu prądu
-i `theta_SH`, zachowanie ładunku topologicznego, zbieżność kąta Halla po
-zagęszczeniu siatki i kroku czasu oraz porównanie z publikowanym benchmarkiem.
-
-### 8.2. Oersted
-
-Wymagane są: przewodnik o rozwiązaniu analitycznym, direct Biot-Savart oracle,
-sprawdzenie `curl H = J` i `div B = 0` w odpowiedniej interpretacji,
-odwrócenie znaku z prądem, zbieżność przestrzenna i dowód identyczności źródła
-z torem transportowym.
-
-### 8.3. CPP-MTJ
-
-Wymagane są: granice P/AP, zerowy mixing, transparent interface, current
-reversal, bilans spinu i momentu pędu, zbieżność warstwowa, CPU-reference ↔ GPU
-FP64 parity oraz porównanie z zewnętrznym solverem i literaturą. TMR/GMR muszą
-być liczone z rezystancji wyprowadzonych z rozwiązanego prądu, a nie z
-podstawionej wartości katalogowej.
-
-### 8.4. Status produkcyjny
-
-`implemented`, `publicly executable`, `runtime proven`, `physically
-validated` i `production qualified` są osobnymi statusami. Żaden scenariusz
-nie jest produkcyjny bez managed-device proof, niezależnego orakla, zbieżności,
-proweniencji i pełnego Python/UI round-trip.
-
-## 9. Kolejność realizacji
-
-1. publiczny FDM/CUDA steady spin M1 konsumujący istniejący zaakceptowany
-   snapshot charge;
-2. direct SHE, mixing i transport torque przekazane do RHS LLG;
-3. minimalny dynamiczny racetrack i pipeline kąta Halla;
-4. FDM Oersted konsumujący ten sam snapshot i wspólny lifecycle kroku;
-5. rozszerzenie descriptorów charge/spin o pełny CPP-MTJ i TMR/GMR;
-6. referencyjne i produkcyjne realizacje FEM tego samego kontraktu;
-7. kwalifikacja krzyżowa FDM/FEM, CPU/GPU oraz porównania zewnętrzne.
-
-Każdy punkt stanowi osobną bramkę TDD, review i managed-runtime. Nie awansuje
-się capability całego modelu na podstawie przejścia jednego ograniczonego
-workloadu.
-
-## 10. Poza zakresem pierwszej bramki
-
-Pierwsza bramka FDM/CUDA nie obejmuje M2/iSHE, transient spin M3, FP32,
-multi-GPU, PBC, termicznego szumu, arbitralnych masek, circuit co-simulation,
-MQS skin effect ani pełnej kwalifikacji FEM. Elementy te pozostają w planie
-głównym, lecz nie mogą rozszerzać pierwszego testowalnego workloadu.
+Odroczone w całości do etapu 3. Model thin-layer homogenized Slonczewski nie
+kwalifikuje pełnego CPP-MTJ. Przyszły etap otrzyma osobny projekt obejmujący
+TMR/GMR, spin accumulation, nieciągłe ślady i mixing conductance.
