@@ -4395,10 +4395,30 @@ mod exact_metric_contract_tests {
 
     #[test]
     fn d07_stage_telemetry_rejects_inexact_stage_counts() {
-        let error = validate_multilayer_stage_telemetry(3, 1, 3, 2, 9)
-            .expect_err("inexact D-07 counters must fail closed");
+        for layer_count in [1_u64, 2, 4, 8] {
+            let pair_count = layer_count * layer_count;
+            for counters in [
+                (0, layer_count, layer_count, pair_count),
+                (1, layer_count - 1, layer_count, pair_count),
+                (1, layer_count, layer_count - 1, pair_count),
+                (1, layer_count, layer_count, pair_count - 1),
+                (2, layer_count, layer_count, pair_count),
+                (1, layer_count + 1, layer_count, pair_count),
+                (1, layer_count, layer_count + 1, pair_count),
+                (1, layer_count, layer_count, pair_count + 1),
+            ] {
+                let error = validate_multilayer_stage_telemetry(
+                    layer_count,
+                    counters.0,
+                    counters.1,
+                    counters.2,
+                    counters.3,
+                )
+                .expect_err("inexact D-07 counters must fail closed");
 
-        assert!(error.message.contains("counter_mismatch"));
+                assert!(error.message.contains("counter_mismatch"));
+            }
+        }
     }
 
     #[test]
