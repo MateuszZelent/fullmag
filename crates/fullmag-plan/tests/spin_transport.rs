@@ -58,12 +58,46 @@ fn set_native_m1(problem: &mut ProblemIR) {
     problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
 }
 
-fn set_module_graph(problem: &mut ProblemIR, modules: Value) {
+fn set_module_graph(problem: &mut ProblemIR, mut modules: Value) {
+    let module_array = modules.as_array_mut().expect("test graph modules");
+    let mut edges = Vec::new();
+    for module in module_array
+        .iter_mut()
+        .filter(|module| module.get("kind").and_then(Value::as_str) == Some("spin_torque"))
+    {
+        let target_id = module
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("test torque id")
+            .to_string();
+        let Some(source_id) = module
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .and_then(|dependencies| dependencies.first())
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let status = module
+            .get("activation")
+            .and_then(Value::as_str)
+            .unwrap_or("inactive")
+            .to_string();
+        module["family_payload"] = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize canonical graph torque");
+        edges.push(json!({
+            "kind": "spin_transport_to_torque",
+            "source_id": source_id,
+            "target_id": target_id,
+            "status": status
+        }));
+    }
     problem.physics_graph = Some(json!({
         "schema_version": "physics_graph.v1",
         "scene_revision": 1,
         "modules": modules,
-        "edges": []
+        "edges": edges
     }));
 }
 
@@ -587,11 +621,11 @@ fn inactive_transport_graph_does_not_expand_the_magnetic_grid() {
             },
             {
                 "id": "spin", "kind": "spin_transport", "applies_to": [],
-                "solve_domain": [], "depends_on": [], "activation": "inactive"
+                "solve_domain": [], "depends_on": ["charge"], "activation": "inactive"
             },
             {
                 "id": "transport_torque", "kind": "spin_torque", "applies_to": [],
-                "solve_domain": [], "depends_on": [], "activation": "inactive"
+                "solve_domain": [], "depends_on": ["spin"], "activation": "inactive"
             }
         ]),
     );
@@ -619,11 +653,11 @@ fn inactive_transport_torque_is_provenance_only_during_relaxation() {
             },
             {
                 "id": "spin", "kind": "spin_transport", "applies_to": [],
-                "solve_domain": [], "depends_on": [], "activation": "inactive"
+                "solve_domain": [], "depends_on": ["charge"], "activation": "inactive"
             },
             {
                 "id": "transport_torque", "kind": "spin_torque", "applies_to": [],
-                "solve_domain": [], "depends_on": [], "activation": "inactive"
+                "solve_domain": [], "depends_on": ["spin"], "activation": "inactive"
             }
         ]),
     );

@@ -620,6 +620,8 @@ mod tests {
             beta: 0.02,
             lande_g: Some(2.1),
         }];
+        let family_payload = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize canonical inactive torque payload");
         problem.physics_graph = Some(serde_json::json!({
             "schema_version": "physics_graph.v1",
             "scene_revision": 1,
@@ -629,7 +631,8 @@ mod tests {
                 "applies_to": [{"kind": "object", "object_id": "strip"}],
                 "solve_domain": [{"object_id": "strip"}],
                 "depends_on": [],
-                "activation": "inactive"
+                "activation": "inactive",
+                "family_payload": family_payload
             }],
             "edges": []
         }));

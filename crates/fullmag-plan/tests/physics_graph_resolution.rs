@@ -1,6 +1,10 @@
 use fullmag_ir::BackendTarget;
 use fullmag_ir::PhysicsGraphRealizationStateIR;
+use fullmag_ir::PrescribedSotFormulaIR;
+use fullmag_ir::PrescribedSotV1DriveIR;
 use fullmag_ir::ProblemIR;
+use fullmag_ir::RegionRefIR;
+use fullmag_ir::SpinTorqueModuleIR;
 use fullmag_plan::{resolve_physics_graph, resolve_physics_modules};
 
 fn source_bound_torque_graph(
@@ -20,6 +24,63 @@ fn source_bound_torque_graph(
         ],
         "edges": edges
     })
+}
+
+fn drift_diffusion_torque(id: &str, solve_id: &str) -> SpinTorqueModuleIR {
+    SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+        schema_version: "drift_diffusion_spin_torque.v1".to_string(),
+        id: id.to_string(),
+        solve_id: solve_id.to_string(),
+        target: RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        },
+        formula_version: "transport_torque_angular_momentum.fullmag.v1".to_string(),
+    }
+}
+
+fn zhang_li_torque(id: &str, current_source: &str) -> SpinTorqueModuleIR {
+    SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some(id.to_string()),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.fullmag.v1".to_string(),
+        operator_version: Some("zhang_li.fdm.upwind.v1".to_string()),
+        current_density: None,
+        current_source: Some(current_source.to_string()),
+        degree: 0.4,
+        beta: 0.03,
+        lande_g: Some(2.0),
+    }
+}
+
+fn typed_torque_graph_problem(
+    torque: SpinTorqueModuleIR,
+    family_payload: serde_json::Value,
+    dependency: &str,
+    edge_kind: &str,
+) -> ProblemIR {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.spin_torque_modules = vec![torque];
+    problem.physics_graph = Some(serde_json::json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 47,
+        "modules": [
+            {"id":"charge","kind":"current_transport","applies_to":[],"solve_domain":[],"depends_on":[],"activation":"active","family_payload":{}},
+            {"id":"spin_solve","kind":"spin_transport","applies_to":[],"solve_domain":[],"depends_on":["charge"],"activation":"active","family_payload":{}},
+            {"id":"torque","kind":"spin_torque","applies_to":[],"solve_domain":[],"depends_on":[dependency],"activation":"active","family_payload":family_payload}
+        ],
+        "edges": [{
+            "kind": edge_kind,
+            "source_id": dependency,
+            "target_id": "torque",
+            "status": "active"
+        }]
+    }));
+    problem
 }
 
 #[test]
@@ -220,6 +281,141 @@ fn source_bound_torque_families_reject_semantic_edge_loopholes() {
             errors.iter().any(|error| error.contains("torque 'torque'")),
             "{case} must identify the rejected torque contract: {errors:?}"
         );
+    }
+}
+
+#[test]
+fn typed_drift_diffusion_torque_rejects_coordinated_current_graph_mutation() {
+    let problem = typed_torque_graph_problem(
+        drift_diffusion_torque("torque", "spin_solve"),
+        serde_json::json!({
+            "kind": "zhang_li",
+            "current_source": "charge"
+        }),
+        "charge",
+        "current_to_torque",
+    );
+
+    let errors = resolve_physics_graph(&problem)
+        .expect_err("typed drift-diffusion torque must reject a coordinated current graph");
+    assert!(
+        errors.iter().any(|error| {
+            error.contains("torque 'torque'") && error.contains("typed spin_torque_modules")
+        }),
+        "typed/graph mismatch must identify canonical torque ownership: {errors:?}"
+    );
+}
+
+#[test]
+fn typed_current_torque_rejects_coordinated_spin_graph_mutation() {
+    let problem = typed_torque_graph_problem(
+        zhang_li_torque("torque", "charge"),
+        serde_json::json!({
+            "kind": "drift_diffusion_spin_torque",
+            "solve_id": "spin_solve"
+        }),
+        "spin_solve",
+        "spin_transport_to_torque",
+    );
+
+    let errors = resolve_physics_graph(&problem)
+        .expect_err("typed current torque must reject a coordinated spin graph");
+    assert!(
+        errors.iter().any(|error| {
+            error.contains("torque 'torque'") && error.contains("typed spin_torque_modules")
+        }),
+        "inverse typed/graph mismatch must identify canonical torque ownership: {errors:?}"
+    );
+}
+
+#[test]
+fn typed_torque_rejects_non_object_graph_family_payload() {
+    let problem = typed_torque_graph_problem(
+        drift_diffusion_torque("torque", "spin_solve"),
+        serde_json::Value::Null,
+        "spin_solve",
+        "spin_transport_to_torque",
+    );
+
+    let errors = resolve_physics_graph(&problem)
+        .expect_err("typed torque must reject an absent graph family payload");
+    assert!(
+        errors.iter().any(|error| {
+            error.contains("torque 'torque'") && error.contains("typed spin_torque_modules")
+        }),
+        "non-object graph payload must identify canonical torque ownership: {errors:?}"
+    );
+}
+
+#[test]
+fn typed_torque_families_accept_matching_canonical_graph_payloads() {
+    let slonczewski = SpinTorqueModuleIR::Slonczewski {
+        schema_version: Some("slonczewski_torque.v1".to_string()),
+        id: Some("torque".to_string()),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "slonczewski.fullmag.v2".to_string(),
+        current_density: None,
+        current_source: Some("charge".to_string()),
+        degree: 0.4,
+        spin_polarization: [0.0, 0.0, 1.0],
+        stack_normal: Some([0.0, 0.0, 1.0]),
+        lambda_asymmetry: 1.0,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: Some(1.0e-9),
+        fixed_layer_position: None,
+        realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+            realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+        }),
+    };
+    let prescribed_sot = SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "torque".to_string(),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: PrescribedSotFormulaIR::FullmagV1 {
+            drive: PrescribedSotV1DriveIR::VectorCurrentSource {
+                current_source_id: "charge".to_string(),
+                drive_direction: [1.0, 0.0, 0.0],
+                interface_normal: [0.0, 0.0, 1.0],
+            },
+            xi_dl: 0.1,
+            xi_fl: 0.01,
+            free_layer_thickness_m: 1.0e-9,
+        },
+    };
+    let cases = [
+        (
+            "drift diffusion",
+            drift_diffusion_torque("torque", "spin_solve"),
+            "spin_solve",
+            "spin_transport_to_torque",
+        ),
+        (
+            "Zhang-Li",
+            zhang_li_torque("torque", "charge"),
+            "charge",
+            "current_to_torque",
+        ),
+        ("Slonczewski", slonczewski, "charge", "current_to_torque"),
+        (
+            "prescribed SOT",
+            prescribed_sot,
+            "charge",
+            "current_to_torque",
+        ),
+    ];
+
+    for (case, torque, dependency, edge_kind) in cases {
+        let payload = serde_json::to_value(&torque).expect("serialize typed torque");
+        let problem = typed_torque_graph_problem(torque, payload, dependency, edge_kind);
+        assert!(resolve_physics_graph(&problem)
+            .unwrap_or_else(|errors| panic!("{case} typed graph must resolve: {errors:?}"))
+            .is_some());
     }
 }
 

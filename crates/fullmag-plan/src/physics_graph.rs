@@ -1,7 +1,8 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, PhysicsGraphModuleProvenanceIR, PhysicsGraphModuleRealizationIR,
     PhysicsGraphRealizationProvenanceIR, PhysicsGraphRealizationStateIR,
-    PhysicsGraphRuntimeProvenanceIR, ProblemIR, PHYSICS_GRAPH_REALIZATION_SCHEMA,
+    PhysicsGraphRuntimeProvenanceIR, PrescribedSotFormulaIR, PrescribedSotLegacyDriveIR,
+    PrescribedSotV1DriveIR, ProblemIR, SpinTorqueModuleIR, PHYSICS_GRAPH_REALIZATION_SCHEMA,
     PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA,
 };
 use serde_json::Value;
@@ -31,6 +32,88 @@ pub struct ResolvedPhysicsModule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub source_path: String,
+}
+
+#[derive(Clone, Copy)]
+struct TorqueSourceContract<'a> {
+    source_id: &'a str,
+    source_kind: &'static str,
+    edge_kind: &'static str,
+}
+
+struct TypedTorqueContract<'a> {
+    family: &'static str,
+    source: Option<TorqueSourceContract<'a>>,
+    payload: Value,
+}
+
+fn typed_torque_contract<'a>(
+    problem: &'a ProblemIR,
+    module_id: &str,
+) -> Option<TypedTorqueContract<'a>> {
+    problem.spin_torque_modules.iter().find_map(|module| {
+        let (family, source) = match module {
+            SpinTorqueModuleIR::Slonczewski {
+                id, current_source, ..
+            } if id.as_deref() == Some(module_id) => Some((
+                "slonczewski",
+                current_source.as_deref().map(current_torque_source),
+            )),
+            SpinTorqueModuleIR::ZhangLi {
+                id, current_source, ..
+            } if id.as_deref() == Some(module_id) => Some((
+                "zhang_li",
+                current_source.as_deref().map(current_torque_source),
+            )),
+            SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, solve_id, .. }
+                if id == module_id =>
+            {
+                Some((
+                    "drift_diffusion_spin_torque",
+                    Some(TorqueSourceContract {
+                        source_id: solve_id,
+                        source_kind: "spin_transport",
+                        edge_kind: "spin_transport_to_torque",
+                    }),
+                ))
+            }
+            SpinTorqueModuleIR::PrescribedSot { id, formula, .. } if id == module_id => {
+                Some(("prescribed_sot", prescribed_sot_source(formula)))
+            }
+            _ => None,
+        }?;
+        Some(TypedTorqueContract {
+            family,
+            source,
+            payload: serde_json::to_value(module)
+                .expect("SpinTorqueModuleIR must serialize for graph validation"),
+        })
+    })
+}
+
+fn current_torque_source(source_id: &str) -> TorqueSourceContract<'_> {
+    TorqueSourceContract {
+        source_id,
+        source_kind: "current_transport",
+        edge_kind: "current_to_torque",
+    }
+}
+
+fn prescribed_sot_source(formula: &PrescribedSotFormulaIR) -> Option<TorqueSourceContract<'_>> {
+    match formula {
+        PrescribedSotFormulaIR::FullmagV1 {
+            drive:
+                PrescribedSotV1DriveIR::VectorCurrentSource {
+                    current_source_id, ..
+                },
+            ..
+        }
+        | PrescribedSotFormulaIR::LegacyFullmagV0 {
+            drive: PrescribedSotLegacyDriveIR::LegacyCurrentSourceNorm { current_source_id },
+            ..
+        } => Some(current_torque_source(current_source_id)),
+        _ => None,
+    }
 }
 
 /// Validate the optional authored graph before backend-specific lowering.
@@ -179,16 +262,37 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         let Some(module_id) = module_object.get("id").and_then(Value::as_str) else {
             continue;
         };
+        let typed_contract = typed_torque_contract(problem, module_id);
         let Some(payload) = module_object
             .get("family_payload")
             .and_then(Value::as_object)
         else {
+            if typed_contract.is_some() {
+                errors.push(format!(
+                    "physics_graph torque '{module_id}' family_payload must match its canonical typed spin_torque_modules record"
+                ));
+            }
             continue;
         };
-        let family = payload.get("kind").and_then(Value::as_str);
-        let contract = if family == Some("drift_diffusion_spin_torque") {
+        let graph_family = payload.get("kind").and_then(Value::as_str);
+        if let Some(contract) = typed_contract.as_ref() {
+            if graph_family != Some(contract.family)
+                || Value::Object(payload.clone()) != contract.payload
+            {
+                errors.push(format!(
+                    "physics_graph torque '{module_id}' family_payload must match its canonical typed spin_torque_modules record"
+                ));
+            }
+        }
+        let contract = if let Some(contract) = typed_contract.as_ref() {
+            contract.source
+        } else if graph_family == Some("drift_diffusion_spin_torque") {
             match payload.get("solve_id").and_then(Value::as_str) {
-                Some(source_id) => Some((source_id, "spin_transport", "spin_transport_to_torque")),
+                Some(source_id) => Some(TorqueSourceContract {
+                    source_id,
+                    source_kind: "spin_transport",
+                    edge_kind: "spin_transport_to_torque",
+                }),
                 None => {
                     errors.push(format!(
                         "physics_graph torque '{module_id}' drift-diffusion payload requires solve_id"
@@ -208,10 +312,7 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
                         .and_then(|drive| drive.get("current_source_id"))
                         .and_then(Value::as_str)
                 })
-                .map(|source_id| (source_id, "current_transport", "current_to_torque"))
-        };
-        let Some((source_id, expected_source_kind, expected_edge_kind)) = contract else {
-            continue;
+                .map(current_torque_source)
         };
         let dependencies = module_object
             .get("depends_on")
@@ -223,9 +324,26 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let target_edges = edges
+            .iter()
+            .filter(|edge| edge.get("target_id").and_then(Value::as_str) == Some(module_id))
+            .collect::<Vec<_>>();
+        let Some(TorqueSourceContract {
+            source_id,
+            source_kind: expected_source_kind,
+            edge_kind: expected_edge_kind,
+        }) = contract
+        else {
+            if typed_contract.is_some() && (!dependencies.is_empty() || !target_edges.is_empty()) {
+                errors.push(format!(
+                    "physics_graph torque '{module_id}' has no typed source and must not declare dependencies or incoming edges"
+                ));
+            }
+            continue;
+        };
         if dependencies != [source_id] {
             errors.push(format!(
-                "physics_graph torque '{module_id}' {family:?} payload source '{source_id}' must be its only depends_on entry"
+                "physics_graph torque '{module_id}' {graph_family:?} payload source '{source_id}' must be its only depends_on entry"
             ));
         }
         if module_kinds
@@ -233,13 +351,9 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
             .is_some_and(|kind| kind != expected_source_kind)
         {
             errors.push(format!(
-                "physics_graph torque '{module_id}' {family:?} source '{source_id}' must be a {expected_source_kind} module"
+                "physics_graph torque '{module_id}' {graph_family:?} source '{source_id}' must be a {expected_source_kind} module"
             ));
         }
-        let target_edges = edges
-            .iter()
-            .filter(|edge| edge.get("target_id").and_then(Value::as_str) == Some(module_id))
-            .collect::<Vec<_>>();
         if target_edges.len() != 1 {
             errors.push(format!(
                 "physics_graph torque '{module_id}' requires exactly one {expected_edge_kind} edge from declared dependency '{source_id}', found {}",
