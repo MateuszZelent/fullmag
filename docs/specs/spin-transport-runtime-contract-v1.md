@@ -1821,14 +1821,24 @@ powierzchni `NormalCurrentElectrode` o tym samym module gęstości
 `n·J_charge` i przeciwnym całkowitym strumieniu przez pełne powierzchnie
 siatki, oraz czterech `Insulating`. Runner rekonstruuje dokładnie
 `2*(ny*nz + nx*nz + nx*ny)` zewnętrznych records i weryfikuje ich pełne
-pokrycie bez duplikatów, canonical geometry oraz komórkę sąsiednią. Dla
-skończonych $I_f=A_fJ_{n,f}$ preflight i native owner stosują
-`abs(sum(I_f)) <= 64 * f64::EPSILON * sum(abs(I_f))`; przy zerowej skali
-wyłącznie dokładny zerowy strumień jest legalny. Profile mieszane,
-niezbilansowane, o różnych osiach lub z niezgodną gauge są odrzucane przed
-wywołaniem ABI. Nie wynika z tego obsługa częściowych elektrod, masek, domen
-nieprostokątnych ani ogólnego Neumanna; rozszerzenie wymaga osobnej
-specyfikacji i kwalifikacji.
+pokrycie bez duplikatów, canonical geometry oraz komórkę sąsiednią. Dla każdej
+zewnętrznej ściany owner najpierw dodaje $-A_fJ_{n,f}$ do `rhs` jej komórki
+sąsiedniej. Następnie, dla każdego niezakotwiczonego komponentu numerycznego,
+liczy $rhs_{sum}=\sum_i rhs_i$ oraz $rhs_{l1}=\sum_i|rhs_i|$ i wymaga
+$|rhs_{sum}|\le64\,\epsilon_{\mathrm{f64}}rhs_{l1}$; jeżeli $rhs_{l1}=0$,
+legalne jest wyłącznie dokładne $rhs_{sum}=0$. Nie jest publiczną policy
+kompatybilności redukcja terminalowa $\sum_f A_fJ_{n,f}$, ponieważ w
+pojedynczej komórce przeciwne terminale mogą się skasować przed redukcją
+ownerową. Dodatkowo bounded public full-grid slice nie publikuje profilu
+wielokomponentowego: przed ABI wymaga dokładnie jednego komponentu
+numerycznego, dowodzonego przez skończoną i ściśle dodatnią conductance na
+każdej wewnętrznej ścianie,
+$g_a=[2/(1/\sigma_i+1/\sigma_j)]A_a/h_a>0$. W przeciwnym razie preflight
+kończy się `charge_domain=not_single_numerically_connected_component`.
+Profile mieszane, niezbilansowane, o różnych osiach lub z niezgodną gauge są
+odrzucane przed wywołaniem ABI. Nie wynika z tego obsługa częściowych elektrod,
+masek, domen nieprostokątnych ani ogólnego Neumanna; rozszerzenie wymaga
+osobnej specyfikacji i kwalifikacji.
 
 The ABI is separate from `fullmag_fdm_cpu_*` and from the LLG `Context`. It
 uses two opaque, non-interchangeable **handle types** whose names cannot also

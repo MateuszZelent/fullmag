@@ -13112,6 +13112,20 @@ z relatywną tolerancją $10^{-12}$. Profile mieszane Voltage/CurrentDensity,
 niezbilansowane źródła, różne osie i gauge niezgodna z elektrodami są błędami
 IR lub fail-closed preflightu; nie dochodzą do CUDA ABI.
 
+Reguła ownera jest per numeryczny komponent: po złożeniu liczy on
+$rhs_{sum}=\sum_i rhs_i$ i $rhs_{l1}=\sum_i|rhs_i|$ osobno dla każdego
+niezakotwiczonego komponentu, następnie wymaga
+$|rhs_{sum}|\le64\,\epsilon_{\mathrm{f64}}rhs_{l1}$; gdy $rhs_{l1}=0$,
+dopuszcza wyłącznie dokładne $rhs_{sum}=0$. Terminalowa redukcja
+$\sum_f A_fJ_{n,f}$ nie jest policy kompatybilności, gdyż przeciwne terminale
+jednej komórki mogą skasować się już w jej `rhs`. Bounded public full-grid
+slice nie wystawia profilu wielokomponentowego: przed ABI Rust wymaga jednego
+numerycznego komponentu, udowodnionego przez skończoną i ściśle dodatnią
+conductance na każdej wewnętrznej ścianie
+$g_a=[2/(1/\sigma_i+1/\sigma_j)]A_a/h_a>0$. Brak takiego dowodu kończy się
+fail-closed z
+`charge_domain=not_single_numerically_connected_component`.
+
 Fixture `examples/fdm_gpu_charge_zero_mean_public.py` ma $2\times1\times1$
 komórki po $10\,\mathrm{nm}$, $\sigma=4.0\times10^6\,\mathrm{S/m}$,
 $J_n(x_{min})=+2.0\times10^{13}\,\mathrm{A/m^2}$ i
