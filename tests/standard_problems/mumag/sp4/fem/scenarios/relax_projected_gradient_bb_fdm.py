@@ -16,8 +16,8 @@ study = fm.study("mumag_sp4_fdm_relax_projected_gradient_bb")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-# study.interactive(True)
-# study.wait_for_solve(True)
+study.interactive(True)
+study.wait_for_solve(True)
 
 study.universe(
     mode="manual",

@@ -162,6 +162,9 @@ def test_fdm_projected_gradient_bb_counterpart_exports_cpu_double_relaxation() -
         FDM_COUNTERPART_SCENARIOS["relax_projected_gradient_bb_fdm"],
         backend="fdm",
     )
+    runtime_metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+    assert runtime_metadata["interactive_session_requested"] is True
+    assert runtime_metadata["wait_for_solve"] is True
     assert [stage["entrypoint_kind"] for stage in payload["stages"]] == [
         "flat_relax",
         "flat_save_state",
