@@ -35,7 +35,94 @@ export interface ResponseSelectionRef {
   stageId: string;
 }
 
-export type ResultsSelectionRef = ModalSelectionRef | ResponseSelectionRef;
+export interface ModalDetailSelectionRef extends Omit<ModalSelectionRef, "kind"> {
+  detail: "field" | "metadata" | "residuals";
+  kind: "modal-detail";
+}
+
+export interface ResponseDetailSelectionRef extends Omit<ResponseSelectionRef, "kind"> {
+  detail: "field" | "observables";
+  kind: "response-detail";
+}
+
+export interface BranchSelectionRef {
+  artifactRevision: string;
+  branchId: string;
+  kind: "eigen-branch";
+  runId: string;
+  stageId: string;
+}
+
+export interface FmrResonanceFitSelectionRef {
+  artifactRevision: string;
+  fitId: string;
+  kind: "fmr-resonance-fit";
+  runId: string;
+  stageId: string;
+}
+
+export interface ResultsViewSelectionRef {
+  artifactRevision: string;
+  kind: "results-view";
+  runId: string;
+  stageId: string;
+  viewId: "branches" | "field-sweep" | "response-sweep" | "spectrum";
+}
+
+export type ResultsSelectionRef =
+  | BranchSelectionRef
+  | FmrResonanceFitSelectionRef
+  | ModalDetailSelectionRef
+  | ModalSelectionRef
+  | ResponseDetailSelectionRef
+  | ResponseSelectionRef
+  | ResultsViewSelectionRef;
+
+export const RESULTS_NAVIGATOR_INSPECTOR_IDS = {
+  "results.root": "results.frequency_domain.root",
+  "results.runs": "results.frequency_domain.root",
+  "results.run": "results.frequency_domain.run",
+  "results.stage": "jobs.frequency_domain.stage_run",
+  "results.frequency-domain": "results.frequency_domain.root",
+  "results.frequency-domain.overview": "results.frequency_domain.root",
+  "results.frequency-domain.modal-eigen": "results.eigen.root",
+  "results.frequency-domain.spectrum": "results.eigen.spectrum",
+  "results.frequency-domain.field-sweep": "results.eigen.field_sweep",
+  "results.frequency-domain.dispersion": "results.eigen.dispersion",
+  "results.frequency-domain.samples": "results.eigen.samples",
+  "results.frequency-domain.sample": "results.eigen.sample",
+  "results.frequency-domain.modes": "results.eigen.modes",
+  "results.frequency-domain.mode": "results.eigen.mode",
+  "results.frequency-domain.mode-metadata": "results.eigen.mode_metadata",
+  "results.frequency-domain.mode-field": "results.eigen.mode_field",
+  "results.frequency-domain.mode-residuals": "results.eigen.mode_residuals",
+  "results.frequency-domain.branches": "results.eigen.branches",
+  "results.frequency-domain.branch": "results.eigen.branch",
+  "results.frequency-domain.driven-response": "results.frequency_response.root",
+  "results.frequency-domain.frequency-sweep": "results.frequency_response.sweep",
+  "results.frequency-domain.frequency-points": "results.frequency_response.frequency_points",
+  "results.frequency-domain.response-point": "results.frequency_response.frequency_point",
+  "results.frequency-domain.response-observables": "results.frequency_response.observables",
+  "results.frequency-domain.response-field": "resources.analysis.frequency_response.field",
+  "results.frequency-domain.progress": "results.frequency_response.progress",
+  "results.frequency-domain.response-diagnostics": "results.frequency_response.diagnostics",
+  "results.frequency-domain.fmr-views": "results.frequency_domain.fmr",
+  "results.frequency-domain.modal-resonances": "results.frequency_domain.fmr_modal_spectrum",
+  "results.frequency-domain.driven-sweep": "results.frequency_domain.fmr_response_sweep",
+  "results.frequency-domain.peaks": "results.frequency_domain.fmr_peaks",
+  "results.frequency-domain.peak": "results.frequency_domain.fmr_peak",
+  "results.frequency-domain.resonance-fits": "results.frequency_domain.fmr_resonance_fits",
+  "results.frequency-domain.resonance-fit": "results.frequency_domain.fmr_resonance_fit",
+  "results.frequency-domain.kittel-fit": "results.frequency_domain.fmr_kittel_fit",
+  "results.frequency-domain.field-frequency-map": "results.frequency_domain.response_map",
+  "results.frequency-domain.modal-driven-comparison": "results.frequency_domain.comparison",
+  "results.frequency-domain.validation": "results.eigen.provenance",
+  "results.frequency-domain.validation-child": "results.eigen.provenance",
+  "results.frequency-domain.artifacts": "results.frequency_domain.exports",
+} satisfies Record<ResultsNavigatorNodeKind, string>;
+
+export type ResultsNavigatorInspectorId =
+  (typeof RESULTS_NAVIGATOR_INSPECTOR_IDS)[ResultsNavigatorNodeKind];
 
 /**
  * Existing inspector panels use the long-lived dotted selection vocabulary.
@@ -45,76 +132,8 @@ export type ResultsSelectionRef = ModalSelectionRef | ResponseSelectionRef;
  */
 export function inspectorSelectionKindForResultsNodeKind(
   kind: ResultsNavigatorNodeKind,
-): string {
-  switch (kind) {
-    case "results.root":
-    case "results.runs":
-    case "results.frequency-domain":
-    case "results.frequency-domain.overview":
-      return "results.frequency_domain.root";
-    case "results.run":
-      return "results.frequency_domain.run";
-    case "results.stage":
-      return "jobs.frequency_domain.stage_run";
-    case "results.frequency-domain.modal-eigen":
-      return "results.eigen.root";
-    case "results.frequency-domain.spectrum":
-      return "results.eigen.spectrum";
-    case "results.frequency-domain.samples":
-      return "results.eigen.modes";
-    case "results.frequency-domain.sample":
-      return "jobs.frequency_domain.eigen_sample";
-    case "results.frequency-domain.modes":
-      return "results.eigen.modes";
-    case "results.frequency-domain.mode":
-      return "results.eigen.mode";
-    case "results.frequency-domain.branches":
-      return "results.eigen.branches";
-    case "results.frequency-domain.branch":
-      return "results.eigen.branch";
-    case "results.frequency-domain.dispersion":
-      return "results.eigen.dispersion";
-    case "results.frequency-domain.field-sweep":
-      return "results.eigen.root";
-    case "results.frequency-domain.driven-response":
-      return "results.frequency_response.root";
-    case "results.frequency-domain.frequency-sweep":
-      return "results.frequency_response.sweep";
-    case "results.frequency-domain.frequency-points":
-      return "results.frequency_response.frequency_points";
-    case "results.frequency-domain.response-point":
-      return "results.frequency_response.frequency_point";
-    case "results.frequency-domain.progress":
-      return "results.frequency_response.progress";
-    case "results.frequency-domain.response-diagnostics":
-      return "results.frequency_response.diagnostics";
-    case "results.frequency-domain.fmr-views":
-      return "results.frequency_domain.fmr";
-    case "results.frequency-domain.modal-resonances":
-      return "results.frequency_domain.fmr_modal_spectrum";
-    case "results.frequency-domain.driven-sweep":
-      return "results.frequency_domain.fmr_response_sweep";
-    case "results.frequency-domain.peaks":
-      return "results.frequency_domain.fmr_peaks";
-    case "results.frequency-domain.peak":
-      return "results.frequency_domain.fmr_peak";
-    case "results.frequency-domain.resonance-fits":
-    case "results.frequency-domain.resonance-fit":
-      return "results.frequency_domain.fmr_resonance_fits";
-    case "results.frequency-domain.kittel-fit":
-      return "results.frequency_domain.fmr_kittel_fit";
-    case "results.frequency-domain.field-frequency-map":
-      return "results.frequency_domain.response_map";
-    case "results.frequency-domain.modal-driven-comparison":
-      return "results.frequency_domain.comparison";
-    case "results.frequency-domain.validation":
-    case "results.frequency-domain.validation-child":
-      return "results.eigen.provenance";
-    case "results.frequency-domain.artifacts":
-      return "results.frequency_domain.exports";
-    default:
-      return "results.frequency_domain.root";
-  }
+): ResultsNavigatorInspectorId {
+  return RESULTS_NAVIGATOR_INSPECTOR_IDS[kind];
 }
 
 type ModalSelectionInput = Omit<ModalSelectionRef, "kind">;
@@ -128,6 +147,36 @@ export function responseSelectionRef(
   input: ResponseSelectionInput,
 ): ResponseSelectionRef {
   return { kind: "response-point", ...input };
+}
+
+export function modalDetailSelectionRef(
+  input: Omit<ModalDetailSelectionRef, "kind">,
+): ModalDetailSelectionRef {
+  return { ...input, kind: "modal-detail" };
+}
+
+export function responseDetailSelectionRef(
+  input: Omit<ResponseDetailSelectionRef, "kind">,
+): ResponseDetailSelectionRef {
+  return { ...input, kind: "response-detail" };
+}
+
+export function branchSelectionRef(
+  input: Omit<BranchSelectionRef, "kind">,
+): BranchSelectionRef {
+  return { ...input, kind: "eigen-branch" };
+}
+
+export function fmrResonanceFitSelectionRef(
+  input: Omit<FmrResonanceFitSelectionRef, "kind">,
+): FmrResonanceFitSelectionRef {
+  return { ...input, kind: "fmr-resonance-fit" };
+}
+
+export function resultsViewSelectionRef(
+  input: Omit<ResultsViewSelectionRef, "kind">,
+): ResultsViewSelectionRef {
+  return { ...input, kind: "results-view" };
 }
 
 function idSegment(value: string): string {
@@ -171,26 +220,48 @@ export function resultsSelectionRefEquals(
 ): boolean {
   if (left === right) return true;
   if (!left || !right || left.kind !== right.kind) return false;
-  if (left.kind === "modal-mode" && right.kind === "modal-mode") {
+  if (
+    (left.kind === "modal-mode" || left.kind === "modal-detail") &&
+    (right.kind === "modal-mode" || right.kind === "modal-detail")
+  ) {
     return (
+      left.kind === right.kind &&
       left.runId === right.runId &&
       left.stageId === right.stageId &&
       left.artifactRevision === right.artifactRevision &&
       left.sampleId === right.sampleId &&
       left.modeId === right.modeId &&
-      (left.branchId ?? null) === (right.branchId ?? null)
+      (left.branchId ?? null) === (right.branchId ?? null) &&
+      (left.kind !== "modal-detail" ||
+        (right.kind === "modal-detail" && left.detail === right.detail))
     );
   }
-  if (left.kind !== "response-point" || right.kind !== "response-point") {
-    return false;
+  if (
+    (left.kind === "response-point" || left.kind === "response-detail") &&
+    (right.kind === "response-point" || right.kind === "response-detail")
+  ) {
+    return (
+      left.kind === right.kind &&
+      left.runId === right.runId &&
+      left.stageId === right.stageId &&
+      left.artifactRevision === right.artifactRevision &&
+      left.pointId === right.pointId &&
+      (left.observableId ?? null) === (right.observableId ?? null) &&
+      (left.kind !== "response-detail" ||
+        (right.kind === "response-detail" && left.detail === right.detail))
+    );
   }
-  return (
-    left.runId === right.runId &&
-    left.stageId === right.stageId &&
-    left.artifactRevision === right.artifactRevision &&
-    left.pointId === right.pointId &&
-    (left.observableId ?? null) === (right.observableId ?? null)
-  );
+  if (left.kind === "eigen-branch" && right.kind === "eigen-branch") {
+    return left.runId === right.runId && left.stageId === right.stageId &&
+      left.artifactRevision === right.artifactRevision && left.branchId === right.branchId;
+  }
+  if (left.kind === "fmr-resonance-fit" && right.kind === "fmr-resonance-fit") {
+    return left.runId === right.runId && left.stageId === right.stageId &&
+      left.artifactRevision === right.artifactRevision && left.fitId === right.fitId;
+  }
+  return left.kind === "results-view" && right.kind === "results-view" &&
+    left.runId === right.runId && left.stageId === right.stageId &&
+    left.artifactRevision === right.artifactRevision && left.viewId === right.viewId;
 }
 
 /**
@@ -203,7 +274,7 @@ export function toKernelFrequencyDomainSelectionRef(
   nodeId: string,
   kind: string,
 ): Extract<SelectionRef, { type: "frequency-domain" }> {
-  if (ref.kind === "modal-mode") {
+  if (ref.kind === "modal-mode" || ref.kind === "modal-detail") {
     return {
       artifactRevision: ref.artifactRevision,
       analysisRunId: ref.runId,
@@ -217,6 +288,22 @@ export function toKernelFrequencyDomainSelectionRef(
       resourceRef: ref.artifactRevision,
       sampleId: ref.sampleId,
       sampleIndex: ref.sampleIndex,
+      ...(ref.kind === "modal-detail" ? { detail: ref.detail } : {}),
+      type: "frequency-domain",
+    };
+  }
+  if (ref.kind === "response-point" || ref.kind === "response-detail") {
+    return {
+      artifactRevision: ref.artifactRevision,
+      analysisRunId: ref.runId,
+      analysisStageId: ref.stageId,
+      frequencyIndex: ref.frequencyIndex,
+      kind,
+      nodeId,
+      observableId: ref.observableId,
+      pointId: ref.pointId,
+      resourceRef: ref.artifactRevision,
+      ...(ref.kind === "response-detail" ? { detail: ref.detail } : {}),
       type: "frequency-domain",
     };
   }
@@ -224,12 +311,12 @@ export function toKernelFrequencyDomainSelectionRef(
     artifactRevision: ref.artifactRevision,
     analysisRunId: ref.runId,
     analysisStageId: ref.stageId,
-    frequencyIndex: ref.frequencyIndex,
     kind,
     nodeId,
-    observableId: ref.observableId,
-    pointId: ref.pointId,
     resourceRef: ref.artifactRevision,
+    ...(ref.kind === "eigen-branch" ? { branchId: ref.branchId } : {}),
+    ...(ref.kind === "fmr-resonance-fit" ? { fitId: ref.fitId } : {}),
+    ...(ref.kind === "results-view" ? { viewId: ref.viewId } : {}),
     type: "frequency-domain",
   };
 }
@@ -249,16 +336,24 @@ export function toKernelFrequencyDomainNodeSelectionRef(
 }
 
 export function kernelSelectionForResultsNavigatorNode(
-  node: Pick<ResultsNavigatorNode, "id" | "kind" | "resourceKey" | "selectionRef">,
+  node: Pick<ResultsNavigatorNode, "id" | "kind" | "resourceKey" | "selectionRef"> &
+    Partial<Pick<ResultsNavigatorNode, "resourceRevision">> &
+    Partial<Pick<ResultsNavigatorNode, "inspectorId">>,
 ): {
   kind: string;
   ref: Extract<SelectionRef, { type: "frequency-domain" }>;
 } {
-  const kind = inspectorSelectionKindForResultsNodeKind(node.kind);
+  const kind = node.inspectorId ?? inspectorSelectionKindForResultsNodeKind(node.kind);
   return {
     kind,
     ref: node.selectionRef
       ? toKernelFrequencyDomainSelectionRef(node.selectionRef, node.id, kind)
-      : toKernelFrequencyDomainNodeSelectionRef(node.kind, node.id, node.resourceKey),
+      : {
+          kind,
+          nodeId: node.id,
+          resourceRef: node.resourceKey,
+          ...(node.resourceRevision ? { artifactRevision: node.resourceRevision } : {}),
+          type: "frequency-domain",
+        },
   };
 }

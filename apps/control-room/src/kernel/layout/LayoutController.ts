@@ -8,6 +8,7 @@ import {
   type LayoutState,
   type PanelPosition,
   type RibbonTabId,
+  type WorkspaceLayoutPresetId,
 } from "./layoutTypes";
 
 type LayoutListener = (state: LayoutState) => void;
@@ -62,6 +63,20 @@ export class LayoutController {
     if (this.state.activeModuleTab === tabId) return;
     this.state = { ...this.state, activeModuleTab: tabId };
     this.notify("workspace:layout-changed");
+  }
+
+  applyPreset(presetId: WorkspaceLayoutPresetId): void {
+    switch (presetId) {
+      case "workspace.results.frequency-domain":
+        this.replace({
+          ...this.state,
+          activeModuleTab: "results",
+          activeViewportMainModuleId: "analysis-plots",
+          focusedSlot: "panel-left",
+          panelVisible: { left: true, right: true, bottom: true },
+        });
+        return;
+    }
   }
 
   setBottomPanelTab(tabId: BottomPanelTabId): void {

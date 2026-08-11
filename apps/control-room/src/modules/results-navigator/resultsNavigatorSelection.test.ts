@@ -6,7 +6,9 @@ import {
   kernelSelectionForResultsNavigatorNode,
   inspectorSelectionKindForResultsNodeKind,
   modalSelectionRef,
+  modalDetailSelectionRef,
   responseSelectionRef,
+  responseDetailSelectionRef,
   resultsSelectionRefEquals,
   toKernelFrequencyDomainSelectionRef,
   toKernelFrequencyDomainNodeSelectionRef,
@@ -14,6 +16,7 @@ import {
   type ResponseSelectionRef,
 } from "./resultsNavigatorSelection";
 import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
+import type { ResultsNavigatorNode } from "./resultsNavigatorTypes";
 
 describe("results navigator stable selection references", () => {
   it("uses semantic sample/mode IDs and keeps display indexes out of identity", () => {
@@ -95,6 +98,35 @@ describe("results navigator stable selection references", () => {
     });
   });
 
+  it("keeps distinct modal and response detail selections unequal", () => {
+    const modal = modalSelectionRef({
+      artifactRevision: "spectrum-r2",
+      modeId: "mode-a",
+      runId: "run-a",
+      sampleId: "sample-a",
+      stageId: "stage-a",
+    });
+    const response = responseSelectionRef({
+      artifactRevision: "response-r2",
+      pointId: "point-a",
+      runId: "run-a",
+      stageId: "stage-a",
+    });
+    const modalMetadata = modalDetailSelectionRef({ ...modal, detail: "metadata" });
+    const modalField = modalDetailSelectionRef({ ...modal, detail: "field" });
+    const responseObservables = responseDetailSelectionRef({ ...response, detail: "observables" });
+    const responseField = responseDetailSelectionRef({ ...response, detail: "field" });
+
+    expect(resultsSelectionRefEquals(modalMetadata, modalField)).toBe(false);
+    expect(resultsSelectionRefEquals(responseObservables, responseField)).toBe(false);
+    expect(
+      selectionRefEquals(
+        toKernelFrequencyDomainSelectionRef(modalMetadata, "mode:metadata", "results.eigen.mode_metadata"),
+        toKernelFrequencyDomainSelectionRef(modalField, "mode:field", "results.eigen.mode_field"),
+      ),
+    ).toBe(false);
+  });
+
   it("maps Results semantic nodes to the dedicated inspector selection vocabulary", () => {
     expect(inspectorSelectionKindForResultsNodeKind("results.frequency-domain.overview")).toBe(
       "results.frequency_domain.root",
@@ -117,7 +149,7 @@ describe("results navigator stable selection references", () => {
       inspectorSelectionKindForResultsNodeKind(
         "results.frequency-domain.resonance-fit",
       ),
-    ).toBe("results.frequency_domain.fmr_resonance_fits");
+    ).toBe("results.frequency_domain.fmr_resonance_fit");
     expect(
       inspectorSelectionKindForResultsNodeKind(
         "results.frequency-domain.kittel-fit",
@@ -192,6 +224,26 @@ describe("results navigator stable selection references", () => {
         nodeId: "results:fmr:kittel-fit",
         resourceRef: "analysis:frequency-domain:fmr:kittel-fit",
         type: "frequency-domain",
+      },
+    });
+  });
+
+  it("uses the node's catalog-owned inspector route instead of recomputing one from kind", () => {
+    const node: ResultsNavigatorNode = {
+      id: "results:field-sweep",
+      inspectorId: "results.eigen.field_sweep",
+      kind: "results.frequency-domain.spectrum",
+      label: "Field Sweep",
+      parentId: "results:modal",
+      resourceKey: "analysis:frequency-domain:eigen:field-sweep",
+      status: "ready",
+    };
+
+    expect(kernelSelectionForResultsNavigatorNode(node)).toMatchObject({
+      kind: "results.eigen.field_sweep",
+      ref: {
+        kind: "results.eigen.field_sweep",
+        resourceRef: "analysis:frequency-domain:eigen:field-sweep",
       },
     });
   });

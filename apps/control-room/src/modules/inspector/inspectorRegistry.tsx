@@ -83,15 +83,18 @@ import {
   FrequencyResponseProgressInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
-  FmrComparisonInspectorPanel,
-  FmrKittelFitInspectorPanel,
-  FmrModalSpectrumInspectorPanel,
   FmrOverviewInspectorPanel,
   FmrPeakInspectorPanel,
-  FmrPeaksInspectorPanel,
-  FmrResonanceFitsInspectorPanel,
-  FmrResponseSweepInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
+import { FmrComparisonInspectorPanel } from "./panels/frequency-domain/FrequencyDomainComparisonPanel";
+import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FrequencyDomainDrivenPanel";
+import { EigenFieldSweepInspectorPanel } from "./panels/frequency-domain/FrequencyDomainFieldSweepPanel";
+import {
+  FmrKittelFitInspectorPanel,
+  FmrResonanceFitsInspectorPanel,
+} from "./panels/frequency-domain/FrequencyDomainFmrFitsPanel";
+import { FmrPeaksInspectorPanel } from "./panels/frequency-domain/FrequencyDomainFmrPeaksPanel";
+import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FrequencyDomainModalPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
@@ -126,6 +129,8 @@ import {
 import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./panels/SpinAuthoringInspector";
 import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
+import { FieldRow } from "./primitives/FieldRow";
+import { InspectorGroup } from "./primitives/InspectorGroup";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
 import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
@@ -157,7 +162,7 @@ import {
   StudyStageInspectorRouter,
 } from "./panels/StudyStageInspectorRouter";
 import { resolveFrequencyDomainNodeDetail } from "./panels/frequencyDomainNodeDetails";
-import type { InspectorPanelContribution } from "./inspectorTypes";
+import type { InspectorPanelContribution, InspectorPanelProps } from "./inspectorTypes";
 export {
   PBC_INSPECTOR_CONTEXT_IDS,
   resolvePbcInspectorContext,
@@ -209,15 +214,22 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.frequency_domain.fmr_peaks",
   "results.frequency_domain.fmr_peak",
   "results.frequency_domain.fmr_resonance_fits",
+  "results.frequency_domain.fmr_resonance_fit",
   "results.frequency_domain.fmr_kittel_fit",
   "results.frequency_domain.dispersion",
   "results.frequency_domain.response_map",
   "results.eigen.root",
   "results.eigen.study",
   "results.eigen.spectrum",
+  "results.eigen.field_sweep",
+  "results.eigen.samples",
+  "results.eigen.sample",
   "results.eigen.modes",
   "results.eigen.modes.visualization",
   "results.eigen.mode",
+  "results.eigen.mode_metadata",
+  "results.eigen.mode_field",
+  "results.eigen.mode_residuals",
   "results.eigen.dispersion",
   "results.eigen.k_path",
   "results.eigen.branches",
@@ -277,6 +289,28 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
 type FrequencyDomainInspectorKind =
   (typeof FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS)[number];
 
+/**
+ * U0 keeps every Results route distinct without moving U1 panel behaviour.
+ * Each adapter is a unique registry component identity; the established panel
+ * remains the content owner until U1 splits its detail surfaces.
+ */
+function resultsNavigatorRouteAdapter(
+  Panel: InspectorPanelContribution["component"],
+): InspectorPanelContribution["component"] {
+  return function ResultsNavigatorRouteAdapter(props: InspectorPanelProps) {
+    return <Panel {...props} />;
+  };
+}
+
+const EigenSamplesInspectorRoute = resultsNavigatorRouteAdapter(EigenModesInspectorPanel);
+const EigenSampleInspectorRoute = resultsNavigatorRouteAdapter(EigenSampleJobInspectorPanel);
+const EigenModeMetadataInspectorRoute = resultsNavigatorRouteAdapter(
+  EigenModeMetadataResourceInspectorPanel,
+);
+const EigenModeFieldInspectorRoute = resultsNavigatorRouteAdapter(EigenModeFieldResourceInspectorPanel);
+const EigenModeResidualsInspectorRoute = resultsNavigatorRouteAdapter(EigenDiagnosticsInspectorPanel);
+const FmrResonanceFitInspectorRoute = resultsNavigatorRouteAdapter(FmrResonanceFitsInspectorPanel);
+
 const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   Record<FrequencyDomainInspectorKind, InspectorPanelContribution["component"]>
 > = {
@@ -333,10 +367,16 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.eigen.root": EigenOverviewInspectorPanel,
   "results.eigen.study": EigenStudyInspectorPanel,
   "results.eigen.mode": EigenModeInspectorPanel,
+  "results.eigen.mode_metadata": EigenModeMetadataInspectorRoute,
+  "results.eigen.mode_field": EigenModeFieldInspectorRoute,
+  "results.eigen.mode_residuals": EigenModeResidualsInspectorRoute,
+  "results.eigen.sample": EigenSampleInspectorRoute,
+  "results.eigen.samples": EigenSamplesInspectorRoute,
   "results.eigen.modes": EigenModesInspectorPanel,
   "results.eigen.modes.visualization": EigenModesVisualizationInspectorPanel,
   "results.eigen.provenance": EigenProvenanceInspectorPanel,
   "results.eigen.spectrum": EigenSpectrumInspectorPanel,
+  "results.eigen.field_sweep": EigenFieldSweepInspectorPanel,
   "results.eigen.dispersion": EigenDispersionInspectorPanel,
   "results.eigen.k_path": EigenKPathInspectorPanel,
   "results.eigen.diagnostics": EigenDiagnosticsInspectorPanel,
@@ -346,6 +386,7 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.frequency_domain.fmr_peak": FmrPeakInspectorPanel,
   "results.frequency_domain.fmr_resonance_fits":
     FmrResonanceFitsInspectorPanel,
+  "results.frequency_domain.fmr_resonance_fit": FmrResonanceFitInspectorRoute,
   "results.frequency_domain.fmr_kittel_fit": FmrKittelFitInspectorPanel,
   "results.frequency_domain.fmr_response_sweep": FmrResponseSweepInspectorPanel,
   "results.frequency_domain.comparison": FmrComparisonInspectorPanel,
@@ -471,6 +512,24 @@ const frequencyDomainPanels: InspectorPanelContribution[] =
     selectionKinds: [kind],
     component: FREQUENCY_DOMAIN_DEDICATED_PANELS[kind] ?? requireFrequencyDomainNamedPanel(kind),
   }));
+
+function UnsupportedResultsInspectorPanel({ selection }: InspectorPanelProps) {
+  return (
+    <div className="fm-inspector-panel">
+      <InspectorGroup title="Unsupported Results route" badge="unsupported">
+        <FieldRow label="Route" value={selection.kind ?? "unknown"} />
+        <FieldRow label="Node" value={selection.nodeId ?? "none"} />
+      </InspectorGroup>
+    </div>
+  );
+}
+
+const UNSUPPORTED_RESULTS_PANEL: InspectorPanelContribution = {
+  id: "frequency-domain-unsupported",
+  title: "Unsupported Results route",
+  selectionKinds: [],
+  component: UnsupportedResultsInspectorPanel,
+};
 
 const PANELS: InspectorPanelContribution[] = [
   {
@@ -853,9 +912,13 @@ export function resolveInspectorPanel(
     return PANELS.find((panel) => panel.id === "fdm-grid") ?? null;
   }
 
-  return (
-    PANELS.find((panel) => panel.selectionKinds.includes(selection.kind!)) ??
-    PANELS.find((panel) => panel.selectionKinds.includes("*")) ??
-    null
-  );
+  const exact = PANELS.find((panel) => panel.selectionKinds.includes(selection.kind!));
+  if (
+    selection.kind.startsWith("results.frequency_domain.") ||
+    selection.kind.startsWith("results.eigen.") ||
+    selection.kind.startsWith("results.frequency_response.")
+  ) {
+    return exact ?? UNSUPPORTED_RESULTS_PANEL;
+  }
+  return exact ?? PANELS.find((panel) => panel.selectionKinds.includes("*")) ?? null;
 }

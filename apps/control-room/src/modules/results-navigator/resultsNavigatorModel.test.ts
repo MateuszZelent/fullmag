@@ -41,6 +41,7 @@ function artifact(
     artifactPath: "eigen/spectrum.v2.json",
     missingReason: null,
     resourceKey: "analysis:eigen:spectrum",
+    resourceRevision: "sha256:artifact-1",
     schemaVersion: "eigen_spectrum.v2",
     status,
   };
@@ -185,6 +186,44 @@ describe("results navigator model", () => {
     expect(firstMode?.id).toBe(reorderedMode?.id);
   });
 
+  it("publishes semantic mode and response detail nodes without inventing unavailable field payloads", () => {
+    const tree = buildFrequencyDomainResultsTree(
+      input({ response: { points: [{ frequencyIndex: 0, pointId: "point-a" }] } }),
+    );
+    const nodes = collectNodes(tree);
+    const modeNode = nodes.find((node) => node.label === "Mode mode-0");
+    const responsePoint = nodes.find((node) => node.label === "Point point-a");
+
+    expect(modeNode?.children?.map((node) => node.label)).toEqual([
+      "Metadata",
+      "Field",
+      "Residuals",
+    ]);
+    expect(modeNode?.children?.map((node) => node.status)).toEqual([
+      "unsupported",
+      "unsupported",
+      "unsupported",
+    ]);
+    expect(modeNode?.children?.map((node) => node.selectionRef?.kind)).toEqual([
+      "modal-detail",
+      "modal-detail",
+      "modal-detail",
+    ]);
+
+    expect(responsePoint?.children?.map((node) => node.label)).toEqual([
+      "Observables",
+      "Field",
+    ]);
+    expect(responsePoint?.children?.map((node) => node.status)).toEqual([
+      "unsupported",
+      "unsupported",
+    ]);
+    expect(responsePoint?.children?.map((node) => node.selectionRef?.kind)).toEqual([
+      "response-detail",
+      "response-detail",
+    ]);
+  });
+
   it("marks a sample with an absent stable mode ID as partial instead of inventing a selection", () => {
     const tree = buildFrequencyDomainResultsTree(
       input({
@@ -195,7 +234,9 @@ describe("results navigator model", () => {
     );
     const modeNode = collectNodes(tree).find((node) => node.label === "Modes");
     expect(modeNode?.status).toBe("partial");
-    expect(collectNodes(tree).some((node) => node.selectionRef)).toBe(false);
+    expect(
+      collectNodes(tree).some((node) => node.selectionRef?.kind === "modal-mode"),
+    ).toBe(false);
   });
 
   it("paginates without a silent fixed slice and preserves total count", () => {
@@ -275,6 +316,69 @@ describe("results navigator model", () => {
     expect(nodes.find((node) => node.label === "Branch branch-a")?.status).toBe("ready");
     expect(nodes.find((node) => node.label === "Point point-a")?.status).toBe("ready");
     expect(nodes.find((node) => node.label === "Peak peak-a")?.status).toBe("ready");
+  });
+
+  it("keeps resonance-fit identity stable and distinct from its collection route", () => {
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        fmr: {
+          resonanceFits: artifact(),
+          resonanceFitsPayload: { fits: [{ fitId: "fit-a" }] },
+          states: { resonanceFits: "ready" },
+        },
+      }),
+    );
+    const nodes = collectNodes(tree);
+    const fits = nodes.find((node) => node.label === "Resonance Fits");
+    const fit = nodes.find((node) => node.label === "Fit fit-a");
+
+    expect(fits?.inspectorId).toBe("results.frequency_domain.fmr_resonance_fits");
+    expect(fit).toMatchObject({
+      inspectorId: "results.frequency_domain.fmr_resonance_fit",
+      selectionRef: {
+        artifactRevision: "sha256:artifact-1",
+        fitId: "fit-a",
+        kind: "fmr-resonance-fit",
+      },
+      status: "ready",
+    });
+    expect(fit?.id).toContain("fit:fit-a");
+  });
+
+  it.each([
+    ["partial", "partial"],
+    ["corrupt", "error"],
+  ] as const)("does not mark Fit ready when resonance fits are %s", (artifactStatus, expectedStatus) => {
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        fmr: {
+          resonanceFits: artifact(artifactStatus),
+          resonanceFitsPayload: { fits: [{ fitId: "fit-a" }] },
+          states: { resonanceFits: "ready" },
+        },
+      }),
+    );
+
+    expect(collectNodes(tree).find((node) => node.label === "Fit fit-a")?.status).toBe(
+      expectedStatus,
+    );
+  });
+
+  it("binds a modal selection to the spectrum resource revision, not the manifest revision", () => {
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        resources: {
+          branches: artifact(),
+          dispersion: artifact(),
+          response: artifact(),
+          spectrum: { ...artifact(), resourceRevision: "spectrum-revision-2" },
+        },
+      }),
+    );
+
+    expect(collectNodes(tree).find((node) => node.label === "Mode mode-0")?.selectionRef).toMatchObject({
+      artifactRevision: "spectrum-revision-2",
+    });
   });
 
   it("fails fit artifacts closed when semantic payloads are missing, partial, or corrupt", () => {

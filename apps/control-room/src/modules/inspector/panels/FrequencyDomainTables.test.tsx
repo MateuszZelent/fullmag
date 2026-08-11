@@ -84,7 +84,7 @@ describe("FrequencyDomainTables", () => {
               linewidthHz: null,
               modeRef: null,
               phaseRad: null,
-              source: "modal",
+              source: "driven_response",
               validationStatus: "pass",
             },
           ]}

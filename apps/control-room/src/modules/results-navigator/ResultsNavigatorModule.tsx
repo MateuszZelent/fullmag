@@ -33,6 +33,7 @@ import {
   navigatorKittelFitArtifactFromResource,
   navigatorManifestFromResource,
   navigatorProgressFromResource,
+  navigatorResonanceFitsFromResource,
   navigatorResonanceFitsArtifactFromResource,
   navigatorResponseFromResource,
   navigatorSpectrumFromResource,
@@ -54,11 +55,9 @@ function activeStageId(
 
 function resolveIdentity({
   currentRun,
-  manifestRevision,
   stageExecution,
 }: {
   currentRun: ReturnType<typeof useCurrentRunResource>["data"];
-  manifestRevision: string | number | null;
   stageExecution: ReturnType<typeof useStageExecutionResource>["data"];
 }): NavigatorIdentity | null {
   if (!currentRun || !stageExecution) return null;
@@ -68,7 +67,6 @@ function resolveIdentity({
   );
   if (!stageId) return null;
   return {
-    artifactRevision: String(manifestRevision ?? currentRun.revision),
     runId: currentRun.run_id,
     stageId,
   };
@@ -97,10 +95,9 @@ export default function ResultsNavigatorModule({
     () =>
       resolveIdentity({
         currentRun: currentRun.data,
-        manifestRevision: manifest.revision,
         stageExecution: stageExecution.data,
       }),
-    [currentRun.data, manifest.revision, stageExecution.data],
+    [currentRun.data, stageExecution.data],
   );
   const input = useMemo<FrequencyDomainNavigatorInput>(
     () => {
@@ -108,6 +105,7 @@ export default function ResultsNavigatorModule({
       const typedBranches = navigatorBranchesFromResource(branches.data);
       const typedResponse = navigatorResponseFromResource(response.data);
       const typedFmr = navigatorFmrFromResource(fmrPeaks.data);
+      const typedResonanceFits = navigatorResonanceFitsFromResource(fmrResonanceFits.data);
       const resonanceFitsArtifact =
         navigatorResonanceFitsArtifactFromResource(fmrResonanceFits.data);
       const kittelFitArtifact =
@@ -160,6 +158,7 @@ export default function ResultsNavigatorModule({
           kittelFit: kittelFitArtifact,
           peaks: navigatorArtifactFromResource(fmrPeaks.data),
           resonanceFits: resonanceFitsArtifact,
+          ...(typedResonanceFits ? { resonanceFitsPayload: typedResonanceFits } : {}),
           states: {
             kittelFit:
               kittelFitTransportState === "ready"

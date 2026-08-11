@@ -8,8 +8,10 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
@@ -72,13 +74,7 @@ import {
   FrequencyResponseObservableInspectorPanel,
   FrequencyResponseObservablesInspectorPanel,
   FrequencyResponseFrequencyPointsInspectorPanel,
-  FmrComparisonInspectorPanel,
-  FmrKittelFitInspectorPanel,
-  FmrModalSpectrumInspectorPanel,
   FmrPeakInspectorPanel,
-  FmrPeaksInspectorPanel,
-  FmrResponseSweepInspectorPanel,
-  FmrResonanceFitsInspectorPanel,
   FrequencyResponsePointInspectorPanel,
   FrequencyResponseFrequencyJobInspectorPanel,
   FrequencyResponseProvenanceInspectorPanel,
@@ -88,6 +84,15 @@ import {
   FrequencyResponseSweepInspectorPanel,
   frequencyDomainVisualizationReadiness,
 } from "./frequency-domain/FrequencyDomainResultInspectors";
+import { FmrComparisonInspectorPanel } from "./frequency-domain/FrequencyDomainComparisonPanel";
+import { FmrResponseSweepInspectorPanel } from "./frequency-domain/FrequencyDomainDrivenPanel";
+import { EigenFieldSweepInspectorPanel } from "./frequency-domain/FrequencyDomainFieldSweepPanel";
+import {
+  FmrKittelFitInspectorPanel,
+  FmrResonanceFitsInspectorPanel,
+} from "./frequency-domain/FrequencyDomainFmrFitsPanel";
+import { FmrPeaksInspectorPanel } from "./frequency-domain/FrequencyDomainFmrPeaksPanel";
+import { FmrModalSpectrumInspectorPanel } from "./frequency-domain/FrequencyDomainModalPanel";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 import { modePointKey } from "./frequency-domain/FrequencyDomainHelpers";
 
@@ -147,6 +152,11 @@ const fmrFitResourcesFixture = vi.hoisted((): {
 } => ({
   kittel: { data: null, revision: null, status: "idle" },
   resonance: { data: null, revision: null, status: "idle" },
+}));
+
+const fmrPublishedResourcesFixture = vi.hoisted(() => ({
+  fieldSweepStatus: "ready",
+  peaksStatus: "ready",
 }));
 
 function readyResonanceFitsResource() {
@@ -535,9 +545,44 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     revision: "spectrum:1",
     status: "ready",
   }),
+  useFrequencyDomainEigenFieldSweepResource: () => ({
+    ...emptyResource,
+    data: {
+      artifact_path: "eigen/field-sweep.v1.json",
+      payload: {
+        complete: true,
+        samples: [{ bias_field_a_per_m: [79577.5, 0, 0], sample_id: "sample-0", sample_index: 0, status: "ready" }],
+        schema_version: "eigen/field-sweep.v1",
+        status: "ready",
+      },
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+      schema_version: "eigen/field-sweep.v1",
+      status: "ready",
+    },
+    revision: "field-sweep:1",
+    status: fmrPublishedResourcesFixture.fieldSweepStatus,
+  }),
   useFrequencyDomainFmrKittelFitResource: () => ({
     ...emptyResource,
     ...fmrFitResourcesFixture.kittel,
+  }),
+  useFrequencyDomainFmrPeaksResource: () => ({
+    ...emptyResource,
+    data: {
+      artifact_path: "fmr/peaks.v1.json",
+      payload: {
+        complete: true,
+        peaks: [{ frequency_hz: 9.5e9, peak_id: "peak-1", status: "ready" }],
+        schema_version: "fmr/peaks.v1",
+        status: "ready",
+      },
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+      schema_version: "fmr/peaks.v1",
+      status: "ready",
+    },
+    error: fmrPublishedResourcesFixture.peaksStatus === "error" ? new Error("offline") : null,
+    revision: "peaks:1",
+    status: fmrPublishedResourcesFixture.peaksStatus,
   }),
   useFrequencyDomainFmrResonanceFitsResource: () => ({
     ...emptyResource,
@@ -974,6 +1019,8 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 }));
 
 beforeEach(() => {
+  fmrPublishedResourcesFixture.fieldSweepStatus = "ready";
+  fmrPublishedResourcesFixture.peaksStatus = "ready";
   fmrFitResourcesFixture.kittel = {
     data: readyKittelFitResource(),
     revision: "kittel-resource:3",
@@ -1388,16 +1435,25 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
     expect(html).toContain("response/frequency_points/frequency_0001.json");
     expect(html).toContain("9.5 GHz");
-    expect(html).toContain("42 W/m^3");
+    expect(html).toContain(
+      "unsupported: exact observable unit and provenance are not published by typed A2",
+    );
     expect(html).toContain("Absorbed power provenance");
-    expect(html).toContain("drive_projected_absorption_proxy");
+    expect(html).toContain(
+      "unsupported: typed provenance contract is not published by A2",
+    );
     expect(html).toContain("Susceptibility pairs");
     expect(html).toContain("Max susceptibility magnitude");
-    expect(html).toContain("5");
+    expect(html).toContain(
+      "unsupported: exact observable kind and unit are not published by typed A2",
+    );
     expect(html).toContain("Susceptibility provenance");
-    expect(html).toContain("drive_projected_scalar");
     expect(html).toContain("Full susceptibility tensor");
-    expect(html).toContain("no");
+    expect(html).toContain(
+      "unsupported: typed observable contract is not published by A2",
+    );
+    expect(html).not.toContain("42 W/m^3");
+    expect(html).not.toContain("drive_projected_absorption_proxy");
     expect(html).toContain("Tangent leakage status");
     expect(html).toContain("evaluated");
     expect(html).toContain("Complex entries");
@@ -1454,9 +1510,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("mx");
     expect(html).toContain("Observable points");
     expect(html).toContain("1");
-    expect(html).toContain("9.5 GHz-9.5 GHz");
+    expect(html).toContain("unsupported");
     expect(html).toContain("Mean amplitude");
-    expect(html).toContain("1.5");
+    expect(html).toContain("not available");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
   });
 
@@ -1488,14 +1544,15 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Sweep resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("Frequency range");
-    expect(html).toContain("9.5 GHz-9.5 GHz");
+    expect(html).toContain("unsupported");
     expect(html).toContain("Point count");
-    expect(html).toContain("1");
+    expect(html).toContain("0 verified");
     expect(html).toContain("Mean amplitude");
-    expect(html).toContain("1.500");
+    expect(html).toContain("exact observable kind and unit not published");
     expect(html).toContain("Peak amplitude");
     expect(html).toContain("Field payloads");
-    expect(html).toContain("1/1 point(s) field-ready");
+    expect(html).toContain("Field payloads");
+    expect(html).toContain("unsupported");
     expect(html).toContain("Selected Response Observable");
   });
 
@@ -1524,21 +1581,21 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Sweep resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("Frequency range");
-    expect(html).toContain("9.5 GHz-9.5 GHz");
+    expect(html).toContain("unsupported");
     expect(html).toContain("Frequency points");
-    expect(html).toContain("1");
+    expect(html).toContain("0");
     expect(html).toContain("Observable series");
-    expect(html).toContain("1 series");
+    expect(html).toContain("not available");
     expect(html).toContain("Peak response");
-    expect(html).toContain("9.5 GHz; amplitude 1.500");
+    expect(html).toContain("requires published fmr/peaks.v1");
     expect(html).toContain("Field payloads");
-    expect(html).toContain("1/1 point(s) field-ready");
+    expect(html).toContain("unsupported");
     expect(html).toContain("Response series controls");
-    expect(html).toContain("Amplitude, Phase, Absorbed power density, Max |susceptibility|");
+    expect(html).toContain("unsupported until typed observable contracts are published");
     expect(html).toContain("Susceptibility component");
-    expect(html).toContain("max |χ| from response tensor");
+    expect(html).toContain("exact observable kind and unit not published");
     expect(html).toContain("Phase coverage");
-    expect(html).toContain("1/1 point(s)");
+    expect(html).toContain("exact unit not published");
     expect(html).toContain("Absorbed-power coverage");
     expect(html).toContain("Cancellation state");
     expect(html).toContain("cancel_requested; 1/4");
@@ -1570,18 +1627,19 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Sweep resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("Solved frequencies");
-    expect(html).toContain("1 point(s), 1 observable series");
+    expect(html).toContain("0 point(s), 0 observable series");
     expect(html).toContain("Frequency range");
-    expect(html).toContain("9.5 GHz-9.5 GHz");
+    expect(html).toContain("not available");
     expect(html).toContain("Amplitude range");
-    expect(html).toContain("1.500-1.500");
+    expect(html).toContain("not available");
     expect(html).toContain("Field payloads");
-    expect(html).toContain("2 manifest field(s), 1 sweep field(s)");
+    expect(html).toContain("2 manifest field(s), 0 sweep field(s)");
     expect(html).toContain("Progress state");
     expect(html).toContain("unavailable; 0/2");
     expect(html).toContain("Cancellation state");
     expect(html).toContain("cancel_requested; 1/4");
-    expect(html).toContain("Frequency-domain response point table");
+    expect(html).toContain("Response Frequency Point Table");
+    expect(html).toContain("No driven response frequency points available.");
   });
 
   it("renders a dedicated eigen k-path control surface", () => {
@@ -1699,12 +1757,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Cancel state");
     expect(html).toContain("cancel_requested; 1/4");
     expect(html).toContain("Response fields");
-    expect(html).toContain("2 manifest field(s), 1 sweep field(s)");
+    expect(html).toContain("2 manifest field(s), 0 sweep field(s)");
     expect(html).toContain("Krylov preconditioner");
     expect(html).toContain("graph_demag_coarse");
     expect(html).toContain("mfem_phi_consistency_schur_right");
     expect(html).toContain("Residual coverage");
-    expect(html).toContain("0/1 point(s)");
+    expect(html).toContain("0/0 point(s)");
     expect(html).toContain("Response artifact");
     expect(html).toContain("response/magnetic_response_sweep.v2.json");
   });
@@ -2099,7 +2157,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(eigenSampleHtml).toContain("2 field-ready");
     expect(responseFrequencyHtml).toContain("Response Frequency Solve Job");
     expect(responseFrequencyHtml).toContain("Frequency work units");
-    expect(responseFrequencyHtml).toContain("1 point(s), 1 observable series");
+    expect(responseFrequencyHtml).toContain("0 point(s), 0 observable series");
     expect(responseFrequencyHtml).toContain("Sweep progress");
     expect(responseFrequencyHtml).toContain("unavailable; 0/2 frequency points");
     expect(responseFrequencyHtml).toContain("Cancel checkpoint");
@@ -2107,7 +2165,7 @@ describe("FrequencyDomainInspectorPanel", () => {
       "cancel_requested; 1/4 frequency points",
     );
     expect(responseFrequencyHtml).toContain("Field artifacts");
-    expect(responseFrequencyHtml).toContain("2 manifest field(s), 1 sweep field(s)");
+    expect(responseFrequencyHtml).toContain("2 manifest field(s), 0 sweep field(s)");
     expect(responseProgressHtml).toContain("Response Sweep Progress Job");
     expect(responseProgressHtml).toContain("Progress resource");
     expect(responseProgressHtml).toContain(
@@ -2217,7 +2275,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(operatorHtml).toContain("unsupported");
     expect(solverHtml).toContain("Frequency-Domain Solver Diagnostics");
     expect(solverHtml).toContain("Response residuals");
-    expect(solverHtml).toContain("0/1 point(s)");
+    expect(solverHtml).toContain("0/0 point(s)");
     expect(solverHtml).toContain("Execution lane");
     expect(solverHtml).toContain(
       "native_fem_mfem_frequency_domain_cpu; response=ok",
@@ -2433,7 +2491,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(sweepHtml).toContain("Sweep endpoint");
     expect(sweepHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(sweepHtml).toContain("Frequency points");
-    expect(sweepHtml).toContain("1 point(s), 1 observable series");
+    expect(sweepHtml).toContain("0 point(s), not available");
     expect(progressHtml).toContain("Frequency Response Progress Resource");
     expect(progressHtml).toContain("Progress endpoint");
     expect(progressHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH);
@@ -2449,7 +2507,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(fieldHtml).toContain("Field endpoint");
     expect(fieldHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH);
     expect(fieldHtml).toContain("Response fields");
-    expect(fieldHtml).toContain("2 manifest field(s), 1 sweep field(s)");
+    expect(fieldHtml).toContain("2 manifest field(s), 0 sweep field(s)");
   });
 
   it("renders dedicated remaining frequency-domain wrapper replacement surfaces", () => {
@@ -2504,9 +2562,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(eigenDispersionHtml).toContain("1 branch(es), 2 tracked point(s)");
     expect(observablesHtml).toContain("Frequency Response Observables");
     expect(observablesHtml).toContain("Observable series");
-    expect(observablesHtml).toContain("1 series: Amplitude");
+    expect(observablesHtml).toContain("not available");
     expect(observablesHtml).toContain("Field payloads");
-    expect(observablesHtml).toContain("1/1 point(s) field-ready");
+    expect(observablesHtml).toContain("unsupported");
     expect(periodicResourceHtml).toContain("Periodic/Floquet Pair Resource");
     expect(periodicResourceHtml).toContain("valid");
     expect(periodicResourceHtml).toContain("Pair count");
@@ -2517,38 +2575,6 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(periodicDiagnosticHtml).toContain("modal ready; response unsupported");
     expect(periodicDiagnosticHtml).toContain("Dynamic demag-k");
     expect(periodicDiagnosticHtml).toContain("unsupported");
-  });
-
-  it("renders FMR peak rows from modal and driven response artifacts", () => {
-    const selection: Selection = {
-      kind: "results.frequency_domain.fmr_peaks",
-      label: "FMR Peaks",
-      moduleSource: "explorer",
-      nodeId: "results:frequency-domain:fmr:peaks",
-      objectId: null,
-      ref: {
-        kind: "results.frequency_domain.fmr_peaks",
-        nodeId: "results:frequency-domain:fmr:peaks",
-        type: "frequency-domain",
-      },
-    };
-
-    const html = renderToStaticMarkup(
-      <FrequencyDomainInspectorPanel selection={selection} />,
-    );
-
-    expect(html).toContain("FMR Peaks");
-    expect(html).toContain("modal resonance table and driven peak table");
-    expect(html).toContain("Peak count");
-    expect(html).toContain("3");
-    expect(html).toContain("Modal peaks");
-    expect(html).toContain("2");
-    expect(html).toContain("Driven peaks");
-    expect(html).toContain("1");
-    expect(html).toContain("First peak source");
-    expect(html).toContain("modal");
-    expect(html).toContain("First peak frequency");
-    expect(html).toContain("9.5 GHz");
   });
 
   it("renders a dedicated FMR peaks control surface", () => {
@@ -2570,37 +2596,98 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR Peak Control");
-    expect(html).toContain("Peak workflow");
-    expect(html).toContain(
-      "select peak -&gt; compare modal/driven provenance -&gt; plot field",
+    expect(html).toContain("published fmr/peaks.v1 only");
+    expect(html).toContain("Resource state");
+    expect(html).toContain("Artifact state");
+    expect(html).toContain("Qualification state");
+    expect(html).toContain("Selection binding");
+    expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH);
+    expect(html).toContain("unsupported");
+    expect(html).toContain("does not publish peak unit, algorithm version, or parameters");
+    expect(html).toContain("No published FMR peaks available.");
+    expect(html).toContain("requires a typed compatibility certificate");
+    expect(html).not.toContain("Modal eigenmode");
+    expect(html).not.toContain("Driven response");
+  });
+
+  it("retains the last-valid published peaks resource during refresh failure", () => {
+    fmrPublishedResourcesFixture.peaksStatus = "error";
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr_peaks",
+      label: "FMR Peaks",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr:peaks",
+      objectId: null,
+      ref: {
+        artifactRevision: "peaks:1",
+        kind: "results.frequency_domain.fmr_peaks",
+        nodeId: "results:frequency-domain:fmr:peaks",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FmrPeaksInspectorPanel selection={selection} />,
     );
-    expect(html).toContain("Peak rows");
-    expect(html).toContain("3 total, 2 modal, 1 driven");
-    expect(html).toContain("Overlay-ready peaks");
-    expect(html).toContain("3 with field artifacts");
-    expect(html).toContain("First peak");
-    expect(html).toContain("modal, 9.5 GHz");
-    expect(html).toContain("Comparison state");
-    expect(html).toContain("modal and driven peaks available");
-    expect(html).toContain("Nearest modal-driven detuning");
-    expect(html).toContain("0 Hz driven-modal; modal 9.5 GHz, driven 9.5 GHz");
-    expect(html).toContain("Quality factor coverage");
-    expect(html).toContain("0/3 peak(s)");
-    expect(html).toContain("FMR Peak Browser");
-    expect(html).toContain("Modal eigenmode");
-    expect(html).toContain("Driven response");
-    expect(html).toContain("Target");
-    expect(html).toContain("Power density");
-    expect(html).toContain("3D field");
-    expect(html).toContain("field-ready");
-    expect(html).toContain("mode field ready; driven field ready");
-    expect(html).toContain("Frequency-domain FMR peak table");
-    expect(html).toContain("<th>Q factor</th>");
-    expect(html).toContain("Mode / point");
-    expect(html).toContain("Plot 3D");
-    expect(html).toContain("FMR Modal-Driven Difference Table");
-    expect(html).toContain("Frequency-domain FMR comparison table");
-    expect(html).toContain("Field handoff");
+
+    expect(html).toContain("Resource state");
+    expect(html).toContain("error");
+    expect(html).toContain("retained during refresh/error");
+    expect(html).toContain("Selection binding");
+    expect(html).toContain("compatible");
+  });
+
+  it("marks a mismatched published peaks revision incompatible", () => {
+    const selection: Selection = {
+      kind: "results.frequency_domain.fmr_peaks",
+      label: "FMR Peaks",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-domain:fmr:peaks",
+      objectId: null,
+      ref: {
+        artifactRevision: "peaks:old",
+        kind: "results.frequency_domain.fmr_peaks",
+        nodeId: "results:frequency-domain:fmr:peaks",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FmrPeaksInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("incompatible");
+    expect(html).toContain("Selected FMR peaks revision does not match");
+  });
+
+  it("renders Field Sweep from the typed resource but fails closed on incomplete A2 fields", () => {
+    const selection: Selection = {
+      kind: "results.eigen.field_sweep",
+      label: "Field Sweep",
+      moduleSource: "explorer",
+      nodeId: "results:eigen:field-sweep",
+      objectId: null,
+      ref: {
+        artifactRevision: "field-sweep:1",
+        kind: "results.eigen.field_sweep",
+        nodeId: "results:eigen:field-sweep",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <EigenFieldSweepInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Eigen Field Sweep");
+    expect(html).toContain('data-status="unsupported"');
+    expect(html).toContain("H_bias [A/m] (typed); chart unavailable");
+    expect(html).toContain("Frequency axis");
+    expect(html).toContain("not published by typed A2");
+    expect(html).toContain("branch/tracking");
   });
 
   it("renders a dedicated single FMR peak detail surface", () => {
@@ -2628,34 +2715,11 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Visualization");
     expect(html).toContain("Diagnostics");
     expect(html).toContain("Physical source");
-    expect(html).toContain("modal eigenmode");
-    expect(html).toContain("Frequency");
-    expect(html).toContain("9.5 GHz");
-    expect(html).toContain("Canonical target");
-    expect(html).toContain("sample 0, mode 1");
-    expect(html).toContain("Field ID");
-    expect(html).toContain("analysis:eigen:sample-0000:mode-0001");
-    expect(html).toContain("Plot readiness");
-    expect(html).toContain(
-      "field id is published; plot command can use the linked field id",
-    );
-    expect(html).toContain("Display controls");
-    expect(html).toContain("Volume controls");
-    expect(html).toContain("Missing values");
-    expect(html).toContain("amplitude, absorbed power, phase, linewidth");
-    expect(html).toContain("Validation");
-    expect(html).toContain("unavailable");
-    expect(html).toContain("Source surface");
-    expect(html).toContain("Open source result");
-    expect(html).toContain("Open linked mode inspector");
-    expect(html).toContain("Plot linked field in 3D");
-    expect(html).not.toContain("FMR Peak Workbench");
-    expect(html).not.toContain("Peak Observables");
-    expect(html).not.toContain("Data-plane resource");
-    expect(html).not.toContain("Selection kind");
-    expect(html).not.toContain("Node ID");
-    expect(html).not.toContain("Selected Field Metadata");
-    expect(html).not.toContain("Value kind");
+    expect(html).toContain("not available");
+    expect(html).toContain("frequency point not available");
+    expect(html).toContain("field payload missing; 3D field is unavailable");
+    expect(html).not.toContain("modal eigenmode");
+    expect(html).not.toContain("9.5 GHz");
     expect(html).not.toContain("Unknown Frequency-Domain");
   });
 
@@ -2684,9 +2748,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Visualization");
     expect(html).toContain("Diagnostics");
     expect(html).toContain("Physical source");
-    expect(html).toContain("modal eigenmode");
-    expect(html).toContain("Frequency");
-    expect(html).toContain("9.5 GHz");
+    expect(html).toContain("not available");
+    expect(html).not.toContain("modal eigenmode");
+    expect(html).not.toContain("9.5 GHz");
     expect(html).toContain("Amplitude");
     expect(html).toContain("Absorbed power density");
     expect(html).toContain("Field ID");
@@ -2876,13 +2940,13 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal spectrum");
     expect(html).toContain("2 mode(s), 2 field-ready");
     expect(html).toContain("Driven sweep");
-    expect(html).toContain("1 frequency point(s), 1 observable series");
+    expect(html).toContain("0 frequency point(s), 0 observable series");
     expect(html).toContain("Peak comparison");
     expect(html).toContain(
-      "2 modal peak(s), 1 driven peak(s); modal and driven peaks available",
+      "0 published driven peak(s); unsupported",
     );
     expect(html).toContain("Nearest modal-driven detuning");
-    expect(html).toContain("0 Hz driven-modal; modal 9.5 GHz, driven 9.5 GHz");
+    expect(html).toContain("Modal-driven comparison requires a typed compatibility certificate");
     expect(html).toContain("3D visualization");
     expect(html).toContain("2 mode field(s), 2 response field(s)");
     expect(html).toContain("Capability summary");
@@ -2902,11 +2966,11 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("mode 1: 9.5 GHz");
     expect(html).toContain("FMR Driven Response Preview");
     expect(html).toContain("Driven FMR frequency response");
-    expect(html).toContain("mx: 9.5 GHz");
+    expect(html).toContain("No chartable frequency-domain samples.");
     expect(html).toContain("FMR Peak Snapshot");
-    expect(html).toContain("Frequency-domain FMR peak table");
+    expect(html).toContain("No FMR peaks available.");
     expect(html).toContain("FMR Modal-Driven Comparison Snapshot");
-    expect(html).toContain("Frequency-domain FMR comparison table");
+    expect(html).toContain("No modal-driven FMR pairs available.");
     expect(html).not.toContain("FMR Result");
     expect(html).not.toContain("Selected Field Metadata");
   });
@@ -2947,7 +3011,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Blocking physics");
     expect(html).toContain("dynamic_demag_k: unsupported");
     expect(html).toContain("Current response evidence");
-    expect(html).toContain("1 point(s), 2 response field(s)");
+    expect(html).toContain("0 point(s), 2 response field(s)");
     expect(html).toContain("UI fallback");
     expect(html).toContain("show FMR response sweep until nonzero-k map is executable");
     expect(html).toContain("Response Map");
@@ -2973,21 +3037,17 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR Resonance Fits");
-    expect(html).toContain('data-status="ready"');
-    expect(html).toContain("Published source revision");
-    expect(html).toContain("sha256:peaks-source");
-    expect(html).toContain("Resource revision");
+    expect(html).toContain('data-status="unsupported"');
+    expect(html).toContain('data-artifact-status="complete"');
+    expect(html).toContain("Resource state");
+    expect(html).toContain("Artifact state");
+    expect(html).toContain("Qualification state");
+    expect(html).toContain("Selection binding");
     expect(html).toContain("resonance-resource:5");
-    expect(html).toContain("Frequency unit");
-    expect(html).toContain("Hz");
-    expect(html).toContain("Linewidth unit");
-    expect(html).toContain("fit-7");
-    expect(html).toContain("9.75 GHz");
-    expect(html).toContain("25 MHz");
-    expect(html).toContain("covariance; frequency 1.25 MHz; amplitude 0.015");
-    expect(html).toContain("sha256:peak-7");
-    expect(html).not.toContain("Modal vs Driven");
-    expect(html).not.toContain("Eigenmodes resonance");
+    expect(html).toContain("Typed A2 resonance fits omit units");
+    expect(html).toContain("No published resonance fits are available.");
+    expect(html).not.toContain("fit-7");
+    expect(html).not.toContain("sha256:peaks-source");
   });
 
   it("renders the Kittel fit as an independent artifact with parameter units and covariance", () => {
@@ -3010,18 +3070,14 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR Kittel Fit");
-    expect(html).toContain('data-status="ready"');
-    expect(html).toContain("sha256:field-sweep-source");
+    expect(html).toContain('data-status="unsupported"');
+    expect(html).toContain('data-artifact-status="complete"');
     expect(html).toContain("kittel-resource:3");
-    expect(html).toContain("A/m");
-    expect(html).toContain("parameter_covariance; 2 x 2");
-    expect(html).toContain("gamma");
-    expect(html).toContain("rad/(s*T)");
-    expect(html).toContain("M_eff");
-    expect(html).toContain("sample-4");
-    expect(html).toContain("10.1 GHz");
-    expect(html).not.toContain("Modal vs Driven");
-    expect(html).not.toContain("Driven peak");
+    expect(html).toContain("Typed A2 Kittel fit omits units");
+    expect(html).toContain("No published Kittel parameters are available.");
+    expect(html).toContain("No published Kittel validation points are available.");
+    expect(html).not.toContain("gamma");
+    expect(html).not.toContain("sample-4");
   });
 
   it("fails resonance-fit artifacts closed as missing, partial, or corrupt", () => {
@@ -3046,7 +3102,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     const missingHtml = renderToStaticMarkup(
       <FmrResonanceFitsInspectorPanel selection={selection} />,
     );
-    expect(missingHtml).toContain('data-status="missing"');
+    expect(missingHtml).toContain('data-status="unsupported"');
+    expect(missingHtml).toContain('data-artifact-status="missing"');
     expect(missingHtml).toContain("Artifact state");
     expect(missingHtml).not.toContain('data-status="ready"');
 
@@ -3062,7 +3119,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     const partialHtml = renderToStaticMarkup(
       <FmrResonanceFitsInspectorPanel selection={selection} />,
     );
-    expect(partialHtml).toContain('data-status="partial"');
+    expect(partialHtml).toContain('data-status="unsupported"');
+    expect(partialHtml).toContain('data-artifact-status="partial"');
     expect(partialHtml).not.toContain('data-status="ready"');
 
     fmrFitResourcesFixture.resonance = {
@@ -3077,8 +3135,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     const corruptHtml = renderToStaticMarkup(
       <FmrResonanceFitsInspectorPanel selection={selection} />,
     );
-    expect(corruptHtml).toContain('data-status="corrupt"');
-    expect(corruptHtml).toContain("Artifact payload is corrupt");
+    expect(corruptHtml).toContain('data-status="unsupported"');
+    expect(corruptHtml).toContain('data-artifact-status="corrupt"');
     expect(corruptHtml).not.toContain('data-status="ready"');
   });
 
@@ -3101,64 +3159,16 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR Modal vs Driven Comparison");
-    expect(html).toContain("Canonical comparison");
-    expect(html).toContain("Eigenmodes resonance vs FrequencyResponse peak");
+    expect(html).toContain("server-published modal-driven compatibility certificate only");
     expect(html).toContain("Comparison readiness");
-    expect(html).toContain("modal and driven peaks available");
-    expect(html).toContain("Modal resonance");
-    expect(html).toContain("9.5 GHz; mode 1");
-    expect(html).toContain("Driven peak");
-    expect(html).toContain("9.5 GHz; amplitude 1.500");
-    expect(html).toContain("Frequency offset");
-    expect(html).toContain("0 Hz (0 Hz)");
-    expect(html).toContain("Peak amplitude ratio");
-    expect(html).toContain("not available");
-    expect(html).toContain("Spatial overlap (eta_j)");
-    expect(html).toContain("degraded (field payload missing; request link)");
-    expect(html).toContain("Modal field");
-    expect(html).toContain("analysis:eigen:sample-0000:mode-0001; mode field ready");
-    expect(html).toContain("Driven field");
-    expect(html).toContain("analysis:frequency-response:frequency-0000; response field ready");
-    expect(html).toContain("Validation state");
-    expect(html).toContain("unavailable modal, unavailable driven");
-    expect(html).toContain("FMR Comparison Browser");
-    expect(html).toContain("modal-driven detuning");
-    expect(html).toContain("Modal field");
-    expect(html).toContain("Driven field");
-    expect(html).toContain("field-ready");
-    expect(html).toContain("mode field ready; driven field ready");
-    expect(html).toContain("Amplitude ratio");
-    expect(html).toContain("Field handoff");
-    expect(html).toContain("Plot modal");
-    expect(html).toContain("Plot driven");
-    expect(html).toContain("FMR Modal-Driven Pair Table");
-    expect(html).toContain("Frequency-domain FMR comparison table");
-    expect(html).toContain("<th>Modal</th>");
-    expect(html).toContain("<th>Driven</th>");
-    expect(html).toContain("<th>Detuning</th>");
-    expect(html).toContain("<th>Field handoff</th>");
-    expect(html).toContain("<td>mode 1 @ 9.5 GHz</td>");
-    expect(html).toContain("<td>response @ 9.5 GHz</td>");
-    expect(html).toContain("<td>0 Hz</td>");
-    expect(html).toContain("mode field ready; driven field ready");
-    expect(html).toContain("Resources");
-    expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
-    expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
-    expect(html).toContain("FMR Comparison Actions");
-    expect(html).toContain("both fields ready");
-    expect(html).toContain("Modal target");
-    expect(html).toContain("modal mode 1 9.5 GHz");
-    expect(html).toContain("Driven target");
-    expect(html).toContain("driven response 9.5 GHz");
-    expect(html).toContain("Open modal mode");
-    expect(html).toContain("Open driven point");
-    expect(html).toContain("Plot modal field");
-    expect(html).toContain("Plot driven field");
-    expect(html).toContain('title="Plot the driven comparison field in 3D"');
-    expect(html).not.toMatch(
-      /disabled="" title="Plot the modal comparison field in 3D"/,
-    );
-    expect(html).not.toContain("Selected Field Metadata");
+    expect(html).toContain("requires a typed compatibility certificate");
+    expect(html).toContain("unsupported without compatibility certificate");
+    expect(html).toContain("No modal-driven FMR comparison pairs available.");
+    expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH);
+    expect(html).toContain("compatibility certificate not published by typed A2");
+    expect(html).not.toContain("modal-driven detuning");
+    expect(html).not.toContain("9.5 GHz; mode 1");
+    expect(html).not.toContain("<td>0 Hz</td>");
   });
 
   it("renders a dedicated frequency-domain dispersion control surface", () => {
@@ -3498,38 +3508,26 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Sweep resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("Frequency points");
-    expect(html).toContain("1 points, 1 observable series");
+    expect(html).toContain("0 points, 0 observable series");
     expect(html).toContain("Response fields");
     expect(html).toContain("2 field artifacts");
     expect(html).toContain("Driven peak status");
-    expect(html).toContain("1 driven peaks");
+    expect(html).toContain("0 driven peaks");
     expect(html).toContain("Response series");
-    expect(html).toContain("1 chart series");
+    expect(html).toContain("0 chart series");
     expect(html).toContain("3D handoff");
     expect(html).toContain(
-      "1/1 frequency points are directly linked; 2 field payloads published",
+      "0/0 frequency points are directly linked; 2 field payloads published",
     );
     expect(html).toContain("FMR Response Sweep Chart");
-    expect(html).toContain("Driven FMR frequency response");
-    expect(html).toContain('data-renderer="echarts"');
-    expect(html).toContain("Load in 3D");
+    expect(html).toContain("No chartable frequency-domain samples.");
     expect(html).toContain("FMR Response Point Browser");
-    expect(html).toContain("mx, frequency point 0");
-    expect(html).toContain("Amplitude");
-    expect(html).toContain("1.500");
-    expect(html).toContain("Phase");
-    expect(html).toContain("Absorbed power");
-    expect(html).toContain("Susceptibility");
-    expect(html).toContain("Residual");
-    expect(html).toContain("Response field");
-    expect(html).toContain("field-ready");
-    expect(html).not.toContain("field missing");
-    expect(html).toContain("Inspect");
+    expect(html).toContain("No driven FMR response points available.");
+    expect(html).not.toContain("field-ready");
     expect(html).toContain("FMR Response Point Table");
-    expect(html).toContain("Frequency-domain response point table");
-    expect(html).toContain("Plot this response field with phase-rotated real display");
+    expect(html).toContain("No driven response frequency points available.");
     expect(html).toContain("Driven FMR Peak Table");
-    expect(html).toContain("Frequency-domain FMR peak table");
+    expect(html).toContain("No FMR peaks available.");
     expect(html).not.toContain("Selected Field Metadata");
   });
 
@@ -3556,7 +3554,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Response Frequency Point Control");
     expect(html).toContain("Canonical object");
     expect(html).toContain("FrequencyResponse point");
-    expect(html).toContain("9.5 GHz");
+    expect(html).toContain("unsupported: typed observable contract incomplete");
     expect(html).not.toContain("9500000000 Hz");
     expect(html).toContain(
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH.replace(
@@ -3566,17 +3564,18 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
     expect(html).toContain("response/frequency_points/frequency_0001.json");
     expect(html).toContain("Response amplitude");
-    expect(html).toContain("1.500");
+    expect(html).toContain("unsupported: exact observable kind and unit not published");
+    expect(html).not.toContain("1.500");
     expect(html).toContain("Response phase");
-    expect(html).toContain("0.1000 rad");
+    expect(html).toContain("unsupported: exact observable unit not published");
     expect(html).toContain("Absorbed power density");
-    expect(html).toContain("42 W/m^3");
+    expect(html).toContain("unsupported: exact observable unit not published");
     expect(html).toContain("3D field");
     expect(html).toContain("analysis:frequency-response:frequency-0001; field-ready");
     expect(html).toContain("Available field views");
     expect(html).toContain("phase_rotated_real");
     expect(html).toContain("Provenance");
-    expect(html).toContain("drive_projected_absorption_proxy");
+    expect(html).not.toContain("drive_projected_absorption_proxy");
     expect(html).toContain("Response Point 3D Visualization");
     expect(html).toContain("3D field ready");
     expect(html).toContain("Field ID");
@@ -3627,27 +3626,11 @@ describe("FrequencyDomainInspectorPanel", () => {
       <FrequencyDomainInspectorPanel selection={selection} />,
     );
 
-    expect(html).toContain("Active FMR Peak");
-    expect(html).toContain("Active peak");
-    expect(html).toContain("modal, 9.5 GHz, sample 0 mode 1");
-    expect(html).toContain("Peak source");
-    expect(html).toContain("modal");
-    expect(html).toContain("Modal provenance");
-    expect(html).toContain("sample 0, mode 1");
-    expect(html).toContain("Driven provenance");
-    expect(html).toContain("not a driven peak");
-    expect(html).toContain("3D field artifact");
-    expect(html).toContain("analysis:eigen:sample-0000:mode-0001");
-    expect(html).toContain("Validation");
-    expect(html).toContain("unavailable");
-    expect(html).toContain("Select active peak");
-    expect(html).toContain("Plot active peak 3D");
-    expect(html).toMatch(
-      /<button class="[^"]*fm-button--secondary[^"]*fm-button--sm[^"]*"[^>]*>Select active peak<\/button>/,
-    );
-    expect(html).toMatch(
-      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*"[^>]*>Plot active peak 3D<\/button>/,
-    );
+    expect(html).not.toContain("Active FMR Peak");
+    expect(html).toContain("Peak diagnostics");
+    expect(html).toContain("FMR peaks require the published fmr/peaks.v1 resource");
+    expect(html).not.toContain("Select active peak");
+    expect(html).not.toContain("Plot active peak 3D");
   });
 
   it("renders contextual ECharts frequency-domain charts for FMR", () => {
@@ -3676,13 +3659,13 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal modes");
     expect(html).toContain("2 modes, 2 field payloads");
     expect(html).toContain("FMR peaks");
-    expect(html).toContain("2 modal, 1 driven");
+    expect(html).toContain("0 published driven");
     expect(html).toContain("Field readiness");
     expect(html).toContain("selected mode field ready");
     expect(html).toContain("Driven comparison");
-    expect(html).toContain("response sweep available");
+    expect(html).toContain("response sweep missing");
     expect(html).toContain("Nearest modal-driven detuning");
-    expect(html).toContain("0 Hz driven-modal; modal 9.5 GHz, driven 9.5 GHz");
+    expect(html).toContain("not available");
     expect(html).toContain('class="fm-frequency-domain-chart"');
     expect(html).toContain('data-renderer="echarts"');
     expect(html).toContain("Eigen Mode Browser");
@@ -3723,21 +3706,21 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toMatch(
       /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*fm-inspector-action-button[^"]*"[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
-    expect(html).toMatch(
-      /aria-label="Plot this response field with phase-rotated real display at 9.5 GHz" title="Plot this response field with phase-rotated real display"/,
+    expect(html).not.toContain(
+      'aria-label="Plot this response field with phase-rotated real display',
     );
     expect(html).not.toContain("Response field artifact is missing");
     expect(html).toContain("Frequency-domain mode table");
-    expect(html).toContain("Frequency-domain response point table");
-    expect(html).toContain("Frequency-domain FMR peak table");
+    expect(html).toContain("No driven response frequency points available.");
+    expect(html).toContain("No FMR peaks available.");
     expect(html).not.toContain("Bloch / Floquet dispersion");
     expect(html).not.toContain("Frequency-domain branch table");
     expect(html).toContain("mode 1: 9.5 GHz");
     expect(html).toContain("mode 2: 12 GHz");
-    expect(html).toContain("Amplitude: 1 samples");
-    expect(html).toContain("<td>modal</td><td>9.5 GHz</td>");
+    expect(html).not.toContain("Amplitude: 1 samples");
+    expect(html).not.toContain("<td>modal</td><td>9.5 GHz</td>");
     expect(html).toContain("<td>0</td><td>1</td>");
-    expect(html).toContain("<td>0</td><td>mx</td>");
+    expect(html).not.toContain("<td>0</td><td>mx</td>");
     expect(html).toContain("available");
     expect(html).toContain("Plot the real part of this eigen mode");
     expect(html).toContain("Plot the imaginary part of this eigen mode");
@@ -3942,7 +3925,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal evidence");
     expect(html).toContain("2 mode(s), 2 field-ready");
     expect(html).toContain("Driven evidence");
-    expect(html).toContain("1 response point(s), 1 observable series");
+    expect(html).toContain("no driven response sweep loaded");
     expect(html).toContain("Response-map gate");
     expect(html).toContain("nonzero-k response unavailable");
     expect(html).toContain("Required artifacts");
@@ -3985,7 +3968,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Primary workflow");
     expect(html).toContain("fmr_response -&gt; response-sweep");
     expect(html).toContain("FMR readiness");
-    expect(html).toContain("2 modal mode(s), 1 driven point(s), 3 peak(s)");
+    expect(html).toContain("2 modal mode(s), 0 driven point(s), 0 peak(s)");
     expect(html).toContain("Modal visualization");
     expect(html).toContain("2 mode field payload(s)");
     expect(html).toContain("Driven visualization");
@@ -4097,7 +4080,7 @@ describe("FrequencyDomainInspectorPanel", () => {
 
     expect(rootHtml).toContain("Frequency Response Results Overview");
     expect(rootHtml).toContain("Sweep");
-    expect(rootHtml).toContain("1 point(s), 1 observable series");
+    expect(rootHtml).toContain("0 point(s), 0 observable series");
     expect(rootHtml).toContain("Progress");
     expect(rootHtml).toContain("unavailable; 0/2");
     expect(rootHtml).toContain("Cancellation");

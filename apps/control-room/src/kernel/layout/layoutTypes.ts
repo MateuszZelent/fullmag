@@ -27,6 +27,9 @@ export type BottomPanelTabId =
   | "quick-chart"
   | "telemetry";
 
+/** Kernel-owned workspace compositions; modules never create a second shell. */
+export type WorkspaceLayoutPresetId = "workspace.results.frequency-domain";
+
 export interface LayoutState {
   /** Currently active ribbon tab */
   activeModuleTab: RibbonTabId;

@@ -1,3 +1,4 @@
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -85,14 +86,16 @@ import {
   FrequencyResponseFrequencyJobInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
-  FmrComparisonInspectorPanel,
-  FmrKittelFitInspectorPanel,
-  FmrModalSpectrumInspectorPanel,
   FmrOverviewInspectorPanel,
   FmrPeakInspectorPanel,
-  FmrPeaksInspectorPanel,
-  FmrResonanceFitsInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
+import { FmrComparisonInspectorPanel } from "./panels/frequency-domain/FrequencyDomainComparisonPanel";
+import {
+  FmrKittelFitInspectorPanel,
+  FmrResonanceFitsInspectorPanel,
+} from "./panels/frequency-domain/FrequencyDomainFmrFitsPanel";
+import { FmrPeaksInspectorPanel } from "./panels/frequency-domain/FrequencyDomainFmrPeaksPanel";
+import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FrequencyDomainModalPanel";
 import { FrequencyDomainInspectorPanel } from "./panels/FrequencyDomainInspectorPanel";
 import {
   EigenmodesBoundaryStageInspectorPanel,
@@ -549,6 +552,29 @@ describe("inspectorRegistry", () => {
         frequencyDomainPanelId(kind),
       );
     }
+  });
+
+  it("renders an explicit unsupported panel for an unknown Results Navigator route", () => {
+    const panel = resolveInspectorPanel({ kind: "results.eigen.future-schema" });
+    const Panel = panel?.component;
+
+    expect(panel?.id).toBe("frequency-domain-unsupported");
+    expect(Panel).toBeDefined();
+    const markup = Panel
+      ? renderToStaticMarkup(
+        <Panel
+          selection={{
+            kind: "results.eigen.future-schema",
+            label: null,
+            moduleSource: "inspector",
+            nodeId: "future-result",
+            objectId: null,
+            ref: null,
+          }}
+        />,
+      )
+      : "";
+    expect(markup).toContain("Unsupported Results route");
   });
 
   it("routes primary frequency-domain workflow nodes to dedicated inspector components", () => {

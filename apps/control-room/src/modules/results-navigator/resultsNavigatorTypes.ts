@@ -10,6 +10,7 @@ import type {
   FrequencyDomainTextArtifactResource,
 } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 
 import type { ResultsSelectionRef } from "./resultsNavigatorSelection";
 
@@ -36,12 +37,17 @@ export type ResultsNavigatorNodeKind =
   | "results.frequency-domain.sample"
   | "results.frequency-domain.modes"
   | "results.frequency-domain.mode"
+  | "results.frequency-domain.mode-metadata"
+  | "results.frequency-domain.mode-field"
+  | "results.frequency-domain.mode-residuals"
   | "results.frequency-domain.branches"
   | "results.frequency-domain.branch"
   | "results.frequency-domain.driven-response"
   | "results.frequency-domain.frequency-sweep"
   | "results.frequency-domain.frequency-points"
   | "results.frequency-domain.response-point"
+  | "results.frequency-domain.response-observables"
+  | "results.frequency-domain.response-field"
   | "results.frequency-domain.progress"
   | "results.frequency-domain.response-diagnostics"
   | "results.frequency-domain.fmr-views"
@@ -59,7 +65,6 @@ export type ResultsNavigatorNodeKind =
   | "results.frequency-domain.artifacts";
 
 export interface NavigatorIdentity {
-  artifactRevision: string;
   runId: string;
   stageId: string;
 }
@@ -68,6 +73,7 @@ export interface NavigatorArtifactDescriptor {
   artifactPath: string;
   missingReason: string | null;
   resourceKey: string;
+  resourceRevision: string | null;
   schemaVersion: string;
   status: string;
 }
@@ -134,6 +140,15 @@ export interface NavigatorFmrPayload {
   peaks: readonly NavigatorFmrPeakDescriptor[];
 }
 
+export interface NavigatorFmrFitDescriptor {
+  fitId: string;
+  stableIdentityAvailable?: boolean;
+}
+
+export interface NavigatorFmrResonanceFitsPayload {
+  fits: readonly NavigatorFmrFitDescriptor[];
+}
+
 export interface NavigatorManifestSummary {
   eigenStatus: string;
   eigenReason?: string | null;
@@ -162,6 +177,7 @@ export interface FrequencyDomainNavigatorInput {
     peaks?: NavigatorArtifactDescriptor | null;
     resonanceFits?: NavigatorArtifactDescriptor | null;
     payload?: NavigatorFmrPayload | null;
+    resonanceFitsPayload?: NavigatorFmrResonanceFitsPayload | null;
     states?: Partial<Record<"kittelFit" | "peaks" | "resonanceFits", NavigatorNodeStatus>>;
   } | null;
   identity: NavigatorIdentity | null;
@@ -189,6 +205,7 @@ export interface ResultsNavigatorNode {
   label: string;
   parentId: string | null;
   resourceKey: string;
+  resourceRevision?: string;
   selectionRef?: ResultsSelectionRef;
   status: NavigatorNodeStatus;
   statusReason?: string;
@@ -210,6 +227,17 @@ export type NavigatorResourceResult<T> = Pick<
   "data" | "error" | "revision" | "status"
 >;
 
+function artifactResourceRevision(
+  resource: FrequencyDomainJsonArtifactResource | FrequencyDomainTextArtifactResource,
+): string | null {
+  if ("revision" in resource) {
+    return resource.revision ?? (
+      "content_digest" in resource ? resource.content_digest ?? null : null
+    );
+  }
+  return "content_digest" in resource ? resource.content_digest ?? null : null;
+}
+
 export function navigatorArtifactFromResource(
   resource: FrequencyDomainJsonArtifactResource | FrequencyDomainTextArtifactResource | null | undefined,
 ): NavigatorArtifactDescriptor | null {
@@ -218,6 +246,7 @@ export function navigatorArtifactFromResource(
     artifactPath: resource.artifact_path,
     missingReason: resource.missing_reason ?? null,
     resourceKey: resource.resource_key,
+    resourceRevision: artifactResourceRevision(resource),
     schemaVersion: resource.schema_version,
     status: resource.status,
   };
@@ -428,6 +457,13 @@ function isFmrPeaksPayload(
   return Boolean(schemaVersion?.includes("fmr")) && Array.isArray(payload["peaks"]);
 }
 
+function isResonanceFitsPayload(
+  payload: FrequencyDomainJsonArtifactPayload,
+): payload is components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] {
+  const schemaVersion = payloadSchemaVersion(payload);
+  return Boolean(schemaVersion?.includes("resonance_fits")) && Array.isArray(payload["fits"]);
+}
+
 /**
  * Typed compatibility adapters for the generated A2 payload union.  The
  * generated schema is intentionally untagged, so the schema-owned property
@@ -520,6 +556,20 @@ export function navigatorFmrFromResource(
         stableIdentityAvailable: peak.peak_id != null,
       };
     }),
+  };
+}
+
+export function navigatorResonanceFitsFromResource(
+  resource: FrequencyDomainJsonArtifactResource | null | undefined,
+): NavigatorFmrResonanceFitsPayload | null {
+  const payload = resource?.payload;
+  if (!payload || !isResonanceFitsPayload(payload)) return null;
+
+  return {
+    fits: (payload.fits ?? []).map((fit, index) => ({
+      fitId: fit.fit_id ?? `fit-${index}`,
+      stableIdentityAvailable: fit.fit_id != null,
+    })),
   };
 }
 

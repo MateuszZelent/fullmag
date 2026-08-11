@@ -1,8 +1,14 @@
 import {
+  branchSelectionRef,
   buildModalNodeId,
   buildResponsePointNodeId,
+  fmrResonanceFitSelectionRef,
+  inspectorSelectionKindForResultsNodeKind,
+  modalDetailSelectionRef,
   modalSelectionRef,
+  responseDetailSelectionRef,
   responseSelectionRef,
+  resultsViewSelectionRef,
 } from "./resultsNavigatorSelection";
 import type {
   FrequencyDomainNavigatorInput,
@@ -118,11 +124,12 @@ function node({
   children,
   collection,
   id,
-  inspectorId,
+  inspectorId: _legacyInspectorId,
   kind,
   label,
   parentId,
   resourceKey,
+  resourceRevision,
   selectionRef,
   status,
   statusReason,
@@ -135,19 +142,22 @@ function node({
   label: string;
   parentId: string | null;
   resourceKey: string;
+  resourceRevision?: string;
   selectionRef?: ResultsNavigatorNode["selectionRef"];
   status: NavigatorNodeStatus;
   statusReason?: string;
 }): ResultsNavigatorNode {
+  void _legacyInspectorId;
   return {
     ...(children ? { children } : {}),
     ...(collection ? { collection } : {}),
     id,
-    inspectorId,
+    inspectorId: inspectorSelectionKindForResultsNodeKind(kind),
     kind,
     label,
     parentId,
     resourceKey,
+    ...(resourceRevision ? { resourceRevision } : {}),
     ...(selectionRef ? { selectionRef } : {}),
     status,
     ...(statusReason ? { statusReason } : {}),
@@ -162,46 +172,90 @@ function collection(totalCount: number, pageSize = DEFAULT_PAGE_SIZE) {
   };
 }
 
+function selectionIdentity(
+  input: FrequencyDomainNavigatorInput,
+  resource: NavigatorArtifactDescriptor | null | undefined,
+): { artifactRevision: string; runId: string; stageId: string } | undefined {
+  if (!input.identity || !resource?.resourceRevision) return undefined;
+  return {
+    artifactRevision: resource.resourceRevision,
+    runId: input.identity.runId,
+    stageId: input.identity.stageId,
+  };
+}
+
+function viewSelection(
+  input: FrequencyDomainNavigatorInput,
+  resource: NavigatorArtifactDescriptor | null | undefined,
+  viewId: "branches" | "field-sweep" | "response-sweep" | "spectrum",
+) {
+  const identity = selectionIdentity(input, resource);
+  return identity
+    ? resultsViewSelectionRef({
+        ...identity,
+        viewId,
+      })
+    : undefined;
+}
+
 function modeNode(
   sample: NavigatorSampleDescriptor,
   mode: NavigatorModeDescriptor,
   parentId: string,
   input: FrequencyDomainNavigatorInput,
 ): ResultsNavigatorNode {
-  const id = mode.modeId && input.identity
+  const identity = selectionIdentity(input, input.resources.spectrum);
+  const id = mode.modeId && identity
     ? buildModalNodeId(
         modalSelectionRef({
-          artifactRevision: input.identity.artifactRevision,
+          ...identity,
           ...(mode.branchId ? { branchId: mode.branchId } : {}),
           modeId: mode.modeId,
           rawModeIndex: mode.rawModeIndex,
-          runId: input.identity.runId,
           sampleId: sample.sampleId,
           sampleIndex: sample.sampleIndex,
-          stageId: input.identity.stageId,
         }),
       )
     : nodePath(parentId, "mode", String(mode.rawModeIndex));
-  const stableRef = mode.modeId && input.identity
+  const stableRef = mode.modeId && identity
     ? modalSelectionRef({
-        artifactRevision: input.identity.artifactRevision,
+        ...identity,
         ...(mode.branchId ? { branchId: mode.branchId } : {}),
         modeId: mode.modeId,
         rawModeIndex: mode.rawModeIndex,
-        runId: input.identity.runId,
         sampleId: sample.sampleId,
         sampleIndex: sample.sampleIndex,
-        stageId: input.identity.stageId,
       })
     : undefined;
   const status = stableRef ? "ready" : "partial";
+  const detailNodes = stableRef
+    ? ([
+        ["Metadata", "results.frequency-domain.mode-metadata", "metadata"],
+        ["Field", "results.frequency-domain.mode-field", "field"],
+        ["Residuals", "results.frequency-domain.mode-residuals", "residuals"],
+      ] as const).map(([label, kind, detail]) =>
+        node({
+          id: nodePath(id, detail),
+          inspectorId: "frequency-domain/eigen/mode",
+          kind,
+          label,
+          parentId: id,
+          resourceKey: `analysis:eigen:sample:${sample.sampleId}:mode:${mode.modeId}:${detail}`,
+          selectionRef: modalDetailSelectionRef({ ...stableRef, detail }),
+          status: "unsupported",
+          statusReason: `Published mode ${detail} resource is not available on the current transport.`,
+        }),
+      )
+    : [];
   return node({
+    ...(detailNodes.length > 0 ? { children: detailNodes } : {}),
     id,
     inspectorId: "frequency-domain/eigen/mode",
     kind: "results.frequency-domain.mode",
     label: mode.modeId ? `Mode ${mode.modeId}` : `Mode ${mode.rawModeIndex}`,
     parentId,
     resourceKey: `analysis:eigen:sample:${sample.sampleId}:modes`,
+    resourceRevision: input.resources.spectrum?.resourceRevision ?? undefined,
     ...(stableRef ? { selectionRef: stableRef } : {}),
     status,
     ...(stableRef ? {} : { statusReason: "Published mode is missing stable modeId." }),
@@ -246,6 +300,7 @@ function branchNode(
   parentId: string,
   input: FrequencyDomainNavigatorInput,
 ): ResultsNavigatorNode {
+  const identity = selectionIdentity(input, input.resources.branches);
   return node({
     id: nodePath(parentId, "branch", branch.branchId),
     inspectorId: "frequency-domain/eigen/branch",
@@ -253,7 +308,16 @@ function branchNode(
     label: `Branch ${branch.branchId}`,
     parentId,
     resourceKey: input.resources.branches?.resourceKey ?? "analysis:eigen:branches",
-    status: branch.stableIdentityAvailable === false ? "partial" : "ready",
+    resourceRevision: input.resources.branches?.resourceRevision ?? undefined,
+    ...(identity && branch.stableIdentityAvailable !== false
+      ? {
+          selectionRef: branchSelectionRef({
+            ...identity,
+            branchId: branch.branchId,
+          }),
+        }
+      : {}),
+    status: branch.stableIdentityAvailable === false || !identity ? "partial" : "ready",
     ...(branch.stableIdentityAvailable === false
       ? { statusReason: "Published branch is missing stable branchId." }
       : {}),
@@ -269,6 +333,8 @@ function artifactNode(
     label: string;
     parentId: string;
     resourceKey: string;
+    resourceRevision?: string;
+    selectionRef?: ResultsNavigatorNode["selectionRef"];
     missingStatus?: NavigatorNodeStatus;
     statusOverride?: NavigatorNodeStatus;
     statusReason?: string;
@@ -290,6 +356,8 @@ function artifactNode(
     label: args.label,
     parentId: args.parentId,
     resourceKey: args.artifact?.resourceKey ?? args.resourceKey,
+    resourceRevision: args.artifact?.resourceRevision ?? args.resourceRevision,
+    ...(args.selectionRef ? { selectionRef: args.selectionRef } : {}),
     status,
     ...(statusReason ? { statusReason } : {}),
   });
@@ -337,6 +405,7 @@ function buildFrequencyDomainTree(
     label: "Spectrum",
     parentId: modalId,
     resourceKey: "analysis:eigen:spectrum",
+    selectionRef: viewSelection(input, input.resources.spectrum, "spectrum"),
     statusOverride:
       input.spectrum || input.resources.states?.spectrum !== "ready"
         ? input.resources.states?.spectrum
@@ -353,6 +422,7 @@ function buildFrequencyDomainTree(
     label: "Field Sweep",
     parentId: modalId,
     resourceKey: "analysis:eigen:field-sweep",
+    selectionRef: viewSelection(input, input.resources.fieldSweep, "field-sweep"),
     statusOverride: input.resources.states?.fieldSweep,
     ...(input.resources.fieldSweep ? {} : { missingStatus: "unsupported" as const }),
     statusReason: input.resources.fieldSweep
@@ -388,6 +458,7 @@ function buildFrequencyDomainTree(
     label: "Samples",
     parentId: modalId,
     resourceKey: input.resources.spectrum?.resourceKey ?? "analysis:eigen:spectrum",
+    resourceRevision: input.resources.spectrum?.resourceRevision ?? undefined,
     status: samplesStatus,
     ...(samplesStatus === "partial" && !input.spectrum
       ? { statusReason: "Typed sample payload is not available on this transport." }
@@ -413,6 +484,7 @@ function buildFrequencyDomainTree(
     label: "Branches",
     parentId: modalId,
     resourceKey: input.resources.branches?.resourceKey ?? "analysis:eigen:branches",
+    selectionRef: viewSelection(input, input.resources.branches, "branches"),
     status: branchesStatus,
   });
   const modal = node({
@@ -441,30 +513,50 @@ function buildFrequencyDomainTree(
     label: "Frequency Sweep",
     parentId: responseId,
     resourceKey: "analysis:frequency-domain:response",
+    selectionRef: viewSelection(input, input.resources.response, "response-sweep"),
     statusOverride: input.resources.states?.response,
   });
   const pointsId = nodePath(responseId, "frequency-points");
   const points = input.response?.points ?? [];
   const pointNodes = points.map((point) => {
-    const stableRef = point.pointId && input.identity
+    const identity = selectionIdentity(input, input.resources.response);
+    const stableRef = point.pointId && identity
       ? responseSelectionRef({
-          artifactRevision: input.identity.artifactRevision,
+          ...identity,
           frequencyIndex: point.frequencyIndex,
           pointId: point.pointId,
-          runId: input.identity.runId,
-          stageId: input.identity.stageId,
         })
       : undefined;
     const pointId = stableRef
       ? buildResponsePointNodeId(stableRef)
       : nodePath(pointsId, "point", point.pointId ?? `frequency-${point.frequencyIndex}`);
+    const detailNodes = stableRef
+      ? ([
+          ["Observables", "results.frequency-domain.response-observables", "observables"],
+          ["Field", "results.frequency-domain.response-field", "field"],
+        ] as const).map(([label, kind, detail]) =>
+          node({
+            id: nodePath(pointId, detail),
+            inspectorId: "frequency-domain/response/point",
+            kind,
+            label,
+            parentId: pointId,
+            resourceKey: `analysis:frequency-domain:response:point:${point.pointId}:${detail}`,
+            selectionRef: responseDetailSelectionRef({ ...stableRef, detail }),
+            status: "unsupported",
+            statusReason: `Published response ${detail} resource is not available on the current transport.`,
+          }),
+        )
+      : [];
     return node({
+      ...(detailNodes.length > 0 ? { children: detailNodes } : {}),
       id: pointId,
       inspectorId: "frequency-domain/response/point",
       kind: "results.frequency-domain.response-point",
       label: point.pointId ? `Point ${point.pointId}` : `Frequency ${point.frequencyIndex}`,
       parentId: pointsId,
       resourceKey: `analysis:frequency-domain:response:point:${point.pointId ?? point.frequencyIndex}`,
+      resourceRevision: input.resources.response?.resourceRevision ?? undefined,
       ...(stableRef ? { selectionRef: stableRef } : {}),
       status: stableRef
         ? point.stableIdentityAvailable === false
@@ -540,6 +632,12 @@ function buildFrequencyDomainTree(
   const fmrId = nodePath(frequencyId, "fmr-views");
   const fmr = input.fmr;
   const peaksId = nodePath(fmrId, "peaks");
+  const resonanceFitsId = nodePath(fmrId, "resonance-fits");
+  const resonanceFitsArtifactStatus = mapNavigatorArtifactState(fmr?.resonanceFits);
+  const resonanceFitsStatus = fmr?.states?.resonanceFits
+    ? combineStatuses([fmr.states.resonanceFits, resonanceFitsArtifactStatus])
+    : resonanceFitsArtifactStatus;
+  const resonanceFitsIdentity = selectionIdentity(input, fmr?.resonanceFits);
   const peakNodes = (fmr?.payload?.peaks ?? []).map((peak) =>
     node({
       id: nodePath(peaksId, "peak", peak.peakId),
@@ -571,6 +669,51 @@ function buildFrequencyDomainTree(
         ? "partial"
         : fmr?.states?.peaks ?? (fmr?.peaks ? "partial" : "missing"),
   });
+  const resonanceFitNodes = (fmr?.resonanceFitsPayload?.fits ?? []).map((fit) =>
+    node({
+      id: nodePath(resonanceFitsId, "fit", fit.fitId),
+      inspectorId: "frequency-domain/fmr/resonance-fits",
+      kind: "results.frequency-domain.resonance-fit",
+      label: `Fit ${fit.fitId}`,
+      parentId: resonanceFitsId,
+      resourceKey: fmr?.resonanceFits?.resourceKey ?? "analysis:frequency-domain:fmr:resonance-fits",
+      resourceRevision: fmr?.resonanceFits?.resourceRevision ?? undefined,
+      ...(resonanceFitsIdentity && fit.stableIdentityAvailable !== false
+        ? {
+          selectionRef: fmrResonanceFitSelectionRef({
+              ...resonanceFitsIdentity,
+              fitId: fit.fitId,
+            }),
+          }
+        : {}),
+      status: resonanceFitsStatus === "ready" && resonanceFitsIdentity &&
+        fit.stableIdentityAvailable !== false
+        ? "ready"
+        : resonanceFitsStatus === "ready" ? "partial" : resonanceFitsStatus,
+      ...(fit.stableIdentityAvailable === false
+        ? { statusReason: "Published resonance fit is missing stable fitId." }
+        : resonanceFitsStatus !== "ready"
+          ? { statusReason: fmr?.resonanceFits?.missingReason ?? `Resonance fits are ${resonanceFitsStatus}.` }
+          : {}),
+    }),
+  );
+  const resonanceFitsNode = node({
+    ...(resonanceFitNodes.length > 0 ? { children: resonanceFitNodes } : {}),
+    ...(resonanceFitNodes.length > 0 ? { collection: collection(resonanceFitNodes.length) } : {}),
+    id: resonanceFitsId,
+    inspectorId: "frequency-domain/fmr/resonance-fits",
+    kind: "results.frequency-domain.resonance-fits",
+    label: "Resonance Fits",
+    parentId: fmrId,
+    resourceKey: fmr?.resonanceFits?.resourceKey ?? "analysis:frequency-domain:fmr:resonance-fits",
+    resourceRevision: fmr?.resonanceFits?.resourceRevision ?? undefined,
+    status: fmr?.resonanceFitsPayload && resonanceFitNodes.length > 0
+      ? combineStatuses(resonanceFitNodes.map((item) => item.status))
+      : resonanceFitsStatus,
+    ...(fmr?.resonanceFits?.missingReason
+      ? { statusReason: fmr.resonanceFits.missingReason }
+      : {}),
+  });
   const fmrChildren: ResultsNavigatorNode[] = [
     artifactNode({
       artifact: fmr?.modalResonances,
@@ -595,16 +738,7 @@ function buildFrequencyDomainTree(
       resourceKey: "analysis:frequency-domain:fmr:driven-sweep",
     }),
     peaksNode,
-    artifactNode({
-      artifact: fmr?.resonanceFits,
-      id: nodePath(fmrId, "resonance-fits"),
-      inspectorId: "frequency-domain/fmr/resonance-fits",
-      kind: "results.frequency-domain.resonance-fits",
-      label: "Resonance Fits",
-      parentId: fmrId,
-      resourceKey: "analysis:frequency-domain:fmr:resonance-fits",
-      statusOverride: fmr?.states?.resonanceFits,
-    }),
+    resonanceFitsNode,
     artifactNode({
       artifact: fmr?.kittelFit,
       id: nodePath(fmrId, "kittel-fit"),

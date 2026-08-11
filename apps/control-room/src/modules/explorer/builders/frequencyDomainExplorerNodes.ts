@@ -199,18 +199,6 @@ export function buildFrequencyDomainResultNode(
             activeAnalysisFieldOverlay,
           )
         : null,
-      fmrPeaks.peaks.some((peak) => peak.source === "modal") &&
-      fmrPeaks.peaks.some((peak) => peak.source === "driven_response")
-        ? {
-            id: `${parentId}:comparison`,
-            kind: "results.frequency_domain.comparison",
-            label: "Modal vs Driven Comparison",
-            parentId,
-            badge: "FMR",
-            icon: "gauge",
-            status: "ready",
-          } satisfies ExplorerNode
-        : null,
       hasExports
         ? {
             id: `${parentId}:exports`,
@@ -478,7 +466,6 @@ function buildFrequencyDomainFmrNode({
               parentId: `${parentId}:fmr:peaks`,
               peaks: fmrPeaks.peaks,
               responseSweep,
-              spectrum,
             }),
           }
         : null,
@@ -491,47 +478,38 @@ function buildFmrPeakNodes({
   parentId,
   peaks,
   responseSweep,
-  spectrum,
 }: {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   parentId: string;
   peaks: ReturnType<typeof buildFmrPeakTableModel>["peaks"];
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined;
-  spectrum: FrequencyDomainJsonArtifactResource | null | undefined;
 }): ExplorerNode[] {
   return peaks.map((peak, index) => {
-    const isModal = peak.source === "modal";
     const hasField = peak.fieldId != null;
     const activeAnalysisField = isActiveAnalysisField(
       activeAnalysisFieldOverlay,
       peak.fieldId,
-      isModal ? "eigen-mode" : "frequency-response",
+      "frequency-response",
     );
     return {
       activeAnalysisField,
-      artifactPath: isModal
-        ? spectrum?.artifact_path ?? undefined
-        : responseSweep?.artifact_path ?? undefined,
-      calculationMode: isModal ? "fmr_modal" : "fmr_response",
+      artifactPath: responseSweep?.artifact_path ?? undefined,
+      calculationMode: "fmr_response",
       contextCommands: hasField
-        ? isModal
-          ? EIGEN_MODE_FIELD_3D_COMMANDS
-          : FREQUENCY_RESPONSE_FIELD_3D_COMMANDS
+        ? FREQUENCY_RESPONSE_FIELD_3D_COMMANDS
         : undefined,
       fieldId: peak.fieldId ?? undefined,
       fmrPeakIndex: index,
       frequencyIndex: peak.frequencyPointIndex ?? undefined,
-      icon: isModal ? "wave" : "activity",
+      icon: "activity",
       id: `${parentId}:peak:${index}`,
       kind: "results.frequency_domain.fmr_peak",
-      label: `${isModal ? "Modal" : "Driven"} Peak ${index + 1}`,
+      label: `Published FMR Peak ${index + 1}`,
       modeIndex: peak.modeRef?.rawModeIndex,
-      observableId: isModal ? undefined : "response",
+      observableId: "response",
       parentId,
-      resourceRef: isModal
-        ? peak.fieldResourceKey ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH
-        : peak.fieldResourceKey ??
-          ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+      resourceRef: peak.fieldResourceKey ??
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
       sampleIndex: peak.modeRef?.sampleIndex,
       status: "ready",
       badge: formatFrequencyHz(peak.frequencyHz),

@@ -1,6 +1,9 @@
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
@@ -223,6 +226,14 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     visualization:
       "peak frequency [Hz], linewidth [Hz], fit uncertainty, and source revision",
   },
+  "results.frequency_domain.fmr_resonance_fit": {
+    artifact: "fmr/resonance_fits.v1.json",
+    focus: "published resonance fit",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+    title: "FMR Resonance Fit",
+    visualization:
+      "peak frequency [Hz], linewidth [Hz], fit uncertainty, and source revision",
+  },
   "results.frequency_domain.fmr_kittel_fit": {
     artifact: "fmr/kittel_fit.v1.json",
     focus: "published Kittel fit",
@@ -280,12 +291,54 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     title: "Eigen Spectrum",
     visualization: "mode frequency table and spectrum chart",
   },
+  "results.eigen.field_sweep": {
+    artifact: "eigen/field_sweep.v1.json",
+    focus: "eigen field sweep",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+    title: "Eigen Field Sweep",
+    visualization: "bias-field samples, modal spectrum, and 3D mode fields",
+  },
+  "results.eigen.samples": {
+    artifact: "eigen/spectrum.v2.json",
+    focus: "eigen samples",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    title: "Eigen Samples",
+    visualization: "k-sample table and per-sample eigenmodes",
+  },
+  "results.eigen.sample": {
+    artifact: "eigen/spectrum.v2.json",
+    focus: "eigen sample",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    title: "Eigen Sample",
+    visualization: "selected k-sample modes, frequencies, and residuals",
+  },
   "results.eigen.modes": {
     artifact: "eigen/modes",
     focus: "eigen modes",
     resource: "mode metadata resources",
     title: "Eigen Modes",
     visualization: "mode table and selectable 3D mode fields",
+  },
+  "results.eigen.mode_metadata": {
+    artifact: "eigen/modes/{sample}/{mode}.json",
+    focus: "eigen mode metadata",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+    title: "Eigen Mode Metadata",
+    visualization: "mode metadata, damping, normalization, and provenance",
+  },
+  "results.eigen.mode_field": {
+    artifact: "eigen/mode field payload",
+    focus: "eigen mode field",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
+    title: "Eigen Mode Field",
+    visualization: "real, imag, abs, phase, and animated phase field views",
+  },
+  "results.eigen.mode_residuals": {
+    artifact: "eigen/diagnostics.v2.json",
+    focus: "eigen mode residuals",
+    resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+    title: "Eigen Mode Residuals",
+    visualization: "modal residuals, tangent leakage, and convergence diagnostics",
   },
   "results.eigen.modes.visualization": {
     artifact: "eigen/modes",

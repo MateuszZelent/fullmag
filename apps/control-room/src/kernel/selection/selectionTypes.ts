@@ -566,7 +566,9 @@ export type SelectionRef =
       artifactPath?: string;
       branchId?: string;
       calculationMode?: string;
+      detail?: string;
       fieldId?: string;
+      fitId?: string;
       fmrPeakIndex?: number;
       frequencyIndex?: number;
       kind: string;
@@ -580,6 +582,7 @@ export type SelectionRef =
       sampleId?: string;
       sampleIndex?: number;
       type: "frequency-domain";
+      viewId?: string;
     }
   | {
       fieldId: string;
@@ -993,7 +996,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.artifactPath, right.artifactPath) &&
         nullableStringEquals(left.branchId, right.branchId) &&
         nullableStringEquals(left.calculationMode, right.calculationMode) &&
+        nullableStringEquals(left.detail, right.detail) &&
         nullableStringEquals(left.fieldId, right.fieldId) &&
+        nullableStringEquals(left.fitId, right.fitId) &&
         left.frequencyIndex === right.frequencyIndex &&
         nullableStringEquals(left.modeId, right.modeId) &&
         left.modeIndex === right.modeIndex &&
@@ -1002,7 +1007,8 @@ export function selectionRefEquals(
         left.rawModeIndex === right.rawModeIndex &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
         nullableStringEquals(left.sampleId, right.sampleId) &&
-        left.sampleIndex === right.sampleIndex
+        left.sampleIndex === right.sampleIndex &&
+        nullableStringEquals(left.viewId, right.viewId)
       );
     case "mode-visualization":
       return (
