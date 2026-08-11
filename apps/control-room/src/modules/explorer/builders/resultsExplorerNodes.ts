@@ -4,6 +4,7 @@ import {
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
+import type { PostprocessingDefinition } from "@/shared/domain/analysis/postprocessingDefinitions";
 
 export interface PhysicsFirstResultProducts {
   coupling?: boolean;
@@ -25,6 +26,7 @@ export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
 
 export interface PhysicsFirstResultsSnapshot {
   entries: readonly PhysicsFirstResultEntry[];
+  postprocessing?: readonly PostprocessingDefinition[];
   resultContextRunId: string;
 }
 
@@ -369,6 +371,20 @@ function rootWithChildren(
   return node(id, kind, label, parentId, { children: children.filter((child): child is ExplorerNode => child !== null) });
 }
 
+function postprocessingChildren(
+  parentId: string,
+  kind: PostprocessingDefinition["kind"],
+  definitions: readonly PostprocessingDefinition[],
+): ExplorerNode[] {
+  const nodeKind = `results.${kind === "analysis_view" ? "analysis_views" : kind === "derived_value" ? "derived_values" : kind === "table" ? "tables" : "exports"}.definition` as ExplorerNodeKind;
+  return definitions.filter((definition) => definition.kind === kind).map((definition) =>
+    node(`${parentId}:${key(definition.id)}`, nodeKind, definition.label, parentId, {
+      badge: definition.persistentOwner ? "saved" : "session only",
+      resourceRef: definition.datasetRef,
+    }),
+  );
+}
+
 export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapshot): ExplorerNode[] {
   for (const entry of snapshot.entries) {
     if (entry.runId !== snapshot.resultContextRunId) {
@@ -384,6 +400,7 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
   const dispersionId = `${resultsId}:k-resolved`;
   const resonanceStages = snapshot.entries.map((entry) => resonanceStage(resonanceId, entry));
   const dispersionStages = snapshot.entries.map((entry) => kResolvedStage(dispersionId, entry));
+  const definitions = snapshot.postprocessing ?? [];
 
   return [
     node(resultsId, "results.root", "Results", null, {
@@ -399,10 +416,10 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
           dispersionStages,
         ),
         rootWithChildren(`${resultsId}:hysteresis`, "results.hysteresis.root", "Hysteresis", resultsId, []),
-        rootWithChildren(`${resultsId}:analysis-views`, "results.analysis_views.root", "Analysis Views", resultsId, []),
-        rootWithChildren(`${resultsId}:derived-values`, "results.derived_values.root", "Derived Values", resultsId, []),
-        rootWithChildren(`${resultsId}:tables`, "results.tables.root", "Tables", resultsId, []),
-        rootWithChildren(`${resultsId}:exports`, "results.exports.root", "Exports", resultsId, []),
+        rootWithChildren(`${resultsId}:analysis-views`, "results.analysis_views.root", "Analysis Views", resultsId, postprocessingChildren(`${resultsId}:analysis-views`, "analysis_view", definitions)),
+        rootWithChildren(`${resultsId}:derived-values`, "results.derived_values.root", "Derived Values", resultsId, postprocessingChildren(`${resultsId}:derived-values`, "derived_value", definitions)),
+        rootWithChildren(`${resultsId}:tables`, "results.tables.root", "Tables", resultsId, postprocessingChildren(`${resultsId}:tables`, "table", definitions)),
+        rootWithChildren(`${resultsId}:exports`, "results.exports.root", "Exports", resultsId, postprocessingChildren(`${resultsId}:exports`, "export", definitions)),
       ],
     }),
   ];
