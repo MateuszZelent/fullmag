@@ -107,3 +107,15 @@ Task 5: ukończony (commit `4955c06f6`; wszystkie selectable node kinds mają
 fail-closed route coverage oraz descriptor owner/icon/type contracts, w tym
 dedykowane Airbox/object/mesh-part/mode metadata; focused 226/226, typecheck,
 targeted ESLint i diff-check przechodzą).
+Task 6: częściowo zweryfikowany (commit `d09a41132`; `smoke:inspector` przechodzi
+z `consoleErrors: 0`, selection matrixą Airbox/Object/Mesh-part/Mode, keyboard
+path i asercją zdrowego WebGL canvasu). Wymagany dodatkowy
+`smoke:viewport-3d-explorer-inspector-targets` pozostaje zablokowany przez
+istniejący próg pixel-delta: FDM `changedPixels=13 < 18`, FEM fallback
+`changedPixels=0 < 18`; progu nie obniżano.
+Plan design systemu Inspectorów: zweryfikowany na implementacji odziedziczonej
+z wcześniejszych commitów; świeża family matrix `30/30` plików i `228/228`
+testów, kontrakty design systemu `93/93`, API hygiene `exit 0`. Pełny wrapper
+testowy nadal odtwarza niezależny baseline failure
+`ChartLegend.rowsBinary...` (`3` wywołania zamiast `2`), a architecture hygiene
+ma znany import `explorerSelection.ts` do `viewport-3d`.
