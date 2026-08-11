@@ -1,4 +1,7 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "context.hpp"
+#include "core/fem_mesh.hpp"
+#include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 
 #include <algorithm>
@@ -8,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -21,6 +25,136 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+void check_canonical_mesh_identity(
+    const fullmag::fem::FemMeshRuntimeState &context_mesh,
+    const fullmag::fem::FemMeshRuntimeState &modal_mesh)
+{
+    check(context_mesh.n_nodes == modal_mesh.n_nodes, "mesh import preserves node count");
+    check(context_mesh.n_elements == modal_mesh.n_elements,
+          "mesh import preserves element count");
+    check(context_mesh.n_boundary_faces == modal_mesh.n_boundary_faces,
+          "mesh import preserves boundary-face count");
+    check(context_mesh.nodes_xyz == modal_mesh.nodes_xyz,
+          "mesh import preserves ordered coordinates");
+    check(context_mesh.cell_types == modal_mesh.cell_types,
+          "mesh import preserves ordered cell types");
+    check(context_mesh.cell_offsets == modal_mesh.cell_offsets,
+          "mesh import preserves cell offsets");
+    check(context_mesh.cell_nodes == modal_mesh.cell_nodes,
+          "mesh import preserves ordered cell connectivity");
+    check(context_mesh.cell_global_ordinals == modal_mesh.cell_global_ordinals,
+          "mesh import preserves cell global ordinals");
+    check(context_mesh.cell_markers == modal_mesh.cell_markers,
+          "mesh import preserves cell markers");
+    check(context_mesh.facet_types == modal_mesh.facet_types,
+          "mesh import preserves ordered facet types");
+    check(context_mesh.facet_roles == modal_mesh.facet_roles,
+          "mesh import preserves facet roles");
+    check(context_mesh.facet_offsets == modal_mesh.facet_offsets,
+          "mesh import preserves facet offsets");
+    check(context_mesh.facet_nodes == modal_mesh.facet_nodes,
+          "mesh import preserves ordered facet connectivity");
+    check(context_mesh.facet_global_ordinals == modal_mesh.facet_global_ordinals,
+          "mesh import preserves facet global ordinals");
+    check(context_mesh.facet_markers == modal_mesh.facet_markers,
+          "mesh import preserves facet markers");
+    check(context_mesh.periodic_node_pairs == modal_mesh.periodic_node_pairs,
+          "mesh import preserves periodic node pairs");
+    check(context_mesh.periodic_reduced_node == modal_mesh.periodic_reduced_node,
+          "mesh import preserves periodic reduction classes");
+    check(context_mesh.periodic_representative_nodes ==
+              modal_mesh.periodic_representative_nodes,
+          "mesh import preserves periodic representatives");
+    check(context_mesh.periodic_reduced_node_count ==
+              modal_mesh.periodic_reduced_node_count,
+          "mesh import preserves periodic reduced-node count");
+    check(context_mesh.periodic_boundary_marker_set ==
+              modal_mesh.periodic_boundary_marker_set,
+          "mesh import preserves periodic boundary markers");
+}
+
+void check_mfem_ordered_topology_identity(
+    const fullmag::fem::FemMeshRuntimeState &context_mesh,
+    const fullmag::fem::FemMeshRuntimeState &modal_mesh)
+{
+    std::unique_ptr<mfem::Mesh> context_mfem;
+    std::unique_ptr<mfem::Mesh> modal_mfem;
+    std::string context_error;
+    std::string modal_error;
+    check(fullmag::fem::build_mfem_mesh(context_mesh, context_mfem, context_error),
+          context_error.c_str());
+    check(fullmag::fem::build_mfem_mesh(modal_mesh, modal_mfem, modal_error),
+          modal_error.c_str());
+    check(context_mfem->GetNV() == modal_mfem->GetNV(),
+          "MFEM import preserves vertex count");
+    check(context_mfem->GetNE() == modal_mfem->GetNE(),
+          "MFEM import preserves element count");
+    check(context_mfem->GetNBE() == modal_mfem->GetNBE(),
+          "MFEM import preserves boundary-element count");
+    for (int vertex = 0; vertex < context_mfem->GetNV(); ++vertex) {
+        const double *context_xyz = context_mfem->GetVertex(vertex);
+        const double *modal_xyz = modal_mfem->GetVertex(vertex);
+        check(context_xyz[0] == modal_xyz[0] && context_xyz[1] == modal_xyz[1] &&
+                  context_xyz[2] == modal_xyz[2],
+              "MFEM import preserves ordered vertex coordinates");
+    }
+    for (int element = 0; element < context_mfem->GetNE(); ++element) {
+        mfem::Array<int> context_vertices;
+        mfem::Array<int> modal_vertices;
+        context_mfem->GetElementVertices(element, context_vertices);
+        modal_mfem->GetElementVertices(element, modal_vertices);
+        check(context_mfem->GetElementGeometry(element) ==
+                  modal_mfem->GetElementGeometry(element),
+              "MFEM import preserves ordered element geometry");
+        check(context_mfem->GetAttribute(element) == modal_mfem->GetAttribute(element),
+              "MFEM import preserves ordered element attributes");
+        check(context_vertices == modal_vertices,
+              "MFEM import preserves ordered element vertices");
+    }
+    for (int boundary = 0; boundary < context_mfem->GetNBE(); ++boundary) {
+        mfem::Array<int> context_vertices;
+        mfem::Array<int> modal_vertices;
+        context_mfem->GetBdrElementVertices(boundary, context_vertices);
+        modal_mfem->GetBdrElementVertices(boundary, modal_vertices);
+        check(context_mfem->GetBdrElementGeometry(boundary) ==
+                  modal_mfem->GetBdrElementGeometry(boundary),
+              "MFEM import preserves ordered boundary geometry");
+        check(context_mfem->GetBdrAttribute(boundary) ==
+                  modal_mfem->GetBdrAttribute(boundary),
+              "MFEM import preserves ordered boundary attributes");
+        check(context_vertices == modal_vertices,
+              "MFEM import preserves ordered boundary vertices");
+    }
+}
+
+void check_context_modal_mesh_import_identity(const fullmag_fem_mesh_desc &mesh)
+{
+    fullmag::fem::Context context;
+    std::string context_error;
+    check(fullmag::fem::initialize_mesh_plan_fields(context, mesh, context_error),
+          context_error.c_str());
+    fullmag::fem::FemMeshRuntimeState modal_mesh;
+    std::string modal_error;
+    check(fd::import_modal_shared_domain_mesh(mesh, modal_mesh, modal_error),
+          modal_error.c_str());
+    check_canonical_mesh_identity(context.mesh, modal_mesh);
+    check_mfem_ordered_topology_identity(context.mesh, modal_mesh);
+}
+
+void check_context_modal_mesh_rejection_identity(
+    const fullmag_fem_mesh_desc &mesh,
+    const char *message)
+{
+    fullmag::fem::Context context;
+    std::string context_error;
+    check(!fullmag::fem::initialize_mesh_plan_fields(context, mesh, context_error), message);
+    fullmag::fem::FemMeshRuntimeState modal_mesh;
+    std::string modal_error;
+    check(!fd::import_modal_shared_domain_mesh(mesh, modal_mesh, modal_error), message);
+    check(!context_error.empty() && context_error == modal_error,
+          "Context and modal mesh import reject through the same admission contract");
 }
 
 double matrix_value(const fd::PoissonAirboxSharedDomainCsrMatrix &matrix,
@@ -1472,6 +1606,18 @@ int main()
         film_air_facet_markers.data(), film_air_facet_markers.size(),
         film_air_periodic_node_pairs.data(), film_air_periodic_node_pairs.size(),
         film_air_periodic_boundary_markers.data(), film_air_periodic_boundary_markers.size()};
+    check_context_modal_mesh_import_identity(film_air_mesh);
+    fullmag_fem_mesh_desc invalid_global_ordinals_mesh = film_air_mesh;
+    invalid_global_ordinals_mesh.cell_global_ordinals_len = 1u;
+    check_context_modal_mesh_rejection_identity(
+        invalid_global_ordinals_mesh,
+        "Context and modal imports reject incomplete cell global ordinals");
+    const std::vector<std::uint32_t> invalid_typed_cell_offsets = {0u, 4u, 7u};
+    fullmag_fem_mesh_desc invalid_typed_csr_mesh = film_air_mesh;
+    invalid_typed_csr_mesh.cell_offsets = invalid_typed_cell_offsets.data();
+    check_context_modal_mesh_rejection_identity(
+        invalid_typed_csr_mesh,
+        "Context and modal imports reject invalid typed cell CSR");
     const std::vector<double> film_air_equilibrium = {
         0.0, 0.0, 1.0,
         0.0, 0.0, 1.0,
@@ -1862,8 +2008,8 @@ int main()
     interleaved_payload.mesh = &interleaved_mesh;
     expect_map_binding_rejection(
         interleaved_payload,
-        "magnetic node ordering is not bound to the marker map",
-        "interleaved magnetic compact-node order must fail closed");
+        "FEM mesh cell has non-positive Jacobian at order-two validation points",
+        "invalid interleaved magnetic topology must fail before map binding");
     FullmagFemModalSharedDomainPayload altered_magnetic_part_payload = film_air_payload;
     altered_magnetic_part_payload.magnetic_part_identity = "magnetic:other";
     expect_map_binding_rejection(
@@ -2115,11 +2261,11 @@ int main()
         all_airbox_markers.data(), all_airbox_markers.size(),
         "requires both magnetic and airbox cell regions");
     expect_region_map_rejection(
-        nullptr, 0u, "missing the magnetic/airbox cell marker map");
+        nullptr, 0u, "FEM mesh cell_markers length must equal type count");
     const std::vector<std::uint32_t> short_markers = {1u};
     expect_region_map_rejection(
         short_markers.data(), short_markers.size(),
-        "cell marker count does not match the mesh");
+        "FEM mesh cell_markers length must equal type count");
 
     FullmagFemModalSharedDomainPayload missing_linearization_digest = film_air_payload;
     missing_linearization_digest.linearization_state_digest = nullptr;

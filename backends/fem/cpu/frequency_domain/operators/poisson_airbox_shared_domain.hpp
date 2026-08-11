@@ -16,6 +16,10 @@
 #include <mfem.hpp>
 #endif
 
+namespace fullmag::fem {
+struct FemMeshRuntimeState;
+}
+
 namespace fullmag::fem::frequency_domain {
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -150,6 +154,14 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
     std::uint64_t expected_node_count,
     ModalSharedDomainValidationResult *out_validation,
     char error_message[256]) noexcept;
+
+/* Internal modal adapter over the canonical Context mesh admission contract.
+ * It preserves the typed mesh order and derived periodic classes without
+ * maintaining a second, weaker mesh validator in the frequency-domain path. */
+bool import_modal_shared_domain_mesh(
+    const fullmag_fem_mesh_desc &mesh,
+    fullmag::fem::FemMeshRuntimeState &out_mesh,
+    std::string &error);
 
 /*
  * Assemble the magnetic energy-Hessian block from the accepted backend-neutral

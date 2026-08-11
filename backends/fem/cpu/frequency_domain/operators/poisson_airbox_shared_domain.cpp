@@ -2,6 +2,7 @@
 
 #if FULLMAG_HAS_MFEM_STACK
 
+#include "context.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "frequency_domain/canonical_digest.hpp"
@@ -626,62 +627,6 @@ bool copy_payload_span(
     return true;
 }
 
-bool copy_mesh_payload(
-    const fullmag_fem_mesh_desc &mesh,
-    fullmag::fem::FemMeshRuntimeState &out,
-    std::string &error)
-{
-    if (mesh.abi_version != FULLMAG_FEM_MESH_DESC_ABI_VERSION ||
-        mesh.struct_size != sizeof(fullmag_fem_mesh_desc) ||
-        mesh.nodes_xyz_len == 0u || mesh.nodes_xyz_len % 3u != 0u ||
-        mesh.cell_types_len == 0u ||
-        mesh.nodes_xyz_len / 3u > std::numeric_limits<std::uint32_t>::max() ||
-        mesh.cell_types_len > std::numeric_limits<std::uint32_t>::max() ||
-        mesh.facet_types_len > std::numeric_limits<std::uint32_t>::max()) {
-        error = "shared-domain payload carries an invalid mesh descriptor";
-        return false;
-    }
-    out = fullmag::fem::FemMeshRuntimeState{};
-    out.n_nodes = static_cast<std::uint32_t>(mesh.nodes_xyz_len / 3u);
-    out.n_elements = static_cast<std::uint32_t>(mesh.cell_types_len);
-    out.n_boundary_faces = static_cast<std::uint32_t>(mesh.facet_types_len);
-    const bool copied =
-        copy_payload_span(mesh.nodes_xyz, mesh.nodes_xyz_len, out.nodes_xyz, error, "nodes_xyz") &&
-        copy_payload_span(mesh.cell_types, mesh.cell_types_len, out.cell_types, error, "cell_types") &&
-        copy_payload_span(mesh.cell_offsets, mesh.cell_offsets_len, out.cell_offsets, error, "cell_offsets") &&
-        copy_payload_span(mesh.cell_nodes, mesh.cell_nodes_len, out.cell_nodes, error, "cell_nodes") &&
-        copy_payload_span(mesh.cell_global_ordinals, mesh.cell_global_ordinals_len,
-                          out.cell_global_ordinals, error, "cell_global_ordinals") &&
-        copy_payload_span(mesh.cell_markers, mesh.cell_markers_len, out.cell_markers, error, "cell_markers") &&
-        copy_payload_span(mesh.facet_types, mesh.facet_types_len, out.facet_types, error, "facet_types") &&
-        copy_payload_span(mesh.facet_roles, mesh.facet_roles_len, out.facet_roles, error, "facet_roles") &&
-        copy_payload_span(mesh.facet_offsets, mesh.facet_offsets_len, out.facet_offsets, error, "facet_offsets") &&
-        copy_payload_span(mesh.facet_nodes, mesh.facet_nodes_len, out.facet_nodes, error, "facet_nodes") &&
-        copy_payload_span(mesh.facet_global_ordinals, mesh.facet_global_ordinals_len,
-                          out.facet_global_ordinals, error, "facet_global_ordinals") &&
-        copy_payload_span(mesh.facet_markers, mesh.facet_markers_len, out.facet_markers, error, "facet_markers") &&
-        copy_payload_span(mesh.periodic_node_pairs, mesh.periodic_node_pairs_len,
-                          out.periodic_node_pairs, error, "periodic_node_pairs");
-    if (!copied) {
-        return false;
-    }
-    if (mesh.periodic_boundary_pair_markers_len % 2u != 0u) {
-        error = "shared-domain payload periodic boundary marker pairs must have even cardinality";
-        return false;
-    }
-    out.periodic_boundary_marker_set.clear();
-    for (std::uint64_t index = 0;
-         index < mesh.periodic_boundary_pair_markers_len;
-         ++index) {
-        if (mesh.periodic_boundary_pair_markers == nullptr) {
-            error = "shared-domain payload periodic boundary marker pairs are null";
-            return false;
-        }
-        out.periodic_boundary_marker_set.insert(mesh.periodic_boundary_pair_markers[index]);
-    }
-    return true;
-}
-
 struct OwnedNativeV6View {
     std::vector<std::uint32_t> region_ids{};
     std::vector<std::uint32_t> boundary_axis_masks{};
@@ -960,6 +905,19 @@ bool validate_canonical_reduction_map(
 }
 
 } // namespace
+
+bool import_modal_shared_domain_mesh(
+    const fullmag_fem_mesh_desc &mesh,
+    fullmag::fem::FemMeshRuntimeState &out_mesh,
+    std::string &error)
+{
+    fullmag::fem::Context context;
+    if (!fullmag::fem::initialize_mesh_plan_fields(context, mesh, error)) {
+        return false;
+    }
+    out_mesh = std::move(context.mesh);
+    return true;
+}
 
 FrequencyDomainStatus compute_modal_shared_domain_map_binding_digest(
     const FullmagFemModalSharedDomainPayload &payload,
@@ -2397,7 +2355,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         }
         fullmag::fem::FemMeshRuntimeState source{};
         std::string error;
-        if (!copy_mesh_payload(*payload.mesh, source, error)) {
+        if (!import_modal_shared_domain_mesh(*payload.mesh, source, error)) {
             copy_error(out_result->error_message, error.c_str());
             return out_result->status;
         }
