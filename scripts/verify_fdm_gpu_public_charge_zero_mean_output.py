@@ -52,7 +52,10 @@ def main() -> int:
     assert execution["resolved_engine"] == "cuda_fdm_charge_only"
     assert execution["gauge_policy"] == "zero_mean_per_free_component"
     for metric in ("physical_residual", "component_balance", "electrode_balance"):
-        assert execution[metric] < 1.0e-12, f"{metric} exceeds tolerance"
+        value = execution[metric]
+        assert math.isfinite(value) and 0.0 <= value < 1.0e-12, (
+            f"{metric} must be finite and in [0, 1e-12), got {value!r}"
+        )
     return 0
 
 

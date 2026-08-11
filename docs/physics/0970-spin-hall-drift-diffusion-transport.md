@@ -863,11 +863,12 @@ przerwanym po jednej iteracji pochodzi z celowej fault-injection w transfer-audi
 i nie jest błędem bramki.
 
 Ten wynik zamyka managed proof bounded zero-mean realization, ale nie zmienia
-granic publicznej kwalifikacji: publiczny przepływ charge-only jest opisany
-osobno w sekcji 7.3, natomiast nie ma jeszcze publicznego zero-mean gauge,
-persistent Krylov warm start w tym przepływie, CUDA steady spin/SHE/mixing/
-torque, compute-sanitizer, mesh convergence, cross-backend parity ani
-produkcyjnego statusu. Ogólna capability pozostaje `semantic_only`.
+granic publicznej kwalifikacji: publiczny zero-mean gauge istnieje wyłącznie
+dla opisanego w sekcji 7.3 pełnopowierzchniowego profilu dwóch elektrod
+`NormalCurrentElectrode`. Nie ma persistent Krylov warm start w tym przepływie,
+CUDA steady spin/SHE/mixing/torque, compute-sanitizer, mesh convergence,
+cross-backend parity ani produkcyjnego statusu. Ogólna capability pozostaje
+`semantic_only`.
 
 #### Ownership, lifecycle, and immutable charge state
 
@@ -1868,9 +1869,16 @@ $J_n(x_{\max})=-2.0\times10^{13}\,\mathrm{A/m^2}$, the stored axis current
 is $J_x=-2.0\times10^{13}\,\mathrm{A/m^2}$ because $J_n=\mathbf n\cdot
 \mathbf J_c$ and $\mathbf J_c=-\sigma\nabla V$. Hence the zero-mean
 cell-centre oracle in increasing x order is
-$V=(-0.025,+0.025)\,\mathrm{V}$. The verifier also requires physical,
-component and electrode balances below $10^{-12}$ and provenance
-`gauge_policy=zero_mean_per_free_component`. This is an electrical prerequisite
+$V=(-0.025,+0.025)\,\mathrm{V}$. Publiczny preflight odtwarza każdy rekord
+zewnętrznej ściany pełnej siatki (łącznie
+$2(n_y n_z+n_x n_z+n_x n_y)$), wymaga dokładnego pokrycia bez duplikatów oraz
+sprawdza zgodność `axis`, `side`, `canonical_face_index` i `adjacent_cell`.
+Po wyliczeniu skończonych prądów terminali
+$I_f=A_fJ_{n,f}$ stosuje tę samą wymiarową regułę kompatybilności co owner
+CUDA: $|\sum_f I_f|\le64\,\epsilon_{\mathrm{f64}}\sum_f|I_f|$; przy zerowej
+skali legalne jest wyłącznie dokładne zero. The verifier also requires finite,
+non-negative physical, component and electrode balances below $10^{-12}$ and
+provenance `gauge_policy=zero_mean_per_free_component`. This is an electrical prerequisite
 for later solved-current racetrack/SHE-to-SOT/STT/Hall and current-derived
 Oersted work; it does not itself enable any spin torque, Hall observable or
 Oersted field.
@@ -1934,7 +1942,9 @@ a qualified workload without the validation gates above.
 | Public charge fixture and analytic oracle | examples/fdm_gpu_charge_public.py; scripts/verify_fdm_gpu_public_charge_output.py | study; main | define the 2 x 1 x 1 affine voltage fixture and independently verify V/J, residuals, and provenance | managed public charge gate |
 | Public charge managed recipe | justfile | verify-fdm-gpu-public-charge-runtime | compile the CUDA runtime and CLI through the container-backed managed path, run the fixture, and execute the oracle | actual RTX 4080 SUPER; unvalidated |
 | `fdm-gpu-public-charge-planner`: public pure-Neumann planner profile | crates/fullmag-plan/src/current_transport.rs | bounded_fdm_gpu_charge_boundary_profile | require two opposite balanced current-density faces, zero-mean gauge, and four insulating faces without relaxing the FDM/CUDA/FP64/strict scope | planner regression |
-| `fdm-gpu-public-charge-runner`: public pure-Neumann runner profile | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | validate_boundary_faces | map zero-mean gauge to the CUDA ABI and reject unbalanced, mixed, or gauge-incompatible boundary profiles before native execution | runner ABI regression |
+| `fdm-gpu-public-charge-runner`: public pure-Neumann preflight | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | validate_boundary_faces | reconstruct and exactly cover all external FDM faces; reject noncanonical geometry, nonfinite terminal currents, unbalanced, mixed, or gauge-incompatible profiles before native execution | runner ABI regression |
+| `fdm-gpu-public-charge-runner`: public CUDA ABI lifecycle | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_with_abi | map the selected gauge policy to the frozen CUDA ABI and execute the bounded context/snapshot lifecycle | runner ABI regression |
+| `fdm-gpu-public-charge-runner`: public fields and provenance | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_public_gpu_charge_only | publish accepted V/J fields and the resolved zero-mean provenance without fallback | managed public charge gates |
 | `fdm-gpu-public-zero-mean-fixture` and `fdm-gpu-public-zero-mean-verifier`: public pure-Neumann fixture and analytic oracle | examples/fdm_gpu_charge_zero_mean_public.py; scripts/verify_fdm_gpu_public_charge_zero_mean_output.py | build_study; main | define the balanced 2 x 1 x 1 current-density fixture and verify sign, gauge, balances, and provenance | managed pure-Neumann gate |
 | Public pure-Neumann managed recipe | justfile | verify-fdm-gpu-public-charge-zero-mean-runtime | compile through the container-backed runtime, execute the public fixture, and run the independent oracle | managed actual-device gate |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |

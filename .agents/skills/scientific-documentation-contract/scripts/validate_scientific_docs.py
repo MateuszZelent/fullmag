@@ -91,6 +91,8 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
             rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?fn\s+{escaped}\s*\(",
             re.MULTILINE,
         )
+    elif Path(path).name == "justfile":
+        pattern = re.compile(rf"^\s*{escaped}\s*:\s*$", re.MULTILINE)
     else:
         pattern = re.compile(
             rf"^(?!\s*return\b)\s*(?:"

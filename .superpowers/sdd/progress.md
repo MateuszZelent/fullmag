@@ -92,4 +92,4 @@ Control Room Thin Film authoring slice: complete (commits 087a7411..bc6290a4, re
 
 | Task | Status | RED evidence | GREEN evidence | Reviews | Commit |
 |---:|---|---|---|---|---|
-| 1 | complete | planner: `charge_gauge=ZeroMean`; runner: boundary-reference-only guard | planner 9/9; runner 11/11; docs 16/16; managed CUDA E2E 0, $V=[-0.025,+0.025]$ V, $J_x=-2e13$ A/m² | pending independent review | pending commit |
+| 1 | poprawki po review zaimplementowane; re-review pending | I1: mały niezbilansowany $5\times10^{-13}\,\mathrm{A}$ był akceptowany przez ukrytą skalę $1\,\mathrm{A}$; I2: brakujący sidewall i zła `adjacent_cell` dochodziły do ABI; M1: test różnych osi nie izolował wspólnej osi | planner 10/10; runner 14/14; docs 16/16; source-map 0; validator source-map 22/22; managed CUDA E2E 0, $V=[-0.025,+0.025]$ V, $J_x=-2e13$ A/m², residual/bilanse skończone i $<10^{-12}$ | `REQUEST_CHANGES` I1--I3 i M1--M3 pokryte; końcowa akceptacja oczekuje na niezależny re-review | `2e00562a37f61b26666cf51598e1e358bfb9d742..(follow-up fix commit)` |

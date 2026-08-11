@@ -13101,7 +13101,11 @@ pełnopowierzchniowe elektrody `NormalCurrentElectrode` oraz cztery
 normalny $J_n=\mathbf n\cdot\mathbf J_c$ w $\mathrm{A/m^2}$, gdzie
 $\mathbf J_c=-\sigma\nabla V$. Planner wyznacza pole powierzchni z fizycznej
 siatki, wymaga wspólnej osi, przeciwnych stron i zerowego całkowitego strumienia
-z tolerancją względną $10^{-12}$. Profile mieszane Voltage/CurrentDensity,
+z regułą $|\sum_f I_f|\le64\,\epsilon_{\mathrm{f64}}\sum_f|I_f|$, gdzie
+$I_f=A_fJ_{n,f}$ w amperach; przy zerowej skali legalne jest wyłącznie dokładne
+zero. Runner odtwarza wszystkie $2(n_y n_z+n_x n_z+n_x n_y)$ zewnętrzne rekordy
+i fail-closed sprawdza ich pełne pokrycie, `axis`, `side`,
+`canonical_face_index` oraz `adjacent_cell`. Profile mieszane Voltage/CurrentDensity,
 niezbilansowane źródła, różne osie i gauge niezgodna z elektrodami są błędami
 IR lub fail-closed preflightu; nie dochodzą do CUDA ABI.
 
@@ -13121,8 +13125,8 @@ Recepta `just verify-fdm-gpu-public-charge-zero-mean-runtime` wykonuje pełną
 ścieżkę Python -> ProblemIR -> planner -> runner -> CUDA ABI -> artefakty
 w kontenerze zarządzanym, przy jawnie wymuszonym GPU/FP64/strict i bez
 fallbacku. Niezależny weryfikator odrzuca niepoprawny znak, niewłaściwą gauge,
-brak provenance, fallback, residual lub bilans komponentu/elektrod większy niż
-$10^{-12}$. Bramka zakończyła się kodem 0 na RTX 4080 SUPER (UUID
+brak provenance, fallback, nieskończony albo ujemny residual/bilans lub wartość
+nie mniejszą niż $10^{-12}$. Bramka zakończyła się kodem 0 na RTX 4080 SUPER (UUID
 `fcb9fbf1828437c7af5b76bcbf2d2937`, CUDA runtime `12040`, driver `13010`,
 build digest `d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`):
 `iterations=1`, residual algebraiczny `4.1150157270026995e-17`, residual

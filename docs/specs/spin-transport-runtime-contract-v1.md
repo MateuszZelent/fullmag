@@ -1819,10 +1819,16 @@ W tej bounded ścieżce planner i runner dopuszczają dwa, rozłączne profile
 `gauge_policy=zero_mean_per_free_component`, dokładnie dwóch przeciwnych
 powierzchni `NormalCurrentElectrode` o tym samym module gęstości
 `n·J_charge` i przeciwnym całkowitym strumieniu przez pełne powierzchnie
-siatki, oraz czterech `Insulating`. Profile mieszane, niezbilansowane, o
-różnych osiach lub z niezgodną gauge są odrzucane przed wywołaniem ABI. Nie
-wynika z tego obsługa częściowych elektrod, masek, domen nieprostokątnych ani
-ogólnego Neumanna; rozszerzenie wymaga osobnej specyfikacji i kwalifikacji.
+siatki, oraz czterech `Insulating`. Runner rekonstruuje dokładnie
+`2*(ny*nz + nx*nz + nx*ny)` zewnętrznych records i weryfikuje ich pełne
+pokrycie bez duplikatów, canonical geometry oraz komórkę sąsiednią. Dla
+skończonych $I_f=A_fJ_{n,f}$ preflight i native owner stosują
+`abs(sum(I_f)) <= 64 * f64::EPSILON * sum(abs(I_f))`; przy zerowej skali
+wyłącznie dokładny zerowy strumień jest legalny. Profile mieszane,
+niezbilansowane, o różnych osiach lub z niezgodną gauge są odrzucane przed
+wywołaniem ABI. Nie wynika z tego obsługa częściowych elektrod, masek, domen
+nieprostokątnych ani ogólnego Neumanna; rozszerzenie wymaga osobnej
+specyfikacji i kwalifikacji.
 
 The ABI is separate from `fullmag_fdm_cpu_*` and from the LLG `Context`. It
 uses two opaque, non-interchangeable **handle types** whose names cannot also

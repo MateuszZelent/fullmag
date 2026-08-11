@@ -250,10 +250,10 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
             "charge_domain=not_full_rectangular_active_grid".into(),
         ]));
     }
-    if !bounded_fdm_gpu_charge_boundary_profile(&descriptor, context) {
-        return Err(fdm_gpu_charge_scope_error(vec![
-            "boundary_contract=two_single_surface_voltage_electrodes_plus_insulating_or_two_opposite_balanced_current_density_electrodes_plus_insulating".into(),
-        ]));
+    if let Err(boundary_contract) = bounded_fdm_gpu_charge_boundary_profile(&descriptor, context) {
+        return Err(fdm_gpu_charge_scope_error(vec![format!(
+            "boundary_contract={boundary_contract}"
+        )]));
     }
     Ok(vec![descriptor])
 }
@@ -261,7 +261,7 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
 fn bounded_fdm_gpu_charge_boundary_profile(
     descriptor: &ResolvedFdmGpuChargeTransportIR,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
-) -> bool {
+) -> Result<(), &'static str> {
     use fullmag_ir::ResolvedChargeBoundaryConditionIR as Condition;
 
     let voltage = descriptor
@@ -288,46 +288,78 @@ fn bounded_fdm_gpu_charge_boundary_profile(
     match descriptor.charge_gauge {
         ChargePotentialGaugeIR::DirichletReference => {
             if voltage.len() != 2 || !current.is_empty() || insulating != 4 {
-                return false;
+                return Err("two_single_surface_voltage_electrodes_plus_insulating");
             }
             let Some((first_axis, first_side, _)) = boundary_face_geometry(voltage[0], context)
             else {
-                return false;
+                return Err("voltage_electrode_geometry");
             };
             let Some((second_axis, second_side, _)) = boundary_face_geometry(voltage[1], context)
             else {
-                return false;
+                return Err("voltage_electrode_geometry");
             };
-            voltage[0].source_id != voltage[1].source_id
-                && first_axis == second_axis
-                && first_side == -second_side
+            if voltage[0].source_id == voltage[1].source_id
+                || first_axis != second_axis
+                || first_side != -second_side
+            {
+                return Err("voltage_electrodes_must_be_on_opposite_faces_of_one_axis");
+            }
+            Ok(())
         }
         ChargePotentialGaugeIR::ZeroMean => {
-            if voltage.is_empty() && current.len() == 2 && insulating == 4 {
-                let Some((first_axis, first_side, first_area, first_density)) =
-                    current_boundary_geometry(current[0], context)
-                else {
-                    return false;
-                };
-                let Some((second_axis, second_side, second_area, second_density)) =
-                    current_boundary_geometry(current[1], context)
-                else {
-                    return false;
-                };
-                let flux = first_area * first_density + second_area * second_density;
-                let flux_scale = (first_area * first_density)
-                    .abs()
-                    .max((second_area * second_density).abs())
-                    .max(1.0);
-                first_axis == second_axis
-                    && first_side == -second_side
-                    && current[0].source_id != current[1].source_id
-                    && flux.abs() <= 1.0e-12 * flux_scale
-            } else {
-                false
+            if !voltage.is_empty() || current.len() != 2 || insulating != 4 {
+                return Err("two_opposite_balanced_current_density_electrodes_plus_insulating");
             }
+            let Some((first_axis, first_side, first_area, first_density)) =
+                current_boundary_geometry(current[0], context)
+            else {
+                return Err("current_density_electrode_geometry");
+            };
+            let Some((second_axis, second_side, second_area, second_density)) =
+                current_boundary_geometry(current[1], context)
+            else {
+                return Err("current_density_electrode_geometry");
+            };
+            if first_axis != second_axis
+                || first_side != -second_side
+                || current[0].source_id == current[1].source_id
+            {
+                return Err("current_density_electrodes_must_be_on_opposite_faces_of_one_axis");
+            }
+            let Some(first_current_a) = finite_terminal_current(first_area, first_density) else {
+                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
+            };
+            let Some(second_current_a) = finite_terminal_current(second_area, second_density)
+            else {
+                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
+            };
+            let Some(flux_a) = finite_sum(first_current_a, second_current_a) else {
+                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
+            };
+            let Some(flux_scale_a) = finite_sum(first_current_a.abs(), second_current_a.abs())
+            else {
+                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
+            };
+            let compatibility_tolerance_a = 64.0 * f64::EPSILON * flux_scale_a;
+            if !compatibility_tolerance_a.is_finite()
+                || (flux_scale_a == 0.0 && flux_a != 0.0)
+                || (flux_scale_a != 0.0 && flux_a.abs() > compatibility_tolerance_a)
+            {
+                return Err("current_density_electrodes_must_have_finite_area_weighted_balance");
+            }
+            Ok(())
         }
     }
+}
+
+fn finite_terminal_current(area_m2: f64, density_apm2: f64) -> Option<f64> {
+    let current_a = area_m2 * density_apm2;
+    current_a.is_finite().then_some(current_a)
+}
+
+fn finite_sum(left: f64, right: f64) -> Option<f64> {
+    let sum = left + right;
+    sum.is_finite().then_some(sum)
 }
 
 fn current_boundary_geometry(
@@ -764,9 +796,16 @@ mod tests {
                 surface_id: "y_max".into(),
                 orientation: [0.0, 1.0, 0.0],
             }],
-            outward_current_density_apm2: -2.0e13,
+            // The x-face has 10 x 3 cells and the y-face has 100 x 3 cells
+            // in this intentionally non-cubic fixture.
+            // Keep the integrated currents balanced so this isolates the
+            // same-axis constraint.
+            outward_current_density_apm2: -2.0e13 / 10.0,
         };
-        assert_gpu_charge_scope_rejected(&different_axes, "boundary_contract=");
+        assert_gpu_charge_scope_rejected(
+            &different_axes,
+            "boundary_contract=current_density_electrodes_must_be_on_opposite_faces_of_one_axis",
+        );
 
         let mut mixed = same_sign.clone();
         let charge = charge_definition_mut(&mut mixed);
@@ -799,6 +838,35 @@ mod tests {
             }),
             "unexpected gauge mismatch rejection: {:?}",
             wrong_gauge_error.reasons,
+        );
+    }
+
+    #[test]
+    fn bounded_public_fdm_gpu_zero_mean_charge_rejects_small_area_weighted_imbalance() {
+        let mut problem = bounded_gpu_charge_problem();
+        let charge = charge_definition_mut(&mut problem);
+        charge.gauge = ChargePotentialGaugeIR::ZeroMean;
+        for boundary in &mut charge.boundaries {
+            let ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } = boundary else {
+                continue;
+            };
+            let outward_current_density_apm2 = if id == "x_min" {
+                2.0e13
+            } else {
+                // A 5e3 A/m2 density mismatch is 5e-13 A over this 1e-16 m2
+                // terminal: the old hidden 1 A scale admitted it.
+                -2.0e13 + 5.0e3
+            };
+            *boundary = ChargeBoundaryIR::NormalCurrentElectrode {
+                id: std::mem::take(id),
+                surfaces: std::mem::take(surfaces),
+                outward_current_density_apm2,
+            };
+        }
+
+        assert_gpu_charge_scope_rejected(
+            &problem,
+            "boundary_contract=current_density_electrodes_must_have_finite_area_weighted_balance",
         );
     }
 
