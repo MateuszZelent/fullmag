@@ -48,6 +48,14 @@ export interface AnalysisFieldOverlayState {
   cellOrigin?: [number, number, number];
   floquetSpatialConvention?: FloquetSpatialConvention;
   phasorConvention?: PhasorConvention;
+  provenance?: {
+    artifactRevision?: number | string;
+    equilibriumId?: string;
+    kContextKind?: string;
+    normalization?: string;
+    runId?: string;
+    stageId?: string;
+  };
 }
 
 type AnalysisFieldOverlayListener = () => void;
@@ -68,6 +76,7 @@ export class AnalysisFieldOverlayController {
       ...next,
       ...(next.appearance ? { appearance: { ...next.appearance } } : {}),
       ...(next.animation ? { animation: { ...next.animation } } : {}),
+      ...(next.provenance ? { provenance: { ...next.provenance } } : {}),
       query: { ...next.query },
     };
     this.notify();
@@ -90,6 +99,11 @@ export class AnalysisFieldOverlayController {
           ? { animation: { ...this.snapshot.animation } }
           : {}
         : { animation: { ...next.animation } }),
+      ...(next.provenance === undefined
+        ? this.snapshot.provenance
+          ? { provenance: { ...this.snapshot.provenance } }
+          : {}
+        : { provenance: { ...next.provenance } }),
       query: next.query ? { ...next.query } : { ...this.snapshot.query },
     });
   }
@@ -100,6 +114,11 @@ export class AnalysisFieldOverlayController {
     }
     this.snapshot = null;
     this.notify();
+  }
+
+  belongsToResultContext(runId: string | null | undefined): boolean {
+    const ownerRunId = this.snapshot?.provenance?.runId;
+    return !this.snapshot || !ownerRunId || ownerRunId === runId;
   }
 
   subscribe(listener: AnalysisFieldOverlayListener): () => void {
@@ -141,8 +160,25 @@ function analysisFieldOverlayStateEquals(
     fieldVectorQueryEquals(left.query, right.query) &&
     numberArrayEquals(left.wavevectorKf, right.wavevectorKf) &&
     numberArrayEquals(left.cellOrigin, right.cellOrigin) &&
+    analysisFieldOverlayProvenanceEquals(left.provenance, right.provenance) &&
     left.floquetSpatialConvention === right.floquetSpatialConvention &&
     left.phasorConvention === right.phasorConvention
+  );
+}
+
+function analysisFieldOverlayProvenanceEquals(
+  left: AnalysisFieldOverlayState["provenance"],
+  right: AnalysisFieldOverlayState["provenance"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    (left.artifactRevision ?? null) === (right.artifactRevision ?? null) &&
+    (left.equilibriumId ?? null) === (right.equilibriumId ?? null) &&
+    (left.kContextKind ?? null) === (right.kContextKind ?? null) &&
+    (left.normalization ?? null) === (right.normalization ?? null) &&
+    (left.runId ?? null) === (right.runId ?? null) &&
+    (left.stageId ?? null) === (right.stageId ?? null)
   );
 }
 

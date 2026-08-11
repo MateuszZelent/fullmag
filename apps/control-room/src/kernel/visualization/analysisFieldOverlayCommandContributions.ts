@@ -295,6 +295,7 @@ function overlayStateFromContext(
     activeOverlay?.visualizationPhaseRad ??
     activeOverlay?.query.phase_rad ??
     0;
+  const selectedRef = selectedFrequencyDomainRef(context);
   return {
     ...(appearance ? { appearance } : {}),
     fieldId,
@@ -304,6 +305,17 @@ function overlayStateFromContext(
       : overlayQueryWithDefaultViewFromContext(context, defaultView, phaseRad),
     source: resolvedSource,
     visualizationPhaseRad: phaseRad,
+    ...(selectedRef
+      ? {
+          provenance: {
+            artifactRevision: selectedRef.artifactRevision,
+            equilibriumId: selectedRef.equilibriumId,
+            kContextKind: selectedRef.kContextKind,
+            runId: selectedRef.analysisRunId,
+            stageId: selectedRef.analysisStageId,
+          },
+        }
+      : {}),
   };
 }
 

@@ -219,17 +219,14 @@ function modeVisualizationNode(
 ): ExplorerNode | null {
   const activeOverlay = resources.activeAnalysisFieldOverlay ?? null;
   if (!activeOverlay) return null;
-
-  const fields = modeVisualizationFields(resources);
-  if (fields.length === 0) return null;
-
   const nodeId = `${parentId}:mode-visualization`;
-  const primaryField =
-    fields.find(
-      (field) =>
-        field.fieldId === activeOverlay.fieldId &&
-        field.source === activeOverlay.source,
-    ) ?? fields[0];
+  const primaryField: ModeVisualizationFieldNode = {
+    badge: activeOverlay.query.view ?? "phase_rotated_real",
+    fieldId: activeOverlay.fieldId,
+    id: "active",
+    label: activeOverlay.label,
+    source: activeOverlay.source,
+  };
   const rootIdentity: ModeVisualizationRootIdentity = {
     fieldId: primaryField.fieldId,
     source: primaryField.source,
@@ -237,9 +234,9 @@ function modeVisualizationNode(
   return {
     id: nodeId,
     kind: "object.mode_visualization",
-    label: "Mode visualization",
+    label: "Active Analysis Overlay",
     parentId,
-    badge: `${fields.length} field(s)`,
+    badge: activeOverlay.source === "eigen-mode" ? "Modal" : "Driven",
     analysisFieldSource: primaryField.source,
     ...(activeOverlay.query.view ? { analysisFieldView: activeOverlay.query.view } : {}),
     fieldId: primaryField.fieldId,
@@ -248,13 +245,15 @@ function modeVisualizationNode(
     icon: "wave",
     objectId: object.id,
     status: "ready",
-    children: modeVisualizationGroupNodes(
-      nodeId,
-      object.id,
-      fields,
-      activeOverlay,
-      rootIdentity,
-    ),
+    children: [
+      modeVisualizationFieldNode(
+        nodeId,
+        object.id,
+        primaryField,
+        activeOverlay,
+        rootIdentity,
+      ),
+    ],
   };
 }
 
