@@ -1864,6 +1864,58 @@ fn fdm_supports_interfacial_dmi_normal(normal: [f64; 3]) -> bool {
         && (normal[2] * inv_norm - 1.0).abs() <= 1e-12
 }
 
+pub const FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_two_d_stack_unqualified";
+pub const FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_push_pull_unqualified";
+pub const FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified";
+pub const FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_xy_offset_unqualified";
+
+/// Return stable reason codes for multilayer operator classes which the
+/// current CUDA runner cannot execute with the canonical CPU semantics.
+pub fn fdm_multilayer_cuda_containment_reason_codes(
+    mode: &str,
+    layers: &[FdmLayerPlanIR],
+) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+    if mode == "two_d_stack" {
+        reasons.push(FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED);
+    }
+    if layers
+        .iter()
+        .any(|layer| layer.transfer_kind == "push_pull")
+    {
+        reasons.push(FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED);
+    }
+    if let Some(reference_hz) = layers.first().map(|layer| layer.native_cell_size[2]) {
+        if layers
+            .iter()
+            .any(|layer| layer.native_cell_size[2] != reference_hz)
+        {
+            reasons.push(FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED);
+        }
+    }
+    if let Some(reference_center) = layers.first().map(fdm_layer_xy_center) {
+        if layers
+            .iter()
+            .map(fdm_layer_xy_center)
+            .any(|center| center != reference_center)
+        {
+            reasons.push(FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED);
+        }
+    }
+    reasons
+}
+
+fn fdm_layer_xy_center(layer: &FdmLayerPlanIR) -> [f64; 2] {
+    [
+        layer.native_origin[0] + 0.5 * layer.native_grid[0] as f64 * layer.native_cell_size[0],
+        layer.native_origin[1] + 0.5 * layer.native_grid[1] as f64 * layer.native_cell_size[1],
+    ]
+}
+
 fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
     let Some(first_layer) = layers.first() else {
         return false;
@@ -2688,8 +2740,20 @@ pub(crate) fn plan_fdm_multilayer(
         .collect::<Vec<_>>();
     let multilayer_topology_tokens =
         fullmag_ir::fdm_multilayer_topology_tokens(&selected_mode, &layers);
-    let native_cuda_lane =
-        runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
+    if runtime_requests_cuda(problem) {
+        errors.extend(
+            fdm_multilayer_cuda_containment_reason_codes(&selected_mode, &layers)
+                .into_iter()
+                .map(|reason_code| {
+                    format!(
+                        "{reason_code}: forced CUDA multilayer execution is not qualified for this operator class; use device='cpu'"
+                    )
+                }),
+        );
+    }
+    let native_cuda_lane = runtime_requests_cuda(problem)
+        && requested_strategy == "auto"
+        && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
         let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
         integrator == "auto"

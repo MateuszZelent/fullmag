@@ -6670,6 +6670,171 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
     ir
 }
 
+fn cuda_three_d_identity_multilayer_problem() -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: Some([20, 10, 1]),
+        common_cells_xy: None,
+    });
+    ir
+}
+
+fn assert_cuda_multilayer_rejects_reason(ir: &ProblemIR, reason_code: &str) {
+    let error = plan(ir).expect_err("unqualified CUDA multilayer operator must fail closed");
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains(reason_code)),
+        "missing reason code {reason_code}: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
+    let mut two_d_stack = cuda_three_d_identity_multilayer_problem();
+    two_d_stack
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints")
+        .mode = "two_d_stack".to_string();
+    let demag = two_d_stack
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints");
+    demag.common_cells = None;
+    demag.common_cells_xy = Some([20, 10]);
+    assert_cuda_multilayer_rejects_reason(
+        &two_d_stack,
+        "fdm_cuda_multilayer_two_d_stack_unqualified",
+    );
+
+    let mut push_pull = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { base, .. } = &mut push_pull.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    size[0] = 20e-9;
+    assert_cuda_multilayer_rejects_reason(&push_pull, "fdm_cuda_multilayer_push_pull_unqualified");
+
+    let mut heterogeneous_hz = cuda_three_d_identity_multilayer_problem();
+    let fdm = heterogeneous_hz
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("CUDA fixture must provide FDM hints");
+    fdm.per_magnet = Some(BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 1e-9],
+            },
+        ),
+    ]));
+    assert_cuda_multilayer_rejects_reason(
+        &heterogeneous_hz,
+        "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified",
+    );
+
+    let mut xy_offset = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut xy_offset.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    by[0] = 10e-9;
+    assert_cuda_multilayer_rejects_reason(&xy_offset, "fdm_cuda_multilayer_xy_offset_unqualified");
+}
+
+#[test]
+fn cpu_multilayer_preserves_two_d_push_pull_heterogeneous_hz_and_xy_offset() {
+    let mut cases = Vec::new();
+
+    let mut two_d_stack = cuda_three_d_identity_multilayer_problem();
+    let demag = two_d_stack
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints");
+    demag.mode = "two_d_stack".to_string();
+    demag.common_cells = None;
+    demag.common_cells_xy = Some([20, 10]);
+    cases.push(two_d_stack);
+
+    let mut push_pull = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { base, .. } = &mut push_pull.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    size[0] = 20e-9;
+    cases.push(push_pull);
+
+    let mut heterogeneous_hz = cuda_three_d_identity_multilayer_problem();
+    heterogeneous_hz
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("CUDA fixture must provide FDM hints")
+        .per_magnet = Some(BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 1e-9],
+            },
+        ),
+    ]));
+    cases.push(heterogeneous_hz);
+
+    let mut xy_offset = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut xy_offset.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    by[0] = 10e-9;
+    cases.push(xy_offset);
+
+    for mut ir in cases {
+        ir.problem_meta.runtime_metadata.remove("runtime_selection");
+        plan(&ir).expect("CPU multilayer containment scope must remain executable");
+    }
+}
+
 #[test]
 fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -7069,19 +7234,14 @@ fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
 }
 
 #[test]
-fn native_cuda_multilayer_keeps_supported_non_heun_integrators() {
-    let mut ir = stacked_two_body_multilayer_problem();
+fn native_cuda_three_d_identity_multilayer_keeps_supported_non_heun_integrators() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
         panic!("bootstrap study should be time evolution");
     };
     let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
     *integrator = "rk4".to_string();
-    ir.problem_meta.runtime_metadata.insert(
-        "runtime_selection".to_string(),
-        serde_json::json!({"device": "cuda"}),
-    );
-
-    let planned = plan(&ir).expect("native single-grid-compatible CUDA supports RK4");
+    let planned = plan(&ir).expect("native CUDA multilayer v2 supports three_d identity RK4");
     let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
         panic!("expected multilayer plan");
     };
@@ -7237,6 +7397,18 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         "runtime_selection".to_string(),
         serde_json::json!({"device": "cuda"}),
     );
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: Some([20, 10, 1]),
+        common_cells_xy: None,
+    });
     if let fullmag_ir::StudyIR::TimeEvolution {
         dynamics:
             fullmag_ir::DynamicsIR::Llg {
@@ -7295,13 +7467,34 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk45".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let cuda_plan = plan(&ir).expect("native-stacked CUDA multilayer RK45 should lower");
-    match cuda_plan.backend_plan {
-        BackendPlanIR::FdmMultilayer(multilayer) => {
-            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
-        }
-        other => panic!("expected FDM multilayer plan, got {other:?}"),
-    }
+    let explicit_error = plan(&ir).expect_err(
+        "explicit multilayer_convolution must not use the native single-grid fast path",
+    );
+    assert!(explicit_error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("staged CUDA") && reason.contains("rk45") }));
+
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("stacked fixture must provide demag hints")
+        .strategy = "auto".to_string();
+    let auto_plan = plan(&ir).expect("auto strategy preserves the legal native CUDA fast path");
+    let BackendPlanIR::FdmMultilayer(multilayer) = auto_plan.backend_plan else {
+        panic!("expected FDM multilayer plan");
+    };
+    assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
+
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("stacked fixture must provide demag hints")
+        .strategy = "multilayer_convolution".to_string();
 
     ir.materials.push(fullmag_ir::MaterialIR {
         name: "CoFeB".to_string(),
@@ -7324,7 +7517,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk23".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let staged = plan(&ir).expect("heterogeneous staged CUDA multilayer RK23 should lower");
+    let staged = plan(&ir).expect("heterogeneous-material CUDA multilayer RK23 should lower");
     match staged.backend_plan {
         BackendPlanIR::FdmMultilayer(multilayer) => {
             assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk23);
