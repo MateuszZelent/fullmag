@@ -1,12 +1,17 @@
 "use client";
 
 import {
+  Activity,
   Box,
   Focus,
   MoreHorizontal,
   RotateCcw,
   BarChart2,
   Check,
+  Database,
+  Gauge,
+  Layers3,
+  Play,
 } from "lucide-react";
 import { useId, useLayoutEffect, type ReactNode } from "react";
 
@@ -54,6 +59,17 @@ function statusVariant(
   return tone === "info" ? "default" : "secondary";
 }
 
+function InspectorIdentityIcon({ icon }: Pick<InspectorDescriptor, "icon">) {
+  if (icon === "airbox") return <Layers3 size={22} strokeWidth={1.5} />;
+  if (icon === "analysis") return <BarChart2 size={22} strokeWidth={1.5} />;
+  if (icon === "diagnostics") return <Gauge size={22} strokeWidth={1.5} />;
+  if (icon === "mesh") return <Database size={22} strokeWidth={1.5} />;
+  if (icon === "mode") return <Activity size={22} strokeWidth={1.5} />;
+  if (icon === "study") return <Play size={22} strokeWidth={1.5} />;
+  if (icon === "visualization") return <Focus size={22} strokeWidth={1.5} />;
+  return <Box size={22} strokeWidth={1.5} />;
+}
+
 export function InspectorShell({
   children,
   descriptor,
@@ -73,7 +89,11 @@ export function InspectorShell({
   }, [descriptor.tabs, descriptorKey]);
 
   return (
-    <section className="fm-inspector" aria-label="Inspector">
+    <section
+      aria-label="Inspector"
+      className="fm-inspector"
+      data-inspector-owner={descriptor.ownerId}
+    >
       <header className="fm-inspector__header">
         {descriptor.breadcrumbs.length > 0 ? (
           <nav className="fm-inspector__breadcrumbs" aria-label="Selection path">
@@ -101,7 +121,7 @@ export function InspectorShell({
         ) : null}
         <div className="fm-inspector__identity">
           <span className="fm-inspector__identity-icon" aria-hidden="true">
-            <Box size={22} strokeWidth={1.5} />
+            <InspectorIdentityIcon icon={descriptor.icon} />
           </span>
           <div className="fm-inspector__identity-copy">
             <h2 className="fm-inspector__title">{descriptor.title}</h2>

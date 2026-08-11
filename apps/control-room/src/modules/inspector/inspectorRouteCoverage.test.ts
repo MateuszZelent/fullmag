@@ -26,6 +26,7 @@ import {
   flattenExplorerNodes,
 } from "../explorer/builders/buildModelTree";
 import { modelTreeSnapshotFromScene } from "../explorer/builders/sceneModelTreeAdapter";
+import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveInspectorRoute } from "./inspectorRouteCatalog";
 
@@ -437,6 +438,17 @@ describe("inspector route coverage", () => {
       expect(panel?.id, `missing Inspector for ${node.id}`).toBeTruthy();
       expect(panel?.id, `placeholder for ${node.id}`).not.toBe("placeholder");
       expect(panel).toBe(route?.contribution);
+
+      const descriptor = resolveInspectorDescriptor({
+        kind: node.kind,
+        label: node.label,
+        moduleSource: "explorer",
+        nodeId: node.id,
+        objectId: node.objectId ?? null,
+        ref: null,
+      });
+      expect(descriptor.ownerId, `missing owner for ${node.id}`).toBe(route?.id);
+      expect(descriptor.icon, `missing icon for ${node.id}`).toBeTruthy();
     }
   });
 });
