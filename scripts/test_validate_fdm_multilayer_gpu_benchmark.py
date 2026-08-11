@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.analysis.validate_fdm_multilayer_gpu_benchmark import (
     ARTIFACT_SCHEMA,
     ATTESTATION_SCHEMA,
@@ -63,6 +65,9 @@ def benchmark_row(lane: str, layer_count: int) -> dict[str, object]:
         execution_provenance = {
             "execution_engine": "cuda_assisted_multilayer",
             "precision": "double",
+            "resolved_fallback": None,
+            "lossy_fallback_used": False,
+            "ignored_terms": [],
             "fft_backend": "cuFFT",
             "device_name": "NVIDIA Test GPU",
             "compute_capability": "8.9",
@@ -302,6 +307,63 @@ def test_rejects_invented_overall_engine_and_stage_shape(tmp_path: Path) -> None
         "cuda_fp64 L=4: transfer execution_shape must be cuda_assisted_multilayer"
         in report["reasons"]
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("resolved_fallback", "cpu_reference"),
+        ("lossy_fallback_used", True),
+        ("ignored_terms", ["demag"]),
+    ],
+)
+def test_rejects_cuda_provenance_that_records_a_fallback(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = complete_payload()
+    cuda_row(payload, 2)["execution_provenance"][field] = value
+    bind_attestation(payload)
+
+    report = validate_benchmark_artifact(write_payload(tmp_path, payload))
+
+    assert report["contract_status"] == "invalid"
+    assert report["qualification_status"] == "not_qualified"
+
+
+@pytest.mark.parametrize("field", ["resolved_fallback", "lossy_fallback_used", "ignored_terms"])
+def test_rejects_cuda_provenance_without_explicit_no_fallback_fields(
+    tmp_path: Path, field: str
+) -> None:
+    payload = complete_payload()
+    del cuda_row(payload, 2)["execution_provenance"][field]
+    bind_attestation(payload)
+
+    report = validate_benchmark_artifact(write_payload(tmp_path, payload))
+
+    assert report["contract_status"] == "invalid"
+    assert report["qualification_status"] == "not_qualified"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("resolved_fallback", {}),
+        ("lossy_fallback_used", 0),
+        ("lossy_fallback_used", "false"),
+        ("ignored_terms", "[]"),
+    ],
+)
+def test_rejects_cuda_provenance_with_malformed_no_fallback_fields(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    payload = complete_payload()
+    cuda_row(payload, 2)["execution_provenance"][field] = value
+    bind_attestation(payload)
+
+    report = validate_benchmark_artifact(write_payload(tmp_path, payload))
+
+    assert report["contract_status"] == "invalid"
+    assert report["qualification_status"] == "not_qualified"
 
 
 def test_zero_cuda_memory_and_transfer_evidence_is_rejected(tmp_path: Path) -> None:

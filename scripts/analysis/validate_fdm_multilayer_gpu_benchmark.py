@@ -230,6 +230,21 @@ def _validate_cuda_provenance(
         )
     if provenance.get("precision") != "double":
         reasons.append(f"{label}: execution_provenance.precision must be double")
+    if (
+        "resolved_fallback" not in provenance
+        or provenance["resolved_fallback"] is not None
+    ):
+        reasons.append(
+            f"{label}: execution_provenance.resolved_fallback must be null"
+        )
+    if provenance.get("lossy_fallback_used") is not False:
+        reasons.append(
+            f"{label}: execution_provenance.lossy_fallback_used must be false"
+        )
+    if type(provenance.get("ignored_terms")) is not list or provenance[
+        "ignored_terms"
+    ]:
+        reasons.append(f"{label}: execution_provenance.ignored_terms must be []")
     if provenance.get("fft_backend") != "cuFFT":
         reasons.append(f"{label}: execution_provenance.fft_backend must be cuFFT")
     for key in ("device_name", "compute_capability"):
