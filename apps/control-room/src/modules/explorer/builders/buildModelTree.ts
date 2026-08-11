@@ -9,13 +9,11 @@ import { isFdmDomain } from "@/shared/domain/mesh/domainPresentation";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
 import {
-  buildFrequencyDomainDiagnosticsNode,
-  buildFrequencyDomainJobsNode,
-  buildPeriodicPairsResourceNode,
-  buildFrequencyDomainResourceNodes,
-  buildFrequencyDomainResultNode,
   type ExplorerTreeResources,
 } from "./frequencyDomainExplorerNodes";
+import { buildRuntimeDiagnosticTree } from "./diagnosticExplorerNodes";
+import { buildRuntimeJobTree } from "./jobExplorerNodes";
+import { buildRuntimeResourceTree } from "./resourceExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 import { buildPhysicsGraphTree } from "./physicsGraphTree";
 import {
@@ -172,81 +170,9 @@ export function buildExplorerTree(
   resources: ExplorerTreeResources = {},
 ): ExplorerNode[] {
   if (tabId === "model") return buildModelTree(null, resources);
-  if (tabId === "resources") {
-    return [
-      {
-        ...branch("resources:root", "Session Resources", "resources.root"),
-        children: [
-          ...buildFrequencyDomainResourceNodes(
-            resources.frequencyDomainManifest,
-            resources.activeAnalysisFieldOverlay,
-          ),
-          {
-            id: "resources:fields",
-            kind: "resources.field",
-            label: "Published fields",
-            parentId: "resources:root",
-            badge: "m, H_demag",
-            icon: "wave",
-            status: "ready",
-          },
-          {
-            id: "resources:mesh",
-            kind: "resources.mesh",
-            label: "Mesh topology",
-            parentId: "resources:root",
-            badge: "revision 0",
-            icon: "mesh",
-            status: "stale",
-            children: [buildPeriodicPairsResourceNode()],
-          },
-        ],
-      },
-    ];
-  }
+  if (tabId === "resources") return buildRuntimeResourceTree(resources);
   if (tabId === "results") {
     if (!resources.currentRun) {
-      if (!resources.physicsFirstResultsRequired) {
-        return [{
-          ...branch("results:root", "Results", "results.root"),
-          children: [
-            buildFrequencyDomainResultNode(
-              resources.frequencyDomainManifest,
-              resources.frequencyDomainBranches,
-              resources.frequencyDomainDispersion,
-              resources.frequencyDomainResponseSweep,
-              resources.frequencyDomainSpectrum,
-              resources.activeAnalysisFieldOverlay,
-            ),
-            {
-              id: "results:field:m",
-              kind: "results.field_quantity",
-              label: "Magnetization",
-              parentId: "results:root",
-              badge: "A/m",
-              icon: "wave",
-              status: "ready",
-            },
-            ...(resources.pinnedQuickChart
-              ? [{
-                  badge: `${resources.pinnedQuickChart.selectedSeriesIds.length} series`,
-                  chartId: resources.pinnedQuickChart.chartId,
-                  displayUnits: resources.pinnedQuickChart.displayUnits,
-                  icon: "wave" as const,
-                  id: `results:quick-charts:${resources.pinnedQuickChart.chartId}`,
-                  kind: "results.quick_chart" as const,
-                  label: "Quick Chart",
-                  parentId: "results:root",
-                  status: "ready" as const,
-                  range: resources.pinnedQuickChart.range,
-                  selectedSeriesIds: resources.pinnedQuickChart.selectedSeriesIds,
-                  tableId: resources.pinnedQuickChart.tableId,
-                  xAxisId: resources.pinnedQuickChart.xAxisId,
-                }]
-              : []),
-          ],
-        }];
-      }
       return [{
         ...branch("results:root", "Results", "results.root", "unavailable"),
         availability: "unavailable",
@@ -264,43 +190,9 @@ export function buildExplorerTree(
     });
     return buildPhysicsFirstResultsTree(adapted.snapshot);
   }
-  if (tabId === "jobs") {
-    return [
-      {
-        ...branch("jobs:root", "Jobs", "jobs.root"),
-        children: [
-          buildFrequencyDomainJobsNode(resources),
-          {
-            id: "jobs:command-queue",
-            kind: "jobs.command",
-            label: "Command queue",
-            parentId: "jobs:root",
-            badge: "idle",
-            icon: "activity",
-            status: "ready",
-          },
-        ],
-      },
-    ];
-  }
+  if (tabId === "jobs") return buildRuntimeJobTree(resources);
 
-  return [
-    {
-      ...branch("diagnostics:root", "Diagnostics", "diagnostics.root"),
-      children: [
-        buildFrequencyDomainDiagnosticsNode(resources.frequencyDomainManifest),
-        {
-          id: "diagnostics:resources",
-          kind: "diagnostics.resource",
-          label: "Resource cache",
-          parentId: "diagnostics:root",
-          badge: "revision-driven",
-          icon: "database",
-          status: "ready",
-        },
-      ],
-    },
-  ];
+  return buildRuntimeDiagnosticTree(resources);
 }
 
 export function flattenExplorerNodes(nodes: readonly ExplorerNode[]): ExplorerNode[] {

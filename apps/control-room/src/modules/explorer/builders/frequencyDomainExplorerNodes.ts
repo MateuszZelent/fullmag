@@ -72,8 +72,6 @@ export interface ExplorerTreeResources {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   pinnedQuickChart?: PinnedQuickChart | null;
   currentRun?: CurrentRunResource | null;
-  /** Bounded old-ID fixture reader; production Explorer requires physics-first Results. */
-  physicsFirstResultsRequired?: boolean;
 }
 
 export function buildFrequencyDomainResultNode(

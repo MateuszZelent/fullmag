@@ -497,7 +497,6 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
             pinnedQuickChart,
             currentRun: currentRun.data,
-            physicsFirstResultsRequired: true,
           });
     return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
