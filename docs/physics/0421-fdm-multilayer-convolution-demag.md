@@ -1,10 +1,10 @@
 # FDM: wielowarstwowa konwolucja demagnetyzacyjna
 
-> Status: kanoniczna specyfikacja fizyczno-numeryczna. CPU FP64 ma już aktywny
-> katalog kerneli i współdzielony workspace dla descriptorowego runtime, ale
-> żaden lane shifted, heterogeneous, transferowy ani GPU nie jest obecnie
-> production-qualified. Macierz poniżej rozdziela zgodność z BORIS od dowodu
-> wykonania i od kwalifikacji produkcyjnej.
+> Status: kanoniczna specyfikacja fizyczno-numeryczna dla aktualnego `master`.
+> CPU FP64 ma aktywny katalog kerneli i współdzielony workspace dla
+> descriptorowego runtime. Jest to implementacja wykonywalna z lokalnymi testami
+> oraklowymi, a nie kwalifikacja całego modułu: shifted, heterogeneous,
+> transferowy i GPU pozostają ograniczone zakresem dowodu opisanym niżej.
 
 (problem-statement)=
 ## Problem fizyczny
@@ -87,9 +87,14 @@ scratch $\mathbf r'$ i komórek wejściowych $c_i$,
 $\mathbf M(\mathbf r')=\sum_i w_i\mathbf M(\mathbf r_i)$,
 $w_i=\widetilde d_i\delta_i/\sum_j\widetilde d_j\delta_j$,
 $\widetilde d_i=\lvert(\mathbf h'+\mathbf h)/2\rvert-\lvert\mathbf r'-\mathbf r_i\rvert$,
-gdzie $\delta_i$ wybiera komórki zachodzące. To jest cytowany model
-transferu, nie dowód, że obecny Fullmag realizuje adjoint $P^*$; ten warunek
-jest kanoniczną, planowaną bramą orakla.
+gdzie $\delta_i$ wybiera komórki zachodzące. W Fullmag odpowiedzialność za
+transfer ma `VolumeWeightedTransfer`; testy
+`volume_weighted_transfer_preserves_2d_moment_through_z_average` oraz
+`volume_weighted_transfer_is_adjoint_with_active_mask` sprawdzają odpowiednio
+moment objętościowy i adjointność dla jawnie zdefiniowanych native/scratch
+extentów oraz maski. Nie wolno rozszerzać tego wyniku na różne
+różne natywne grubości $h_{source,z}\ne h_{destination,z}$ bez
+niezależnego orakla komórka--continuum.
 
 Appendix A publikacji, strony 6--7 PDF, definiuje nieregularny Newell:
 
@@ -214,12 +219,14 @@ nie może być mniejszy. Descriptor zawiera source insertion offset, lag-zero,
 mapę lagów ujemnych, destination crop window, R2C na osi X o długości
 $N_x/2+1$, x-fastest indexing, normalizację inverse i zerowanie paddingu.
 
-two_d_stack ma jedną roboczą komórkę Z na warstwę. Tekstura
-$\mathbf M(z)$ wymaga jawnego transferu i testu 2D-vs-3D albo wyboru three_d.
-2D używa moment-zachowującej średniej przez grubość. Appendix-A dla nierównych
-grubości wymaga wspólnego $h_x,h_y$ pary; inne XY wymagają transferu do
-wspólnego scratch XY albo odrzucenia. Reuse $+\Delta z/-\Delta z$ jest legalny
-wyłącznie dla two_d_stack, czystego shift Z i zorientowanej pary o równych $h$.
+two_d_stack ma jedną roboczą komórkę Z na warstwę. Bieżący planner nie wykonuje
+automatycznej, moment-zachowującej średniej przez wielokomórkową warstwę Z:
+warstwa z więcej niż jedną natywną komórką Z musi użyć `three_d`, inaczej plan
+jest odrzucony. Appendix-A dla nierównych grubości wymaga wspólnego $h_x,h_y$
+pary; inne XY wymagają transferu do wspólnego scratch XY albo odrzucenia.
+Reuse $+\Delta z/-\Delta z$ jest legalny wyłącznie dla `two_d_stack`, czystego
+shift Z i zorientowanej pary o równych $h$; test deskryptora jawnie odrzuca
+reuse przy nierównych wysokościach.
 
 Tabela I Lepadatu rozróżnia 2D-self, 3D-self, 2D-zShift, 3D-zShift oraz
 2D/3D-full: self używa kerneli real i reduced storage; 2D-zShift ma
@@ -242,7 +249,47 @@ $z_{d,s}$ i crop celu $C_d$. Współczynnik o lagu $q$ trafia do
 $K[(q+z_{d,s})\bmod F]$, magnetyzacja do $M[(i+a_s)\bmod F]$, a wynik celu
 czyta się z $H[C_d(l)]$. Forward nie normalizuje, inverse mnoży przez
 $1/\prod_\alpha F_\alpha$ dokładnie raz. To są wymagane formuły descriptoru;
-test ma pokryć wrap-around i niezerowy crop.
+testy deskryptora pokrywają wrap-around, niezerowy crop i odrzucenie
+niezgodnego liniowego extentu.
+
+(supercell-and-test-examples)=
+## Supercell obliczeniowy i przykłady z testów
+
+Supercell nie jest „większym meshem materiałowym”. Jest jedynie prostokątnym
+obszarem roboczym FFT, do którego każda warstwa wnosi własny native grid przez
+`identity` albo `push_pull`. Minimalny test deskryptora buduje parę o kształtach
+`[3,2,1]` i `[5,4,1]`. Liniowy extent wynosi wtedy
+$[3+5-1,\,2+4-1,\,1+1-1]=[7,5,1]$; test używa paddingu FFT `[16,8,1]`,
+offsetu wstawienia źródła `[1,0,0]` i cropu celu zaczynającego się w `[1,1,0]`.
+`CommonTransformLayout::is_physical_mesh()` zwraca `false`. To dowodzi
+poprawnego indeksowania i izolacji layoutu, nie poprawności pola magnetycznego.
+
+Poniższa macierz jest mapą rzeczywistych testów z bieżącego drzewa. Wszystkie
+testy były uruchomione na tej rewizji przed aktualizacją dokumentacji.
+
+| Przypadek | Test i dane | Wynik | Czego dowodzi / czego nie dowodzi |
+|---|---|---|---|
+| Layout supercell | `crates/fullmag-fdm-demag/tests/descriptors.rs::common_layout_is_computational_and_preserves_linear_extent`; `[3,2,1]`, `[5,4,1]`, extent `[7,5,1]` | `ok` | offset, lag-zero, crop, padding i `physical_mesh=false`; nie dowodzi pola |
+| Nierówne $h_z$, 2-D | `irregular_shifted_kernel.rs::unequal_2d_layer_thickness_matches_cubature_for_both_signed_z_offsets`; $h_s=[0.7,0.9,0.6]$, $h_d=[0.7,0.9,1.4]$, offset $[0.35,-0.27,3.2]$ | `ok`, GL8 dla lagów XY `[1,-1,0]` i `[-1,1,0]` przy dodatnim $z$ | sześć składowych pair kernela; nie dowodzi złożonego `push_pull` ani CUDA |
+| Orientacja $+z/-z$ | `irregular_shifted_kernel.rs::unequal_2d_pair_keeps_xy_parity_for_positive_and_negative_z_offsets`; offsety $z=+2.3$ i $z=-2.3$ | `ok`, parzystość wszystkich sześciu składowych | osobny dowód znaku/orientacji; nie zastępuje cubature dla każdego $z$ ani dowodu runtime |
+| Nierówne $h_z$ po FFT | `irregular_shifted_kernel.rs::fft_pair_inverse_matches_independent_cubature_for_unequal_2d_pair` | `ok` | odwrotna FFT i normalizacja zachowują tensor; nie dowodzi pełnego kroku LLG |
+| Nierówne komórki 3-D | `irregular_shifted_kernel.rs::unequal_3d_cell_pair_matches_cubature_and_volume_weighted_reciprocity` | `ok` | cubature oraz $V_dN_{d\leftarrow s}=V_sN_{s\leftarrow d}^{T}$; nie kwalifikuje produkcyjnego 3-D |
+| Niedozwolone nierówne XY | `irregular_shifted_kernel.rs::three_d_unequal_inplane_spacing_fails_closed_in_translational_kernel_builder` | `ok`, błąd `UnsupportedGeometry` | brak cichej interpretacji jednego translacyjnego kernela; nie oznacza braku plannerowego `push_pull` |
+| Reuse i workspace | `crates/fullmag-engine/src/multilayer.rs`: `regular_stack_materializes_five_unique_kernels_for_nine_ordered_pairs`, `irregular_stack_does_not_reuse_oriented_kernel_entries`, `runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace` | `ok` | katalog reuse zależny od pełnego klucza i ponowne użycie workspace; nie dowodzi CUDA residency |
+| Transfer moment/adjoint | `crates/fullmag-fdm-demag/src/transfer.rs`: `volume_weighted_transfer_preserves_2d_moment_through_z_average`, `volume_weighted_transfer_is_adjoint_with_active_mask` | `ok` (w filtrze transferu 4/4) | jawny kontrakt transferu objętościowego i maski; nie dowodzi złożonego continuum/native-cell `push_pull` |
+
+Recepta testowa dla modułu kernela jest celowo jawna:
+
+```bash
+cargo test -p fullmag-fdm-demag --test descriptors --test irregular_shifted_kernel --test shifted_newell_oracle
+cargo test -p fullmag-engine multilayer --lib
+cargo test -p fullmag-plan multilayer --lib
+```
+
+Wynik referencyjny tej aktualizacji to odpowiednio `19`, `7`, `7`, `16` i
+`25` zakończonych testów, a filtr transferu daje `4/4`; test benchmarkowy
+workspace pozostaje oznaczony `ignored` jako ręczny mikrobenchmark. To są dowody kontraktu CPU/Rust, nie
+źródłowo związany artefakt produkcyjny ani dowód urządzenia CUDA.
 
 (boris-gap-matrix)=
 ## Macierz różnic względem BORIS
@@ -403,25 +450,46 @@ testowego ownera, niezależnego od production buildera.
 (validation)=
 ## Plan walidacji
 
-Małe asymetryczne przypadki porównują niezależną cubature lub high-precision
-fixtures dla sześciu składowych i znaków $\pm x,\pm y,\pm z$. Testy obejmują
-linear extent, crop, padding, source offset, weighted reciprocity, energy
-finite difference, transfer adjointness, stałe pola, moment i active mask.
+Małe asymetryczne przypadki porównują niezależną cubature GL8 dla wszystkich
+sześciu składowych. Osobny test parzystości sprawdza oba znaki offsetu Z i
+orientację składowych XY/XZ/YZ. `descriptors.rs` sprawdza liniowy
+extent, crop, padding, source offset, mapowanie ujemnego laga, mask identity,
+transfer contract i granice reuse. `irregular_shifted_kernel.rs` sprawdza
+nierówne $h_z$, pełny offset XYZ, parzystość XY, odwrotną FFT, reciprocity
+objętościową i fail-closed dla nierównego XY. `shifted_newell_oracle.rs`
+oddziela cubature od production buildera i sprawdza również gałąź asymptotyczną
+dla signed far-field.
 
-sp4-derived-multilayer, a nie kanoniczny µMAG SP4, sprawdza L=1, bilayer,
-three-layer, równe/nierówne grubości oraz identity/push_pull. CPU target-only
-Airbox convergence ma osobny świeży dowód dla meshów `160×40×18` i
-`160×40×24` przy `115200/115200` wspólnych centrach; nie zastępuje to
-kwalifikacji device ani pełnej macierzy wizualnej. Paper-reproduction
-lane ma osobno odtworzyć geometrię publikacji: trilayer Ni80Fe20
-$640\times320\,\mathrm{nm^2}$, grubości $20/10/20\,\mathrm{nm}$ i szczeliny
-$1\,\mathrm{nm}$ przy polu $20\,\mathrm{kA\,m^{-1}}$ pod $5^\circ$, a następnie
-Co skyrmion disks o średnicy $512\,\mathrm{nm}$, grubości $1\,\mathrm{nm}$ i
-spacerze $3\,\mathrm{nm}$. To lane traceability, nie zastępstwo dla orakla
-ani kwalifikacji SP4. Airbox jest
-target-only observation carrier: pierwsza promocja publikuje H_demag; H_eff
-poza domeną magnetyczną ma versioned unavailable reason. CPU FP64, CUDA FP64 i
-CUDA FP32 wymagają osobnych artefaktów runtime, urządzenia i tolerancji.
+Transfer ma osobne testy źródłowe: `volume_weighted_transfer_preserves_2d_moment_through_z_average`
+sprawdza średnią Z z zachowaniem momentu, a
+`volume_weighted_transfer_is_adjoint_with_active_mask` sprawdza relację
+objętościowego sprzężenia zwrotnego i wyzerowanie nieaktywnej komórki. Są to
+kontrakty operatora transferu, nie niezależny continuum/native-cell dowód
+całego złożonego kroku.
+
+Scenariusze Python w
+`tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/` są prawdziwymi
+fixture'ami authoringu i loweringu. `scenario_l3_identity_3d_small.py` ma
+$L=3$, `mode="three_d"`, `common_cells=(8,4,2)` i transfer `identity`;
+`scenario_unequal_small.py` ma warstwy $3\,\mathrm{nm}$ i
+$6\,\mathrm{nm}$ przy `common_cells=(16,8,2)`; `scenario_l3_heterogeneous_small.py`
+ma natywne warstwy $1/2/1$ komórki Z i wymusza composed `push_pull`. Testy
+`test_runtime.py` potwierdzają dokładny ProblemIR tych scenariuszy oraz
+rozróżnienie Airboxa target-only. Nie są same w sobie dowodem pola, energii ani
+kwalifikacji runtime.
+
+CPU target-only Airbox convergence ma osobny świeży dowód dla meshów
+`160×40×18` i `160×40×24` przy `115200/115200` wspólnych centrach; nie
+zastępuje to kwalifikacji device ani pełnej macierzy wizualnej.
+Paper-reproduction lane ma osobno odtworzyć geometrię publikacji: trilayer
+Ni80Fe20 $640\times320\,\mathrm{nm^2}$, grubości $20/10/20\,\mathrm{nm}$ i
+szczeliny $1\,\mathrm{nm}$ przy polu $20\,\mathrm{kA\,m^{-1}}$ pod $5^\circ$,
+a następnie Co skyrmion disks o średnicy $512\,\mathrm{nm}$, grubości
+$1\,\mathrm{nm}$ i spacerze $3\,\mathrm{nm}$. To lane traceability, nie
+zastępstwo dla orakla ani kwalifikacji SP4. Airbox jest target-only observation
+carrier: pierwsza promocja publikuje $H_{demag}$; $H_{eff}$ poza domeną
+magnetyczną ma versioned unavailable reason. CPU FP64, CUDA FP64 i CUDA FP32
+wymagają osobnych artefaktów runtime, urządzenia i tolerancji.
 
 (limitations)=
 ## Ograniczenia
@@ -463,21 +531,31 @@ kwalifikacji.
 
 | Claim | Path | Symbol | Responsibility | Lane | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|---|
-| Python FDM wrapper | packages/fullmag-py/src/fullmag/model/discretization.py | class FDM | lowers the full public FDM wrapper | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_two_object_two_d_policy_preserves_requested_auto_in_ir | executable authoring contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Python demag intent | packages/fullmag-py/src/fullmag/model/discretization.py | class FDMDemag | validates and lowers requested demag policy | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_auto_mode_preserves_common_cells_for_planner_resolution | executable authoring contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Continuous kernel definition (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_f | anchors the continuous Newell primitive; no discrete runtime ownership claim | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Appendix A g primitive (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_g | anchors the off-diagonal Newell primitive; no unequal-cell production owner | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CPU production Newell tensor | crates/fullmag-fdm-demag/src/newell.rs | compute_newell_kernels | exact 64-corner 2D lane with bounded 3D asymptotic branch | FDM CPU reference | crates/fullmag-fdm-demag/src/newell.rs::tests::two_d_corner_kernel_matches_independent_reference_at_near_and_far_lags | runtime-verified CPU FP64; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Volume-weighted reciprocity oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs | unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | independent unequal-volume oracle; not production proof | FDM numerical oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | oracle-only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Shifted tensor | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel | builds current shifted tensor spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::shifted_kernel_matches_independent_cubature_for_both_z_lag_directions | code/test only; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Tensor product | crates/fullmag-fdm-demag/src/multiply.rs | accumulate_tensor_convolution | accumulates source into destination spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/src/multiply.rs::tests::diagonal_kernel_scales_components_independently | code/test only; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Field sign | crates/fullmag-fdm-demag/src/multiply.rs | negate_field | applies the single demagnetizing minus sign to the accumulated destination spectrum before inverse FFT | FDM CPU oracle input | sign-convention source contract; independent end-to-end fixture still required | code/test only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CPU multilayer energy | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs | observe_multilayer | reports current CPU demag energy | FDM CPU, current owner | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::multilayer_reference_run_executes_two_layers | code/test only; no independent energy oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CUDA demag energy blocks | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | demag_energy_blocks_kernel | reduces FP64 demag-energy blocks | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CUDA demag energy reduction | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | reduce_demag_energy_fp64 | launches and reduces FP64 demag energy | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel_pair | current unequal-cell pair-kernel owner; `newell.rs::newell_g` remains the publication-formula anchor | FDM CPU kernel plus theory/oracle boundary | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | implemented and oracle-tested in scoped CPU cases; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | local/source-unbound verifier: field, energy, and adjoint checks for different extents and $V_{native}\ne V_{scratch}$ with equal native $h_z$ | physically validated in the stated local scope; no unequal-native-cell-thickness continuum oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | local/source-unbound verifier: field, energy, and adjoint checks for different extents and $V_{native}\ne V_{scratch}$ with equal native $h_z$ | physically validated in the stated local scope; no unequal-native-cell-thickness continuum oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Python FDM wrapper | packages/fullmag-py/src/fullmag/model/discretization.py | class FDM | lowers the full public FDM wrapper | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_two_object_two_d_policy_preserves_requested_auto_in_ir | executable authoring contract only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Python demag intent | packages/fullmag-py/src/fullmag/model/discretization.py | class FDMDemag | validates and lowers requested demag policy | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_auto_mode_preserves_common_cells_for_planner_resolution | executable authoring contract only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Continuous kernel definition (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_f | anchors the continuous Newell primitive; no discrete runtime ownership claim | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Appendix A g primitive (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_g | anchors the off-diagonal Newell primitive; no unequal-cell production owner | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CPU production Newell tensor | crates/fullmag-fdm-demag/src/newell.rs | compute_newell_kernels | exact 64-corner 2D lane with bounded 3D asymptotic branch | FDM CPU reference | crates/fullmag-fdm-demag/src/newell.rs::tests::two_d_corner_kernel_matches_independent_reference_at_near_and_far_lags | runtime-verified CPU FP64; not production-qualified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Volume-weighted reciprocity oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs | unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | independent unequal-volume oracle; not production proof | FDM numerical oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | oracle-only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Shifted tensor | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel | builds current shifted tensor spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::shifted_kernel_matches_independent_cubature_for_both_z_lag_directions | code/test only; not production-qualified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Tensor product | crates/fullmag-fdm-demag/src/multiply.rs | accumulate_tensor_convolution | accumulates source into destination spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/src/multiply.rs::tests::diagonal_kernel_scales_components_independently | code/test only; not production-qualified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Field sign | crates/fullmag-fdm-demag/src/multiply.rs | negate_field | applies the single demagnetizing minus sign to the accumulated destination spectrum before inverse FFT | FDM CPU oracle input | sign-convention source contract; independent end-to-end fixture still required | code/test only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CPU multilayer energy | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs | observe_multilayer | reports current CPU demag energy | FDM CPU, current owner | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::multilayer_reference_run_executes_two_layers | code/test only; no independent energy oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CUDA demag energy blocks | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | demag_energy_blocks_kernel | reduces FP64 demag-energy blocks | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CUDA demag energy reduction | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | reduce_demag_energy_fp64 | launches and reduces FP64 demag energy | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel_pair | current unequal-cell pair-kernel owner; `newell.rs::newell_g` remains the publication-formula anchor | FDM CPU kernel plus theory/oracle boundary | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | implemented and oracle-tested in scoped CPU cases; not production-qualified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::volume_weighted_transfer_preserves_2d_moment_through_z_average | physically validated for the stated Z moment contract; no unequal-native-cell-thickness continuum oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::volume_weighted_transfer_is_adjoint_with_active_mask | physically validated for the stated volume-adjoint and mask contract; no unequal-native-cell-thickness continuum oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | CPU catalog and workspace | crates/fullmag-engine/src/multilayer.rs | build_kernel_catalog | deduplicates kernels and binds ordered layer pairs to one descriptor | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace | runtime-verified CPU, not production-qualified | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |
 | CPU checked refresh | crates/fullmag-engine/src/multilayer.rs | compute_demag_fields_checked | validates native/scratch geometry and executes catalog/workspace refresh | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::identity_path_rejects_native_scratch_cell_count_mismatch_without_panicking | fail-closed contract; no managed production artifact | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |
+| Supercell descriptor test | crates/fullmag-fdm-demag/tests/descriptors.rs | common_layout_is_computational_and_preserves_linear_extent | proves `[3,2,1]` + `[5,4,1]` gives linear extent `[7,5,1]`, crop and `physical_mesh=false` | FDM descriptor | cargo test `descriptors` | executable contract; not field proof | current master source snapshot |
+| Unequal-Z pair test | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | unequal_2d_layer_thickness_matches_cubature_for_both_signed_z_offsets | compares six pair components with independent GL8 cubature for asymmetric XY lags at a fixed Z offset | FDM CPU kernel | cargo test `irregular_shifted_kernel` | scoped physical oracle; not composed transfer/CUDA proof | current master source snapshot |
+| Signed-Z orientation test | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | unequal_2d_pair_keeps_xy_parity_for_positive_and_negative_z_offsets | checks component parity for positive and negative Z offsets | FDM CPU kernel | cargo test `irregular_shifted_kernel` | scoped orientation contract; not a continuum/runtime qualification | current master source snapshot |
+| Unequal-Z inverse FFT test | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | fft_pair_inverse_matches_independent_cubature_for_unequal_2d_pair | verifies inverse normalization and lag extraction after FFT | FDM CPU convolution | cargo test `irregular_shifted_kernel` | scoped physical oracle; not production-qualified | current master source snapshot |
+| CPU catalog reuse | crates/fullmag-engine/src/multilayer.rs | regular_stack_materializes_five_unique_kernels_for_nine_ordered_pairs | demonstrates reuse is keyed by full descriptor and ordered pairs remain distinct | FDM CPU runtime | cargo test `fullmag-engine multilayer` | runtime contract; no device residency proof | current master source snapshot |
+| Planner XY transfer | crates/fullmag-plan/src/tests.rs | multilayer_planner_materializes_xy_offset_in_common_scratch_transfer | proves distinct XY geometry is represented by explicit common scratch and transfer | FDM planner | cargo test `fullmag-plan multilayer` | executable planner contract | current master source snapshot |
+| Stage-first L=3 fixture | tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/test_runtime.py | test_l3_identity_three_d_scenario_preserves_common_identity_grid | checks `mode=three_d`, `common_cells=(8,4,2)` and per-magnet native cells in ProblemIR | Python authoring | pytest multilayer fixture tests | authoring/lowering only; not field proof | current master source snapshot |
+| Python fail-closed validation | packages/fullmag-py/tests/test_fdm_multilayer_contract.py | test_demag_rejects_incompatible_common_grid_combinations | rejects contradictory `common_cells`, `common_cells_xy` and mode combinations | Python authoring | pytest FDM contract tests | executable API contract | current master source snapshot |
+| Transfer moment test | crates/fullmag-fdm-demag/src/transfer.rs | volume_weighted_transfer_preserves_2d_moment_through_z_average | verifies Z averaging preserves the volume-weighted moment | FDM CPU transfer | cargo test `fullmag-fdm-demag` | scoped transfer contract | current master source snapshot |
+| Transfer adjoint test | crates/fullmag-fdm-demag/src/transfer.rs | volume_weighted_transfer_is_adjoint_with_active_mask | verifies volume adjointness and inactive-mask zeroing | FDM CPU transfer | cargo test `fullmag-fdm-demag` | scoped transfer contract | current master source snapshot |

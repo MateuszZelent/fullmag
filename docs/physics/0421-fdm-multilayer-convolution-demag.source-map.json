@@ -9,7 +9,7 @@
       "status": "implemented",
       "scope": "common-grid CPU reference with active kernel catalog/workspace; exact 2D corner tensor, mode/transfer/heterogeneous production gates remain open",
       "qualification": "not production-qualified",
-      "evidence": "54 backend tests, managed CPU FP64 runtime and target-only Airbox carrier; independent full parity remains open"
+      "evidence": "Rust descriptor/kernel/engine/planner tests and source-bound authoring/runtime fixtures; no immutable managed production receipt"
     },
     {
       "solver": "FDM",
@@ -361,6 +361,76 @@
       "path": "crates/fullmag-engine/src/multilayer.rs",
       "symbol": "compute_demag_fields_checked",
       "responsibility": "checked CPU refresh using catalog and reusable workspace"
+    },
+    {
+      "id": "descriptorLayoutTests",
+      "path": "crates/fullmag-fdm-demag/tests/descriptors.rs",
+      "symbol": "common_layout_is_computational_and_preserves_linear_extent",
+      "responsibility": "tests linear convolution extent, insertion/crop and the non-physical supercell contract",
+      "evidence_status": "executable descriptor contract"
+    },
+    {
+      "id": "irregularKernelTests",
+      "path": "crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs",
+      "symbol": "unequal_2d_layer_thickness_matches_cubature_for_both_signed_z_offsets",
+      "responsibility": "compares unequal-Z pair kernels with independent GL8 cubature for asymmetric XY lags at a fixed Z offset",
+      "evidence_status": "scoped CPU oracle; not production-qualified"
+    },
+    {
+      "id": "signedZParityTests",
+      "path": "crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs",
+      "symbol": "unequal_2d_pair_keeps_xy_parity_for_positive_and_negative_z_offsets",
+      "responsibility": "checks component parity for positive and negative Z offsets",
+      "evidence_status": "scoped orientation contract; not production-qualified"
+    },
+    {
+      "id": "inverseFftTests",
+      "path": "crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs",
+      "symbol": "fft_pair_inverse_matches_independent_cubature_for_unequal_2d_pair",
+      "responsibility": "checks inverse FFT, crop and normalization for an unequal-Z pair",
+      "evidence_status": "scoped CPU oracle; not production-qualified"
+    },
+    {
+      "id": "engineMultilayerTests",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "regular_stack_materializes_five_unique_kernels_for_nine_ordered_pairs",
+      "responsibility": "checks full-key kernel reuse and ordered pair bindings in the CPU catalog",
+      "evidence_status": "runtime contract test; no CUDA residency proof"
+    },
+    {
+      "id": "plannerMultilayerTests",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "multilayer_planner_materializes_xy_offset_in_common_scratch_transfer",
+      "responsibility": "checks planner materialization of distinct XY extents/centers and push/pull transfer",
+      "evidence_status": "executable planner contract"
+    },
+    {
+      "id": "pythonScenarioTests",
+      "path": "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/test_runtime.py",
+      "symbol": "test_l3_identity_three_d_scenario_preserves_common_identity_grid",
+      "responsibility": "checks stage-first L=3 three-dimensional identity scenario and canonical ProblemIR lowering",
+      "evidence_status": "authoring/lowering contract; not a physical runtime receipt"
+    },
+    {
+      "id": "pythonValidationTests",
+      "path": "packages/fullmag-py/tests/test_fdm_multilayer_contract.py",
+      "symbol": "test_demag_rejects_incompatible_common_grid_combinations",
+      "responsibility": "checks fail-closed common-grid and mode validation in the public Python API",
+      "evidence_status": "executable authoring contract"
+    },
+    {
+      "id": "transferMomentTests",
+      "path": "crates/fullmag-fdm-demag/src/transfer.rs",
+      "symbol": "volume_weighted_transfer_preserves_2d_moment_through_z_average",
+      "responsibility": "checks the volume-weighted Z moment contract for native-to-scratch transfer",
+      "evidence_status": "scoped transfer contract"
+    },
+    {
+      "id": "transferAdjointTests",
+      "path": "crates/fullmag-fdm-demag/src/transfer.rs",
+      "symbol": "volume_weighted_transfer_is_adjoint_with_active_mask",
+      "responsibility": "checks volume adjointness and inactive-mask zeroing for scratch-to-native transfer",
+      "evidence_status": "scoped transfer contract"
     }
   ],
   "public_api": {

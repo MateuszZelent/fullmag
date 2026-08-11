@@ -418,6 +418,137 @@ the same time. For the simplest identity transfer, choose a common grid equal to
 native grid. Different grids activate `push_pull` and require a separate transfer-error
 assessment.
 
+### 5.4. Rzeczywiste scenariusze testowe i interpretacja
+
+Poniższe przypadki są kopiowalnymi odpowiednikami fixture'ów z
+`tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/`. Są to scenariusze
+SP4-derived, nie kanoniczny µMAG Standard Problem 4.
+
+#### L=3, `three_d`, transfer `identity`
+
+Ten przypadek ma trzy warstwy o rozmiarze `31.25 nm × 15.625 nm × 6 nm`, natywną
+komórkę `(3.90625 nm, 3.90625 nm, 3 nm)` i wspólną siatkę `(8, 4, 2)`. Każda warstwa
+ma ten sam grid, więc planner może użyć `identity`; translacje Z pozostają częścią
+fizycznego offsetu par.
+
+```python
+# %% L=3 identity fixture (fragment odpowiada scenario_l3_identity_3d_small.py)
+import fullmag as fm
+
+CELL = (3.90625e-9, 3.90625e-9, 3e-9)
+SIZE = (31.25e-9, 15.625e-9, 6e-9)
+study = fm.study("fdm_multilayer_l3_identity_3d_small")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.fdm(
+    default_cell=CELL,
+    per_magnet={name: fm.FDMGrid(cell=CELL) for name in
+                ("layer_bottom", "layer_middle", "layer_top")},
+    demag=fm.FDMDemag(
+        strategy="multilayer_convolution",
+        mode="three_d",
+        common_cells=(8, 4, 2),
+    ),
+)
+study.universe(mode="manual", size=(40e-9, 20e-9, 36e-9),
+               center=(0.0, 0.0, 12e-9), padding=(0.0, 0.0, 0.0))
+for name, z in (("layer_bottom", 0.0), ("layer_middle", 12e-9),
+                ("layer_top", 24e-9)):
+    shape = fm.Box(size=SIZE).translate((0.0, 0.0, z))
+    layer = study.geometry(shape, name=name)
+    layer.Ms = 8e5
+    layer.Aex = 1.3e-11
+    layer.alpha = 0.02
+    layer.m = fm.init.UniformMagnetization((0.9950371902099893,
+                                             0.09950371902099893, 0.0))
+study.exchange(enabled=True)
+study.demag(enabled=True)
+study.stages.add_run(until=1e-14, stage_id="l3_identity_three_d_small")
+```
+
+Test `test_l3_identity_three_d_scenario_preserves_common_identity_grid` sprawdza
+po loweringu dokładnie `strategy`, `mode`, `common_cells` i trzy wpisy `per_magnet`.
+Nie mierzy pola; jest dowodem authoringu i ProblemIR.
+
+#### L=2, nierówna grubość przez `three_d`
+
+`scenario_unequal_small.py` używa dolnej warstwy o wysokości `3 nm`, górnej `6 nm`,
+tej samej komórki natywnej i `common_cells=(16, 8, 2)`. Natywne liczności Z to
+odpowiednio `1` i `2`. To jest właściwy publiczny sposób zapisania tekstury przez
+grubość: nie wymuszamy `two_d_stack` i nie udajemy średniej Z.
+
+```python
+# %% Unequal-Z fixture (fragment odpowiada scenario_unequal_small.py)
+import fullmag as fm
+
+cell = (3.90625e-9, 3.90625e-9, 3e-9)
+study = fm.study("fdm_multilayer_unequal_z_small")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.fdm(
+    default_cell=cell,
+    per_magnet={
+        "layer_bottom": fm.FDMGrid(cell=cell),
+        "layer_top": fm.FDMGrid(cell=cell),
+    },
+    demag=fm.FDMDemag(
+        strategy="multilayer_convolution", mode="three_d",
+        common_cells=(16, 8, 2),
+    ),
+)
+study.universe(mode="manual", size=(64e-9, 32e-9, 24e-9),
+               center=(0.0, 0.0, 7.5e-9), padding=(0.0, 0.0, 0.0))
+bottom = study.geometry(
+    fm.Box(size=(31.25e-9, 15.625e-9, 3e-9)), name="layer_bottom"
+)
+top_shape = fm.Box(size=(31.25e-9, 15.625e-9, 6e-9)).translate(
+    (0.0, 0.0, 12e-9)
+)
+top = study.geometry(top_shape, name="layer_top")
+for layer in (bottom, top):
+    layer.Ms = 8e5
+    layer.Aex = 1.3e-11
+    layer.alpha = 0.02
+    layer.m = fm.init.UniformMagnetization((0.9950371902099893,
+                                             0.09950371902099893, 0.0))
+study.exchange(enabled=True)
+study.demag(enabled=True)
+study.stages.add_run(until=1e-14, stage_id="l2_unequal_small")
+```
+
+#### Supercell i `push_pull`
+
+W fixture `scenario_l3_heterogeneous_small.py` warstwy mają natywne liczności Z
+`1/2/1`, ale wspólną siatkę roboczą `(16, 8, 2)`. To wymusza jawny transfer
+`native → scratch → native`; nie tworzy jednego ferromagnetycznego meshu
+obejmującego wszystkie warstwy. Testy `multilayer_engine` sprawdzają przy tym,
+że regularny stos dziewięciu uporządkowanych par materializuje pięć unikalnych
+kerneli, a nieregularny stos nie wykonuje niedozwolonego reuse.
+
+Mały test deskryptora używa jeszcze prostszych liczb: źródło `[3,2,1]`, cel
+`[5,4,1]`, więc liniowy extent to `[7,5,1]`; crop i insertion offset są zapisane
+oddzielnie. `CommonTransformLayout` ma `physical_mesh=false`. Pole w takim
+scratchu nie jest obserwowalnym polem materiałowym i nie może być renderowane
+jako warstwa.
+
+| Test | Wynik w bieżącym `master` | Interpretacja |
+|---|---:|---|
+| `descriptors.rs` — layout i liniowy extent | 19/19 | kontrakt supercell, maski, crop, padding, reuse; bez dowodu pola |
+| `irregular_shifted_kernel.rs` | 7/7 | GL8 dla nierównego $h_z$, osobna parzystość dla offsetów $+z/-z$, inverse FFT, reciprocity i fail-closed unequal XY |
+| `shifted_newell_oracle.rs` | 7/7 | niezależna cubature, parzystość i bounded far-field |
+| `fullmag-engine` `multilayer` | 16/16 (1 benchmark `ignored`) | CPU catalog/workspace i transfer contracts |
+| `fullmag-plan` `multilayer` | 25/25 | planner mode, identity/push-pull, PBC i unsupported interactions |
+| `fullmag-fdm-demag` transfer unit tests | 4/4 (filtr `volume_weighted_transfer`) | moment Z, adjointność z maską, reused buffers i fail-closed PBC |
+| Python fixture tests | 21/21 | stage-first authoring, lowering i fail-closed API; nie field parity |
+
+Powyższe wyniki są testami kontraktowymi i lokalnymi oraklami. Nie podnoszą CUDA
+do `runtime-verified`: bieżący CUDA-assisted heterogeneous path nie używa tego
+samego descriptorowego operatora pair co CPU, a pełny krok pozostaje
+host-authoritative. Dla nierównych native-cell thickness nadal brakuje
+niezależnego continuum/native-cell oracla złożonego transferu.
+
 (multilayer-convolution-problem-ir)=
 ## 6. ProblemIR, planner, and provenance
 
@@ -590,14 +721,15 @@ status does not inherit a higher one.
 | CPU 2D-self FP64 | Complete L=1 field, energy, reciprocity, cubature, and self-trace | locally physically-validated; not production-qualified |
 | CPU 2D-zShift FP64 | Complete L=2 field for both Z signs, energy, and weighted reciprocity | locally physically-validated; not production-qualified |
 | CPU 3D identity FP64 | Small L=3 field, energy, reciprocity, self-trace, and cubature | locally physically-validated; no independent managed receipt |
-| CPU push/pull FP64 | Equal and small unequal cases, field, energy, and adjointness | locally physically-validated in the stated scope |
+| CPU push/pull FP64 | Transfer moment/adjoint unit contracts plus local equal-thickness field/energy cases | locally physically-validated in the stated scope; no unequal-native-cell continuum oracle |
 | CPU target-only Airbox | `160×40×18` versus `160×40×24` convergence at common centers | locally runtime-verified and physically-validated for this mesh pair |
 | CUDA FP64 | ABI v2 contract, plan creation, and static tests | implemented/executable contract; no fresh device parity |
 | CUDA FP32 | Source and runtime path | not runtime-verified and not physically-validated |
 | UI/viewport | Round-trip, adapter, Explorer/Inspector, and render-model tests | contract-verified; no fresh post-integration browser/WebGL proof |
 
-An independent oracle should check all six tensor components, lag signs, complete field
-coverage, energy, weighted reciprocity, transfer moment, and adjointness. Comparing two paths
+The remaining independent qualification gate is full field coverage across all six tensor
+components and lag signs, energy, weighted reciprocity, and the composed unequal-native-cell
+transfer. The transfer unit tests cover moment and adjoint contracts, but comparing two paths
 that share the same kernel builder is not independent physical evidence.
 
 (multilayer-convolution-limitations)=
@@ -681,38 +813,38 @@ Fullmag code.
 
 | Claim | Path | Symbol | Responsibility | Lane | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|---|
-| Python grid | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | Validates and lowers one magnet's cell. | Public API | `packages/fullmag-py/tests/test_fdm_multilayer_contract.py` | executable authoring | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Python demag policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | Validates requested strategy, mode, and common layout. | Public API | `packages/fullmag-py/tests/test_fdm_multilayer_contract.py` | executable authoring | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Python FDM wrapper | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Lowers complete FDM hints. | Public API | `packages/fullmag-py/tests/test_fdm_ui_roundtrip.py` | round-trip contract | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| ProblemIR topology identity | `crates/fullmag-ir/src/mesh_hints.rs` | `fdm_multilayer_topology_tokens` | Binds resolved mode and layer geometry to topology certificate. | IR | `crates/fullmag-ir/src/mesh_hints.rs` tests | executable contract | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| ProblemIR validation | `crates/fullmag-ir/src/mesh_hints.rs` | `FdmDemagHintsIR::validate` | Rejects illegal authored configuration. | IR | `crates/fullmag-ir/src/mesh_hints.rs` tests | executable contract | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Planner | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | Resolves mode, layers, grid certificate, and transfer. | Planner | `crates/fullmag-plan/src/tests.rs` multilayer tests | executable contract | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CPU runtime | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `execute_reference_fdm_multilayer` | Runs CPU reference; runtime performs FFT, pairs, and field pull. | FDM CPU FP64 | multilayer engine tests and independent oracles | local/source-unbound runtime evidence | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CPU observation and energy | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `observe_multilayer` | Publishes CPU field, energy, and provenance. | FDM CPU FP64 | SP4-derived runtime artifacts | local/source-unbound runtime evidence | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Push transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `push_m_with_boundary_policy` | Transfers magnetization to the scratch grid. | FDM CPU transfer | transfer parity oracle | locally physically-validated, source-unbound | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Pull transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `pull_h_with_boundary_policy` | Returns field to the native grid. | FDM CPU transfer | adjointness oracle | locally physically-validated, source-unbound | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Newell diagonal primitive | `crates/fullmag-fdm-demag/src/newell.rs` | `newell_f` | Evaluates Newell tensor function $f$. | Kernel preparation | Newell reference tests | code/test evidence | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Newell cross primitive | `crates/fullmag-fdm-demag/src/newell.rs` | `newell_g` | Evaluates Newell tensor function $g$. | Kernel preparation | Newell reference tests | code/test evidence | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Shifted Newell builder | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels_shifted` | Builds an oriented shifted tensor. | FDM CPU kernel | shifted/cubature tests | locally physically-validated | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CUDA v2 plan creation | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_v2` | Validates, uploads, and prepares D-07 plan. | FDM CUDA | managed ABI/contract tests | executable contract, no device parity | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| CUDA FFT workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_prepare_multilayer_fft_workspace_v2` | Prepares batched cuFFT workspace. | FDM CUDA | managed contract tests | executable contract, no device parity | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| UI round-trip model | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | `createStudyGlobalDraft` | Reads scene FDM values into the Inspector draft. | Control Room | `StudyGlobalAuthoringModel.test.ts` | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| UI native-layer adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Adapts independent physical native-layer carriers and rejects malformed mask declarations. | Explorer/viewport | viewport adapter tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| UI Airbox adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Adapts the validated target-only Airbox without treating the common FFT grid as geometry. | Explorer/viewport | viewport adapter tests | contract-verified, no fresh browser proof | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Python grid | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | Validates and lowers one magnet's cell. | Public API | `packages/fullmag-py/tests/test_fdm_multilayer_contract.py` | executable authoring | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Python demag policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | Validates requested strategy, mode, and common layout. | Public API | `packages/fullmag-py/tests/test_fdm_multilayer_contract.py` | executable authoring | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Python FDM wrapper | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Lowers complete FDM hints. | Public API | `packages/fullmag-py/tests/test_fdm_ui_roundtrip.py` | round-trip contract | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| ProblemIR topology identity | `crates/fullmag-ir/src/mesh_hints.rs` | `fdm_multilayer_topology_tokens` | Binds resolved mode and layer geometry to topology certificate. | IR | `crates/fullmag-ir/src/mesh_hints.rs` tests | executable contract | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| ProblemIR validation | `crates/fullmag-ir/src/mesh_hints.rs` | `FdmDemagHintsIR::validate` | Rejects illegal authored configuration. | IR | `crates/fullmag-ir/src/mesh_hints.rs` tests | executable contract | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Planner | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | Resolves mode, layers, grid certificate, and transfer. | Planner | `crates/fullmag-plan/src/tests.rs` multilayer tests | executable contract | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CPU runtime | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `execute_reference_fdm_multilayer` | Runs CPU reference; runtime performs FFT, pairs, and field pull. | FDM CPU FP64 | multilayer engine tests and independent oracles | local/source-unbound runtime evidence | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CPU observation and energy | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs` | `observe_multilayer` | Publishes CPU field, energy, and provenance. | FDM CPU FP64 | SP4-derived runtime artifacts | local/source-unbound runtime evidence | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Push transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `push_m_with_boundary_policy` | Transfers magnetization to the scratch grid. | FDM CPU transfer | `volume_weighted_transfer_preserves_2d_moment_through_z_average` | locally physically-validated for the stated moment contract; no unequal-native-cell-thickness continuum oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Pull transfer | `crates/fullmag-fdm-demag/src/transfer.rs` | `pull_h_with_boundary_policy` | Returns field to the native grid. | FDM CPU transfer | `volume_weighted_transfer_is_adjoint_with_active_mask` | locally physically-validated for the stated volume-adjoint and mask contract; no unequal-native-cell-thickness continuum oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Newell diagonal primitive | `crates/fullmag-fdm-demag/src/newell.rs` | `newell_f` | Evaluates Newell tensor function $f$. | Kernel preparation | Newell reference tests | code/test evidence | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Newell cross primitive | `crates/fullmag-fdm-demag/src/newell.rs` | `newell_g` | Evaluates Newell tensor function $g$. | Kernel preparation | Newell reference tests | code/test evidence | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Shifted Newell builder | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels_shifted` | Builds an oriented shifted tensor. | FDM CPU kernel | shifted/cubature tests | locally physically-validated | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CUDA v2 plan creation | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_v2` | Validates, uploads, and prepares D-07 plan. | FDM CUDA | managed ABI/contract tests | executable contract, no device parity | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| CUDA FFT workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_prepare_multilayer_fft_workspace_v2` | Prepares batched cuFFT workspace. | FDM CUDA | managed contract tests | executable contract, no device parity | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| UI round-trip model | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | `createStudyGlobalDraft` | Reads scene FDM values into the Inspector draft. | Control Room | `StudyGlobalAuthoringModel.test.ts` | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| UI native-layer adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Adapts independent physical native-layer carriers and rejects malformed mask declarations. | Explorer/viewport | viewport adapter tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| UI Airbox adapter | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Adapts the validated target-only Airbox without treating the common FFT grid as geometry. | Explorer/viewport | viewport adapter tests | contract-verified, no fresh browser proof | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | BORIS common-grid policy | `external_solvers/BORIS/Boris/SDemag.cpp` | `SDemag::Set_n_common` | Reference behavior for explicit shared convolution counts. | BORIS reference | clean-room behavioral reference; SHA-256 manifest | traceability only | External reference snapshot |
 | BORIS ordered kernel reuse | `external_solvers/BORIS/Boris/DemagKernelCollection_Calc.cpp` | `DemagKernelCollection::KernelAlreadyComputed` | Observed reference key lookup over oriented shift and source/destination cell size. | BORIS reference | clean-room behavioral reference; SHA-256 manifest | traceability only | External reference snapshot |
 | BORIS pair accumulation | `external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp` | `DemagKernelCollection::KernelMultiplication_2D` | Observed reference ordered pair multiplication. | BORIS reference | clean-room behavioral reference; SHA-256 manifest | traceability only | External reference snapshot |
 | BORIS irregular-thickness tensor | `external_solvers/BORIS/Boris/DemagTFunc_Irregular.cpp` | `DemagTFunc::CalcDiagTens2D_Shifted_Irregular` | Observed unequal-thickness tensor construction. | BORIS reference | clean-room behavioral reference; SHA-256 manifest | traceability only | External reference snapshot |
 | BORIS multilayer phases | `external_solvers/BORIS/Boris/SDemag_MConv.cpp` | `SDemag::UpdateField_MConv_Demag` | Observed forward, pair, and inverse staging. | BORIS reference | clean-room behavioral reference; SHA-256 manifest | traceability only | External reference snapshot |
-| Fullmag kernel reuse | `crates/fullmag-fdm-demag/src/descriptors.rs` | `KernelReuseKey::from_layers_with_layout` | Builds the independent reuse key from the full transform and layer descriptors. | FDM CPU/GPU | descriptor unit tests | executable contract | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag common-transform schema | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `fdm_multilayer_layout_resource` | Builds the resource containing the computational common-transform schema, not a physical mesh. | Control Room API | API schema tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag layer correlation | `crates/fullmag-api/src/router_v2/handlers/data/multilayer_identity.rs` | `correlate_multilayer_layers` | Binds artifact and execution-plan layers one-to-one and rejects identity disagreement. | Control Room API | v2 route tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag layout route | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `get_fdm_multilayer_layout` | Publishes layout availability and an explicit unavailable reason. | Control Room API | v2 route tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag FMBM mask route | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `get_fdm_multilayer_layer_active_mask` | Publishes a revisioned FMBM v1 active-mask payload with bound layout and grid identities. | Control Room API | v2 route tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag FMBM payload builder | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `pack_native_active_mask` | Packs the native active mask carried by the FMBM payload. | Control Room API | v2 route tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag FMBM codec | `apps/control-room/src/kernel/api/codecs/fdmMultilayerActiveMaskCodec.ts` | `decodeFdmMultilayerActiveMask` | Validates FMBM magic, version, shape, cell count, and payload length. | Control Room API | codec tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag FMBM identity contract | `apps/control-room/src/kernel/api/codecs/fdmMultilayerActiveMaskCodec.ts` | `validateFdmMultilayerActiveMaskContract` | Rejects mismatched layout revision, grid identity, hash, and active-cell counts. | Control Room API | codec tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag FMBM resource hook | `apps/control-room/src/kernel/resources/geometryLifecycleResources.ts` | `useFdmMultilayerLayerActiveMasksResource` | Fetches only declared masks and marks incompatible payloads unusable. | Control Room API | resource-hook tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag Explorer omission | `apps/control-room/src/modules/explorer/builders/buildModelTree.ts` | `buildModelTree` | Omits unavailable layout nodes and keeps native-layer targets separate. | Explorer | Explorer tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag native-layer domains | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Adapts physical native-layer carriers only. | Viewport | viewport adapter tests | contract-verified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Fullmag target-only Airbox domain | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Adapts target-only Airbox and validates field availability. | Viewport | viewport adapter tests | contract-verified, no fresh browser proof | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Fullmag kernel reuse | `crates/fullmag-fdm-demag/src/descriptors.rs` | `KernelReuseKey::from_layers_with_layout` | Builds the independent reuse key from the full transform and layer descriptors. | FDM CPU/GPU | descriptor unit tests | executable contract | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag common-transform schema | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `fdm_multilayer_layout_resource` | Builds the resource containing the computational common-transform schema, not a physical mesh. | Control Room API | API schema tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag layer correlation | `crates/fullmag-api/src/router_v2/handlers/data/multilayer_identity.rs` | `correlate_multilayer_layers` | Binds artifact and execution-plan layers one-to-one and rejects identity disagreement. | Control Room API | v2 route tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag layout route | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `get_fdm_multilayer_layout` | Publishes layout availability and an explicit unavailable reason. | Control Room API | v2 route tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag FMBM mask route | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `get_fdm_multilayer_layer_active_mask` | Publishes a revisioned FMBM v1 active-mask payload with bound layout and grid identities. | Control Room API | v2 route tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag FMBM payload builder | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs` | `pack_native_active_mask` | Packs the native active mask carried by the FMBM payload. | Control Room API | v2 route tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag FMBM codec | `apps/control-room/src/kernel/api/codecs/fdmMultilayerActiveMaskCodec.ts` | `decodeFdmMultilayerActiveMask` | Validates FMBM magic, version, shape, cell count, and payload length. | Control Room API | codec tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag FMBM identity contract | `apps/control-room/src/kernel/api/codecs/fdmMultilayerActiveMaskCodec.ts` | `validateFdmMultilayerActiveMaskContract` | Rejects mismatched layout revision, grid identity, hash, and active-cell counts. | Control Room API | codec tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag FMBM resource hook | `apps/control-room/src/kernel/resources/geometryLifecycleResources.ts` | `useFdmMultilayerLayerActiveMasksResource` | Fetches only declared masks and marks incompatible payloads unusable. | Control Room API | resource-hook tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag Explorer omission | `apps/control-room/src/modules/explorer/builders/buildModelTree.ts` | `buildModelTree` | Omits unavailable layout nodes and keeps native-layer targets separate. | Explorer | Explorer tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag native-layer domains | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Adapts physical native-layer carriers only. | Viewport | viewport adapter tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Fullmag target-only Airbox domain | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Adapts target-only Airbox and validates field availability. | Viewport | viewport adapter tests | contract-verified, no fresh browser proof | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
