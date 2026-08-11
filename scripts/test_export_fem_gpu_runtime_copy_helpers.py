@@ -1238,13 +1238,12 @@ def test_export_revalidates_source_immediately_before_alias_switch() -> None:
     publication = exporter[function_start:function_end]
 
     verify_index = publication.rindex("verify_source_snapshot_identity")
-    prune_index = publication.index('FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}"')
-    migrate_index = publication.index("migrate_managed_fem_runtime_variants")
-    link_index = publication.index('ln -sfn "${alias_target}"')
-    switch_index = publication.index('mv -Tf "${repo_next_alias}"')
+    latest_index = publication.index('mv -f "${persistent_staging_archive}"')
+    rebind_index = publication.index("rebind_managed_fem_runtime_aliases")
 
-    assert prune_index < migrate_index < verify_index < link_index < switch_index
-    assert "source_identity_file" not in publication[verify_index:link_index]
+    assert latest_index < verify_index < rebind_index
+    assert 'FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}"' not in publication
+    assert "source_identity_file" not in publication[verify_index:rebind_index]
 
 
 def test_managed_runtime_validator_rejects_mismatched_mesh_abi(tmp_path: Path) -> None:
@@ -1561,9 +1560,7 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     assert '.fullmag/runtimes/fem-gpu-host.staging' not in exporter
     assert 'manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json"' in exporter
     assert 'variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"' in exporter
-    assert 'alias_target="fem-gpu-variants/$(basename "${variant_root}")"' in exporter
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}"' in exporter
-    assert 'ln -sfn "${alias_target}" "${repo_next_alias}"' in exporter
+    assert 'rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"' in exporter
     assert 'PERSISTENT_LATEST_ARCHIVE=' in exporter
     assert '--allow-unaddressed-staging' in exporter
     assert '--runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"' in exporter
@@ -1622,10 +1619,9 @@ def test_export_defaults_to_exact_persistent_build_root() -> None:
         REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
     ).read_text(encoding="utf-8")
 
-    assert (
-        'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
-        in exporter
-    )
+    assert "resolve_managed_fem_native_storage_profile" in exporter
+    assert '/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4' in storage_helper
+    assert '/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native-2.ext4' in storage_helper
     assert 'readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"' in exporter
     assert (
         'readonly FULLMAG_CONTAINER_TARGET_ROOT='
@@ -1645,7 +1641,7 @@ def test_export_publishes_durable_copy_before_switching_aliases() -> None:
 
     archive_index = exporter.index('tar -C "${variant_root}"')
     latest_index = exporter.index('mv -f "${persistent_staging_archive}"')
-    repo_alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    repo_alias_index = exporter.index('rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"')
     assert archive_index < latest_index < repo_alias_index
 
 
@@ -1656,7 +1652,7 @@ def test_export_validates_persistent_archive_before_switching_repo_alias() -> No
     validate_index = exporter.index(
         'validate_persistent_runtime_archive "${persistent_archive}" "${variant_root}"'
     )
-    alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    alias_index = exporter.index('rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"')
     assert archive_index < validate_index < alias_index
 
 
@@ -1822,6 +1818,7 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
     assert "if ! validate_current >/dev/null 2>&1; then" in ensure_recipe
     assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime" in ensure_recipe
+    assert "FULLMAG_NATIVE_STORAGE_PROFILE=" not in ensure_recipe
     assert (
         "FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 "
         "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime"

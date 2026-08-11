@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
 
+resolve_managed_fem_native_storage_profile() {
+  FULLMAG_NATIVE_STORAGE_PROFILE="${FULLMAG_NATIVE_STORAGE_PROFILE-canonical}"
+  FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
+  case "${FULLMAG_NATIVE_STORAGE_PROFILE}" in
+    canonical)
+      FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
+      FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
+      ;;
+    native-2)
+      FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native-2.ext4"
+      FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native-2"
+      ;;
+    *)
+      echo "[managed_fem_runtime_storage] unknown managed FEM native storage profile: ${FULLMAG_NATIVE_STORAGE_PROFILE:-<empty>} (expected canonical or native-2)" >&2
+      return 2
+      ;;
+  esac
+}
+
 validate_managed_fem_runtime_storage_target() {
   local target_dir="$1"
   local expected_backing_image="$2"
@@ -177,4 +196,60 @@ migrate_managed_fem_runtime_variants() {
   rmdir -- "${variants_alias}"
   ln -sfn "${durable_variants_root}" "${next_alias}"
   mv -Tf "${next_alias}" "${variants_alias}"
+}
+
+prepare_managed_fem_runtime_variants_for_rebind() {
+  local variants_alias="$1"
+  local durable_variants_root="$2"
+  local validator="$3"
+
+  if [ -L "${variants_alias}" ] && \
+     [ "$(readlink -f "${variants_alias}" 2>/dev/null || true)" != \
+       "$(readlink -f "${durable_variants_root}")" ]; then
+    return 0
+  fi
+  migrate_managed_fem_runtime_variants \
+    "${variants_alias}" "${durable_variants_root}" "${validator}"
+}
+
+rebind_managed_fem_runtime_aliases() {
+  local active_alias="$1"
+  local variants_alias="$2"
+  local durable_variants_root="$3"
+  local durable_variant="$4"
+  local validator="$5"
+  local variant_name direct_next variants_next relative_next direct_target
+
+  require_regular_contained_durable_variant \
+    "${durable_variants_root}" "${durable_variant}"
+  python3 "${validator}" --runtime-root "${durable_variant}" >/dev/null
+  if { [ -e "${active_alias}" ] || [ -L "${active_alias}" ]; } && \
+     [ ! -L "${active_alias}" ]; then
+    echo "managed FEM active runtime is not a symlink: ${active_alias}" >&2
+    return 2
+  fi
+
+  variant_name="$(basename "${durable_variant}")"
+  direct_target="$(readlink -f "${durable_variant}")"
+  direct_next="${active_alias}.direct-next.$$"
+  variants_next="${variants_alias}.next.$$"
+  relative_next="${active_alias}.relative-next.$$"
+
+  ln -sfn "${direct_target}" "${direct_next}"
+  if ! mv -Tf "${direct_next}" "${active_alias}"; then
+    rm -f -- "${direct_next}"
+    return 2
+  fi
+
+  ln -sfn "${durable_variants_root}" "${variants_next}"
+  if ! mv -Tf "${variants_next}" "${variants_alias}"; then
+    rm -f -- "${variants_next}"
+    return 2
+  fi
+
+  ln -sfn "fem-gpu-variants/${variant_name}" "${relative_next}"
+  if ! mv -Tf "${relative_next}" "${active_alias}"; then
+    rm -f -- "${relative_next}"
+    return 2
+  fi
 }

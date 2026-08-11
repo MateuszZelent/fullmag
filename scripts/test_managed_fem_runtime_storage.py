@@ -58,6 +58,36 @@ def _migrate(alias: Path, durable: Path, validator: Path) -> subprocess.Complete
     )
 
 
+def _rebind(
+    active: Path,
+    alias: Path,
+    durable: Path,
+    variant: Path,
+    validator: Path,
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    return subprocess.run(
+        [
+            "bash", "-euo", "pipefail", "-c",
+            (
+                'source "$1"; rebind_managed_fem_runtime_aliases '
+                '"$2" "$3" "$4" "$5" "$6"'
+            ),
+            "bash",
+            str(STORAGE_HELPER),
+            str(active),
+            str(alias),
+            str(durable),
+            str(variant),
+            str(validator),
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def test_migrates_valid_legacy_variants_then_selects_durable_alias(tmp_path: Path) -> None:
     alias = tmp_path / "repo/.fullmag/runtimes/fem-gpu-variants"
     durable = tmp_path / "durable/variants"
@@ -82,13 +112,119 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     )
 
     assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in exporter
+    assert "prepare_managed_fem_runtime_variants_for_rebind" in exporter
+    assert 'rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in restorer
+    assert "prepare_managed_fem_runtime_variants_for_rebind" in restorer
+    assert 'rebind_managed_fem_runtime_aliases "${runtime_parent}/fem-gpu-host"' in restorer
     assert "validate_managed_fem_runtime_storage_target" in restorer
     assert restorer.index("validate_managed_fem_runtime_storage_target") < restorer.index(
         'tar -C "${staging}"'
     )
+
+
+def test_rebind_operation_does_not_call_legacy_copy_delete_migration() -> None:
+    helper = STORAGE_HELPER.read_text(encoding="utf-8")
+    start = helper.index("rebind_managed_fem_runtime_aliases() {")
+    body = helper[start:]
+
+    assert "migrate_managed_fem_runtime_variants" not in body
+    assert "cp -a" not in body
+    assert "rm -rf" not in body
+
+
+def test_rebind_switches_profiles_without_copying_or_deleting_old_variants(
+    tmp_path: Path,
+) -> None:
+    runtime_parent = tmp_path / "repo/.fullmag/runtimes"
+    runtime_parent.mkdir(parents=True)
+    active = runtime_parent / "fem-gpu-host"
+    alias = runtime_parent / "fem-gpu-variants"
+    old_root = tmp_path / "old/variants"
+    old_variant = _variant(old_root, "old", "old-payload")
+    new_root = tmp_path / "new/variants"
+    new_variant = _variant(new_root, "new", "new-payload")
+    alias.symlink_to(old_root)
+    active.symlink_to("fem-gpu-variants/old")
+    validator = tmp_path / "validator.py"
+    _validator(validator)
+
+    result = _rebind(active, alias, new_root, new_variant, validator)
+
+    assert result.returncode == 0, result.stderr
+    assert active.is_symlink()
+    assert os.readlink(active) == "fem-gpu-variants/new"
+    assert active.resolve() == new_variant.resolve()
+    assert alias.resolve() == new_root.resolve()
+    assert old_variant.is_dir() and not old_variant.is_symlink()
+    assert (old_variant / "bin/worker").read_text(encoding="utf-8") == "old-payload"
+    assert sorted(path.name for path in old_root.iterdir()) == ["old"]
+    assert sorted(path.name for path in new_root.iterdir()) == ["new"]
+
+
+def test_rebind_keeps_active_runtime_resolvable_after_each_atomic_switch_failure(
+    tmp_path: Path,
+) -> None:
+    validator = tmp_path / "validator.py"
+    _validator(validator)
+
+    for fail_on_call in (1, 2, 3):
+        case = tmp_path / f"case-{fail_on_call}"
+        runtime_parent = case / "repo/.fullmag/runtimes"
+        runtime_parent.mkdir(parents=True)
+        active = runtime_parent / "fem-gpu-host"
+        alias = runtime_parent / "fem-gpu-variants"
+        old_root = case / "old/variants"
+        old_variant = _variant(old_root, "old", "old-payload")
+        new_root = case / "new/variants"
+        new_variant = _variant(new_root, "new", "new-payload")
+        alias.symlink_to(old_root)
+        active.symlink_to("fem-gpu-variants/old")
+        fake_bin = case / "bin"
+        fake_bin.mkdir()
+        counter = case / "mv-counter"
+        fake_mv = fake_bin / "mv"
+        fake_mv.write_text(
+            "#!/bin/sh\n"
+            'count=0; [ ! -f "$MV_COUNTER" ] || count="$(cat "$MV_COUNTER")"\n'
+            'count=$((count + 1)); printf "%s\\n" "$count" > "$MV_COUNTER"\n'
+            'if [ "$count" = "$MV_FAIL_ON" ]; then exit 86; fi\n'
+            'exec /bin/mv "$@"\n',
+            encoding="utf-8",
+        )
+        fake_mv.chmod(0o755)
+        environment_path = f"{fake_bin}:{os.environ['PATH']}"
+        environment = os.environ.copy()
+        environment["PATH"] = environment_path
+        environment["MV_COUNTER"] = str(counter)
+        environment["MV_FAIL_ON"] = str(fail_on_call)
+        result = subprocess.run(
+            [
+                "bash", "-euo", "pipefail", "-c",
+                (
+                    'source "$1"; rebind_managed_fem_runtime_aliases '
+                    '"$2" "$3" "$4" "$5" "$6"'
+                ),
+                "bash",
+                str(STORAGE_HELPER),
+                str(active),
+                str(alias),
+                str(new_root),
+                str(new_variant),
+                str(validator),
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert active.is_symlink()
+        assert active.resolve().is_dir()
+        assert (active.resolve() / "bin/worker").is_file()
+        assert old_variant.is_dir()
+        assert new_variant.is_dir()
 
 
 def test_migration_rejects_mismatched_collision_without_deleting_legacy(tmp_path: Path) -> None:

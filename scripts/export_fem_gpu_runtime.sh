@@ -5,6 +5,9 @@ SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="${FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT:-${SOURCE_ROOT}}"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_image_identity.sh"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
+resolve_managed_fem_native_storage_profile
+readonly FULLMAG_NATIVE_STORAGE_PROFILE FULLMAG_NATIVE_BUILD_STORAGE_ROOT
+readonly FULLMAG_NATIVE_BUILD_IMAGE FULLMAG_NATIVE_MOUNT_VIEW
 RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
 VARIANTS_ROOT=""
@@ -135,9 +138,6 @@ validate_container_target_dir() {
 cd "${SOURCE_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
-readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
-readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
-readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
 readonly FULLMAG_CONTAINER_TARGET_ROOT="${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"
 readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"
 readonly PERSISTENT_RUNTIME_PARENT="${FULLMAG_BUILD_ROOT}/runtimes"
@@ -1167,8 +1167,6 @@ publish_runtime_bundle() {
   local manifest_sha256
   manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json" | awk '{print $1}')"
   local variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"
-  local alias_target="fem-gpu-variants/$(basename "${variant_root}")"
-  local repo_next_alias="${RUNTIME_PARENT}/.fem-gpu-host.next.$$"
   local variants_alias="${RUNTIME_PARENT}/fem-gpu-variants"
   local persistent_archive="${PERSISTENT_RUNTIME_PARENT}/$(basename "${variant_root}").tar"
   python3 scripts/validate_managed_fem_runtime_bundle.py \
@@ -1214,16 +1212,13 @@ publish_runtime_bundle() {
   verify_source_snapshot_identity
   mv -f "${persistent_staging_archive}" "${PERSISTENT_LATEST_ARCHIVE}"
   persistent_staging_archive=""
-  if [ "${FULLMAG_RUNTIME_PRUNE}" = "1" ]; then
-    FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}" \
-      FULLMAG_RUNTIME_KEEP_PER_FAMILY="${FULLMAG_RUNTIME_KEEP_PER_FAMILY:-2}" \
-      bash "${SOURCE_SNAPSHOT_ROOT}/scripts/prune_managed_fem_runtimes.sh"
-  fi
-  migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}" \
+  prepare_managed_fem_runtime_variants_for_rebind "${variants_alias}" \
+    "${VARIANTS_ROOT}" \
     "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
   verify_source_snapshot_identity
-  ln -sfn "${alias_target}" "${repo_next_alias}"
-  mv -Tf "${repo_next_alias}" "${RUNTIME_ROOT}"
+  rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}" "${variants_alias}" \
+    "${VARIANTS_ROOT}" "${variant_root}" \
+    "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
   rm -rf -- "${STAGING_ROOT}"
 }
 
