@@ -29,7 +29,7 @@ describe("analysis preference hydration", () => {
     const dom = installSimulationPreparationTestDom();
     const values = new Map<string, string>();
     values.set(ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY, serializeAnalysisViewPreferences({
-      activeSurface: "frequency-response",
+      activeSurface: "resonance-fmr",
       descriptorPreferences: {
         "artifact:frequency-response:artifact://response": { displayUnits: { amplitude: "mJ" }, range: null, selectedSeriesIds: ["response"] },
       },

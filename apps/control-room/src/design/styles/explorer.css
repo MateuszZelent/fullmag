@@ -72,6 +72,30 @@
     box-shadow var(--fm-transition-fast);
 }
 
+.fm-result-context {
+  display: grid;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  min-width: 0;
+}
+
+.fm-result-context__label {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+}
+
+.fm-result-context__reason {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-result-context__trigger {
+  min-width: 0;
+  width: 100%;
+}
+
 .fm-explorer-filter:focus-within {
   border-color: var(--fm-accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 12%, transparent);

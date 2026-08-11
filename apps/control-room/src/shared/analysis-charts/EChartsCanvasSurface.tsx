@@ -21,6 +21,7 @@ import {
   resolveChartTokens,
   type FullmagChartTokens,
 } from "./fullmagChartTokens";
+import { parseLabelAndUnit } from "./scientificChartFormatting";
 import type { ChartDataPresentationState } from "./chartPresentationState";
 
 export function EChartsCanvasSurface({
@@ -33,6 +34,7 @@ export function EChartsCanvasSurface({
   onDataZoom,
   onDoubleClick,
   presentation,
+  ownerStatus,
   diagnostics,
   exportRef,
 }: {
@@ -53,6 +55,7 @@ export function EChartsCanvasSurface({
   onDataZoom?: (event: unknown) => void;
   onDoubleClick?: (event: unknown) => void;
   presentation?: ChartDataPresentationState;
+  ownerStatus?: string;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef(model);
@@ -192,11 +195,13 @@ export function EChartsCanvasSurface({
     presentation?.kind === "unsupported";
   const keepCanvas = hasRenderableData && !blocksPlot;
   const status = surfaceStatus(model, rendererStatus, presentation);
+  const accessibleLabel = `${model.ariaLabel}. X axis ${accessibleAxisLabel(model.xAxis)}. Y axes ${model.yAxes.map(accessibleAxisLabel).join(", ")}.`;
   return (
     <div
       aria-describedby={`${model.key}-summary`}
-      aria-label={model.ariaLabel}
+      aria-label={accessibleLabel}
       className="fm-analysis-chart-surface"
+      data-status={ownerStatus}
       role="img"
     >
       <div
@@ -217,6 +222,11 @@ export function EChartsCanvasSurface({
       {children}
     </div>
   );
+}
+
+function accessibleAxisLabel(axis: { label: string; unit: string }): string {
+  const baseLabel = parseLabelAndUnit(axis.label, axis.unit).baseLabel;
+  return axis.unit ? `${baseLabel} [${axis.unit}]` : baseLabel;
 }
 
 function surfaceStatus(

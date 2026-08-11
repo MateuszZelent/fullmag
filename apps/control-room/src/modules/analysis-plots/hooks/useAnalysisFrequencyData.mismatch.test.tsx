@@ -25,7 +25,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 
 import { useAnalysisFrequencyData } from "./useAnalysisFrequencyData";
 
-function Harness({ surface = "eigenmodes" }: { surface?: "eigenmodes" | "frequency-response" }) {
+function Harness({ surface = "resonance-fmr" }: { surface?: "dispersion" | "resonance-fmr" }) {
   const data = useAnalysisFrequencyData(surface);
   return <span>{`${data.frequencyDomainStatus}:${data.frequencyDomainSeries.length}`}</span>;
 }
@@ -37,12 +37,12 @@ describe("frequency surface mismatch", () => {
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     try {
-      await act(async () => root.render(<Harness surface="frequency-response" />));
+      await act(async () => root.render(<Harness surface="resonance-fmr" />));
       expect(container.textContent).toBe("loading:0");
       for (const call of [spectrum, dispersion, branches, response]) expect(call).toHaveBeenLastCalledWith({ enabled: false });
 
       manifestState = { data: { result_manifest: { payload: { artifacts: { response_sweep_v2_path: "response.json" }, requested_execution: { calculation_mode: "fmr_response" } } } }, status: "ready" };
-      await act(async () => root.render(<Harness surface="frequency-response" />));
+      await act(async () => root.render(<Harness surface="resonance-fmr" />));
       expect(response).toHaveBeenLastCalledWith({ enabled: true });
       for (const call of [spectrum, dispersion, branches]) {
         expect(call.mock.calls.every(([options]) => (options as { enabled: boolean }).enabled === false)).toBe(true);
@@ -50,12 +50,12 @@ describe("frequency surface mismatch", () => {
     } finally { manifestState = { data: { result_manifest: { payload: { artifacts: { response_sweep_v2_path: "response.json" }, requested_execution: { calculation_mode: "fmr_response" } } } }, status: "ready" }; await act(async () => root.unmount()); dom.restore(); }
   });
 
-  it("mounts eigenmodes against a response artifact without loading any nonmatching artifact resource", async () => {
+  it("rejects a response artifact on the dispersion surface without loading it", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     try {
-      await act(async () => root.render(<Harness />));
+      await act(async () => root.render(<Harness surface="dispersion" />));
       expect(container.textContent).toBe("unsupported:0");
       expect(manifest).toHaveBeenCalledWith({ enabled: true });
       for (const call of [spectrum, dispersion, branches, response]) expect(call).toHaveBeenCalledWith({ enabled: false });
@@ -68,7 +68,7 @@ describe("frequency surface mismatch", () => {
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     try {
-      await act(async () => root.render(<Harness surface="frequency-response" />));
+      await act(async () => root.render(<Harness surface="resonance-fmr" />));
       expect(container.textContent).toBe("unsupported:0");
       for (const call of [spectrum, dispersion, branches, response]) expect(call).toHaveBeenLastCalledWith({ enabled: false });
     } finally {

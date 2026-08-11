@@ -4,7 +4,10 @@ import type {
   RegionVisualizationTargetId,
   SelectionRef,
 } from "@/kernel/selection/selectionTypes";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import {
+  modeVisualizationTargetId,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
@@ -131,14 +134,6 @@ function modeVisualizationViewFromNode(node: ExplorerNode): string | undefined {
   return markerIndex >= 0 ? node.id.slice(markerIndex + marker.length) : undefined;
 }
 
-function modeVisualizationTargetId(
-  objectId: string,
-  source: "eigen-mode" | "frequency-response",
-  fieldId: string,
-): `mode:${string}:${typeof source}:${string}` {
-  return `mode:${objectId}:${source}:${encodeURIComponent(fieldId)}`;
-}
-
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (node.kind === "results.quick_chart") {
     const descriptor = parsePinnedQuickChart(node);
@@ -249,6 +244,11 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     return {
       ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
       ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
+      ...(node.artifactRevision !== undefined
+        ? { artifactRevision: node.artifactRevision }
+        : {}),
+      ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
+      ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
       ...(node.artifactPath ? { artifactPath: node.artifactPath } : {}),
       ...(node.branchId ? { branchId: node.branchId } : {}),
       ...(node.calculationMode ? { calculationMode: node.calculationMode } : {}),
@@ -265,6 +265,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "frequency-domain",
     };
   }
@@ -281,11 +282,18 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     if (!source) return null;
     return {
       fieldId: node.fieldId,
+      ...(node.fieldIds ? { fieldIds: node.fieldIds } : {}),
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),
       kind: node.kind,
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      ...(node.modeVisualizationRootFieldId
+        ? { modeVisualizationRootFieldId: node.modeVisualizationRootFieldId }
+        : {}),
+      ...(node.modeVisualizationRootSource
+        ? { modeVisualizationRootSource: node.modeVisualizationRootSource }
+        : {}),
       nodeId: node.id,
       objectId: node.objectId,
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
@@ -598,6 +606,13 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
 
 function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
   return (
+    node.kind.startsWith("results.resonance") ||
+    node.kind.startsWith("results.dispersion") ||
+    node.kind === "results.frequency_domain.provenance" ||
+    node.kind.startsWith("results.analysis_views") ||
+    node.kind.startsWith("results.derived_values") ||
+    node.kind.startsWith("results.tables") ||
+    node.kind.startsWith("results.exports") ||
     node.kind.startsWith("results.frequency_domain") ||
     node.kind.startsWith("results.eigen") ||
     node.kind.startsWith("results.frequency_response") ||

@@ -19,13 +19,13 @@ function tableFixture(tableId: string, revision: number) {
 }
 
 describe("Analysis workbench", () => {
-  it("exposes the seven explicit dataset-driven workbench surfaces", () => {
+  it("exposes the five physics-first workbench surfaces", () => {
     const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="dynamics" />);
-    for (const label of ["Dynamics", "Spectrum", "Frequency Response", "Eigenmodes", "Dispersion", "Hysteresis", "Comparison"]) expect(html).toContain(`>${label}</button>`);
+    for (const label of ["Dynamics", "Resonance &amp; FMR", "Dispersion", "Hysteresis", "Comparison"]) expect(html).toContain(`>${label}</button>`);
   });
 
   it("renders each selected workbench surface", () => {
-    for (const activeSurface of ["dynamics", "spectrum", "frequency-response", "eigenmodes", "dispersion", "hysteresis", "comparison"] as const) {
+    for (const activeSurface of ["dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison"] as const) {
       const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={activeSurface} />);
       expect(html).toContain('aria-label="Analysis dataset"');
     }
@@ -43,15 +43,14 @@ describe("Analysis workbench", () => {
     expect(html).toContain("Compatible series");
   });
 
-  it("renders surface-specific provenance for all seven surfaces", () => {
+  it("renders surface-specific provenance for all five surfaces", () => {
     const expected: Record<string, string | null> = {
       comparison: "table-a · revision 7", dynamics: "table-a · revision 7",
-      dispersion: "dynamic-structure-factor", eigenmodes: "eigen/spectrum",
-      "frequency-response": "response/magnetic-sweep", hysteresis: "hysteresis",
-      spectrum: "spin-wave-gamma",
+      dispersion: "dynamic-structure-factor",
+      "resonance-fmr": "response/magnetic-sweep", hysteresis: "hysteresis",
     };
     for (const [surface, provenance] of Object.entries(expected)) {
-      const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={surface as never} selectedDatasetRef="table-a" table={tableFixture("table-a", 7)} frequencyDomainProvenance={provenance} surfaceProvenance={{ dispersion: provenance!, hysteresis: provenance!, spectrum: provenance! }} /> as never);
+      const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={surface as never} selectedDatasetRef="table-a" table={tableFixture("table-a", 7)} frequencyDomainProvenance={provenance} surfaceProvenance={{ dispersion: provenance!, hysteresis: provenance! }} /> as never);
       expect(html).toContain(provenance!);
       if (surface !== "dynamics" && surface !== "comparison") expect(html).not.toContain("Dataset provenance: table-a");
     }

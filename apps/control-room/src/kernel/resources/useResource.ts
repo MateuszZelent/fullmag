@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   useSyncExternalStore,
@@ -286,6 +287,8 @@ function useResourceLoader<TData>({
   runtimeStore: ResourceRuntimeStore<TData>;
   setLoadedRefreshToken: (token: number) => void;
 }): void {
+  const loadLatest = useEffectEvent(load);
+
   useEffect(() => {
     if (!enabled) return;
     const hasManualRefresh = refreshToken !== loadedRefreshToken;
@@ -332,7 +335,7 @@ function useResourceLoader<TData>({
           abortStaleInflight,
           externalRevision,
           force: hasManualRefresh,
-          load,
+          load: loadLatest,
           minRefetchIntervalMs,
           resolveRevision,
           resourceKey,
@@ -403,7 +406,6 @@ function useResourceLoader<TData>({
     enabled,
     errorCountRef,
     externalRevision,
-    load,
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,

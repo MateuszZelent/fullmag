@@ -1,9 +1,32 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { buildScalarChartSeries } from "../chartTableModel";
 import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
+
+const echarts = vi.hoisted(() => ({
+  init: vi.fn(() => ({
+    dispatchAction: vi.fn(),
+    dispose: vi.fn(),
+    getDataURL: vi.fn(() => "data:image/png;base64,"),
+    resize: vi.fn(),
+    setOption: vi.fn(),
+  })),
+}));
+
+vi.mock("echarts", () => echarts);
+
+afterEach(() => {
+  echarts.init.mockClear();
+});
 
 const sourceUrl = new URL("./EChartsSurface.tsx", import.meta.url);
 const sharedSurfaceUrl = new URL("../../../shared/analysis-charts/InteractiveChartSurface.tsx", import.meta.url);
@@ -125,6 +148,74 @@ describe("EChartsSurface", () => {
     expect(errorHtml).toContain("Table samples unavailable");
   });
 
+  it("retains the mounted Analysis chart owner while retained samples refresh", async () => {
+    const dom = installSimulationPreparationTestDom();
+    globalThis.getComputedStyle = (() => ({
+      direction: "ltr",
+      getPropertyValue: () => "",
+    })) as unknown as typeof getComputedStyle;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <EChartsSurface
+            presentation={{ kind: "ready", revision: 41 }}
+            series={series}
+            xAxisLabel="step"
+          />,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const mountedSurface = findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-chart-surface",
+        "mounted Analysis chart surface",
+      );
+      const mountedCanvas = findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-plots__echarts",
+        "mounted Analysis chart canvas",
+      );
+
+      await act(async () => {
+        root.render(
+          <EChartsSurface
+            dataStatus="loading"
+            presentation={{
+              kind: "refreshing",
+              requestedRevision: 42,
+              visibleRevision: 41,
+            }}
+            series={series}
+            xAxisLabel="step"
+          />,
+        );
+      });
+
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-chart-surface",
+        "refreshing Analysis chart surface",
+      )).toBe(mountedSurface);
+      expect(mountedSurface.getAttribute("data-status")).toBe("refreshing");
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-plots__echarts",
+        "refreshing Analysis chart canvas",
+      )).toBe(mountedCanvas);
+      expect(mountedCanvas.getAttribute("data-retained")).toBe("true");
+      expect(container.textContent).not.toContain("Loading table samples");
+      expect(echarts.init).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("does not mislabel intentionally hidden series as missing table samples", () => {
     const model = tableSeriesRenderModel([], series, "step");
 
@@ -160,5 +251,18 @@ describe("EChartsSurface", () => {
     expect(styles).toMatch(/\.fm-analysis-plots__chart-frame\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/);
     expect(styles).toMatch(/\.fm-analysis-chart-surface\s*\{[^}]*flex:\s*1[^}]*min-height:\s*0/);
     expect(styles).toMatch(/\.fm-analysis-chart-export\s*\{[^}]*flex:\s*0\s+0\s+auto/);
+  });
+
+  it("stacks chart controls and preserves full scientific labels at phone width", () => {
+    const styles = readFileSync(analysisStylesUrl, "utf8");
+    const phoneRules = styles.slice(styles.indexOf("@media (max-width: 380px)"));
+
+    expect(styles).toContain("@media (max-width: 380px)");
+    expect(phoneRules).toContain(".fm-chart-section__header");
+    expect(phoneRules).toContain("flex-direction: column");
+    expect(phoneRules).toContain(".fm-chart-section__title");
+    expect(phoneRules).toContain("white-space: normal");
+    expect(phoneRules).toContain(".fm-analysis-chart-export");
+    expect(phoneRules).toContain("width: 100%");
   });
 });

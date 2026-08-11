@@ -22,7 +22,55 @@ describe("resolveInspectorDescriptor", () => {
     );
 
     expect(descriptor.tabs).toEqual([]);
-    expect(descriptor.typeLabel).toBe("Display");
+    expect(descriptor.typeLabel).toBe("Object display");
+  });
+
+  it("publishes distinct owner, icon, and type contracts for visualization routes", () => {
+    const cases = [
+      ["airbox.visualization", "airbox-visualization", "airbox", "Airbox display"],
+      ["object.visualization", "object-visualization", "visualization", "Object display"],
+      ["mesh-part", "mesh-part-visualization", "mesh", "Mesh-part display"],
+      [
+        "object.mode_visualization",
+        "object-mode-visualization-overview",
+        "mode",
+        "Mode visualization overview",
+      ],
+      [
+        "object.mode_visualization.group",
+        "object-mode-visualization-group",
+        "mode",
+        "Mode visualization fields",
+      ],
+      [
+        "object.mode_visualization.field",
+        "object-mode-visualization-field",
+        "mode",
+        "Mode visualization field",
+      ],
+      [
+        "object.mode_visualization.view",
+        "object-mode-visualization-view",
+        "mode",
+        "Mode visualization view",
+      ],
+    ] as const;
+
+    const descriptors = cases.map(([kind]) =>
+      resolveInspectorDescriptor(selection(kind)),
+    );
+
+    for (const [index, [, ownerId, icon, typeLabel]] of cases.entries()) {
+      expect(descriptors[index]).toMatchObject({ ownerId, icon, typeLabel });
+    }
+    expect(new Set(descriptors.map((descriptor) => descriptor.ownerId)).size).toBe(
+      cases.length,
+    );
+    expect(resolveInspectorDescriptor(selection("mesh-part-airbox"))).toMatchObject({
+      ownerId: "airbox-visualization",
+      icon: "airbox",
+      typeLabel: "Airbox display",
+    });
   });
 
   it("uses task-oriented mesh navigation", () => {

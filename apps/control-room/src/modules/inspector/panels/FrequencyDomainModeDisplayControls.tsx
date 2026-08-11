@@ -60,12 +60,17 @@ const MODE_FIELD_COMPONENT_ITEMS: Array<{
 const MODE_VECTOR_BUDGET_DEFAULT = 1200;
 
 interface FrequencyDomainModeAppearanceCommandInput {
+  colorRangeMax: number;
+  colorRangeMin: number;
+  colorRangeMode: "auto" | "manual" | "symmetric";
   colorSource: SurfaceColorSource;
   colormap: string;
   geometryScope: VisualizationGeometryScope;
+  displayGain: number;
   shaderVisible: boolean;
   solidColor: string;
   vectorBudget: number;
+  vectorScale: number;
   vectorsVisible: boolean;
 }
 
@@ -73,21 +78,31 @@ export interface FrequencyDomainModeDisplaySettings {
   activeAnalysisFieldOverlay: AnalysisFieldOverlayState | null;
   appearanceCommandInput: () => FrequencyDomainModeAppearanceCommandInput;
   colorSource: SurfaceColorSource;
+  colorRangeMax: number;
+  colorRangeMin: number;
+  colorRangeMode: "auto" | "manual" | "symmetric";
   colormap: string;
   component: ModeFieldComponent;
   geometryScope: VisualizationGeometryScope;
+  displayGain: number;
   setColorSource: (value: string) => void;
+  setColorRangeMax: (value: string) => void;
+  setColorRangeMin: (value: string) => void;
+  setColorRangeMode: (value: string) => void;
+  setDisplayGain: (value: string) => void;
   setColormap: (value: string) => void;
   setComponent: (value: string) => void;
   setGeometryScope: (value: string) => void;
   setShaderVisible: (value: boolean) => void;
   setSolidColor: (value: string) => void;
   setVectorBudget: (value: string) => void;
+  setVectorScale: (value: string) => void;
   setVectorsVisible: (value: boolean) => void;
   setView: (value: string) => void;
   shaderVisible: boolean;
   solidColor: string;
   vectorBudget: number;
+  vectorScale: number;
   vectorsVisible: boolean;
   view: string;
 }
@@ -163,6 +178,11 @@ export function useFrequencyDomainModeDisplaySettings({
   const view = normalizeAnalysisFieldView(
     activeAnalysisFieldOverlay?.query?.view ?? null,
   );
+  const colorRangeMode = activeAnalysisFieldOverlay?.appearance?.colorRangeMode ?? "auto";
+  const colorRangeMin = activeAnalysisFieldOverlay?.appearance?.colorRangeMin ?? -1;
+  const colorRangeMax = activeAnalysisFieldOverlay?.appearance?.colorRangeMax ?? 1;
+  const displayGain = activeAnalysisFieldOverlay?.appearance?.displayGain ?? 1;
+  const vectorScale = activeAnalysisFieldOverlay?.appearance?.vectorScale ?? 1;
 
   const updateActiveModeAppearance = (
     patch: Partial<FrequencyDomainModeAppearanceCommandInput>,
@@ -180,12 +200,17 @@ export function useFrequencyDomainModeDisplaySettings({
   };
 
   const appearanceCommandInput = () => ({
+    colorRangeMax,
+    colorRangeMin,
+    colorRangeMode,
     colorSource,
     colormap,
     geometryScope,
+    displayGain,
     shaderVisible,
     solidColor,
     vectorBudget,
+    vectorScale,
     vectorsVisible,
   });
 
@@ -193,12 +218,17 @@ export function useFrequencyDomainModeDisplaySettings({
     activeAnalysisFieldOverlay,
     appearanceCommandInput,
     colorSource,
+    colorRangeMax,
+    colorRangeMin,
+    colorRangeMode,
     colormap,
     component: normalizeModeFieldComponent(colorSource),
     geometryScope,
+    displayGain,
     shaderVisible,
     solidColor,
     vectorBudget,
+    vectorScale,
     vectorsVisible,
     view,
     setColorSource: (value: string) => {
@@ -213,6 +243,19 @@ export function useFrequencyDomainModeDisplaySettings({
       onCommandMessage?.(
         `Mode color source set to ${modeColorSourceLabel(surfaceColorSource)}.`,
       );
+    },
+    setColorRangeMode: (value: string) => {
+      const next = value === "manual" || value === "symmetric" ? value : "auto";
+      updateActiveModeAppearance({ colorRangeMode: next });
+    },
+    setColorRangeMin: (value: string) => {
+      updateActiveModeAppearance({ colorRangeMin: finiteNumber(value) ?? colorRangeMin });
+    },
+    setColorRangeMax: (value: string) => {
+      updateActiveModeAppearance({ colorRangeMax: finiteNumber(value) ?? colorRangeMax });
+    },
+    setDisplayGain: (value: string) => {
+      updateActiveModeAppearance({ displayGain: Math.max(0, finiteNumber(value) ?? displayGain) });
     },
     setColormap: (value: string) => {
       const nextColormap = normalizeScalarColorPalette(value);
@@ -280,6 +323,9 @@ export function useFrequencyDomainModeDisplaySettings({
         });
       }
       onCommandMessage?.(`Mode vector budget set to ${nextVectorBudget}.`);
+    },
+    setVectorScale: (value: string) => {
+      updateActiveModeAppearance({ vectorScale: Math.max(0, finiteNumber(value) ?? vectorScale) });
     },
     setVectorsVisible: (value: boolean) => {
       if (activeAnalysisFieldOverlay) {
@@ -488,6 +534,66 @@ export function FrequencyDomainModeDisplayControls({
         }
       />
       <FieldRow
+        label="Color range"
+        value={
+          <select
+            aria-label={`${labelPrefix} color range mode`}
+            className="fm-inspector-select"
+            disabled={disabled}
+            value={settings.colorRangeMode}
+            onChange={(event) => settings.setColorRangeMode(event.target.value)}
+          >
+            <option value="auto">Auto</option>
+            <option value="symmetric">Symmetric</option>
+            <option value="manual">Manual</option>
+          </select>
+        }
+      />
+      <FieldRow
+        label="Color minimum"
+        value={
+          <input
+            aria-label={`${labelPrefix} color minimum`}
+            className="fm-inspector-input"
+            disabled={disabled || settings.colorRangeMode !== "manual"}
+            step="any"
+            type="number"
+            value={settings.colorRangeMin}
+            onChange={(event) => settings.setColorRangeMin(event.currentTarget.value)}
+          />
+        }
+      />
+      <FieldRow
+        label="Color maximum"
+        value={
+          <input
+            aria-label={`${labelPrefix} color maximum`}
+            className="fm-inspector-input"
+            disabled={disabled || settings.colorRangeMode === "auto"}
+            min={settings.colorRangeMode === "symmetric" ? "0" : undefined}
+            step="any"
+            type="number"
+            value={settings.colorRangeMax}
+            onChange={(event) => settings.setColorRangeMax(event.currentTarget.value)}
+          />
+        }
+      />
+      <FieldRow
+        label="Display gain"
+        value={
+          <input
+            aria-label={`${labelPrefix} display gain`}
+            className="fm-inspector-input"
+            disabled={disabled}
+            min="0"
+            step="0.1"
+            type="number"
+            value={settings.displayGain}
+            onChange={(event) => settings.setDisplayGain(event.currentTarget.value)}
+          />
+        }
+      />
+      <FieldRow
         label="Vector budget"
         value={
           <input
@@ -521,6 +627,24 @@ export function FrequencyDomainModeDisplayControls({
           </select>
         }
       />
+      <FieldRow
+        label="Vector scale"
+        value={
+          <input
+            aria-label={`${labelPrefix} vector scale`}
+            className="fm-inspector-input"
+            disabled={disabled}
+            min="0"
+            step="0.1"
+            type="number"
+            value={settings.vectorScale}
+            onChange={(event) => settings.setVectorScale(event.currentTarget.value)}
+          />
+        }
+      />
+      <p className="fm-mode-visualization__presentation-note">
+        Visualization only — these controls do not change the computed mode.
+      </p>
     </>
   );
 }

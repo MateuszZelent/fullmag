@@ -463,6 +463,31 @@
   font-size: var(--fm-font-size-xs);
 }
 
+@media (max-width: 380px) {
+  .fm-frequency-domain-chart__header,
+  .fm-frequency-domain-peak-card__header,
+  .fm-frequency-domain-resonance-card__header,
+  .fm-frequency-domain-response-card__header,
+  .fm-frequency-domain-comparison-card__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fm-frequency-domain-chart__header,
+  .fm-frequency-domain-chart__header small,
+  .fm-frequency-domain-chart__mode span,
+  .fm-frequency-domain-chart__mode small {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .fm-frequency-domain-chart__controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 
 /* ── Frequency domain alert cards ── */
 .fm-fd-alert__title {
@@ -474,4 +499,29 @@
 .fm-fd-alert__row {
   font-size: var(--fm-font-size-xs);
   margin: var(--fm-space-1) 0;
+}
+.fm-mode-phase-control {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mode-phase-control__value,
+.fm-mode-phase-control__transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mode-phase-control__slider {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.fm-mode-visualization__presentation-note {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: var(--fm-line-height-normal);
 }

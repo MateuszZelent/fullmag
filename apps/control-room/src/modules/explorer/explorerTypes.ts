@@ -18,7 +18,7 @@ export type ExplorerTabId =
   | "jobs"
   | "diagnostics";
 
-type ExplorerNodeKind =
+export type ExplorerNodeKind =
   | "session.root"
   | "universe.root"
   | "objects.root"
@@ -144,6 +144,35 @@ type ExplorerNodeKind =
   | "study.stage.change_device"
   | "study.stage.save_state"
   | "results.root"
+  | "results.dynamics.root"
+  | "results.resonance.root"
+  | "results.resonance.modal.stage"
+  | "results.resonance.driven.stage"
+  | "results.resonance.modal.spectrum"
+  | "results.resonance.modal.modes"
+  | "results.resonance.modal.coupling"
+  | "results.resonance.driven.spectrum"
+  | "results.resonance.driven.peaks"
+  | "results.resonance.driven.frequency_points"
+  | "results.resonance.driven.fields"
+  | "results.dispersion.root"
+  | "results.dispersion.modal.stage"
+  | "results.dispersion.driven.stage"
+  | "results.dispersion.k_sampling"
+  | "results.dispersion.modal.relation"
+  | "results.dispersion.modal.branches"
+  | "results.dispersion.modal.modes_at_k"
+  | "results.dispersion.driven.response_map"
+  | "results.hysteresis.root"
+  | "results.analysis_views.root"
+  | "results.analysis_views.definition"
+  | "results.derived_values.root"
+  | "results.derived_values.definition"
+  | "results.tables.root"
+  | "results.tables.definition"
+  | "results.exports.root"
+  | "results.exports.definition"
+  | "results.frequency_domain.provenance"
   | "results.frequency_domain.root"
   | "results.frequency_domain.run"
   | "results.frequency_domain.calculation_modes"
@@ -252,6 +281,25 @@ export type ExplorerNodeStatus =
   | "unavailable"
   | "unsupported";
 
+export type ExplorerResourceState = "idle" | "loading" | "ready" | "stale" | "error";
+
+export type ExplorerExecutionState =
+  | "not_started"
+  | "queued"
+  | "running"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type ExplorerAvailability = "available" | "partial" | "unavailable" | "unsupported";
+
+export interface ExplorerNodeStateFacets {
+  availability: ExplorerAvailability;
+  executionState: ExplorerExecutionState;
+  resourceState: ExplorerResourceState;
+}
+
 export type ExplorerIconToken =
   | "activity"
   | "box"
@@ -283,6 +331,10 @@ export interface ExplorerNode {
   contextCommandInputs?: Partial<Record<CommandId, unknown>>;
   analysisRunId?: string;
   analysisStageId?: string;
+  artifactRevision?: number | string;
+  equilibriumId?: string;
+  kContextKind?: "finite_open" | "fixed_k" | "gamma" | "k_grid" | "k_path";
+  studyProduct?: "driven_response" | "modal_eigen" | string;
   artifactPath?: string;
   branchId?: string;
   calculationMode?: FrequencyDomainCalculationMode;
@@ -290,6 +342,7 @@ export interface ExplorerNode {
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
+  fieldIds?: readonly string[];
   extensionId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
@@ -311,6 +364,8 @@ export interface ExplorerNode {
   frequencyIndex?: number;
   analysisFieldSource?: "eigen-mode" | "frequency-response";
   analysisFieldView?: string;
+  modeVisualizationRootFieldId?: string;
+  modeVisualizationRootSource?: "eigen-mode" | "frequency-response";
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;
@@ -353,6 +408,9 @@ export interface ExplorerNode {
   sampleIndex?: number;
   stageId?: string;
   stageIndex?: number;
+  availability?: ExplorerAvailability;
+  executionState?: ExplorerExecutionState;
+  resourceState?: ExplorerResourceState;
   status?: ExplorerNodeStatus;
   structuredCurrentClosureId?: string;
   structuredCurrentSourceCutId?: string;

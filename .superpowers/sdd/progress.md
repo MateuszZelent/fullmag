@@ -93,3 +93,91 @@ Control Room Thin Film authoring slice: complete (commits 087a7411..bc6290a4, re
 | Task | Status | RED evidence | GREEN evidence | Reviews | Commit |
 |---:|---|---|---|---|---|
 | 1 | ledger closure re-review pending | I1: mały niezbilansowany $5\times10^{-13}\,\mathrm{A}$ był akceptowany przez ukrytą skalę $1\,\mathrm{A}$; I2: brakujący sidewall i zła `adjacent_cell` dochodziły do ABI; M1: test różnych osi nie izolował wspólnej osi; I1-R1: one-cell RHS rozbiegał się z ownerem; I2-R1: `area_m2` omijało preflight; I1-R2: `\sigma=5e-324\,\mathrm{S/m}` rozcinało ownerowy graf przy globalnie zbilansowanym RHS; I1-R3: dokumenty normatywne opisywały terminalową redukcję zamiast ownerowego RHS per komponent | RED: planner zwracał `Ok(())`; po wyłączeniu runner preflight MockAbi zwracał wynik, więc ABI było osiągalne. GREEN: planner 342/342; runner 818/818; source-map 22/22; FDM GPU docs 16/16; managed CUDA E2E: $V=[-0.025,+0.025]$ V, $J_x=-2e13$ A/m², residual algebraiczny $4.1150157270026995\times10^{-17}$, bilanse $0$ | Final documentation review: `REQUEST_CHANGES`, `0 Critical / 1 Important`; finding ledgeru fixed by `452b40e`; ledger closure re-review pending | `2e00562a37f61b26666cf51598e1e358bfb9d742..72ea50a23738205ad33eb7c41ae2454733030df6` |
+
+## Plan: Control Room Inspector refactor
+
+Task 1: complete (commits `5d8d18a8..fdfe1037`, review clean; focused RED
+confirmed 2 intended failures and 52 passing tests; fixture coverage includes
+model, resources, results, jobs, and diagnostics).
+Task 2: complete (commit `ebd02bc3`, review clean; 54 focused route-coverage
+tests and typecheck pass; exact route map, explicit unknown fallback, and
+frequency-kind coverage are present).
+Task 3: complete (commit `737eeafe`, review clean; 154 focused tree tests,
+typecheck, focused lint, and API hygiene pass; builder domains are split while
+public node IDs, kinds, order, and selection refs remain stable).
+Resource loader stabilization: complete (commits `46e769390..e12b03224`,
+fresh review clean; 2 focused timer/source-contract tests and typecheck pass;
+the base variant produced the intended RED result).
+Task 4: complete (commits `c836680b..22b8d7b2`; dedicated Airbox/object/mesh/mode
+visualization Inspector owners, canonical mode breadcrumb identity, interactive
+phase commands, distinct debug contracts, and stale CSS cleanup; focused
+171/171, full Control Room 515/515 files and 4947/4947 tests, typecheck, lint,
+and diff-check pass).
+Task 5: ukończony (commit `4955c06f6`; wszystkie selectable node kinds mają
+fail-closed route coverage oraz descriptor owner/icon/type contracts, w tym
+dedykowane Airbox/object/mesh-part/mode metadata; focused 226/226, typecheck,
+targeted ESLint i diff-check przechodzą).
+Task 6: częściowo zweryfikowany (commit `d09a41132`; `smoke:inspector` przechodzi
+z `consoleErrors: 0`, selection matrixą Airbox/Object/Mesh-part/Mode, keyboard
+path i asercją zdrowego WebGL canvasu). Wymagany dodatkowy
+`smoke:viewport-3d-explorer-inspector-targets` pozostaje zablokowany przez
+istniejący próg pixel-delta: FDM `changedPixels=13 < 18`, FEM fallback
+`changedPixels=0 < 18`; progu nie obniżano.
+Plan design systemu Inspectorów: zweryfikowany na implementacji odziedziczonej
+z wcześniejszych commitów; świeża family matrix `30/30` plików i `228/228`
+testów, kontrakty design systemu `93/93`, API hygiene `exit 0`. Pełny wrapper
+testowy nadal odtwarza niezależny baseline failure
+`ChartLegend.rowsBinary...` (`3` wywołania zamiast `2`), a architecture hygiene
+ma znany import `explorerSelection.ts` do `viewport-3d`.
+
+## Frequency-domain UX
+
+Deskryptory powierzchni analitycznych zakończone w `36912c45d`, wspólny stan
+prezentacji zasobów zakończony w `09ab148d3`, a dedykowany FMR modal spectrum
+Inspector zakończony w `75272786a`. Panel zachowuje wspólny szablon
+Inspectorów, ma własny owner, proweniencję i fail-closed gotowość pola 3D;
+routing korzysta bezpośrednio z nowego komponentu, a eksport z monolitu
+pozostaje dla kompatybilności.
+
+Task 4 driven-response/peak zakończony w `14cceb401`: response sweep ma
+dedykowanego ownera, pure model osi/progress/cancel/field handoff, osobny
+response-point browser oraz bezpośredni route import. Compatibility export
+monolitu pozostaje zachowany, a single-peak Inspector ma jawnego ownera.
+
+Ostatnia bramka tej części: `328/328` testów w pięciu plikach dla Task 4 oraz
+wcześniejsze `356/356` testów w sześciu plikach dla Task 3; typecheck,
+targeted ESLint, design contracts `93/93`, API hygiene i `git diff --check`.
+Końcowy audyt pozostałych powierzchni częstotliwości oraz wymagany smoke
+`smoke:viewport-3d-explorer-inspector-targets` pozostają otwarte; smoke nadal
+zatrzymuje się na istniejącym progu pixel-delta FDM `13 < 18` i FEM fallback
+`0 < 18`.
+
+Task 5 eigen/dispersion został zaimplementowany lokalnie: dispersion, branch i
+mode mają osobnych ownerów z tym samym `InspectorGroup`/`FieldRow`/chart/table
+template, osobne pure row models, stabilne selection refs i jawny handoff 3D.
+Explorer zachowuje istniejące ID, a dodatkowo publikuje artifact/resource
+provenance. Workbench używa descriptorów i explicit calculation mode; znane
+ścieżki nie rozpoznają FMR przez tytuł wykresu. Przeszły `461/461` testów
+fokusowych, typecheck, zero-warning targeted ESLint i `git diff --check`.
+
+Task 6 qualification checkpoint: responsywność Analysis jest sprawdzana przy
+360/640/900/1280 px wraz z osiami i jednostkami, legendą, kursorem/tabelą,
+eksportem oraz brakiem poziomego overflow. Klawiatura pokrywa toggles serii,
+wybór punktu z tabeli, driven-response point, wiersz eigen branch i modalny
+Plot 3D. Właściciel ECharts zachowuje ten sam canvas podczas retained refresh,
+a cleanup obejmuje renderer, listenery, ResizeObserver, MutationObserver i
+oczekujący RAF. `396/396` szerokich testów Analysis/chart/frequency Inspector,
+typecheck, targeted ESLint, API hygiene, React Doctor `90/100` bez uwag,
+`smoke:analysis-plots`, `smoke:inspector` oraz izolowany
+`CONTROL_ROOM_TARGET_SMOKE_PHASE=analysis-handoff` przechodzą. Produkcyjny
+build Next 16 przechodzi. Pełna macierz target smoke nadal zatrzymuje się na
+niezmienionym progu FDM pixel delta `13 < 18`.
+
+Audyt chart performance został naprawiony tak, aby zawsze wybierał Dynamics,
+mierzył ustalony heap po trzech cyklach GC i nie przypisywał globalnego RAF
+aktywnego viewportu 3D właścicielowi chartu. Produkcyjny przebieg 10 000 wierszy
+i 100 remountów przeszedł wcześniejszy limit heap oraz zerowy wzrost canvasów,
+listenerów, observerów, workerów, URL-i i aktywnych RAF. Pozostaje otwarta
+bramka Quick Chart + 3D: `/v2/sessions/current/data/fields` jest odpytywane co
+około 110 ms, dlatego session requests nie osiągają idle. Progu ani liczby
+cykli nie obniżono.

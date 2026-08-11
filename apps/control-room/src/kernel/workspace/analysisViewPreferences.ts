@@ -1,8 +1,6 @@
 export type AnalysisSurface =
   | "dynamics"
-  | "spectrum"
-  | "frequency-response"
-  | "eigenmodes"
+  | "resonance-fmr"
   | "dispersion"
   | "hysteresis"
   | "comparison";
@@ -21,7 +19,7 @@ export interface AnalysisViewPreferencesV2 {
 }
 
 export const ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY = "fm:analysis-view-preferences:v2";
-const SURFACES: readonly AnalysisSurface[] = ["dynamics", "spectrum", "frequency-response", "eigenmodes", "dispersion", "hysteresis", "comparison"];
+const SURFACES: readonly AnalysisSurface[] = ["dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison"];
 const MAX_DESCRIPTORS = 50;
 const MAX_DESCRIPTOR_LENGTH = 160;
 const MAX_SERIES = 100;
@@ -30,7 +28,7 @@ const MAX_STORED_BYTES = 256 * 1024;
 
 export function analysisDescriptorId(identity:
   | { kind: "dataset"; surface: AnalysisSurface; datasetRef: string | null }
-  | { kind: "artifact"; surface: "frequency-response" | "eigenmodes"; resourceKey: string }
+  | { kind: "artifact"; surface: "resonance-fmr" | "dispersion"; resourceKey: string }
   | { kind: "comparison"; primaryDatasetRef: string | null; secondaryDatasetRef: string | null },
 ): string {
   if (identity.kind === "dataset") return `${identity.surface}:${descriptorSegment(identity.datasetRef)}`;
@@ -54,7 +52,7 @@ export function parseAnalysisViewPreferences(raw: unknown): AnalysisViewPreferen
     }
   }
   return {
-    activeSurface: isSurface(raw.activeSurface) ? raw.activeSurface : "dynamics",
+    activeSurface: migrateSurface(raw.activeSurface),
     descriptorPreferences,
     schemaVersion: 2,
     selectedDatasetRef: validRawIdentifier(raw.selectedDatasetRef) ? raw.selectedDatasetRef : null,
@@ -127,6 +125,15 @@ function stableHash(value: string): string {
 
 function isSurface(value: unknown): value is AnalysisSurface {
   return typeof value === "string" && SURFACES.includes(value as AnalysisSurface);
+}
+
+function migrateSurface(value: unknown): AnalysisSurface {
+  if (isSurface(value)) return value;
+  if (value === "frequency-response" || value === "eigenmodes") {
+    return "resonance-fmr";
+  }
+  if (value === "spectrum") return "dynamics";
+  return "dynamics";
 }
 
 function validRawIdentifier(value: unknown): value is string {

@@ -35,6 +35,7 @@ import {
   resolveActiveObjectExtensionExplorerItems,
   setObjectExtensionEnabled,
 } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
+import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
 
 import {
   buildExplorerTree,
@@ -43,10 +44,36 @@ import {
   findExplorerNodePath,
   flattenExplorerNodes,
 } from "./buildModelTree";
+import { createExplorerNode } from "./explorerNodeContract";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
 } from "./sceneModelTreeAdapter";
+
+describe("Explorer node contract", () => {
+  it("preserves a valid node and its exported kind", () => {
+    const kind: ExplorerNodeKind = "object.root";
+    const node: ExplorerNode = {
+      id: "model:object:sample",
+      kind,
+      label: "Sample",
+      parentId: "model:objects",
+    };
+
+    expect(createExplorerNode(node)).toBe(node);
+  });
+
+  it("rejects an empty node id", () => {
+    expect(() =>
+      createExplorerNode({
+        id: "   ",
+        kind: "object.root",
+        label: "Sample",
+        parentId: "model:objects",
+      }),
+    ).toThrow("Explorer node requires a non-empty id");
+  });
+});
 
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 const RESPONSE_MAP_RESOURCE_KEY = "analysis:frequency-domain:response-map.v2";
@@ -2904,6 +2931,10 @@ describe("buildModelTree", () => {
                 resources: {
                   response_field_resources: [
                     {
+                      field_resource_id: "analysis:frequency-response:field-0000",
+                      frequency_index: 0,
+                    },
+                    {
                       field_resource_id: "analysis:frequency-response:field-0001",
                       frequency_index: 1,
                     },
@@ -2924,7 +2955,7 @@ describe("buildModelTree", () => {
           node.id === "model:object:film:visualization:mode-visualization",
       ),
     ).toMatchObject({
-      badge: "2 field(s)",
+      badge: "3 field(s)",
       kind: "object.mode_visualization",
       label: "Mode visualization",
       objectId: "film",
@@ -2945,6 +2976,19 @@ describe("buildModelTree", () => {
       kind: "object.mode_visualization.field",
       objectId: "film",
       status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film:visualization:mode-visualization:response",
+      ),
+    ).toMatchObject({
+      fieldIds: [
+        "analysis:frequency-response:field-0000",
+        "analysis:frequency-response:field-0001",
+      ],
+      kind: "object.mode_visualization.group",
     });
     expect(
       flattened.find(

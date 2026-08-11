@@ -21,6 +21,8 @@
 
 import { useMemo } from "react";
 
+import type { ResourceRevision } from "@/kernel/api/apiTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import {
   useFrequencyDomainEigenBranchesResource,
@@ -41,6 +43,14 @@ import {
 
 import type { ChartSeries } from "../chartTableModel";
 import { frequencyDomainChartSeriesForAnalysisPlots } from "../frequencyDomainSeriesAdapter";
+import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
+
+export interface FrequencyDomainPresentationResource {
+  data: unknown | null;
+  error: Error | null;
+  revision: ResourceRevision | null;
+  status: ResourceStatus;
+}
 
 export interface AnalysisFrequencyDataResult {
   /** Derived series for EChartsSurface */
@@ -51,6 +61,8 @@ export interface AnalysisFrequencyDataResult {
   frequencyDomainTitle: string;
   /** Non-null when data can't be shown — displayed as empty-state message */
   frequencyDomainUnavailableReason: string | null;
+  /** Resource presentation state, separate from scientific trust. */
+  frequencyDomainPresentation: ChartDataPresentationState;
   /** Resolved route (primaryChart, mode, status) */
   frequencyDomainRoute: Pick<FrequencyDomainChartRoute, "mode" | "primaryChart" | "status" | "unavailableReason">;
   /** Model detail for click-to-select in dispersion/spectrum/response charts */
@@ -66,7 +78,7 @@ export interface AnalysisFrequencyDataResult {
  * Only the resource for the active route loads — others remain disabled.
  */
 export function useAnalysisFrequencyData(
-  activeSurface: "frequency-response" | "eigenmodes" | "idle",
+  activeSurface: "dispersion" | "resonance-fmr" | "idle",
 ): AnalysisFrequencyDataResult {
   const loadFrequency = activeSurface !== "idle";
 
@@ -81,15 +93,17 @@ export function useAnalysisFrequencyData(
     ...frequencyDomainManifestRoute,
     ...frequencyDomainRouteOverride,
   };
-  const expectedChart = activeSurface === "frequency-response"
-    ? "response-sweep"
-    : activeSurface === "eigenmodes"
-      ? "modal-spectrum"
-      : null;
+  const expectedChart = activeSurface === "dispersion" ? "dispersion" : null;
+  const resonanceChart =
+    frequencyDomainRoute.primaryChart === "modal-spectrum" ||
+    frequencyDomainRoute.primaryChart === "response-sweep";
   const manifestReady = frequencyDomainManifest.status === "ready" &&
     frequencyDomainRoute.status === "available";
-  const surfaceMismatch = manifestReady && expectedChart !== null &&
-    frequencyDomainRoute.primaryChart !== expectedChart;
+  const surfaceMismatch = manifestReady && (
+    expectedChart !== null
+      ? frequencyDomainRoute.primaryChart !== expectedChart
+      : activeSurface === "resonance-fmr" && !resonanceChart
+  );
   const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
 
   // Load only the sub-resource required by the active route
@@ -186,7 +200,7 @@ export function useAnalysisFrequencyData(
 
   const frequencyDomainUnavailableReason =
     surfaceMismatch
-      ? `This artifact does not publish the ${activeSurface === "frequency-response" ? "frequency-response" : "eigenmode"} resource required by this surface.`
+      ? `This artifact does not publish a result compatible with the ${activeSurface} surface.`
       : frequencyDomainRoute.primaryChart === "response-map"
       ? "response-map chart adapter is not available yet"
       : frequencyDomainRoute.unavailableReason ??
@@ -196,16 +210,76 @@ export function useAnalysisFrequencyData(
           frequencyDomainSpectrumModel.diagnostics,
         ]);
 
+  const frequencyDomainResource =
+    frequencyDomainRoute.primaryChart === "dispersion"
+      ? frequencyDomainDispersion
+      : frequencyDomainRoute.primaryChart === "response-sweep"
+        ? frequencyDomainResponse
+        : frequencyDomainRoute.primaryChart === "modal-spectrum"
+          ? frequencyDomainSpectrum
+          : frequencyDomainManifest;
+  const frequencyDomainPresentation = useMemo(
+    () => deriveFrequencyDomainPresentationState(
+      frequencyDomainResource,
+      frequencyDomainStatus,
+      frequencyDomainUnavailableReason,
+    ),
+    [
+      frequencyDomainResource,
+      frequencyDomainStatus,
+      frequencyDomainUnavailableReason,
+    ],
+  );
+
   return {
     frequencyDomainSeries,
     frequencyDomainStatus,
     frequencyDomainTitle,
     frequencyDomainUnavailableReason,
     frequencyDomainRoute,
+    frequencyDomainPresentation,
     frequencyDomainDispersionModel,
     frequencyDomainResponseModel,
     frequencyDomainSpectrumModel,
   };
+}
+
+export function deriveFrequencyDomainPresentationState(
+  resource: FrequencyDomainPresentationResource,
+  status: string,
+  unsupportedReason: string | null,
+): ChartDataPresentationState {
+  if (status === "unsupported") {
+    return {
+      kind: "unsupported",
+      reason: unsupportedReason ?? "The selected frequency-domain resource is unsupported.",
+    };
+  }
+
+  const data = resource.data;
+  const revision = resource.revision;
+  const error = resource.error ?? new Error("Frequency-domain resource unavailable");
+
+  if (data === null) {
+    if (status === "error") return { kind: "error", error };
+    if (status === "loading" || status === "stale") return { kind: "initial-loading" };
+    return { kind: "empty", revision };
+  }
+
+  if (status === "error") {
+    return revision == null
+      ? { kind: "error", error }
+      : { kind: "stale", error, visibleRevision: revision };
+  }
+  if (status === "loading" || status === "stale") {
+    return revision == null
+      ? { kind: "initial-loading" }
+      : { kind: "refreshing", requestedRevision: revision, visibleRevision: revision };
+  }
+  if (status === "ready") {
+    return revision == null ? { kind: "empty", revision: null } : { kind: "ready", revision };
+  }
+  return { kind: "empty", revision };
 }
 
 // ===== Utilities extracted from controller =====

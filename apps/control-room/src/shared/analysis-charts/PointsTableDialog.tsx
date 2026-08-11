@@ -20,6 +20,7 @@ interface PointsTableDialogProps {
   /** Controlled open state */
   open: boolean;
   onClose: () => void;
+  onPointSelected?: (seriesId: string, pointIndex: number) => void;
 }
 
 /**
@@ -32,7 +33,12 @@ interface PointsTableDialogProps {
  * - Numeric values and units use the same dimension-aware transform as the canvas.
  * - Data is provenance-stamped (revision, decimation, trust).
  */
-export function PointsTableDialog({ model, open, onClose }: PointsTableDialogProps) {
+export function PointsTableDialog({
+  model,
+  open,
+  onClose,
+  onPointSelected,
+}: PointsTableDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descId = useId();
@@ -119,6 +125,7 @@ export function PointsTableDialog({ model, open, onClose }: PointsTableDialogPro
               unit: series.unit,
             }}
             yTransform={yTransforms[series.yAxis] ?? createChartDisplayTransform(series.unit, null)}
+            onPointSelected={onPointSelected}
           />
         ))}
         {model.series.length === 0 ? (
@@ -145,12 +152,14 @@ function SeriesTable({
   xTransform,
   yAxis,
   yTransform,
+  onPointSelected,
 }: {
   series: ChartRenderSeries;
   xAxis: { label: string; unit: string };
   xTransform: ChartDisplayTransform;
   yAxis: { label: string; unit: string };
   yTransform: ChartDisplayTransform;
+  onPointSelected?: (seriesId: string, pointIndex: number) => void;
 }) {
   const truncated = series.points.length > MAX_ROWS;
   const points = truncated ? series.points.slice(0, MAX_ROWS) : series.points;
@@ -192,10 +201,11 @@ function SeriesTable({
               <th scope="col">Row</th>
               <th scope="col">{xLabel}</th>
               <th scope="col">{yLabel}</th>
+              {onPointSelected ? <th scope="col">Action</th> : null}
             </tr>
           </thead>
           <tbody>
-            {points.map((point) => (
+            {points.map((point, pointIndex) => (
               <tr key={point.rowIndex}>
                 <td>{point.rowIndex}</td>
                 <td className="fm-points-table-dialog__numeric">
@@ -204,6 +214,18 @@ function SeriesTable({
                 <td className="fm-points-table-dialog__numeric">
                   {formatChartDisplayValue(point.y, yTransform)}
                 </td>
+                {onPointSelected ? (
+                  <td>
+                    <button
+                      aria-label={`Select ${series.label} row ${point.rowIndex}`}
+                      className="fm-points-table-dialog__select-point"
+                      type="button"
+                      onClick={() => onPointSelected(series.id, pointIndex)}
+                    >
+                      Select
+                    </button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

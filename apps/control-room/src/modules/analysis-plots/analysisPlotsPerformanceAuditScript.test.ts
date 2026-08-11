@@ -102,6 +102,10 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("pauseAnalysisUpdates(page)");
     expect(auditScript).toContain("Resume live chart updates");
     expect(auditScript).toContain("verifyChartInstanceLifecycle");
+    expect(auditScript).toContain("selectDynamicsAnalysisSurface");
+    expect(auditScript).toContain("waitForAnimationFrameOwnershipStable");
+    expect(auditScript).not.toContain("result.animationFrameCallbacks > 0");
+    expect(auditScript).toContain("round < 3");
     expect(auditScript).toContain("waitForQuietRowsBinRequests");
     expect(auditScript).toContain("waitForRowsTransportSizes");
     expect(auditScript).toContain('page.on("requestfinished"');
@@ -110,6 +114,9 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("rows.bin requests during chart idle");
     expect(auditScript).toContain("chart redraws during idle");
     expect(auditScript).toContain("chart instance leak");
+    expect(auditScript).toContain("createdObjectUrls");
+    expect(auditScript).toContain("revokedObjectUrls");
+    expect(auditScript).toContain("activeAnimationFrames");
     expect(auditScript).not.toContain("activeInstances === 1");
     expect(auditScript).not.toContain("setInterval");
   });

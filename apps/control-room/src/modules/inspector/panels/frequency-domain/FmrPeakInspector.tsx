@@ -39,7 +39,10 @@ export function FmrPeakInspector({
   summary,
 }: FmrPeakInspectorProps) {
   return (
-    <div data-inspector-surface="fmr-peak">
+    <div
+      data-inspector-owner="frequency-domain.fmr-peak"
+      data-inspector-surface="fmr-peak"
+    >
       <InspectorGroup title="Identity" badge={summary.badge}>
         <div className="fm-frequency-domain-active-peak">
           <div className="fm-frequency-domain-active-peak__header">
