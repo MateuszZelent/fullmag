@@ -1183,6 +1183,7 @@ void release(HierarchyCache &cache) noexcept {
     if (cache.coarse_edge_weight) (void)cudaFree(cache.coarse_edge_weight);
     if (cache.hierarchy_info) (void)cudaFree(cache.hierarchy_info);
     if (cache.warm_potential) (void)cudaFree(cache.warm_potential);
+    if (cache.warm_potential_staging) (void)cudaFree(cache.warm_potential_staging);
     cache = {};
 }
 
@@ -1332,7 +1333,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         checked_add(workspace_bytes, sizeof(DeviceSolveMetrics) + sizeof(uint32_t),
                     &workspace_bytes) &&
         checked_scaled(max_coarse_edges, 3 * sizeof(uint64_t), &edge_bytes) &&
-        checked_scaled(fine_bytes, 9, &cache_bytes) &&
+        checked_scaled(fine_bytes, 10, &cache_bytes) &&
         checked_add(cache_bytes, cells, &cache_bytes) &&
         checked_add(cache_bytes, edge_bytes, &cache_bytes) &&
         checked_add(cache_bytes, sizeof(DeviceHierarchyInfo), &cache_bytes) &&
@@ -1386,7 +1387,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
             alloc(reinterpret_cast<void **>(&cache.coarse_edge_weight),
                   max_coarse_edges * sizeof(double)) &&
             alloc(&cache.hierarchy_info, sizeof(DeviceHierarchyInfo)) &&
-            alloc(reinterpret_cast<void **>(&cache.warm_potential), fine_bytes);
+            alloc(reinterpret_cast<void **>(&cache.warm_potential), fine_bytes) &&
+            alloc(reinterpret_cast<void **>(&cache.warm_potential_staging), fine_bytes);
     }
     const bool allocated = cache_allocated &&
         alloc(reinterpret_cast<void **>(&candidate.potential), fine_bytes) &&

@@ -2034,6 +2034,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
     const uint64_t accepted_sequence = parent.accepted_sequence + 1;
     if (!parent.hierarchy_cache.valid ||
         parent.hierarchy_cache.warm_potential == nullptr ||
+        parent.hierarchy_cache.warm_potential_staging == nullptr ||
         parent.hierarchy_cache.cells != parent.provisional.cells ||
         parent.provisional.cells > UINT64_MAX / sizeof(double)) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
@@ -2047,9 +2048,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
     const bool inject_sync_failure = parent.test_failure_boundary == 71;
     if (inject_copy_failure || inject_sync_failure)
         parent.test_failure_boundary = 0;
-    parent.hierarchy_cache.warm_valid = false;
     if (inject_copy_failure ||
-        cudaMemcpyAsync(parent.hierarchy_cache.warm_potential,
+        cudaMemcpyAsync(parent.hierarchy_cache.warm_potential_staging,
                         parent.provisional.potential, warm_copy_bytes,
                         cudaMemcpyDeviceToDevice, parent.stream) != cudaSuccess) {
         append_charge_telemetry(
@@ -2061,7 +2061,9 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
             0, 0, 0, 0, parent.iterations, parent.candidate_digest.data());
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
-    const cudaError_t warm_sync = cudaStreamSynchronize(parent.stream);
+    const cudaError_t warm_sync = inject_sync_failure
+        ? cudaErrorUnknown
+        : cudaStreamSynchronize(parent.stream);
     if (inject_sync_failure || warm_sync != cudaSuccess) {
         append_charge_telemetry(
             parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
@@ -2079,6 +2081,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
             0, 0, 0, 0, parent.iterations, parent.candidate_digest.data());
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
+    std::swap(parent.hierarchy_cache.warm_potential,
+              parent.hierarchy_cache.warm_potential_staging);
     append_charge_telemetry(
         parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,

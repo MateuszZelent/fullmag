@@ -47,6 +47,7 @@ struct HierarchyCache {
     double *coarse_edge_weight = nullptr;
     void *hierarchy_info = nullptr;
     double *warm_potential = nullptr;
+    double *warm_potential_staging = nullptr;
     uint64_t cells = 0;
     uint64_t coarse_cells = 0;
     uint64_t warm_descriptor_revision = 0;
