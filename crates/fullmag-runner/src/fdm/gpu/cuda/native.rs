@@ -4374,15 +4374,24 @@ mod exact_metric_contract_tests {
     }
 
     #[test]
-    fn d07_l3_stage_telemetry_requires_exact_counts() {
-        let telemetry = validate_multilayer_stage_telemetry(3, 1, 3, 3, 9)
-            .expect("exact L=3 D-07 telemetry");
+    fn d07_stage_telemetry_requires_exact_counts_for_qualification_layer_matrix() {
+        for layer_count in [1_u64, 2, 4, 8] {
+            let pair_count = layer_count * layer_count;
+            let telemetry = validate_multilayer_stage_telemetry(
+                layer_count,
+                1,
+                layer_count,
+                layer_count,
+                pair_count,
+            )
+            .expect("exact D-07 telemetry for qualification layer matrix");
 
-        assert_eq!(telemetry.layer_count, 3);
-        assert_eq!(telemetry.refresh_count, 1);
-        assert_eq!(telemetry.forward_fft_count, 3);
-        assert_eq!(telemetry.inverse_fft_count, 3);
-        assert_eq!(telemetry.pair_accumulation_count, 9);
+            assert_eq!(telemetry.layer_count, layer_count);
+            assert_eq!(telemetry.refresh_count, 1);
+            assert_eq!(telemetry.forward_fft_count, layer_count);
+            assert_eq!(telemetry.inverse_fft_count, layer_count);
+            assert_eq!(telemetry.pair_accumulation_count, pair_count);
+        }
     }
 
     #[test]
