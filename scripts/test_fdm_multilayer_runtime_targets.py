@@ -97,3 +97,61 @@ def test_production_recipe_aggregates_lanes_and_records_gpu_reason_code() -> Non
     ):
         assert required in recipe
     assert "verify-fdm-multilayer-demag-runtime cuda-" not in recipe
+
+
+def test_webgl_matrix_recipe_owns_a_strict_cpu_fp64_multilayer_session() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+    for required in (
+        'web_port="" api_port=""',
+        'run_root="$(mktemp -d "$report_parent/webgl-matrix-cpu.run.XXXXXXXX")"',
+        "select_free_port()",
+        "socket.AF_INET",
+        'if [ -z "$web_port" ]; then web_port="$(select_free_port)"; fi',
+        'if [ -z "$api_port" ]; then api_port="$(select_free_port)"; fi',
+        'while [ "$api_port" = "$web_port" ]; do api_port="$(select_free_port)"; done',
+        "setsid env",
+        'sim_sid="$(ps -o sid= -p "$sim_pid" | tr -d " ")"',
+        "assert_owned_listener()",
+        'lsof -nP -t -iTCP:"$port" -sTCP:LISTEN',
+        'listener_sid="$(ps -o sid= -p "$listener_pid" | tr -d " " || true)"',
+        'assert_owned_listener "$api_port" "API status"',
+        'assert_owned_listener "$api_port" "multilayer layout"',
+        'assert_owned_listener "$web_port" "workspace UI"',
+        "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario.py",
+        "FULLMAG_FDM_EXECUTION=cpu",
+        "--backend fdm",
+        "--precision double",
+        'FULLMAG_API_PORT="$api_port"',
+        '--web-port "$web_port"',
+        "/v2/sessions/current/status",
+        "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+        'curl -fsS "$web_url" > "$run_root/workspace.html"',
+        "CONTROL_ROOM_API_BASE_URL=\"$api_url\"",
+        "CONTROL_ROOM_URL=\"$web_url\"",
+        "CONTROL_ROOM_FDM_MULTILAYER_DIAGNOSTIC_READBACK_MODE=per-case",
+        "CONTROL_ROOM_FDM_MULTILAYER_MATRIX_ARTIFACT_DIR=\"$run_root/screenshots\"",
+        "CONTROL_ROOM_FDM_MULTILAYER_MATRIX_EVIDENCE=\"$evidence\"",
+        "smoke:fdm-multilayer-webgl-matrix",
+        "passed_cpu_fp64_browser_fallback",
+        "manifest.json",
+        "fullmag.log",
+        "fdm-multilayer-layout.json",
+        "sim_pid=$!",
+        'kill "$sim_pid"',
+        'wait "$sim_pid"',
+        "trap finish EXIT INT TERM",
+        "find \"$run_root/screenshots\" -name",
+    ):
+        assert required in recipe
+    assert 'evidence.get("diagnostic_only") is not True' in recipe
+    assert "--skip" not in recipe
+    assert "scenario_airbox" not in recipe
+    assert 'web_port="3297"' not in recipe
+    assert 'api_port="18297"' not in recipe
+    assert "pkill" not in recipe
+
+
+def test_webgl_matrix_recipe_normalizes_named_port_overrides() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+    assert 'case "$web_port" in web_port=*) web_port="$(printf "%s" "$web_port" | cut -d= -f2-)" ;; esac' in recipe
+    assert 'case "$api_port" in api_port=*) api_port="$(printf "%s" "$api_port" | cut -d= -f2-)" ;; esac' in recipe
