@@ -157,6 +157,12 @@ def test_webgl_matrix_recipe_normalizes_named_port_overrides() -> None:
     assert 'case "$api_port" in api_port=*) api_port="$(printf "%s" "$api_port" | cut -d= -f2-)" ;; esac' in recipe
 
 
+def test_webgl_matrix_recipe_escapes_port_bind_address_for_nested_bash() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+    assert 'sock.bind((\\"127.0.0.1\\", 0))' in recipe
+    assert "sock.bind(('127.0.0.1', 0))" not in recipe
+
+
 def test_webgl_matrix_recipe_isolates_the_cpu_only_launcher_build() -> None:
     recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
 

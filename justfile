@@ -4169,7 +4169,7 @@ run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
       mkdir -p "$cargo_target_dir" > "$build_log" 2>&1; \
       just ensure-python >> "$build_log" 2>&1; \
       FULLMAG_CARGO_TARGET_DIR="$cargo_target_dir" just build fullmag 1 >> "$build_log" 2>&1; \
-      select_free_port() { python3 -c "import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); sock.bind(('127.0.0.1', 0)); print(sock.getsockname()[1]); sock.close()"; }; \
+      select_free_port() { python3 -c "import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); sock.bind((\"127.0.0.1\", 0)); print(sock.getsockname()[1]); sock.close()"; }; \
       web_port="{{web_port}}"; api_port="{{api_port}}"; \
       case "$web_port" in web_port=*) web_port="$(printf "%s" "$web_port" | cut -d= -f2-)" ;; esac; \
       case "$api_port" in api_port=*) api_port="$(printf "%s" "$api_port" | cut -d= -f2-)" ;; esac; \
