@@ -18,6 +18,7 @@ import { formatXAxisLabel, tableRowsLike, tableWindowTableId } from "./analysisW
 import type { ChartSeries } from "./chartTableModel";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { ChartValueRange } from "./chartTableModel";
 import { descriptorForSurface } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 
@@ -41,6 +42,7 @@ type AnalysisPlotsViewInput = {
   frequencyDomainTitle?: string;
   frequencyDomainUnavailableReason?: string | null;
   frequencyDomainProvenance?: string | null;
+  frequencyDomainPresentation?: ChartDataPresentationState;
   kernel: KernelApi;
   onDatasetRefChange?: (datasetRef: string | null) => void;
   onDisplayUnitsChange?: (patch: Record<string, string>) => void;
@@ -135,7 +137,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
       {surface === "dynamics" ? (datasetPrompt ?? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} />) : null}
       {surface === "spectrum" ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
       {surface === "dispersion" ? <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
-      {surface === "frequency-response" || surface === "eigenmodes" ? <AnalysisFrequencySurface chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
+      {surface === "frequency-response" || surface === "eigenmodes" ? <AnalysisFrequencySurface chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
       {surface === "hysteresis" ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
       {surface === "comparison" ? <div className="fm-analysis-plots__comparison">
         <div className="fm-analysis-plots__comparison-selector">

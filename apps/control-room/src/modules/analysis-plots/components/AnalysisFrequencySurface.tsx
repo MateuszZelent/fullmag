@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
+import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
@@ -33,6 +34,7 @@ export function AnalysisFrequencySurface({
   onRangeChange = () => undefined,
   onDisplayUnitsChange = () => undefined,
   onSelectedSeriesIdsChange,
+  presentation,
   selectedSeriesIds,
   selectedPoint,
   series,
@@ -49,6 +51,7 @@ export function AnalysisFrequencySurface({
   onRangeChange?: (range: ChartValueRange) => void;
   onDisplayUnitsChange?: (patch: Record<string, string>) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
+  presentation?: ChartDataPresentationState;
   selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   series: readonly ChartSeries[];
@@ -76,7 +79,7 @@ export function AnalysisFrequencySurface({
     return (
       <ChartSection
         title={surfaceTitle}
-        status={{ primary: status, trust: "unknown" }}
+        status={{ presentation, primary: status, trust: "unknown" }}
       >
         <div className="fm-analysis-plots__empty" role="status">
           {unavailableReason ?? formatFrequencyDomainEmptyState(status)}
@@ -181,6 +184,7 @@ export function AnalysisFrequencySurface({
       footer={footerContent}
       legend={legend}
       status={{
+        presentation,
         primary: status === "ready" ? "Ready" : status,
         revision: series[0]?.dataRevision ?? null,
         // The current frequency-domain resources do not carry qualification.
@@ -222,6 +226,7 @@ export function AnalysisFrequencySurface({
             onPointSelect={onPointSelect}
             onRangeChange={onRangeChange}
             series={visibleSeries}
+            presentation={presentation}
             xAxisLabel={frequencyDomainXAxisLabel(series)}
           />
         )}
