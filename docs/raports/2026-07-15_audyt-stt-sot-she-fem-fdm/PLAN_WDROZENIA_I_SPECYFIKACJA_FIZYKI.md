@@ -12839,3 +12839,32 @@ Do czasu tych wyników agregat pozostaje bez zmian:
 `validated_workloads=[]`. Ta zmiana jest zaakceptowana na poziomie
 implementacji i kontraktu, lecz pozostaje niezwalidowana na rzeczywistym
 urządzeniu.
+
+## 32.174. Closure atomowej promocji warm-startu FDM GPU (2026-08-11)
+
+Re-review po §32.173 wykrył błąd P0 w fault-injection: granica synchronizacji
+71 była raportowana dopiero po wykonaniu rzeczywistego
+`cudaStreamSynchronize`, a kopia D2D zapisywała bezpośrednio do zaakceptowanego
+bufora. Taki kod mógł unieważnić warm state po częściowym zapisie i nie
+spełniał reguły injection-before-operation.
+
+Commit `9d265013c` naprawia oba punkty:
+
+- `HierarchyCache` posiada osobny `warm_potential_staging`; pamięć obu buforów
+  jest uwzględniona w preflight/peak (`9 -> 10 * fine_bytes`) i zwalniana
+  symetrycznie;
+- promocja kopiuje wyłącznie do staging, a wskaźnik zaakceptowanego bufora,
+  rewizje, `warm_valid` i licznik promocji zmieniają się dopiero po udanej
+  synchronizacji i `std::swap`;
+- fault boundary 70 nie kolejkuje D2D, a boundary 71 zwraca błąd przed
+  synchronizacją. Ewentualny niedokończony transfer dotyka tylko stagingu;
+- test uniform odczytuje bitowy wektor zaakceptowany przed faultem, sprawdza
+  `memcmp` po obu granicach 70/71, a następnie wykonuje retry tego samego
+  `provisional_generation` i poprawny commit.
+
+Niezależny re-review zakończył się `APPROVE` bez findingów blokujących na
+poziomie źródło/kontrakt. `git diff --check` oraz testy dokumentacyjne
+`scripts.test_fdm_gpu_m1_contract_docs` i
+`scripts.test_fdm_gpu_m1_charge_scalability_contract` (16/16) przechodzą.
+Managed CUDA dla tej wersji nadal nie został uruchomiony, dlatego poprawka nie
+awansuje `validated_workloads` ani statusu produkcyjnego.
