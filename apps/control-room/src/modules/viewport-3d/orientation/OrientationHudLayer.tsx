@@ -142,7 +142,6 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       };
 
       applyLiveCamera(nextCamera);
-      viewport3dStore.setCamera(nextCamera);
       commitCameraChange(nextCamera);
       tracker.recordDirtyFrame("orientation-hud-snap");
       invalidate();
@@ -183,7 +182,6 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       return;
     }
     pendingOrbitCameraRef.current = null;
-    viewport3dStore.setCamera(nextCamera);
     void Promise.resolve(onCameraChange(nextCamera))
       .catch(() => undefined)
       .finally(() => onCameraInteractionEnd?.());

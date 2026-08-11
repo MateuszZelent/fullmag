@@ -4020,7 +4020,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("clipFrameRotationDegrees: 0");
   });
 
-  it("uses the local viewport camera for live scene rendering", () => {
+  it("uses the committed camera registry snapshot for live scene rendering", () => {
     const commandState = {
       camera: {
         position: [3, 2, 1],
@@ -4044,7 +4044,11 @@ describe("useViewport3DSceneModel", () => {
         cameraRegistryCamera: registryCamera,
         commandState,
       }).cameraState,
-    ).toEqual(commandState.camera);
+    ).toEqual({
+      position: registryCamera.position,
+      target: registryCamera.target,
+      up: registryCamera.up,
+    });
     expect(
       resolveViewport3DSceneCameraView({
         cameraRegistryCamera: {
@@ -4054,7 +4058,7 @@ describe("useViewport3DSceneModel", () => {
         },
         commandState,
       }).cameraOrthographicScale,
-    ).toBe(4e-6);
+    ).toBe(2.5e-6);
     expect(
       resolveViewport3DSceneCameraView({
         cameraRegistryCamera: {
@@ -4064,7 +4068,11 @@ describe("useViewport3DSceneModel", () => {
         },
         commandState,
       }).cameraState,
-    ).toEqual(commandState.camera);
+    ).toEqual({
+      position: registryCamera.position,
+      target: registryCamera.target,
+      up: registryCamera.up,
+    });
     expect(
       resolveViewport3DSceneCameraView({
         cameraRegistryCamera: {
@@ -4074,7 +4082,10 @@ describe("useViewport3DSceneModel", () => {
         },
         commandState,
       }).cameraOrthographicScale,
-    ).toBe(4e-6);
+    ).toBe(2.5e-6);
+    expect(readFileSync(sceneModelSourceUrl, "utf8")).not.toContain(
+      "useViewport3DCameraRegistryStoreSync",
+    );
   });
 
   it("routes FDM cuboid model builds through the build-engine lane without camera coupling", () => {

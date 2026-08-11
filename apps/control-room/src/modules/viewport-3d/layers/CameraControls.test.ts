@@ -9,8 +9,6 @@ import {
   resolveViewport3DOrbitDebugStep,
   resolveViewport3DCameraFit,
   resolveViewport3DCameraInteractionOptions,
-  resolveViewport3DSmoothWheelZoomStep,
-  resolveViewport3DWheelZoomScale,
   shouldApplyViewport3DOrbitDebugAngles,
   shouldApplyViewport3DCameraState,
   shouldAutoFitViewport3DBoundsChange,
@@ -65,15 +63,10 @@ describe("CameraControls", () => {
     expect(orbitControlsBlock).toContain("panSpeed={options.panSpeed}");
   });
 
-  it("handles wheel zoom with a damped viewport-owned interaction path", () => {
+  it("delegates wheel zoom and damping to the single Drei OrbitControls owner", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
-    );
-    const wheelHookStart = source.indexOf("function useSmoothViewport3DWheelZoom");
-    const wheelHookBlock = source.slice(
-      wheelHookStart,
-      source.indexOf("function useOrbitCameraControlsModel"),
     );
     const orbitControlsStart = source.indexOf("<DreiOrbitControls");
     const orbitControlsBlock = source.slice(
@@ -81,33 +74,11 @@ describe("CameraControls", () => {
       source.indexOf("/>", orbitControlsStart),
     );
 
-    expect(wheelHookStart).toBeGreaterThan(-1);
-    expect(wheelHookBlock).toContain('addEventListener("wheel", handleWheel');
-    expect(wheelHookBlock).toContain("capture: true");
-    expect(wheelHookBlock).toContain("passive: false");
-    expect(wheelHookBlock).toContain("stopImmediatePropagation");
-    expect(wheelHookBlock).toContain("resolveViewport3DSmoothWheelZoomStep");
-    expect(wheelHookBlock).toContain('tracker.recordDirtyFrame("camera-wheel-zoom")');
+    expect(source).not.toContain("useSmoothViewport3DWheelZoom");
+    expect(source).not.toContain('addEventListener("wheel"');
+    expect(source).not.toContain("stopImmediatePropagation");
     expect(orbitControlsBlock).toContain("enableZoom={options.enableZoom}");
-  });
-
-  it("does not re-register the wheel listener only because the camera object changed", () => {
-    const source = readFileSync(
-      new URL("./CameraControls.tsx", import.meta.url),
-      "utf8",
-    );
-    const wheelHookStart = source.indexOf("function useSmoothViewport3DWheelZoom");
-    const wheelHookBlock = source.slice(
-      wheelHookStart,
-      source.indexOf("useFrame((_, deltaSeconds)", wheelHookStart),
-    );
-    const wheelDeps = wheelHookBlock.slice(
-      wheelHookBlock.lastIndexOf("}, ["),
-      wheelHookBlock.lastIndexOf("]);") + 3,
-    );
-
-    expect(wheelHookBlock).toContain("const frameCamera = cameraRef.current;");
-    expect(wheelDeps).not.toContain("camera,");
+    expect(orbitControlsBlock).toContain("enableDamping={options.enableDamping}");
   });
 
   it("registers the camera controls diagnostic global only outside production", () => {
@@ -129,31 +100,6 @@ describe("CameraControls", () => {
     expect(diagnosticBlock).toContain(
       "window.__FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__ = readDiagnostics;",
     );
-  });
-
-  it("resolves wheel zoom targets and smooth intermediate steps", () => {
-    const zoomInScale = resolveViewport3DWheelZoomScale({
-      deltaY: -240,
-      zoomSpeed: 1,
-    });
-    const zoomOutScale = resolveViewport3DWheelZoomScale({
-      deltaY: 240,
-      zoomSpeed: 1,
-    });
-
-    expect(zoomInScale).toBeGreaterThan(0);
-    expect(zoomInScale).toBeLessThan(1);
-    expect(zoomOutScale).toBeGreaterThan(1);
-    expect(zoomInScale * zoomOutScale).toBeCloseTo(1);
-
-    const next = resolveViewport3DSmoothWheelZoomStep({
-      current: 10,
-      deltaSeconds: 1 / 60,
-      target: 5,
-    });
-
-    expect(next).toBeLessThan(10);
-    expect(next).toBeGreaterThan(5);
   });
 
   it("keeps temporary orbit debug isolated from direct orbit pointer rotation", () => {
@@ -297,18 +243,19 @@ describe("CameraControls", () => {
     expect(source).toContain("VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS");
     expect(updateBlock).toContain("cameraGestureEndedRef.current");
     expect(updateBlock).toContain(
-      "scheduleCameraControlsPoseCommit({ restart: true });",
+      "scheduleCameraControlsPoseCommit(epoch, { restart: true });",
     );
     expect(updateBlock).not.toContain("scheduleCameraControlsPoseCommit();");
     expect(updateBlock).not.toContain("clearCameraControlsPoseCommit();");
-    expect(transitionBlock).toContain("beginViewport3DCameraGesture(cameraGestureRef);");
+    expect(transitionBlock).toContain(
+      'beginViewport3DCameraGesture(cameraGestureRef, "orbit")',
+    );
+    expect(transitionBlock).toContain("onCameraInteractionStart?.(epoch);");
     expect(transitionBlock).toContain("clearCameraControlsPoseCommit();");
     expect(endBlock).toContain(
-      "scheduleCameraControlsPoseCommit({ restart: true });",
+      "scheduleCameraControlsPoseCommit(epoch, { restart: true });",
     );
-    expect(endBlock).toContain(
-      "beginViewport3DCameraGesture(cameraGestureRef);",
-    );
+    expect(endBlock).not.toContain("beginViewport3DCameraGesture");
     expect(controlsBlock).toContain("onStart={handleTransitionStart}");
     expect(controlsBlock).toContain("onEnd={handleEnd}");
   });
@@ -331,7 +278,8 @@ describe("CameraControls", () => {
 
     expect(commitBlock).toContain("cameraGestureEndedRef.current");
     expect(commitBlock).toContain("if (cameraGestureEndedRef.current)");
-    expect(commitBlock).toContain("endViewport3DCameraGesture(cameraGestureRef);");
+    expect(commitBlock).toContain("settleViewport3DCameraGesture");
+    expect(commitBlock).toContain("onCameraInteractionEnd?.(epoch);");
     expect(transitionBlock).toContain("cameraGestureEndedRef.current = false;");
     expect(endBlock).toContain("cameraGestureEndedRef.current = true;");
   });
@@ -378,8 +326,8 @@ describe("CameraControls", () => {
 
     expect(orbitControlsBlock).not.toContain("regress");
     expect(orbitControlsBlock).toContain("enableRotate={options.enableRotate}");
-    expect(orbitControlsBlock).not.toContain("onStart={onCameraInteractionStart}");
-    expect(orbitControlsBlock).not.toContain("onEnd={onCameraInteractionEnd}");
+    expect(orbitControlsBlock).toContain("onStart={handleTransitionStart}");
+    expect(orbitControlsBlock).toContain("onEnd={handleEnd}");
   });
 
   it("does not clamp orbit yaw or zoom distance so users can inspect freely", () => {
@@ -552,6 +500,39 @@ describe("CameraControls", () => {
         previousBoundsSignature: "previous",
       }),
     ).toBe(false);
+  });
+
+  it("does not auto-fit or write the store while a camera gesture is active", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const boundsLogic = source.indexOf("const nextBoundsSignature");
+    const fitEffectStart = source.lastIndexOf("useEffect(() => {", boundsLogic);
+    const fitEffectEnd = source.indexOf("useEffect(() => {", boundsLogic);
+    const fitEffect = source.slice(fitEffectStart, fitEffectEnd);
+
+    expect(fitEffect).toContain(
+      "if (viewport3DCameraGestureActive(cameraGestureRef)) {",
+    );
+    expect(fitEffect).toContain("if (!fitRequested && !resetRequested) return;");
+    expect(fitEffect).not.toContain("viewport3dStore.setCamera(nextCamera)");
+  });
+
+  it("lets explicit Fit or Reset cancel an active gesture while bounds updates cannot", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const boundsLogic = source.indexOf("const nextBoundsSignature");
+    const fitEffectStart = source.lastIndexOf("useEffect(() => {", boundsLogic);
+    const fitEffectEnd = source.indexOf("useEffect(() => {", boundsLogic);
+    const fitEffect = source.slice(fitEffectStart, fitEffectEnd);
+
+    expect(fitEffect).toContain("const fitRequested =");
+    expect(fitEffect).toContain("const resetRequested =");
+    expect(fitEffect).toContain("if (!fitRequested && !resetRequested) return;");
+    expect(fitEffect).toContain("cancelViewport3DCameraGesture(");
   });
 
   it("does not let a late default resource camera overwrite an FDM auto-fit", () => {

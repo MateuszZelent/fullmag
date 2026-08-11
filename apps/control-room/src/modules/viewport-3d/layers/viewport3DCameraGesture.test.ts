@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   beginViewport3DCameraGesture,
+  cancelViewport3DCameraGesture,
   createViewport3DCameraGestureRef,
+  disposeViewport3DCameraGesture,
   endViewport3DCameraGesture,
-  VIEWPORT_3D_CAMERA_FIELD_UPDATE_RELEASE_DELAY_MS,
+  markViewport3DCameraGestureChanged,
+  settleViewport3DCameraGesture,
   viewport3DCameraGestureActive,
   type Viewport3DCameraGestureRef,
 } from "./viewport3DCameraGesture";
@@ -23,24 +26,60 @@ describe("viewport3DCameraGesture", () => {
       expect(viewport3DCameraGestureActive(ref)).toBe(false);
       expect(viewport3DFieldUpdateHoldActive()).toBe(false);
 
-      beginViewport3DCameraGesture(ref);
+      const epoch = beginViewport3DCameraGesture(ref, "orbit");
       expect(viewport3DCameraGestureActive(ref)).toBe(true);
       expect(viewport3DFieldUpdateHoldActive()).toBe(true);
 
-      endViewport3DCameraGesture(ref);
+      markViewport3DCameraGestureChanged(ref, epoch);
+      expect(settleViewport3DCameraGesture(ref, epoch)).toBe(true);
       expect(viewport3DCameraGestureActive(ref)).toBe(false);
-      expect(viewport3DFieldUpdateHoldActive()).toBe(true);
-
-      vi.advanceTimersByTime(
-        VIEWPORT_3D_CAMERA_FIELD_UPDATE_RELEASE_DELAY_MS - 1,
-      );
-      expect(viewport3DFieldUpdateHoldActive()).toBe(true);
-
-      vi.advanceTimersByTime(1);
       expect(viewport3DFieldUpdateHoldActive()).toBe(false);
     } finally {
       resetViewport3DFieldUpdateHoldForTest();
       vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stale gesture settle or release the current hold", () => {
+    resetViewport3DFieldUpdateHoldForTest();
+    try {
+      const ref = createViewport3DCameraGestureRef();
+      const first = beginViewport3DCameraGesture(ref, "orbit");
+      const second = beginViewport3DCameraGesture(ref, "wheel");
+
+      expect(second).toBeGreaterThan(first);
+      expect(settleViewport3DCameraGesture(ref, first)).toBe(false);
+      expect(viewport3DCameraGestureActive(ref)).toBe(true);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(true);
+
+      markViewport3DCameraGestureChanged(ref, second);
+      expect(settleViewport3DCameraGesture(ref, second)).toBe(true);
+      expect(viewport3DCameraGestureActive(ref)).toBe(false);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+    } finally {
+      resetViewport3DFieldUpdateHoldForTest();
+    }
+  });
+
+  it("cancels and disposes an active gesture idempotently", () => {
+    resetViewport3DFieldUpdateHoldForTest();
+    try {
+      const ref = createViewport3DCameraGestureRef();
+      const epoch = beginViewport3DCameraGesture(ref, "orientation-hud");
+
+      expect(cancelViewport3DCameraGesture(ref, epoch)).toBe(true);
+      expect(cancelViewport3DCameraGesture(ref, epoch)).toBe(false);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+
+      beginViewport3DCameraGesture(ref, "projection");
+      disposeViewport3DCameraGesture(ref);
+      disposeViewport3DCameraGesture(ref);
+
+      expect(viewport3DCameraGestureActive(ref)).toBe(false);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+      expect(beginViewport3DCameraGesture(ref, "orbit")).toBe(-1);
+    } finally {
+      resetViewport3DFieldUpdateHoldForTest();
     }
   });
 

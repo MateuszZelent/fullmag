@@ -301,8 +301,12 @@ try {
       console.log(`Viewport 3D camera smoke passed at ${url}.`);
     } else {
       if (!regionOnlyObjectId) {
-        await verifyProjectionRoundTrip({ canvas, page });
+        const projectionCameraPhases = await verifyProjectionRoundTrip({
+          canvas,
+          page,
+        });
         viewport3DPerformancePhases.push(
+          ...projectionCameraPhases,
           await collectViewport3DPerformancePhase(page, "projection-round-trip"),
         );
         await verifyDimensionFrameCage({ canvas, page });
@@ -347,6 +351,12 @@ try {
       console.log(`Viewport 3D smoke passed at ${url}.`);
     }
   }
+} catch (error) {
+  const evidence = await collectViewportStartupFailureEvidence(page, errors);
+  console.error(
+    `Viewport 3D startup failure evidence: ${JSON.stringify(evidence)}`,
+  );
+  throw error;
 } finally {
   try {
     await browser.close();
@@ -361,6 +371,27 @@ try {
   }
 }
 
+async function collectViewportStartupFailureEvidence(page, browserErrors) {
+  const pageState = await page
+    .evaluate(() => ({
+      bodyText: document.body?.innerText?.slice(0, 4_000) ?? "",
+      canvasCount: document.querySelectorAll("canvas").length,
+      readyState: document.readyState,
+      title: document.title,
+      url: window.location.href,
+      viewportCount: document.querySelectorAll(".fm-viewport-3d").length,
+    }))
+    .catch((evaluationError) => ({
+      evaluationError: evaluationError.message,
+      url: page.url(),
+    }));
+
+  return {
+    ...pageState,
+    errors: [...browserErrors],
+  };
+}
+
 async function verifyCameraGesturesStayLocal({ page }) {
   const gesturePerformancePhases = [];
   const box = await readCanvasClipBox(page);
@@ -373,15 +404,16 @@ async function verifyCameraGesturesStayLocal({ page }) {
 
   const initialCameraSignature = await readViewportCameraSignature(page);
 
+  await clearViewportCameraTrajectory(page);
   await assertCameraGestureDoesNotFetch(page, "orbit rotate", async () => {
     await page.mouse.move(x, y);
     await page.mouse.down({ button: "left" });
     // Keep the pointer held across several damping/commit windows. A single
     // instantaneous drag cannot expose the old ~180 ms camera rewind race.
-    for (let step = 1; step <= 12; step += 1) {
+    for (let step = 1; step <= 18; step += 1) {
       await page.mouse.move(
-        x + (120 * step) / 12,
-        y + (42 * step) / 12,
+        x + (120 * step) / 18,
+        y + (42 * step) / 18,
         { steps: 1 },
       );
       await page.waitForTimeout(120);
@@ -395,10 +427,16 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "Viewport camera state did not change after left-button orbit rotate",
   );
   await assertViewportCameraUpIsWorldUp(page, "left-button orbit rotate");
+  assertCameraTrajectory(
+    await readViewportCameraTrajectory(page),
+    "left-button orbit rotate",
+    "position",
+  );
   gesturePerformancePhases.push(
-    await collectViewport3DPerformancePhase(page, "camera-orbit-rotate"),
+    await collectViewport3DPerformancePhase(page, "camera-orbit-continuity"),
   );
 
+  await clearViewportCameraTrajectory(page);
   await assertCameraGestureDoesNotFetch(page, "orbit zoom", async () => {
     await page.mouse.move(x, y);
     for (let index = 0; index < 4; index += 1) {
@@ -412,13 +450,19 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "Viewport camera state did not change after camera wheel",
   );
   await assertViewportCameraUpIsWorldUp(page, "camera wheel zoom");
+  assertCameraTrajectory(
+    await readViewportCameraTrajectory(page),
+    "perspective wheel zoom",
+    "distance",
+  );
   const wheelZoomPhase = await collectViewport3DPerformancePhase(
     page,
-    "camera-wheel-zoom",
+    "camera-wheel-perspective",
   );
   assertSmoothCameraWheelZoomPhase(wheelZoomPhase);
   gesturePerformancePhases.push(wheelZoomPhase);
 
+  await clearViewportCameraTrajectory(page);
   await assertCameraGestureDoesNotFetch(page, "orbit pan", async () => {
     await page.mouse.down({ button: "right" });
     await page.mouse.move(x + 80, y + 36, { steps: 8 });
@@ -426,7 +470,7 @@ async function verifyCameraGesturesStayLocal({ page }) {
   });
   const rightPanPhase = await collectViewport3DPerformancePhase(
     page,
-    "camera-right-pan",
+    "camera-pan-continuity",
   );
   assertResponsiveCameraRightPanPhase(rightPanPhase);
   gesturePerformancePhases.push(rightPanPhase);
@@ -437,6 +481,11 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "Viewport camera state did not change after right-button free-camera pan",
   );
   await assertViewportCameraUpIsWorldUp(page, "right-button orbit pan");
+  assertCameraTrajectory(
+    await readViewportCameraTrajectory(page),
+    "right-button orbit pan",
+    "target",
+  );
 
   const gestureRequests = cameraGestureRequests.slice(startIndex);
   const visualizationStatePatches = gestureRequests.filter(
@@ -776,8 +825,144 @@ async function waitForInitialViewport3DResourceQuiet(page) {
 }
 
 async function waitForCameraGestureSettle(page) {
-  await waitForBrowserPaint(page);
-  await delay(25);
+  await waitForCondition("camera gesture settle", async () => {
+    const samples = await readViewportCameraTrajectory(page);
+    const last = samples.at(-1);
+    if (last?.reason === "settle" && last.active === false) return last;
+    throw new Error(
+      `last trajectory sample=${last ? `${last.reason}/active=${last.active}` : "missing"}`,
+    );
+  });
+}
+
+async function clearViewportCameraTrajectory(page) {
+  await page.evaluate(() => {
+    const probe = window.__FULLMAG_VIEWPORT3D_CAMERA_AUDIT__;
+    if (!probe) {
+      throw new Error("Missing __FULLMAG_VIEWPORT3D_CAMERA_AUDIT__ probe.");
+    }
+    probe.clear();
+  });
+}
+
+async function readViewportCameraTrajectory(page) {
+  return page.evaluate(() => {
+    const probe = window.__FULLMAG_VIEWPORT3D_CAMERA_AUDIT__;
+    if (!probe) {
+      throw new Error("Missing __FULLMAG_VIEWPORT3D_CAMERA_AUDIT__ probe.");
+    }
+    return probe.snapshot();
+  });
+}
+
+function assertCameraTrajectory(samples, label, metric) {
+  const liveSamples = samples.filter((sample) => sample.liveCamera);
+  if (liveSamples.length < 3) {
+    throw new Error(
+      `${label} produced too few live trajectory samples: ${liveSamples.length}.`,
+    );
+  }
+  const settled = samples.at(-1);
+  if (settled?.reason !== "settle" || settled.active !== false) {
+    throw new Error(`${label} did not end with an inactive settle sample.`);
+  }
+  assertSettledCameraSnapshotsAgree(samples, settled, label);
+
+  const committedVersions = new Set(
+    samples
+      .filter((sample) => sample.reason === "commit" && sample.registry)
+      .map((sample) => sample.registry.localVersion),
+  );
+  if (committedVersions.size !== 1) {
+    throw new Error(
+      `${label} committed ${committedVersions.size} registry versions instead of exactly one.`,
+    );
+  }
+
+  const values = liveSamples.map((sample) => cameraTrajectoryMetric(sample, metric));
+  const start = values[0];
+  const end = values.at(-1);
+  const direction = end - start;
+  const scale = Math.max(Math.abs(start), Math.abs(end), 1e-15);
+  if (Math.abs(direction) <= scale * 1e-10) {
+    throw new Error(`${label} trajectory did not move in metric ${metric}.`);
+  }
+  let previousProgress = 0;
+  let maximumBackwardStep = 0;
+  for (const value of values.slice(1)) {
+    const progress = (value - start) / direction;
+    maximumBackwardStep = Math.max(maximumBackwardStep, previousProgress - progress);
+    previousProgress = progress;
+  }
+  if (maximumBackwardStep > 0.15) {
+    throw new Error(
+      `${label} camera trajectory rewound by ${maximumBackwardStep.toFixed(4)} of its final displacement.`,
+    );
+  }
+}
+
+function assertSettledCameraSnapshotsAgree(samples, settledSample, label) {
+  const commitSample = samples.findLast(
+    (sample) =>
+      sample.reason === "commit" &&
+      sample.epoch === settledSample.epoch &&
+      sample.committedCamera,
+  );
+  const live = settledSample.liveCamera;
+  const committed = commitSample?.committedCamera;
+  const store = commitSample?.storeCamera;
+  if (!live || !committed || !store) {
+    throw new Error(
+      `${label} trajectory is missing camera state: ` +
+        `live=${Boolean(live)} registry=${Boolean(committed)} store=${Boolean(store)}.`,
+    );
+  }
+  const tolerance = cameraSnapshotTolerance(live, committed, store);
+  for (const key of ["position", "target", "up"]) {
+    assertCameraSnapshotVectorNear(live[key], committed[key], tolerance, label, `registry.${key}`);
+    assertCameraSnapshotVectorNear(live[key], store[key], tolerance, label, `store.${key}`);
+  }
+}
+
+function cameraSnapshotTolerance(...snapshots) {
+  const scale = Math.max(
+    ...snapshots.flatMap((snapshot) => [
+      vectorDistance(snapshot.position, snapshot.target),
+      Math.hypot(...snapshot.position),
+      Math.hypot(...snapshot.target),
+    ]),
+    1e-12,
+  );
+  return Math.max(scale * 1e-7, 1e-12);
+}
+
+function assertCameraSnapshotVectorNear(actual, expected, tolerance, label, field) {
+  if (vectorDistance(actual, expected) <= tolerance) return;
+  throw new Error(
+    `${label} settled live camera disagrees with ${field}: ` +
+      `actual=${JSON.stringify(actual)} expected=${JSON.stringify(expected)} tolerance=${tolerance}.`,
+  );
+}
+
+function cameraTrajectoryMetric(sample, metric) {
+  const camera = sample.liveCamera;
+  if (!camera) return 0;
+  if (metric === "distance") {
+    return vectorDistance(camera.position, camera.target);
+  }
+  if (metric === "orthographic-scale") {
+    return camera.orthographicScale ?? 0;
+  }
+  const vector = metric === "target" ? camera.target : camera.position;
+  return vector[0] + vector[1] * Math.SQRT2 + vector[2] * Math.sqrt(3);
+}
+
+function vectorDistance(left, right) {
+  return Math.hypot(
+    left[0] - right[0],
+    left[1] - right[1],
+    left[2] - right[2],
+  );
 }
 
 async function readViewportCameraSignature(page) {
@@ -1313,6 +1498,7 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
   const firstExpectedActive = initialActive === "true" ? "false" : "true";
   const secondExpectedActive = initialActive === "true" ? "true" : "false";
   const initialProjectionSample = await sampleCanvasComposite(page);
+  let orthographicWheelPhase = null;
 
   await projectionToggle.click();
   await waitForCondition(
@@ -1330,6 +1516,12 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
     "projection canvas renders after first toggle",
     "Viewport canvas did not visually change after first projection toggle",
   );
+  if (firstExpectedActive === "true") {
+    orthographicWheelPhase = await verifyOrthographicCameraWheel({
+      canvas,
+      page,
+    });
+  }
 
   await projectionToggle.click();
   await waitForCondition(
@@ -1347,12 +1539,42 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
     "projection canvas renders after second toggle",
     "Viewport canvas did not visually leave orthographic projection after second toggle",
   );
+  if (secondExpectedActive === "true" && orthographicWheelPhase === null) {
+    orthographicWheelPhase = await verifyOrthographicCameraWheel({
+      canvas,
+      page,
+    });
+  }
 
   console.log(
     "Viewport 3D projection round-trip passed (initial active=" +
       (initialActive ?? "null") +
       ").",
   );
+  return orthographicWheelPhase ? [orthographicWheelPhase] : [];
+}
+
+async function verifyOrthographicCameraWheel({ canvas, page }) {
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("Cannot test orthographic wheel: canvas has no bounds.");
+  await clearViewportCameraTrajectory(page);
+  await assertCameraGestureDoesNotFetch(page, "orthographic wheel", async () => {
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    for (let index = 0; index < 4; index += 1) {
+      await page.mouse.wheel(0, -240);
+    }
+  });
+  assertCameraTrajectory(
+    await readViewportCameraTrajectory(page),
+    "orthographic wheel zoom",
+    "orthographic-scale",
+  );
+  const phase = await collectViewport3DPerformancePhase(
+    page,
+    "camera-wheel-orthographic",
+  );
+  assertSmoothCameraWheelZoomPhase(phase);
+  return phase;
 }
 
 async function verifyDimensionFrameCage({ canvas, page }) {

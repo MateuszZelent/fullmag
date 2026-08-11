@@ -101,6 +101,7 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
 import {
@@ -1346,35 +1347,48 @@ export default function Viewport3DModule({
     [kernel.cameraRegistry],
   );
   const saveCameraState = useCallback(
-    (camera: Viewport3DCameraChange) => {
-      kernel.cameraRegistry.patchCamera(buildViewport3DCameraRegistryPatch(camera));
-      const nextCamera = {
-        position: camera.position,
-        target: camera.target,
-        up: camera.up ?? VIEWPORT_3D_WORLD_UP,
-      };
-      if (
-        camera.projection !== undefined ||
-        camera.orthographicScale !== undefined
-      ) {
+    (camera: Viewport3DCameraChange, epoch?: number) => {
+      const accepted = kernel.cameraRegistry.patchCamera(
+        buildViewport3DCameraRegistryPatch(camera),
+        epoch,
+      );
+      const registry = kernel.cameraRegistry.getSnapshot();
+      if (accepted) {
         viewport3dStore.setCameraView({
-          camera: nextCamera,
-          orthographicScale: camera.orthographicScale ?? null,
-          projection:
-            camera.projection ??
-            viewport3dStore.getSnapshot().widgets.cameraProjection,
+          camera: {
+            position: toCameraTuple(registry.camera.position),
+            target: toCameraTuple(registry.camera.target),
+            up: toCameraTuple(registry.camera.up),
+          },
+          orthographicScale: registry.camera.orthographic_scale,
+          projection: registry.camera.projection,
         });
-      } else {
-        viewport3dStore.setCamera(nextCamera);
       }
+      recordViewport3DCameraTrajectorySample({
+        active: epoch !== undefined,
+        committedCamera: registry.camera,
+        epoch: epoch ?? -1,
+        frame: registry.localVersion,
+        liveCamera: null,
+        reason: "commit",
+        registry: {
+          dirty: registry.dirty,
+          lastRemoteRevision: registry.lastRemoteRevision,
+          localVersion: registry.localVersion,
+          persistedShadow: registry.persistedShadow,
+        },
+        source: null,
+        storeCamera: viewport3dStore.getSnapshot().camera,
+        timestamp: performance.now(),
+      });
     },
     [kernel.cameraRegistry],
   );
-  const beginCameraInteraction = useCallback(() => {
-    kernel.cameraRegistry.beginInteraction();
+  const beginCameraInteraction = useCallback((epoch?: number) => {
+    kernel.cameraRegistry.beginInteraction(epoch);
   }, [kernel.cameraRegistry]);
-  const endCameraInteraction = useCallback(() => {
-    kernel.cameraRegistry.endInteraction();
+  const endCameraInteraction = useCallback((epoch?: number) => {
+    kernel.cameraRegistry.endInteraction(epoch);
   }, [kernel.cameraRegistry]);
   const changeRegionOverlaySource = useCallback(
     (source: RegionDiagnosticOverlaySource) => {

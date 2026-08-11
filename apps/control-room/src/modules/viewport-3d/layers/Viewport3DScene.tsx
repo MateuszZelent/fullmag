@@ -206,9 +206,12 @@ interface Viewport3DSceneProps {
   meshRegionOverlays: readonly RegionOverlayInput[];
   periodicOverlayModel: PeriodicOverlayModel | null;
   meshSizeHighlightModel: Viewport3DMeshSizeHighlightModel | null;
-  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
-  onCameraInteractionEnd?: () => void;
-  onCameraInteractionStart?: () => void;
+  onCameraChange: (
+    camera: Viewport3DCameraChange,
+    epoch?: number,
+  ) => Promise<void> | void;
+  onCameraInteractionEnd?: (epoch?: number) => void;
+  onCameraInteractionStart?: (epoch?: number) => void;
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
@@ -1438,6 +1441,8 @@ function Viewport3DInteractionAndHudStack({
         orbitDebugCommitRevision={orbitDebugCommitRevision}
         orbitDebugRevision={orbitDebugRevision}
         onCameraChange={onCameraChange}
+        onCameraInteractionEnd={onCameraInteractionEnd}
+        onCameraInteractionStart={onCameraInteractionStart}
         onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
         tracker={tracker}
       />

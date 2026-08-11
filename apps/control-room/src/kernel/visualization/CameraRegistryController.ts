@@ -108,7 +108,10 @@ export class CameraRegistryController {
   };
   private idleFlushId: ReturnType<typeof setTimeout> | null = null;
   private inflightCameraInvalidationSuppressed = false;
+  private activeInteractionEpoch: number | null = null;
   private interactionActive = false;
+  private interactionEpochExplicit = false;
+  private interactionEpochSequence = 0;
   private localDirty = false;
   private snapshot: CameraRegistrySnapshot = INITIAL_SNAPSHOT;
   private started = false;
@@ -141,31 +144,42 @@ export class CameraRegistryController {
     this.applyRemoteState(state, "remote", null);
   }
 
-  beginInteraction(): void {
+  beginInteraction(epoch?: number): number {
     this.clearIdleFlushTimer();
+    if (epoch === undefined && this.activeInteractionEpoch !== null) {
+      return this.activeInteractionEpoch;
+    }
+    const nextEpoch = epoch ?? this.interactionEpochSequence + 1;
+    this.interactionEpochSequence = Math.max(
+      this.interactionEpochSequence,
+      nextEpoch,
+    );
+    this.activeInteractionEpoch = nextEpoch;
     this.interactionActive = true;
+    this.interactionEpochExplicit = epoch !== undefined;
+    return nextEpoch;
   }
 
-  endInteraction(): void {
+  endInteraction(epoch?: number): void {
     if (!this.interactionActive) return;
+    if (
+      epoch !== undefined &&
+      this.activeInteractionEpoch !== null &&
+      epoch !== this.activeInteractionEpoch
+    ) {
+      return;
+    }
     this.interactionActive = false;
+    this.activeInteractionEpoch = null;
+    this.interactionEpochExplicit = false;
 
     if (this.snapshot.dirty) {
       this.scheduleIdleFlush();
-      return;
     }
+  }
 
-    if (
-      this.snapshot.persistedShadow &&
-      !cameraStatesEqual(this.snapshot.camera, this.snapshot.persistedShadow)
-    ) {
-      this.setSnapshotIfChanged({
-        ...this.snapshot,
-        camera: this.snapshot.persistedShadow,
-        lastSource: "remote",
-        liveView: this.snapshot.persistedShadow,
-      });
-    }
+  cancelInteraction(epoch?: number): void {
+    this.endInteraction(epoch);
   }
 
   private applyRemoteState(
@@ -212,12 +226,28 @@ export class CameraRegistryController {
     });
   }
 
-  patchCamera(patch: CameraPatch): void {
-    if (!hasCameraPatchKeys(patch)) return;
+  patchCamera(patch: CameraPatch, epoch?: number): boolean {
+    if (
+      epoch === undefined &&
+      this.activeInteractionEpoch !== null &&
+      this.interactionEpochExplicit
+    ) {
+      this.interactionActive = false;
+      this.activeInteractionEpoch = null;
+      this.interactionEpochExplicit = false;
+    }
+    if (
+      epoch !== undefined &&
+      (this.activeInteractionEpoch === null ||
+        epoch !== this.activeInteractionEpoch)
+    ) {
+      return false;
+    }
+    if (!hasCameraPatchKeys(patch)) return false;
 
     const camera = applyCameraPatch(this.snapshot.camera, patch);
     if (cameraStatesEqual(this.snapshot.camera, camera)) {
-      return;
+      return false;
     }
 
     this.localDirty = true;
@@ -235,6 +265,7 @@ export class CameraRegistryController {
     };
     this.notify();
     this.scheduleIdleFlush();
+    return true;
   }
 
   flushDue(reason: CameraRegistryFlushReason = "manual"): Promise<void> {
