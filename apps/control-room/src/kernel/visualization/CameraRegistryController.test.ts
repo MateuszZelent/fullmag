@@ -322,6 +322,19 @@ describe("CameraRegistryController", () => {
     );
   });
 
+  it("lets an explicit programmatic command supersede an active gesture epoch", () => {
+    const { controller } = createController();
+    controller.beginInteraction(21);
+    expect(controller.patchCamera({ position: [3, 2, 1] }, 21)).toBe(true);
+
+    expect(controller.patchCamera({ projection: "orthographic" })).toBe(true);
+    expect(controller.patchCamera({ position: [9, 9, 9] }, 21)).toBe(false);
+    controller.endInteraction(21);
+
+    expect(controller.getSnapshot().camera.projection).toBe("orthographic");
+    expect(controller.getSnapshot().camera.position).toEqual([3, 2, 1]);
+  });
+
   it("uses a stable camera signature so sub-epsilon jitter does not become dirty", async () => {
     const { controller, patchSpy } = createController();
     const remote = camera({ position: [1, 2, 3] });

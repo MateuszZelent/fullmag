@@ -23,6 +23,7 @@ import {
   markViewport3DCameraGestureChanged,
   settleViewport3DCameraGesture,
   viewport3DCameraGestureActive,
+  viewport3DCameraGestureEpoch,
   type Viewport3DCameraGestureRef,
 } from "./viewport3DCameraGesture";
 import {
@@ -512,7 +513,16 @@ export function CameraController({
   }, [cameraState]);
 
   useEffect(() => {
-    if (viewport3DCameraGestureActive(cameraGestureRef)) return;
+    const fitRequested = handledFitRevisionRef.current !== fitRevision;
+    const resetRequested =
+      handledResetCameraRevisionRef.current !== resetCameraRevision;
+    if (viewport3DCameraGestureActive(cameraGestureRef)) {
+      if (!fitRequested && !resetRequested) return;
+      cancelViewport3DCameraGesture(
+        cameraGestureRef,
+        viewport3DCameraGestureEpoch(cameraGestureRef),
+      );
+    }
     const nextBoundsSignature = boundsSignature(bounds);
     const shouldAutoFitInitialBounds =
       nextBoundsSignature !== null &&
@@ -525,8 +535,8 @@ export function CameraController({
       previousBoundsSignature: autoFittedBoundsRef.current,
     });
     const shouldFit =
-      handledFitRevisionRef.current !== fitRevision ||
-      handledResetCameraRevisionRef.current !== resetCameraRevision ||
+      fitRequested ||
+      resetRequested ||
       shouldAutoFitInitialBounds ||
       shouldAutoFitChangedBounds;
     if (!shouldFit) return;
@@ -546,7 +556,10 @@ export function CameraController({
       target: fit.target,
       up: VIEWPORT_3D_WORLD_UP,
     };
-    lastAutoFitCameraStateRef.current = nextCamera;
+    lastAutoFitCameraStateRef.current =
+      resetRequested || (!fitRequested && !resetRequested)
+        ? nextCamera
+        : null;
     appliedCameraRef.current = camera;
     appliedCameraStateRef.current = nextCamera;
     void Promise.resolve(

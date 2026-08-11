@@ -513,9 +513,26 @@ describe("CameraControls", () => {
     const fitEffect = source.slice(fitEffectStart, fitEffectEnd);
 
     expect(fitEffect).toContain(
-      "if (viewport3DCameraGestureActive(cameraGestureRef)) return;",
+      "if (viewport3DCameraGestureActive(cameraGestureRef)) {",
     );
+    expect(fitEffect).toContain("if (!fitRequested && !resetRequested) return;");
     expect(fitEffect).not.toContain("viewport3dStore.setCamera(nextCamera)");
+  });
+
+  it("lets explicit Fit or Reset cancel an active gesture while bounds updates cannot", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const boundsLogic = source.indexOf("const nextBoundsSignature");
+    const fitEffectStart = source.lastIndexOf("useEffect(() => {", boundsLogic);
+    const fitEffectEnd = source.indexOf("useEffect(() => {", boundsLogic);
+    const fitEffect = source.slice(fitEffectStart, fitEffectEnd);
+
+    expect(fitEffect).toContain("const fitRequested =");
+    expect(fitEffect).toContain("const resetRequested =");
+    expect(fitEffect).toContain("if (!fitRequested && !resetRequested) return;");
+    expect(fitEffect).toContain("cancelViewport3DCameraGesture(");
   });
 
   it("does not let a late default resource camera overwrite an FDM auto-fit", () => {

@@ -110,6 +110,7 @@ export class CameraRegistryController {
   private inflightCameraInvalidationSuppressed = false;
   private activeInteractionEpoch: number | null = null;
   private interactionActive = false;
+  private interactionEpochExplicit = false;
   private interactionEpochSequence = 0;
   private localDirty = false;
   private snapshot: CameraRegistrySnapshot = INITIAL_SNAPSHOT;
@@ -155,6 +156,7 @@ export class CameraRegistryController {
     );
     this.activeInteractionEpoch = nextEpoch;
     this.interactionActive = true;
+    this.interactionEpochExplicit = epoch !== undefined;
     return nextEpoch;
   }
 
@@ -169,6 +171,7 @@ export class CameraRegistryController {
     }
     this.interactionActive = false;
     this.activeInteractionEpoch = null;
+    this.interactionEpochExplicit = false;
 
     if (this.snapshot.dirty) {
       this.scheduleIdleFlush();
@@ -224,6 +227,15 @@ export class CameraRegistryController {
   }
 
   patchCamera(patch: CameraPatch, epoch?: number): boolean {
+    if (
+      epoch === undefined &&
+      this.activeInteractionEpoch !== null &&
+      this.interactionEpochExplicit
+    ) {
+      this.interactionActive = false;
+      this.activeInteractionEpoch = null;
+      this.interactionEpochExplicit = false;
+    }
     if (
       epoch !== undefined &&
       (this.activeInteractionEpoch === null ||
