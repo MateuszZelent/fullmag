@@ -9,6 +9,10 @@ from scripts.verify_fdm_multilayer_cuda_parity import verify
 
 
 QUALIFICATION_SCOPE = "SP4-derived, not canonical SP4 qualification"
+CANONICAL_THRESHOLDS = (
+    Path(__file__).resolve().parents[1]
+    / "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json"
+)
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -106,18 +110,7 @@ def _cuda_metadata(precision: str, layer_count: int = 3) -> dict:
 
 
 def _thresholds(path: Path) -> Path:
-    _write_json(
-        path,
-        {
-            "schema_version": "fdm_multilayer_thresholds.v1",
-            "qualification_scope": QUALIFICATION_SCOPE,
-            "cuda_fp64_vs_cpu": {"rtol": 1e-8, "atol": 1e-4},
-            "cuda_fp32_vs_cuda_fp64": {
-                "weighted_rms_max": 2e-4,
-                "max_component_normalized": 5e-4,
-            },
-        },
-    )
+    path.write_bytes(CANONICAL_THRESHOLDS.read_bytes())
     return path
 
 
@@ -240,6 +233,28 @@ def test_rejects_source_hash_mismatch_between_reference_and_candidate(tmp_path: 
         verify(reference, candidate, thresholds, "cuda-fp64")
 
 
+def test_rejects_missing_source_hashes_even_when_both_artifacts_match(tmp_path: Path) -> None:
+    reference, candidate, thresholds = _artifacts(tmp_path)
+    for root in (reference, candidate):
+        metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+        metadata.pop("source_hash")
+        _write_json(root / "metadata.json", metadata)
+
+    with pytest.raises(ValueError, match="artifact_source_hash_invalid:reference"):
+        verify(reference, candidate, thresholds, "cuda-fp64")
+
+
+def test_rejects_equal_malformed_source_hashes(tmp_path: Path) -> None:
+    reference, candidate, thresholds = _artifacts(tmp_path)
+    for root in (reference, candidate):
+        metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+        metadata["source_hash"] = "not-a-sha256-digest"
+        _write_json(root / "metadata.json", metadata)
+
+    with pytest.raises(ValueError, match="artifact_source_hash_invalid:reference"):
+        verify(reference, candidate, thresholds, "cuda-fp64")
+
+
 def test_rejects_threshold_schema_drift(tmp_path: Path) -> None:
     reference, candidate, thresholds = _artifacts(tmp_path)
     limits = json.loads(thresholds.read_text(encoding="utf-8"))
@@ -247,6 +262,16 @@ def test_rejects_threshold_schema_drift(tmp_path: Path) -> None:
     _write_json(thresholds, limits)
 
     with pytest.raises(ValueError, match="thresholds_schema_mismatch"):
+        verify(reference, candidate, thresholds, "cuda-fp64")
+
+
+def test_rejects_threshold_value_tampering(tmp_path: Path) -> None:
+    reference, candidate, thresholds = _artifacts(tmp_path)
+    limits = json.loads(thresholds.read_text(encoding="utf-8"))
+    limits["cuda_fp64_vs_cpu"]["atol"] = 1e9
+    _write_json(thresholds, limits)
+
+    with pytest.raises(ValueError, match="thresholds_digest_mismatch"):
         verify(reference, candidate, thresholds, "cuda-fp64")
 
 

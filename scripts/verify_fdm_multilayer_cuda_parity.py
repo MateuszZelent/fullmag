@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 THRESHOLDS_SCHEMA = "fdm_multilayer_thresholds.v1"
+CANONICAL_THRESHOLDS_SHA256 = (
+    "9d8046f2866e5720f29937b35f4f07cae9a93dc7a37fc6c36a43259327d02458"
+)
 QUALIFICATION_SCOPE = "SP4-derived, not canonical SP4 qualification"
 CUDA_EXECUTION_SHAPE = "cuda_native_multilayer_convolution"
 CUDA_STAGE_ENGINE = "cuda_native_multilayer_demag_v2"
@@ -206,9 +209,19 @@ def _validate_cuda_artifact(metadata: dict, layer_count: int, precision: str, la
     }
 
 
+def _validate_source_hash(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"artifact_source_hash_invalid:{label}")
+    return value
+
+
 def _validate_artifact_identity(reference: dict, candidate: dict) -> dict:
-    reference_source = reference.get("source_hash")
-    candidate_source = candidate.get("source_hash")
+    reference_source = _validate_source_hash(reference.get("source_hash"), "reference")
+    candidate_source = _validate_source_hash(candidate.get("source_hash"), "candidate")
     if reference_source != candidate_source:
         raise ValueError("artifact_source_hash_mismatch")
     reference_version = reference.get("engine_version")
@@ -216,7 +229,7 @@ def _validate_artifact_identity(reference: dict, candidate: dict) -> dict:
     if not isinstance(reference_version, str) or reference_version != candidate_version:
         raise ValueError("artifact_engine_version_mismatch")
     return {
-        "source_hash": reference_source if reference_source is not None else "not_exposed",
+        "source_hash": reference_source,
         "engine_version": reference_version,
     }
 
@@ -228,6 +241,8 @@ def _validate_thresholds(path: Path) -> tuple[dict, str]:
     if limits.get("qualification_scope") != QUALIFICATION_SCOPE:
         raise ValueError("thresholds_qualification_scope_mismatch")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != CANONICAL_THRESHOLDS_SHA256:
+        raise ValueError("thresholds_digest_mismatch")
     return limits, f"sha256:{digest}"
 
 
