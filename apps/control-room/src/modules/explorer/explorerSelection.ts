@@ -244,6 +244,11 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     return {
       ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
       ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
+      ...(node.artifactRevision !== undefined
+        ? { artifactRevision: node.artifactRevision }
+        : {}),
+      ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
+      ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
       ...(node.artifactPath ? { artifactPath: node.artifactPath } : {}),
       ...(node.branchId ? { branchId: node.branchId } : {}),
       ...(node.calculationMode ? { calculationMode: node.calculationMode } : {}),
@@ -260,6 +265,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "frequency-domain",
     };
   }
@@ -600,6 +606,13 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
 
 function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
   return (
+    node.kind.startsWith("results.resonance") ||
+    node.kind.startsWith("results.dispersion") ||
+    node.kind === "results.frequency_domain.provenance" ||
+    node.kind.startsWith("results.analysis_views") ||
+    node.kind.startsWith("results.derived_values") ||
+    node.kind.startsWith("results.tables") ||
+    node.kind.startsWith("results.exports") ||
     node.kind.startsWith("results.frequency_domain") ||
     node.kind.startsWith("results.eigen") ||
     node.kind.startsWith("results.frequency_response") ||

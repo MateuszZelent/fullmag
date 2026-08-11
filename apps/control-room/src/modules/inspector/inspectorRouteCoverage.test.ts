@@ -104,6 +104,14 @@ const frequencyDomainManifest = {
     artifact_path: "frequency_domain/manifest.v1.json",
     missing_reason: null,
     payload: {
+      equilibrium_identity: "eq-fixture-r1",
+      revision: "eigen-fixture-r1",
+      stage_id: "eigen-stage",
+      stage_label: "Eigenmodes",
+      study_product: "modal_eigen",
+      requested_execution: {
+        boundary_context: "finite_open",
+      },
       artifacts: {
         branches_v2_path: "eigen/branches.v2.json",
         dispersion_csv_path: "eigen/dispersion.csv",
@@ -340,6 +348,7 @@ const modelSnapshot = (() => {
 })();
 
 const resources = {
+  currentRun: { revision: 1, run_id: "run-fixture" } as never,
   frequencyDomainBranches,
   frequencyDomainCancelRequested,
   frequencyDomainDispersion,
@@ -397,11 +406,14 @@ describe("inspector route coverage", () => {
     );
     expect(kindsByTab("results")).toEqual(
       expect.arrayContaining([
-        "results.frequency_domain.fmr_modal_spectrum",
-        "results.frequency_domain.fmr_response_sweep",
-        "results.eigen.mode",
-        "results.frequency_response.root",
-        "results.frequency_response.frequency_point",
+        "results.resonance.root",
+        "results.resonance.modal.stage",
+        "results.resonance.modal.spectrum",
+        "results.resonance.modal.modes",
+        "results.analysis_views.root",
+        "results.derived_values.root",
+        "results.tables.root",
+        "results.exports.root",
       ]),
     );
     expect(kindsByTab("jobs")).toEqual(

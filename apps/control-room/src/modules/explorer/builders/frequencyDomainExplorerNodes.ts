@@ -15,6 +15,7 @@ import {
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
+  CurrentRunResource,
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainManifestResource,
   FrequencyDomainSweepProgressResource,
@@ -70,6 +71,9 @@ export interface ExplorerTreeResources {
   frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   pinnedQuickChart?: PinnedQuickChart | null;
+  currentRun?: CurrentRunResource | null;
+  /** Bounded old-ID fixture reader; production Explorer requires physics-first Results. */
+  physicsFirstResultsRequired?: boolean;
 }
 
 export function buildFrequencyDomainResultNode(

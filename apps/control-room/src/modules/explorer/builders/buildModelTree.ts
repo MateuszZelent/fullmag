@@ -41,6 +41,10 @@ import {
   buildSessionRootNode,
   buildUniverseNode,
 } from "./modelRootNodes";
+import {
+  buildPhysicsFirstResultsTree,
+  physicsFirstResultsSnapshotFromResources,
+} from "./resultsExplorerNodes";
 
 export { buildPlanarMonitorNodes } from "./modelRootNodes";
 export { visualizationDebugNode } from "./explorerNodeContract";
@@ -201,47 +205,64 @@ export function buildExplorerTree(
     ];
   }
   if (tabId === "results") {
-    return [
-      {
-        ...branch("results:root", "Results", "results.root"),
-        children: [
-          buildFrequencyDomainResultNode(
-            resources.frequencyDomainManifest,
-            resources.frequencyDomainBranches,
-            resources.frequencyDomainDispersion,
-            resources.frequencyDomainResponseSweep,
-            resources.frequencyDomainSpectrum,
-            resources.activeAnalysisFieldOverlay,
-          ),
-          {
-            id: "results:field:m",
-            kind: "results.field_quantity",
-            label: "Magnetization",
-            parentId: "results:root",
-            badge: "A/m",
-            icon: "wave",
-            status: "ready",
-          },
-          ...(resources.pinnedQuickChart
-            ? [{
-                badge: `${resources.pinnedQuickChart.selectedSeriesIds.length} series`,
-                chartId: resources.pinnedQuickChart.chartId,
-                displayUnits: resources.pinnedQuickChart.displayUnits,
-                icon: "wave" as const,
-                id: `results:quick-charts:${resources.pinnedQuickChart.chartId}`,
-                kind: "results.quick_chart" as const,
-                label: "Quick Chart",
-                parentId: "results:root",
-                status: "ready" as const,
-                range: resources.pinnedQuickChart.range,
-                selectedSeriesIds: resources.pinnedQuickChart.selectedSeriesIds,
-                tableId: resources.pinnedQuickChart.tableId,
-                xAxisId: resources.pinnedQuickChart.xAxisId,
-              }]
-            : []),
-        ],
-      },
-    ];
+    if (!resources.currentRun) {
+      if (!resources.physicsFirstResultsRequired) {
+        return [{
+          ...branch("results:root", "Results", "results.root"),
+          children: [
+            buildFrequencyDomainResultNode(
+              resources.frequencyDomainManifest,
+              resources.frequencyDomainBranches,
+              resources.frequencyDomainDispersion,
+              resources.frequencyDomainResponseSweep,
+              resources.frequencyDomainSpectrum,
+              resources.activeAnalysisFieldOverlay,
+            ),
+            {
+              id: "results:field:m",
+              kind: "results.field_quantity",
+              label: "Magnetization",
+              parentId: "results:root",
+              badge: "A/m",
+              icon: "wave",
+              status: "ready",
+            },
+            ...(resources.pinnedQuickChart
+              ? [{
+                  badge: `${resources.pinnedQuickChart.selectedSeriesIds.length} series`,
+                  chartId: resources.pinnedQuickChart.chartId,
+                  displayUnits: resources.pinnedQuickChart.displayUnits,
+                  icon: "wave" as const,
+                  id: `results:quick-charts:${resources.pinnedQuickChart.chartId}`,
+                  kind: "results.quick_chart" as const,
+                  label: "Quick Chart",
+                  parentId: "results:root",
+                  status: "ready" as const,
+                  range: resources.pinnedQuickChart.range,
+                  selectedSeriesIds: resources.pinnedQuickChart.selectedSeriesIds,
+                  tableId: resources.pinnedQuickChart.tableId,
+                  xAxisId: resources.pinnedQuickChart.xAxisId,
+                }]
+              : []),
+          ],
+        }];
+      }
+      return [{
+        ...branch("results:root", "Results", "results.root", "unavailable"),
+        availability: "unavailable",
+        executionState: "not_started",
+        resourceState: "idle",
+      }];
+    }
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      branches: resources.frequencyDomainBranches,
+      currentRun: resources.currentRun,
+      dispersion: resources.frequencyDomainDispersion,
+      manifest: resources.frequencyDomainManifest,
+      responseSweep: resources.frequencyDomainResponseSweep,
+      spectrum: resources.frequencyDomainSpectrum,
+    });
+    return buildPhysicsFirstResultsTree(adapted.snapshot);
   }
   if (tabId === "jobs") {
     return [

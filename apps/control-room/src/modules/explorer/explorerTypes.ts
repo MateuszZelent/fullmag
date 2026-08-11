@@ -146,7 +146,8 @@ export type ExplorerNodeKind =
   | "results.root"
   | "results.dynamics.root"
   | "results.resonance.root"
-  | "results.resonance.stage"
+  | "results.resonance.modal.stage"
+  | "results.resonance.driven.stage"
   | "results.resonance.modal.spectrum"
   | "results.resonance.modal.modes"
   | "results.resonance.modal.coupling"
@@ -155,7 +156,8 @@ export type ExplorerNodeKind =
   | "results.resonance.driven.frequency_points"
   | "results.resonance.driven.fields"
   | "results.dispersion.root"
-  | "results.dispersion.stage"
+  | "results.dispersion.modal.stage"
+  | "results.dispersion.driven.stage"
   | "results.dispersion.k_sampling"
   | "results.dispersion.modal.relation"
   | "results.dispersion.modal.branches"
@@ -325,6 +327,10 @@ export interface ExplorerNode {
   contextCommandInputs?: Partial<Record<CommandId, unknown>>;
   analysisRunId?: string;
   analysisStageId?: string;
+  artifactRevision?: number | string;
+  equilibriumId?: string;
+  kContextKind?: "finite_open" | "fixed_k" | "gamma" | "k_grid" | "k_path";
+  studyProduct?: "driven_response" | "modal_eigen" | string;
   artifactPath?: string;
   branchId?: string;
   calculationMode?: FrequencyDomainCalculationMode;

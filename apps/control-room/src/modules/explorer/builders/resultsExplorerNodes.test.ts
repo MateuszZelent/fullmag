@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { flattenExplorerNodes } from "./buildModelTree";
 import {
   buildPhysicsFirstResultsTree,
+  physicsFirstResultsSnapshotFromResources,
   type PhysicsFirstResultEntry,
 } from "./resultsExplorerNodes";
 
@@ -145,5 +146,76 @@ describe("buildPhysicsFirstResultsTree", () => {
     const labels = flattenExplorerNodes(tree).map((node) => node.label);
 
     expect(labels).not.toContain("Linear eigenmodes · Modal");
+  });
+});
+
+describe("physicsFirstResultsSnapshotFromResources", () => {
+  it("adapts explicit manifest provenance without trusting the manifest run placeholder", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 17, run_id: "runtime-run-17" },
+      dispersion: {
+        path_metadata: {
+          sampling: {
+            kind: "path",
+            points: [
+              { k_vector: [0, 0, 0], label: "Γ" },
+              { k_vector: [1e7, 0, 0], label: "X" },
+            ],
+            samples_per_segment: [8],
+          },
+        },
+        status: "ready",
+      },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-relax-r4",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: "path",
+            },
+            revision: "eigen-r9",
+            stage_id: "eigen-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.contractGaps).toEqual([]);
+    expect(adapted.snapshot).toMatchObject({
+      resultContextRunId: "runtime-run-17",
+      entries: [
+        {
+          artifactRevision: "eigen-r9",
+          equilibriumId: "eq-relax-r4",
+          kSampling: { kind: "path", label: "Γ–X", sampleCount: 9 },
+          runId: "runtime-run-17",
+          stageId: "eigen-stage",
+          studyProduct: "modal_eigen",
+        },
+      ],
+    });
+  });
+
+  it("fails closed when owner, equilibrium, or boundary evidence is absent", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 2, run_id: "run-2" },
+      manifest: {
+        result_manifest: {
+          payload: { stage_id: "eigen", study_product: "modal_eigen" },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries).toEqual([]);
+    expect(adapted.contractGaps).toEqual([
+      "Frequency-domain artifact does not publish equilibrium_identity",
+      "Frequency-domain artifact does not publish boundary_context",
+    ]);
   });
 });

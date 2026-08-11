@@ -569,6 +569,9 @@ export type SelectionRef =
   | {
       analysisRunId?: string;
       analysisStageId?: string;
+      artifactRevision?: number | string;
+      equilibriumId?: string;
+      kContextKind?: string;
       artifactPath?: string;
       branchId?: string;
       calculationMode?: string;
@@ -581,6 +584,7 @@ export type SelectionRef =
       observableId?: string;
       resourceRef?: string;
       sampleIndex?: number;
+      studyProduct?: string;
       type: "frequency-domain";
     }
   | {

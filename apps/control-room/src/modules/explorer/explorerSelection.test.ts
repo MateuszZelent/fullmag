@@ -1597,4 +1597,34 @@ describe("selectExplorerNode", () => {
       type: "structured-current-source-cut",
     });
   });
+
+  it("preserves the complete physics-first result owner in selection", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      analysisRunId: "run-7",
+      analysisStageId: "eigen-stage",
+      artifactRevision: "eigen-r9",
+      equilibriumId: "eq-r4",
+      id: "results:run:run-7:resonance:stage:eigen-stage:modal_eigen:spectrum",
+      kContextKind: "finite_open",
+      kind: "results.resonance.modal.spectrum",
+      label: "Eigenfrequency Spectrum",
+      parentId: "results:run:run-7:resonance:stage:eigen-stage:modal_eigen",
+      resourceRef: "artifact-revision:eigen-r9",
+      studyProduct: "modal_eigen",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      analysisRunId: "run-7",
+      analysisStageId: "eigen-stage",
+      artifactRevision: "eigen-r9",
+      equilibriumId: "eq-r4",
+      kContextKind: "finite_open",
+      kind: "results.resonance.modal.spectrum",
+      nodeId: "results:run:run-7:resonance:stage:eigen-stage:modal_eigen:spectrum",
+      resourceRef: "artifact-revision:eigen-r9",
+      studyProduct: "modal_eigen",
+      type: "frequency-domain",
+    });
+  });
 });
