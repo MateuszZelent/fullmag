@@ -3,11 +3,23 @@
 ## Zakres
 
 Zmodyfikowano wyłącznie `.superpowers/sdd/progress.md` dla Task 1. Ledger
-obejmuje teraz pełny zakres implementacji od
-`2e00562a37f61b26666cf51598e1e358bfb9d742` do
-`72ea50a23738205ad33eb7c41ae2454733030df6` oraz zapisuje wynik końcowego
-przeglądu dokumentacyjnego: `approved after final documentation review`,
-`0 Critical / 0 Important`.
+obejmuje pełny zakres implementacji i dokumentacji
+`2e00562a37f61b26666cf51598e1e358bfb9d742..72ea50a23738205ad33eb7c41ae2454733030df6`.
+Końcowy przegląd dokumentacyjny miał werdykt `REQUEST_CHANGES`,
+`0 Critical / 1 Important`; wcześniejszy zapis `approved after final
+documentation review, 0/0` był błędny.
+
+## Chronologia korekty
+
+- `452b40e` był bookkeeping commitem zamykającym brak SHA w ledgerze, lecz
+  zawierał błędny zapis wyniku końcowego przeglądu dokumentacyjnego.
+- `2c5d954` skorygował ledger do prawdziwego wyniku `REQUEST_CHANGES`,
+  `0 Critical / 1 Important`.
+- Bieżący commit koryguje wyłącznie historyczny raport poprawki 5, aby jego
+  opis był zgodny z ledgerem i wynikiem review.
+
+Nie zmienia to zakresu `2e00562a..72ea50a`: nie zmieniono kodu, fizyki,
+capability ani dokumentacji implementacyjnej.
 
 ## Zachowane dowody
 
@@ -18,4 +30,5 @@ Nie zmieniono statusu capability.
 ## Weryfikacja
 
 - `git diff --check` — passed.
-- Zakres staged przed commitem — tylko oba pliki ledgeru/raportu tej poprawki.
+- Zakres staged przed commitem — wyłącznie historyczny raport poprawki 5 i
+  raport poprawki 7.
