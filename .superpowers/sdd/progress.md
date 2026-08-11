@@ -98,3 +98,8 @@ public node IDs, kinds, order, and selection refs remain stable).
 Resource loader stabilization: complete (commits `46e769390..e12b03224`,
 fresh review clean; 2 focused timer/source-contract tests and typecheck pass;
 the base variant produced the intended RED result).
+Task 4: complete (commits `c836680b..22b8d7b2`; dedicated Airbox/object/mesh/mode
+visualization Inspector owners, canonical mode breadcrumb identity, interactive
+phase commands, distinct debug contracts, and stale CSS cleanup; focused
+171/171, full Control Room 515/515 files and 4947/4947 tests, typecheck, lint,
+and diff-check pass).
