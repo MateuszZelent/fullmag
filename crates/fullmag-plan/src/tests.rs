@@ -6515,6 +6515,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
                 mode: "two_d_stack".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
+                common_cell_size: None,
             }),
             boundary_correction: None,
             boundary_phi_floor: None,
@@ -6603,6 +6604,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
                 mode: "two_d_stack".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
+                common_cell_size: None,
             }),
             boundary_correction: None,
             boundary_phi_floor: None,
@@ -6691,6 +6693,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
                 mode: "two_d_stack".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
+                common_cell_size: None,
             }),
             boundary_correction: None,
             boundary_phi_floor: None,
@@ -6700,6 +6703,65 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
         hybrid: None,
     });
     ir
+}
+
+#[test]
+fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    for (entry, z) in ir.geometry.entries.iter_mut().zip([0.0, 20e-9]) {
+        let GeometryEntryIR::Translate { base, by, .. } = entry else {
+            panic!("fixture geometry must be translated boxes");
+        };
+        let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+            panic!("fixture geometry base must be a box");
+        };
+        *size = [100e-9, 50e-9, 10e-9];
+        *by = [0.0, 0.0, z];
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("fixture must provide FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(std::collections::BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 10e-9],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [5e-9, 5e-9, 10e-9],
+            },
+        ),
+    ]));
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "auto".to_string(),
+        mode: "auto".to_string(),
+        common_cells: None,
+        common_cells_xy: None,
+        common_cell_size: Some([2e-9, 2e-9, 2.5e-9]),
+    });
+
+    let planned = plan(&ir).expect("requested common cell size should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("heterogeneous magnetic objects must use multilayer convolution");
+    };
+
+    assert_eq!(multilayer.common_cells, [50, 25, 4]);
+    assert_eq!(multilayer.mode, "three_d");
+    assert!(multilayer.layers.iter().all(|layer| {
+        layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9]
+    }));
+    assert!(multilayer
+        .layers
+        .iter()
+        .any(|layer| layer.transfer_kind == "push_pull"));
 }
 
 fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
@@ -6741,6 +6803,7 @@ fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
         mode: "three_d".to_string(),
         common_cells: Some([262_144, 1, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     ir
 }
@@ -6803,6 +6866,7 @@ fn cuda_three_d_identity_multilayer_problem() -> ProblemIR {
         mode: "three_d".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     ir
 }
@@ -7034,6 +7098,7 @@ fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
         mode: "auto".to_string(),
         common_cells: None,
         common_cells_xy: None,
+        common_cell_size: None,
     });
 
     let planned = plan(&ir).expect("explicit multilayer strategy must be executable for L=1");
@@ -7090,6 +7155,7 @@ fn multilayer_planner_rejects_every_non_neutral_boundary_intent() {
                     mode: "auto".to_string(),
                     common_cells: None,
                     common_cells_xy: None,
+                    common_cell_size: None,
                 });
                 ir
             } else {
@@ -7133,6 +7199,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         mode: "auto".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     let planned = plan(&common_cells_auto).expect("common_cells auto mode should resolve");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
@@ -7154,6 +7221,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         mode: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
+        common_cell_size: None,
     });
     let planned = plan(&common_cells_xy_auto).expect("common_cells_xy auto mode should resolve");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
@@ -7175,6 +7243,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         mode: "two_d_stack".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     let error = plan(&conflict).expect_err("common_cells must reject explicit two_d_stack");
     assert!(error
@@ -7220,6 +7289,7 @@ fn two_d_stack_fails_closed_for_native_thickness_without_moment_preserving_avera
         mode: "two_d_stack".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
+        common_cell_size: None,
     });
     let error = plan(&ir).expect_err("2D mode must not copy a native z slice");
     assert!(error
@@ -7665,6 +7735,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         mode: "three_d".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     if let fullmag_ir::StudyIR::TimeEvolution {
         dynamics:

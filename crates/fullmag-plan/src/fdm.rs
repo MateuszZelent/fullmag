@@ -2619,6 +2619,27 @@ pub(crate) fn plan_fdm_multilayer(
             cells
         } else if let Some(cells_xy) = policy.common_cells_xy {
             [cells_xy[0], cells_xy[1], 1]
+        } else if let Some(cell_size) = policy.common_cell_size {
+            let extents = [common_xy_extent[0], common_xy_extent[1], max_native_z_size];
+            let mut cells = [1_u32; 3];
+            for axis in 0..3 {
+                let ratio = extents[axis] / cell_size[axis];
+                let rounded = ratio.round();
+                if !ratio.is_finite()
+                    || rounded < 1.0
+                    || rounded > u32::MAX as f64
+                    || (ratio - rounded).abs() > GRID_TOLERANCE * ratio.abs().max(1.0)
+                {
+                    let axis_name = ["x", "y", "z"][axis];
+                    errors.push(format!(
+                        "fdm.demag.common_cell_size[{axis_name}]={:.6e} m does not divide the common convolution extent {:.6e} m; strict mode does not round the grid",
+                        cell_size[axis], extents[axis]
+                    ));
+                } else {
+                    cells[axis] = rounded as u32;
+                }
+            }
+            cells
         } else {
             match fdm_default_cell(fdm_hints) {
                 Ok(base_cell) => [
@@ -2669,11 +2690,13 @@ pub(crate) fn plan_fdm_multilayer(
             }
         }
     };
-    let convolution_cell_size = [
-        common_xy_extent[0] / common_cells[0] as f64,
-        common_xy_extent[1] / common_cells[1] as f64,
-        max_native_z_size / common_cells[2] as f64,
-    ];
+    let convolution_cell_size = demag_hints
+        .and_then(|policy| policy.common_cell_size)
+        .unwrap_or([
+            common_xy_extent[0] / common_cells[0] as f64,
+            common_xy_extent[1] / common_cells[1] as f64,
+            max_native_z_size / common_cells[2] as f64,
+        ]);
 
     // Record the native-to-scratch placement that a descriptor-aware runtime
     // must use.  The current CPU/CUDA runners accept only a common scratch
