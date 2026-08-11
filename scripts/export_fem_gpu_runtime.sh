@@ -1146,8 +1146,6 @@ publish_runtime_bundle() {
   local manifest_sha256
   manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json" | awk '{print $1}')"
   local variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"
-  local alias_target="fem-gpu-variants/$(basename "${variant_root}")"
-  local repo_next_alias="${RUNTIME_PARENT}/.fem-gpu-host.next.$$"
   local variants_alias="${RUNTIME_PARENT}/fem-gpu-variants"
   local persistent_archive="${PERSISTENT_RUNTIME_PARENT}/$(basename "${variant_root}").tar"
   python3 scripts/validate_managed_fem_runtime_bundle.py \
@@ -1198,12 +1196,11 @@ publish_runtime_bundle() {
       FULLMAG_RUNTIME_KEEP_PER_FAMILY="${FULLMAG_RUNTIME_KEEP_PER_FAMILY:-2}" \
       bash "${SOURCE_SNAPSHOT_ROOT}/scripts/prune_managed_fem_runtimes.sh"
   fi
-  migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}" \
-    "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py" \
-    "${VARIANTS_ALIAS_RETARGET_FROM}"
   verify_source_snapshot_identity
-  ln -sfn "${alias_target}" "${repo_next_alias}"
-  mv -Tf "${repo_next_alias}" "${RUNTIME_ROOT}"
+  publish_managed_fem_runtime_aliases "${variants_alias}" "${VARIANTS_ROOT}" \
+    "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py" \
+    "${VARIANTS_ALIAS_RETARGET_FROM}" \
+    "${RUNTIME_ROOT}" "$(basename "${variant_root}")"
   rm -rf -- "${STAGING_ROOT}"
 }
 

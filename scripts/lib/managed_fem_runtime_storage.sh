@@ -311,3 +311,135 @@ migrate_managed_fem_runtime_variants() {
   ln -sfn "${durable_variants_root}" "${next_alias}"
   mv -Tf "${next_alias}" "${variants_alias}"
 }
+
+restore_managed_fem_runtime_alias() {
+  local alias_path="$1"
+  local original_kind="$2"
+  local original_target="${3:-}"
+  local rollback_alias="${alias_path}.rollback.$$"
+
+  case "${original_kind}" in
+    symlink)
+      rm -f -- "${rollback_alias}"
+      ln -sfn "${original_target}" "${rollback_alias}"
+      mv -Tf "${rollback_alias}" "${alias_path}"
+      ;;
+    missing)
+      if [ -L "${alias_path}" ]; then
+        rm -f -- "${alias_path}"
+      elif [ -e "${alias_path}" ]; then
+        echo "cannot roll back managed FEM alias over a non-symlink path: ${alias_path}" >&2
+        return 2
+      fi
+      ;;
+    *)
+      echo "invalid managed FEM alias rollback state: ${original_kind}" >&2
+      return 2
+      ;;
+  esac
+}
+
+publish_managed_fem_runtime_aliases() (
+  set -euo pipefail
+
+  local variants_alias="$1"
+  local durable_variants_root="$2"
+  local validator="$3"
+  local allowed_retarget_from="${4:-}"
+  local active_alias="$5"
+  local variant_name="$6"
+  local variant_root="${durable_variants_root}/${variant_name}"
+  local active_parent
+  active_parent="$(dirname "${active_alias}")"
+  local bridge_alias="${active_parent}/.fem-gpu-host.bridge.$$"
+  local final_alias="${active_parent}/.fem-gpu-host.next.$$"
+  local rollback_bridge_alias="${active_parent}/.fem-gpu-host.rollback-bridge.$$"
+  local original_variants_kind original_variants_target=""
+  local original_active_kind original_active_target=""
+
+  case "${variant_name}" in
+    ""|.|..|*/*)
+      echo "invalid managed FEM runtime variant name: ${variant_name}" >&2
+      return 2
+      ;;
+  esac
+  require_regular_contained_durable_variant \
+    "${durable_variants_root}" "${variant_root}"
+  python3 "${validator}" --runtime-root "${variant_root}" >/dev/null
+
+  mkdir -p "$(dirname "${variants_alias}")" "${active_parent}"
+  if [ -e "${active_alias}" ] && [ ! -L "${active_alias}" ]; then
+    echo "managed FEM active runtime must be a symlink or missing path: ${active_alias}" >&2
+    return 2
+  fi
+
+  # A legacy directory can be migrated safely before the alias transaction:
+  # every old variant is copied and validated before the directory is replaced.
+  if [ -d "${variants_alias}" ] && [ ! -L "${variants_alias}" ]; then
+    migrate_managed_fem_runtime_variants \
+      "${variants_alias}" "${durable_variants_root}" "${validator}" \
+      "${allowed_retarget_from}"
+  fi
+  if [ -L "${variants_alias}" ]; then
+    original_variants_kind="symlink"
+    original_variants_target="$(readlink "${variants_alias}")"
+  elif [ -e "${variants_alias}" ]; then
+    echo "managed FEM variants alias must be a symlink or missing path: ${variants_alias}" >&2
+    return 2
+  else
+    original_variants_kind="missing"
+  fi
+  if [ -L "${active_alias}" ]; then
+    original_active_kind="symlink"
+    original_active_target="$(readlink "${active_alias}")"
+  else
+    original_active_kind="missing"
+  fi
+
+  rollback_managed_fem_runtime_aliases() {
+    local status="$?"
+    local rollback_failed=0
+    trap - EXIT HUP INT TERM
+    set +e
+
+    rm -f -- "${rollback_bridge_alias}"
+    ln -sfn "${variant_root}" "${rollback_bridge_alias}"
+    if ! mv -Tf "${rollback_bridge_alias}" "${active_alias}"; then
+      echo "managed FEM alias rollback could not secure the active runtime bridge" >&2
+      rollback_failed=1
+    elif ! restore_managed_fem_runtime_alias \
+      "${variants_alias}" "${original_variants_kind}" \
+      "${original_variants_target}"; then
+      echo "managed FEM alias rollback could not restore the variants alias; keeping the active bridge" >&2
+      rollback_failed=1
+    elif ! restore_managed_fem_runtime_alias \
+      "${active_alias}" "${original_active_kind}" "${original_active_target}"; then
+      echo "managed FEM alias rollback could not restore the active alias" >&2
+      rollback_failed=1
+    fi
+    rm -f -- "${bridge_alias}" "${final_alias}" "${rollback_bridge_alias}"
+    if [ "${rollback_failed}" -ne 0 ] || [ "${status}" -eq 0 ]; then
+      status=2
+    fi
+    exit "${status}"
+  }
+  trap rollback_managed_fem_runtime_aliases EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  rm -f -- "${bridge_alias}" "${final_alias}" "${rollback_bridge_alias}"
+  ln -sfn "${variant_root}" "${bridge_alias}"
+  ln -sfn "fem-gpu-variants/${variant_name}" "${final_alias}"
+
+  # The absolute bridge keeps the launcher independent of variants_alias while
+  # that alias moves between durable storage roots.
+  mv -Tf "${bridge_alias}" "${active_alias}"
+  migrate_managed_fem_runtime_variants \
+    "${variants_alias}" "${durable_variants_root}" "${validator}" \
+    "${allowed_retarget_from}"
+  mv -Tf "${final_alias}" "${active_alias}"
+
+  trap - EXIT HUP INT TERM
+  rm -f -- "${bridge_alias}" "${final_alias}" "${rollback_bridge_alias}"
+)

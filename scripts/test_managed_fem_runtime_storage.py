@@ -7,6 +7,8 @@ import re
 import shutil
 import subprocess
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STORAGE_HELPER = REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
@@ -95,6 +97,211 @@ def _select_alias(
         capture_output=True,
         check=False,
     )
+
+
+def _publish_aliases(
+    variants_alias: Path,
+    durable: Path,
+    validator: Path,
+    active_alias: Path,
+    variant_name: str,
+    *,
+    retarget_from: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            'source "$1"; publish_managed_fem_runtime_aliases '
+            '"$2" "$3" "$4" "$5" "$6" "$7"',
+            "bash",
+            str(STORAGE_HELPER),
+            str(variants_alias),
+            str(durable),
+            str(validator),
+            str(retarget_from) if retarget_from is not None else "",
+            str(active_alias),
+            variant_name,
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _write_alias_mv_probe(
+    tmp_path: Path,
+    active_alias: Path,
+    operation_log: Path,
+    *,
+    fail_after_operation: int,
+) -> tuple[Path, dict[str, str]]:
+    fake_bin = tmp_path / "alias-mv-probe"
+    fake_bin.mkdir()
+    real_mv = shutil.which("mv")
+    assert real_mv is not None
+    probe = fake_bin / "mv"
+    probe.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        'count=0\n'
+        'if [ -f "$FULLMAG_TEST_MV_COUNT" ]; then read -r count < "$FULLMAG_TEST_MV_COUNT"; fi\n'
+        'count=$((count + 1))\n'
+        'printf "%s\\n" "$count" > "$FULLMAG_TEST_MV_COUNT"\n'
+        '"$FULLMAG_TEST_REAL_MV" "$@"\n'
+        'status=$?\n'
+        'destination="${@: -1}"\n'
+        'launcher_state="UNRESOLVED"\n'
+        'if [ -x "$FULLMAG_TEST_ACTIVE_ALIAS/bin/fullmag-fem-gpu" ]; then\n'
+        '  launcher_state="$("$FULLMAG_TEST_ACTIVE_ALIAS/bin/fullmag-fem-gpu")"\n'
+        'fi\n'
+        'printf "%s|%s|%s\\n" "$count" "$destination" "$launcher_state" '
+        '>> "$FULLMAG_TEST_MV_LOG"\n'
+        'if [ "$count" -eq "$FULLMAG_TEST_FAIL_AFTER_MV" ]; then exit 73; fi\n'
+        'exit "$status"\n',
+        encoding="utf-8",
+    )
+    probe.chmod(0o755)
+    count_file = tmp_path / "mv-count"
+    return fake_bin, {
+        **os.environ,
+        "FULLMAG_TEST_ACTIVE_ALIAS": str(active_alias),
+        "FULLMAG_TEST_FAIL_AFTER_MV": str(fail_after_operation),
+        "FULLMAG_TEST_MV_COUNT": str(count_file),
+        "FULLMAG_TEST_MV_LOG": str(operation_log),
+        "FULLMAG_TEST_REAL_MV": real_mv,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+
+def _prepare_alias_transition(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, Path, Path]:
+    old_durable = tmp_path / "old/runtime-variants"
+    old_variant = _variant(old_durable, "old")
+    old_launcher = old_variant / "bin/fullmag-fem-gpu"
+    old_launcher.write_text("#!/bin/sh\necho old\n", encoding="utf-8")
+    old_launcher.chmod(0o755)
+    new_durable = tmp_path / "new/runtime-variants"
+    new_variant = _variant(new_durable, "new")
+    new_launcher = new_variant / "bin/fullmag-fem-gpu"
+    new_launcher.write_text("#!/bin/sh\necho new\n", encoding="utf-8")
+    new_launcher.chmod(0o755)
+    runtime_parent = tmp_path / "repo/.fullmag/runtimes"
+    runtime_parent.mkdir(parents=True)
+    variants_alias = runtime_parent / "fem-gpu-variants"
+    variants_alias.symlink_to(old_durable, target_is_directory=True)
+    active_alias = runtime_parent / "fem-gpu-host"
+    active_alias.symlink_to("fem-gpu-variants/old", target_is_directory=True)
+    validator = tmp_path / "validator.py"
+    _validator(validator)
+    return old_durable, new_durable, variants_alias, active_alias, validator
+
+
+@pytest.mark.parametrize("fail_after_operation", [1, 2, 3])
+def test_alias_publication_rolls_back_without_unresolvable_launcher_at_each_switch(
+    tmp_path: Path,
+    fail_after_operation: int,
+) -> None:
+    old_durable, new_durable, variants_alias, active_alias, validator = (
+        _prepare_alias_transition(tmp_path)
+    )
+    original_variants_target = os.readlink(variants_alias)
+    original_active_target = os.readlink(active_alias)
+    operation_log = tmp_path / "mv-operations.log"
+    _, env = _write_alias_mv_probe(
+        tmp_path,
+        active_alias,
+        operation_log,
+        fail_after_operation=fail_after_operation,
+    )
+
+    result = _publish_aliases(
+        variants_alias,
+        new_durable,
+        validator,
+        active_alias,
+        "new",
+        retarget_from=old_durable,
+        env=env,
+    )
+
+    assert result.returncode == 73, result.stderr
+    assert os.readlink(variants_alias) == original_variants_target
+    assert os.readlink(active_alias) == original_active_target
+    assert active_alias.resolve() == (old_durable / "old").resolve()
+    assert subprocess.check_output(
+        [str(active_alias / "bin/fullmag-fem-gpu")], text=True
+    ).strip() == "old"
+    observations = operation_log.read_text(encoding="utf-8").splitlines()
+    assert observations
+    assert all(not observation.endswith("|UNRESOLVED") for observation in observations)
+
+
+def test_alias_publication_uses_bridge_then_variants_then_relative_active_alias(
+    tmp_path: Path,
+) -> None:
+    old_durable, new_durable, variants_alias, active_alias, validator = (
+        _prepare_alias_transition(tmp_path)
+    )
+    operation_log = tmp_path / "mv-operations.log"
+    _, env = _write_alias_mv_probe(
+        tmp_path,
+        active_alias,
+        operation_log,
+        fail_after_operation=0,
+    )
+
+    result = _publish_aliases(
+        variants_alias,
+        new_durable,
+        validator,
+        active_alias,
+        "new",
+        retarget_from=old_durable,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observations = operation_log.read_text(encoding="utf-8").splitlines()
+    assert [line.split("|", 2)[1] for line in observations] == [
+        str(active_alias),
+        str(variants_alias),
+        str(active_alias),
+    ]
+    assert [line.rsplit("|", 1)[1] for line in observations] == ["new", "new", "new"]
+    assert variants_alias.resolve() == new_durable.resolve()
+    assert os.readlink(active_alias) == "fem-gpu-variants/new"
+    assert active_alias.resolve() == (new_durable / "new").resolve()
+
+
+def test_alias_publication_rejects_non_symlink_active_runtime_without_changes(
+    tmp_path: Path,
+) -> None:
+    old_durable, new_durable, variants_alias, active_alias, validator = (
+        _prepare_alias_transition(tmp_path)
+    )
+    active_alias.unlink()
+    active_alias.mkdir()
+    original_variants_target = os.readlink(variants_alias)
+
+    result = _publish_aliases(
+        variants_alias,
+        new_durable,
+        validator,
+        active_alias,
+        "new",
+        retarget_from=old_durable,
+    )
+
+    assert result.returncode == 2
+    assert "active runtime must be a symlink or missing path" in result.stderr
+    assert os.readlink(variants_alias) == original_variants_target
+    assert active_alias.is_dir() and not active_alias.is_symlink()
 
 
 def test_ensure_selector_retargets_only_the_expected_canonical_alias(
@@ -458,17 +665,19 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     assert "select_managed_fem_runtime_variants_alias" not in preflight
     assert "mv -Tf" not in preflight
     assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in exporter
+    assert 'publish_managed_fem_runtime_aliases "${variants_alias}"' in exporter
     assert '"${VARIANTS_ALIAS_RETARGET_FROM}"' in exporter
+    assert '"${RUNTIME_ROOT}" "$(basename "${variant_root}")"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in restorer
+    assert 'publish_managed_fem_runtime_aliases "${variants_alias}"' in restorer
     assert '"${variants_alias_retarget_from}"' in restorer
+    assert '"${runtime_parent}/fem-gpu-host" "${variant_name}"' in restorer
     assert "validate_managed_fem_runtime_storage_target" in restorer
     assert restorer.index("validate_managed_fem_runtime_storage_target") < restorer.index(
         'tar -C "${staging}"'
     )
     assert restorer.rindex('--runtime-root "${variant_root}"') < restorer.index(
-        "migrate_managed_fem_runtime_variants"
+        "publish_managed_fem_runtime_aliases"
     )
 
 

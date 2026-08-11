@@ -1161,12 +1161,10 @@ def test_export_revalidates_source_immediately_before_alias_switch() -> None:
 
     verify_index = publication.rindex("verify_source_snapshot_identity")
     prune_index = publication.index('FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}"')
-    migrate_index = publication.index("migrate_managed_fem_runtime_variants")
-    link_index = publication.index('ln -sfn "${alias_target}"')
-    switch_index = publication.index('mv -Tf "${repo_next_alias}"')
+    switch_index = publication.index("publish_managed_fem_runtime_aliases")
 
-    assert prune_index < migrate_index < verify_index < link_index < switch_index
-    assert "source_identity_file" not in publication[verify_index:link_index]
+    assert prune_index < verify_index < switch_index
+    assert "source_identity_file" not in publication[verify_index:switch_index]
 
 
 def test_managed_runtime_validator_rejects_mismatched_mesh_abi(tmp_path: Path) -> None:
@@ -1483,9 +1481,8 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     assert '.fullmag/runtimes/fem-gpu-host.staging' not in exporter
     assert 'manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json"' in exporter
     assert 'variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"' in exporter
-    assert 'alias_target="fem-gpu-variants/$(basename "${variant_root}")"' in exporter
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}"' in exporter
-    assert 'ln -sfn "${alias_target}" "${repo_next_alias}"' in exporter
+    assert 'publish_managed_fem_runtime_aliases "${variants_alias}" "${VARIANTS_ROOT}"' in exporter
+    assert '"${RUNTIME_ROOT}" "$(basename "${variant_root}")"' in exporter
     assert 'PERSISTENT_LATEST_ARCHIVE=' in exporter
     assert '--allow-unaddressed-staging' in exporter
     assert '--runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"' in exporter
@@ -1568,7 +1565,7 @@ def test_export_publishes_durable_copy_before_switching_aliases() -> None:
 
     archive_index = exporter.index('tar -C "${variant_root}"')
     latest_index = exporter.index('mv -f "${persistent_staging_archive}"')
-    repo_alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    repo_alias_index = exporter.index("publish_managed_fem_runtime_aliases")
     assert archive_index < latest_index < repo_alias_index
 
 
@@ -1579,7 +1576,7 @@ def test_export_validates_persistent_archive_before_switching_repo_alias() -> No
     validate_index = exporter.index(
         'validate_persistent_runtime_archive "${persistent_archive}" "${variant_root}"'
     )
-    alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    alias_index = exporter.index("publish_managed_fem_runtime_aliases")
     assert archive_index < validate_index < alias_index
 
 

@@ -80,11 +80,9 @@ else
 fi
 python3 "${REPO_ROOT}/scripts/validate_managed_fem_runtime_bundle.py" --runtime-root "${variant_root}" >/dev/null
 variants_alias="${runtime_parent}/fem-gpu-variants"
-migrate_managed_fem_runtime_variants "${variants_alias}" \
+publish_managed_fem_runtime_aliases "${variants_alias}" \
   "${FULLMAG_RUNTIME_VARIANTS_ROOT}" \
   "${REPO_ROOT}/scripts/validate_managed_fem_runtime_bundle.py" \
-  "${variants_alias_retarget_from}"
-next="${runtime_parent}/.fem-gpu-host.next.$$"
-ln -sfn "fem-gpu-variants/${variant_name}" "${next}"
-mv -Tf "${next}" "${runtime_parent}/fem-gpu-host"
+  "${variants_alias_retarget_from}" \
+  "${runtime_parent}/fem-gpu-host" "${variant_name}"
 echo "Restored managed FEM runtime from ${archive}"
