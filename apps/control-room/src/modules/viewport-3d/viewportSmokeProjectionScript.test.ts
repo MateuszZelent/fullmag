@@ -32,6 +32,10 @@ const profileSwitchScriptUrl = new URL(
   import.meta.url,
 );
 const justfileUrl = new URL("../../../../../justfile", import.meta.url);
+const fdmCpuRelaxSmokeUrl = new URL(
+  "../../../../../examples/fdm_cpu_relax_smoke.py",
+  import.meta.url,
+);
 
 function endpointFamilyLiteral(path: string, suffix: string): string {
   const suffixStart = path.lastIndexOf(suffix);
@@ -69,6 +73,14 @@ describe("viewport smoke projection round-trip", () => {
     expect(justfile).toContain("CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN");
   });
 
+  it("uses an explicit timestep policy in the disposable FDM smoke fixture", () => {
+    const fixture = readFileSync(fdmCpuRelaxSmokeUrl, "utf8");
+
+    expect(fixture).toContain(
+      'study.stages.add_relax(algorithm="llg_overdamped", dt=1e-13, tolA=1e-4, max_steps=4)',
+    );
+  });
+
   it("toggles relative to the initial projection state", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
@@ -103,6 +115,16 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("3D viewport final drawing buffer is empty after");
     expect(smokeScript).toContain("finalWebGL");
   });
+
+  it("reports browser evidence when startup fails before the canvas appears", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("collectViewportStartupFailureEvidence");
+    expect(smokeScript).toContain("Viewport 3D startup failure evidence:");
+    expect(smokeScript).toContain("document.body?.innerText");
+    expect(smokeScript).toContain("errors: [...browserErrors]");
+  });
+
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 

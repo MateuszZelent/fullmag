@@ -351,6 +351,12 @@ try {
       console.log(`Viewport 3D smoke passed at ${url}.`);
     }
   }
+} catch (error) {
+  const evidence = await collectViewportStartupFailureEvidence(page, errors);
+  console.error(
+    `Viewport 3D startup failure evidence: ${JSON.stringify(evidence)}`,
+  );
+  throw error;
 } finally {
   try {
     await browser.close();
@@ -363,6 +369,27 @@ try {
       );
     }
   }
+}
+
+async function collectViewportStartupFailureEvidence(page, browserErrors) {
+  const pageState = await page
+    .evaluate(() => ({
+      bodyText: document.body?.innerText?.slice(0, 4_000) ?? "",
+      canvasCount: document.querySelectorAll("canvas").length,
+      readyState: document.readyState,
+      title: document.title,
+      url: window.location.href,
+      viewportCount: document.querySelectorAll(".fm-viewport-3d").length,
+    }))
+    .catch((evaluationError) => ({
+      evaluationError: evaluationError.message,
+      url: page.url(),
+    }));
+
+  return {
+    ...pageState,
+    errors: [...browserErrors],
+  };
 }
 
 async function verifyCameraGesturesStayLocal({ page }) {
