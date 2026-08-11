@@ -1113,6 +1113,12 @@ pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub command_id: Option<String>,
     #[serde(default)]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default)]
+    pub mesh_topology_fingerprint: Option<String>,
+    #[serde(default)]
+    pub mesh_revision: Option<u64>,
+    #[serde(default)]
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub completed_at_unix_ms: Option<u64>,

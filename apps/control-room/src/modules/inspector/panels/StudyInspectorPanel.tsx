@@ -1451,6 +1451,25 @@ export function StudySelectedStageSection({
         label="Command"
         value={selectedStage?.commandId ?? "not linked"}
       />
+      <FieldRow
+        label="Mesh generation"
+        value={selectedStage?.meshGenerationId ?? "unknown"}
+        mono
+      />
+      <FieldRow
+        label="Mesh revision"
+        value={
+          selectedStage?.meshRevision === null ||
+          selectedStage?.meshRevision === undefined
+            ? "unknown"
+            : String(selectedStage.meshRevision)
+        }
+      />
+      <FieldRow
+        label="Topology fingerprint"
+        value={selectedStage?.meshTopologyFingerprint ?? "unknown"}
+        mono
+      />
       {selectedStage?.transition ? (
         <>
           <FieldRow

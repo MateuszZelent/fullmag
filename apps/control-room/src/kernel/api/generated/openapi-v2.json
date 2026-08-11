@@ -6108,6 +6108,10 @@
         ],
         "type": "string"
       },
+      "FrequencyDomainArtifactExtras": {
+        "additionalProperties": true,
+        "type": "object"
+      },
       "FrequencyDomainAvailabilitySummaryResource": {
         "properties": {
           "diagnostics_json": {
@@ -6183,85 +6187,103 @@
         "type": "object"
       },
       "FrequencyDomainBranchPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "branch_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "points": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainBranchPointPayload"
+          {
+            "properties": {
+              "branch_id": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "points": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainBranchPointPayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainBranchPointPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "raw_mode_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "sample_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
+          {
+            "properties": {
+              "frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "raw_mode_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sample_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainBranchesArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "branches": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainBranchPayload"
-            },
-            "type": "array"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "diagnostics": {
-            "oneOf": [
-              {
-                "type": "null"
+          {
+            "properties": {
+              "branches": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainBranchPayload"
+                },
+                "type": "array"
               },
-              {
-                "$ref": "#/components/schemas/FrequencyDomainTrackingDiagnosticsPayload"
+              "diagnostics": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainTrackingDiagnosticsPayload"
+                  }
+                ]
+              },
+              "schema_version": {
+                "type": "string"
               }
-            ]
-          },
-          "schema_version": {
-            "type": "string"
+            },
+            "required": [
+              "schema_version",
+              "branches"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version",
-          "branches"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainCapabilityEntryResource": {
         "properties": {
@@ -6333,34 +6355,40 @@
         "type": "object"
       },
       "FrequencyDomainDiagnosticsArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "complete": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "interrupted": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+          {
+            "properties": {
+              "complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "interrupted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainDispersionCapabilitiesResource": {
         "properties": {
@@ -6622,161 +6650,185 @@
         "type": "object"
       },
       "FrequencyDomainFieldSweepArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "artifact_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "complete": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "interrupted": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "samples": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainFieldSweepSamplePayload"
+          {
+            "properties": {
+              "artifact_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "interrupted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "samples": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainFieldSweepSamplePayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainFieldSweepSamplePayload": {
-        "additionalProperties": {},
-        "properties": {
-          "bias_field_a_per_m": {
-            "items": {
-              "format": "double",
-              "type": "number"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "bias_field_a_per_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "sample_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sample_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "sample_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "sample_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainFmrPeakPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "mode_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "peak_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "sample_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+          {
+            "properties": {
+              "frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "mode_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "peak_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sample_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainFmrPeaksArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "complete": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "interrupted": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "peaks": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainFmrPeakPayload"
+          {
+            "properties": {
+              "complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "interrupted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "peaks": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainFmrPeakPayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainJsonArtifactPayload": {
         "description": "Typed control-plane payloads published by the frequency-domain artifact\nfamily.  The enum is intentionally untagged so the JSON body remains\nbackward compatible with the existing artifact files: the artifact's\n`schema_version` remains the discriminator on the wire.",
@@ -6937,93 +6989,111 @@
         "type": "object"
       },
       "FrequencyDomainKittelFitArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "complete": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "points": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainKittelFitPointPayload"
+          {
+            "properties": {
+              "complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "points": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainKittelFitPointPayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "validation_status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "validation_status": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainKittelFitPointPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "relative_frequency_error": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "sample_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "solved_frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+          {
+            "properties": {
+              "relative_frequency_error": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "sample_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "solved_frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainManifestArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "analysis_family": {
-            "type": [
-              "string",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "schema_version": {
-            "type": "string"
-          },
-          "study_product": {
-            "type": [
-              "string",
-              "null"
-            ]
+          {
+            "properties": {
+              "analysis_family": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "study_product": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainManifestResource": {
         "properties": {
@@ -7138,109 +7208,178 @@
         "type": "object"
       },
       "FrequencyDomainModeArtifactPayload": {
-        "additionalProperties": {},
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "component_basis": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "raw_mode_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sample_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "source_mesh_identity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainModeSourceMeshIdentityPayload"
+                  }
+                ]
+              },
+              "value_kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FrequencyDomainModeSourceMeshIdentityPayload": {
         "properties": {
-          "component_basis": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "raw_mode_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "sample_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "schema_version": {
+          "indexing": {
             "type": "string"
           },
-          "value_kind": {
+          "mesh_generation_id": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "mesh_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "node_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topology_fingerprint": {
+            "type": "string"
           }
         },
         "required": [
-          "schema_version"
+          "topology_fingerprint",
+          "indexing",
+          "node_count"
         ],
         "type": "object"
       },
       "FrequencyDomainResonanceFitPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "fit_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "peak_frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+          {
+            "properties": {
+              "fit_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "peak_frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainResonanceFitsArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "complete": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "fits": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainResonanceFitPayload"
+          {
+            "properties": {
+              "complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "fits": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainResonanceFitPayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainResponseCapabilitiesResource": {
         "properties": {
@@ -7274,163 +7413,193 @@
         "type": "object"
       },
       "FrequencyDomainResponsePointPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "frequency_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "point_id": {
-            "description": "Stable response-point identity; `frequency_index` is presentation order only.",
-            "type": [
-              "string",
-              "null"
-            ]
+          {
+            "properties": {
+              "frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "frequency_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "point_id": {
+                "description": "Stable response-point identity; `frequency_index` is presentation order only.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainResponseSweepArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "complete": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "interrupted": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "points": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainResponsePointPayload"
+          {
+            "properties": {
+              "complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "interrupted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "points": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainResponsePointPayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "type": "string"
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "required": [
+              "schema_version"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainSpectrumArtifactPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "samples": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainSpectrumSamplePayload"
-            },
-            "type": "array"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "schema_version": {
-            "type": "string"
+          {
+            "properties": {
+              "samples": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainSpectrumSamplePayload"
+                },
+                "type": "array"
+              },
+              "schema_version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "samples"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schema_version",
-          "samples"
-        ],
-        "type": "object"
+        ]
       },
       "FrequencyDomainSpectrumModePayload": {
-        "additionalProperties": {},
-        "properties": {
-          "branch_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "frequency_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "frequency_real_hz": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "mode_id": {
-            "description": "Stable mode identity within a spectrum sample.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "raw_mode_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
+          {
+            "properties": {
+              "branch_id": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "frequency_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "frequency_real_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "mode_id": {
+                "description": "Stable mode identity within a spectrum sample.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "raw_mode_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainSpectrumSamplePayload": {
-        "additionalProperties": {},
-        "properties": {
-          "modes": {
-            "items": {
-              "$ref": "#/components/schemas/FrequencyDomainSpectrumModePayload"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "modes": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainSpectrumModePayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "sample_id": {
+                "description": "Stable sample identity; `sample_index` is presentation order only.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sample_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
             },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "sample_id": {
-            "description": "Stable sample identity; `sample_index` is presentation order only.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "sample_index": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainSweepProgressResource": {
         "properties": {
@@ -7572,22 +7741,28 @@
         "type": "object"
       },
       "FrequencyDomainTrackingDiagnosticsPayload": {
-        "additionalProperties": {},
-        "properties": {
-          "modal_overlap_available": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
           },
-          "tracking_score_source": {
-            "type": [
-              "string",
-              "null"
-            ]
+          {
+            "properties": {
+              "modal_overlap_available": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "tracking_score_source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "FrequencyDomainValidationCapabilitiesResource": {
         "properties": {
@@ -24331,6 +24506,29 @@
             ]
           },
           "loaded_state_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "description": "Stable generation identity of the solver mesh used by this stage.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "description": "Mesh resource revision observed when this stage mesh was published.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_topology_fingerprint": {
+            "description": "Content-derived topology fingerprint of the solver mesh used by this stage.",
             "type": [
               "string",
               "null"

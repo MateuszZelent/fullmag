@@ -1011,6 +1011,9 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
+                    mesh_generation_id: None,
+                    mesh_topology_fingerprint: None,
+                    mesh_revision: None,
                     started_at_unix_ms: Some(1_700_000_000_000),
                     completed_at_unix_ms: Some(1_700_000_001_000),
                     reason: None,
@@ -1043,6 +1046,9 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
+                    mesh_generation_id: None,
+                    mesh_topology_fingerprint: None,
+                    mesh_revision: None,
                     started_at_unix_ms: Some(1_700_000_002_000),
                     completed_at_unix_ms: None,
                     reason: None,
@@ -1382,6 +1388,9 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
+                    mesh_generation_id: Some("mesh-generation-0".into()),
+                    mesh_topology_fingerprint: Some("sha256:stage-topology-0".into()),
+                    mesh_revision: Some(7),
                     started_at_unix_ms: Some(1_700_000_000_000),
                     completed_at_unix_ms: Some(1_700_000_001_000),
                     reason: None,
@@ -1414,6 +1423,9 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
+                    mesh_generation_id: Some("mesh-generation-1".into()),
+                    mesh_topology_fingerprint: Some("sha256:stage-topology-1".into()),
+                    mesh_revision: Some(9),
                     started_at_unix_ms: Some(1_700_000_002_000),
                     completed_at_unix_ms: None,
                     reason: None,
@@ -16864,6 +16876,9 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hysteresis-run".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -17063,6 +17078,9 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Cancelled,
                 command_id: Some("cmd-solve".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: Some(fullmag_ir::StageStopReason::UserCancelled),
@@ -17561,6 +17579,9 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: None,
@@ -18289,6 +18310,15 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["stages"][0]["label"], "Stage 1");
     assert_eq!(json["stages"][0]["command_id"], "cmd-stage-0");
     assert_eq!(
+        json["stages"][0]["mesh_generation_id"],
+        "mesh-generation-0"
+    );
+    assert_eq!(
+        json["stages"][0]["mesh_topology_fingerprint"],
+        "sha256:stage-topology-0"
+    );
+    assert_eq!(json["stages"][0]["mesh_revision"], 7);
+    assert_eq!(
         json["stages"][0]["started_at_unix_ms"],
         1_700_000_000_000u64
     );
@@ -18311,6 +18341,15 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["stages"][1]["stage_id"], "stage-001");
     assert_eq!(json["stages"][1]["kind"], "relax");
     assert_eq!(json["stages"][1]["command_id"], "cmd-stage-1");
+    assert_eq!(
+        json["stages"][1]["mesh_generation_id"],
+        "mesh-generation-1"
+    );
+    assert_eq!(
+        json["stages"][1]["mesh_topology_fingerprint"],
+        "sha256:stage-topology-1"
+    );
+    assert_eq!(json["stages"][1]["mesh_revision"], 9);
     assert_eq!(
         json["stages"][1]["started_at_unix_ms"],
         1_700_000_002_000u64
@@ -18369,6 +18408,9 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 kind: Some("flat_frequency_response".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-stage-3".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_010_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -18811,6 +18853,9 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -18906,6 +18951,9 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -18991,6 +19039,9 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -19069,6 +19120,9 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -19154,6 +19208,9 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -19240,6 +19297,9 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -19326,6 +19386,9 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -19452,6 +19515,9 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -19604,6 +19670,9 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: Some(1_700_000_003_000),
                 reason: None,
@@ -19748,6 +19817,9 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: Some(1_700_000_003_000),
                 reason: None,
@@ -19927,6 +19999,9 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: Some(1_700_000_003_000),
                 reason: None,
@@ -20103,6 +20178,9 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -20219,6 +20297,9 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-relax".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000u64),
                 completed_at_unix_ms: Some(1_700_000_010_000u64),
                 reason: Some(fullmag_ir::StageStopReason::Torque),
@@ -20392,6 +20473,9 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: None,
                 completed_at_unix_ms: None,
                 reason: Some(fullmag_ir::StageStopReason::MaxSteps),
@@ -26091,6 +26175,9 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: None,
@@ -26245,6 +26332,9 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Running,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -26366,6 +26456,9 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -26460,6 +26553,9 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -26533,6 +26629,9 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -27082,6 +27181,9 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -32761,6 +32863,9 @@ fn openapi_relaxation_contract_is_typed() {
     assert!(stage_schema.contains("StageMetricKind"));
     assert!(stage_schema.contains("StageMetricUnit"));
     assert!(stage_schema.contains("converged"));
+    assert!(stage_schema.contains("mesh_generation_id"));
+    assert!(stage_schema.contains("mesh_topology_fingerprint"));
+    assert!(stage_schema.contains("mesh_revision"));
 
     let solver_schema = schemas
         .get("SolverStatusResource")
@@ -34472,7 +34577,16 @@ async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
 
 #[tokio::test]
 async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
-    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let current_mesh = sample_fem_mesh_payload();
+    let current_topology_fingerprint =
+        fullmag_runner::fem_mesh_topology_fingerprint(&current_mesh);
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.mesh_revision = 9;
+        snapshot.fem_mesh = Some(current_mesh);
+    }
     write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
         .expect("response sweep bundle should be written");
     let progress_path = artifact_dir.join("response").join("progress.v1.json");
@@ -34564,14 +34678,21 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
             "schema_version": "eigen_mode.v2",
             "sample_index": 0,
             "raw_mode_index": 3,
+            "source_mesh_identity": {
+                "mesh_generation_id": "42",
+                "mesh_revision": 9,
+                "topology_fingerprint": current_topology_fingerprint,
+                "indexing": "full_domain_node_order",
+                "node_count": 4
+            },
             "value_kind": "complex_spatial_vector",
             "component_basis": "global_xyz",
             "component_count": 3,
             "components": ["x", "y", "z"],
             "payload_encoding": "f64_interleaved_real_imag_xyz",
             "binary_layout": "complex_f64_pairs_little_endian",
-            "complex_pair_count": 3,
-            "payload_value_count": 6,
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
             "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
             "default_view": "phase_rotated_real",
             "default_phase_rad": 0.0
@@ -34873,8 +34994,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["components"], serde_json::json!(["x", "y", "z"]));
     assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
     assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
-    assert_eq!(payload["complex_pair_count"], 3);
-    assert_eq!(payload["payload_value_count"], 6);
+    assert_eq!(payload["complex_pair_count"], 12);
+    assert_eq!(payload["payload_value_count"], 24);
     assert_eq!(payload["default_view"], "phase_rotated_real");
     assert_eq!(payload["default_phase_rad"], 0.0);
     assert_eq!(
@@ -34899,7 +35020,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .join("mode_0003");
     fs::create_dir_all(&mode_field_dir).expect("mode field directory should be created");
     let mut mode_field_bytes = Vec::new();
-    for value in [1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0] {
+    for value in [
+        1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0, 2.0, 0.0, 4.0, 0.0, 6.0, 0.0, 3.0, 0.0,
+        5.0, 0.0, 7.0, 0.0, 4.0, 0.0, 6.0, 0.0, 8.0, 0.0,
+    ] {
         mode_field_bytes.extend_from_slice(&value.to_le_bytes());
     }
     fs::write(mode_field_dir.join("vector.bin"), mode_field_bytes)
@@ -34926,8 +35050,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["components"], serde_json::json!(["x", "y", "z"]));
     assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
     assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
-    assert_eq!(payload["complex_pair_count"], 3);
-    assert_eq!(payload["payload_value_count"], 6);
+    assert_eq!(payload["complex_pair_count"], 12);
+    assert_eq!(payload["payload_value_count"], 24);
 
     let response = app
         .clone()
@@ -34976,11 +35100,15 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         Some("3")
     );
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
+    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    let values: Vec<f64> = body[48 + metadata_length..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(values, vec![1.0, 0.0, 3.0]);
+    assert_eq!(
+        values,
+        vec![1.0, 0.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0, 4.0, 6.0, 8.0]
+    );
 
     fs::write(
         eigen_dir
@@ -35242,8 +35370,90 @@ async fn frequency_domain_eigen_mode_field_meta_rejects_invalid_complex_xyz_payl
 }
 
 #[tokio::test]
+async fn frequency_domain_eigen_mode_field_rejects_stale_topology_with_same_node_count() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let current_mesh = sample_fem_mesh_payload();
+    let mut source_mesh = current_mesh.clone();
+    source_mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 3, 2]]);
+    assert_eq!(source_mesh.nodes.len(), current_mesh.nodes.len());
+    let source_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&source_mesh);
+    assert_ne!(
+        source_topology_fingerprint,
+        fullmag_runner::fem_mesh_topology_fingerprint(&current_mesh)
+    );
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.mesh_revision = 9;
+        snapshot.fem_mesh = Some(current_mesh);
+    }
+
+    let mode_dir = artifact_dir.join("eigen/modes/sample_0000");
+    let payload_dir = artifact_dir.join("eigen/mode_fields/sample_0000/mode_0000");
+    fs::create_dir_all(&mode_dir).expect("mode metadata directory should be created");
+    fs::create_dir_all(&payload_dir).expect("mode payload directory should be created");
+    fs::write(
+        mode_dir.join("mode_0000.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "sample_index": 0,
+            "raw_mode_index": 0,
+            "source_mesh_identity": {
+                "mesh_generation_id": "42",
+                "mesh_revision": 9,
+                "topology_fingerprint": source_topology_fingerprint,
+                "indexing": "full_domain_node_order",
+                "node_count": 4
+            },
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("mode metadata should serialize"),
+    )
+    .expect("mode metadata should be written");
+    let mut payload = Vec::new();
+    for value in 0..24 {
+        payload.extend_from_slice(&f64::from(value).to_le_bytes());
+    }
+    fs::write(payload_dir.join("vector.bin"), payload).expect("mode payload should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let payload = body_json(response).await;
+    assert_eq!(payload["code"], "stale_eigen_mode_mesh");
+}
+
+#[tokio::test]
 async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
-    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let current_mesh = sample_fem_mesh_payload();
+    let current_topology_fingerprint =
+        fullmag_runner::fem_mesh_topology_fingerprint(&current_mesh);
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.mesh_revision = 9;
+        snapshot.fem_mesh = Some(current_mesh);
+    }
     let mode_dir = artifact_dir.join("eigen").join("modes").join("sample_0000");
     fs::create_dir_all(&mode_dir).expect("mode metadata directory should be created");
     let zarr_array_dir = artifact_dir
@@ -35260,6 +35470,13 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
             "schema_version": "eigen_mode.v2",
             "sample_index": 0,
             "raw_mode_index": 3,
+            "source_mesh_identity": {
+                "mesh_generation_id": "42",
+                "mesh_revision": 9,
+                "topology_fingerprint": current_topology_fingerprint,
+                "indexing": "full_domain_node_order",
+                "node_count": 4
+            },
             "value_kind": "complex_spatial_vector",
             "component_basis": "global_xyz",
             "component_count": 3,
@@ -35269,14 +35486,14 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
             "zarr_array_path": "eigen/mode_fields.zarr/sample_0000/mode_0003/vector_xyz_complex",
             "zarr_chunk_path": zarr_chunk_path,
             "zarr_dtype": "<f8",
-            "zarr_shape": [1, 3, 2],
-            "zarr_chunk_shape": [1, 3, 2],
+            "zarr_shape": [4, 3, 2],
+            "zarr_chunk_shape": [4, 3, 2],
             "zarr_compressor": null,
             "compatibility_binary_payload_path": "eigen/mode_fields/sample_0000/mode_0003/vector.bin",
             "payload_encoding": "f64_interleaved_real_imag_xyz",
             "binary_layout": "complex_f64_pairs_little_endian",
-            "complex_pair_count": 3,
-            "payload_value_count": 6,
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
             "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
             "default_view": "phase_rotated_real",
             "default_phase_rad": 0.0
@@ -35285,7 +35502,10 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
     )
     .expect("mode metadata should be written");
     let mut zarr_chunk_bytes = Vec::new();
-    for value in [2.0f64, 0.0, 0.0, 2.0, 5.0, 12.0] {
+    for value in [
+        2.0f64, 0.0, 0.0, 2.0, 5.0, 12.0, 3.0, 0.0, 4.0, 0.0, 6.0, 0.0, 4.0,
+        0.0, 5.0, 0.0, 7.0, 0.0, 5.0, 0.0, 6.0, 0.0, 8.0, 0.0,
+    ] {
         zarr_chunk_bytes.extend_from_slice(&value.to_le_bytes());
     }
     fs::write(zarr_array_dir.join("0.0.0"), zarr_chunk_bytes)
@@ -35320,11 +35540,15 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
+    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    let values: Vec<f64> = body[48 + metadata_length..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(values, vec![2.0, 0.0, 5.0]);
+    assert_eq!(
+        values,
+        vec![2.0, 0.0, 5.0, 3.0, 4.0, 6.0, 4.0, 5.0, 7.0, 5.0, 6.0, 8.0]
+    );
 }
 
 #[tokio::test]

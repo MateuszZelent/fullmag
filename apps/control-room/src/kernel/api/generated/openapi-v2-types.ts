@@ -4975,6 +4975,9 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        FrequencyDomainArtifactExtras: {
+            [key: string]: unknown;
+        };
         FrequencyDomainAvailabilitySummaryResource: {
             diagnostics_json: string;
             driven_response_available: boolean;
@@ -4994,29 +4997,23 @@ export interface components {
             periodic_pair_diagnostics: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             static_periodic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
-        FrequencyDomainBranchPayload: {
+        FrequencyDomainBranchPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: int64 */
             branch_id?: number | null;
             points?: components["schemas"]["FrequencyDomainBranchPointPayload"][] | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainBranchPointPayload: {
+        FrequencyDomainBranchPointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: double */
             frequency_hz?: number | null;
             /** Format: int64 */
             raw_mode_index?: number | null;
             /** Format: int64 */
             sample_index?: number | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainBranchesArtifactPayload: {
+        FrequencyDomainBranchesArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             branches: components["schemas"]["FrequencyDomainBranchPayload"][];
             diagnostics?: null | components["schemas"]["FrequencyDomainTrackingDiagnosticsPayload"];
             schema_version: string;
-        } & {
-            [key: string]: unknown;
         };
         FrequencyDomainCapabilityEntryResource: {
             reason: string;
@@ -5036,13 +5033,11 @@ export interface components {
             floquet_dynamic_k: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             static_periodic_pbc: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
-        FrequencyDomainDiagnosticsArtifactPayload: {
+        FrequencyDomainDiagnosticsArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             complete?: boolean | null;
             interrupted?: boolean | null;
             schema_version: string;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
         FrequencyDomainDispersionCapabilitiesResource: {
             branch_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -5097,43 +5092,35 @@ export interface components {
             zarr_shape?: number[] | null;
             zarr_store_path?: string | null;
         };
-        FrequencyDomainFieldSweepArtifactPayload: {
+        FrequencyDomainFieldSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             artifact_id?: string | null;
             complete?: boolean | null;
             interrupted?: boolean | null;
             samples?: components["schemas"]["FrequencyDomainFieldSweepSamplePayload"][] | null;
             schema_version: string;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainFieldSweepSamplePayload: {
+        FrequencyDomainFieldSweepSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             bias_field_a_per_m?: number[] | null;
             sample_id?: string | null;
             /** Format: int64 */
             sample_index?: number | null;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainFmrPeakPayload: {
+        FrequencyDomainFmrPeakPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: double */
             frequency_hz?: number | null;
             mode_id?: string | null;
             peak_id?: string | null;
             sample_id?: string | null;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainFmrPeaksArtifactPayload: {
+        FrequencyDomainFmrPeaksArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             complete?: boolean | null;
             interrupted?: boolean | null;
             peaks?: components["schemas"]["FrequencyDomainFmrPeakPayload"][] | null;
             schema_version: string;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * @description Typed control-plane payloads published by the frequency-domain artifact
@@ -5167,30 +5154,24 @@ export interface components {
             points: components["schemas"]["FrequencyDomainKPathControlPointResource"][];
             samples_per_segment: number[];
         };
-        FrequencyDomainKittelFitArtifactPayload: {
+        FrequencyDomainKittelFitArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             complete?: boolean | null;
             points?: components["schemas"]["FrequencyDomainKittelFitPointPayload"][] | null;
             schema_version: string;
             status?: string | null;
             validation_status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainKittelFitPointPayload: {
+        FrequencyDomainKittelFitPointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: double */
             relative_frequency_error?: number | null;
             sample_id?: string | null;
             /** Format: double */
             solved_frequency_hz?: number | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainManifestArtifactPayload: {
+        FrequencyDomainManifestArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             analysis_family?: string | null;
             schema_version: string;
             study_product?: string | null;
-        } & {
-            [key: string]: unknown;
         };
         FrequencyDomainManifestResource: {
             capabilities: components["schemas"]["FrequencyDomainCapabilitySnapshotResource"];
@@ -5216,7 +5197,7 @@ export interface components {
             production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
-        FrequencyDomainModeArtifactPayload: {
+        FrequencyDomainModeArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             component_basis?: string | null;
             /** Format: double */
             frequency_hz?: number | null;
@@ -5225,25 +5206,30 @@ export interface components {
             /** Format: int64 */
             sample_index?: number | null;
             schema_version: string;
+            source_mesh_identity?: null | components["schemas"]["FrequencyDomainModeSourceMeshIdentityPayload"];
             value_kind?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainResonanceFitPayload: {
+        FrequencyDomainModeSourceMeshIdentityPayload: {
+            indexing: string;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            /** Format: int64 */
+            node_count: number;
+            topology_fingerprint: string;
+        };
+        FrequencyDomainResonanceFitPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             fit_id?: string | null;
             model?: string | null;
             /** Format: double */
             peak_frequency_hz?: number | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainResonanceFitsArtifactPayload: {
+        FrequencyDomainResonanceFitsArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             complete?: boolean | null;
             fits?: components["schemas"]["FrequencyDomainResonanceFitPayload"][] | null;
             schema_version: string;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
         FrequencyDomainResponseCapabilitiesResource: {
             frequency_sweep: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -5253,32 +5239,26 @@ export interface components {
             magnetoelastic_quasistatic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             mode_projected: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
-        FrequencyDomainResponsePointPayload: {
+        FrequencyDomainResponsePointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: double */
             frequency_hz?: number | null;
             /** Format: int64 */
             frequency_index?: number | null;
             /** @description Stable response-point identity; `frequency_index` is presentation order only. */
             point_id?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainResponseSweepArtifactPayload: {
+        FrequencyDomainResponseSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             complete?: boolean | null;
             interrupted?: boolean | null;
             points?: components["schemas"]["FrequencyDomainResponsePointPayload"][] | null;
             schema_version: string;
             status?: string | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainSpectrumArtifactPayload: {
+        FrequencyDomainSpectrumArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             samples: components["schemas"]["FrequencyDomainSpectrumSamplePayload"][];
             schema_version: string;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainSpectrumModePayload: {
+        FrequencyDomainSpectrumModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: int64 */
             branch_id?: number | null;
             /** Format: double */
@@ -5289,17 +5269,13 @@ export interface components {
             mode_id?: string | null;
             /** Format: int64 */
             raw_mode_index?: number | null;
-        } & {
-            [key: string]: unknown;
         };
-        FrequencyDomainSpectrumSamplePayload: {
+        FrequencyDomainSpectrumSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             modes?: components["schemas"]["FrequencyDomainSpectrumModePayload"][] | null;
             /** @description Stable sample identity; `sample_index` is presentation order only. */
             sample_id?: string | null;
             /** Format: int64 */
             sample_index?: number | null;
-        } & {
-            [key: string]: unknown;
         };
         FrequencyDomainSweepProgressResource: {
             complete: boolean;
@@ -5334,11 +5310,9 @@ export interface components {
             status: string;
             text?: string | null;
         };
-        FrequencyDomainTrackingDiagnosticsPayload: {
+        FrequencyDomainTrackingDiagnosticsPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             modal_overlap_available?: boolean | null;
             tracking_score_source?: string | null;
-        } & {
-            [key: string]: unknown;
         };
         FrequencyDomainValidationCapabilitiesResource: {
             fmr_k0: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -9513,6 +9487,15 @@ export interface components {
             /** Format: int64 */
             last_progress_unix_ms?: number | null;
             loaded_state_ref?: string | null;
+            /** @description Stable generation identity of the solver mesh used by this stage. */
+            mesh_generation_id?: string | null;
+            /**
+             * Format: int64
+             * @description Mesh resource revision observed when this stage mesh was published.
+             */
+            mesh_revision?: number | null;
+            /** @description Content-derived topology fingerprint of the solver mesh used by this stage. */
+            mesh_topology_fingerprint?: string | null;
             metric_kind?: null | components["schemas"]["StageMetricKind"];
             metric_name?: string | null;
             metric_unit?: null | components["schemas"]["StageMetricUnit"];

@@ -3525,6 +3525,16 @@ struct ResponseFieldDataPlaneMetadata {
     available_views: Vec<String>,
     default_view: String,
     default_phase_rad: f64,
+    source_mesh_identity: Option<EigenModeSourceMeshIdentity>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct EigenModeSourceMeshIdentity {
+    mesh_generation_id: Option<String>,
+    mesh_revision: Option<u64>,
+    topology_fingerprint: String,
+    indexing: String,
+    node_count: u64,
 }
 
 fn default_frequency_domain_field_views() -> Vec<String> {
@@ -3591,6 +3601,7 @@ fn response_field_data_plane_metadata_from_point_artifact(
             available_views: default_frequency_domain_field_views(),
             default_view: "complex".to_string(),
             default_phase_rad: 0.0,
+            source_mesh_identity: None,
         });
     }
     let point = read_json_artifact_value(artifact_dir, relative_path)?;
@@ -3649,6 +3660,7 @@ fn response_field_data_plane_metadata_from_point_artifact(
         available_views,
         default_view,
         default_phase_rad,
+        source_mesh_identity: None,
     })
 }
 
@@ -3713,6 +3725,23 @@ fn eigen_mode_data_plane_metadata_from_mode_artifact(
     let available_views = validate_response_field_available_views(&mode, &relative_path)?;
     let default_view = validate_response_field_default_view(&mode, &relative_path)?;
     let default_phase_rad = validate_response_field_default_phase_rad(&mode, &relative_path)?;
+    let source_mesh_identity = mode
+        .get("source_mesh_identity")
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "stale_eigen_mode_mesh: eigen mode metadata '{}' has no immutable source mesh identity",
+                relative_path
+            ))
+        })
+        .and_then(|value| {
+            serde_json::from_value::<EigenModeSourceMeshIdentity>(value).map_err(|error| {
+                ApiError::conflict(format!(
+                    "stale_eigen_mode_mesh: eigen mode metadata '{}' has invalid source mesh identity: {}",
+                    relative_path, error
+                ))
+            })
+        })?;
     let payload_path = eigen_mode_data_plane_payload_path(
         artifact_dir,
         &mode,
@@ -3727,6 +3756,7 @@ fn eigen_mode_data_plane_metadata_from_mode_artifact(
         available_views,
         default_view,
         default_phase_rad,
+        source_mesh_identity: Some(source_mesh_identity),
     })
 }
 
@@ -3884,6 +3914,62 @@ fn validate_response_field_default_phase_rad(
     Ok(default_phase_rad)
 }
 
+fn validate_eigen_mode_source_mesh_identity(
+    snapshot: &SessionStateResponse,
+    relative_path: &str,
+    source: &EigenModeSourceMeshIdentity,
+) -> Result<(), ApiError> {
+    let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode metadata '{}' has no current FEM mesh for identity validation",
+            relative_path
+        ))
+    })?;
+    if source.indexing != "full_domain_node_order" {
+        return Err(ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode metadata '{}' uses unsupported source indexing '{}'",
+            relative_path, source.indexing
+        )));
+    }
+    let current_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    if source.topology_fingerprint.is_empty()
+        || source.topology_fingerprint != current_topology_fingerprint
+    {
+        return Err(ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode metadata '{}' topology fingerprint '{}' does not match current mesh '{}'",
+            relative_path, source.topology_fingerprint, current_topology_fingerprint
+        )));
+    }
+    if let Some(source_generation_id) = source.mesh_generation_id.as_deref() {
+        if mesh.generation_id.as_deref() != Some(source_generation_id) {
+            return Err(ApiError::conflict(format!(
+                "stale_eigen_mode_mesh: eigen mode metadata '{}' mesh generation '{}' does not match current mesh generation '{}'",
+                relative_path,
+                source_generation_id,
+                mesh.generation_id.as_deref().unwrap_or("missing")
+            )));
+        }
+    }
+    if source
+        .mesh_revision
+        .is_some_and(|revision| revision != snapshot.mesh_revision)
+    {
+        return Err(ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode metadata '{}' mesh revision {:?} does not match current mesh revision {}",
+            relative_path, source.mesh_revision, snapshot.mesh_revision
+        )));
+    }
+    if usize::try_from(source.node_count).ok() != Some(mesh.nodes.len()) {
+        return Err(ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode metadata '{}' source node count {} does not match current mesh node count {}",
+            relative_path,
+            source.node_count,
+            mesh.nodes.len()
+        )));
+    }
+    Ok(())
+}
+
 fn analysis_eigen_mode_vector_response(
     snapshot: &SessionStateResponse,
     field_id: &str,
@@ -3898,6 +3984,13 @@ fn analysis_eigen_mode_vector_response(
     let metadata =
         eigen_mode_data_plane_metadata_from_mode_artifact(&artifact_dir, sample_index, mode_index)?;
     let relative_path = metadata.payload_path.clone();
+    let source_mesh_identity = metadata.source_mesh_identity.as_ref().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode payload '{}' has no immutable source mesh identity",
+            relative_path
+        ))
+    })?;
+    validate_eigen_mode_source_mesh_identity(snapshot, &relative_path, source_mesh_identity)?;
     let path = artifact_dir.join(&relative_path);
     let bytes = std::fs::read(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -3944,6 +4037,12 @@ fn analysis_eigen_mode_vector_response(
     let component = parse_component(query.component.as_deref().or(default_component), n_comp)?;
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
+    if u64::try_from(point_count).ok() != Some(source_mesh_identity.node_count) {
+        return Err(ApiError::conflict(format!(
+            "stale_eigen_mode_mesh: eigen mode payload '{}' point count {} does not match its source mesh node count {}",
+            relative_path, point_count, source_mesh_identity.node_count
+        )));
+    }
     let out_grid = [point_count as u32, 1, 1];
     let binary = serialize_analysis_field_vector_binary(
         snapshot, field_id, out_n_comp, out_grid, &projected,

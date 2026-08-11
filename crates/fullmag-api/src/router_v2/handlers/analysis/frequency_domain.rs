@@ -316,6 +316,19 @@ pub struct FrequencyDomainDiagnosticsArtifactPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainModeSourceMeshIdentityPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
+    pub topology_fingerprint: String,
+    pub indexing: String,
+    pub node_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FrequencyDomainModeArtifactPayload {
     pub schema_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,6 +341,8 @@ pub struct FrequencyDomainModeArtifactPayload {
     pub value_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub component_basis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_mesh_identity: Option<FrequencyDomainModeSourceMeshIdentityPayload>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }

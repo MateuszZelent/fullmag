@@ -569,6 +569,9 @@ describe("StudyInspectorPanel", () => {
               kind: "relax",
               label: "Relax 1",
               maxSteps: "1000",
+              meshGenerationId: "mesh-generation-7",
+              meshRevision: 19,
+              meshTopologyFingerprint: "sha256:stage-topology-7",
               progressPercent: 100,
               runtimeMetric: {
                 name: "max_torque_apm",
@@ -599,6 +602,12 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("max_torque_apm");
     expect(html).toContain("simulation/stages/execution@13");
     expect(html).toContain("runs/run-1/stages/stage-relax");
+    expect(html).toContain("Mesh generation");
+    expect(html).toContain("mesh-generation-7");
+    expect(html).toContain("Mesh revision");
+    expect(html).toContain("19");
+    expect(html).toContain("Topology fingerprint");
+    expect(html).toContain("sha256:stage-topology-7");
   });
 
   it("renders selected stage transition metadata", () => {
@@ -635,6 +644,9 @@ describe("StudyInspectorPanel", () => {
               kind: "run",
               label: "Run 2",
               maxSteps: null,
+              meshGenerationId: null,
+              meshRevision: null,
+              meshTopologyFingerprint: null,
               progressPercent: 0,
               runtimeMetric: null,
               stageId: "stage-run",
@@ -663,6 +675,8 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Change device");
     expect(html).toContain("backend_transfer");
     expect(html).toContain("identity_copy");
+    expect(html).toContain("Mesh generation");
+    expect(html).toContain(">unknown<");
     expect(html).toContain("simulation/stages/execution@16");
   });
 
@@ -701,6 +715,9 @@ describe("StudyInspectorPanel", () => {
               label: "Eigenmodes 2",
               lastProgressUnixMs: 1_781_445_105_275,
               maxSteps: null,
+              meshGenerationId: null,
+              meshRevision: null,
+              meshTopologyFingerprint: null,
               progressDetail: "heartbeat 8.5s since last solver update",
               progressLabel: "solving",
               progressPercent: 35,
@@ -771,6 +788,9 @@ describe("StudyInspectorPanel", () => {
                 kind: "relax",
                 label: "Relax 1",
                 maxSteps: "50000",
+                meshGenerationId: null,
+                meshRevision: null,
+                meshTopologyFingerprint: null,
                 progressPercent: 0,
                 runtimeMetric: null,
                 stageId: "relax-1",
@@ -896,6 +916,9 @@ describe("StudyInspectorPanel", () => {
                 label: "Frequency response 1",
                 lastProgressUnixMs: 1_781_467_092_000,
                 maxSteps: null,
+                meshGenerationId: null,
+                meshRevision: null,
+                meshTopologyFingerprint: null,
                 progressDetail:
                   "demag=periodic_airbox_k0; range=2.000000-5.000000 GHz; frequency point 2/7",
                 progressLabel: "solving frequency point",
@@ -1225,6 +1248,9 @@ describe("StudyInspectorPanel", () => {
                 kind: "relax",
                 label: "Relax 1",
                 maxSteps: "50000",
+                meshGenerationId: null,
+                meshRevision: null,
+                meshTopologyFingerprint: null,
                 progressPercent: 0,
                 runtimeMetric: null,
                 stageId: "relax-1",
