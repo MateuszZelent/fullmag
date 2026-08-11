@@ -18,7 +18,7 @@ export type ExplorerTabId =
   | "jobs"
   | "diagnostics";
 
-type ExplorerNodeKind =
+export type ExplorerNodeKind =
   | "session.root"
   | "universe.root"
   | "objects.root"

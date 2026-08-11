@@ -35,6 +35,7 @@ import {
   resolveActiveObjectExtensionExplorerItems,
   setObjectExtensionEnabled,
 } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
+import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
 
 import {
   buildExplorerTree,
@@ -43,10 +44,36 @@ import {
   findExplorerNodePath,
   flattenExplorerNodes,
 } from "./buildModelTree";
+import { createExplorerNode } from "./explorerNodeContract";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
 } from "./sceneModelTreeAdapter";
+
+describe("Explorer node contract", () => {
+  it("preserves a valid node and its exported kind", () => {
+    const kind: ExplorerNodeKind = "object.root";
+    const node: ExplorerNode = {
+      id: "model:object:sample",
+      kind,
+      label: "Sample",
+      parentId: "model:objects",
+    };
+
+    expect(createExplorerNode(node)).toBe(node);
+  });
+
+  it("rejects an empty node id", () => {
+    expect(() =>
+      createExplorerNode({
+        id: "   ",
+        kind: "object.root",
+        label: "Sample",
+        parentId: "model:objects",
+      }),
+    ).toThrow("Explorer node requires a non-empty id");
+  });
+});
 
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 const RESPONSE_MAP_RESOURCE_KEY = "analysis:frequency-domain:response-map.v2";
