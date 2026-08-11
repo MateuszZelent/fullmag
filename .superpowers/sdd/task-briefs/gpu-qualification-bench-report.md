@@ -26,7 +26,7 @@ Artefakt rozdziela i zachowuje:
 - katalog kerneli oraz liczniki `L`, `L` i `L^2`.
 
 Walidator zapisuje strukturalny wynik
-`fullmag.fdm_multilayer_gpu_benchmark_qualification.v1`. Brak artefaktu,
+`fullmag.fdm_multilayer_gpu_benchmark_qualification.v2`. Brak artefaktu,
 niepełna macierz, host-only CUDA, fallback, brak managed identity, warm transfer,
 niezgodne liczniki albo niespójne rozliczenie pamięci kończą się
 `qualification_status=not_qualified`. CLI zwraca wtedy kod `1`, ale nadal
