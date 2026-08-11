@@ -358,8 +358,8 @@
       "test_path": "crates/fullmag-plan/src/tests.rs",
       "test_symbol": "multilayer_planner_rejects_every_non_neutral_boundary_intent",
       "evidence_status": "source-tested fail-closed planner contract only; no runtime or device proof",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/ed0dd3061c6725a9547312fbce23394ea769cb36/crates/fullmag-plan/src/fdm.rs",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/ed0dd3061c6725a9547312fbce23394ea769cb36/crates/fullmag-plan/src/tests.rs",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/3fcf40d6d8e2c2f106031ae99481539832014349/crates/fullmag-plan/src/fdm.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/3fcf40d6d8e2c2f106031ae99481539832014349/crates/fullmag-plan/src/tests.rs",
       "source_anchor_status": "immutable_commit",
       "test_anchor_status": "immutable_commit"
     },
