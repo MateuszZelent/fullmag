@@ -2462,7 +2462,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
     }
 
     let response = build_v2_router()
-        .with_state(state)
+        .with_state(state.clone())
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/status")
@@ -2715,7 +2715,7 @@ async fn status_active_lane_fails_closed_for_partial_session_resolution() {
         }));
     }
     let response = build_v2_router()
-        .with_state(state)
+        .with_state(state.clone())
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/status")
@@ -3022,12 +3022,21 @@ async fn fdm_multilayer_layout_is_fail_closed_without_published_layout() {
 #[tokio::test]
 async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
     let state = test_app_state_with_live_session().await;
+    let native_bottom_fingerprint = fullmag_ir::FdmGridCertificateIR::new(
+        [-2.0e-9, -1.5e-9, -1.0e-9],
+        [4, 3, 1],
+        [1.0e-9, 1.0e-9, 2.0e-9],
+        11,
+        1,
+    )
+    .expect("valid native layer certificate")
+    .grid_fingerprint;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
             "mesh": {
                 "transfer_provenance": [{
                     "magnet_name": "bottom",
-                    "source_grid_fingerprint": "sha256:native-bottom"
+                    "source_grid_fingerprint": native_bottom_fingerprint
                 }]
             },
             "execution_plan": {
@@ -3084,7 +3093,7 @@ async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
     assert_eq!(json["layers"][0]["active_cell_count"], 11);
     assert_eq!(
         json["layers"][0]["native_grid_fingerprint"],
-        "sha256:native-bottom"
+        format!("sha256:{native_bottom_fingerprint}")
     );
     assert_eq!(json["airbox"]["carrier_available"], false);
     assert_eq!(json["airbox"]["h_demag_available"], false);
@@ -3253,6 +3262,268 @@ async fn fdm_multilayer_layout_correlates_reordered_artifact_layers_by_identity(
         .await
         .unwrap();
     assert_eq!(conflicted.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_layout_rejects_plan_artifact_grid_and_count_conflicts() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "common_cells": [2, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [2, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "native_active_mask": [true, false]
+                }]
+            } },
+            "artifact_layout": {
+                "backend": "fdm_multilayer", "common_cells": [2, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [3, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "active_mask_present": true,
+                    "total_cell_count": 3, "active_cell_count": 1, "inactive_cell_count": 2
+                }]
+            }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let artifact_layer =
+            &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][0];
+        artifact_layer["native_grid"] = serde_json::json!([2, 1, 1]);
+        artifact_layer["total_cell_count"] = serde_json::json!(2);
+        artifact_layer["active_cell_count"] = serde_json::json!(2);
+        artifact_layer["inactive_cell_count"] = serde_json::json!(0);
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let artifact_layer =
+            &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][0];
+        artifact_layer["active_cell_count"] = serde_json::json!(1);
+        artifact_layer["inactive_cell_count"] = serde_json::json!(1);
+        artifact_layer["native_cell_size"] = serde_json::json!([2.0, 1.0, 1.0]);
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let artifact_layer =
+            &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][0];
+        artifact_layer["native_cell_size"] = serde_json::json!([1.0, 1.0, 1.0]);
+        artifact_layer["native_origin"] = serde_json::json!([0.0, 0.0, 1.0]);
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let metadata = snapshot.metadata.as_mut().unwrap();
+        metadata["artifact_layout"]["layers"][0]["native_origin"] =
+            serde_json::json!([0.0, 0.0, 0.0]);
+        metadata["artifact_layout"]["layers"][0]["native_grid_fingerprint"] =
+            serde_json::json!(format!("sha256:{}", "a".repeat(64)));
+        metadata["execution_plan"]["backend_plan"]["layers"][0]["native_grid_fingerprint"] =
+            serde_json::json!(format!("sha256:{}", "b".repeat(64)));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_layout_rejects_missing_or_malformed_native_layers() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "common_cells": [2, 1, 1],
+                "layers": [
+                    {
+                        "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                        "native_grid": [1, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                        "native_origin": [0.0, 0.0, 0.0]
+                    },
+                    {
+                        "layer_id": "layer:top", "object_id": "top", "magnet_name": "top",
+                        "native_grid": [1, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                        "native_origin": [0.0, 0.0, 1.0]
+                    }
+                ]
+            } },
+            "artifact_layout": {
+                "backend": "fdm_multilayer", "common_cells": [2, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [1, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0]
+                }]
+            }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "common_cells": [1, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [1, 1, 1], "native_origin": [0.0, 0.0, 0.0]
+                }]
+            } }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn fdm_multilayer_layout_rejects_unmaterialized_or_malformed_active_masks() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "common_cells": [2, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [2, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "native_active_mask": [true]
+                }]
+            } }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][0]
+            ["native_active_mask"] = serde_json::json!([true, "invalid"]);
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "common_cells": [2, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [2, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0]
+                }]
+            } },
+            "artifact_layout": {
+                "backend": "fdm_multilayer", "common_cells": [2, 1, 1],
+                "layers": [{
+                    "layer_id": "layer:bottom", "object_id": "bottom", "magnet_name": "bottom",
+                    "native_grid": [2, 1, 1], "native_cell_size": [1.0, 1.0, 1.0],
+                    "native_origin": [0.0, 0.0, 0.0],
+                    "active_mask_present": true,
+                    "total_cell_count": 2, "active_cell_count": 2, "inactive_cell_count": 0
+                }]
+            }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

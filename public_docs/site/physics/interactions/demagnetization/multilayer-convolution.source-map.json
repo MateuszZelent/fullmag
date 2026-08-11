@@ -142,201 +142,83 @@
     {
       "id": "ui-layers",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
-      "symbol": "adaptFdmDomainMeta",
-      "responsibility": "Create the committed FDM grid render domain used as the base for independent native-layer Explorer and viewport targets."
+      "symbol": "adaptFdmMultilayerNativeLayerDomains",
+      "responsibility": "Adapt independent physical native-layer carriers and reject malformed mask declarations."
     },
     {
       "id": "ui-airbox",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
-      "symbol": "adaptFdmDomainPresentation",
-      "responsibility": "Adapt the committed FDM presentation domain; the target-only multilayer Airbox carrier is an explicitly scoped extension of this contract."
-    },
-    {
-      "id": "boris-rect-collection",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-rect-collection",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L141-L146",
-      "responsibility": "BORIS traceability for per-mesh/per-layer convolution rectangles and scratch alignment."
-    },
-    {
-      "id": "boris-common-n",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-common-n",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L147-L152",
-      "responsibility": "BORIS traceability for n_common defaults and the forced two-dimensional Z count."
-    },
-    {
-      "id": "boris-header-force-mode",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-header-force-mode",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L153-L159",
-      "responsibility": "BORIS header traceability for force_2d_convolution values 0, 1, and 2."
-    },
-    {
-      "id": "boris-set-n-common",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-set-n-common",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L160-L165",
-      "responsibility": "BORIS traceability for explicit common convolution counts."
-    },
-    {
-      "id": "boris-convolution-rect",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-convolution-rect",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L166-L171",
-      "responsibility": "BORIS traceability for the adjusted convolution rectangle returned to scratch modules."
-    },
-    {
-      "id": "boris-mconv-init",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-mconv-init",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L172-L177",
-      "responsibility": "BORIS traceability for multilayer scratch-space and convolution initialization."
-    },
-    {
-      "id": "boris-mconv-update",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-mconv-update",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L178-L183",
-      "responsibility": "BORIS traceability for forward FFT, pair multiplication, and inverse FFT stages."
-    },
-    {
-      "id": "boris-2d-mode",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-2d-mode",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L184-L189",
-      "responsibility": "BORIS traceability for the force_2d_convolution switch."
-    },
-    {
-      "id": "boris-multilayer-toggle",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-multilayer-toggle",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L190-L195",
-      "responsibility": "BORIS traceability for the multilayer-versus-supermesh switch."
-    },
-    {
-      "id": "boris-kernel-catalog",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-kernel-catalog",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L196-L201",
-      "responsibility": "BORIS traceability for the self, shifted, and full-complex kernel catalog declarations."
-    },
-    {
-      "id": "boris-kernel-reuse",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-kernel-reuse",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L202-L207",
-      "responsibility": "BORIS traceability for source/destination-cell and shift based kernel reuse."
-    },
-    {
-      "id": "boris-kernel-storage",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-kernel-storage",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L208-L213",
-      "responsibility": "BORIS traceability for KerType real/complex, shift flags, source/destination cell sizes, and FFT dimensions."
-    },
-    {
-      "id": "boris-kernel-multiply",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-kernel-multiply",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L214-L219",
-      "responsibility": "BORIS traceability for full ordered-input 2-D and 3-D pair multiplication."
-    },
-    {
-      "id": "boris-kernel-multiply-3d",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-kernel-multiply-3d",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L220-L225",
-      "responsibility": "BORIS traceability for full ordered-input 3-D pair multiplication."
-    },
-    {
-      "id": "boris-irregular-thickness",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-irregular-thickness",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L226-L231",
-      "responsibility": "BORIS traceability for unequal source/destination Z thickness with common XY."
-    },
-    {
-      "id": "boris-weighted-transfer",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-weighted-transfer",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L232-L237",
-      "responsibility": "BORIS traceability for weighted mesh-transfer initialization."
-    },
-    {
-      "id": "boris-cuda-update",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-cuda-update",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L238-L243",
-      "responsibility": "BORIS CUDA traceability for multilayer update staging."
-    },
-    {
-      "id": "boris-cuda-init",
-      "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
-      "symbol": "DOC-ANCHOR:boris-cuda-init",
-      "evidence_status": "planned_contract",
-      "line_anchor": "L244-L249",
-      "responsibility": "BORIS CUDA traceability for multilayer scratch initialization."
+      "symbol": "adaptFdmMultilayerAirboxDomain",
+      "responsibility": "Adapt the validated target-only Airbox without treating the common FFT grid as geometry."
     },
     {
       "id": "fullmag-kernel-reuse",
       "path": "crates/fullmag-fdm-demag/src/descriptors.rs",
-      "symbol": "from_pair_with_layout",
-      "line_anchor": "L1181-L1204",
+      "symbol": "from_layers_with_layout",
       "responsibility": "Fullmag kernel reuse key construction from the exact transform/crop descriptor."
     },
     {
       "id": "fullmag-layout-schema",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
       "symbol": "fdm_multilayer_layout_resource",
-      "line_anchor": "L164-L305",
       "responsibility": "Fullmag API schema distinguishing computational common transform layout from a physical mesh."
     },
     {
       "id": "fullmag-layout-route",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
       "symbol": "fdm_multilayer_layout_resource",
-      "line_anchor": "L145-L161",
-      "responsibility": "Fullmag resource-first route for multilayer layout availability and explicit unavailable reasons."
+      "responsibility": "Build the resource-first multilayer layout payload with availability and explicit unavailable reasons."
+    },
+    {
+      "id": "fullmag-fmbm-mask-payload",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "pack_native_active_mask",
+      "responsibility": "Pack the native active mask used in the revisioned FMBM v1 payload."
+    },
+    {
+      "id": "fullmag-fmbm-codec",
+      "path": "apps/control-room/src/kernel/api/codecs/fdmMultilayerActiveMaskCodec.ts",
+      "symbol": "decodeFdmMultilayerActiveMask",
+      "responsibility": "Decode and validate FMBM magic, version, shape, cell count, and payload length."
+    },
+    {
+      "id": "fullmag-fmbm-contract",
+      "path": "apps/control-room/src/kernel/api/codecs/fdmMultilayerActiveMaskCodec.ts",
+      "symbol": "validateFdmMultilayerActiveMaskContract",
+      "responsibility": "Fail closed when layout revision, grid identity, hash, or active-cell counts disagree."
+    },
+    {
+      "id": "fullmag-fmbm-resource-hook",
+      "path": "apps/control-room/src/kernel/resources/geometryLifecycleResources.ts",
+      "symbol": "useFdmMultilayerLayerActiveMasksResource",
+      "responsibility": "Fetch only declared native masks and mark incompatible payloads unusable."
     },
     {
       "id": "fullmag-explorer-layout",
       "path": "apps/control-room/src/modules/explorer/builders/buildModelTree.ts",
       "symbol": "buildModelTree",
-      "line_anchor": "L1247-L1320",
       "responsibility": "Fullmag Explorer omission boundary for unavailable multilayer layouts and native-layer nodes."
     },
     {
       "id": "fullmag-native-domains",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
       "symbol": "adaptFdmMultilayerNativeLayerDomains",
-      "line_anchor": "L176-L240",
       "responsibility": "Fullmag viewport adaptation for physical native-layer carriers only."
     },
     {
       "id": "fullmag-airbox-domain",
       "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
       "symbol": "adaptFdmMultilayerAirboxDomain",
-      "line_anchor": "L242-L340",
       "responsibility": "Fullmag target-only Airbox viewport adaptation and field-availability checks."
     }
+  ],
+  "behavioral_reference_sources": [
+    {"path": "external_solvers/BORIS/Boris/DemagKernelCollection_Calc.cpp", "symbol": "DemagKernelCollection::KernelAlreadyComputed", "sha256": "17004571392be0421635d4bd82de06b2270492c7fd55b4db6c0b677467b89e57"},
+    {"path": "external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp", "symbol": "DemagKernelCollection::KernelMultiplication_2D", "sha256": "7bc8de857c3aede345284a471075c6937f9e1e82f8387f55c3fc06cc3db5c1c1"},
+    {"path": "external_solvers/BORIS/Boris/SDemag.cpp", "symbol": "SDemag::Set_n_common", "sha256": "2aeba6beb159c32b7d7b24a57e5ffc5125fa2471a51d6608ad37104ab0710049"},
+    {"path": "external_solvers/BORIS/Boris/DemagTFunc.h", "symbol": "DemagTFunc::CalcDiagTens2D_Shifted_Irregular", "sha256": "dec68a7f20c7b4710a9f2adda18eabe602ae72b05bc2db1415e3e53fe209f64f"},
+    {"path": "external_solvers/BORIS/Boris/DemagTFunc_Irregular.cpp", "symbol": "DemagTFunc::CalcDiagTens2D_Shifted_Irregular", "sha256": "fea1c38de2ba2ce194a553c829e141140dc55b4bfe25460d46bcbb0271e93fdd"},
+    {"path": "external_solvers/BORIS/Boris/SDemag_MConv.cpp", "symbol": "SDemag::UpdateField_MConv_Demag", "sha256": "51a2293c8725a49a33cd86c1c03aebbf9cb4bad799c64a6238a8470305d2ac89"}
   ],
   "symbols": [
     {"id": "L", "latex": "$L$", "meaning": "number of magnetic layers", "si_unit": "$1$"},

@@ -5,6 +5,15 @@ use serde_json::Value;
 use crate::error::ApiError;
 
 const IDENTITY_KEYS: [&str; 3] = ["layer_id", "object_id", "magnet_name"];
+const SHARED_CONTRACT_KEYS: [&str; 7] = [
+    "native_grid",
+    "native_cell_size",
+    "native_origin",
+    "native_grid_fingerprint",
+    "total_cell_count",
+    "active_cell_count",
+    "inactive_cell_count",
+];
 
 pub(crate) fn correlate_multilayer_layers<'a>(
     artifact_layers: &'a [Value],
@@ -45,6 +54,17 @@ pub(crate) fn correlate_multilayer_layers<'a>(
             return Err(ApiError::conflict(
                 "multilayer FDM artifact layers do not map one-to-one to execution plan layers",
             ));
+        }
+        for key in SHARED_CONTRACT_KEYS {
+            if let (Some(artifact_value), Some(plan_value)) =
+                (artifact_layer.get(key), plan_layer.get(key))
+            {
+                if artifact_value != plan_value {
+                    return Err(ApiError::conflict(format!(
+                        "multilayer FDM artifact and execution plan layer field '{key}' disagree"
+                    )));
+                }
+            }
         }
         pairs.push((artifact_layer, *plan_layer));
     }

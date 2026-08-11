@@ -5,6 +5,7 @@ import type { FdmMultilayerLayoutResource } from "@/kernel/api/apiTypes";
 import {
   adaptFdmMultilayerAirboxDomain,
   adaptFdmMultilayerNativeLayerDomains,
+  resolveFdmNativeLayerActiveMaskForRendering,
   resolveFdmMultilayerAirboxFieldAvailability,
 } from "./viewport3dDomainAdapter";
 
@@ -37,7 +38,8 @@ const layout = {
       native_grid: [8, 8, 1],
       native_cell_size: [1e-9, 1e-9, 2e-9],
       native_origin: [0, 0, -2e-9],
-      native_grid_fingerprint: "sha256:native-a",
+      native_grid_fingerprint:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       convolution_grid: [16, 12, 8],
       convolution_cell_size: [1e-9, 1e-9, 1e-9],
       transfer_kind: "push_pull",
@@ -53,13 +55,18 @@ const layout = {
       native_grid: [12, 8, 2],
       native_cell_size: [0.5e-9, 0.5e-9, 2e-9],
       native_origin: [0, 0, 0],
-      native_grid_fingerprint: "sha256:native-b",
+      native_grid_fingerprint:
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       convolution_grid: [16, 12, 8],
       convolution_cell_size: [1e-9, 1e-9, 1e-9],
       transfer_kind: "push_pull",
       active_mask_present: true,
       active_cell_count: 160,
       inactive_cell_count: 32,
+      active_mask_hash:
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      mask_ref:
+        "/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Ab/active-mask",
       mask_provenance: "execution_plan.layers.native_active_mask",
     },
   ],
@@ -81,6 +88,90 @@ describe("FDM multilayer viewport domain adapter", () => {
     expect(domains[1].inactiveCellCount).toBe(32);
     expect(domains[0].origin[2]).toBe(-2e-9);
     expect(domains[1].shape).toEqual([12, 8, 2]);
+  });
+
+  it("fails closed for malformed mask declarations and inconsistent counts", () => {
+    expect(
+      adaptFdmMultilayerNativeLayerDomains(
+        {
+          ...layout,
+          layers: [
+            {
+              ...layout.layers[1],
+              active_cell_count: 192,
+              inactive_cell_count: 0,
+              active_mask_hash: null,
+              mask_ref: null,
+            },
+          ],
+        },
+        10_000,
+      ),
+    ).toEqual([]);
+    expect(
+      adaptFdmMultilayerNativeLayerDomains(
+        {
+          ...layout,
+          layers: [
+            {
+              ...layout.layers[0],
+              active_cell_count: 63,
+              inactive_cell_count: 1,
+            },
+          ],
+        },
+        10_000,
+      ),
+    ).toEqual([]);
+  });
+
+  it("requires a compatible materialized FMBM even when a declared mask is dense", () => {
+    const maskedDenseLayer = {
+      ...layout.layers[1],
+      active_cell_count: 192,
+      inactive_cell_count: 0,
+    };
+    const [domain] = adaptFdmMultilayerNativeLayerDomains(
+      {
+        ...layout,
+        layers: [maskedDenseLayer],
+      },
+      10_000,
+    );
+    expect(domain).toBeDefined();
+    expect(
+      resolveFdmNativeLayerActiveMaskForRendering(
+        domain!,
+        layout.layout_revision,
+        maskedDenseLayer,
+        null,
+      ),
+    ).toBeNull();
+    const decoded = {
+      activeMask: new Uint8Array(192).fill(1),
+      cellCount: 192,
+      gridFingerprint: "c".repeat(64),
+      layoutRevision: layout.layout_revision,
+      maskHash: "b".repeat(64),
+      packedMask: new Uint8Array(24).fill(0xff),
+      shape: [12, 8, 2] as [number, number, number],
+    };
+    expect(
+      resolveFdmNativeLayerActiveMaskForRendering(
+        domain!,
+        layout.layout_revision,
+        maskedDenseLayer,
+        decoded,
+      ),
+    ).toBe(decoded.activeMask);
+    expect(
+      resolveFdmNativeLayerActiveMaskForRendering(
+        domain!,
+        layout.layout_revision + 1,
+        maskedDenseLayer,
+        decoded,
+      ),
+    ).toBeNull();
   });
 
   it("does not synthesize a common-grid or airbox carrier", () => {

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import path from "node:path";
 
@@ -20,6 +21,16 @@ const apiBase =
 // throughput at production field sizes. Keep the fixture dense enough to
 // exercise every pass while bounded enough for 120 rendered transitions in CI.
 const FIELD_GRID = [24, 16, 2];
+const FDM_PARTIAL_LAYER_ID = "layer:partial";
+const FDM_DENSE_LAYER_ID = "layer:dense";
+const FDM_MULTILAYER_LAYOUT_REVISION = 7;
+const FDM_MULTILAYER_GRID_FINGERPRINT = "a1".repeat(32);
+const FDM_PARTIAL_INACTIVE_CELL_INDICES = [0, 23, 384, 767];
+const FDM_PARTIAL_ACTIVE_MASK = createPartialActiveMask();
+const FDM_PARTIAL_PACKED_MASK = packActiveMask(FDM_PARTIAL_ACTIVE_MASK);
+const FDM_PARTIAL_MASK_HASH = createHash("sha256")
+  .update(FDM_PARTIAL_PACKED_MASK)
+  .digest("hex");
 const QUANTITY_SEQUENCE = Array.from(
   { length: 120 },
   (_, index) => ["m", "H_eff", "H_demag", "H_ex"][index % 4],
@@ -322,6 +333,14 @@ try {
   }
   assertViewportRuntimeReleased(afterUnmountRuntime, unmountedBaselineRuntime);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "after-unmount.png") });
+  const partialMultilayer = await assertPartialMultilayerNativeMaskRendered(
+    page,
+    fixture,
+    fixtureRequests,
+  );
+  if (errors.length > 0) {
+    throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
+  }
   await writeAuditArtifact({
     after,
     afterUnmount,
@@ -333,6 +352,7 @@ try {
     gpuAfterStress,
     idle,
     idleRequests,
+    partialMultilayer,
     fidelity,
     topologyRequests,
     url,
@@ -435,6 +455,80 @@ async function assertPublicationRendered(page, viewport, quantityId, revision, b
     2_000,
     `Audit publication r${revision} (${quantityId}) was not observed by the mounted viewport.`,
   );
+}
+
+async function assertPartialMultilayerNativeMaskRendered(
+  page,
+  fixture,
+  fixtureRequests,
+) {
+  const activeMaskPath = fdmMultilayerActiveMaskPath(FDM_PARTIAL_LAYER_ID);
+  const requestsBeforeReload = countFixtureRequests(fixtureRequests, activeMaskPath);
+  fixture.multilayerEnabled = true;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => Boolean(window.__FULLMAG_CONTROL_ROOM_AUDIT__),
+    undefined,
+    { timeout: 10_000 },
+  );
+  await page.evaluate(() => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-3d");
+  });
+  const viewport = page.locator(".fm-viewport-3d");
+  const canvas = page.locator(".fm-viewport-3d canvas");
+  await canvas.waitFor({ state: "visible", timeout: 10_000 });
+  await waitForCanvasReady(canvas);
+  await waitForDiagnostics(viewport);
+  await waitForCondition(
+    () => countFixtureRequests(fixtureRequests, activeMaskPath) > requestsBeforeReload,
+    10_000,
+    `FDM multilayer fixture did not request its declared partial active mask: ${activeMaskPath}`,
+  );
+  const expectedCellIndices = Array.from(FDM_PARTIAL_ACTIVE_MASK, (active, index) => (
+    active ? index : null
+  )).filter((cellIndex) => cellIndex !== null);
+  let partialModel;
+  await waitForCondition(
+    async () => {
+      const results = await readFdmBuildResults(page);
+      partialModel = results.find((result) => (
+        sameNumberArray(result.activeMask, Array.from(FDM_PARTIAL_ACTIVE_MASK)) &&
+        sameNumberArray(result.shape, FIELD_GRID)
+      ));
+      return Boolean(partialModel);
+    },
+    10_000,
+    "FDM multilayer partial-mask build did not return an observable worker model.",
+  );
+  if (!partialModel || partialModel.count !== expectedCellIndices.length) {
+    throw new Error(
+      `FDM multilayer partial-mask model count was ${partialModel?.count ?? "missing"}; expected ${expectedCellIndices.length} active cells.`,
+    );
+  }
+  if (!sameNumberArray(partialModel.cellIndices, expectedCellIndices)) {
+    const inactive = partialModel.cellIndices.filter((cellIndex) => (
+      FDM_PARTIAL_ACTIVE_MASK[cellIndex] !== 1
+    ));
+    throw new Error(
+      `FDM multilayer partial-mask model did not preserve exact active membership; inactive cellIndices=${inactive.join(",") || "none"}.`,
+    );
+  }
+  return {
+    activeCellCount: partialModel.count,
+    inactiveCellIndices: FDM_PARTIAL_INACTIVE_CELL_INDICES,
+    maskPath: activeMaskPath,
+    requested: countFixtureRequests(fixtureRequests, activeMaskPath) - requestsBeforeReload,
+  };
+}
+
+async function readFdmBuildResults(page) {
+  return page.evaluate(() => (
+    window.__FM_VIEWPORT_BROWSER_AUDIT__?.fdmBuildResults ?? []
+  ));
+}
+
+function sameNumberArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 async function readViewportAuditRuntime(page) {
@@ -660,7 +754,63 @@ async function installBrowserAuditInstrumentation(page) {
       drawCalls: 0,
       frames: 0,
     };
+    const fdmBuildRequests = new Map();
+    const fdmBuildResults = [];
+    Object.defineProperty(counters, "fdmBuildResults", {
+      enumerable: false,
+      value: fdmBuildResults,
+    });
     window.__FM_VIEWPORT_BROWSER_AUDIT__ = counters;
+
+    const workerMessageListeners = new WeakMap();
+    const originalWorkerAddEventListener = Worker.prototype.addEventListener;
+    const originalWorkerRemoveEventListener = Worker.prototype.removeEventListener;
+    const originalWorkerPostMessage = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, transfer) {
+      if (
+        message?.nativeActiveMask instanceof Uint8Array &&
+        Number.isSafeInteger(message.id)
+      ) {
+        fdmBuildRequests.set(message.id, {
+          activeMask: Array.from(message.nativeActiveMask),
+          shape: Array.from(message.domain?.shape ?? []),
+        });
+      }
+      return originalWorkerPostMessage.call(this, message, transfer);
+    };
+    Worker.prototype.addEventListener = function (type, listener, options) {
+      if (type !== "message" || typeof listener !== "function") {
+        return originalWorkerAddEventListener.call(this, type, listener, options);
+      }
+      let listeners = workerMessageListeners.get(this);
+      if (!listeners) {
+        listeners = new WeakMap();
+        workerMessageListeners.set(this, listeners);
+      }
+      let wrapped = listeners.get(listener);
+      if (!wrapped) {
+        wrapped = function (event) {
+          const request = fdmBuildRequests.get(event.data?.id);
+          const model = event.data?.ok ? event.data.data?.model : null;
+          if (request && model?.cellIndices instanceof Uint32Array) {
+            fdmBuildResults.push({
+              activeMask: request.activeMask,
+              cellIndices: Array.from(model.cellIndices),
+              count: model.count,
+              shape: request.shape,
+            });
+            fdmBuildRequests.delete(event.data.id);
+          }
+          return listener.call(this, event);
+        };
+        listeners.set(listener, wrapped);
+      }
+      return originalWorkerAddEventListener.call(this, type, wrapped, options);
+    };
+    Worker.prototype.removeEventListener = function (type, listener, options) {
+      const wrapped = workerMessageListeners.get(this)?.get(listener) ?? listener;
+      return originalWorkerRemoveEventListener.call(this, type, wrapped, options);
+    };
 
     const originalRaf = window.requestAnimationFrame.bind(window);
     window.requestAnimationFrame = (callback) =>
@@ -732,6 +882,22 @@ async function installFdmFixtureApi(page, fixture, requests) {
     }
     if (path === "/v2/sessions/current/data/domain/meta") {
       await fulfillJson(route, fdmDomainMetaFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/domain/fdm-multilayer-layout") {
+      if (fixture.multilayerEnabled) {
+        await fulfillJson(route, fdmMultilayerLayoutFixture());
+      } else {
+        await fulfillEmpty(route, 204);
+      }
+      return;
+    }
+    if (path === fdmMultilayerActiveMaskPath(FDM_PARTIAL_LAYER_ID)) {
+      if (fixture.multilayerEnabled) {
+        await fulfillBinary(route, makeFdmMultilayerActiveMaskBuffer());
+      } else {
+        await fulfillEmpty(route, 404);
+      }
       return;
     }
     if (path === "/v2/sessions/current/data/fields") {
@@ -842,8 +1008,16 @@ function countFieldRequests(requests, quantityId) {
   return requests.filter((request) => request === expected).length;
 }
 
+function countFixtureRequests(requests, path) {
+  return requests.filter((request) => request.endsWith(` ${path}`)).length;
+}
+
 function fieldVectorRequest(quantityId) {
   return `GET /v2/sessions/current/data/fields/${encodeURIComponent(quantityId)}/samples/vector`;
+}
+
+function fdmMultilayerActiveMaskPath(layerId) {
+  return `/v2/sessions/current/data/domain/fdm-multilayer-layers/${encodeURIComponent(layerId)}/active-mask`;
 }
 
 async function reportAuditFailure(
@@ -1212,6 +1386,119 @@ function fdmDomainMetaFixture() {
     },
     units: { length: "m" },
   };
+}
+
+function fdmMultilayerLayoutFixture() {
+  const totalCells = FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2];
+  const nativeCellSize = [1.25e-8, 1.25e-8, 5e-8];
+  const nativeGridFingerprint = `sha256:${FDM_MULTILAYER_GRID_FINGERPRINT}`;
+  return {
+    airbox: {
+      carrier_available: false,
+      h_demag_available: false,
+      h_eff_available: false,
+    },
+    available: true,
+    backend: "fdm_multilayer",
+    common_transform_layout: {
+      cell_size: nativeCellSize,
+      fft_shape: [48, 32, 4],
+      is_physical_mesh: false,
+      origin: [-6e-7, -4e-7, -1e-7],
+      provenance: "audit-fixture;fft-scratch-only",
+      shape: FIELD_GRID,
+    },
+    domain_generation_id: "1",
+    execution_revision: 1,
+    layers: [
+      {
+        active_cell_count: totalCells,
+        active_mask_present: false,
+        convolution_cell_size: nativeCellSize,
+        convolution_grid: [48, 32, 4],
+        inactive_cell_count: 0,
+        layer_id: FDM_DENSE_LAYER_ID,
+        magnet_name: "dense",
+        native_cell_size: nativeCellSize,
+        native_grid: FIELD_GRID,
+        native_grid_fingerprint: nativeGridFingerprint,
+        native_origin: [-6e-7, -4e-7, -1.5e-7],
+        object_id: "object:dense",
+        transfer_kind: "push_pull",
+      },
+      {
+        active_cell_count: totalCells - FDM_PARTIAL_INACTIVE_CELL_INDICES.length,
+        active_mask_hash: `sha256:${FDM_PARTIAL_MASK_HASH}`,
+        active_mask_present: true,
+        convolution_cell_size: nativeCellSize,
+        convolution_grid: [48, 32, 4],
+        inactive_cell_count: FDM_PARTIAL_INACTIVE_CELL_INDICES.length,
+        layer_id: FDM_PARTIAL_LAYER_ID,
+        magnet_name: "partial",
+        mask_provenance: "execution_plan.layers.native_active_mask",
+        mask_ref: fdmMultilayerActiveMaskPath(FDM_PARTIAL_LAYER_ID),
+        native_cell_size: nativeCellSize,
+        native_grid: FIELD_GRID,
+        native_grid_fingerprint: nativeGridFingerprint,
+        native_origin: [-6e-7, -4e-7, 5e-8],
+        object_id: "object:partial",
+        transfer_kind: "push_pull",
+      },
+    ],
+    layout_fingerprint: "sha256:fdm-memory-churn-multilayer-layout",
+    layout_revision: FDM_MULTILAYER_LAYOUT_REVISION,
+    observation_revision: 1,
+    requested_mode: "auto",
+    resolved_mode: "three_d",
+    schema_version: "fdm-multilayer-layout.v1",
+    strategy: "multilayer_convolution",
+  };
+}
+
+function makeFdmMultilayerActiveMaskBuffer() {
+  const buffer = new ArrayBuffer(104 + FDM_PARTIAL_PACKED_MASK.byteLength);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMBM"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, FIELD_GRID[0], true);
+  view.setUint32(12, FIELD_GRID[1], true);
+  view.setUint32(16, FIELD_GRID[2], true);
+  view.setUint32(20, FDM_PARTIAL_ACTIVE_MASK.length, true);
+  view.setUint32(24, FDM_PARTIAL_PACKED_MASK.byteLength, true);
+  view.setBigUint64(28, BigInt(FDM_MULTILAYER_LAYOUT_REVISION), true);
+  writeHexBytes(view, 36, FDM_MULTILAYER_GRID_FINGERPRINT);
+  writeHexBytes(view, 68, FDM_PARTIAL_MASK_HASH);
+  new Uint8Array(buffer, 104).set(FDM_PARTIAL_PACKED_MASK);
+  return buffer;
+}
+
+function createPartialActiveMask() {
+  const activeMask = new Uint8Array(FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2]);
+  activeMask.fill(1);
+  for (const cellIndex of FDM_PARTIAL_INACTIVE_CELL_INDICES) {
+    activeMask[cellIndex] = 0;
+  }
+  return activeMask;
+}
+
+function packActiveMask(activeMask) {
+  const packed = new Uint8Array(Math.ceil(activeMask.length / 8));
+  for (let cellIndex = 0; cellIndex < activeMask.length; cellIndex += 1) {
+    packed[cellIndex >> 3] |= (activeMask[cellIndex] ?? 0) << (cellIndex & 7);
+  }
+  return packed;
+}
+
+function writeHexBytes(view, offset, hex) {
+  for (let index = 0; index < hex.length / 2; index += 1) {
+    view.setUint8(
+      offset + index,
+      Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16),
+    );
+  }
 }
 
 function fdmFieldCatalogFixture() {

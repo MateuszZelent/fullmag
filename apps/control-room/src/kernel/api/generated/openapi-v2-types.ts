@@ -11580,7 +11580,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Artifact and execution-plan layers have conflicting counts or identities, or cannot be correlated one-to-one without ambiguity */
+            /** @description Artifact and execution-plan layers are missing, malformed, disagree in identity, native geometry, fingerprint, counts, or active-mask materialization, or cannot be correlated one-to-one */
             409: {
                 headers: {
                     [name: string]: unknown;

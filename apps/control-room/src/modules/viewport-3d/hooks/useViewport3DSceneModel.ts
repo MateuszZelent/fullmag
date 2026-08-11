@@ -214,6 +214,7 @@ import {
   adaptFdmMultilayerAirboxDomain,
   adaptFdmMultilayerNativeLayerDomains,
   adaptFemSharedDomainManifest,
+  resolveFdmNativeLayerActiveMaskForRendering,
   resolveViewport3DFdmRealizedRegionIds,
   type FdmNativeLayerRenderView,
   type FdmMultilayerAirboxRenderView,
@@ -4695,12 +4696,16 @@ export function useViewport3DSceneModel({
         const layerLayout = fdmMultilayerLayout.data?.layers.find(
           (layer) => layer.layer_id === domain.layerId,
         );
-        const activeMask = domain.activeMaskPresent
+        const decodedActiveMask = domain.activeMaskPresent
           ? fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId) ?? null
           : null;
-        const activeMaskRequired =
-          domain.activeMaskPresent &&
-          domain.activeCellCount !== domain.totalCells;
+        const activeMask = resolveFdmNativeLayerActiveMaskForRendering(
+          domain,
+          fdmMultilayerLayout.data!.layout_revision,
+          layerLayout,
+          decodedActiveMask,
+        );
+        const activeMaskRequired = domain.activeMaskPresent;
         const maskRevision = domain.activeMaskPresent
           ? layerLayout?.active_mask_hash ?? "missing"
           : "dense";
@@ -4761,12 +4766,12 @@ export function useViewport3DSceneModel({
           buildKey,
           cellSelection: "dense",
           domain: { ...domain, kind: "fdm-grid" as const },
-          enabled: settings.visible && (!activeMaskRequired || Boolean(activeMask)),
+          enabled: settings.visible && (!activeMaskRequired || activeMask !== null),
           groupKey: `fdm-cuboid:session=current:native-layer:${domain.layerId}`,
           id: `native:${domain.layerId}`,
           maxVectorGlyphs: maxVectors,
           modelFieldVector: null,
-          nativeActiveMask: activeMask?.activeMask ?? null,
+          nativeActiveMask: activeMask,
           realizedRegionIds: null,
           revisionSummary: `carrier=${domain.gridFingerprint ?? "none"} target=${targetStyleRevision} field=${fieldRevision}`,
           vectorAnchorMode: settings.vectorCenteringEnabled ? "center" : "tail",

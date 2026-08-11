@@ -73,7 +73,10 @@ Nota BORIS nie dodaje publicznego API. Pokazuje jedynie, jak żądanie
 |---|---|---|---|---|---|---|---|
 | `FDMDemag.strategy` | `Literal[str]` | `auto` | $1$ | `auto`, `single_grid`, `multilayer_convolution` | żądana realizacja demag | FDM CPU/GPU; lane gated | `backend_policy.discretization_hints.fdm.demag.strategy` |
 | `FDMDemag.mode` | `Literal["auto", "two_d_stack", "three_d"]` | `auto` | $1$ | `auto`, `two_d_stack` lub `three_d`; explicite `two_d_stack` odrzuca `common_cells`, a explicite `three_d` odrzuca `common_cells_xy` | żądany model wymiaru native warstw; `auto` jest rozwiązywane przez planner | FDM CPU/GPU; z ograniczeniami | `backend_policy.discretization_hints.fdm.demag.mode` |
+| `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | dokładnie trzy dodatnie `int`; wzajemnie wyłączne z `common_cells_xy`; dozwolone z `auto` lub `three_d`, odrzucane z `two_d_stack` | jawny pełny 3-D rozmiar common scratch gridu; nie jest meshem fizycznym | FDM; lane gated | `backend_policy.discretization_hints.fdm.demag.common_cells` |
 | `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | dodatnie $N_x,N_y$; dozwolone z `auto` lub `two_d_stack`, wzajemnie wyłączne z `common_cells` | hint liczby komórek scratch XY; przy `auto` rozwiązuje `two_d_stack` | FDM; nie jest meshem fizycznym | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
+| `FDMDemag.explain` | `bool` | `True` | $1$ | konstruktor `FDMDemag` nie waliduje runtime typu; raw script builder odrzuca wartość nie-`bool` | żądanie wyjaśnienia planu dla autora; nie zmienia fizyki ani wyboru strategii | Python authoring/UI | nie jest lowerowane przez `FDMDemag.to_ir()` |
+| `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | $1$ | tylko `None`; każda wartość nie-`None` powoduje `ValueError` | usunięty input kompatybilności; publiczny DSL nie dopuszcza cichego fallbacku | nieobsługiwane | odrzucone przed `ProblemIR`; brak destination |
 
 ```python
 # %% Import i study
@@ -133,7 +136,10 @@ Eksporter Python odtwarza żądany DSL, nie przypadkowy układ scratch. Planner
 odrzuca niezgodne wymiary, nakładające się warstwy, PBC i nieobsługiwany storage;
 validation errors są jawne. Requested intent i resolved execution pozostają
 rozłączne, a unsupported combinations nie przechodzą cicho do `single_grid` ani
-do innej precyzji. Poniższe kotwice są traceability, nie fallbackiem runtime.
+do innej precyzji. `allow_single_grid_fallback` nie jest ścieżką compatibility:
+nie-`None` jest odrzucane jeszcze przez DSL. `explain` jest stanem authoring/UI i
+nie trafia do `FDMDemag.to_ir()`. Poniższe obserwacje są traceability, nie
+fallbackiem runtime.
 
 (discrete-realization)=
 ## Realizacja dyskretna i kotwice zachowania BORIS
@@ -202,14 +208,24 @@ Wpis katalogu opisuje klasę pary, a nie tylko skalarne oddalenie.
 (boris-kernel-reuse)=
 ### Reuse
 
-Reuse jest dozwolone tylko przy zgodności pełnej tożsamości pary: cell sizes,
-shiftu, storage i transform shape.
+W obserwowanym snapshotcie wywołanie `KernelAlreadyComputed` dostaje tylko
+`shift`, `h_src` i `h_dst`. To są wejścia obserwowanej decyzji BORIS, a nie
+udowodniona pełna tożsamość cache: z samego podpisu nie wolno wywnioskować
+warunków na storage, shape transformacji, precyzję ani brzeg.
+
+Fullmag stosuje silniejszą, niezależną tożsamość `KernelReuseKey`: obejmuje
+tryb, pełny wektor przesunięcia, zorientowane cell sizes, grubości i objętości
+warstw, `TransformKey` (shape, linear extent, FFT shape, padding, insert,
+lag-zero, crop i normalizację), reprezentację tensora, precyzję oraz boundary.
+Jest to kontrakt Fullmag, nie interpretacja ani transplantacja cache BORIS.
 
 (boris-kernel-storage)=
 ### Metadane storage
 
-Real/complex representation, shift class, rozmiary komórek i transform
-dimensions są częścią metadanych kernela.
+Fullmag zapisuje representation i pełny layout transformacji w kluczu cache,
+aby wykluczyć reuse między niezgodnymi realizacjami. Snapshot BORIS pokazuje
+rodziny kerneli, lecz ta nota nie rozszerza obserwowanych trzech wejść
+`KernelAlreadyComputed` do takiego warunku równości.
 
 (boris-kernel-multiply)=
 ### Mnożenie 2-D
@@ -253,6 +269,9 @@ kernel state; sama obecność tych faz nie jest dowodem parity Fullmag.
 Behavioral specification jest wyłącznie kotwicą porównawczą. Właścicielami
 implementacji Fullmag są `FDMDemag`, `FdmLayerPlanIR`, katalog kerneli CPU oraz
 oddzielna realizacja CUDA; żaden z nich nie dziedziczy nazw prywatnych BORIS.
+`boris-reference-manifest.v1.json` i source map zapisują immutable hashes
+konkretnych plików referencyjnych, a source map publicznej noty wskazuje realne
+symbole Fullmag zamiast kotwic tej samej noty.
 
 (validation)=
 ## Walidacja
@@ -286,21 +305,13 @@ w snapshotcie musi zostać przełożona na niezależny kontrakt Fullmag i test.
 
 | Claim | Path | Symbol | Responsibility | Lane | Evidence status |
 |---|---|---|---|---|---|
-| Rectangle collection | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-rect-collection` | per-layer rectangles i scratch alignment | BORIS reference | planned contract |
-| Common counts | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-common-n` | default counts i wymiar Z | BORIS reference | planned contract |
-| Force modes | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-header-force-mode` | rozróżnienie polityk 0/1/2 | BORIS reference | planned contract |
-| Explicit counts | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-set-n-common` | jawny common layout | BORIS reference | planned contract |
-| Convolution rectangle | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-convolution-rect` | alignment scratch | BORIS reference | planned contract |
-| Initialization | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-mconv-init` | moduły per layer | BORIS reference | planned contract |
-| Update | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-mconv-update` | forward/pair/inverse | BORIS reference | planned contract |
-| 2-D mode | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-2d-mode` | polityka Z | BORIS reference | planned contract |
-| Multilayer toggle | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-multilayer-toggle` | multilayer kontra supermesh | BORIS reference | planned contract |
-| Kernel catalog | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-kernel-catalog` | rodziny self/shifted/full | BORIS reference | planned contract |
-| Kernel reuse | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-kernel-reuse` | pełna tożsamość reuse | BORIS reference | planned contract |
-| Kernel storage | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-kernel-storage` | representation and shape | BORIS reference | planned contract |
-| 2-D multiply | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-kernel-multiply` | ordered pair accumulation | BORIS reference | planned contract |
-| 3-D multiply | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-kernel-multiply-3d` | full tensor set | BORIS reference | planned contract |
-| Irregular thickness | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-irregular-thickness` | unequal Z | BORIS reference | planned contract |
-| Weighted transfer | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-weighted-transfer` | transfer weights | BORIS reference | planned contract |
-| CUDA update | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-cuda-update` | device update phases | BORIS CUDA reference | planned contract |
-| CUDA init | `docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md` | `DOC-ANCHOR:boris-cuda-init` | device scratch state | BORIS CUDA reference | planned contract |
+| Fullmag DSL i odrzucenie fallbacku | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | authoring, walidacja common-grid i brak silent fallbacku | Fullmag Python | executable authoring contract |
+| Fullmag authoring/UI round-trip | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_export_fdm` | eksportuje `explain` obok requested demag hints | Fullmag Python/UI | source-validated |
+| Rozwiązanie requested mode | `crates/fullmag-ir/src/mesh_hints.rs` | `resolve_mode` | normalizacja `auto` po poznaniu native Z | Fullmag ProblemIR | source-validated |
+| Silna tożsamość cache Fullmag | `crates/fullmag-fdm-demag/src/descriptors.rs` | `from_layers_with_layout` | pełny `KernelReuseKey` dla warstw i layoutu | Fullmag FDM | source-validated |
+| Obserwowane wejścia lookupu BORIS | `external_solvers/BORIS/Boris/DemagKernelCollection_Calc.cpp` | `DemagKernelCollection::KernelAlreadyComputed` | tylko `shift`, `h_src`, `h_dst`; SHA-256 w manifeście | BORIS reference | traceability only |
+| Akumulacja par BORIS | `external_solvers/BORIS/Boris/DemagKernelCollection_Mult.cpp` | `DemagKernelCollection::KernelMultiplication_2D` | akumulacja wejść 2-D; SHA-256 w manifeście | BORIS reference | traceability only |
+| Common layout BORIS | `external_solvers/BORIS/Boris/SDemag.cpp` | `SDemag::Set_n_common` | jawne counts; SHA-256 w manifeście | BORIS reference | traceability only |
+| Kontrakt nieregularnych tensorów | `external_solvers/BORIS/Boris/DemagTFunc.h` | `DemagTFunc::CalcDiagTens2D_Shifted_Irregular` | deklaracja par o nierównej grubości; SHA-256 w manifeście | BORIS reference | traceability only |
+| Realizacja nieregularnych tensorów | `external_solvers/BORIS/Boris/DemagTFunc_Irregular.cpp` | `DemagTFunc::CalcDiagTens2D_Shifted_Irregular` | obliczenie diagonalne 2-D; SHA-256 w manifeście | BORIS reference | traceability only |
+| Fazy multilayer BORIS | `external_solvers/BORIS/Boris/SDemag_MConv.cpp` | `SDemag::UpdateField_MConv_Demag` | forward, akumulacja i inverse; SHA-256 w manifeście | BORIS reference | traceability only |
