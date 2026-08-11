@@ -421,6 +421,17 @@ export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTa
  */
 export const FDM_NATIVE_LAYER_TARGET_PREFIX = "fdm-native-layer:";
 
+export function targetForFdmNativeLayer(
+  layerId: string,
+  label?: string | null,
+): VisualizationTargetRef {
+  return {
+    id: `${FDM_NATIVE_LAYER_TARGET_PREFIX}${encodeURIComponent(layerId)}`,
+    kind: "fdm-native-layer",
+    label: label ?? layerId,
+  };
+}
+
 export function isFdmNativeLayerTarget(
   target: VisualizationTargetRef,
 ): boolean {

@@ -37,7 +37,7 @@ describe("viewport3dSelection", () => {
       domainShape: [2, 2, 2],
       instanceId: 0,
       membership,
-      model: { cellIndices: new Uint32Array([1]), centers: new Float32Array(3), count: 1, gridShape: [2, 2, 2], cellSize: [1, 1, 1], regionIds: new Uint32Array([7]) },
+      model: { cellIndices: new Uint32Array([1]), centers: new Float32Array(3), count: 1, gridShape: [2, 2, 2], cellSize: [1, 1, 1], matrices: new Float32Array(16), matrixContentRevision: "test-matrix", membershipRevision: "test-membership", regionIds: new Uint32Array([7]) },
     });
     expect(selection?.ref).toMatchObject({
       type: "fdm-cell", cellOrdinal: "1", gridFingerprint: "grid-7", ijk: [1, 0, 0],

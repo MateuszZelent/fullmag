@@ -22,8 +22,55 @@ export interface FdmCuboidInstanceModel {
   centers: Float32Array;
   count: number;
   gridShape: [number, number, number];
+  /** Three.js column-major instance matrices prepared with the model. */
+  matrices: Float32Array;
+  /** Stable checksum of the exact transform payload, computed in the worker. */
+  matrixContentRevision: string;
+  /** Stable checksum of sampled cell membership and instance order. */
+  membershipRevision: string;
   /** Realized numeric region IDs for sampled cells. */
   regionIds: Uint32Array;
+}
+
+function writeFdmCuboidMatrix(
+  target: Float32Array,
+  instance: number,
+  center: readonly [number, number, number],
+  scale: readonly [number, number, number],
+): void {
+  const offset = instance * 16;
+  target[offset] = scale[0];
+  target[offset + 5] = scale[1];
+  target[offset + 10] = scale[2];
+  target[offset + 12] = center[0];
+  target[offset + 13] = center[1];
+  target[offset + 14] = center[2];
+  target[offset + 15] = 1;
+}
+
+export function resolveFdmCuboidMatrixContentRevision(
+  matrices: Float32Array,
+): string {
+  const words = new Uint32Array(
+    matrices.buffer,
+    matrices.byteOffset,
+    matrices.byteLength / Uint32Array.BYTES_PER_ELEMENT,
+  );
+  let hash = 2166136261;
+  for (const word of words) {
+    hash = Math.imul(hash ^ word, 16777619) >>> 0;
+  }
+  return `matrix:${matrices.length}:${hash.toString(16)}`;
+}
+
+export function resolveFdmCuboidMembershipRevision(
+  cellIndices: Uint32Array,
+): string {
+  let hash = 2166136261;
+  for (const cellIndex of cellIndices) {
+    hash = Math.imul(hash ^ cellIndex, 16777619) >>> 0;
+  }
+  return `membership:${cellIndices.length}:${hash.toString(16)}`;
 }
 
 export interface FdmVoxelTopographyOptions {
@@ -37,7 +84,7 @@ export interface FdmVoxelTopographyOptions {
  * viewport pass must select cells from that artifact rather than treating the
  * authored universe as magnetic material.
  */
-export type FdmCuboidCellSelection = "all" | "active" | "inactive";
+export type FdmCuboidCellSelection = "all" | "active" | "dense" | "inactive";
 
 export interface FdmCuboidInstanceModelOptions {
   cellSelection: FdmCuboidCellSelection;
@@ -53,9 +100,11 @@ export interface FdmCuboidBuildRequest {
   domain: FdmGridRenderDomain | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
+  nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
+  vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
   voxelFillRatio: number;
   voxelMagnitudeThreshold: number;
@@ -72,25 +121,36 @@ export interface FdmCuboidBuildResult {
 export function buildViewport3DFdmCuboid(
   request: FdmCuboidBuildRequest,
 ): FdmCuboidBuildResult {
-  const model = buildFdmCuboidInstanceModel(request.domain, {
-    cellSelection: request.cellSelection,
-    fieldVector: request.modelFieldVector,
-    realizedRegionIds: request.realizedRegionIds,
-    voxelFillRatio: request.voxelFillRatio,
-    voxelMagnitudeThreshold: request.voxelMagnitudeThreshold,
-    voxelTopography: request.voxelTopography,
-  });
+  const model = request.cellSelection === "dense"
+    ? buildFdmMaskedNativeLayerInstanceModel(
+        request.domain,
+        request.nativeActiveMask ?? null,
+        request.voxelFillRatio,
+      )
+    : buildFdmCuboidInstanceModel(request.domain, {
+        cellSelection: request.cellSelection,
+        fieldVector: request.modelFieldVector,
+        realizedRegionIds: request.realizedRegionIds,
+        voxelFillRatio: request.voxelFillRatio,
+        voxelMagnitudeThreshold: request.voxelMagnitudeThreshold,
+        voxelTopography: request.voxelTopography,
+      });
   const vectorSegments = buildFdmVectorSegmentsUncached(
     model,
     request.vectorField,
     resolveFdmVectorGlyphScale(model, request.vectorScale),
     request.maxVectorGlyphs,
-    { anchorMode: request.vectorAnchorMode },
+    {
+      anchorMode: request.vectorAnchorMode,
+      geometryScope: request.vectorGeometryScope ?? "full",
+    },
   );
   const vectorCellIndices = buildFdmVectorSampledCellIndices(
     model,
     request.vectorField,
     request.maxVectorGlyphs,
+    undefined,
+    request.vectorGeometryScope ?? "full",
   );
   return { model, vectorCellIndices, vectorSegments };
 }
@@ -165,9 +225,15 @@ export function buildFdmCuboidInstanceModel(
   if (count <= 0) return null;
 
   const centers = new Float32Array(count * 3);
+  const matrices = new Float32Array(count * 16);
   const cellIndices = new Uint32Array(count);
   const sampledRegionIds = new Uint32Array(count);
 
+  const cellSize: [number, number, number] = [
+    Math.max(dx * fillRatio, 1e-18),
+    Math.max(dy * fillRatio, 1e-18),
+    Math.max(dz * fillRatio, 1e-18),
+  ];
   for (let instance = 0; instance < count; instance += 1) {
     const cellIndex = sampledCellIndices[instance] ?? 0;
     cellIndices[instance] = cellIndex;
@@ -189,18 +255,23 @@ export function buildFdmCuboidInstanceModel(
         dz,
         fieldIndexing,
       );
+    writeFdmCuboidMatrix(
+      matrices,
+      instance,
+      [centers[target] ?? 0, centers[target + 1] ?? 0, centers[target + 2] ?? 0],
+      cellSize,
+    );
   }
 
   return {
-    cellSize: [
-      Math.max(dx * fillRatio, 1e-18),
-      Math.max(dy * fillRatio, 1e-18),
-      Math.max(dz * fillRatio, 1e-18),
-    ],
+    cellSize,
     cellIndices,
     centers,
     count,
     gridShape: [nx, ny, nz],
+    matrices,
+    matrixContentRevision: resolveFdmCuboidMatrixContentRevision(matrices),
+    membershipRevision: resolveFdmCuboidMembershipRevision(cellIndices),
     regionIds: sampledRegionIds,
   };
 }
@@ -216,6 +287,23 @@ export function buildFdmDenseNativeLayerInstanceModel(
   domain: FdmGridRenderDomain | null,
   voxelFillRatio = CELL_VISUAL_FILL,
 ): FdmCuboidInstanceModel | null {
+  return buildFdmMaskedNativeLayerInstanceModel(
+    domain,
+    null,
+    voxelFillRatio,
+  );
+}
+
+/**
+ * Builds one physical native-layer carrier. A supplied FMBM mask is the only
+ * source of active-cell membership; absent masks are accepted only for layers
+ * whose layout declares a dense native grid.
+ */
+export function buildFdmMaskedNativeLayerInstanceModel(
+  domain: FdmGridRenderDomain | null,
+  activeMask: Uint8Array | null,
+  voxelFillRatio = CELL_VISUAL_FILL,
+): FdmCuboidInstanceModel | null {
   if (!domain || domain.displayCellCount <= 0 || domain.totalCells <= 0) {
     return null;
   }
@@ -228,17 +316,25 @@ export function buildFdmDenseNativeLayerInstanceModel(
   ) {
     return null;
   }
-  const displayCellIndices = sampleFdmDisplayCellIndices(
+  if (activeMask && activeMask.length !== totalCells) return null;
+  const displayCellIndices = sampleNativeLayerCellIndices(
     totalCells,
     domain.displayCellCount,
+    activeMask,
   );
   if (displayCellIndices.length === 0) return null;
   const centers = new Float32Array(displayCellIndices.length * 3);
   const cellIndices = new Uint32Array(displayCellIndices);
   const regionIds = new Uint32Array(displayCellIndices.length);
+  const matrices = new Float32Array(displayCellIndices.length * 16);
   const [dx, dy, dz] = domain.spacing;
   const [ox, oy, oz] = domain.origin;
   const fillRatio = clampVoxelFillRatio(voxelFillRatio);
+  const cellSize: [number, number, number] = [
+    Math.max(dx * fillRatio, 1e-18),
+    Math.max(dy * fillRatio, 1e-18),
+    Math.max(dz * fillRatio, 1e-18),
+  ];
   const planeStride = nx * ny;
   for (let instance = 0; instance < cellIndices.length; instance += 1) {
     const cellIndex = cellIndices[instance] ?? 0;
@@ -249,19 +345,66 @@ export function buildFdmDenseNativeLayerInstanceModel(
     centers[offset] = ox + (ix + 0.5) * dx;
     centers[offset + 1] = oy + (iy + 0.5) * dy;
     centers[offset + 2] = oz + (iz + 0.5) * dz;
+    writeFdmCuboidMatrix(
+      matrices,
+      instance,
+      [centers[offset] ?? 0, centers[offset + 1] ?? 0, centers[offset + 2] ?? 0],
+      cellSize,
+    );
   }
   return {
-    cellSize: [
-      Math.max(dx * fillRatio, 1e-18),
-      Math.max(dy * fillRatio, 1e-18),
-      Math.max(dz * fillRatio, 1e-18),
-    ],
+    cellSize,
     cellIndices,
     centers,
     count: cellIndices.length,
     gridShape: [nx, ny, nz],
+    matrices,
+    matrixContentRevision: resolveFdmCuboidMatrixContentRevision(matrices),
+    membershipRevision: resolveFdmCuboidMembershipRevision(cellIndices),
     regionIds,
   };
+}
+
+function sampleNativeLayerCellIndices(
+  totalCells: number,
+  displayCellCount: number,
+  activeMask: Uint8Array | null,
+): Uint32Array {
+  if (!activeMask) {
+    return sampleFdmDisplayCellIndices(totalCells, displayCellCount);
+  }
+  const activeCellCount = activeMask.reduce(
+    (count, active) => count + (active === 1 ? 1 : 0),
+    0,
+  );
+  if (activeCellCount === 0) return new Uint32Array();
+  const activeCellIndices = new Uint32Array(activeCellCount);
+  let activeOrdinal = 0;
+  for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+    if (activeMask[cellIndex] === 1) {
+      activeCellIndices[activeOrdinal] = cellIndex;
+      activeOrdinal += 1;
+    }
+  }
+  const budget = Math.max(1, Math.floor(displayCellCount));
+  if (activeCellCount <= budget) {
+    return activeCellIndices;
+  }
+  const stride = Math.max(
+    1,
+    Math.ceil(activeCellCount / budget),
+  );
+  const sampled = new Uint32Array(Math.ceil(activeCellCount / stride));
+  let sampledCount = 0;
+  for (
+    let ordinal = 0;
+    ordinal < activeCellCount && sampledCount < sampled.length;
+    ordinal += stride
+  ) {
+    sampled[sampledCount] = activeCellIndices[ordinal] ?? 0;
+    sampledCount += 1;
+  }
+  return sampled;
 }
 
 function sampleFdmDisplayCellIndicesWithMinimumMembership({
@@ -414,7 +557,10 @@ function isFdmCuboidCellSelection(
   selection: unknown,
 ): selection is FdmCuboidCellSelection {
   return (
-    selection === "all" || selection === "active" || selection === "inactive"
+    selection === "all" ||
+    selection === "active" ||
+    selection === "dense" ||
+    selection === "inactive"
   );
 }
 
@@ -700,6 +846,7 @@ export function estimateFdmCuboidBuildInputBytes(
   return (
     estimateFieldVectorBytes(request.modelFieldVector) +
     estimateFieldVectorBytes(request.vectorField) +
+    (request.nativeActiveMask?.byteLength ?? 0) +
     (request.realizedRegionIds?.byteLength ?? 0)
   );
 }
@@ -715,6 +862,8 @@ export function estimateFdmCuboidBuildOutputBytes(
   );
   return (
     modelCount * 3 * Float32Array.BYTES_PER_ELEMENT +
+    modelCount * 16 * Float32Array.BYTES_PER_ELEMENT +
+    modelCount * Uint32Array.BYTES_PER_ELEMENT +
     modelCount * Uint32Array.BYTES_PER_ELEMENT +
     vectorCount * Uint32Array.BYTES_PER_ELEMENT +
     vectorCount * FDM_VECTOR_SEGMENT_STRIDE * Float32Array.BYTES_PER_ELEMENT
@@ -727,6 +876,7 @@ export function transferablesForFdmCuboidBuildResult(
   const transferables: Transferable[] = [];
   addArrayBufferTransferable(transferables, result.model?.cellIndices.buffer);
   addArrayBufferTransferable(transferables, result.model?.centers.buffer);
+  addArrayBufferTransferable(transferables, result.model?.matrices.buffer);
   addArrayBufferTransferable(transferables, result.model?.regionIds?.buffer);
   addArrayBufferTransferable(transferables, result.vectorCellIndices?.buffer);
   addArrayBufferTransferable(transferables, result.vectorSegments?.buffer);

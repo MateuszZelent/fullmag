@@ -756,6 +756,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_active_mask"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
         parameters: {
             query?: never;
@@ -4183,6 +4199,7 @@ export interface components {
         FdmLayerLayoutResource: {
             /** Format: int64 */
             active_cell_count: number;
+            active_mask_hash?: string | null;
             active_mask_present: boolean;
             convolution_cell_size: number[];
             convolution_grid: number[];
@@ -4191,6 +4208,7 @@ export interface components {
             layer_id: string;
             magnet_name: string;
             mask_provenance?: string | null;
+            mask_ref?: string | null;
             native_cell_size: number[];
             native_grid: number[];
             native_grid_fingerprint?: string | null;
@@ -11501,6 +11519,77 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_active_mask: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous FMBM response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the FMBM payload */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Stable native multilayer layer identity */
+                layer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bit-packed native-layer active mask (FMBM v1) */
+            200: {
+                headers: {
+                    /** @description Exact native grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Current multilayer layout revision */
+                    "x-fullmag-layout-revision"?: string;
+                    /** @description SHA-256 identity of the packed active mask */
+                    "x-fullmag-mask-hash"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMBM payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description FMBM payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Layer or materialized native active mask is not applicable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Native active mask disagrees with the published layer layout */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FMBM byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_domain_fdm_multilayer_layout: {
         parameters: {
             query?: never;
@@ -11521,6 +11610,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Artifact and execution-plan layers are missing, malformed, disagree in identity, native geometry, fingerprint, counts, or active-mask materialization, or cannot be correlated one-to-one */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13170,7 +13266,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Snapshot does not match the current domain */
+            /** @description Snapshot does not match the current domain, or multilayer artifact and execution-plan layer identities cannot be correlated one-to-one */
             409: {
                 headers: {
                     [name: string]: unknown;

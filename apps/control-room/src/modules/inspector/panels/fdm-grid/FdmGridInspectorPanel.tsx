@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import {
   useDomainMetaResource,
@@ -25,6 +25,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { ObjectVisualizationPanel } from "../ObjectVisualizationPanel";
 import {
   NumberField,
   VisualizationToggleButton,
@@ -128,8 +129,10 @@ function FdmUniverseDisplayControls({
 
 function FdmMultilayerInspectorPanelView({
   model,
+  visualizationControls,
 }: {
   model: FdmMultilayerInspectorModel;
+  visualizationControls?: ReactNode;
 }) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-fdm-multilayer-status={model.status}>
@@ -144,6 +147,7 @@ function FdmMultilayerInspectorPanelView({
           <FieldRow key={row.label} label={row.label} value={row.value} mono={row.mono} />
         )) : <FieldRow label="State" value="not published" />}
       </InspectorGroup>
+      {visualizationControls}
     </div>
   );
 }
@@ -153,15 +157,24 @@ export function FdmGridInspectorPanelView({
   displaySettings,
   model,
   multilayer,
+  multilayerVisualizationControls,
   onDisplayPatch,
 }: {
   detail: FdmGridSelectionInspectorModel;
   displaySettings?: VisualizationTargetSettings | null;
   model: FdmGridInspectorModel;
   multilayer?: FdmMultilayerInspectorModel | null;
+  multilayerVisualizationControls?: ReactNode;
   onDisplayPatch?: (patch: VisualizationTargetPatch) => void;
 }) {
-  if (multilayer) return <FdmMultilayerInspectorPanelView model={multilayer} />;
+  if (multilayer) {
+    return (
+      <FdmMultilayerInspectorPanelView
+        model={multilayer}
+        visualizationControls={multilayerVisualizationControls}
+      />
+    );
+  }
   const bannerKind = statusBannerKind(model.status);
   const displaySampling =
     model.totalCells == null ? null : resolveFdmDisplaySampling(model.totalCells);
@@ -412,6 +425,9 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
     },
     [outsideSupportSelected, visualization],
   );
+  const nativeLayerSelected =
+    selection.ref?.type === "fdm-domain" &&
+    selection.ref.visualizationTargetId.startsWith("fdm-native-layer:");
 
   return (
     <FdmGridInspectorPanelView
@@ -419,6 +435,9 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
       displaySettings={displaySettings}
       model={model}
       multilayer={multilayer}
+      multilayerVisualizationControls={
+        nativeLayerSelected ? <ObjectVisualizationPanel selection={selection} /> : null
+      }
       onDisplayPatch={onDisplayPatch}
     />
   );

@@ -8,6 +8,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -95,6 +96,10 @@ import {
 } from "../api/apiTypes";
 import {
   decodeFdmRegionMembership,
+  decodeFdmMultilayerActiveMask,
+  FMBM_HEADER_LEN,
+  validateFdmMultilayerActiveMaskContract,
+  type DecodedFdmMultilayerActiveMask,
   FMRM_HEADER_LEN,
   validateFdmRegionMembershipContract,
   type DecodedFdmRegionMembership,
@@ -176,6 +181,11 @@ export interface FdmRegionMembershipBinaryResult
 const fdmRegionMembershipBinaryCache = new ResourceCache<DecodedFdmRegionMembership>({
   maxBytes: 128 * 1024 * 1024,
 });
+
+const fdmMultilayerActiveMaskCache =
+  new ResourceCache<DecodedFdmMultilayerActiveMask>({
+    maxBytes: 128 * 1024 * 1024,
+  });
 
 export const SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
 export const GEOMETRY_CAPABILITIES_RESOURCE_KEY =
@@ -1152,6 +1162,114 @@ export function useFdmMultilayerLayoutResource(
     load,
     resolveRevision: resolveFdmMultilayerLayoutRevision,
     resourceKey: DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
+  });
+}
+
+export interface FdmMultilayerLayerActiveMasksData {
+  incompatibleLayerIds: readonly string[];
+  masks: ReadonlyMap<string, DecodedFdmMultilayerActiveMask>;
+}
+
+function fdmMultilayerLayerActiveMaskResourceKey(
+  layerId: string,
+  layoutRevision: ResourceRevision,
+  maskHash: string,
+): string {
+  return `${DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH}:${encodeURIComponent(layerId)}#layout=${encodeURIComponent(String(layoutRevision))}:mask=${encodeURIComponent(maskHash)}`;
+}
+
+/** Loads only the optional native masks declared by the revisioned layout. */
+export function useFdmMultilayerLayerActiveMasksResource(
+  layout: FdmMultilayerLayoutResource | null | undefined,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const maskedLayers = useMemo(
+    () =>
+      layout?.available
+        ? layout.layers.filter((layer) => layer.active_mask_present)
+        : [],
+    [layout],
+  );
+  const resourceKey = useMemo(
+    () =>
+      `${DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH}:layout:${layout?.layout_revision ?? "none"}:${maskedLayers.map((layer) => `${layer.layer_id}:${layer.active_mask_hash ?? "missing"}`).join("|")}`,
+    [layout?.layout_revision, maskedLayers],
+  );
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      if (!layout?.available) {
+        return {
+          incompatibleLayerIds: [] as string[],
+          masks: new Map<string, DecodedFdmMultilayerActiveMask>(),
+        };
+      }
+      const masks = new Map<string, DecodedFdmMultilayerActiveMask>();
+      const incompatibleLayerIds: string[] = [];
+      await Promise.all(
+        maskedLayers.map(async (layer) => {
+          if (!layer.mask_ref || !layer.active_mask_hash) {
+            incompatibleLayerIds.push(layer.layer_id);
+            return;
+          }
+          const cacheKey = fdmMultilayerLayerActiveMaskResourceKey(
+            layer.layer_id,
+            layout.layout_revision,
+            layer.active_mask_hash,
+          );
+          const cached = fdmMultilayerActiveMaskCache.peek(cacheKey);
+          const response = await api.data.domain.fdmMultilayerLayerActiveMaskBytes(
+            layer.layer_id,
+            { etag: cached?.etag, signal },
+          );
+          let decoded: DecodedFdmMultilayerActiveMask;
+          if (response.status === "not-modified") {
+            if (!cached) {
+              incompatibleLayerIds.push(layer.layer_id);
+              return;
+            }
+            decoded = cached.data;
+          } else if (response.status === "ready") {
+            decoded = decodeFdmMultilayerActiveMask(response.data);
+          } else {
+            incompatibleLayerIds.push(layer.layer_id);
+            fdmMultilayerActiveMaskCache.delete(cacheKey);
+            return;
+          }
+          const contract = await validateFdmMultilayerActiveMaskContract(
+            decoded,
+            layout,
+            layer,
+          );
+          if (contract.status !== "ready") {
+            incompatibleLayerIds.push(layer.layer_id);
+            fdmMultilayerActiveMaskCache.delete(cacheKey);
+            return;
+          }
+          fdmMultilayerActiveMaskCache.set(cacheKey, {
+            byteLength:
+              response.status === "ready"
+                ? response.byteLength
+                : decoded.packedMask.byteLength + FMBM_HEADER_LEN,
+            data: decoded,
+            etag: response.etag ?? cached?.etag ?? null,
+          });
+          masks.set(layer.layer_id, decoded);
+        }),
+      );
+      return { incompatibleLayerIds, masks };
+    },
+    [api, layout, maskedLayers],
+  );
+  return useResource<FdmMultilayerLayerActiveMasksData>({
+    abortStaleInflight: true,
+    enabled:
+      options.enabled !== false &&
+      Boolean(layout?.available) &&
+      maskedLayers.length > 0,
+    load,
+    resolveRevision: () => layout?.layout_revision ?? null,
+    resourceKey,
   });
 }
 

@@ -272,6 +272,30 @@ interface Viewport3DCameraClip {
   near: number;
 }
 
+type Viewport3DProjectionCamera =
+  | ThreeOrthographicCamera
+  | ThreePerspectiveCamera;
+
+export function shouldApplyViewport3DProjectionCameraClip({
+  camera,
+  clip,
+  previous,
+}: {
+  camera: Viewport3DProjectionCamera;
+  clip: Viewport3DCameraClip;
+  previous: {
+    camera: Viewport3DProjectionCamera;
+    clip: Viewport3DCameraClip;
+  } | null;
+}): boolean {
+  return Boolean(
+    !previous ||
+      previous.camera !== camera ||
+      previous.clip.near !== clip.near ||
+      previous.clip.far !== clip.far,
+  );
+}
+
 const FALLBACK_GRID_SIZE = 1e-6;
 const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
 
@@ -1524,6 +1548,10 @@ export function Viewport3DScene({
   const viewportSize = useThree((state) => state.size);
   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
+  const appliedCameraClipRef = useRef<{
+    camera: Viewport3DProjectionCamera;
+    clip: Viewport3DCameraClip;
+  } | null>(null);
   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
   const effectiveCameraState = useMemo(
     () => resolveViewport3DEffectiveCameraState({ bounds, cameraState }),
@@ -1592,9 +1620,19 @@ export function Viewport3DScene({
         ? orthographicCameraRef.current
         : perspectiveCameraRef.current;
     if (!activeCamera) return;
+    if (
+      !shouldApplyViewport3DProjectionCameraClip({
+        camera: activeCamera,
+        clip: cameraClip,
+        previous: appliedCameraClipRef.current,
+      })
+    ) {
+      return;
+    }
     activeCamera.near = cameraClip.near;
     activeCamera.far = cameraClip.far;
     activeCamera.updateProjectionMatrix();
+    appliedCameraClipRef.current = { camera: activeCamera, clip: cameraClip };
     tracker.recordDirtyFrame("camera-clip");
     invalidate();
   }, [cameraClip, cameraProjection, invalidate, tracker]);

@@ -167,9 +167,51 @@ export interface Viewport3DFdmTargetSettingsForPlanning {
   targetId: string;
 }
 
+export interface Viewport3DFdmNativeLayerFieldRequestInput {
+  layerId: string;
+  settings: Pick<
+    VisualizationTargetSettings,
+    "activeQuantityId" | "shaderVisible" | "vectorsVisible" | "visible"
+  > | null;
+}
+
 export interface Viewport3DTargetQuantityFieldDemandPlan {
   demands: readonly Viewport3DPassDemand[];
   requests: ReadonlyMap<string, Viewport3DFieldResourceRequest>;
+}
+
+export function resolveViewport3DFdmNativeLayerFieldRequests({
+  available,
+  layers,
+  maxSamples,
+}: {
+  available: boolean;
+  layers: readonly Viewport3DFdmNativeLayerFieldRequestInput[];
+  maxSamples: number;
+}): ReadonlyMap<string, Viewport3DFieldResourceRequest> {
+  const requests = new Map<string, Viewport3DFieldResourceRequest>();
+  if (!available) return requests;
+  for (const { layerId, settings } of layers) {
+    if (
+      !settings?.visible ||
+      (!settings.shaderVisible && !settings.vectorsVisible)
+    ) {
+      continue;
+    }
+    const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    requests.set(layerId, {
+      consumers: [`viewport-3d:fdm-native-layer:${layerId}`],
+      quantityId,
+      query: {
+        component: "full",
+        max_samples: maxSamples,
+        scope_id: layerId,
+        scope_kind: "layer",
+      },
+      requestId: `fdm-native-layer:${layerId}:${quantityId}`,
+    });
+  }
+  return requests;
 }
 
 export interface Viewport3DScopedPartFieldDemandPlan {
