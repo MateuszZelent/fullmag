@@ -275,6 +275,18 @@
   ],
   "sources": [
     {
+      "id": "geometry-mesh-authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Owns the shared per-object mesh facade that will carry canonical FDM cell_size authoring."
+    },
+    {
+      "id": "universe-mesh-authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Owns FEM airbox mesh controls and the approved FDM common-domain cell_size authoring scope."
+    },
+    {
       "id": "continuousTheory",
       "path": "crates/fullmag-fdm-demag/src/newell.rs",
       "symbol": "newell_f",
@@ -448,6 +460,56 @@
   ],
   "public_api": {
     "parameters": [
+      {
+        "python": "body.mesh.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive values; mutually exclusive with FEM element-size and Gmsh controls",
+        "meaning": "exact Cartesian native-cell size $(h_x,h_y,h_z)$ for one magnetic object",
+        "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet.<object>.cell"
+      },
+      {
+        "python": "study.objects.mesh.defaults.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive values; an object value overrides it",
+        "meaning": "default native-cell size for FDM objects",
+        "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
+      },
+      {
+        "python": "study.universe.mesh.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive values; each common-domain extent must be an integer multiple; required for unequal native grids",
+        "meaning": "cell size of the non-physical common convolution domain",
+        "backend_support": "FDM multilayer CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cell_size"
+      },
+      {
+        "python": "study.universe.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and no greater than the maximum; mutually exclusive with `cell_size`",
+        "meaning": "lower element-size target for the FEM airbox mesh",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmin"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and no smaller than the minimum; mutually exclusive with `cell_size`",
+        "meaning": "upper element-size target for the FEM airbox mesh",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmax"
+      },
       {
         "python": "FDM.cell",
         "type": "Sequence[float] or None",
