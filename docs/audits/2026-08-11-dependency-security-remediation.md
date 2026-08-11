@@ -81,6 +81,6 @@ przeliczenie lockfile, a nie dodawać sztuczną zależność.
 | Etap | Implementacja | Weryfikacja | GitHub |
 |---|---|---|---|
 | Inwentaryzacja | zakończona | grafy pnpm i Cargo odtworzone | 50 otwartych |
-| npm | nie rozpoczęta | nie rozpoczęta | nieprzeliczone |
+| npm | naprawialne wersje zaktualizowane; image-size pozostaje dev-only bez poprawki | pnpm audit prod: 0; Control Room typecheck i webpack build: pass; pełne testy odtwarzają 18 bazowych failures, jeden niestabilny test przeszedł w izolacji; lint odtwarza identyczne 4 błędy i 7 ostrzeżeń bazowych; legacy blokują brakujące moduły debug obecne w bazie | nieprzeliczone |
 | Rust | nie rozpoczęta | nie rozpoczęta | nieprzeliczone |
 | Końcowa kwalifikacja | nie rozpoczęta | nie rozpoczęta | nieprzeliczone |
