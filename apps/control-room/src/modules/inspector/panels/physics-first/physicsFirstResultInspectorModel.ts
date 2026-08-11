@@ -1,50 +1,35 @@
 export interface PhysicsFirstResultInspectorModel {
   description: string;
+  methodLabel: string;
+  physicalLabel: string;
   title: string;
 }
 
 const models: Readonly<Record<string, PhysicsFirstResultInspectorModel>> = {
-  "results.dynamics.root": {
-    description: "Time-domain results and spectral analysis",
-    title: "Dynamics",
-  },
-  "results.resonance.root": {
-    description: "Modal and driven resonance results",
-    title: "Resonance & FMR",
-  },
-  "results.resonance.modal.coupling": {
-    description: "Modal coupling evidence",
-    title: "RF Coupling / FMR Activity",
-  },
-  "results.dispersion.root": {
-    description: "Wavevector-resolved modal and driven products",
-    title: "Dispersion & k-resolved response",
-  },
-  "results.dispersion.driven.response_map": {
-    description: "Driven k-frequency response",
-    title: "Spectral Response Map · A(k,f)",
-  },
-  "results.hysteresis.root": {
-    description: "Field-sweep branches and loops",
-    title: "Hysteresis",
-  },
-  "results.analysis_views.root": {
-    description: "Saved postprocessing views",
-    title: "Analysis Views",
-  },
-  "results.derived_values.root": {
-    description: "Evaluated scalar or integral definitions",
-    title: "Derived Values",
-  },
-  "results.tables.root": {
-    description: "Dataset-backed tabular definitions",
-    title: "Tables",
-  },
-  "results.exports.root": {
-    description: "Reproducible export definitions",
-    title: "Exports",
-  },
+  "results.dynamics.root": model("Dynamics", "Time-domain results and spectral analysis", "Dynamics", "Runtime observables"),
+  "results.resonance.root": model("Resonance & FMR", "Modal and driven resonance results", "Resonance", "Mixed products"),
+  "results.resonance.modal.coupling": model("RF Coupling / FMR Activity", "Published modal coupling evidence", "FMR activity", "Modal eigensolve"),
+  "results.dispersion.root": model("Dispersion & k-resolved response", "Wavevector-resolved modal and driven products", "Wavevector-resolved", "Mixed products"),
+  "results.dispersion.driven.response_map": model("Spectral Response Map · A(k,f)", "Driven k-frequency response; not a modal dispersion relation", "k-resolved response", "Frequency-driven"),
+  "results.hysteresis.root": model("Hysteresis", "Field-sweep branches and loops", "Hysteresis", "Field sweep"),
+  "results.analysis_views.root": model("Analysis Views", "Dataset-backed saved postprocessing views", "Postprocessing", "View definition"),
+  "results.analysis_views.definition": model("Analysis View", "A view referencing an owned dataset without copying its payload", "Postprocessing", "View definition"),
+  "results.derived_values.root": model("Derived Values", "Evaluated scalar or integral definitions", "Postprocessing", "Derived definition"),
+  "results.derived_values.definition": model("Derived Value", "A derived operation referencing an owned dataset", "Postprocessing", "Derived definition"),
+  "results.tables.root": model("Tables", "Dataset-backed tabular definitions", "Postprocessing", "Table definition"),
+  "results.tables.definition": model("Table", "A table definition referencing an owned dataset", "Postprocessing", "Table definition"),
+  "results.exports.root": model("Exports", "Reproducible export definitions", "Postprocessing", "Export definition"),
+  "results.exports.definition": model("Export", "An export definition referencing an owned dataset", "Postprocessing", "Export definition"),
 };
+
+function model(
+  title: string,
+  description: string,
+  physicalLabel: string,
+  methodLabel: string,
+): PhysicsFirstResultInspectorModel {
+  return { description, methodLabel, physicalLabel, title };
+}
 
 export function physicsFirstResultInspectorModel(
   kind: string,

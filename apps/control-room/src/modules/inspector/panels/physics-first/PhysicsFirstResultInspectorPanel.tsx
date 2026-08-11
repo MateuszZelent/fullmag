@@ -1,3 +1,4 @@
+import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -16,24 +17,28 @@ export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelPr
   }
 
   return (
-    <>
-      <InspectorGroup title={model.title} description={model.description}>
-        <FieldRow label="Product" value={ref?.studyProduct ?? "Not applicable"} />
-        <FieldRow label="k context" value={ref?.kContextKind ?? "Not applicable"} />
-      </InspectorGroup>
-      <InspectorGroup title="Result owner">
-        <FieldRow label="Run" value={ref?.analysisRunId ?? "Unavailable"} mono />
-        <FieldRow label="Stage" value={ref?.analysisStageId ?? "Unavailable"} mono />
-        <FieldRow label="Equilibrium" value={ref?.equilibriumId ?? "Unavailable"} mono />
-        <FieldRow label="Artifact revision" value={ref?.artifactRevision ?? "Unavailable"} mono />
-      </InspectorGroup>
-      <InspectorGroup title="Availability">
-        <FieldRow
-          label="Contract"
-          value={ref ? "Typed result reference" : "Result owner unavailable"}
-          status={ref ? "ready" : "unavailable"}
-        />
-      </InspectorGroup>
-    </>
+    <ScientificInspectorTemplate
+      breadcrumbs={["Results", model.physicalLabel]}
+      diagnostics={ref ? [] : ["Typed result owner is unavailable; visualization and comparison are disabled."]}
+      methodLabel={model.methodLabel}
+      physicalLabel={model.physicalLabel}
+      properties={[
+        { label: "Product", value: ref?.studyProduct ?? "Not applicable" },
+        { label: "k context", value: ref?.kContextKind ?? "Not applicable" },
+        { label: "Meaning", value: model.description },
+      ]}
+      provenance={[
+        { label: "Run", mono: true, value: ref?.analysisRunId ?? "Unavailable" },
+        { label: "Stage", mono: true, value: ref?.analysisStageId ?? "Unavailable" },
+        { label: "Equilibrium", mono: true, value: ref?.equilibriumId ?? "Unavailable" },
+        { label: "Artifact revision", mono: true, value: ref?.artifactRevision ?? "Unavailable" },
+      ]}
+      status={{
+        availability: ref ? "available" : "unavailable",
+        execution: ref ? "completed" : "unknown",
+        resource: ref ? "ready" : "unavailable",
+      }}
+      title={model.title}
+    />
   );
 }
