@@ -38,25 +38,6 @@ fn racetrack_problem() -> ProblemIR {
     problem
 }
 
-fn source_bound_torque_graph(
-    family_payload: serde_json::Value,
-    dependency: &str,
-    edges: serde_json::Value,
-) -> serde_json::Value {
-    serde_json::json!({
-        "schema_version": "physics_graph.v1",
-        "scene_revision": 46,
-        "modules": [
-            {"id":"current:a","kind":"current_transport","applies_to":[],"solve_domain":[],"depends_on":[],"activation":"active","family_payload":{}},
-            {"id":"current:b","kind":"current_transport","applies_to":[],"solve_domain":[],"depends_on":[],"activation":"active","family_payload":{}},
-            {"id":"spin:a","kind":"spin_transport","applies_to":[],"solve_domain":[],"depends_on":["current:a"],"activation":"active","family_payload":{}},
-            {"id":"spin:b","kind":"spin_transport","applies_to":[],"solve_domain":[],"depends_on":["current:b"],"activation":"active","family_payload":{}},
-            {"id":"torque","kind":"spin_torque","applies_to":[],"solve_domain":[],"depends_on":[dependency],"activation":"active","family_payload":family_payload}
-        ],
-        "edges": edges
-    })
-}
-
 fn drift_diffusion_torque(id: &str, solve_id: &str) -> SpinTorqueModuleIR {
     SpinTorqueModuleIR::DriftDiffusionSpinTorque {
         schema_version: "drift_diffusion_spin_torque.v1".to_string(),
@@ -277,124 +258,129 @@ fn source_bound_torque_families_accept_their_exact_declared_semantic_edge() {
     let cases = [
         (
             "drift diffusion",
-            serde_json::json!({
-                "kind": "drift_diffusion_spin_torque",
-                "solve_id": "spin:a"
-            }),
-            "spin:a",
-            serde_json::json!([{
-                "kind": "spin_transport_to_torque",
-                "source_id": "spin:a",
-                "target_id": "torque",
-                "status": "active"
-            }]),
+            drift_diffusion_torque("torque", "spin"),
+            "spin",
+            "spin_transport_to_torque",
         ),
         (
             "current driven",
-            serde_json::json!({"kind": "zhang_li", "current_source": "current:a"}),
-            "current:a",
-            serde_json::json!([{
-                "kind": "current_to_torque",
-                "source_id": "current:a",
-                "target_id": "torque",
-                "status": "active"
-            }]),
+            zhang_li_torque("torque", "charge"),
+            "charge",
+            "current_to_torque",
         ),
         (
             "nested prescribed SOT current drive",
-            serde_json::json!({
-                "kind": "prescribed_sot",
-                "drive": {
-                    "kind": "vector_current_source",
-                    "current_source_id": "current:a"
-                }
-            }),
-            "current:a",
-            serde_json::json!([{
-                "kind": "current_to_torque",
-                "source_id": "current:a",
-                "target_id": "torque",
-                "status": "active"
-            }]),
+            prescribed_sot_torque("torque", "charge"),
+            "charge",
+            "current_to_torque",
         ),
     ];
 
-    for (case, payload, dependency, edges) in cases {
-        let mut problem = ProblemIR::bootstrap_example();
-        problem.physics_graph = Some(source_bound_torque_graph(payload, dependency, edges));
+    for (case, torque, dependency, edge_kind) in cases {
+        let payload = serde_json::to_value(&torque).expect("serialize typed torque");
+        let problem = typed_torque_graph_problem(torque, payload, dependency, edge_kind);
+        problem
+            .validate()
+            .unwrap_or_else(|errors| panic!("{case} typed ProblemIR must validate: {errors:?}"));
         assert!(resolve_physics_graph(&problem)
             .unwrap_or_else(|errors| panic!("{case} graph must resolve: {errors:?}"))
             .is_some());
+        if case == "drift diffusion" {
+            fullmag_plan::plan(&problem)
+                .unwrap_or_else(|error| panic!("{case} primary plan must resolve: {error:?}"));
+        }
     }
 }
 
 #[test]
 fn source_bound_torque_families_reject_semantic_edge_loopholes() {
+    let drift = drift_diffusion_torque("torque", "spin");
+    let drift_payload = serde_json::to_value(&drift).expect("serialize drift torque");
+    let zhang_li = zhang_li_torque("torque", "charge");
+    let zhang_li_payload = serde_json::to_value(&zhang_li).expect("serialize Zhang-Li torque");
     let cases = [
         (
             "drift diffusion swapped source",
-            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
-            "spin:a",
-            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin:b","target_id":"torque","status":"active"}]),
+            drift.clone(),
+            drift_payload.clone(),
+            "spin",
+            serde_json::json!([{"kind":"current_to_torque","source_id":"charge","target_id":"torque","status":"active"}]),
         ),
         (
             "drift diffusion extra wrong edge",
-            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
-            "spin:a",
+            drift.clone(),
+            drift_payload.clone(),
+            "spin",
             serde_json::json!([
-                {"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"},
-                {"kind":"current_to_torque","source_id":"current:a","target_id":"torque","status":"active"}
+                {"kind":"spin_transport_to_torque","source_id":"spin","target_id":"torque","status":"active"},
+                {"kind":"current_to_torque","source_id":"charge","target_id":"torque","status":"active"}
             ]),
         ),
         (
             "drift diffusion missing edge",
-            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
-            "spin:a",
+            drift.clone(),
+            drift_payload.clone(),
+            "spin",
             serde_json::json!([]),
         ),
         (
             "drift diffusion duplicate edge",
-            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
-            "spin:a",
+            drift.clone(),
+            drift_payload.clone(),
+            "spin",
             serde_json::json!([
-                {"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"},
-                {"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"}
+                {"kind":"spin_transport_to_torque","source_id":"spin","target_id":"torque","status":"active"},
+                {"kind":"spin_transport_to_torque","source_id":"spin","target_id":"torque","status":"active"}
             ]),
         ),
         (
             "drift diffusion payload dependency mismatch",
-            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:b"}),
-            "spin:a",
-            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"}]),
+            drift.clone(),
+            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"charge"}),
+            "spin",
+            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin","target_id":"torque","status":"active"}]),
         ),
         (
             "current driven swapped source",
-            serde_json::json!({"kind":"zhang_li","current_source":"current:a"}),
-            "current:a",
-            serde_json::json!([{"kind":"current_to_torque","source_id":"current:b","target_id":"torque","status":"active"}]),
+            zhang_li.clone(),
+            zhang_li_payload.clone(),
+            "charge",
+            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin","target_id":"torque","status":"active"}]),
         ),
         (
             "current family inverse spin edge",
-            serde_json::json!({"kind":"zhang_li","current_source":"current:a"}),
-            "spin:a",
-            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin:a","target_id":"torque","status":"active"}]),
+            zhang_li.clone(),
+            zhang_li_payload.clone(),
+            "spin",
+            serde_json::json!([{"kind":"spin_transport_to_torque","source_id":"spin","target_id":"torque","status":"active"}]),
         ),
         (
             "spin family inverse current edge",
-            serde_json::json!({"kind":"drift_diffusion_spin_torque","solve_id":"spin:a"}),
-            "current:a",
-            serde_json::json!([{"kind":"current_to_torque","source_id":"current:a","target_id":"torque","status":"active"}]),
+            drift,
+            drift_payload,
+            "charge",
+            serde_json::json!([{"kind":"current_to_torque","source_id":"charge","target_id":"torque","status":"active"}]),
         ),
     ];
 
-    for (case, payload, dependency, edges) in cases {
-        let mut problem = ProblemIR::bootstrap_example();
-        problem.physics_graph = Some(source_bound_torque_graph(payload, dependency, edges));
+    for (case, torque, payload, dependency, edges) in cases {
+        let mut problem =
+            typed_torque_graph_problem(torque, payload, dependency, "spin_transport_to_torque");
+        problem.physics_graph.as_mut().expect("typed graph")["edges"] = edges;
         let errors =
             resolve_physics_graph(&problem).expect_err(&format!("{case} graph must fail closed"));
         assert!(
             errors.iter().any(|error| error.contains("torque 'torque'")),
             "{case} must identify the rejected torque contract: {errors:?}"
+        );
+        let plan_error = fullmag_plan::plan(&problem)
+            .expect_err(&format!("{case} primary plan must fail closed"));
+        assert!(
+            plan_error
+                .reasons
+                .iter()
+                .any(|error| error.contains("torque 'torque'")),
+            "{case} primary plan must identify the rejected torque contract: {plan_error:?}"
         );
     }
 }
@@ -509,6 +495,75 @@ fn typed_torque_families_accept_matching_canonical_graph_payloads() {
 }
 
 #[test]
+fn typed_torque_cardinality_is_enforced_by_direct_and_primary_planners() {
+    let torque = drift_diffusion_torque("torque", "spin");
+    let payload = serde_json::to_value(&torque).expect("serialize typed torque");
+
+    let exactly_one = typed_torque_graph_problem(
+        torque.clone(),
+        payload.clone(),
+        "spin",
+        "spin_transport_to_torque",
+    );
+    assert!(resolve_physics_graph(&exactly_one)
+        .expect("exactly one typed torque must resolve directly")
+        .is_some());
+    fullmag_plan::plan(&exactly_one).expect("exactly one typed torque must reach the primary plan");
+
+    let mut zero = exactly_one.clone();
+    zero.spin_torque_modules.clear();
+    let direct_zero =
+        resolve_physics_graph(&zero).expect_err("graph-only torque must fail direct resolution");
+    assert!(direct_zero.iter().any(|error| {
+        error.contains("torque 'torque'")
+            && error.contains("exactly one canonical typed spin_torque_modules record")
+    }));
+    let planned_zero =
+        fullmag_plan::plan(&zero).expect_err("graph-only torque must fail primary planning");
+    assert!(planned_zero.reasons.iter().any(|error| {
+        error.contains("torque 'torque'")
+            && error.contains("exactly one canonical typed spin_torque_modules record")
+    }));
+
+    let mut multiple = exactly_one;
+    multiple.spin_torque_modules.push(torque);
+    let direct_multiple = resolve_physics_graph(&multiple)
+        .expect_err("ambiguous typed torque must fail direct resolution");
+    assert!(direct_multiple.iter().any(|error| {
+        error.contains("torque 'torque'")
+            && error.contains("exactly one canonical typed spin_torque_modules record")
+    }));
+    let planned_multiple = fullmag_plan::plan(&multiple)
+        .expect_err("ambiguous typed torque must fail primary planning");
+    assert!(planned_multiple.reasons.iter().any(|error| {
+        error.contains("canonical torque id 'torque'") && error.contains("duplicate")
+    }));
+}
+
+#[test]
+fn typed_torque_rejects_unknown_graph_family_in_direct_and_primary_planners() {
+    let torque = drift_diffusion_torque("torque", "spin");
+    let mut payload = serde_json::to_value(&torque).expect("serialize typed torque");
+    payload["kind"] = serde_json::json!("banana");
+    let problem = typed_torque_graph_problem(torque, payload, "spin", "spin_transport_to_torque");
+
+    let direct = resolve_physics_graph(&problem)
+        .expect_err("unknown graph torque family must fail direct resolution");
+    assert!(direct.iter().any(|error| {
+        error.contains("torque 'torque'")
+            && error.contains("unknown family 'banana'")
+            && error.contains("spin_torque_modules")
+    }));
+    let planned = fullmag_plan::plan(&problem)
+        .expect_err("unknown graph torque family must fail primary planning");
+    assert!(planned.reasons.iter().any(|error| {
+        error.contains("torque 'torque'")
+            && error.contains("unknown family 'banana'")
+            && error.contains("spin_torque_modules")
+    }));
+}
+
+#[test]
 fn duplicate_cross_family_typed_torque_ids_fail_closed() {
     let slonczewski = slonczewski_torque("torque", "charge");
     let payload = serde_json::to_value(&slonczewski).expect("serialize typed torque");
@@ -590,65 +645,171 @@ fn typed_torque_source_module_requires_exact_kind() {
 
 #[test]
 fn typed_torque_edge_status_must_match_module_activation() {
-    for invalid_status in ["inactive", "blocked"] {
+    for activation in [
+        "active",
+        "configured",
+        "inactive",
+        "blocked",
+        "unsupported",
+        "unresolved",
+    ] {
         let torque = drift_diffusion_torque("torque", "spin");
         let payload = serde_json::to_value(&torque).expect("serialize typed torque");
         let mut problem =
             typed_torque_graph_problem(torque, payload, "spin", "spin_transport_to_torque");
-        let edges = problem
+        let graph = problem
             .physics_graph
             .as_mut()
-            .and_then(|graph| graph.get_mut("edges"))
-            .and_then(serde_json::Value::as_array_mut)
-            .expect("typed graph edges");
-        let torque_edge = edges
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("typed graph");
+        graph["modules"]
+            .as_array_mut()
+            .expect("typed graph modules")
+            .iter_mut()
+            .find(|module| module.get("id").and_then(serde_json::Value::as_str) == Some("torque"))
+            .expect("typed torque module")["activation"] =
+            serde_json::Value::String(activation.to_string());
+        graph["edges"]
+            .as_array_mut()
+            .expect("typed graph edges")
             .iter_mut()
             .find(|edge| {
                 edge.get("target_id").and_then(serde_json::Value::as_str) == Some("torque")
             })
-            .expect("typed torque edge");
-        torque_edge["status"] = serde_json::Value::String(invalid_status.to_string());
+            .expect("typed torque edge")["status"] =
+            serde_json::Value::String(activation.to_string());
 
         problem
             .validate()
             .expect("typed ProblemIR remains valid independently of its malformed graph copy");
-        let graph_errors = resolve_physics_graph(&problem)
-            .expect_err("active typed torque must reject a non-active incoming edge");
-        assert!(
-            graph_errors.iter().any(|error| {
-                error.contains("torque 'torque'")
-                    && error.contains("edge status")
-                    && error.contains("active")
-            }),
-            "edge activation mismatch must identify the typed torque: {graph_errors:?}"
+        assert!(resolve_physics_graph(&problem)
+            .unwrap_or_else(|errors| panic!("{activation} typed graph must resolve: {errors:?}"))
+            .is_some());
+        let resolved = resolve_physics_modules(&problem, BackendTarget::Fdm)
+            .unwrap_or_else(|errors| panic!("{activation} modules must resolve: {errors:?}"));
+        let resolved_torque = resolved
+            .iter()
+            .find(|module| module.module_id == "torque")
+            .expect("resolved typed torque");
+        assert_eq!(resolved_torque.status, activation);
+        assert_eq!(
+            resolved_torque.fdm_cell_mask_id.is_some(),
+            matches!(activation, "active" | "configured"),
+            "only executable activation states may materialize an FDM mask"
         );
+        if matches!(activation, "active" | "configured") {
+            fullmag_plan::plan(&problem).unwrap_or_else(|error| {
+                panic!("{activation} primary plan must remain executable: {error:?}")
+            });
+        } else {
+            let error = fullmag_plan::plan(&problem).expect_err(&format!(
+                "{activation} torque must not be executable through the primary plan"
+            ));
+            assert!(
+                error.reasons.iter().any(|reason| {
+                    reason.contains("spin transport 'spin'")
+                        && reason.contains("no DriftDiffusionSpinTorque target")
+                }),
+                "{activation} primary plan must fail because torque is non-executable: {error:?}"
+            );
+        }
     }
+}
 
+fn assert_typed_torque_status_rejected(field: &str, malformed: Option<serde_json::Value>) {
     let torque = drift_diffusion_torque("torque", "spin");
     let payload = serde_json::to_value(&torque).expect("serialize typed torque");
-    let mut inactive =
+    let mut problem =
         typed_torque_graph_problem(torque, payload, "spin", "spin_transport_to_torque");
-    let graph = inactive
+    let graph = problem
         .physics_graph
         .as_mut()
         .and_then(serde_json::Value::as_object_mut)
         .expect("typed graph");
-    graph["modules"]
-        .as_array_mut()
-        .expect("typed graph modules")
-        .iter_mut()
-        .find(|module| module.get("id").and_then(serde_json::Value::as_str) == Some("torque"))
-        .expect("typed torque module")["activation"] =
-        serde_json::Value::String("inactive".to_string());
-    graph["edges"]
-        .as_array_mut()
-        .expect("typed graph edges")
-        .iter_mut()
-        .find(|edge| edge.get("target_id").and_then(serde_json::Value::as_str) == Some("torque"))
-        .expect("typed torque edge")["status"] = serde_json::Value::String("inactive".to_string());
-    assert!(resolve_physics_graph(&inactive)
-        .expect("matching inactive torque and edge activation must remain valid")
-        .is_some());
+    if field.starts_with("module") {
+        let module = graph["modules"]
+            .as_array_mut()
+            .expect("typed graph modules")
+            .iter_mut()
+            .find(|module| module.get("id").and_then(serde_json::Value::as_str) == Some("torque"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("typed torque module");
+        match malformed {
+            Some(value) => {
+                module.insert("activation".to_string(), value);
+            }
+            None => {
+                module.remove("activation");
+            }
+        }
+    } else {
+        let edge = graph["edges"]
+            .as_array_mut()
+            .expect("typed graph edges")
+            .iter_mut()
+            .find(|edge| {
+                edge.get("target_id").and_then(serde_json::Value::as_str) == Some("torque")
+            })
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("typed torque edge");
+        match malformed {
+            Some(value) => {
+                edge.insert("status".to_string(), value);
+            }
+            None => {
+                edge.remove("status");
+            }
+        }
+    }
+
+    let direct =
+        resolve_physics_graph(&problem).expect_err(&format!("{field} must fail direct resolution"));
+    assert!(
+        direct.iter().any(|error| {
+            error.contains(if field.starts_with("module") {
+                "physics_graph torque 'torque' activation"
+            } else {
+                "physics_graph torque 'torque' semantic edge status"
+            }) && error.contains("configured|active|inactive|blocked|unsupported|unresolved")
+        }),
+        "{field} must report the closed vocabulary: {direct:?}"
+    );
+    let planned =
+        fullmag_plan::plan(&problem).expect_err(&format!("{field} must fail primary planning"));
+    assert!(
+        planned.reasons.iter().any(
+            |error| error.contains("configured|active|inactive|blocked|unsupported|unresolved")
+        ),
+        "{field} primary plan must preserve the closed-vocabulary error: {planned:?}"
+    );
+}
+
+#[test]
+fn typed_torque_requires_explicit_string_activation_and_edge_status() {
+    for (field, malformed) in [
+        ("module activation missing", None),
+        (
+            "module activation non-string",
+            Some(serde_json::Value::Null),
+        ),
+        ("edge status missing", None),
+        ("edge status non-string", Some(serde_json::Value::Null)),
+    ] {
+        assert_typed_torque_status_rejected(field, malformed);
+    }
+}
+
+#[test]
+fn typed_torque_rejects_unknown_activation_status_banana() {
+    assert_typed_torque_status_rejected(
+        "module activation unknown",
+        Some(serde_json::json!("banana")),
+    );
+}
+
+#[test]
+fn typed_torque_rejects_unknown_semantic_edge_status_banana() {
+    assert_typed_torque_status_rejected("edge status unknown", Some(serde_json::json!("banana")));
 }
 
 #[test]
@@ -832,6 +993,23 @@ fn fdm_object_scope_accepts_certified_magnet_and_geometry_aliases() {
     let mut problem = ProblemIR::bootstrap_example();
     problem.backend_policy.requested_backend = BackendTarget::Fdm;
     problem.magnets[0].name = "plate".to_string();
+    let torque = SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some("sp5_zhang_li".to_string()),
+        target: Some(RegionRefIR {
+            object_id: "plate".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.mumax3.v1".to_string(),
+        operator_version: Some("zl_mumax3_central_v1".to_string()),
+        current_density: Some([1.0e12, 0.0, 0.0]),
+        current_source: None,
+        degree: 1.0,
+        beta: 0.05,
+        lande_g: Some(2.0),
+    };
+    let family_payload = serde_json::to_value(&torque).expect("serialize typed Zhang-Li torque");
+    problem.spin_torque_modules = vec![torque];
     problem.physics_graph = Some(serde_json::json!({
         "schema_version": "physics_graph.v1",
         "scene_revision": 44,
@@ -844,8 +1022,8 @@ fn fdm_object_scope_accepts_certified_magnet_and_geometry_aliases() {
             "activation": "active",
             "authored_state": "authored",
             "capability": "reference_executable",
-            "source_path": "/spin_torques/0",
-            "family_payload": {"kind": "zhang_li"}
+            "source_path": "/spin_torque_modules/0",
+            "family_payload": family_payload
         }],
         "edges": []
     }));
