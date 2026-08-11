@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ChartSeries } from "./chartTableModel";
 import {
   buildFrequencyDomainCursorSummary,
+  buildFrequencyDomainWorkflowSummary,
   buildFrequencyDomainWorkbenchSummary,
   resourceStatusFromString,
 } from "./analysisWorkbenchModel";
@@ -14,6 +15,45 @@ describe("resourceStatusFromString", () => {
 });
 
 describe("buildFrequencyDomainWorkbenchSummary", () => {
+  it("uses the descriptor and calculation mode instead of a chart title", () => {
+    expect(
+      buildFrequencyDomainWorkflowSummary(
+        "frequency-domain:eigen-spectrum",
+        "free_modes",
+      ),
+    ).toMatchObject({
+      inspector: "eigen mode inspector",
+      workflow: "Eigenmode modal",
+    });
+    expect(
+      buildFrequencyDomainWorkflowSummary(
+        "frequency-domain:eigen-spectrum",
+        "fmr_modal",
+      ),
+    ).toMatchObject({
+      inspector: "mode inspector",
+      workflow: "FMR modal",
+    });
+    expect(
+      buildFrequencyDomainWorkflowSummary(
+        "frequency-domain:response-sweep",
+        "free_response",
+      ),
+    ).toMatchObject({
+      inspector: "frequency response point inspector",
+      workflow: "Frequency response",
+    });
+    expect(
+      buildFrequencyDomainWorkflowSummary(
+        "frequency-domain:response-sweep",
+        "fmr_response",
+      ),
+    ).toMatchObject({
+      inspector: "response point inspector",
+      workflow: "FMR driven",
+    });
+  });
+
   it("summarizes a large response sweep without spreading all samples into Math.min/max", () => {
     const series: ChartSeries[] = [{
       id: "response",
@@ -36,7 +76,7 @@ describe("buildFrequencyDomainWorkbenchSummary", () => {
 
     const summary = buildFrequencyDomainWorkbenchSummary(
       series,
-      "FMR response sweep",
+      "fmr_response",
       "ready",
     );
 
@@ -69,9 +109,9 @@ describe("buildFrequencyDomainWorkbenchSummary", () => {
       xUnit: "GHz",
     };
 
-    expect(buildFrequencyDomainWorkbenchSummary(series, "FMR response sweep", "ready").frequencyRange).toBe("9.5 THz");
-    expect(buildFrequencyDomainCursorSummary(point, "FMR response sweep", series)?.xValue).toBe("9.5 THz");
-    expect(buildFrequencyDomainCursorSummary(point, "FMR response sweep", series)?.yValue).toBe("0.5");
+    expect(buildFrequencyDomainWorkbenchSummary(series, "fmr_response", "ready").frequencyRange).toBe("9.5 THz");
+    expect(buildFrequencyDomainCursorSummary(point, "fmr_response", series)?.xValue).toBe("9.5 THz");
+    expect(buildFrequencyDomainCursorSummary(point, "fmr_response", series)?.yValue).toBe("0.5");
   });
 
   it("keeps a zero-inclusive prefixed frequency range aligned with the chart axis", () => {
@@ -93,7 +133,7 @@ describe("buildFrequencyDomainWorkbenchSummary", () => {
       xUnit: "GHz",
     }];
 
-    expect(buildFrequencyDomainWorkbenchSummary(series, "FMR response sweep", "ready").frequencyRange)
+    expect(buildFrequencyDomainWorkbenchSummary(series, "fmr_response", "ready").frequencyRange)
       .toBe("0 THz-9.5 THz");
   });
 });

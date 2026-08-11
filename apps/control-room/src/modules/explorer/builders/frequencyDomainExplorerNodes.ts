@@ -155,10 +155,12 @@ export function buildFrequencyDomainResultNode(
         : null,
       dispersionModel.points.length > 0 || branchesModel.branches.length > 0
         ? {
+            calculationMode: "dispersion_modal",
             id: `${parentId}:dispersion`,
             kind: "results.frequency_domain.dispersion",
             label: "Dispersion",
             parentId,
+            resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
             badge:
               dispersionModel.points.length > 0
                 ? `${dispersionModel.points.length} point(s)`
@@ -374,6 +376,8 @@ function buildEigenKPathNode({
   );
   const sampleCount = new Set(model.points.map((point) => point.sampleIndex)).size;
   return {
+    artifactPath: dispersion?.artifact_path ?? undefined,
+    calculationMode: "dispersion_modal",
     id,
     kind: "results.eigen.k_path",
     label: "k-Path",
@@ -607,6 +611,8 @@ function buildEigenResultNode(
         : null,
       dispersionModel.points.length > 0
         ? {
+            artifactPath: dispersion?.artifact_path ?? undefined,
+            calculationMode: "dispersion_modal",
             id: `${parentId}:dispersion`,
             kind: "results.eigen.dispersion",
             label: "Dispersion",
@@ -646,6 +652,7 @@ function buildEigenBranchesNode({
 }): ExplorerNode | null {
   const model = buildEigenBranchesModel(branches);
   const branchNodes = model.branches.slice(0, 64).map((branch) => ({
+    artifactPath: branches?.artifact_path ?? undefined,
     id: `${id}:branch:${branch.branchId}`,
     kind: "results.eigen.branch" as const,
     label: branch.label ?? `Branch ${branch.branchId}`,
@@ -666,6 +673,8 @@ function buildEigenBranchesNode({
   if (branchNodes.length === 0) return null;
 
   return {
+    artifactPath: branches?.artifact_path ?? undefined,
+    calculationMode: "dispersion_modal",
     id,
     kind: "results.eigen.branches",
     label: "Branches",
@@ -694,6 +703,7 @@ function buildEigenModeNodes(
       "eigen-mode",
     );
     return {
+      artifactPath: spectrum?.artifact_path ?? undefined,
       activeAnalysisField,
       id: `results:eigen:sample:${sampleIndex}:mode:${modeIndex}`,
       kind: "results.eigen.mode",

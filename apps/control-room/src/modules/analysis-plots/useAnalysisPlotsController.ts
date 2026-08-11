@@ -139,6 +139,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     frequencyDomainSeries: frequency.frequencyDomainSeries,
     frequencyDomainStatus: frequency.frequencyDomainStatus,
     frequencyDomainPresentation: frequency.frequencyDomainPresentation,
+    frequencyDomainCalculationMode: frequency.frequencyDomainRoute.mode,
     frequencyDomainTitle: frequency.frequencyDomainTitle,
     frequencyDomainUnavailableReason: frequency.frequencyDomainUnavailableReason,
     frequencyDomainProvenance: frequency.frequencyDomainSeries[0] ? `${frequency.frequencyDomainSeries[0].source.resourceKey} · revision ${frequency.frequencyDomainSeries[0].dataRevision}` : null,

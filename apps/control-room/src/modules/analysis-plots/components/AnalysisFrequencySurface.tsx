@@ -27,6 +27,7 @@ import { EChartsSurface } from "./EChartsSurface";
 
 export function AnalysisFrequencySurface({
   chartId,
+  calculationMode,
   displayUnits,
   descriptorId,
   kernel,
@@ -44,6 +45,7 @@ export function AnalysisFrequencySurface({
   unavailableReason,
 }: {
   chartId?: string;
+  calculationMode?: string;
   displayUnits?: Readonly<Record<string, string>>;
   descriptorId?: string;
   kernel: KernelApi;
@@ -65,14 +67,18 @@ export function AnalysisFrequencySurface({
     [series],
   );
   const surfaceTitle = title || descriptor.title;
-  const workflow = useMemo(() => buildFrequencyDomainWorkflowSummary(title), [title]);
+  const tableId = series[0]?.source.tableId ?? "frequency-domain";
+  const workflow = useMemo(
+    () => buildFrequencyDomainWorkflowSummary(tableId, calculationMode),
+    [calculationMode, tableId],
+  );
   const workbench = useMemo(
-    () => buildFrequencyDomainWorkbenchSummary(series, title, status),
-    [series, status, title],
+    () => buildFrequencyDomainWorkbenchSummary(series, calculationMode, status),
+    [calculationMode, series, status],
   );
   const selectedPointSummary = useMemo(
-    () => buildFrequencyDomainCursorSummary(selectedPoint, title, series),
-    [selectedPoint, series, title],
+    () => buildFrequencyDomainCursorSummary(selectedPoint, calculationMode, series),
+    [calculationMode, selectedPoint, series],
   );
 
   if (series.length === 0) {

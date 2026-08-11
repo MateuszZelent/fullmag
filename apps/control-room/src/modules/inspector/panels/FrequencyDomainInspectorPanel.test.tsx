@@ -25,8 +25,6 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import { FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS } from "../inspectorRegistry";
 import { FrequencyDomainInspectorPanel } from "./FrequencyDomainInspectorPanel";
 import {
-  EigenModeInspectorPanel,
-  EigenBranchInspectorPanel,
   EigenBranchesInspectorPanel,
   EigenDiagnosticsInspectorPanel,
   FrequencyDomainApiResourcesDiagnosticInspectorPanel,
@@ -47,7 +45,6 @@ import {
   FrequencyDomainSolverDiagnosticInspectorPanel,
   FrequencyDomainVisualizationDiagnosticInspectorPanel,
   EigenKPathInspectorPanel,
-  EigenDispersionInspectorPanel,
   EigenModesInspectorPanel,
   EigenOverviewInspectorPanel,
   EigenProvenanceInspectorPanel,
@@ -82,6 +79,9 @@ import {
   FrequencyResponseSweepInspectorPanel,
   frequencyDomainVisualizationReadiness,
 } from "./frequency-domain/FrequencyDomainResultInspectors";
+import { EigenBranchInspectorPanel } from "./frequency-domain/EigenBranchInspectorPanel";
+import { EigenDispersionInspectorPanel } from "./frequency-domain/EigenDispersionInspectorPanel";
+import { EigenModeInspectorPanel } from "./frequency-domain/EigenModeInspectorPanel";
 import { FmrModalSpectrumInspectorPanel } from "./frequency-domain/FmrModalSpectrumInspectorPanel";
 import { FmrResponseSweepInspectorPanel } from "./frequency-domain/FmrResponseSweepInspectorPanel";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
@@ -2381,6 +2381,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(eigenDispersionHtml).toContain("Eigen Dispersion Inspector");
+    expect(eigenDispersionHtml).toContain(
+      'data-inspector-owner="frequency-domain.eigen-dispersion"',
+    );
     expect(eigenDispersionHtml).toContain("Dispersion resource");
     expect(eigenDispersionHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH);
     expect(eigenDispersionHtml).toContain("Path metadata artifact");
@@ -3037,6 +3040,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("Eigen Branch Detail");
+    expect(html).toContain(
+      'data-inspector-owner="frequency-domain.eigen-branch"',
+    );
     expect(html).toContain("Branch identity");
     expect(html).toContain("branch-0; acoustic");
     expect(html).toContain("Frequency range");
@@ -3077,7 +3083,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     const source = readFileSync(
       resolve(
         __dirname,
-        "frequency-domain/FrequencyDomainResultInspectors.tsx",
+        "frequency-domain/EigenBranchInspectorPanel.tsx",
       ),
       "utf8",
     );
@@ -3169,6 +3175,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("Eigen Mode Control");
+    expect(html).toContain(
+      'data-inspector-owner="frequency-domain.eigen-mode"',
+    );
     expect(html).toContain("Canonical object");
     expect(html).toContain("Eigenmodes mode");
     expect(html).toContain("Mode identity");

@@ -1322,6 +1322,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "mode index",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_modal"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
         onPointSelect={() => undefined}
@@ -1370,6 +1371,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "GHz",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_response"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
         onPointSelect={() => undefined}
@@ -1472,6 +1474,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "mode index",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_modal"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
         onPointSelect={() => undefined}
@@ -1580,6 +1583,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "GHz",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_response"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
         onPointSelect={() => undefined}

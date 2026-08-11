@@ -141,3 +141,11 @@ Końcowy audyt pozostałych powierzchni częstotliwości oraz wymagany smoke
 `smoke:viewport-3d-explorer-inspector-targets` pozostają otwarte; smoke nadal
 zatrzymuje się na istniejącym progu pixel-delta FDM `13 < 18` i FEM fallback
 `0 < 18`.
+
+Task 5 eigen/dispersion został zaimplementowany lokalnie: dispersion, branch i
+mode mają osobnych ownerów z tym samym `InspectorGroup`/`FieldRow`/chart/table
+template, osobne pure row models, stabilne selection refs i jawny handoff 3D.
+Explorer zachowuje istniejące ID, a dodatkowo publikuje artifact/resource
+provenance. Workbench używa descriptorów i explicit calculation mode; znane
+ścieżki nie rozpoznają FMR przez tytuł wykresu. Przeszły `461/461` testów
+fokusowych, typecheck, zero-warning targeted ESLint i `git diff --check`.

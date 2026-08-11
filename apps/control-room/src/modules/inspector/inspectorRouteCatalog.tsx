@@ -18,10 +18,8 @@ import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import { RegionalFieldDrivePanel } from "./panels/RegionalFieldDrivePanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import {
-  EigenBranchInspectorPanel,
   EigenBranchesInspectorPanel,
   EigenDiagnosticsInspectorPanel,
-  EigenDispersionInspectorPanel,
   FrequencyDomainApiResourcesDiagnosticInspectorPanel,
   FrequencyDomainArtifactsDiagnosticInspectorPanel,
   FrequencyDomainCapabilitiesDiagnosticInspectorPanel,
@@ -52,7 +50,6 @@ import {
   FrequencyDomainSolverDiagnosticInspectorPanel,
   FrequencyDomainVisualizationDiagnosticInspectorPanel,
   EigenKPathInspectorPanel,
-  EigenModeInspectorPanel,
   EigenModesInspectorPanel,
   EigenModesVisualizationInspectorPanel,
   EigenOverviewInspectorPanel,
@@ -87,6 +84,9 @@ import {
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
+import { EigenBranchInspectorPanel } from "./panels/frequency-domain/EigenBranchInspectorPanel";
+import { EigenDispersionInspectorPanel } from "./panels/frequency-domain/EigenDispersionInspectorPanel";
+import { EigenModeInspectorPanel } from "./panels/frequency-domain/EigenModeInspectorPanel";
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrModalSpectrumInspectorPanel";
 import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrResponseSweepInspectorPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
