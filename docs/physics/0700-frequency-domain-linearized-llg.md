@@ -68,41 +68,6 @@ Both products use:
 - manifest `analysis_family = "magnetic_frequency_domain"`,
 - explicit `study_product = "modal_eigen"` or `study_product = "driven_response"`.
 
-## User-facing result classification
-
-The result browser classifies a typed frequency-domain manifest by physical
-context before exposing solver method or artifact representation. It must not
-infer physics from a label, file name, array position, or the mere presence of a
-frequency axis.
-
-The Bloch wavevector is applicable only to periodic/Floquet problems. A finite
-system with open or free boundaries is labelled `Finite system · k n/a`, not
-`k = 0`. A periodic single sample at the Γ point is labelled
-`Γ point · k = 0`. A single nonzero sample is `Fixed k`; it is k-resolved but is
-not a dispersion relation. A path, grid, or other multi-sample contract is
-wavevector-resolved.
-
-Modal and driven products remain distinct:
-
-- a modal branch is the relation $f_n(\mathbf{k})$;
-- a driven map is an observable such as $A(\mathbf{k},f)$,
-  $\chi(\mathbf{k},f)$, or $P_{\mathrm{abs}}(\mathbf{k},f)$ and must not be
-  relabelled as $f(\mathbf{k})$;
-- an eigenmode is called FMR-active only when the artifact publishes coupling
-  to a specified RF field, oscillator strength, drive-mode projection, or an
-  equivalent documented observable;
-- a driven result is called an FMR response only when the manifest identifies a
-  magnetic RF drive and publishes a physically defined susceptibility,
-  absorbed-power, or drive-projected observable with units and provenance.
-
-Without that evidence the legal names are `Eigenfrequency Spectrum` and
-`Harmonic Response Spectrum`. A standalone `Spectrum` label is insufficient.
-Display units may change, but the stored SI identities remain frequency in
-$\mathrm{Hz}$ and wavevector in $\mathrm{rad\,m^{-1}}$ under the Fullmag
-Floquet convention. Every result selection preserves run, stage, equilibrium,
-artifact revision, observable, k context, and requested/resolved execution
-provenance.
-
 ## COMSOL parity requirements
 
 `docs/comsol/Manual_for_Micromagnetics_Module.pdf` is not a Fullmag semantic
