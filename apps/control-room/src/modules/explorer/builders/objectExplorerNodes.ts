@@ -40,7 +40,6 @@ interface ModeVisualizationFieldNode {
   sampleIndex?: number;
   source: "eigen-mode" | "frequency-response";
 }
-
 export function buildObjectExplorerNode(
   object: ModelTreeObjectSnapshot,
   resources: ModelTreeResources = {},
@@ -753,4 +752,3 @@ function physicsInteractionBadge(
   if (interaction.enabledCount === 0) return "disabled";
   return `${interaction.enabledCount}/${interaction.objectCount} active`;
 }
-

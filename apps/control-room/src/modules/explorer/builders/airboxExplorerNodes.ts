@@ -161,7 +161,6 @@ export function buildFdmAirboxNode(
   };
 }
 
-
 export function buildFemAirboxNode(
   snapshot: ModelTreeSnapshot | null,
   legacyAirboxObjectPresent: boolean,
@@ -299,4 +298,3 @@ export function buildBoundaryFacesNode(
     status,
   };
 }
-

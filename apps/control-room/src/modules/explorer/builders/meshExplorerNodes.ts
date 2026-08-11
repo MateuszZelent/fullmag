@@ -27,7 +27,6 @@ export function meshRootStatus(mesh: ModelTreeSnapshot["mesh"]): ExplorerNodeSta
   if (mesh?.meshName) return "mesh-ready";
   return "mesh-stale";
 }
-
 function meshRootBadge(mesh: ModelTreeSnapshot["mesh"]): string {
   if (mesh?.lastError) return "failed";
   if (mesh?.activeBuildStatus) return mesh.activeBuildStatus;
@@ -534,5 +533,4 @@ export function buildUnresolvedMeshPolicyNode(
     children: [],
   };
 }
-
 
