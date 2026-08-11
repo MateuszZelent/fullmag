@@ -119,3 +119,19 @@ testów, kontrakty design systemu `93/93`, API hygiene `exit 0`. Pełny wrapper
 testowy nadal odtwarza niezależny baseline failure
 `ChartLegend.rowsBinary...` (`3` wywołania zamiast `2`), a architecture hygiene
 ma znany import `explorerSelection.ts` do `viewport-3d`.
+
+## Frequency-domain UX
+
+Deskryptory powierzchni analitycznych zakończone w `36912c45d`, wspólny stan
+prezentacji zasobów zakończony w `09ab148d3`, a dedykowany FMR modal spectrum
+Inspector zakończony w `75272786a`. Panel zachowuje wspólny szablon
+Inspectorów, ma własny owner, proweniencję i fail-closed gotowość pola 3D;
+routing korzysta bezpośrednio z nowego komponentu, a eksport z monolitu
+pozostaje dla kompatybilności.
+
+Ostatnia bramka tej części: `356/356` testów w sześciu plikach, typecheck,
+targeted ESLint, design contracts `93/93`, API hygiene i `git diff --check`.
+Końcowy audyt pozostałych powierzchni częstotliwości oraz wymagany smoke
+`smoke:viewport-3d-explorer-inspector-targets` pozostają otwarte; smoke nadal
+zatrzymuje się na istniejącym progu pixel-delta FDM `13 < 18` i FEM fallback
+`0 < 18`.
