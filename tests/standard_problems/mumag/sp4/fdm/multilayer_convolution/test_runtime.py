@@ -88,6 +88,7 @@ def test_sp4_derived_scenario_exports_scene_document_outside_repo_import_path(
     assert completed.returncode == 0, completed.stderr
     scene = json.loads(completed.stdout)
     assert {item["id"] for item in scene["objects"]} == {"layer_bottom", "layer_top"}
+    assert scene["study"]["fdm"]["demag"]["strategy"] == "multilayer_convolution"
 
 
 def test_runtime_verifier_fails_closed_when_cpu_artifacts_are_absent(tmp_path: Path) -> None:
