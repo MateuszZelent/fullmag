@@ -377,12 +377,22 @@ fn active_lane_capability_snapshot(
         precision: snapshot.session.requested_precision.clone(),
         mode: snapshot.session.requested_mode.clone(),
     };
-    let resolved = match (
+    let session_resolution = (
         snapshot.session.resolved_backend.as_ref(),
         snapshot.session.resolved_device.as_ref(),
         snapshot.session.resolved_precision.as_ref(),
         snapshot.session.resolved_mode.as_ref(),
-    ) {
+    );
+    let metadata_resolution = || {
+        let execution = snapshot.metadata.as_ref()?.get("resolved_execution")?;
+        Some((
+            execution.get("backend")?.as_str()?,
+            execution.get("device")?.as_str()?,
+            execution.get("precision")?.as_str()?,
+            execution.get("mode")?.as_str()?,
+        ))
+    };
+    let resolved = match session_resolution {
         (Some(backend), Some(device), Some(precision), Some(mode)) => Some(ActiveLaneIdentity {
             discretization: normalize_lane_discretization(
                 backend,
@@ -393,8 +403,29 @@ fn active_lane_capability_snapshot(
             precision: precision.clone(),
             mode: mode.clone(),
         }),
+        (None, None, None, None) => {
+            metadata_resolution().map(|(backend, device, precision, mode)| ActiveLaneIdentity {
+                discretization: normalize_lane_discretization(
+                    backend,
+                    if is_fem { "fem" } else { "fdm" },
+                ),
+                backend: backend.to_string(),
+                device: device.to_string(),
+                precision: precision.to_string(),
+                mode: mode.to_string(),
+            })
+        }
         _ => None,
     };
+    let resolved = resolved.filter(|session_or_fallback| {
+        let Some((backend, device, precision, mode)) = metadata_resolution() else {
+            return true;
+        };
+        session_or_fallback.backend == backend
+            && session_or_fallback.device == device
+            && session_or_fallback.precision == precision
+            && session_or_fallback.mode == mode
+    });
     let fallback = snapshot
         .session
         .resolved_fallback

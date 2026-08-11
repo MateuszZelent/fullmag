@@ -301,6 +301,9 @@ function cloneFdmCuboidBuildRequestForWorker(
     ...input,
     id,
     modelFieldVector: cloneFieldVectorForWorker(input.modelFieldVector),
+    nativeActiveMask: input.nativeActiveMask
+      ? new Uint8Array(input.nativeActiveMask)
+      : input.nativeActiveMask,
     realizedRegionIds: input.realizedRegionIds
       ? new Uint32Array(input.realizedRegionIds)
       : input.realizedRegionIds,
@@ -327,6 +330,7 @@ function transferablesForFdmCuboidBuildRequest(
 ): Transferable[] {
   const transferables: Transferable[] = [];
   addArrayBufferTransferable(transferables, request.modelFieldVector?.values.buffer);
+  addArrayBufferTransferable(transferables, request.nativeActiveMask?.buffer);
   if (request.vectorField?.values.buffer !== request.modelFieldVector?.values.buffer) {
     addArrayBufferTransferable(transferables, request.vectorField?.values.buffer);
   }

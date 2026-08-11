@@ -6,6 +6,8 @@ import {
   FDM_NATIVE_LAYER_TARGET_PREFIX,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
+export { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
+
 import {
   resolveMeshPartBounds,
   type FdmGridRenderDomain,
@@ -71,17 +73,6 @@ export function targetForFdmDomain(
     id: "fdm-domain",
     kind: "fdm-domain",
     label: domainId,
-  };
-}
-
-export function targetForFdmNativeLayer(
-  layerId: string,
-  label?: string | null,
-): VisualizationTargetRef {
-  return {
-    id: `${FDM_NATIVE_LAYER_TARGET_PREFIX}${encodeURIComponent(layerId)}`,
-    kind: "fdm-native-layer",
-    label: label ?? layerId,
   };
 }
 

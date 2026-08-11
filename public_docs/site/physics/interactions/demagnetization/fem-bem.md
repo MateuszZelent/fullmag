@@ -154,6 +154,70 @@ surface is not a lower-accuracy input; it changes or invalidates the mathematica
 (demag-bem-python-api)=
 ## 5. Python API and complete solver parameters
 
+The Fredkin–Koehler path uses a closed body-only mesh. The following complete CPU scenario does
+not declare an airbox: the exterior problem is represented by the boundary operator built from
+the sphere surface.
+
+```python
+# %% Imports and body-only FEM/BEM study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("demag_fredkin_koehler_sphere")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+# %% Closed magnetic body, material, initial state, and volume mesh
+body = study.geometry(
+    fm.Sphere(radius=30 * nm, name="sphere"),
+    name="sphere",
+)
+body.Ms = 8.0e5
+body.Aex = 1.3e-11
+body.alpha = 0.1
+body.m = fm.init.UniformMagnetization((0.0, 0.0, 1.0))
+body.mesh(
+    maximum_element_size=12 * nm,
+    order=1,
+    algorithm_2d=1,
+    algorithm_3d=1,
+    size_factor=1,
+    size_from_curvature=0,
+    smoothing_steps=1,
+    optimize_iterations=1,
+    narrow_regions=0,
+    compute_quality=False,
+    per_element_quality=False,
+)
+
+# %% Fredkin–Koehler interaction and the two-solve FEM policy
+study.exchange(enabled=False)
+study.demag(model="fredkin_koehler")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1.0e-10,
+    max_iterations=500,
+)
+
+# %% Ordered stage and scientific outputs
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=2_000,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "e_demag", "e_total", "max_torque_T"],
+        ),
+        fields=[fm.FieldAutosave("H_demag", every_steps=100)],
+    )
+)
+```
+
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

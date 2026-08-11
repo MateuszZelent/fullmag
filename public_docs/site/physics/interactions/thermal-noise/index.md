@@ -192,6 +192,55 @@ test has been executed.
 | `StudyBuilder.thermal_noise(temperature, seed=...)` | method | — | $\mathrm{K}$ / $1$ | delegates to flat function and returns builder | fluent authoring convenience | same as `ThermalNoise` | same canonical lowering |
 | `SaveField("H_therm")` or thermal snapshot output | `str` | not requested | $\mathrm{A\,m^{-1}}$ | current FDM observables reject direct materialization; request `H_eff` or remove it; FEM output is lane-specific | requested sampled thermal field output | not universally executable | `study.sampling.outputs[]`, then planner validation |
 
+### Complete fixed-step thermal stage
+
+This copyable study uses the public FDM CPU reference lane, a fixed positive
+timestep, and a fixed seed. Brown thermal noise is registered before the
+physical-time stage. The stage records the total effective field rather than
+requesting the currently unsupported direct FDM `H_therm` output.
+
+```python
+# %% Imports and SI units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Study and execution lane
+study = fm.study("thermal_noise_reference")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+
+# %% Geometry, material, initial state, and interactions
+film = study.geometry(
+    fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"),
+    name="film",
+)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+study.exchange()
+study.thermal_noise(temperature=300.0, seed=123)
+
+# %% Fixed-step dynamics, outputs, and ordered stage
+study.solver(integrator="heun", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(
+    stage_id="thermalize",
+    until=1.0e-12,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            t_sampl=1.0e-13,
+            quantities=["step", "t", "mx", "my", "mz", "e_ex", "e_total"],
+        ),
+        fields=[fm.FieldAutosave("H_eff", every=1.0e-13)],
+    )
+)
+```
+
 `seed=None` is not the same as `seed=0`: Python omits the seed field for
 `None`, while zero is rejected before lowering. A fixed seed requests replay,
 but does not establish identical trajectories between solver/device lanes.

@@ -3776,13 +3776,17 @@ mod tests {
             ..make_test_plan()
         };
         let mut magnetization_updates = 0usize;
+        let mut terminal_cache_updates = 0usize;
         let mut on_step = |update: StepUpdate| -> StepAction {
             if let Some(values) = update.magnetization.as_ref() {
                 magnetization_updates += 1;
                 assert_eq!(values.len(), plan.initial_magnetization.len() * 3);
             }
             assert!(update.preview_field.is_none());
-            assert!(update.cached_preview_fields.is_none());
+            if update.cached_preview_fields.is_some() {
+                terminal_cache_updates += 1;
+                assert!(update.magnetization.is_some());
+            }
             StepAction::Continue
         };
 
@@ -3807,10 +3811,14 @@ mod tests {
             magnetization_updates >= 2,
             "expected repeated live magnetization payloads"
         );
+        assert_eq!(
+            terminal_cache_updates, 1,
+            "only the terminal live update should materialize cached vector fields"
+        );
         let observe_calls = observe_state_call_count();
         assert!(
-            observe_calls <= 1,
-            "live magnetization payload should read state directly instead of full observables per refresh; observe_state calls: {observe_calls}"
+            observe_calls <= 2,
+            "live magnetization payload should read state directly between refreshes and observe only for final outputs and the terminal cache; observe_state calls: {observe_calls}"
         );
     }
 
@@ -4239,12 +4247,12 @@ mod tests {
         assert_eq!(field_snapshots[0].name, "H_ext");
         assert_eq!(
             field_snapshots[0].vec3_values().unwrap(),
-            vec![[2.5, 3.25, 4.125], [0.0, 0.0, 0.0]]
+            vec![[2.0, 3.0, 4.0], [2.0, 3.0, 4.0]]
         );
         assert_eq!(field_snapshots[1].name, "H_ext.y");
         assert_eq!(
             field_snapshots[1].vec3_values().unwrap(),
-            vec![[3.25, 0.0, 0.0], [0.0, 0.0, 0.0]]
+            vec![[3.0, 0.0, 0.0], [3.0, 0.0, 0.0]]
         );
     }
 
@@ -5397,7 +5405,7 @@ mod tests {
     }
 
     #[test]
-    fn active_mask_keeps_inactive_cells_zero_and_excludes_them_from_fields() {
+    fn active_mask_keeps_inactive_m_zero_and_preserves_full_domain_fields() {
         let active_mask = vec![
             true, true, false, false, true, true, false, false, true, true, false, false, true,
             true, false, false,
@@ -5456,16 +5464,49 @@ mod tests {
             }
         }
 
-        for snapshot in &executed.field_snapshots {
-            if snapshot.name == "H_demag" || snapshot.name == "H_ext" || snapshot.name == "m" {
-                for (index, is_active) in active_mask.iter().enumerate() {
-                    if !is_active {
-                        assert!(
-                            is_zero(snapshot.vec3_values().unwrap()[index]),
-                            "inactive cell {index} should stay zero in snapshot '{}'",
-                            snapshot.name
-                        );
-                    }
+        let magnetization_snapshots = executed
+            .field_snapshots
+            .iter()
+            .filter(|snapshot| snapshot.name == "m")
+            .collect::<Vec<_>>();
+        assert!(!magnetization_snapshots.is_empty());
+        for snapshot in magnetization_snapshots {
+            for (index, is_active) in active_mask.iter().enumerate() {
+                if !is_active {
+                    assert!(
+                        is_zero(snapshot.vec3_values().unwrap()[index]),
+                        "inactive cell {index} should stay zero in snapshot '{}'",
+                        snapshot.name
+                    );
+                }
+            }
+        }
+
+        let demag_snapshots = executed
+            .field_snapshots
+            .iter()
+            .filter(|snapshot| snapshot.name == "H_demag")
+            .collect::<Vec<_>>();
+        assert!(!demag_snapshots.is_empty());
+        assert!(demag_snapshots.iter().any(|snapshot| {
+            snapshot
+                .vec3_values()
+                .unwrap()
+                .iter()
+                .zip(&active_mask)
+                .any(|(value, is_active)| !is_active && !is_zero(*value))
+        }));
+
+        let external_field_snapshots = executed
+            .field_snapshots
+            .iter()
+            .filter(|snapshot| snapshot.name == "H_ext")
+            .collect::<Vec<_>>();
+        assert!(!external_field_snapshots.is_empty());
+        for snapshot in external_field_snapshots {
+            for (value, is_active) in snapshot.vec3_values().unwrap().iter().zip(&active_mask) {
+                if !is_active {
+                    assert_eq!(*value, [1e5, 0.0, 0.0]);
                 }
             }
         }

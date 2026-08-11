@@ -1,5 +1,5 @@
 ---
-title: Solved-current Oersted field
+title: Oersted field
 status: partial
 doc_kind: reference
 audience: user

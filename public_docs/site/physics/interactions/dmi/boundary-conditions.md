@@ -128,11 +128,60 @@ centres.
 (dmi-boundary-python-api)=
 ## Python API and boundary request
 
-The stage builder currently has no dedicated DMI boundary registration method. Consequently
-this page does not publish a standalone Python constructor cell: a cell without a complete
-stage graph would suggest an executable workflow that the current public API does not provide.
-Use the parameter table and the source-backed scenario references below until the stage hook is
-implemented.
+The DMI boundary operator is not registered independently. In the stage-first API, assigning
+`Dind` to a magnetic body activates the interfacial-DMI term, and the resolved FDM or FEM
+realization supplies its natural boundary treatment together with exchange. This complete FDM
+scenario relaxes a Neel wall in an open nanostrip and records the field and energy needed to
+inspect the edge twist.
+
+```python
+# %% Imports and units
+import fullmag as fm
+
+nm = 1.0e-9
+
+# %% Open-boundary FDM study
+study = fm.study("interfacial_dmi_boundary_twist")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.fdm(default_cell=(2 * nm, 2 * nm, 2 * nm))
+
+# %% Geometry, material, chiral state, and interactions
+strip = study.geometry(
+    fm.Box(size=(120 * nm, 40 * nm, 2 * nm), name="strip"),
+    name="strip",
+)
+strip.Ms = 5.8e5
+strip.Aex = 15.0e-12
+strip.Dind = 3.0e-3
+strip.alpha = 0.3
+strip.m = fm.texture.domain_wall(
+    width=12 * nm,
+    kind="neel",
+    normal_axis="x",
+    left=(0.0, 0.0, 1.0),
+    right=(0.0, 0.0, -1.0),
+)
+study.exchange()
+study.demag(enabled=False)
+
+# %% Ordered relaxation stage and boundary-sensitive observables
+study.stages.add_relax(
+    stage_id="relax_boundary_twist",
+    algorithm="projected_gradient_bb",
+    max_steps=1_000,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "e_ex", "e_dmi", "e_total", "max_torque_T"],
+        ),
+        fields=[fm.FieldAutosave("H_dmi", every_steps=20)],
+    )
+)
+```
 
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |

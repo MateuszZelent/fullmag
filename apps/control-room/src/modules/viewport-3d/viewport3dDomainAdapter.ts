@@ -5,6 +5,7 @@ import type {
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import type {
+  DecodedFdmMultilayerActiveMask,
   DecodedFdmRegionMembership,
   DecodedFieldVector,
   DecodedTopology,
@@ -194,14 +195,36 @@ export function adaptFdmMultilayerNativeLayerDomains(
       layer.native_origin[1],
       layer.native_origin[2],
     ];
+    const totalCells = shape[0] * shape[1] * shape[2];
+    const gridFingerprint = canonicalSha256Fingerprint(
+      layer.native_grid_fingerprint,
+    );
+    const activeMaskHash = canonicalSha256Fingerprint(layer.active_mask_hash);
+    const maskRef = layer.mask_ref?.trim() ?? "";
+    const countsAreValid =
+      Number.isSafeInteger(layer.active_cell_count) &&
+      layer.active_cell_count >= 0 &&
+      Number.isSafeInteger(layer.inactive_cell_count) &&
+      layer.inactive_cell_count >= 0 &&
+      layer.active_cell_count + layer.inactive_cell_count === totalCells;
+    const maskDeclarationIsValid = layer.active_mask_present
+      ? Boolean(activeMaskHash && maskRef)
+      : layer.active_cell_count === totalCells &&
+        layer.inactive_cell_count === 0 &&
+        !layer.active_mask_hash &&
+        !layer.mask_ref;
     if (
       shape.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
       spacing.some((value) => !Number.isFinite(value) || value <= 0) ||
-      origin.some((value) => !Number.isFinite(value))
+      origin.some((value) => !Number.isFinite(value)) ||
+      !Number.isSafeInteger(totalCells) ||
+      totalCells <= 0 ||
+      !gridFingerprint ||
+      !countsAreValid ||
+      !maskDeclarationIsValid
     ) {
       return [];
     }
-    const totalCells = shape[0] * shape[1] * shape[2];
     const sampling = resolveFdmDisplaySampling(totalCells, displayCellBudget);
     const boundsSize: [number, number, number] = [
       shape[0] * spacing[0],
@@ -223,7 +246,7 @@ export function adaptFdmMultilayerNativeLayerDomains(
       bounds,
       displayCellBudget: sampling.budget,
       displayCellCount: sampling.displaySamples,
-      gridFingerprint: layer.native_grid_fingerprint ?? null,
+      gridFingerprint,
       kind: "fdm-native-layer" as const,
       layerId: layer.layer_id,
       magnetName: layer.magnet_name,
@@ -237,6 +260,49 @@ export function adaptFdmMultilayerNativeLayerDomains(
       inactiveCellCount: layer.inactive_cell_count,
     }];
   });
+}
+
+/**
+ * Accepts only an FMBM payload whose revisioned identities and cardinalities
+ * still match the current native-layer layout. A declared mask never falls
+ * back to dense rendering, including an all-active mask.
+ */
+export function resolveFdmNativeLayerActiveMaskForRendering(
+  domain: FdmNativeLayerRenderDomain,
+  layoutRevision: number,
+  layer: FdmMultilayerLayoutResource["layers"][number] | null | undefined,
+  decoded: DecodedFdmMultilayerActiveMask | null | undefined,
+): Uint8Array | null {
+  if (!domain.activeMaskPresent || !layer || !decoded) return null;
+  const layerGridFingerprint = canonicalSha256Fingerprint(
+    layer.native_grid_fingerprint,
+  );
+  const layerMaskHash = canonicalSha256Fingerprint(layer.active_mask_hash);
+  if (
+    layer.layer_id !== domain.layerId ||
+    decoded.layoutRevision !== layoutRevision ||
+    decoded.cellCount !== domain.totalCells ||
+    decoded.activeMask.length !== domain.totalCells ||
+    decoded.shape.some((count, axis) => count !== domain.shape[axis]) ||
+    !layerGridFingerprint ||
+    decoded.gridFingerprint !== layerGridFingerprint.slice("sha256:".length) ||
+    !layerMaskHash ||
+    decoded.maskHash !== layerMaskHash.slice("sha256:".length)
+  ) {
+    return null;
+  }
+  let activeCellCount = 0;
+  for (const active of decoded.activeMask) {
+    if (active !== 0 && active !== 1) return null;
+    activeCellCount += active;
+  }
+  if (
+    activeCellCount !== domain.activeCellCount ||
+    domain.totalCells - activeCellCount !== domain.inactiveCellCount
+  ) {
+    return null;
+  }
+  return decoded.activeMask;
 }
 
 export function adaptFdmMultilayerAirboxDomain(
