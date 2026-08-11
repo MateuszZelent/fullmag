@@ -1346,35 +1346,19 @@ export default function Viewport3DModule({
     [kernel.cameraRegistry],
   );
   const saveCameraState = useCallback(
-    (camera: Viewport3DCameraChange) => {
-      kernel.cameraRegistry.patchCamera(buildViewport3DCameraRegistryPatch(camera));
-      const nextCamera = {
-        position: camera.position,
-        target: camera.target,
-        up: camera.up ?? VIEWPORT_3D_WORLD_UP,
-      };
-      if (
-        camera.projection !== undefined ||
-        camera.orthographicScale !== undefined
-      ) {
-        viewport3dStore.setCameraView({
-          camera: nextCamera,
-          orthographicScale: camera.orthographicScale ?? null,
-          projection:
-            camera.projection ??
-            viewport3dStore.getSnapshot().widgets.cameraProjection,
-        });
-      } else {
-        viewport3dStore.setCamera(nextCamera);
-      }
+    (camera: Viewport3DCameraChange, epoch?: number) => {
+      kernel.cameraRegistry.patchCamera(
+        buildViewport3DCameraRegistryPatch(camera),
+        epoch,
+      );
     },
     [kernel.cameraRegistry],
   );
-  const beginCameraInteraction = useCallback(() => {
-    kernel.cameraRegistry.beginInteraction();
+  const beginCameraInteraction = useCallback((epoch?: number) => {
+    kernel.cameraRegistry.beginInteraction(epoch);
   }, [kernel.cameraRegistry]);
-  const endCameraInteraction = useCallback(() => {
-    kernel.cameraRegistry.endInteraction();
+  const endCameraInteraction = useCallback((epoch?: number) => {
+    kernel.cameraRegistry.endInteraction(epoch);
   }, [kernel.cameraRegistry]);
   const changeRegionOverlaySource = useCallback(
     (source: RegionDiagnosticOverlaySource) => {

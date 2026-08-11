@@ -310,7 +310,6 @@ import {
   resolveViewport3DCameraOrthographicScale,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
-  viewport3DCameraViewSignature,
   viewport3dStore,
   type Viewport3DCommandState,
   type Viewport3DCameraProjection,
@@ -2492,7 +2491,7 @@ function pushViewportVisualizationTarget(
 
 export function resolveViewport3DSceneCameraView({
   cameraRegistryCamera,
-  commandState,
+  commandState: _commandState,
 }: {
   cameraRegistryCamera: VisualizationStateResource["camera"];
   commandState: Pick<Viewport3DCommandState, "camera" | "widgets">;
@@ -2503,10 +2502,14 @@ export function resolveViewport3DSceneCameraView({
   cameraState: Viewport3DCameraState;
 } {
   return {
-    cameraOrthographicScale: commandState.widgets.cameraOrthographicScale,
-    cameraProjection: commandState.widgets.cameraProjection,
+    cameraOrthographicScale: resolveViewport3DCameraOrthographicScale({
+      camera: cameraRegistryCamera,
+    }),
+    cameraProjection: resolveViewport3DCameraProjection({
+      camera: cameraRegistryCamera,
+    }),
     cameraResource: cameraRegistryCamera,
-    cameraState: commandState.camera,
+    cameraState: resolveViewport3DCameraState({ camera: cameraRegistryCamera }),
   };
 }
 
@@ -2561,7 +2564,6 @@ export function useViewport3DSceneModel({
     commandState,
   });
   const cameraResource = cameraView.cameraResource;
-  useViewport3DCameraRegistryStoreSync(cameraResource);
   const visualizationRevision = renderingState?.revision ?? null;
   const visualizationError = visualizationState.error?.message ?? null;
   const visualizationEffectiveRenderMode = resolveVisualizationEffectiveRenderMode({
@@ -5558,30 +5560,6 @@ export function useViewport3DSceneModel({
   };
 }
 
-function useViewport3DCameraRegistryStoreSync(
-  cameraResource: VisualizationStateResource["camera"],
-) {
-  const lastRemoteSignatureRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const camera = resolveViewport3DCameraState({ camera: cameraResource });
-    const projection = resolveViewport3DCameraProjection({
-      camera: cameraResource,
-    });
-    const orthographicScale = resolveViewport3DCameraOrthographicScale({
-      camera: cameraResource,
-    });
-    const signature = viewport3DCameraViewSignature({
-      camera,
-      orthographicScale,
-      projection,
-    });
-    if (lastRemoteSignatureRef.current === signature) return;
-
-    lastRemoteSignatureRef.current = signature;
-    viewport3dStore.setCameraView({ camera, orthographicScale, projection });
-  }, [cameraResource]);
-}
 
 function measureViewport3DModelBuild<T>(name: string, build: () => T): T {
   const performanceTarget =

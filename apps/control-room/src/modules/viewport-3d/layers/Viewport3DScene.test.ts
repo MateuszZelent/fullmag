@@ -30,6 +30,25 @@ function invokeFrameCallback(
 }
 
 describe("Viewport3DScene scale helpers", () => {
+  it("wires ordinary OrbitControls into the camera registry interaction lifecycle", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const controlsStart = source.indexOf("<OrbitCameraControls");
+    const controlsBlock = source.slice(
+      controlsStart,
+      source.indexOf("/>", controlsStart),
+    );
+
+    expect(controlsBlock).toContain(
+      "onCameraInteractionStart={onCameraInteractionStart}",
+    );
+    expect(controlsBlock).toContain(
+      "onCameraInteractionEnd={onCameraInteractionEnd}",
+    );
+  });
+
   it("passes the requested FDM Airbox wireframe and points into the inactive-cell layer", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
