@@ -462,34 +462,37 @@ unsigned-density centre, a maximum-amplitude pixel, or a centre computed after
 discarding negative triangle contributions is not admissible.
 
 The steady interval is selected from all contiguous sample intervals $[i,j]$.
-Times must be finite and strictly increasing. For $N=j-i+1$, adjacent secant
+Times must be finite and strictly increasing. For $N_w=j-i+1$, adjacent secant
 speeds, their mean, and the population coefficient of variation are
 
 ```{math}
 :label: skyrmion-candidate-speed-statistics
 s_k=\frac{\lVert\mathbf r_{k+1}-\mathbf r_k\rVert}{t_{k+1}-t_k},
 \qquad
-\bar s=\frac{1}{N-1}\sum_{k=i}^{j-1}s_k,\qquad
-c_v=\frac{\sqrt{\frac{1}{N-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}.
+\bar s=\frac{1}{N_w-1}\sum_{k=i}^{j-1}s_k,\qquad
+c_v=\frac{\sqrt{\frac{1}{N_w-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}.
 ```
 
+(skyrmion-hall-steady-window-thresholds)=
 A candidate requires all of the following exact `skyrmion_hall_angle_v1`
 thresholds:
 
-- at least $N=21$ samples and duration $t_j-t_i\ge100\,\mathrm{ps}$;
+- at least $N_w=21$ samples and duration $t_j-t_i\ge100\,\mathrm{ps}$;
 - one charge sign, $|Q_n|\ge0.5$, and
   $\max_n|Q_n-Q_{\mathrm{med}}|\le0.05|Q_{\mathrm{med}}|$, where the
   deterministic median is the sorted middle value or the arithmetic mean of
-  the two sorted middle values for even $N$;
+  the two sorted middle values for even $N_w$;
 - distance from the centre to every track edge of at least $16\,\mathrm{nm}$;
 - net displacement at least $4\,\mathrm{nm}$ and $\bar s\ge1\,\mathrm{m\,s^{-1}}$;
 - $c_v\le0.10$.
 
+(skyrmion-hall-candidate-window-selection)=
 Enumerate every interval in increasing start index and then increasing end
 index. Among passing candidates select maximum duration; an exact duration tie
 selects the minimum start index, then the minimum end index. This is the only
 candidate-window selection and tie-break rule.
 
+(skyrmion-hall-equal-weight-wls)=
 The v1 trajectory producer does not estimate centre-coordinate uncertainty:
 position variances are not produced by the signed triangle-density moment.
 Inventing $\sigma_{x,n}^2$ or $\sigma_{y,n}^2$ from grid spacing would attach
@@ -500,7 +503,7 @@ one common sample mask and an intercept:
 
 ```{math}
 :label: skyrmion-hall-weighted-regression
-w_n=1,\quad W=\sum_nw_n=N,\quad
+w_n=1,\quad W=\sum_nw_n=N_w,\quad
 \bar t_w=\frac{\sum_nw_nt_n}{W},\quad
 \bar x_w=\frac{\sum_nw_nx_n}{W},\quad
 \bar y_w=\frac{\sum_nw_ny_n}{W},\quad
@@ -511,18 +514,19 @@ v_y=\frac{\sum_nw_n(t_n-\bar t_w)(y_n-\bar y_w)}{S_{tt}},\quad
 b_x=\bar x_w-v_x\bar t_w,\quad b_y=\bar y_w-v_y\bar t_w.
 ```
 
-The fit is invalid when $S_{tt}\le0$ or $N-2\le0$. For $a,b\in\{x,y\}$,
+The fit is invalid when $S_{tt}\le0$ or $N_w-2\le0$. For $a,b\in\{x,y\}$,
 $r_{a,n}=a_n-(b_a+v_at_n)$ and the equal-weight residual cross-covariance
-uses exactly $N-2$ degrees of freedom. The complete reported two-coordinate
+uses exactly $N_w-2$ degrees of freedom. The complete reported two-coordinate
 velocity covariance is
 
 ```{math}
 :label: skyrmion-hall-weighted-covariance
 r_{a,n}=a_n-(b_a+v_at_n),\qquad
-\chi_{ab}=\frac{1}{N-2}\sum_nr_{a,n}r_{b,n},\qquad
+\chi_{ab}=\frac{1}{N_w-2}\sum_nr_{a,n}r_{b,n},\qquad
 \operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}.
 ```
 
+(skyrmion-hall-trajectory-provenance)=
 Every trajectory sample must provide `accepted_sequence`, finite strictly
 increasing `time_s`, finite `topological_charge`, finite two-component
 `centre_m`, and finite nonnegative `minimum_edge_distance_m`. These fields
@@ -570,8 +574,8 @@ off-diagonal term:
 | $s_k$ | $s_k$ | adjacent secant speed | $\mathrm{m\,s^{-1}}$ |
 | $\bar s$ | $\bar s$ | arithmetic mean of adjacent secant speeds | $\mathrm{m\,s^{-1}}$ |
 | $c_v$ | $c_v$ | coefficient of variation of adjacent speeds | $1$ |
-| $N$ | $N$ | number of samples in a candidate window | $1$ |
-| $W$ | $W$ | sum of equal sample weights, exactly $N$ | $1$ |
+| $N_w$ | $N_w$ | number of samples in a candidate Hall window | $1$ |
+| $W$ | $W$ | sum of equal sample weights, exactly $N_w$ | $1$ |
 | $S_{tt}$ | $S_{tt}$ | centred equal-weight time normal-matrix entry | $\mathrm{s^2}$ |
 | $\bar t_w$ | $\bar t_w$ | weighted mean trajectory time | $\mathrm{s}$ |
 | $\bar x_w,\bar y_w$ | $\bar x_w,\bar y_w$ | weighted mean centre coordinates | $\mathrm{m}$ |
@@ -583,6 +587,7 @@ off-diagonal term:
 | $\operatorname{Cov}(v_a,v_b)$ | $\operatorname{Cov}(v_a,v_b)$ | fitted velocity covariance entry | $\mathrm{m^2\,s^{-2}}$ |
 | $\operatorname{Var}(\Theta_H)$ | $\operatorname{Var}(\Theta_H)$ | delta-method Hall-angle variance | $\mathrm{rad^2}$ |
 
+(skyrmion-hall-reason-code-precedence)=
 The method returns no angle and exactly one stable reason code. Precedence is
 `topology_lost` → `edge_contaminated` → `insufficient_samples` → `no_motion` → `no_stationary_window`.
 `topology_lost` wins for any
@@ -901,3 +906,8 @@ evidence. The Hall-angle row remains planned and unqualified.
 | Managed evidence validator | scripts/validate_topological_charge_runtime.py | validate_evidence | reject incomplete FDM/FEM managed-runtime evidence | managed cross-backend recipes |
 | Belavin-Polyakov validation contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:validation | own the independent continuum validation target | documentation contract; not production-kernel evidence |
 | Planned trajectory and Hall angle | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-angle-v1-contract | freeze signed-density centre, steady-window, regression, covariance, angle, and reason-code semantics | planned contract only; not implemented or qualified |
+| Hall steady-window thresholds | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-steady-window-thresholds | freeze all numeric candidate-window gates | planned contract only; Task 1 owner; not implemented or qualified |
+| Hall candidate-window selection | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-candidate-window-selection | freeze exhaustive enumeration and deterministic tie-break | planned contract only; Task 1 owner; not implemented or qualified |
+| Hall equal-weight WLS and covariance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-equal-weight-wls | freeze equal weights, intercept fit, residual covariance, and velocity covariance | planned contract only; Task 1 owner; not implemented or qualified |
+| Hall trajectory provenance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-trajectory-provenance | freeze required sample fields and common provenance identity | planned contract only; Task 1 owner; not implemented or qualified |
+| Hall reason-code precedence | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-reason-code-precedence | freeze fail-closed reason ordering and gate ownership | planned contract only; Task 1 owner; not implemented or qualified |

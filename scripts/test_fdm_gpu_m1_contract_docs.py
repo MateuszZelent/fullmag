@@ -2509,9 +2509,9 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         for fragment in (
             r"\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi}",
             r"\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}",
-            r"c_v=\frac{\sqrt{\frac{1}{N-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}",
+            r"c_v=\frac{\sqrt{\frac{1}{N_w-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}",
             r"w_n=1",
-            r"\chi_{ab}=\frac{1}{N-2}\sum_nr_{a,n}r_{b,n}",
+            r"\chi_{ab}=\frac{1}{N_w-2}\sum_nr_{a,n}r_{b,n}",
             r"\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}",
             "position variances are not produced",
             "equal_weight_v1",
@@ -2526,6 +2526,7 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         )
 
     def test_topological_source_map_covers_equations_and_numerical_claims(self) -> None:
+        page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
         source_map = json.loads(TOPOLOGICAL_SOURCE_MAP.read_text(encoding="utf-8"))
         equations = {row["id"]: row for row in source_map["equations"]}
         self.assertEqual(
@@ -2559,21 +2560,40 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             "skyrmion-hall-angle",
             "skyrmion-hall-angle-variance",
         ):
-            self.assertEqual(["skyrmion-hall-contract"], equations[equation_id]["sources"])
+            equation = equations[equation_id]
+            self.assertEqual("Task 1", equation.get("owner_task"))
+            self.assertEqual("planned_contract", equation.get("evidence_status"))
+            self.assertTrue(equation["sources"])
+
+        hall_section = _anchored_section(
+            page,
+            "(skyrmion-hall-angle-v1-contract)=",
+            "\n### 4.3 Planner and capability impact",
+        )
+        hall_document_labels = set(re.findall(r":label:\s+([^\s]+)", hall_section))
+        hall_map_labels = {
+            equation_id
+            for equation_id, equation in equations.items()
+            if equation.get("owner_task") == "Task 1"
+        }
+        self.assertEqual(hall_document_labels, hall_map_labels)
 
         claims = {row["id"]: row for row in source_map["claims"]}
-        self.assertEqual(
-            {
-                "scaled-vector-normalization",
-                "exceptional-triangle-thresholds",
-                "under-resolution-threshold",
-                "support-topology-qualification",
-                "boundary-uniformity-threshold",
-                "fdm-cell-thickness-weighting",
-                "fem-auto-profile-count",
-            },
-            set(claims),
-        )
+        task_1_claim_sources = {
+            "skyrmion-hall-steady-window-thresholds": "skyrmion-hall-window-thresholds-contract",
+            "skyrmion-hall-exhaustive-window-selection": "skyrmion-hall-window-selection-contract",
+            "skyrmion-hall-equal-weight-wls": "skyrmion-hall-equal-weight-wls-contract",
+            "skyrmion-hall-covariance": "skyrmion-hall-equal-weight-wls-contract",
+            "skyrmion-hall-trajectory-provenance": "skyrmion-hall-trajectory-provenance-contract",
+            "skyrmion-hall-reason-code-precedence": "skyrmion-hall-reason-code-contract",
+        }
+        self.assertTrue(set(task_1_claim_sources).issubset(claims))
+        for claim_id, source_id in task_1_claim_sources.items():
+            with self.subTest(claim_id=claim_id):
+                claim = claims[claim_id]
+                self.assertEqual([source_id], claim["sources"])
+                self.assertEqual("planned_contract", claim["evidence_status"])
+                self.assertEqual("Task 1", claim["owner_task"])
         source_ids = {row["id"] for row in source_map["sources"]}
         for claim in claims.values():
             self.assertTrue(claim["sources"])
@@ -2587,6 +2607,60 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             sources["topological-profile-sampling"]["symbol"],
         )
         self.assertEqual("planned_contract", sources["skyrmion-hall-contract"]["evidence_status"])
+        for source_id in set(task_1_claim_sources.values()) | {"skyrmion-hall-contract"}:
+            with self.subTest(source_id=source_id):
+                source = sources[source_id]
+                self.assertEqual(TOPOLOGICAL_PAGE.relative_to(ROOT).as_posix(), source["path"])
+                self.assertTrue(source["symbol"].startswith("DOC-ANCHOR:"))
+                self.assertEqual("planned_contract", source["evidence_status"])
+                self.assertEqual("Task 1", source["owner_task"])
+
+        symbols = {row["id"]: row for row in source_map["symbols"]}
+        self.assertEqual("N", symbols["N"]["latex"])
+        self.assertEqual("number of uniformly weighted FEM profile cuts", symbols["N"]["meaning"])
+        self.assertEqual("N_w", symbols["N_w"]["latex"])
+        self.assertEqual("number of samples in a candidate Hall window", symbols["N_w"]["meaning"])
+        self.assertEqual("Q_{\\mathrm{med}}", symbols["Q_med"]["latex"])
+
+    def test_task_1_transport_equations_are_mapped_from_document_to_source_map(self) -> None:
+        page = PAGE.read_text(encoding="utf-8")
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        equations = {row["id"]: row for row in source_map["equations"]}
+        task_1_labels = {
+            "fdm-gpu-m1-neumann-compatibility",
+            "racetrack-charge-continuity",
+            "racetrack-direct-she",
+            "racetrack-steady-spin-balance",
+            "racetrack-mixing-boundary",
+            "racetrack-torque-balance",
+            "racetrack-gilbert-llg",
+            "racetrack-theta-sh-torque-decomposition",
+            "racetrack-neel-seed",
+        }
+        self.assertTrue(task_1_labels.issubset(set(re.findall(r":label:\s+([^\s]+)", page))))
+        self.assertTrue(task_1_labels.issubset(equations))
+
+        neumann = equations["fdm-gpu-m1-neumann-compatibility"]
+        self.assertEqual("Task 1", neumann["owner_task"])
+        self.assertEqual("source_and_actual_device_tests", neumann["evidence_status"])
+        self.assertEqual(
+            [
+                "fdm-gpu-m1-neumann-gauge",
+                "fdm-gpu-m1-uniform-test",
+                "fdm-gpu-public-charge-preflight",
+            ],
+            neumann["sources"],
+        )
+
+        sources = {row["id"]: row for row in source_map["sources"]}
+        gauge = sources["fdm-gpu-m1-neumann-gauge"]
+        self.assertEqual(
+            "backends/fdm/gpu/cuda/transport/charge/device_solver.cu",
+            gauge["path"],
+        )
+        self.assertEqual("label_reference_components_kernel", gauge["symbol"])
+        self.assertEqual("actual_device_contract", gauge["evidence_status"])
+        self.assertEqual("Task 1", gauge["owner_task"])
 
     def test_new_topological_tables_use_myst_inline_math(self) -> None:
         page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
@@ -2595,6 +2669,8 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             r"| $w_n$ | $w_n$ | deterministic equal sample weight, exactly one | $1$ |",
             r"| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |",
             r"| $\chi_{ab}$ | $\chi_{ab}$ | equal-weight residual cross-covariance of centre coordinates | $\mathrm{m^2}$ |",
+            r"| $Q_{\mathrm{med}}$ | $Q_{\mathrm{med}}$ | deterministic median charge in a candidate window | $1$ |",
+            r"| $N_w$ | $N_w$ | number of samples in a candidate Hall window | $1$ |",
         ):
             self.assertIn(row, page)
         self.assertNotIn("| t_n | t_n | accepted trajectory time sample | \\mathrm{s} |", page)

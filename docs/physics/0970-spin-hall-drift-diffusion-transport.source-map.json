@@ -38,6 +38,13 @@
       "sources": ["fdm-native-charge", "fdm-gpu-m1-charge-solver", "fdm-gpu-m1-uniform-test", "fdm-gpu-m1-layered-test"]
     },
     {
+      "id": "fdm-gpu-m1-neumann-compatibility",
+      "symbols": ["b_K", "K", "C", "V", "V_bar_C"],
+      "sources": ["fdm-gpu-m1-neumann-gauge", "fdm-gpu-m1-uniform-test", "fdm-gpu-public-charge-preflight"],
+      "evidence_status": "source_and_actual_device_tests",
+      "owner_task": "Task 1"
+    },
+    {
       "id": "m2-reciprocal-constitutive-block",
       "symbols": ["Sigma_mr", "sigma_parallel", "sigma_perpendicular", "sigma_AHE", "J_c", "Q"],
       "sources": ["fem-m2-oracle", "fem-m2-c-api"]
@@ -110,6 +117,10 @@
   ],
   "symbols": [
     {"id": "V", "latex": "V", "meaning": "charge electrochemical potential", "si_unit": "\\mathrm{V}"},
+    {"id": "b_K", "latex": "b_K", "meaning": "assembled finite-volume charge right-hand side for cell $K$", "si_unit": "\\mathrm{A}"},
+    {"id": "K", "latex": "K", "meaning": "deterministic finite-volume cell index", "si_unit": "$1$"},
+    {"id": "C", "latex": "C", "meaning": "one numerically connected conducting-cell component", "si_unit": "$1$"},
+    {"id": "V_bar_C", "latex": "\\bar V_C", "meaning": "arithmetic mean charge potential on component $C$", "si_unit": "\\mathrm{V}"},
     {"id": "mu_s", "latex": "\\mu_s", "meaning": "full spin-channel splitting", "si_unit": "\\mathrm{V}"},
     {"id": "E", "latex": "E_i", "meaning": "electric field, negative charge-potential gradient", "si_unit": "\\mathrm{V\\,m^{-1}}"},
     {"id": "G", "latex": "G_{ia}", "meaning": "spin-voltage gradient", "si_unit": "\\mathrm{V\\,m^{-1}}"},
@@ -197,6 +208,7 @@
     {"id": "fdm-gpu-m1-abi", "path": "backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h", "symbol": "fullmag_fdm_gpu_transport_solve_charge_v1", "responsibility": "Declare append-only typed charge payloads, opaque handles, lifecycle, artifact, telemetry, and checkpoint records.", "evidence_status": "implemented_contract"},
     {"id": "fdm-gpu-m1-charge-context", "path": "backends/fdm/gpu/cuda/transport/context.cu", "symbol": "validate_host_view", "responsibility": "Validate typed static host records before ownership transfer and prevent malformed payload publication.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-charge-solver", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "solve_device", "responsibility": "Assemble conservative harmonic finite-volume charge and execute deterministic FP64 device CG with linear-cost geometric 2x2x2 aggregation and exact device RAP.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-neumann-gauge", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "label_reference_components_kernel", "responsibility": "Identify conductive components, enforce component-wise Neumann compatibility, and select the explicit zero-mean or boundary-reference gauge policy on device.", "evidence_status": "actual_device_contract", "owner_task": "Task 1"},
     {"id": "fdm-gpu-m1-checkpoint-codec", "path": "backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp", "symbol": "build_checkpoint", "responsibility": "Encode canonical FMGPUTR1 charge sections 1--9/18/20 and bind runtime identity-dependent digests.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-rust-abi", "path": "crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs", "symbol": "fullmag_fdm_gpu_transport_solve_charge_v1", "responsibility": "Mirror the append-only C ABI records and symbols in Rust without claiming a public runner path.", "evidence_status": "layout_contract"},
     {"id": "fdm-gpu-m1-uniform-test", "path": "backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp", "symbol": "main", "responsibility": "Check analytic uniform potential/current, AMG/cache audit, bounded transfers, and zero fallback on an actual GPU.", "evidence_status": "actual_device_contract"},

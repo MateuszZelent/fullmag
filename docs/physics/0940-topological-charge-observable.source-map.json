@@ -72,32 +72,44 @@
     {
       "id": "skyrmion-signed-density-centre",
       "symbols": ["delta_Q_nk", "Omega_nk", "c_nk", "r_nk_l", "r_n", "Q_n", "x_n", "y_n"],
-      "sources": ["skyrmion-hall-contract"]
+      "sources": ["skyrmion-hall-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     },
     {
       "id": "skyrmion-candidate-speed-statistics",
-      "symbols": ["t_n", "r_n", "s_k", "s_bar", "c_v", "N"],
-      "sources": ["skyrmion-hall-contract"]
+      "symbols": ["t_n", "r_n", "s_k", "s_bar", "c_v", "N_w"],
+      "sources": ["skyrmion-hall-window-thresholds-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     },
     {
       "id": "skyrmion-hall-weighted-regression",
       "symbols": ["t_n", "w_n", "x_n", "y_n", "v_x", "v_y", "b_x", "b_y", "W", "S_tt", "t_bar_w", "xy_bar_w"],
-      "sources": ["skyrmion-hall-contract"]
+      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     },
     {
       "id": "skyrmion-hall-weighted-covariance",
-      "symbols": ["w_n", "r_a_n", "a_b_index", "chi_ab", "velocity_covariance", "S_tt", "N"],
-      "sources": ["skyrmion-hall-contract"]
+      "symbols": ["w_n", "r_a_n", "a_b_index", "chi_ab", "velocity_covariance", "S_tt", "N_w"],
+      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     },
     {
       "id": "skyrmion-hall-angle",
       "symbols": ["v_x", "v_y", "Theta_H"],
-      "sources": ["skyrmion-hall-contract"]
+      "sources": ["skyrmion-hall-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     },
     {
       "id": "skyrmion-hall-angle-variance",
       "symbols": ["v_x", "v_y", "velocity_covariance", "Theta_variance"],
-      "sources": ["skyrmion-hall-contract"]
+      "sources": ["skyrmion-hall-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     },
     {
       "id": "belavin-polyakov-texture",
@@ -120,7 +132,7 @@
     {"id": "Q_bar", "latex": "\\bar Q", "meaning": "full-thickness averaged topological charge", "si_unit": "$1$"},
     {"id": "Q_si", "latex": "Q(s_i)", "meaning": "topological charge at physical cut $s_i$", "si_unit": "$1$"},
     {"id": "delta_s_i", "latex": "\\Delta s_i", "meaning": "physical thickness weight owned by FDM cut $i$", "si_unit": "\\mathrm{m}"},
-    {"id": "N", "latex": "N", "meaning": "number of samples in a candidate window", "si_unit": "$1$"},
+    {"id": "N", "latex": "N", "meaning": "number of uniformly weighted FEM profile cuts", "si_unit": "$1$"},
     {"id": "i", "latex": "i", "meaning": "deterministic layer or profile-cut index", "si_unit": "$1$"},
     {"id": "t_n", "latex": "t_n", "meaning": "accepted trajectory time sample", "si_unit": "\\mathrm{s}"},
     {"id": "w_n", "latex": "w_n", "meaning": "deterministic equal sample weight, exactly one", "si_unit": "$1$"},
@@ -135,10 +147,12 @@
     {"id": "r_nk_l", "latex": "\\mathbf r_{n,k,\\ell}", "meaning": "physical position of support vertex $\\ell$ on triangle $k$", "si_unit": "\\mathrm{m}"},
     {"id": "r_n", "latex": "\\mathbf r_n", "meaning": "signed-density skyrmion centre", "si_unit": "\\mathrm{m}"},
     {"id": "Q_n", "latex": "Q_n", "meaning": "signed topological charge at trajectory sample $n$", "si_unit": "$1$"},
+    {"id": "Q_med", "latex": "Q_{\\mathrm{med}}", "meaning": "deterministic median charge in a candidate window", "si_unit": "$1$"},
     {"id": "s_k", "latex": "s_k", "meaning": "adjacent secant speed", "si_unit": "\\mathrm{m\\,s^{-1}}"},
     {"id": "s_bar", "latex": "\\bar s", "meaning": "arithmetic mean of adjacent secant speeds", "si_unit": "\\mathrm{m\\,s^{-1}}"},
     {"id": "c_v", "latex": "c_v", "meaning": "coefficient of variation of adjacent speeds", "si_unit": "$1$"},
-    {"id": "W", "latex": "W", "meaning": "sum of equal sample weights, exactly $N$", "si_unit": "$1$"},
+    {"id": "N_w", "latex": "N_w", "meaning": "number of samples in a candidate Hall window", "si_unit": "$1$"},
+    {"id": "W", "latex": "W", "meaning": "sum of equal sample weights, exactly $N_w$", "si_unit": "$1$"},
     {"id": "S_tt", "latex": "S_{tt}", "meaning": "centred equal-weight time normal-matrix entry", "si_unit": "\\mathrm{s^2}"},
     {"id": "t_bar_w", "latex": "\\bar t_w", "meaning": "weighted mean trajectory time", "si_unit": "\\mathrm{s}"},
     {"id": "xy_bar_w", "latex": "\\bar x_w,\\bar y_w", "meaning": "weighted mean centre coordinates", "si_unit": "\\mathrm{m}"},
@@ -220,7 +234,48 @@
       "path": "docs/physics/0940-topological-charge-observable.md",
       "symbol": "DOC-ANCHOR:skyrmion-hall-angle-v1-contract",
       "responsibility": "Freeze signed-density centre, steady-window, weighted-regression, covariance, angle, and reason-code semantics without claiming implementation.",
-      "evidence_status": "planned_contract"
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-window-thresholds-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-steady-window-thresholds",
+      "responsibility": "Freeze the exact sample-count, duration, charge, edge-distance, displacement, mean-speed, and speed-variation thresholds.",
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-window-selection-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-candidate-window-selection",
+      "responsibility": "Freeze exhaustive contiguous-window enumeration and the maximum-duration, minimum-start, minimum-end tie-break.",
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-equal-weight-wls-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-equal-weight-wls",
+      "responsibility": "Freeze equal sample weights, the common-mask intercept fit, residual cross-covariance, and full velocity covariance.",
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-trajectory-provenance-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-trajectory-provenance",
+      "responsibility": "Freeze required numeric sample fields and one consistent revision, generation, snapshot, stage, and cache identity.",
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-reason-code-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-reason-code-precedence",
+      "responsibility": "Freeze the fail-closed reason-code precedence and the physical gate owned by each reason.",
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     }
   ],
   "claims": [
@@ -258,6 +313,42 @@
       "id": "fem-auto-profile-count",
       "sources": ["topological-profile-sampling", "topological-fem-weighting"],
       "evidence_status": "source_and_tests"
+    },
+    {
+      "id": "skyrmion-hall-steady-window-thresholds",
+      "sources": ["skyrmion-hall-window-thresholds-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-exhaustive-window-selection",
+      "sources": ["skyrmion-hall-window-selection-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-equal-weight-wls",
+      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-covariance",
+      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-trajectory-provenance",
+      "sources": ["skyrmion-hall-trajectory-provenance-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
+    },
+    {
+      "id": "skyrmion-hall-reason-code-precedence",
+      "sources": ["skyrmion-hall-reason-code-contract"],
+      "evidence_status": "planned_contract",
+      "owner_task": "Task 1"
     }
   ],
   "planned_symbols": [
