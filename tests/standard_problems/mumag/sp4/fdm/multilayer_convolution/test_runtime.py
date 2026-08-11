@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -60,6 +63,31 @@ def test_sp4_derived_scenario_declares_multilayer_and_changed_airbox_mesh() -> N
     assert AIRBOX_RUNTIME["padding_cells_above_below"] == (5, 9)
     assert AIRBOX_RUNTIME["target_only"] is True
     assert AIRBOX_RUNTIME["origin_m"] == (-250e-9, -62.5e-9, -28.5e-9)
+
+
+def test_sp4_derived_scenario_exports_scene_document_outside_repo_import_path(
+    tmp_path: Path,
+) -> None:
+    package_source = Path(__file__).resolve().parents[6] / "packages" / "fullmag-py" / "src"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "fullmag.runtime.helper",
+            "export-scene-document",
+            "--script",
+            str(SCENARIO_PATH),
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(package_source)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    scene = json.loads(completed.stdout)
+    assert {item["id"] for item in scene["objects"]} == {"layer_bottom", "layer_top"}
 
 
 def test_runtime_verifier_fails_closed_when_cpu_artifacts_are_absent(tmp_path: Path) -> None:
