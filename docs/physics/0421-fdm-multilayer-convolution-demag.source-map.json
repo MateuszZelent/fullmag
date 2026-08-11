@@ -355,7 +355,13 @@
       "path": "crates/fullmag-plan/src/fdm.rs",
       "symbol": "plan_fdm_multilayer",
       "responsibility": "validates that multilayer boundary intent is exactly neutral before constructing layer plans",
-      "evidence_status": "source-tested fail-closed planner contract only; no runtime or device proof"
+      "test_path": "crates/fullmag-plan/src/tests.rs",
+      "test_symbol": "multilayer_planner_rejects_every_non_neutral_boundary_intent",
+      "evidence_status": "source-tested fail-closed planner contract only; no runtime or device proof",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/de61f3979370bd8a073a4a2891455cb46009076e/crates/fullmag-plan/src/fdm.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/de61f3979370bd8a073a4a2891455cb46009076e/crates/fullmag-plan/src/tests.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
     },
     {
       "id": "cpuCatalog",
