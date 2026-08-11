@@ -145,7 +145,7 @@ study = fm.study("interfacial_dmi_boundary_twist")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fdm(default_cell=(2 * nm, 2 * nm, 2 * nm))
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 
 # %% Geometry, material, chiral state, and interactions
 strip = study.geometry(

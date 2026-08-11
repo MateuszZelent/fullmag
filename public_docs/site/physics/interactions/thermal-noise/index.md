@@ -210,7 +210,7 @@ study = fm.study("thermal_noise_reference")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.cell(2 * nm, 2 * nm, 5 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
 
 # %% Geometry, material, initial state, and interactions
 film = study.geometry(

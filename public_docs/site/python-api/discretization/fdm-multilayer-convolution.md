@@ -28,12 +28,10 @@ Three layouts must not be confused:
 3. an optional **target-only Airbox grid** carries only the published `H_demag` observation outside
    the magnetic support.
 
-This is an FDM multimesh configuration, not a FEM meshing workflow. Each `per_magnet` entry
-defines that magnet's native Cartesian grid. The common XY grid is the shared FFT supercell/kernel
-layout selected by `common_cells_xy` (or its three-dimensional analogue), not an extra material
-body. Layer separation is set by the geometry transforms, hence by the resulting native-grid
-origins along $z$; it is not encoded by a `universe.mesh(...)` call. Do not add a FEM universe-mesh
-request to make this FDM method executable.
+The public authoring vocabulary mirrors FEM: `body.mesh(...)` configures an object's native mesh,
+while `study.universe.mesh(...)` configures the shared computational domain. For FDM both calls
+use `cell_size=(dx, dy, dz)`. The common domain is FFT scratch, not an extra magnetic body.
+Layer separation still comes only from geometry transforms and the resulting native-grid origins.
 
 (python-api-fdm-multilayer-convolution-governing-equations)=
 <!-- (governing-equations)= -->
@@ -128,12 +126,14 @@ Python or `ProblemIR` is not proof that a requested GPU lane executed.
 
 ### Complete parameter reference
 
-The `per_magnet` keys must be the canonical magnet names passed to `study.geometry(..., name=...)`.
-`cell=` is retained as a legacy alias of `default_cell=`; new multilayer scripts should use
-`default_cell=` explicitly.
+Normal scripts use the first three rows below. The legacy `FDM*` classes remain compatibility
+adapters and are not canonical authoring syntax.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
+| `body.mesh(cell_size=...)` | `Sequence[float] of length 3` | required unless a default exists | $\mathrm{m}$ | Three finite positive values; each object extent must be exactly divisible. | Native Cartesian cell size for that magnetic object. | FDM CPU/GPU subject to planner capability gates. | `.fdm.per_magnet[object_name].cell` |
+| `study.objects.mesh.defaults(cell_size=...)` | `Sequence[float] of length 3` | `None` | $\mathrm{m}$ | Three finite positive values. | Default native cell size for objects without an override. | FDM CPU/GPU. | `.fdm.default_cell` |
+| `study.universe.mesh(cell_size=...)` | `Sequence[float] of length 3` | inferred only for compatible grids | $\mathrm{m}$ | Three finite positive values; must divide the common envelope exactly. | Requested common convolution-grid resolution. | FDM multilayer CPU/GPU subject to lane qualification. | `.fdm.demag.common_cell_size` |
 | `FDMGrid.cell` | `Sequence[float] of length 3` | required | $\mathrm{m}$ per component | Exactly three finite, strictly positive components. | Native Cartesian cell size for one named magnet. | FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane. | `backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell` |
 | `FDMDemag.strategy` | `Literal["auto", "single_grid", "multilayer_convolution"]` | `"auto"` | $1$ | Must be one of the three literal values. | Requested demagnetization topology; use `"multilayer_convolution"` to force this path. | FDM CPU/GPU; multi-body `single_grid` is currently rejected by the planner. | `backend_policy.discretization_hints.fdm.demag.strategy` |
 | `FDMDemag.mode` | `Literal["auto", "two_d_stack", "three_d"]` | `"auto"` | $1$ | Must be one of the three literal values. | Requested thin-film stack or full 3-D convolution mode. | FDM CPU/GPU subject to geometry and native-Z constraints. | `backend_policy.discretization_hints.fdm.demag.mode` |
@@ -165,22 +165,8 @@ study.device("cpu", precision="double")
 study.mode("strict")
 study.interactive(False)
 
-# %% Native layer grids and common FFT scratch grid
+# %% Native cell size
 native_cell = (4.0 * nm, 4.0 * nm, 3.0 * nm)
-study.fdm(
-    default_cell=native_cell,
-    per_magnet={
-        "layer_bottom": fm.FDMGrid(cell=native_cell),
-        "layer_middle": fm.FDMGrid(cell=native_cell),
-        "layer_top": fm.FDMGrid(cell=native_cell),
-    },
-    demag=fm.FDMDemag(
-        strategy="multilayer_convolution",
-        mode="two_d_stack",
-        common_cells_xy=(8, 4),
-        explain=True,
-    ),
-)
 
 # %% Universe and three non-overlapping, XY-aligned layers
 study.universe(
@@ -200,6 +186,9 @@ top = study.geometry(
     fm.Box(size=layer_size).translate((0.0, 0.0, 18.0 * nm)),
     name="layer_top",
 )
+for layer in (bottom, middle, top):
+    layer.mesh(cell_size=native_cell)
+study.universe.mesh(cell_size=native_cell)
 
 # %% Material state and interactions
 for layer in (bottom, middle, top):
@@ -222,15 +211,11 @@ study.tableautosave(
 study.stages.add_run(until=1.0e-13, stage_id="multilayer_run")
 ```
 
-Use `mode="three_d"` with `common_cells=(N_x,N_y,N_z)` when any native layer has more than one
-Z cell. Do not set both common-grid fields. Omitting both delegates common-grid sizing to the
-planner; it does not turn the common grid into a physical layer mesh. This Fullmag planner-auto
-policy is not BORIS `ncommonstatus=false`: the authored `ProblemIR` has no `common_cells*` fields,
-and the resolved union-scratch layout is recorded in the plan/provenance rather than reproducing
-BORIS's largest-mesh default. The common grid is a supercell for kernel/FFT work, while each layer
-retains its own FDM grid and z origin.
-Likewise, `two_d_stack` is not BORIS `2dmulticonvolution=1` or `=2`; it requires one native Z cell
-per layer.
+The planner selects `two_d_stack` only when every native layer has exactly one Z cell and no
+explicit 3-D common resolution is requested. Supplying `study.universe.mesh(cell_size=...)`
+requests a full 3-D common grid, so the resolved mode is `three_d`. This is deliberate: the three
+components specify the physical resolution of the FFT supercell, while each layer keeps its own
+native grid and world-space Z origin.
 
 ### Optional CPU FP64 target-only Airbox observation
 
@@ -247,24 +232,15 @@ study = fm.study("fdm_multilayer_airbox_guide")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fdm(
-    default_cell=(4.0 * nm, 4.0 * nm, 3.0 * nm),
-    per_magnet={
-        "bottom": fm.FDMGrid(cell=(4.0 * nm, 4.0 * nm, 3.0 * nm)),
-        "top": fm.FDMGrid(cell=(4.0 * nm, 4.0 * nm, 3.0 * nm)),
-    },
-    demag=fm.FDMDemag(
-        strategy="multilayer_convolution",
-        mode="two_d_stack",
-        common_cells_xy=(8, 4),
-    ),
-)
 study.universe(mode="manual", size=(40.0 * nm, 20.0 * nm, 30.0 * nm), center=(0.0, 0.0, 4.5 * nm))
 bottom = study.geometry(fm.Box(size=(32.0 * nm, 16.0 * nm, 3.0 * nm)), name="bottom")
 top = study.geometry(
     fm.Box(size=(32.0 * nm, 16.0 * nm, 3.0 * nm)).translate((0.0, 0.0, 9.0 * nm)),
     name="top",
 )
+for layer in (bottom, top):
+    layer.mesh(cell_size=(4.0 * nm, 4.0 * nm, 3.0 * nm))
+study.universe.mesh(cell_size=(4.0 * nm, 4.0 * nm, 3.0 * nm))
 for layer in (bottom, top):
     layer.Ms = 800.0e3
     layer.Aex = 13.0e-12
@@ -301,7 +277,7 @@ non-CPU-reference execution engine and rejects non-FP64 provenance.
 <!-- (problem-ir)= -->
 ## Canonical ProblemIR
 
-`study.fdm(...)` produces `backend_policy.discretization_hints.fdm`. The following JSON is the
+The physics-first mesh calls produce `backend_policy.discretization_hints.fdm`. The following JSON is the
 canonical `ProblemIR` wrapper produced by the first example's FDM objects; `explain` is absent by
 design because it is an authoring/display preference. The surrounding `backend_policy` path is
 part of the canonical contract, not an illustrative shorthand:
@@ -332,7 +308,7 @@ part of the canonical contract, not an illustrative shorthand:
 ```
 
 The physical interaction remains a separate global `Demag` energy term. `study.demag(enabled=True)`
-controls whether that term is enabled; `study.fdm(..., demag=FDMDemag(...))` is a distinct FDM
+controls whether that term is enabled; the mesh calls are a distinct FDM
 discretization policy which selects how that enabled term is realized. They are not normalized by
 one shared Python resolver. The planner lowers the authored FDM subtree to
 `BackendPlanIR::FdmMultilayer`, whose resolved payload contains:
@@ -372,7 +348,7 @@ The authoring path is one chain, including the per-magnet identity:
 | Layer | Source symbol | Contract |
 |---|---|---|
 | Control Room draft | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts::buildStudyGlobalMergePatch` | Global fields (`study.fdm.default_cell`, `study.fdm.per_magnet`, `study.fdm.demag`, and `study.demag_enabled`) are written to one canonical scene merge patch. |
-| Generated script | `packages/fullmag-py/src/fullmag/runtime/script_builder.py::render_loaded_problem_as_script` | The scene patch renders as independent `study.demag(enabled=True)` and `study.fdm(default_cell=..., per_magnet={...}, demag=fm.FDMDemag(...))` calls. |
+| Generated script | `packages/fullmag-py/src/fullmag/runtime/script_builder.py::render_loaded_problem_as_script` | The scene patch renders independent `study.demag(enabled=True)`, per-object mesh calls, and the optional common-universe mesh call. |
 | Per-magnet lookup | `study.geometry(..., name="layer_bottom")` and `per_magnet["layer_bottom"]` | The geometry name is the canonical key. It is not a generated mesh alias and it must not be silently renamed. |
 | Python lowering | `packages/fullmag-py/src/fullmag/model/discretization.py::FDM.to_ir` | Native cells and demag policy lower under `backend_policy.discretization_hints.fdm`. |
 | Planner resolution | `crates/fullmag-plan/src/fdm.rs::plan_fdm_multilayer` | Geometry, mode, common transform, transfer, pair keys, and eligibility become resolved execution; authored values remain requested intent. |
@@ -403,7 +379,7 @@ allocation. Unsupported combinations fail without silently changing multilayer t
 CUDA to CPU, or `three_d` to `two_d_stack`.
 
 The Control Room's global Demag toggle is exported as `study.demag(...)`; the FDM policy is
-exported independently as `study.fdm(..., demag=fm.FDMDemag(...))`. A saved `explain` checkbox may
+exported independently as physics-first mesh calls. A saved `explain` checkbox may
 round-trip through authoring state and generated Python even though it does not enter physical
 `ProblemIR`.
 
@@ -553,7 +529,7 @@ runtime-resource, and UI behavior.
 | Global physical Demag term | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | physical energy-term configuration, separate from FDM policy | Python authoring tests |
 | Study authoring split | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` (`fdm`, `demag`) | independently accepts the global interaction and FDM discretization policy | Python authoring tests |
 | Complete FDM hint container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | default/native grids and boundary policy | Python/UI round-trip tests |
-| Generated stage-first Python | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `render_loaded_problem_as_script` | emits independent `study.demag(...)` and `study.fdm(...)` calls from canonical state | script-builder tests |
+| Generated stage-first Python | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `render_loaded_problem_as_script` | emits independent `study.demag(...)`, per-object mesh, and common-universe mesh calls from canonical state | script-builder tests |
 | Kernel reuse identity | `crates/fullmag-fdm-demag/src/descriptors.rs` | `from_pair_with_layout` | builds `KernelReuseKey` from oriented shifts, source/destination cell sizes, exact transform shape, padding, and crop | unit tests |
 | Per-magnet local validation | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM.__init__` | rejects empty names and non-`FDMGrid` values; matching names to authored geometry is planner validation | Python/planner tests |
 | Resolved multilayer plan | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | geometry eligibility, mode/grid resolution, transfer, certificate, provenance | planner tests |

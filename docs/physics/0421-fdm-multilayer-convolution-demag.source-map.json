@@ -278,13 +278,31 @@
       "id": "geometry-mesh-authoring",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "class GeometryMeshHandle",
-      "responsibility": "Owns the shared per-object mesh facade that will carry canonical FDM cell_size authoring."
+      "responsibility": "Validates and lowers canonical per-object FDM cell_size authoring."
     },
     {
       "id": "universe-mesh-authoring",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "class StudyUniverseHandle",
-      "responsibility": "Owns FEM airbox mesh controls and the approved FDM common-domain cell_size authoring scope."
+      "responsibility": "Owns unchanged FEM airbox controls and validates canonical FDM common-domain cell_size authoring."
+    },
+    {
+      "id": "requested-common-cell-plan",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "validate_requested_common_cell_size",
+      "responsibility": "Preserves the authored common cell size independently of resolved grid counts.",
+      "test_path": "crates/fullmag-plan/src/tests.rs",
+      "test_symbol": "fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding",
+      "evidence_status": "executable requested/resolved planner contract"
+    },
+    {
+      "id": "multilayer-layout-resource",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_multilayer_layout_resource",
+      "responsibility": "Publishes requested common cell size separately from the resolved FFT transform layout.",
+      "test_path": "crates/fullmag-api/src/router_v2/tests.rs",
+      "test_symbol": "fdm_multilayer_layout_exposes_common_and_native_layer_metadata",
+      "evidence_status": "executable HTTP v2 resource contract"
     },
     {
       "id": "continuousTheory",

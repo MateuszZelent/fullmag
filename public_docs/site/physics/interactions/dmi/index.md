@@ -188,7 +188,7 @@ import fullmag as fm
 
 study = fm.study("dmi-stage-boundary")
 study.engine("fdm")
-study.cell(2e-9, 2e-9, 1e-9)
+study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 1e-9))
 body = study.geometry(fm.Box(40e-9, 40e-9, 1e-9), name="film")
 body.Ms = 8.0e5
 body.Aex = 13e-12

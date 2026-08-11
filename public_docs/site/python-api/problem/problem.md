@@ -71,7 +71,7 @@ import fullmag as fm
 study = fm.study("problem_api_example")
 study.engine("fdm")
 study.device("cpu", precision="double")
-study.cell(2e-9, 2e-9, 5e-9)
+study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 5e-9))
 study.exchange()
 film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
 film.Ms = 8.0e5

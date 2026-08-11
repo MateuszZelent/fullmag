@@ -165,7 +165,7 @@ study = fm.study("interfacial_dmi_neel_skyrmion")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fdm(default_cell=(2 * nm, 2 * nm, 1 * nm))
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 1 * nm))
 
 # %% Geometry, material, initial texture, and interactions
 film = study.geometry(

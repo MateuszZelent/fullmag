@@ -56,7 +56,7 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.exchange()
-study.cell(2 * nm, 2 * nm, 5 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
 film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
 film.Ms = 800.0e3
 film.Aex = 13.0e-12

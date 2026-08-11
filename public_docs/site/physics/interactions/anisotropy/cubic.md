@@ -177,7 +177,7 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.exchange()
-study.cell(2 * nm, 2 * nm, 1 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 1 * nm))
 
 body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
 body.Ms = 800.0e3

@@ -177,7 +177,7 @@ nm = 1.0e-9
 study = fm.study("exchange_only")
 study.engine("fdm")
 study.exchange()
-study.cell(2 * nm, 2 * nm, 1 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 1 * nm))
 
 # %% Geometry and material
 body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")

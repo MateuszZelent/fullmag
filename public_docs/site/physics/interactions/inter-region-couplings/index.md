@@ -140,7 +140,7 @@ study = fm.study("region_exchange")
 study.engine("fdm")
 study.device("cuda", precision="double")
 study.mode("strict")
-study.cell(2 * nm, 2 * nm, 2 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 
 # %% Magnetic object and named regions
 body = study.geometry(fm.Box(80 * nm, 20 * nm, 4 * nm), name="bilayer")

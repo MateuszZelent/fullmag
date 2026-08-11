@@ -134,7 +134,7 @@ study = fm.study("prescribed-sot-doc")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.cell(2e-9, 2e-9, 1e-9)
+study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 1e-9))
 
 body = study.geometry(fm.Box(40e-9, 20e-9, 1e-9), name="free_layer")
 body.Ms = 8.0e5
@@ -194,7 +194,7 @@ and module records remain present. `sot.to_ir_module()` appears verbatim under
     "name": "prescribed-sot-doc",
     "description": null,
     "script_language": "python",
-    "script_source": "# %% Study, backend, geometry, and material\nimport fullmag as fm\n\nstudy = fm.study(\"prescribed-sot-doc\")\nstudy.engine(\"fdm\")\nstudy.device(\"cpu\", precision=\"double\")\nstudy.mode(\"strict\")\nstudy.cell(2e-9, 2e-9, 1e-9)\n\nbody = study.geometry(fm.Box(40e-9, 20e-9, 1e-9), name=\"free_layer\")\nbody.Ms = 8.0e5\nbody.Aex = 13.0e-12\nbody.alpha = 0.02\nbody.m = fm.texture.uniform(1.0, 0.0, 0.0)\n\n# %% Canonical prescribed SOT registration\nsot = fm.PrescribedSpinOrbitTorque(\n    name=\"hm_sot\",\n    target=fm.RegionRef(\"free_layer\"),\n    drive=fm.SignedScalarDrive(\n        current_density_Apm2=-4.0e11,\n        sigma=(0.0, 1.0, 0.0),\n    ),\n    xi_dl=0.12,\n    xi_fl=-0.03,\n    free_layer_thickness_m=1.5e-9,\n)\nstudy.spin_torque(sot)\n\n# %% Ordered stage\nstudy.stages.add_run(2.0e-12, stage_id=\"sot_run\")\n",
+    "script_source": "# %% Study, backend, geometry, and material\nimport fullmag as fm\n\nstudy = fm.study(\"prescribed-sot-doc\")\nstudy.engine(\"fdm\")\nstudy.device(\"cpu\", precision=\"double\")\nstudy.mode(\"strict\")\nstudy.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 1e-9))\n\nbody = study.geometry(fm.Box(40e-9, 20e-9, 1e-9), name=\"free_layer\")\nbody.Ms = 8.0e5\nbody.Aex = 13.0e-12\nbody.alpha = 0.02\nbody.m = fm.texture.uniform(1.0, 0.0, 0.0)\n\n# %% Canonical prescribed SOT registration\nsot = fm.PrescribedSpinOrbitTorque(\n    name=\"hm_sot\",\n    target=fm.RegionRef(\"free_layer\"),\n    drive=fm.SignedScalarDrive(\n        current_density_Apm2=-4.0e11,\n        sigma=(0.0, 1.0, 0.0),\n    ),\n    xi_dl=0.12,\n    xi_fl=-0.03,\n    free_layer_thickness_m=1.5e-9,\n)\nstudy.spin_torque(sot)\n\n# %% Ordered stage\nstudy.stages.add_run(2.0e-12, stage_id=\"sot_run\")\n",
     "script_api_version": "0.3.0",
     "serializer_version": "0.3.0",
     "entrypoint_kind": "flat_workspace",

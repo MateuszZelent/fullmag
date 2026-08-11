@@ -116,7 +116,7 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.pbc(x=True, y=True, z=False, demag="truncated_images", images=(4, 4, 0))
-study.fdm(default_cell=(2 * nm, 2 * nm, 5 * nm))
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
 film = study.geometry(
     fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"),
     name="film",

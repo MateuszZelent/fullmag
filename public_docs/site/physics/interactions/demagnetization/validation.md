@@ -74,7 +74,7 @@ study = fm.study("demag_rectangular_prism_validation")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fdm(default_cell=(2 * nm, 2 * nm, 4 * nm))
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 4 * nm))
 
 # %% Geometry, material, state, and isolated demagnetization term
 prism = study.geometry(

@@ -242,7 +242,7 @@ import fullmag as fm
 study = fm.study("magnetoelastic-stage-boundary")
 study.engine("fem")
 study.exchange()
-study.cell(2.0e-9, 2.0e-9, 2.0e-9)
+study.objects.mesh.defaults(cell_size=(2.0e-9, 2.0e-9, 2.0e-9))
 body = study.geometry(fm.Box(40.0e-9, 40.0e-9, 2.0e-9), name="film")
 body.Ms = 1.0e6
 body.Aex = 15.0e-12

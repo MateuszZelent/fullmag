@@ -157,6 +157,9 @@ grid, padding, precision, mask, and energy reduction policy.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
+| `body.mesh(cell_size=...)` | `Sequence[float]` | required unless a default exists | $\mathrm{m}$ | Three finite positive values; geometry extents must be exactly divisible. | Native Cartesian cell size of one magnetic object. | FDM CPU/GPU subject to lane qualification. | `backend_policy.discretization_hints.fdm.per_magnet.<object>.cell` |
+| `study.objects.mesh.defaults(cell_size=...)` | `Sequence[float]` | `None` | $\mathrm{m}$ | Three finite positive values. | Default native cell size. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.default_cell` |
+| `study.universe.mesh(cell_size=...)` | `Sequence[float]` | inferred for compatible grids | $\mathrm{m}$ | Three finite positive values; common extents must divide exactly. | Requested common convolution-grid resolution for multiple native grids. | FDM multilayer CPU/GPU subject to lane qualification. | `backend_policy.discretization_hints.fdm.demag.common_cell_size` |
 | `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, or `multilayer_convolution`. | Selects one common-grid or explicit multilayer convolution topology. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.strategy` |
 | `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, or `three_d`. | Selects thin-film stack or full 3-D multilayer mode. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.mode` |
 | `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | Exactly three positive integers. | Explicit 3-D common convolution grid size. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.common_cells` |
@@ -190,12 +193,6 @@ study.device("cpu", precision="double")
 study.mode("strict")
 study.interactive(False)
 
-# %% FDM grid and demagnetization policy
-study.fdm(
-    default_cell=(4.0 * nm, 4.0 * nm, 4.0 * nm),
-    demag=fm.FDMDemag(strategy="single_grid", mode="auto"),
-)
-
 # %% One magnetic body and physical terms
 study.universe(
     mode="manual",
@@ -204,6 +201,7 @@ study.universe(
     padding=(0.0, 0.0, 0.0),
 )
 magnet = study.geometry(fm.Box(size=(24.0 * nm, 12.0 * nm, 4.0 * nm)), name="magnet")
+magnet.mesh(cell_size=(4.0 * nm, 4.0 * nm, 4.0 * nm))
 magnet.Ms = 800.0e3
 magnet.Aex = 13.0e-12
 magnet.alpha = 0.02

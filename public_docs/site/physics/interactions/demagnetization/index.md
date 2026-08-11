@@ -169,7 +169,7 @@ study.stages.add_relax(
 This is the public execution pattern. The selected airbox realization, FEM Poisson solver policy,
 mesh, stage, and autosaves are declared on `study`; the planner then lowers the stage snapshot and
 records the resolved runtime separately. The FDM equivalent uses `study.engine("fdm")`,
-`study.cell(...)`, and the documented `FDMDemag` policy rather than constructing a direct
+`body.mesh(cell_size=...)`, and the documented multilayer policy rather than constructing a direct
 top-level problem object in the user script.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
