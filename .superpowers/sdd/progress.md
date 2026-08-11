@@ -129,7 +129,13 @@ Inspectorów, ma własny owner, proweniencję i fail-closed gotowość pola 3D;
 routing korzysta bezpośrednio z nowego komponentu, a eksport z monolitu
 pozostaje dla kompatybilności.
 
-Ostatnia bramka tej części: `356/356` testów w sześciu plikach, typecheck,
+Task 4 driven-response/peak zakończony w `14cceb401`: response sweep ma
+dedykowanego ownera, pure model osi/progress/cancel/field handoff, osobny
+response-point browser oraz bezpośredni route import. Compatibility export
+monolitu pozostaje zachowany, a single-peak Inspector ma jawnego ownera.
+
+Ostatnia bramka tej części: `328/328` testów w pięciu plikach dla Task 4 oraz
+wcześniejsze `356/356` testów w sześciu plikach dla Task 3; typecheck,
 targeted ESLint, design contracts `93/93`, API hygiene i `git diff --check`.
 Końcowy audyt pozostałych powierzchni częstotliwości oraz wymagany smoke
 `smoke:viewport-3d-explorer-inspector-targets` pozostają otwarte; smoke nadal
