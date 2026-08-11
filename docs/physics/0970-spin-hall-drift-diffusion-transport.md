@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-10
+- Last updated: 2026-08-11
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -1821,6 +1821,41 @@ The native ABI contract additionally executes the affine cube oracle described
 in section 5.2. It is deliberately a separate `just` target so a zero-gradient
 ABI smoke cannot mask a constitutive sign or `G=-\nabla\mu_s/2` factor error.
 
+### 7.3 Bounded public FDM GPU charge-only path
+
+The public `CurrentTransport` path now has one deliberately bounded executable
+realization. `resolve_fdm_gpu_charge_transports` lowers the Python/ProblemIR
+module to a versioned `ResolvedFdmGpuChargeTransportIR` descriptor only when
+the request is explicit FDM/CUDA, FP64, strict, one-way OhmicPoisson, a full
+rectangular active grid, two opposite voltage faces, and four insulating faces.
+The runner adapter `execute_public_gpu_charge_only` maps that descriptor to the
+append-only CUDA M1 charge ABI and publishes `V_electric`, `J_charge`, and a
+transport provenance artifact. CPU, `auto`, unknown execution values, partial
+masks, current-density electrodes, zero-mean public gauge, PBC, spin/SHE/STT/SOT
+and implicit fallback are rejected before execution.
+
+The managed gate `just verify-fdm-gpu-public-charge-runtime` executes the
+fixture `examples/fdm_gpu_charge_public.py` on a 2 x 1 x 1 grid. An independent
+oracle script checks the cell-centred affine solution
+$V=(0.025,0.075)\,\mathrm{V}$ and
+$J_x=-\sigma\,\partial_xV=-2.0\times10^{13}\,\mathrm{A/m^2}$ for
+$\sigma=4.0\times10^6\,\mathrm{S/m}$ and a 0.1 V drop over 20 nm; the
+transverse current is zero. The run completes on the identified RTX 4080
+SUPER with no fallback, algebraic residual
+`8.201001214742106e-21`, physical residual
+`1.3810679320049756e-16`, and `iterations=2`. This is a bounded executable
+reference slice with actual-device evidence, not a `validated_workloads`
+entry or general production qualification.
+
+The first managed attempt exposed an ABI indexing error: `canonical_face_index`
+is local to each flux axis (`Jx`, `Jy`, `Jz`), not a globally offset index
+stream. The Rust adapter now uses axis-local formulas and validates uniqueness
+on `(axis, canonical_face_index)`; the regression test
+`expanded_boundary_faces_use_axis_local_canonical_indices` freezes this rule.
+The remaining public charge work includes zero-mean gauge and current-density
+electrodes, larger and masked domains, convergence and sanitizer gates,
+cross-backend parity, and the complete spin/SHE/M2/M3/FEM paths.
+
 (source-code-index)=
 ## 8. Source-code index
 
@@ -1862,6 +1897,10 @@ a qualified workload without the validation gates above.
 | M2 FDM/FEM common-limit oracle | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles | compare matched reciprocal FDM cell centres with FEM plane averages over three z resolutions | `just verify-fem-steady-transport-m2-common-limit-contract` |
 | FDM M2 heterogeneous-interface gate | crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs | m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance | exercise an anisotropic N/F region jump and a companion mixing/SML closure with explicit torque accounting | `just verify-fdm-m2-heterogeneous-interface-contract` |
 | M2 3-D SHE/iSHE/AHE common-limit gate | crates/fullmag-runner/src/native_fem/steady_transport.rs | reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles | compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE | `just verify-fem-steady-transport-m2-3d-common-limit-contract` |
+| Public CurrentTransport charge planner | crates/fullmag-plan/src/current_transport.rs | resolve_fdm_gpu_charge_transports | lower the bounded Python/ProblemIR charge descriptor with fail-closed FDM/CUDA/FP64/strict constraints | public bounded path; unvalidated |
+| Public FDM GPU charge runner | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_public_gpu_charge_only | map the resolved descriptor to the CUDA M1 charge ABI, read back V/J, and publish provenance without fallback | `just verify-fdm-gpu-public-charge-runtime`; bounded actual-device E2E |
+| Public charge fixture and analytic oracle | examples/fdm_gpu_charge_public.py; scripts/verify_fdm_gpu_public_charge_output.py | study; main | define the 2 x 1 x 1 affine voltage fixture and independently verify V/J, residuals, and provenance | managed public charge gate |
+| Public charge managed recipe | justfile | verify-fdm-gpu-public-charge-runtime | compile the CUDA runtime and CLI through the container-backed managed path, run the fixture, and execute the oracle | actual RTX 4080 SUPER; unvalidated |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |

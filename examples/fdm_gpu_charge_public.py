@@ -20,7 +20,7 @@ study.device("gpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=SIZE, center=(0.0, 0.0, 0.0))
 study.cell(10.0 * NM, 10.0 * NM, 10.0 * NM)
-study.exchange(enabled=False)
+study.exchange()
 study.demag(enabled=False)
 
 strip = study.geometry(fm.Box(size=SIZE, name="charge_strip"), name="charge_strip")
