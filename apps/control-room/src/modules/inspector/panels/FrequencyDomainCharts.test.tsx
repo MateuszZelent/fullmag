@@ -68,12 +68,12 @@ describe("FrequencyDomainCharts", () => {
               id: "analysis.frequency-domain:eigen:spectrum:frequency",
               label: "Eigen frequency",
               points: [
-                { rowIndex: 0, x: 750, y: 1 },
-                { rowIndex: 1, x: 800, y: 2 },
-                { rowIndex: 2, x: 825, y: 3 },
-                { rowIndex: 3, x: 850, y: 4 },
-                { rowIndex: 4, x: 875, y: 5 },
-                { rowIndex: 5, x: 900, y: 6 },
+                { rowIndex: 0, x: 1, y: 750 },
+                { rowIndex: 1, x: 2, y: 800 },
+                { rowIndex: 2, x: 3, y: 825 },
+                { rowIndex: 3, x: 4, y: 850 },
+                { rowIndex: 4, x: 5, y: 875 },
+                { rowIndex: 5, x: 6, y: 900 },
               ],
               quantity: "frequency",
               source: {

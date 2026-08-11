@@ -83,12 +83,12 @@ import {
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
   FmrComparisonInspectorPanel,
-  FmrModalSpectrumInspectorPanel,
   FmrOverviewInspectorPanel,
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
   FmrResponseSweepInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
+import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrModalSpectrumInspectorPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";

@@ -71,7 +71,6 @@ import {
   FrequencyResponseObservablesInspectorPanel,
   FrequencyResponseFrequencyPointsInspectorPanel,
   FmrComparisonInspectorPanel,
-  FmrModalSpectrumInspectorPanel,
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
   FmrResponseSweepInspectorPanel,
@@ -84,6 +83,7 @@ import {
   FrequencyResponseSweepInspectorPanel,
   frequencyDomainVisualizationReadiness,
 } from "./frequency-domain/FrequencyDomainResultInspectors";
+import { FmrModalSpectrumInspectorPanel } from "./frequency-domain/FmrModalSpectrumInspectorPanel";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 
 const emptyResource = {
@@ -2606,6 +2606,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR Modal Spectrum Control");
+    expect(html).toContain(
+      'data-inspector-owner="frequency-domain.fmr-modal-spectrum"',
+    );
     expect(html).toContain("Mode workflow");
     expect(html).toContain(
       "modal k=0 eigenmodes -&gt; resonances -&gt; 3D mode field",
