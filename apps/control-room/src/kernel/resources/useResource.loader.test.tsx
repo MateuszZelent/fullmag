@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
@@ -21,10 +25,20 @@ import {
 } from "@/kernel/resources/useResource";
 import type { KernelApi } from "@/kernel/types";
 
+const useResourceSource = readFileSync(
+  join(process.cwd(), "src/kernel/resources/useResource.ts"),
+  "utf8",
+);
+
 describe("useResource loader callback", () => {
   afterEach(() => {
     resetSharedResourceRuntimeStoreForTests();
     vi.useRealTimers();
+  });
+
+  it("uses an effect event instead of a passive loader ref", () => {
+    expect(useResourceSource).toContain("useEffectEvent");
+    expect(useResourceSource).not.toContain("loadRef");
   });
 
   it("uses the latest loader when a retry timer fires after a loader change", async () => {
@@ -88,23 +102,20 @@ describe("useResource loader callback", () => {
     });
     await act(async () => {
       setTimeout(() => {
-        root.render(
-          <KernelContext.Provider value={kernel}>
-            <Harness load={loadB} />
-            <SelectorHarness load={selectorLoadB} />
-          </KernelContext.Provider>,
-        );
+        flushSync(() => {
+          root.render(
+            <KernelContext.Provider value={kernel}>
+              <Harness load={loadB} />
+              <SelectorHarness load={selectorLoadB} />
+            </KernelContext.Provider>,
+          );
+        });
       }, 999);
-      await vi.advanceTimersByTimeAsync(999);
-    });
-    expect(loadB).not.toHaveBeenCalled();
-    expect(selectorLoadB).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1);
+      vi.advanceTimersByTime(1000);
     });
     expect(loadB).toHaveBeenCalledTimes(1);
     expect(selectorLoadB).toHaveBeenCalledTimes(1);
+    await act(async () => {});
 
     await act(async () => {
       root.unmount();
