@@ -12725,3 +12725,117 @@ FDM GPU M1 spin/charge. Nie zmieniają capability matrix ani statusu celu:
   standard problem 5;
 - nie wolno oznaczać tej pracy jako produkcyjnego solvera STT/SOT/SHE ani jako
   pełnej kwalifikacji FEM/FDM na podstawie tych trzech bram.
+
+## 32.172. Świeża managed kwalifikacja FEM M2 i limit wspólny z FDM (2026-08-11)
+
+Po §32.171 wykonano na tym samym checkoutcie (`HEAD=
+397fc12be78f756eb2cf343d2ec4bfc7c58b4bb8`) cztery rozdzielne bramy wzajemnego
+transportu M2. Wszystkie użyły repozytoryjnych, container-backed `just`
+recipes, tego samego obrazu `fem-gpu` oraz MFEM native stack; nie użyto
+hostowego builda ani fallbacku CPU zamiast backendu FEM.
+
+### Wyniki
+
+| Brama | Dowód runtime | Wynik |
+|---|---|---|
+| M2 affine ABI | `just verify-fem-steady-transport-m2-affine-contract`; `fem_steady_transport_abi_contract` | `PASS` |
+| M2 mesh convergence | `just verify-fem-steady-transport-m2-convergence-contract`; conforming MFEM tetrahedra `nx=8,16,32` | `PASS`; błędy potencjału coarse/medium `1.72849e-4/3.42662e-5 V`, spin `2.08109e-3/4.12567e-4` |
+| M2 1-D common SI limit | `just verify-fem-steady-transport-m2-common-limit-contract`; FEM kontra FDM dla `Nz=8,16,32` | `PASS`; potencjał `5.60270e-4`, `1.62324e-4`, `4.35987e-5`, spin `6.72230e-3`, `1.94772e-3`, `5.23159e-4` |
+| M2 3-D SHE/iSHE common limit | `just verify-fem-steady-transport-m2-3d-common-limit-contract`; `nxy=2,4,8`, `Nz=4,8,16` | `PASS`; potencjał `1.14404e-4`, `1.59387e-4`, `5.65483e-5`, spin `1.93287e-2`, `6.51759e-3`, `1.88431e-3` |
+
+Testy sprawdzają niezerową konstytutywną reakcję wzajemną, znaki SHE/iSHE,
+jednostki SI, skończony spin-flip, przestrzenną konwergencję oraz zgodność
+profilu z referencją FDM. 3-D fixture nie zastępuje jeszcze ogólnego testu
+heterogenicznych materiałów, interfejsów N/F/T ani pełnego obszaru airbox.
+
+### Interpretacja i pozostała granica
+
+Wynik odtwarza ścieżkę referencyjnego executable dla ograniczonych fixture'ów
+kontraktowych, ale nie uzasadnia zmiany capability matrix ani statusu
+produkcyjnego. Nadal wymagają implementacji i dowodu:
+
+1. publiczny ProblemIR--Python--planner--runner path dla FEM M2 i GPU, z
+   provenance oraz bez ukrytego fallbacku;
+2. RT0/H(div), rzeczywiste interfejsy N/F/T, niejednorodne `sigma` i
+   heterogeniczny spin-flip w FEM oraz równoważny FDM;
+3. niezależny audit bilansów Onsagera, normalizacji $\mu_s/S$ i znaku tensora
+   Levi-Civity w całym łańcuchu, nie tylko w fixture;
+4. compute-sanitizer, restart/rollback i długie przebiegi na urządzeniu dla
+   FEM GPU;
+5. cross-backend parity dla dynamicznego pola Oersteda, sprzężenia z LLG,
+   STT/SOT oraz standard problem 5.
+
+Dlatego aktualny agregat pozostaje bez zmian:
+`implementation_state=partial`, `validation_state=unvalidated`,
+`validated_workloads=[]`. Powyższe cztery wyniki są świeżym dowodem
+wykonywalności i zgodności ograniczonej fizyki M2, a nie deklaracją
+produkcyjnego solvera SHE/STT/SOT.
+
+## 32.173. Persistent accepted Krylov warm-start FDM GPU M1 (2026-08-11)
+
+W tej iteracji zaimplementowano ograniczony, wewnętrzny mechanizm ponownego
+użycia zaakceptowanego rozwiązania charge w solverze CUDA FDM M1. Zmiana jest
+świadomie niższego poziomu niż publiczny kontrakt fizyczny: nie dodaje nowego
+modułu Python, węzła ProblemIR, capability ani ścieżki UI.
+
+### Zakres implementacji
+
+- `HierarchyCache` posiada trwały bufor FP64 na urządzeniu dla ostatniego
+  zaakceptowanego potencjału oraz rewizje deskryptora/source; rezerwacja i
+  rozmiar tego bufora są uwzględniane w preflight, cache bytes i peak bytes.
+- Cold solve zachowuje `x0=0, r=b`. Warm solve używa
+  `x0=warm_potential` i wylicza `r=b-Ax0` przez ten sam cache'owany operator
+  FV. Warm state jest używany wyłącznie przy zgodności liczby komórek oraz
+  rewizji deskryptora i źródła.
+- Kandydat bieżącego solve nie nadpisuje warm state. Promocja następuje
+  dopiero po `accept_charge_snapshot`: najpierw rezerwowany jest slot
+  snapshotu, następnie wykonywany jest D2D copy i synchronizacja; dopiero po
+  pomyślnym zakończeniu oznaczany jest stan jako ważny. Odrzucony kandydat,
+  rollback, brak slotu lub błąd transferu nie mogą częściowo zmienić
+  zaakceptowanego wektora.
+- Transfer audit obejmuje D2D promotion i synchronizację: sukces zapisuje
+  `SCIENTIFIC_COMMIT`, a błędy mają jawne granice `FAILED` (70: enqueue D2D,
+  71: synchronizacja). Odczyt wektora warm jest dostępny tylko przez
+  test-only ABI.
+
+### Weryfikacja źródła i kontraktu
+
+Implementacja znajduje się w commitach
+`992a2ab67a62f23d75a1aea54cc1e410d0688ec7` oraz
+`603234926d291160368026559c8b1c1624bfa1b0`. Pierwszy niezależny review
+wykrył brak dowodu zachowania wektora oraz brak pełnej telemetrii promocji;
+drugi commit uzupełnił oba punkty, poprawił mapowanie `cudaSetDevice` na
+`CUDA_RUNTIME_ERROR` i usunął duplikat deklaracji hooka. Re-review zakończył
+się `APPROVED`, bez uwag Critical/Important/Minor, dla poziomu
+źródło/kontrakt.
+
+RED przed implementacją był odtwarzalny jako brak symbolu
+`fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1` podczas linkowania.
+Po zmianie testy statyczne i dokumentacyjne zakończyły się:
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs scripts.test_fdm_gpu_m1_charge_scalability_contract
+16 tests, OK
+git diff --check
+git show --check
+```
+
+Nie uzyskano jeszcze świeżego managed CUDA GREEN dla tej wersji. Próba
+`just verify-fdm-gpu-m1-charge-native-contract` została zablokowana przez
+brak dostępu procesu do Docker API; eskalowana próba automatycznej zgody
+również wygasła przed utworzeniem procesu. Nie wolno więc liczyć tej zmiany
+do device/runtime qualification ani deklarować poprawy czasu solve.
+
+### Następny gate i status
+
+Po przywróceniu dostępu do managed runtime trzeba wykonać kolejno:
+
+1. `just verify-fdm-gpu-m1-charge-native-contract`;
+2. `just verify-fdm-gpu-m1-charge-scalability-contract`;
+3. `just verify-fdm-gpu-m1-charge-boundary-compute-sanitizer`.
+
+Do czasu tych wyników agregat pozostaje bez zmian:
+`implementation_state=partial`, `validation_state=unvalidated`,
+`validated_workloads=[]`. Ta zmiana jest zaakceptowana na poziomie
+implementacji i kontraktu, lecz pozostaje niezwalidowana na rzeczywistym
+urządzeniu.

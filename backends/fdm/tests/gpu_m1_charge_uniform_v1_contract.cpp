@@ -451,6 +451,50 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "recovered snapshot destroy failed");
 
+    auto promotion_fault_solve = solve;
+    promotion_fault_solve.attempt_id = 6;
+    fullmag_fdm_gpu_charge_solve_result_v1 promotion_fault_result{};
+    init_record(promotion_fault_result);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(
+                &promotion_fault_solve, &promotion_fault_result) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm promotion fault solve setup failed");
+    std::vector<double> committed_warm(cells);
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1(
+                created.context_handle, committed_warm.data(), committed_warm.size()) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm promotion fault baseline readback failed");
+    for (uint32_t boundary : {70u, 71u}) {
+        require(fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
+                    created.context_handle, boundary) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                "warm promotion fault hook setup failed");
+        fullmag_fdm_gpu_charge_snapshot_info_v1 failed_snapshot{};
+        init_record(failed_snapshot);
+        require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                    created.context_handle, promotion_fault_result.provisional_generation,
+                    &failed_snapshot) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR,
+                "warm promotion fault did not fail closed");
+        std::vector<double> after_failure(cells);
+        require(fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1(
+                    created.context_handle, after_failure.data(), after_failure.size()) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                std::memcmp(after_failure.data(), committed_warm.data(),
+                            cells * sizeof(double)) == 0,
+                "failed warm promotion changed the accepted warm vector");
+    }
+    fullmag_fdm_gpu_charge_snapshot_info_v1 recovered_promotion_snapshot{};
+    init_record(recovered_promotion_snapshot);
+    require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                created.context_handle, promotion_fault_result.provisional_generation,
+                &recovered_promotion_snapshot) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_charge_snapshot_destroy_v1(
+                    recovered_promotion_snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "warm promotion retry after fault did not commit cleanly");
+
     auto changed_descriptor = descriptor;
     changed_descriptor.descriptor_revision = 2;
     std::fill(std::begin(changed_descriptor.descriptor_digest),
