@@ -345,6 +345,69 @@ optional enhancements.
 (python-api)=
 ## Public Python API
 
+The canonical physics-first authoring contract uses the same mesh facades as
+FEM while retaining FDM-specific Cartesian cell semantics:
+
+| Parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR | Qualification |
+|---|---|---|---|---|---|---|---|---|
+| `body.mesh.cell_size` | `Sequence[float] | None` | `None` | $\\mathrm m$ | exactly three finite positive values; mutually exclusive with FEM element-size and Gmsh controls | exact Cartesian native-cell size $(h_x,h_y,h_z)$ for one magnetic object | FDM CPU/GPU authoring; runtime lane gated | `backend_policy.discretization_hints.fdm.per_magnet.<object>.cell` | approved contract; implementation gate open |
+| `study.objects.mesh.defaults.cell_size` | `Sequence[float] | None` | `None` | $\\mathrm m$ | exactly three finite positive values; an object value overrides it | default native-cell size for FDM objects | FDM CPU/GPU authoring; runtime lane gated | `backend_policy.discretization_hints.fdm.default_cell` | approved contract; implementation gate open |
+| `study.universe.mesh.cell_size` | `Sequence[float] | None` | `None` | $\\mathrm m$ | exactly three finite positive values; each common-domain extent must be an integer multiple; required for unequal native grids | cell size of the non-physical common convolution domain | FDM multilayer CPU/GPU authoring; runtime lane gated | `backend_policy.discretization_hints.fdm.demag.common_cell_size` | approved contract; implementation gate open |
+| `study.universe.mesh.minimum_element_size` | `float | None` | `None` | $\\mathrm m$ | finite positive and no greater than the maximum; mutually exclusive with `cell_size` | lower element-size target for the FEM airbox mesh | FEM CPU/GPU | `problem_meta.runtime_metadata.study_universe.airbox_hmin` | existing FEM contract; unchanged |
+| `study.universe.mesh.maximum_element_size` | `float | None` | `None` | $\\mathrm m$ | finite positive and no smaller than the minimum; mutually exclusive with `cell_size` | upper element-size target for the FEM airbox mesh | FEM CPU/GPU | `problem_meta.runtime_metadata.study_universe.airbox_hmax` | existing FEM contract; unchanged |
+| `study.demag.enabled` | `bool` | `True` | $1$ | boolean | physical demagnetization request; planner selects the realization | FDM and FEM CPU/GPU subject to lane qualification | `terms.demag.enabled` plus planner-selected realization | physical term implemented; new FDM lowering gate open |
+
+The approved heterogeneous-grid example is:
+
+```python
+# %% Imports and study
+import fullmag as fm
+
+nm = 1e-9
+study = fm.study("heterogeneous_fdm_layers")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+# %% Geometry and material
+bottom = study.geometry(
+    fm.Box(size=(100 * nm, 50 * nm, 10 * nm)),
+    name="layer_bottom",
+)
+top = study.geometry(
+    fm.Box(size=(100 * nm, 50 * nm, 10 * nm)).translate((0, 0, 20 * nm)),
+    name="layer_top",
+)
+permalloy = fm.Material(Ms=800e3, A=13e-12)
+bottom.material(permalloy)
+top.material(permalloy)
+
+# %% Native meshes and common computational domain
+bottom.mesh(cell_size=(2 * nm, 2 * nm, 10 * nm))
+top.mesh(cell_size=(5 * nm, 5 * nm, 10 * nm))
+study.universe.mesh(cell_size=(2 * nm, 2 * nm, 2.5 * nm))
+
+# %% Physics and stage
+study.demag()
+study.exchange()
+study.stages.add_relaxation(method="llg_overdamped")
+```
+
+The corresponding FEM mesh controls remain unchanged:
+
+```python
+study.engine("fem")
+study.universe.mesh(
+    minimum_element_size=1 * nm,
+    maximum_element_size=5 * nm,
+)
+```
+
+Until executable lowering and round-trip tests pass, the new FDM block above is
+an implementation contract, not a runtime-qualification claim. The classes in
+the following table document the current compatibility representation. They
+remain migration adapters but are not canonical tutorial syntax.
+
 | Parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR | Qualification |
 |---|---|---|---|---|---|---|---|
 | FDM.cell | Sequence[float] or None | None | $\mathrm m$ | exclusive with default_cell; three positive values when present | legacy/default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.cell | implemented authoring |
@@ -558,6 +621,8 @@ the qualification status.
 
 | Claim | Path | Symbol | Responsibility | Lane | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|---|
+| Canonical per-object mesh authoring target | packages/fullmag-py/src/fullmag/world.py | class GeometryMeshHandle | shared mesh facade selected for `body.mesh(cell_size=...)` | FDM public API | implementation gate open | approved publication contract; no executable evidence yet | current master source snapshot |
+| Canonical common-domain authoring target | packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | shared universe mesh facade selected for `study.universe.mesh(cell_size=...)` | FDM public API | implementation gate open | approved publication contract; no executable evidence yet | current master source snapshot |
 | Python FDM wrapper | packages/fullmag-py/src/fullmag/model/discretization.py | class FDM | lowers the full public FDM wrapper | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_two_object_two_d_policy_preserves_requested_auto_in_ir | executable authoring contract only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Python demag intent | packages/fullmag-py/src/fullmag/model/discretization.py | class FDMDemag | validates and lowers requested demag policy | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_auto_mode_preserves_common_cells_for_planner_resolution | executable authoring contract only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Continuous kernel definition (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_f | anchors the continuous Newell primitive; no discrete runtime ownership claim | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |

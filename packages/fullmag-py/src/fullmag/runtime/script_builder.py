@@ -981,6 +981,11 @@ def _fdm_from_overrides(
             common_cells_xy = _fdm_integer_vector(
                 raw_demag.get("common_cells_xy"), "fdm.demag.common_cells_xy", 2
             )
+            common_cell_size = _fdm_vector(
+                raw_demag.get("common_cell_size"),
+                "fdm.demag.common_cell_size",
+                3,
+            )
             explain = raw_demag.get("explain", True)
             if not isinstance(explain, bool):
                 raise ValueError("fdm.demag.explain must be boolean")
@@ -989,6 +994,7 @@ def _fdm_from_overrides(
                 mode=str(raw_demag.get("mode", "auto")),
                 common_cells=common_cells,
                 common_cells_xy=common_cells_xy,
+                common_cell_size=common_cell_size,
                 explain=explain,
             )
         else:
@@ -1034,6 +1040,25 @@ def _fdm_vector(value: object, label: str, length: int) -> tuple[float, ...] | N
     if not all(math.isfinite(component) for component in result):
         raise ValueError(f"{label} must contain finite numbers")
     return result
+
+
+def _uses_canonical_fdm_mesh_authoring(fdm: FDM) -> bool:
+    demag = fdm.demag
+    return (
+        (fdm.default_cell is not None or bool(fdm.per_magnet))
+        and fdm.boundary_correction in (None, "none")
+        and fdm.boundary_phi_floor is None
+        and fdm.boundary_delta_min is None
+        and (
+            demag is None
+            or (
+                demag.strategy == "auto"
+                and demag.mode == "auto"
+                and demag.common_cells is None
+                and demag.common_cells_xy is None
+            )
+        )
+    )
 
 
 def _fdm_integer_vector(value: object, label: str, length: int) -> tuple[int, ...] | None:
@@ -1152,12 +1177,28 @@ def _render_runtime(
 
     fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
+        canonical_mesh_authoring = (
+            surface == "study" and _uses_canonical_fdm_mesh_authoring(fdm)
+        )
+        if canonical_mesh_authoring:
+            if fdm.default_cell is not None:
+                lines.append(
+                    "study.objects.mesh.defaults("
+                    f"cell_size={_py_tuple3(fdm.default_cell)})"
+                )
+            if fdm.demag is not None and fdm.demag.common_cell_size is not None:
+                lines.append(
+                    "study.universe.mesh("
+                    f"cell_size={_py_tuple3(fdm.demag.common_cell_size)})"
+                )
         has_extended_policy = (
             fdm.demag is not None
             or fdm.boundary_phi_floor is not None
             or fdm.boundary_delta_min is not None
         )
-        if fdm.per_magnet or has_extended_policy:
+        if canonical_mesh_authoring:
+            pass
+        elif fdm.per_magnet or has_extended_policy:
             fdm_kwargs: list[str] = []
             if fdm.default_cell is not None:
                 fdm_kwargs.append(f"default_cell={_py_tuple3(fdm.default_cell)}")
@@ -1178,6 +1219,10 @@ def _render_runtime(
                 if fdm.demag.common_cells_xy is not None:
                     demag_kwargs.append(
                         f"common_cells_xy={fdm.demag.common_cells_xy!r}"
+                    )
+                if fdm.demag.common_cell_size is not None:
+                    demag_kwargs.append(
+                        f"common_cell_size={fdm.demag.common_cell_size!r}"
                     )
                 fdm_kwargs.append(f"demag=fm.FDMDemag({', '.join(demag_kwargs)})")
             if fdm.boundary_correction is not None:
@@ -1380,12 +1425,22 @@ def _render_geometry_and_materials(
         )
 
     initial_state_override = _normalize_mapping(overrides.get("initial_state"))
+    fdm = _fdm_from_overrides(problem, overrides)
+    canonical_fdm = (
+        surface == "study"
+        and isinstance(fdm, FDM)
+        and _uses_canonical_fdm_mesh_authoring(fdm)
+    )
     lines = ["# Geometry & Material"]
     for magnet in problem.magnets:
         var_name = magnet_vars[magnet.name]
         lines.append(
             f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)})"
         )
+        if canonical_fdm and fdm is not None and fdm.per_magnet:
+            grid = fdm.per_magnet.get(magnet.name)
+            if grid is not None:
+                lines.append(f"{var_name}.mesh(cell_size={_py_tuple3(grid.cell)})")
         if magnet.region is not None and magnet.region.name != magnet.name:
             lines.append(f"{var_name}.region_name = {_py_repr(magnet.region.name)}")
         lines.append(f"{var_name}.Ms = {_py_number(magnet.material.Ms)}")
@@ -7339,6 +7394,9 @@ def _export_fdm(problem: Problem) -> dict[str, object] | None:
             "common_cells_xy": list(fdm.demag.common_cells_xy)
             if fdm.demag.common_cells_xy is not None
             else None,
+            "common_cell_size": list(fdm.demag.common_cell_size)
+            if fdm.demag.common_cell_size is not None
+            else None,
             "explain": fdm.demag.explain,
         }
     else:
@@ -7373,7 +7431,13 @@ def _render_demag(
         "",
         "auto",
     }
-    if enabled and not explicit_realization:
+    fdm = problem.discretization.fdm if problem.discretization is not None else None
+    canonical_fdm = (
+        surface == "study"
+        and isinstance(fdm, FDM)
+        and _uses_canonical_fdm_mesh_authoring(fdm)
+    )
+    if enabled and not explicit_realization and not canonical_fdm:
         return []
     kwargs: list[str] = []
     if not enabled:

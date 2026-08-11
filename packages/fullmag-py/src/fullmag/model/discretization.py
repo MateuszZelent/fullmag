@@ -69,6 +69,7 @@ class FDMDemag:
     mode: Literal["auto", "two_d_stack", "three_d"] = "auto"
     common_cells: tuple[int, int, int] | None = None
     common_cells_xy: tuple[int, int] | None = None
+    common_cell_size: tuple[float, float, float] | None = None
     # Compatibility-only input. It is never lowered because silent fallback
     # is not a public execution contract.
     allow_single_grid_fallback: bool | None = field(default=None, repr=False)
@@ -91,6 +92,15 @@ class FDMDemag:
             )
         if self.common_cells is not None and self.common_cells_xy is not None:
             raise ValueError("cannot specify both 'common_cells' and 'common_cells_xy'")
+        if self.common_cell_size is not None:
+            if self.common_cells is not None or self.common_cells_xy is not None:
+                raise ValueError(
+                    "common_cell_size cannot be combined with common_cells or common_cells_xy"
+                )
+            vector = as_vector3(self.common_cell_size, "common_cell_size")
+            for index, component in enumerate(vector):
+                require_positive(component, f"common_cell_size[{index}]")
+            object.__setattr__(self, "common_cell_size", vector)
         if self.common_cells is not None:
             if len(self.common_cells) != 3:
                 raise ValueError("common_cells must have exactly 3 elements")
@@ -122,6 +132,8 @@ class FDMDemag:
             ir["common_cells"] = list(self.common_cells)
         if self.common_cells_xy is not None:
             ir["common_cells_xy"] = list(self.common_cells_xy)
+        if self.common_cell_size is not None:
+            ir["common_cell_size"] = list(self.common_cell_size)
         return ir
 
 

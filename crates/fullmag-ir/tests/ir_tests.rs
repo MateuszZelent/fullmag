@@ -1672,6 +1672,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
                 mode: "two_d_stack".to_string(),
                 common_cells: Some([4, 4, 1]),
                 common_cells_xy: None,
+                common_cell_size: None,
             },
             "common_cells",
         ),
@@ -1681,6 +1682,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
                 mode: "three_d".to_string(),
                 common_cells: None,
                 common_cells_xy: Some([4, 4]),
+                common_cell_size: None,
             },
             "common_cells_xy",
         ),
@@ -1690,6 +1692,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
                 mode: "auto".to_string(),
                 common_cells: Some([4, 4, 1]),
                 common_cells_xy: Some([4, 4]),
+                common_cell_size: None,
             },
             "mutually exclusive",
         ),
@@ -1720,12 +1723,47 @@ fn fdm_demag_hints_round_trip_preserves_known_wire_values() {
         mode: "two_d_stack".to_string(),
         common_cells: None,
         common_cells_xy: Some([16, 8]),
+        common_cell_size: None,
     };
     let encoded = serde_json::to_value(&hints).expect("serialize FDM demag hints");
     let decoded: FdmDemagHintsIR =
         serde_json::from_value(encoded.clone()).expect("deserialize known FDM demag hints");
     assert_eq!(decoded, hints);
     assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
+}
+
+#[test]
+fn fdm_demag_common_cell_size_round_trips_and_rejects_conflicting_counts() {
+    let hints: FdmDemagHintsIR = serde_json::from_value(serde_json::json!({
+        "strategy": "auto",
+        "mode": "auto",
+        "common_cell_size": [2.0e-9, 2.0e-9, 2.5e-9]
+    }))
+    .expect("common_cell_size should deserialize");
+
+    assert_eq!(hints.common_cell_size, Some([2.0e-9, 2.0e-9, 2.5e-9]));
+    assert_eq!(
+        serde_json::to_value(&hints).expect("common_cell_size should serialize")
+            ["common_cell_size"],
+        serde_json::json!([2.0e-9, 2.0e-9, 2.5e-9])
+    );
+
+    let conflict = serde_json::from_value::<FdmDemagHintsIR>(serde_json::json!({
+        "strategy": "auto",
+        "mode": "auto",
+        "common_cell_size": [2.0e-9, 2.0e-9, 2.5e-9],
+        "common_cells": [50, 25, 12]
+    }))
+    .expect_err("requested cell size and resolved counts must be exclusive");
+    assert!(conflict.to_string().contains("common_cell_size"));
+
+    let invalid = serde_json::from_value::<FdmDemagHintsIR>(serde_json::json!({
+        "strategy": "auto",
+        "mode": "auto",
+        "common_cell_size": [2.0e-9, 0.0, 2.5e-9]
+    }))
+    .expect_err("non-positive common cell size must fail");
+    assert!(invalid.to_string().contains("finite and positive"));
 }
 
 #[test]
