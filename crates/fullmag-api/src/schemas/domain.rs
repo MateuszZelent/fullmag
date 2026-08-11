@@ -71,6 +71,9 @@ pub struct FdmMultilayerLayoutResource {
     pub requested_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_mode: Option<String>,
+    /// Author-requested common convolution-grid resolution in meters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_common_cell_size: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub common_transform_layout: Option<FdmCommonTransformLayoutResource>,
     pub layers: Vec<FdmLayerLayoutResource>,

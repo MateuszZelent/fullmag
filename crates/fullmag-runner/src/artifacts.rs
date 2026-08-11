@@ -4561,6 +4561,7 @@ mod tests {
             backend_plan: BackendPlanIR::FdmMultilayer(FdmMultilayerPlanIR {
                 mode: "three_d".to_string(),
                 common_cells: [2, 1, 2],
+                requested_common_cell_size: None,
                 grid_certificate: None,
                 resolved_periodic_images: None,
                 layers: vec![

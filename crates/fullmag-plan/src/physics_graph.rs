@@ -1261,6 +1261,7 @@ mod tests {
         fullmag_ir::FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [2, 1, 1],
+            requested_common_cell_size: None,
             grid_certificate: Some(certificate),
             layers,
             enable_exchange: false,

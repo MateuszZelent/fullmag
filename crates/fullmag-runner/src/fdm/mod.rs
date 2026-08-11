@@ -592,6 +592,7 @@ mod tests {
         let mut plan = FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [1, 1, 1],
+            requested_common_cell_size: None,
             grid_certificate: None,
             layers: vec![
                 layer("free", 0.0, [1.0, 0.0, 0.0]),

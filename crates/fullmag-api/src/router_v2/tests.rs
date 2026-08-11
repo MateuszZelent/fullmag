@@ -3042,6 +3042,7 @@ async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
             },
             "execution_plan": {
                 "backend_plan": {
+                    "requested_common_cell_size": [2.0e-9, 2.0e-9, 2.5e-9],
                     "layers": [{
                         "layer_id": "layer:bottom",
                         "object_id": "object:bottom",
@@ -3083,6 +3084,10 @@ async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
     let json = body_json(response).await;
     assert_eq!(json["available"], true);
     assert_eq!(json["strategy"], "per_magnet");
+    assert_eq!(
+        json["requested_common_cell_size"],
+        serde_json::json!([2.0e-9, 2.0e-9, 2.5e-9])
+    );
     assert_eq!(json["common_transform_layout"]["is_physical_mesh"], false);
     assert_eq!(
         json["common_transform_layout"]["shape"],

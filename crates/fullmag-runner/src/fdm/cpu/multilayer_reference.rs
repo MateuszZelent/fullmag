@@ -1286,6 +1286,7 @@ mod tests {
         let mut plan = FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
+            requested_common_cell_size: None,
             grid_certificate: None,
             resolved_periodic_images: None,
             layers,

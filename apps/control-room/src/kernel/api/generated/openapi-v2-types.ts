@@ -4273,6 +4273,8 @@ export interface components {
             layout_revision: number;
             /** Format: int64 */
             observation_revision: number;
+            /** @description Author-requested common convolution-grid resolution in meters. */
+            requested_common_cell_size?: number[] | null;
             requested_mode?: string | null;
             resolved_mode?: string | null;
             schema_version: string;

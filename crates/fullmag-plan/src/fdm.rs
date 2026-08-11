@@ -2935,6 +2935,7 @@ pub(crate) fn plan_fdm_multilayer(
     let plan = FdmMultilayerPlanIR {
         mode: selected_mode.clone(),
         common_cells,
+        requested_common_cell_size: demag_hints.and_then(|hints| hints.common_cell_size),
         grid_certificate: Some(grid_certificate),
         layers,
         enable_exchange,

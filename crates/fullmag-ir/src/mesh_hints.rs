@@ -216,6 +216,10 @@ pub struct FdmMultilayerPlanIR {
     /// validates equality so the legacy field cannot diverge.
     pub mode: String,
     pub common_cells: [u32; 3],
+    /// Physics-first common convolution-grid resolution requested by the
+    /// author. The resolved grid remains authoritative for execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_common_cell_size: Option<[f64; 3]>,
     /// Validated certificate for the resolved common convolution grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
@@ -482,6 +486,8 @@ struct FdmMultilayerPlanWireIR {
     mode: String,
     common_cells: [u32; 3],
     #[serde(default)]
+    requested_common_cell_size: Option<[f64; 3]>,
+    #[serde(default)]
     grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
     layers: Vec<FdmLayerPlanIR>,
     enable_exchange: bool,
@@ -675,6 +681,7 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
         let plan = Self {
             mode: wire.mode,
             common_cells: wire.common_cells,
+            requested_common_cell_size: wire.requested_common_cell_size,
             grid_certificate: wire.grid_certificate,
             layers: wire.layers,
             enable_exchange: wire.enable_exchange,
@@ -700,12 +707,25 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
 }
 
 impl FdmMultilayerPlanIR {
+    fn validate_requested_common_cell_size(&self, errors: &mut Vec<String>) {
+        if let Some(cell_size) = self.requested_common_cell_size {
+            for (axis, value) in ["x", "y", "z"].into_iter().zip(cell_size) {
+                if !value.is_finite() || value <= 0.0 {
+                    errors.push(format!(
+                        "fdm multilayer requested common cell size on {axis} must be finite and positive"
+                    ));
+                }
+            }
+        }
+    }
+
     /// Validate the resolved multilayer wire contract before a runner can use
     /// it.  Authored intent belongs to `planner_summary.requested_*`; runtime
     /// consumers must only observe the canonical resolved mode and transfer
     /// vocabulary here.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
+        self.validate_requested_common_cell_size(&mut errors);
         if !matches!(self.mode.as_str(), "two_d_stack" | "three_d") {
             errors.push(format!(
                 "fdm multilayer resolved mode '{}' is unsupported",
@@ -848,6 +868,7 @@ mod multilayer_contract_tests {
             // migration derives the resolved mode from the actual geometry.
             mode: "multilayer_convolution".to_string(),
             common_cells: [2, 1, 2],
+            requested_common_cell_size: None,
             grid_certificate: Some(grid_certificate),
             layers,
             enable_exchange: false,

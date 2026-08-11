@@ -6754,6 +6754,10 @@ fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
     };
 
     assert_eq!(multilayer.common_cells, [50, 25, 4]);
+    assert_eq!(
+        multilayer.requested_common_cell_size,
+        Some([2e-9, 2e-9, 2.5e-9])
+    );
     assert_eq!(multilayer.mode, "three_d");
     assert!(multilayer.layers.iter().all(|layer| {
         layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9]

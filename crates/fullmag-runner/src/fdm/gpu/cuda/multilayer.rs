@@ -3418,6 +3418,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [4, 4, 1],
+            requested_common_cell_size: None,
             grid_certificate: None,
             resolved_periodic_images: None,
             layers: vec![
@@ -3712,6 +3713,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [2, 1, 1],
+            requested_common_cell_size: None,
             grid_certificate: None,
             resolved_periodic_images: None,
             field_refresh: None,
