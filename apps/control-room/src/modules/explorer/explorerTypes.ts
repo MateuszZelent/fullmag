@@ -252,6 +252,25 @@ export type ExplorerNodeStatus =
   | "unavailable"
   | "unsupported";
 
+export type ExplorerResourceState = "idle" | "loading" | "ready" | "stale" | "error";
+
+export type ExplorerExecutionState =
+  | "not_started"
+  | "queued"
+  | "running"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type ExplorerAvailability = "available" | "partial" | "unavailable" | "unsupported";
+
+export interface ExplorerNodeStateFacets {
+  availability: ExplorerAvailability;
+  executionState: ExplorerExecutionState;
+  resourceState: ExplorerResourceState;
+}
+
 export type ExplorerIconToken =
   | "activity"
   | "box"
@@ -356,6 +375,9 @@ export interface ExplorerNode {
   sampleIndex?: number;
   stageId?: string;
   stageIndex?: number;
+  availability?: ExplorerAvailability;
+  executionState?: ExplorerExecutionState;
+  resourceState?: ExplorerResourceState;
   status?: ExplorerNodeStatus;
   structuredCurrentClosureId?: string;
   structuredCurrentSourceCutId?: string;
