@@ -157,24 +157,27 @@ grid, padding, precision, mask, and energy reduction policy.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, or `multilayer_convolution`. | Selects one common-grid or explicit multilayer convolution topology. | FDM CPU/GPU. | `discretization.demag.strategy` |
-| `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, or `three_d`. | Selects thin-film stack or full 3-D multilayer mode. | FDM CPU/GPU. | `discretization.demag.mode` |
-| `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | Exactly three positive integers. | Explicit 3-D common convolution grid size. | FDM CPU/GPU. | `discretization.demag.common_cells` |
-| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | Exactly two positive integers. | Explicit in-plane common grid for `two_d_stack`. | FDM CPU/GPU. | `discretization.demag.common_cells_xy` |
+| `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, or `multilayer_convolution`. | Selects one common-grid or explicit multilayer convolution topology. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.strategy` |
+| `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, or `three_d`. | Selects thin-film stack or full 3-D multilayer mode. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.mode` |
+| `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | Exactly three positive integers. | Explicit 3-D common convolution grid size. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.common_cells` |
+| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | Exactly two positive integers. | Explicit in-plane common grid for `two_d_stack`. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
 | `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | $1$ | Any non-`None` value raises `ValueError`; it is never silently lowered. | Removed compatibility switch. | Unsupported; choose strategy explicitly. | Not serialized |
-| `FDMDemag.explain` | `bool` | `True` | $1$ | Boolean. | Enables a human-readable plan summary; it is not serialized physics. | FDM authoring helper. | Not serialized |
-| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m}$ | Exactly three finite positive values; legacy `cell` is an alias. | Default Cartesian cell size. | FDM CPU/GPU. | `discretization.fdm.default_cell` |
-| `FDM.per_magnet` | `dict[str,FDMGrid] \| None` | `None` | $1$ | Each grid has three positive cell sizes. | Native grid overrides for individual magnets. | FDM multilayer paths. | `discretization.fdm.per_magnet` |
-| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | Nested policy fields are validated individually. | FDM demagnetization topology and common-grid controls. | FDM CPU/GPU. | `discretization.fdm.demag` |
-| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full`. | Partial-cell correction family: none, T0 volume fraction, or T1 full boundary stencil. | Lane/precision dependent; no universal qualification is implied. | `discretization.fdm.boundary_correction` |
-| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Strictly between $0$ and $1$ when supplied. | Lower bound for partial-cell volume fraction in stability logic. | Boundary-correction lanes. | `discretization.fdm.boundary_phi_floor` |
-| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Greater than or equal to $0$ when supplied. | Lower bound for T1 boundary distance. | Boundary-correction lanes. | `discretization.fdm.boundary_delta_min` |
+| `FDMDemag.explain` | `bool` | `True` | $1$ | The raw script builder requires a Boolean; the constructor itself does not type-check it. | Enables a human-readable plan summary; it is not serialized physics. | FDM authoring helper. | Not serialized |
+| `FDMGrid.cell` | `tuple[float,float,float]` | required | $\mathrm{m}$ | Exactly three finite positive values. | Native Cartesian cell size for one named magnet. | FDM multilayer authoring. | `backend_policy.discretization_hints.fdm.per_magnet.<magnet>.cell` |
+| `FDM.cell` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m}$ | Backward-compatible alias; cannot be supplied together with `default_cell`. | Legacy spelling of the default Cartesian cell size. | FDM CPU/GPU. | Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell` |
+| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m}$ | Exactly three finite positive values; cannot be supplied together with `cell`. | Default Cartesian cell size. | FDM CPU/GPU. | Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell` |
+| `FDM.per_magnet` | `dict[str,FDMGrid] \| None` | `None` | $1$ | Each grid has three positive cell sizes. | Native grid overrides for individual magnets. | FDM multilayer paths. | `backend_policy.discretization_hints.fdm.per_magnet` |
+| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | `FDM.__init__` has no explicit type check; a valid `FDMDemag` is required during lowering. | FDM demagnetization topology and common-grid controls. | FDM CPU/GPU. | `backend_policy.discretization_hints.fdm.demag` |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full`. | Partial-cell correction family: none, T0 volume fraction, or T1 full boundary stencil. | Lane/precision dependent; no universal qualification is implied. | `backend_policy.discretization_hints.fdm.boundary_correction` |
+| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Strictly between $0$ and $1$ when supplied. | Lower bound for partial-cell volume fraction in stability logic. | Boundary-correction lanes. | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Greater than or equal to $0$ when supplied. | Lower bound for T1 boundary distance. | Boundary-correction lanes. | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
 
-### Minimalny skrypt stage-first
+### Minimal stage-first script
 
-Poniższy przykład uruchamia pojedynczy magnes na siatce FDM CPU FP64 i zapisuje pole
-`H_demag`. Dla kilku rozłącznych warstw użyj pełnego przykładu na stronie
-{doc}`multilayer-convolution` albo przewodnika {doc}`../../../python-api/discretization/fdm-multilayer-convolution`.
+The example below runs one magnet on an FDM CPU FP64 grid and saves `H_demag`.
+For multiple disjoint layers, use the complete example on
+{doc}`multilayer-convolution` or the
+{doc}`../../../python-api/discretization/fdm-multilayer-convolution` guide.
 
 ```python
 # %% Imports and execution intent

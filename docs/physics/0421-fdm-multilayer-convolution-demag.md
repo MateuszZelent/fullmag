@@ -299,22 +299,23 @@ ulepszeniami.
 
 | Parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR | Qualification |
 |---|---|---|---|---|---|---|---|
-| FDM.cell | Sequence[float] or None | None | $\mathrm m$ | exclusive with default_cell; three positive values when present | legacy/default native cell size | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.cell | implemented authoring |
-| FDM.default_cell | Sequence[float] or None | None | $\mathrm m$ | three positive values when present | default native cell size | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.default_cell | implemented authoring |
-| FDM.per_magnet | dict[str, FDMGrid] or None | None | $1$ | non-empty names and FDMGrid values | per-object native grid overrides | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.per_magnet | implemented authoring |
-| FDM.demag | FDMDemag or None | None | $1$ | FDMDemag instance | demagnetization policy wrapper | FDM CPU/GPU authoring; runtime lane gated | discretization.fdm.demag | implemented authoring |
-| FDMGrid.cell | Sequence[float] | required | $\mathrm m$ | three positive values | native cell size | FDM CPU/GPU | discretization.fdm.per_magnet.*.cell | implemented authoring |
-| FDMDemag.strategy | Literal[str] | auto | $1$ | auto, single_grid, multilayer_convolution | requested demag realization | FDM CPU/GPU | discretization.fdm.demag.strategy | implemented; multilayer runtime gated |
-| FDMDemag.mode | Literal[str] | auto | $1$ | auto, two_d_stack, three_d | requested multilayer mode | FDM CPU/GPU | discretization.fdm.demag.mode | implemented; runtime not qualified |
-| FDMDemag.common_cells | tuple[int, int, int] or None | None | $1$ | three positive ints | explicit 3D working cell count | FDM CPU/GPU | discretization.fdm.demag.common_cells | implemented; runtime not qualified |
-| FDMDemag.common_cells_xy | tuple[int, int] or None | None | $1$ | two positive ints | explicit 2D working XY count | FDM CPU/GPU | discretization.fdm.demag.common_cells_xy | implemented; runtime not qualified |
-| FDMDemag.explain | bool | True | $1$ | boolean | planner explanation request | FDM CPU/GPU authoring | discretization.fdm.demag.explain (authoring metadata; no lowered physics field) | implemented authoring |
+| FDM.cell | Sequence[float] or None | None | $\mathrm m$ | exclusive with default_cell; three positive values when present | legacy/default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.cell | implemented authoring |
+| FDM.default_cell | Sequence[float] or None | None | $\mathrm m$ | three positive values when present; needed when per_magnet is incomplete and for the current common-scratch policy | default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.default_cell | implemented authoring |
+| FDM.per_magnet | dict[str, FDMGrid] or None | None | $1$ | non-empty names and FDMGrid values | per-object native grid overrides | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.per_magnet | implemented authoring |
+| FDM.demag | FDMDemag or None | None | $1$ | no explicit type check in FDM.__init__; a valid FDMDemag is required during lowering | demagnetization policy wrapper | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.demag | implemented authoring |
+| FDMGrid.cell | Sequence[float] | required | $\mathrm m$ | three positive values | native cell size | FDM CPU/GPU | backend_policy.discretization_hints.fdm.per_magnet.*.cell | implemented authoring |
+| FDMDemag.strategy | Literal[str] | auto | $1$ | auto, single_grid, multilayer_convolution | requested demag realization | FDM CPU/GPU | backend_policy.discretization_hints.fdm.demag.strategy | implemented; multilayer runtime gated |
+| FDMDemag.mode | Literal[str] | auto | $1$ | auto, two_d_stack, three_d | requested multilayer mode | FDM CPU/GPU | backend_policy.discretization_hints.fdm.demag.mode | implemented; runtime not qualified |
+| FDMDemag.common_cells | tuple[int, int, int] or None | None | $1$ | three positive ints | explicit 3D working cell count | FDM CPU/GPU | backend_policy.discretization_hints.fdm.demag.common_cells | implemented; runtime not qualified |
+| FDMDemag.common_cells_xy | tuple[int, int] or None | None | $1$ | two positive ints | explicit 2D working XY count | FDM CPU/GPU | backend_policy.discretization_hints.fdm.demag.common_cells_xy | implemented; runtime not qualified |
+| FDMDemag.explain | bool | True | $1$ | raw script builder requires bool; constructor does not type-check it | planner explanation request | FDM CPU/GPU authoring | not serialized by FDMDemag.to_ir | implemented authoring |
+| FDMDemag.allow_single_grid_fallback | bool or None | None | $1$ | every non-None value raises ValueError | removed compatibility input; silent fallback is forbidden | unsupported | not serialized |
 
 Parametry FDM.boundary_correction, FDM.boundary_phi_floor i
-FDM.boundary_delta_min są publicznie obniżane do FDM hints, lecz nie są
-semantyką multilayer-convolution tej noty: pozostają wykluczone z tego
-kontraktu, dopóki planner nie poda ich per-layer wpływu na transfer/kernel.
-Wykluczenie jest jawne; nie oznacza pominięcia wartości przez obecny wrapper.
+FDM.boundary_delta_min są publicznie obniżane do FDM hints, lecz bieżący
+FdmMultilayerPlanIR ich nie przenosi ani nie odrzuca. Jest to otwarty błąd
+round-trip; do czasu zdefiniowania per-layer wpływu planner powinien fail-close
+dla wartości innych niż neutralne.
 
 ```python
 # %% Imports
@@ -329,15 +330,17 @@ assert grid.to_ir()["cell"][2] == 3.0e-9
 assert demag.to_ir()["strategy"] == "multilayer_convolution"
 ```
 
-Obecna biblioteka nie udostępnia pełnej rejestracji tej interakcji przez
-publiczny stage builder. Dokumentacja nie udaje działającego stage workflow
-przed implementacją i runtime proof tej granicy.
+Publiczny stage builder rejestruje `study.fdm(...)`, niezależny termin
+`study.demag(enabled=True)`, outputs, solver i etapy. Samo `to_ir()` dowodzi
+jedynie authoringu. Multilayer relaxation jest obecnie legalne tylko dla
+`llg_overdamped`; direct minimizers PG-BB/NCG pozostają fail-closed.
 
 (problem-ir)=
 ## ProblemIR i normalizacja
 
 FDMGrid.to_ir obniża cell do listy SI. FDMDemag.to_ir obniża strategy, mode,
-common_cells i common_cells_xy do discretization.fdm.demag. Planner materializuje
+common_cells i common_cells_xy do
+backend_policy.discretization_hints.fdm.demag. Planner materializuje
 FdmMultilayerPlanIR, FdmLayerPlanIR i FdmMultilayerSummaryIR z requested oraz
 selected strategy, eligibility i oszacowaniem kerneli.
 
@@ -360,7 +363,7 @@ precyzji.
 | Solver | Device | Status | Stan dowodu |
 |---|---|---|---|
 | FDM | CPU | reference_executable | 2D exact Newell; świeże pełne oracles L=1/L=2 identity, osobny CPU `push_pull` equal + mały unequal transfer oraz target-only Airbox convergence; ogólny 3D/heterogeneous production path nadal gated |
-| FDM | GPU | implemented | CUDA istnieje; wymaga świeżej parity device |
+| FDM | GPU | implemented; executable contract partial; runtime-verified no; physically-validated no; production-qualified no | CUDA istnieje, lecz current managed gate jest `not_qualified`; assisted heterogeneous operator wymaga fail-close lub ujednolicenia z CPU descriptor path |
 | FEM | CPU | not-applicable | nota opisuje FDM FFT/Newell, nie FEM magnetostatykę |
 | FEM | GPU | not-applicable | nota opisuje FDM FFT/Newell, nie FEM magnetostatykę |
 
@@ -460,21 +463,21 @@ kwalifikacji.
 
 | Claim | Path | Symbol | Responsibility | Lane | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|---|
-| Python FDM wrapper | packages/fullmag-py/src/fullmag/model/discretization.py | class FDM | lowers the full public FDM wrapper | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_two_object_two_d_policy_preserves_requested_auto_in_ir | executable authoring contract only | UNCOMMITTED (no SHA) |
-| Python demag intent | packages/fullmag-py/src/fullmag/model/discretization.py | class FDMDemag | validates and lowers requested demag policy | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_auto_mode_preserves_common_cells_for_planner_resolution | executable authoring contract only | UNCOMMITTED (no SHA) |
-| Continuous kernel definition (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_f | anchors the continuous Newell primitive; no discrete runtime ownership claim | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | UNCOMMITTED (no SHA) |
-| Appendix A g primitive (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_g | anchors the off-diagonal Newell primitive; no unequal-cell production owner | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | UNCOMMITTED (no SHA) |
-| CPU production Newell tensor | crates/fullmag-fdm-demag/src/newell.rs | compute_newell_kernels | exact 64-corner 2D lane with bounded 3D asymptotic branch | FDM CPU reference | crates/fullmag-fdm-demag/src/newell.rs::tests::two_d_corner_kernel_matches_independent_reference_at_near_and_far_lags | runtime-verified CPU FP64; not production-qualified | UNCOMMITTED (no SHA) |
-| Volume-weighted reciprocity oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs | unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | independent unequal-volume oracle; not production proof | FDM numerical oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | oracle-only | UNCOMMITTED (no SHA) |
-| Shifted tensor | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel | builds current shifted tensor spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::shifted_kernel_matches_independent_cubature_for_both_z_lag_directions | code/test only; not production-qualified | UNCOMMITTED (no SHA) |
-| Tensor product | crates/fullmag-fdm-demag/src/multiply.rs | accumulate_tensor_convolution | accumulates source into destination spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/src/multiply.rs::tests::diagonal_kernel_scales_components_independently | code/test only; not production-qualified | UNCOMMITTED (no SHA) |
-| Field sign | crates/fullmag-fdm-demag/src/multiply.rs | negate_field | applies the field-sign convention after inverse transform | FDM CPU oracle input | planned sign-convention fixture | planned | UNCOMMITTED (no SHA) |
-| CPU multilayer energy | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs | observe_multilayer | reports current CPU demag energy | FDM CPU, current owner | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::multilayer_reference_run_executes_two_layers | code/test only; no independent energy oracle | UNCOMMITTED (no SHA) |
-| CUDA demag energy blocks | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | demag_energy_blocks_kernel | reduces FP64 demag-energy blocks | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | UNCOMMITTED (no SHA) |
-| CUDA demag energy reduction | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | reduce_demag_energy_fp64 | launches and reduces FP64 demag energy | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | UNCOMMITTED (no SHA) |
-| Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/newell.rs | newell_g | publication formulas only; no unequal-cell production owner | planned theory/oracle | planned independent Appendix-A oracle | theoretical-only; implementation planned | UNCOMMITTED (no SHA) |
-| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::tests::push_m_coarsening_averages | code/test only; adjointness unqualified | UNCOMMITTED (no SHA) |
-| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::tests::identity_transfer_is_noop | code/test only; adjointness unqualified | UNCOMMITTED (no SHA) |
-| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | UNCOMMITTED (no SHA) |
-| CPU catalog and workspace | crates/fullmag-engine/src/multilayer.rs | build_kernel_catalog | deduplicates kernels and binds ordered layer pairs to one descriptor | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace | runtime-verified CPU, not production-qualified | dd25252ec |
-| CPU checked refresh | crates/fullmag-engine/src/multilayer.rs | compute_demag_fields_checked | validates native/scratch geometry and executes catalog/workspace refresh | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::identity_path_rejects_native_scratch_cell_count_mismatch_without_panicking | fail-closed contract; no managed production artifact | dd25252ec |
+| Python FDM wrapper | packages/fullmag-py/src/fullmag/model/discretization.py | class FDM | lowers the full public FDM wrapper | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_two_object_two_d_policy_preserves_requested_auto_in_ir | executable authoring contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Python demag intent | packages/fullmag-py/src/fullmag/model/discretization.py | class FDMDemag | validates and lowers requested demag policy | FDM public API | packages/fullmag-py/tests/test_fdm_multilayer_contract.py::test_auto_mode_preserves_common_cells_for_planner_resolution | executable authoring contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Continuous kernel definition (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_f | anchors the continuous Newell primitive; no discrete runtime ownership claim | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Appendix A g primitive (theory only) | crates/fullmag-fdm-demag/src/newell.rs | newell_g | anchors the off-diagonal Newell primitive; no unequal-cell production owner | theory/oracle boundary | crates/fullmag-fdm-demag/src/newell.rs::tests::nxy_absolute_values_match_reference | theoretical-only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| CPU production Newell tensor | crates/fullmag-fdm-demag/src/newell.rs | compute_newell_kernels | exact 64-corner 2D lane with bounded 3D asymptotic branch | FDM CPU reference | crates/fullmag-fdm-demag/src/newell.rs::tests::two_d_corner_kernel_matches_independent_reference_at_near_and_far_lags | runtime-verified CPU FP64; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Volume-weighted reciprocity oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs | unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | independent unequal-volume oracle; not production proof | FDM numerical oracle | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::unequal_cell_cubature_obeys_nontrivial_volume_weighted_reciprocity | oracle-only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Shifted tensor | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel | builds current shifted tensor spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/tests/shifted_newell_oracle.rs::shifted_kernel_matches_independent_cubature_for_both_z_lag_directions | code/test only; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Tensor product | crates/fullmag-fdm-demag/src/multiply.rs | accumulate_tensor_convolution | accumulates source into destination spectrum | FDM CPU oracle input | crates/fullmag-fdm-demag/src/multiply.rs::tests::diagonal_kernel_scales_components_independently | code/test only; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Field sign | crates/fullmag-fdm-demag/src/multiply.rs | negate_field | applies the single demagnetizing minus sign to the accumulated destination spectrum before inverse FFT | FDM CPU oracle input | sign-convention source contract; independent end-to-end fixture still required | code/test only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| CPU multilayer energy | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs | observe_multilayer | reports current CPU demag energy | FDM CPU, current owner | crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::multilayer_reference_run_executes_two_layers | code/test only; no independent energy oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| CUDA demag energy blocks | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | demag_energy_blocks_kernel | reduces FP64 demag-energy blocks | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| CUDA demag energy reduction | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | reduce_demag_energy_fp64 | launches and reduces FP64 demag energy | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel_pair | current unequal-cell pair-kernel owner; `newell.rs::newell_g` remains the publication-formula anchor | FDM CPU kernel plus theory/oracle boundary | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | implemented and oracle-tested in scoped CPU cases; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | local/source-unbound verifier: field, energy, and adjoint checks for different extents and $V_{native}\ne V_{scratch}$ with equal native $h_z$ | physically validated in the stated local scope; no unequal-native-cell-thickness continuum oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | local/source-unbound verifier: field, energy, and adjoint checks for different extents and $V_{native}\ne V_{scratch}$ with equal native $h_z$ | physically validated in the stated local scope; no unequal-native-cell-thickness continuum oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| CPU catalog and workspace | crates/fullmag-engine/src/multilayer.rs | build_kernel_catalog | deduplicates kernels and binds ordered layer pairs to one descriptor | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace | runtime-verified CPU, not production-qualified | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |
+| CPU checked refresh | crates/fullmag-engine/src/multilayer.rs | compute_demag_fields_checked | validates native/scratch geometry and executes catalog/workspace refresh | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::identity_path_rejects_native_scratch_cell_count_mismatch_without_panicking | fail-closed contract; no managed production artifact | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |

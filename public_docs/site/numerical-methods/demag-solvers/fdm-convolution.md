@@ -41,8 +41,9 @@ The open-boundary FFT implementation embeds the finite convolution in a padded d
 ```{math}
 :label: eq-numerical-demag-fdm-fft
 \widehat{\mathbf H}_{\mathrm d}
-=-\mathcal F^{-1}\left(\widehat{\mathbf N}^{\mathrm{cell}}
-\,\widehat{\mathbf M}\right).
+=-\widehat{\mathbf N}^{\mathrm{cell}}\widehat{\mathbf M},
+\qquad
+\mathbf H_{\mathrm d}=\mathcal F^{-1}\left[\widehat{\mathbf H}_{\mathrm d}\right].
 ```
 
 The tensor is constructed from Newell cell integrals; the FFT is an acceleration of the finite
@@ -78,7 +79,8 @@ convolution, not an assumption of periodic physical boundaries.
   not remove grid, geometry-mask, or finite-precision error.
 - GPU FP32 and FP64 are separate precision lanes. Matching source code is not parity evidence, and
   authoring a GPU request does not prove that the GPU executed it.
-- Multilayer convolution uses an explicit common-grid policy. A failed common-grid resolution must
+- Multilayer convolution uses an explicit multilayer policy with an authored or
+  planner-resolved common scratch layout. A failed common-grid resolution must
   not silently fall back to a single-grid approximation.
 - Omitting both `common_cells` and `common_cells_xy` delegates scratch-grid selection to Fullmag's
   planner-auto policy. This is not a reproduction of BORIS `ncommonstatus=false`: the authored

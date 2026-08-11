@@ -333,7 +333,8 @@ pub struct SceneFdmDiscretizationState {
     #[serde(
         default,
         alias = "per_magnet",
-        skip_serializing_if = "BTreeMap::is_empty"
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "deserialize_null_default"
     )]
     pub per_object_grid: BTreeMap<String, ScriptBuilderFdmGridState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -344,6 +345,14 @@ pub struct SceneFdmDiscretizationState {
     pub boundary_phi_floor: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary_delta_min: Option<f64>,
+}
+
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -1186,6 +1195,24 @@ pub enum SceneCouplingCapabilityPolicy {
 #[cfg(test)]
 mod spin_authoring_tests {
     use super::*;
+
+    #[test]
+    fn scene_document_accepts_null_python_fdm_per_magnet() {
+        let value = serde_json::json!({
+            "version": "scene.v2",
+            "study": {
+                "fdm": {
+                    "default_cell": [6.25e-9, 10.15625e-9, 3.0e-9],
+                    "per_magnet": null
+                }
+            }
+        });
+
+        let scene: SceneDocument =
+            serde_json::from_value(value).expect("Python FDM scene must accept null per_magnet");
+        let fdm = scene.study.fdm.expect("FDM state");
+        assert!(fdm.per_object_grid.is_empty());
+    }
 
     #[test]
     fn scene_document_round_trips_typed_spin_authoring_collections() {

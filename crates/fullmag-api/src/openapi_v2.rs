@@ -738,6 +738,13 @@ pub fn openapi_json() -> Value {
     let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("OpenAPI v2 should serialize");
     add_platform_document_paths(&mut doc);
     add_session_collection_paths(&mut doc);
+    let build_identity = fullmag_build_info::identity();
+    doc["x-fullmag-build-identity"] = json!({
+        "built_at_utc": build_identity.built_at_utc,
+        "git_commit": build_identity.git_commit,
+        "worktree_state": build_identity.worktree_state,
+        "source_snapshot_sha256": build_identity.source_snapshot_sha256,
+    });
     doc["x-fullmag-study-primitive-stage-kinds"] =
         serde_json::to_value(fullmag_authoring::StudyPrimitiveStageKind::ALL)
             .expect("study primitive stage catalog should serialize");
@@ -862,6 +869,22 @@ fn sanitize_operation_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::openapi_json;
+
+    #[test]
+    fn openapi_exposes_the_serving_binary_build_identity() {
+        let document = openapi_json();
+        let identity = fullmag_build_info::identity();
+
+        assert_eq!(
+            document["x-fullmag-build-identity"],
+            serde_json::json!({
+                "built_at_utc": identity.built_at_utc,
+                "git_commit": identity.git_commit,
+                "worktree_state": identity.worktree_state,
+                "source_snapshot_sha256": identity.source_snapshot_sha256,
+            })
+        );
+    }
 
     #[test]
     fn openapi_declares_complete_study_primitive_stage_catalog() {

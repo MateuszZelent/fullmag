@@ -5326,6 +5326,7 @@ fn fem_gpu_execution_provenance(
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {
+        charge_transport: None,
         transport_modules: Vec::new(),
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {

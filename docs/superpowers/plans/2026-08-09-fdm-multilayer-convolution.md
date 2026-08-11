@@ -14,6 +14,32 @@
 >
 > Właściciel browser contract: OpenAPI v2 + `apps/control-room`
 
+> Audyt korygujący: [Audyt implementacji FDM multilayer convolution —
+> 2026-08-11](../../audits/2026-08-11-fdm-multilayer-convolution-implementation-audit.md).
+> W przypadku sprzeczności dotyczącej stanu implementacji, dowodów lub kolejności
+> napraw obowiązuje nowszy audyt. W szczególności CUDA-assisted dla
+> `two_d_stack`/heterogenicznego `h_z`/`push_pull`, plannerowy budżet D-06 i
+> device residency D-07 są blokerami P0, a nie wyłącznie brakami finalnej
+> kwalifikacji.
+
+## Korekta stanu — 2026-08-11
+
+| Obszar | Stan po audycie | Decyzja |
+|---|---|---|
+| Python/ProblemIR/planner | częściowo wykonawcze | domknąć typed enums, reason codes, Scene v3, stable object ID i fail-closed `boundary_*` |
+| CPU FP64 identity/shift | lokalnie zweryfikowane zakresowo | odtworzyć jako source-bound managed receipt |
+| CPU `push_pull` | lokalnie zweryfikowane dla różnych extentów i `V_native != V_scratch`; brak direct oracle dla `h_source,z != h_destination,z` | zachować scoped validation, nie rozszerzać jej na unequal native-cell thickness |
+| D-06 | planner liczy shift-only, runtime bogatszy katalog, CUDA alokuje `L^2` | naprawić przed dalszą kwalifikacją pamięci |
+| CUDA-assisted | publicznie wywoływalne, lecz niekanoniczne dla części heterogenicznego zakresu | fail-close albo użyć wspólnego descriptorowego operatora |
+| D-07 | `L/L/L^2` wewnątrz refreshu | nie kwalifikuje całego solvera; wymagane zero realnych vector H2D/D2H w warm step |
+| API/UI/viewport | kontrakty i testy modelu istnieją | brak świeżego runtime/WebGL proof; rename/object-ID i scratch-grid UI otwarte |
+| Airbox | target-only CPU carrier istnieje | przenieść z eager post-run do on-demand `compute_fields`, dodać maskę i FFT counters |
+| Production | niekwalifikowane | fazy containment, CPU oracle, ABI v3/CUDA, round-trip i pełna kwalifikacja pozostają otwarte |
+
+Artefakty lokalne bez śledzonego pełnego SHA są dowodem diagnostycznym, nie
+immutable production receipt. Historyczne liczby suite i Chromium smoke poniżej
+opisują wcześniejszy snapshot; nie są dowodem bieżącego HEAD.
+
 ## Stan wykonania — 2026-08-10
 
 Wykonano i zweryfikowano: publikację naukową/source-map, kontrakt Python/IR i

@@ -486,17 +486,48 @@ mod control_room_guard_tests {
         );
         assert!(!api_openapi_response_is_compatible(stale));
 
-        let current = concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "x-api-contract-version: 1.0.0\r\n\r\n",
-            "{\"paths\":{",
-            "\"/v2/sessions/current/model/scene\":{},",
-            "\"/v2/sessions/current/data/mesh-region-memberships\":{},",
-            "\"/v2/sessions/current/simulation/objects/{object_id}/metrics\":{}",
-            "},\"x-fullmag-study-primitive-stage-kinds\":",
-            "[\"add_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"]}",
+        let identity = fullmag_build_info::identity();
+        let current = format!(
+            concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "x-api-contract-version: 1.0.0\r\n\r\n",
+                "{{\"paths\":{{",
+                "\"/v2/sessions/current/model/scene\":{{}},",
+                "\"/v2/sessions/current/data/mesh-region-memberships\":{{}},",
+                "\"/v2/sessions/current/simulation/objects/{{object_id}}/metrics\":{{}}",
+                "}},\"x-fullmag-study-primitive-stage-kinds\":",
+                "[\"add_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"],",
+                "\"x-fullmag-build-identity\":{{",
+                "\"built_at_utc\":\"{}\",",
+                "\"git_commit\":\"{}\",",
+                "\"worktree_state\":\"{}\",",
+                "\"source_snapshot_sha256\":\"{}\"",
+                "}}}}"
+            ),
+            identity.built_at_utc,
+            identity.git_commit,
+            identity.worktree_state,
+            identity.source_snapshot_sha256,
         );
-        assert!(api_openapi_response_is_compatible(current));
+        assert!(api_openapi_response_is_compatible(&current));
+
+        let foreign = current.replacen(identity.git_commit, &"0".repeat(40), 1);
+        assert!(!api_openapi_response_is_compatible(&foreign));
+
+        let mismatched_snapshot = if identity.source_snapshot_sha256 == "0".repeat(64) {
+            "1".repeat(64)
+        } else {
+            "0".repeat(64)
+        };
+        let foreign_snapshot =
+            current.replacen(identity.source_snapshot_sha256, &mismatched_snapshot, 1);
+        assert!(!api_openapi_response_is_compatible(&foreign_snapshot));
+
+        let missing_identity = current
+            .split_once(",\"x-fullmag-build-identity\"")
+            .map(|(prefix, _)| format!("{prefix}}}"))
+            .expect("fixture should contain build identity");
+        assert!(!api_openapi_response_is_compatible(&missing_identity));
     }
 
     #[test]
@@ -1237,6 +1268,9 @@ fn api_openapi_response_is_compatible(response: &str) -> bool {
     else {
         return false;
     };
+    if !api_build_identity_is_compatible(&document) {
+        return false;
+    }
 
     paths.contains_key("/v2/sessions/current/model/scene")
         && paths.contains_key("/v2/sessions/current/data/mesh-region-memberships")
@@ -1246,6 +1280,36 @@ fn api_openapi_response_is_compatible(response: &str) -> bool {
                 .iter()
                 .any(|kind| kind.as_str() == Some(required))
         })
+}
+
+fn api_build_identity_is_compatible(document: &serde_json::Value) -> bool {
+    let Some(remote) = document
+        .get("x-fullmag-build-identity")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    let Some(remote_commit) = remote.get("git_commit").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let Some(remote_snapshot) = remote
+        .get("source_snapshot_sha256")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let local = fullmag_build_info::identity();
+    if remote_commit != local.git_commit {
+        return false;
+    }
+
+    let local_snapshot_is_known = local.source_snapshot_sha256 != "unknown";
+    let remote_snapshot_is_known = remote_snapshot != "unknown";
+    if local_snapshot_is_known || remote_snapshot_is_known {
+        return remote_snapshot == local.source_snapshot_sha256;
+    }
+
+    true
 }
 
 pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {

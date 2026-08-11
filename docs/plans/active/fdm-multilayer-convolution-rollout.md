@@ -1,5 +1,14 @@
 # FDM Multi-Layer Convolution Demag: Szczegółowy Plan Architektoniczny
 
+> **Status: historyczny / zastąpiony.** Ten dokument zachowuje pierwotny rollout
+> z 2026-03-25 i nie może być wykonywany jako aktualny plan. Obowiązującym planem
+> jest [Plan produkcyjnego domknięcia FDM multilayer convolution](../../superpowers/plans/2026-08-09-fdm-multilayer-convolution.md),
+> skorygowany przez [audyt z 2026-08-11](../../audits/2026-08-11-fdm-multilayer-convolution-implementation-audit.md).
+> Nieaktualne są w szczególności odwołania do `apps/web`, `/v1/runs`,
+> `allow_single_grid_fallback`, identycznych XY jako wymogu oraz brakującego UI
+> warstw. Planner nadal odrzuca multilayer `BulkDMI`; nie wolno interpretować
+> poniższego baseline'u jako deklaracji jego obsługi.
+
 ## Status implementacji
 
 ### Zaimplementowany pierwszy publiczny slice
@@ -10,7 +19,8 @@ trybie `multilayer_convolution`, ale tylko dla ograniczonego, uczciwie opisanego
 - wiele `Ferromagnet` w jednym `Problem`,
 - body-local `Exchange()`,
 - globalne `Demag()` pomiędzy ciałami,
-- globalne `InterfacialDMI()` / `BulkDMI()` constants w publicznym multilayer planie,
+- globalne `InterfacialDMI()` w publicznym multilayer planie; `BulkDMI()` jest
+  capability-gated i odrzucane przez bieżący planner,
 - planowanie przez `BackendPlanIR::FdmMultilayer(...)`,
 - wykonanie przez CPU reference runner, publiczny `cuda-assisted` runner oraz
   native CUDA single-grid fast path dla kompatybilnych z-stacków,
