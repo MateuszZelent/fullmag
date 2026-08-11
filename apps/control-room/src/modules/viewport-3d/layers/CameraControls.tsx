@@ -23,6 +23,10 @@ import {
   viewport3DCameraGestureActive,
   type Viewport3DCameraGestureRef,
 } from "./viewport3DCameraGesture";
+import {
+  viewport3DCameraSnapshotsEqual,
+  type Viewport3DLiveCameraSnapshot,
+} from "./viewport3DCameraState";
 
 interface Viewport3DCameraFit {
   far: number;
@@ -88,7 +92,6 @@ const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
   size: [1e-6, 1e-6, 1e-6],
 };
 export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
-const CAMERA_STATE_EPSILON = 1e-7;
 const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
 const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
 const ORBIT_DEBUG_DAMPING = 18;
@@ -430,15 +433,22 @@ function nearCameraState(
   left: Viewport3DCameraState,
   right: Viewport3DCameraState,
 ): boolean {
-  return (
-    nearTuple3(left.position, right.position, CAMERA_STATE_EPSILON) &&
-    nearTuple3(left.target, right.target, CAMERA_STATE_EPSILON) &&
-    nearTuple3(
-      left.up ?? VIEWPORT_3D_WORLD_UP,
-      right.up ?? VIEWPORT_3D_WORLD_UP,
-      CAMERA_STATE_EPSILON,
-    )
+  return viewport3DCameraSnapshotsEqual(
+    cameraStateSnapshot(left),
+    cameraStateSnapshot(right),
   );
+}
+
+function cameraStateSnapshot(
+  cameraState: Viewport3DCameraState,
+): Viewport3DLiveCameraSnapshot {
+  return {
+    orthographicScale: null,
+    position: cameraState.position,
+    projection: "perspective",
+    target: cameraState.target,
+    up: cameraState.up ?? VIEWPORT_3D_WORLD_UP,
+  };
 }
 
 export function shouldApplyViewport3DCameraState<TCamera>({
