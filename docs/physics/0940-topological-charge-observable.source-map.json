@@ -1,0 +1,116 @@
+{
+  "document": {
+    "path": "docs/physics/0940-topological-charge-observable.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "reference_executable",
+      "reason": "The object-scoped P1 cut-plane charge resource has managed CPU evidence for the documented bounded contract; the planned trajectory and Hall-angle layer is not implemented or qualified."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "No native FEM GPU trajectory or skyrmion Hall-angle realization has managed runtime evidence."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "reference_executable",
+      "reason": "The object-scoped oriented-triangle charge resource has managed CPU evidence for the documented bounded contract; the planned trajectory and Hall-angle layer is not implemented or qualified."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "No FDM GPU trajectory or skyrmion Hall-angle realization has managed runtime evidence, and CPU charge evidence is not a GPU qualification substitute."
+    }
+  ],
+  "equations": [
+    {
+      "id": "skyrmion-hall-weighted-regression",
+      "symbols": ["t_n", "w_n", "x_n", "y_n", "v_x", "v_y"],
+      "sources": ["skyrmion-hall-contract"]
+    },
+    {
+      "id": "skyrmion-hall-angle",
+      "symbols": ["v_x", "v_y", "Theta_H"],
+      "sources": ["skyrmion-hall-contract"]
+    }
+  ],
+  "symbols": [
+    {"id": "t_n", "latex": "t_n", "meaning": "accepted trajectory time sample", "si_unit": "\\mathrm{s}"},
+    {"id": "w_n", "latex": "w_n", "meaning": "inverse position-variance regression weight", "si_unit": "\\mathrm{m^{-2}}"},
+    {"id": "x_n", "latex": "x_n", "meaning": "signed-density centre coordinate along the track", "si_unit": "\\mathrm{m}"},
+    {"id": "y_n", "latex": "y_n", "meaning": "signed-density centre coordinate along the transverse axis", "si_unit": "\\mathrm{m}"},
+    {"id": "v_x", "latex": "v_x", "meaning": "fitted longitudinal velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
+    {"id": "v_y", "latex": "v_y", "meaning": "fitted transverse velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
+    {"id": "Theta_H", "latex": "\\Theta_H", "meaning": "signed skyrmion Hall angle in the reported frame", "si_unit": "\\mathrm{rad}"}
+  ],
+  "sources": [
+    {
+      "id": "topological-charge-kernel",
+      "path": "crates/fullmag-api/src/analysis/topological_charge.rs",
+      "symbol": "compute_oriented_charge",
+      "responsibility": "Integrate signed solid angles over an oriented triangle support."
+    },
+    {
+      "id": "topological-support-gate",
+      "path": "crates/fullmag-api/src/analysis/topological_charge.rs",
+      "symbol": "qualify_support_topology",
+      "responsibility": "Reject duplicate, nonmanifold, or disconnected supports."
+    },
+    {
+      "id": "topological-boundary-gate",
+      "path": "crates/fullmag-api/src/analysis/topological_charge.rs",
+      "symbol": "qualify_boundary",
+      "responsibility": "Qualify boundary uniformity independently from the charge value."
+    },
+    {
+      "id": "topological-fdm-weighting",
+      "path": "crates/fullmag-api/src/analysis/topological_charge.rs",
+      "symbol": "fdm_weighted_mean",
+      "responsibility": "Compute thickness-weighted FDM layer summaries."
+    },
+    {
+      "id": "topological-cache-key",
+      "path": "crates/fullmag-api/src/quantity_data_plane.rs",
+      "symbol": "topological_charge_cache_key",
+      "responsibility": "Bind object, field, support, method, mesh, domain, and snapshot identity."
+    },
+    {
+      "id": "topological-runtime-validator",
+      "path": "scripts/validate_topological_charge_runtime.py",
+      "symbol": "validate_evidence",
+      "responsibility": "Reject incomplete FDM/FEM managed-runtime evidence."
+    },
+    {
+      "id": "skyrmion-hall-contract",
+      "path": "docs/physics/0940-topological-charge-observable.md",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-angle-v1-contract",
+      "responsibility": "Freeze signed-density centre, steady-window, weighted-regression, covariance, angle, and reason-code semantics without claiming implementation.",
+      "evidence_status": "planned_contract"
+    }
+  ],
+  "planned_symbols": [
+    {
+      "path": "crates/fullmag-api/src/schemas/analysis_extensions.rs",
+      "symbol": "SkyrmionTrajectoryV1",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 8",
+      "evidence_gate": "managed racetrack trajectory and fail-closed reason-code tests"
+    },
+    {
+      "path": "crates/fullmag-api/src/schemas/analysis_extensions.rs",
+      "symbol": "SkyrmionHallAngleV1",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 8",
+      "evidence_gate": "weighted-regression covariance and signed Hall-angle oracle"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

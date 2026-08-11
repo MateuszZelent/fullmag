@@ -13,6 +13,12 @@ from markdown_it import MarkdownIt
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "docs/physics/0970-spin-hall-drift-diffusion-transport.md"
 SOURCE_MAP = ROOT / "docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json"
+TOPOLOGICAL_PAGE = ROOT / "docs/physics/0940-topological-charge-observable.md"
+TOPOLOGICAL_SOURCE_MAP = ROOT / "docs/physics/0940-topological-charge-observable.source-map.json"
+RACETRACK_FIXTURE = (
+    ROOT / "tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
+)
+RACETRACK_README = ROOT / "tests/standard_problems/transport/racetrack_m1_v1/README.md"
 RUNTIME = ROOT / "docs/specs/spin-transport-runtime-contract-v1.md"
 MASTERPLAN = ROOT / "docs/architecture/backend-golden-masterplan.md"
 CAPABILITY_MD = ROOT / "docs/specs/capability-matrix-v0.md"
@@ -1418,6 +1424,143 @@ class FdmGpuM1ContractDocsTests(unittest.TestCase):
             self.assertIn(old, page + runtime)
             with self.assertRaises(AssertionError):
                 _assert_telemetry_and_fixture_closure(page.replace(old, new), runtime.replace(old, new))
+
+
+class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
+    def test_racetrack_fixture_equations_signs_and_planned_symbols_are_frozen(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        transport_page = PAGE.read_text(encoding="utf-8")
+        topological_page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        readme = RACETRACK_README.read_text(encoding="utf-8")
+        transport_source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        topological_source_map = json.loads(
+            TOPOLOGICAL_SOURCE_MAP.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual("racetrack_m1_v1", fixture["schema_version"])
+        self.assertEqual("synthetic_validation_fixture", fixture["fixture_kind"])
+        self.assertFalse(fixture["claims_single_real_material"])
+        self.assertEqual(
+            {
+                "track_axis": "+x",
+                "transverse_axis": "+y",
+                "stack_axis": "+z",
+                "interface_normal_hm_to_fm": "+z",
+                "positive_conventional_current": "+x",
+            },
+            fixture["orientation"],
+        )
+        self.assertEqual(
+            {"racetrack_m1_v1", "she_1d_film_v1", "skyrmion_hall_angle_v1"},
+            set(fixture["contract_ids"]),
+        )
+
+        expected_values = {
+            "track.length": (512e-9, "m"),
+            "track.width": (128e-9, "m"),
+            "hm.thickness": (3e-9, "m"),
+            "fm.thickness": (1e-9, "m"),
+            "cell.x": (2e-9, "m"),
+            "cell.y": (2e-9, "m"),
+            "cell.z": (1e-9, "m"),
+            "fm.Ms": (580e3, "A/m"),
+            "fm.A": (15e-12, "J/m"),
+            "fm.alpha": (0.3, "1"),
+            "fm.Ku": (0.8e6, "J/m^3"),
+            "fm.D": (3e-3, "J/m^2"),
+            "hm.sigma_charge": (5e6, "S/m"),
+            "hm.sigma_spin": (5e6, "S/m"),
+            "hm.theta_SH": (0.2, "1"),
+            "hm.lambda_sf": (1.5e-9, "m"),
+            "fm.sigma_charge": (1e6, "S/m"),
+            "fm.sigma_spin": (1e6, "S/m"),
+            "fm.P": (0.4, "1"),
+            "fm.lambda_sf": (5e-9, "m"),
+            "fm.lambda_J": (1e-9, "m"),
+            "fm.lambda_phi": (1e-9, "m"),
+            "interface.G_up": (2.5e14, "S/m^2"),
+            "interface.G_down": (2.5e14, "S/m^2"),
+            "interface.G_r": (5e14, "S/m^2"),
+            "interface.G_i": (5e13, "S/m^2"),
+            "drive.J_minus_1_5": (-1.5e12, "A/m^2"),
+            "drive.J_minus_1_0": (-1.0e12, "A/m^2"),
+            "drive.J_minus_0_5": (-0.5e12, "A/m^2"),
+            "drive.J_plus_0_5": (0.5e12, "A/m^2"),
+            "drive.J_plus_1_0": (1.0e12, "A/m^2"),
+            "drive.J_plus_1_5": (1.5e12, "A/m^2"),
+        }
+        parameters = {row["id"]: row for row in fixture["parameters"]}
+        self.assertEqual(set(expected_values), set(parameters))
+        for parameter_id, (value, si_unit) in expected_values.items():
+            with self.subTest(parameter_id=parameter_id):
+                row = parameters[parameter_id]
+                self.assertEqual(value, row["value"])
+                self.assertEqual(si_unit, row["si_unit"])
+                self.assertEqual("numerical_validation_fixture", row["value_kind"])
+                for field in (
+                    "symbol",
+                    "si_unit",
+                    "value",
+                    "validity",
+                    "problem_ir_path",
+                    "motivation",
+                ):
+                    self.assertIn(field, row)
+                    self.assertNotEqual("", row[field])
+
+        for equation_id in (
+            "racetrack-charge-continuity",
+            "racetrack-direct-she",
+            "racetrack-steady-spin-balance",
+            "racetrack-mixing-boundary",
+            "racetrack-torque-balance",
+            "racetrack-gilbert-llg",
+        ):
+            self.assertIn(f":label: {equation_id}", transport_page)
+        for equation_id in (
+            "skyrmion-hall-weighted-regression",
+            "skyrmion-hall-angle",
+        ):
+            self.assertIn(f":label: {equation_id}", topological_page)
+        for operation in (
+            "reverse_J",
+            "reverse_theta_SH",
+            "reverse_normal",
+            "reverse_transverse_axis",
+        ):
+            self.assertIn(f"| `{operation}` |", transport_page + topological_page)
+
+        planned_symbols = {
+            row["symbol"]
+            for source_map in (transport_source_map, topological_source_map)
+            for row in source_map["planned_symbols"]
+        }
+        self.assertEqual(
+            {
+                "ResolvedFdmSpinTransportIR.transport_active_mask",
+                "ResolvedSpinTransportPlanIR.fdm_gpu_double",
+                "GpuM1TransportSession::prepare",
+                "fullmag_fdm_context_bind_gpu_transport_v1",
+                "TransportStageCheckpointV1",
+                "execution_provenance.transport_m1_v1",
+                "SkyrmionTrajectoryV1",
+                "SkyrmionHallAngleV1",
+            },
+            planned_symbols,
+        )
+        for source_map in (transport_source_map, topological_source_map):
+            for row in source_map["planned_symbols"]:
+                self.assertEqual("planned_not_implemented", row["status"])
+                for field in ("path", "symbol", "owner_task", "evidence_gate"):
+                    self.assertTrue(row[field])
+
+        for required in (
+            "racetrack_m1_v1",
+            "syntetyczny fixture walidacyjny",
+            "nie reprezentuje jednego rzeczywistego materiału",
+            "skyrmion_hall_angle_v1",
+        ):
+            self.assertIn(required, transport_page + topological_page + readme)
 
 
 if __name__ == "__main__":

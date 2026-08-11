@@ -1,0 +1,425 @@
+{
+  "schema_version": "racetrack_m1_v1",
+  "fixture_kind": "synthetic_validation_fixture",
+  "claims_single_real_material": false,
+  "scope_note": "This is a numerical validation fixture assembled from literature-motivated parameter scales and explicit benchmark choices. It is not a fitted or measured parameter set for one real HM/FM material stack.",
+  "contract_ids": [
+    "racetrack_m1_v1",
+    "she_1d_film_v1",
+    "skyrmion_hall_angle_v1"
+  ],
+  "orientation": {
+    "track_axis": "+x",
+    "transverse_axis": "+y",
+    "stack_axis": "+z",
+    "interface_normal_hm_to_fm": "+z",
+    "positive_conventional_current": "+x"
+  },
+  "execution_intent": {
+    "backend": "fdm",
+    "device": "gpu",
+    "precision": "double",
+    "mode": "strict",
+    "qualification_status": "planned_not_implemented",
+    "forbidden_fallbacks": [
+      "cpu",
+      "single",
+      "prescribed_torque",
+      "prescribed_current_density",
+      "oersted"
+    ]
+  },
+  "initial_state": {
+    "kind": "canonical_neel_skyrmion_seed",
+    "target": "fm",
+    "qualification_rule": "The zero-current relaxation stage, not the seed alone, must establish stable signed topological charge, center, radius, and energy on three grids."
+  },
+  "stage_contract": [
+    {
+      "id": "relax_zero_current",
+      "transport_module_present": true,
+      "current_density_Apm2": 0.0,
+      "transport_torque_enabled": false
+    },
+    {
+      "id": "drive_solved_current",
+      "transport_module_present": true,
+      "current_parameter_ids": [
+        "drive.J_minus_1_5",
+        "drive.J_minus_1_0",
+        "drive.J_minus_0_5",
+        "drive.J_plus_0_5",
+        "drive.J_plus_1_0",
+        "drive.J_plus_1_5"
+      ],
+      "transport_torque_enabled": true
+    }
+  ],
+  "sources": [
+    {
+      "id": "sampaio2013",
+      "kind": "primary_paper",
+      "citation": "J. Sampaio et al., Nature Nanotechnology 8, 839-844 (2013)",
+      "doi": "10.1038/nnano.2013.210",
+      "use": "Ultrathin interfacial-DMI skyrmion and nanotrack scale; magnetic values are adopted as a benchmark scale, not as a material identification."
+    },
+    {
+      "id": "valet_fert1993",
+      "kind": "primary_paper",
+      "citation": "T. Valet and A. Fert, Physical Review B 48, 7099-7113 (1993)",
+      "doi": "10.1103/PhysRevB.48.7099",
+      "use": "Diffusive two-channel transport and spin-diffusion length interpretation."
+    },
+    {
+      "id": "brataas2000",
+      "kind": "primary_paper",
+      "citation": "A. Brataas, Yu. V. Nazarov, and G. E. W. Bauer, Physical Review Letters 84, 2481-2484 (2000)",
+      "doi": "10.1103/PhysRevLett.84.2481",
+      "use": "Oriented magnetoelectronic interface and complex spin-mixing conductance model."
+    },
+    {
+      "id": "abert2015",
+      "kind": "primary_paper",
+      "citation": "C. Abert et al., Scientific Reports 5, 14855 (2015)",
+      "doi": "10.1038/srep14855",
+      "use": "Three-dimensional spin-diffusion/LLG coupling and metallic transport-parameter scale."
+    },
+    {
+      "id": "benchmark_grid",
+      "kind": "explicit_fixture_motivation",
+      "use": "The 256 x 64 x 4 structured grid exactly represents both layers and resolves the 1 nm FM thickness while remaining bounded for the first CUDA qualification workload."
+    },
+    {
+      "id": "symmetric_drive_sweep",
+      "kind": "explicit_fixture_motivation",
+      "use": "Three nonzero magnitudes in both signs expose odd/even sign errors and support a signed-current Hall-angle regression without claiming a material-specific operating window."
+    },
+    {
+      "id": "interface_branch_coverage",
+      "kind": "explicit_fixture_motivation",
+      "use": "Finite longitudinal, real-mixing, and imaginary-mixing coefficients exercise every M1 interface branch; the values are benchmark coefficients, not an interface fit."
+    }
+  ],
+  "parameters": [
+    {
+      "id": "track.length",
+      "symbol": "L_x",
+      "si_unit": "m",
+      "value": 5.12e-7,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive FDM domain length; 256 cells at the frozen cell.x.",
+      "problem_ir_path": "geometry.entries[racetrack].size[0]",
+      "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "nanotrack-scale benchmark extent"}
+    },
+    {
+      "id": "track.width",
+      "symbol": "L_y",
+      "si_unit": "m",
+      "value": 1.28e-7,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive FDM domain width; 64 cells at the frozen cell.y.",
+      "problem_ir_path": "geometry.entries[racetrack].size[1]",
+      "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "bounded racetrack width with edge-distance margin"}
+    },
+    {
+      "id": "hm.thickness",
+      "symbol": "t_{HM}",
+      "si_unit": "m",
+      "value": 3e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive HM thickness; three cell.z layers below the oriented HM-to-FM interface.",
+      "problem_ir_path": "geometry.entries[hm].size[2]",
+      "motivation": {"source_ids": ["abert2015", "benchmark_grid"], "claim": "thin heavy-metal transport layer resolved by three cells"}
+    },
+    {
+      "id": "fm.thickness",
+      "symbol": "t_{FM}",
+      "si_unit": "m",
+      "value": 1e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive FM thickness; one cell.z layer above the oriented HM-to-FM interface.",
+      "problem_ir_path": "geometry.entries[fm].size[2]",
+      "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "ultrathin interfacial-DMI ferromagnet represented without thickness averaging ambiguity"}
+    },
+    {
+      "id": "cell.x",
+      "symbol": "h_x",
+      "si_unit": "m",
+      "value": 2e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive Cartesian spacing dividing track.length without remainder.",
+      "problem_ir_path": "backend_policy.discretization_hints.fdm.cell[0]",
+      "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "bounded in-plane skyrmion-resolution level"}
+    },
+    {
+      "id": "cell.y",
+      "symbol": "h_y",
+      "si_unit": "m",
+      "value": 2e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive Cartesian spacing dividing track.width without remainder.",
+      "problem_ir_path": "backend_policy.discretization_hints.fdm.cell[1]",
+      "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "isotropic in-plane skyrmion-resolution level"}
+    },
+    {
+      "id": "cell.z",
+      "symbol": "h_z",
+      "si_unit": "m",
+      "value": 1e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Exact positive Cartesian spacing resolving the 3 nm HM and 1 nm FM as 3+1 cells.",
+      "problem_ir_path": "backend_policy.discretization_hints.fdm.cell[2]",
+      "motivation": {"source_ids": ["benchmark_grid"], "claim": "exact layer and interface ownership"}
+    },
+    {
+      "id": "fm.Ms",
+      "symbol": "M_s",
+      "si_unit": "A/m",
+      "value": 580000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive on FM; zero outside the magnetic mask.",
+      "problem_ir_path": "materials[fm].saturation_magnetisation",
+      "motivation": {"source_ids": ["sampaio2013"], "claim": "published skyrmion benchmark scale, not a stack identification"}
+    },
+    {
+      "id": "fm.A",
+      "symbol": "A",
+      "si_unit": "J/m",
+      "value": 1.5e-11,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive exchange stiffness on FM.",
+      "problem_ir_path": "materials[fm].exchange_stiffness",
+      "motivation": {"source_ids": ["sampaio2013"], "claim": "published skyrmion benchmark scale, not a stack identification"}
+    },
+    {
+      "id": "fm.alpha",
+      "symbol": "alpha",
+      "si_unit": "1",
+      "value": 0.3,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite dimensionless Gilbert damping with alpha >= 0.",
+      "problem_ir_path": "materials[fm].damping",
+      "motivation": {"source_ids": ["sampaio2013"], "claim": "high-damping deterministic validation choice"}
+    },
+    {
+      "id": "fm.Ku",
+      "symbol": "K_u",
+      "si_unit": "J/m^3",
+      "value": 800000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite perpendicular uniaxial anisotropy with axis +z.",
+      "problem_ir_path": "materials[fm].uniaxial_anisotropy",
+      "motivation": {"source_ids": ["sampaio2013"], "claim": "published interfacial-DMI skyrmion benchmark scale"}
+    },
+    {
+      "id": "fm.D",
+      "symbol": "D",
+      "si_unit": "J/m^2",
+      "value": 0.003,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite interfacial DMI coefficient using the canonical Fullmag DMI sign convention.",
+      "problem_ir_path": "materials[fm].interfacial_dmi",
+      "motivation": {"source_ids": ["sampaio2013"], "claim": "published stable-skyrmion benchmark scale; chirality still follows Fullmag sign convention"}
+    },
+    {
+      "id": "hm.sigma_charge",
+      "symbol": "sigma_{HM}",
+      "si_unit": "S/m",
+      "value": 5000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive scalar charge conductivity in HM.",
+      "problem_ir_path": "current_modules[charge].materials[hm].material.sigma_Spm",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "metallic diffusive-transport benchmark scale"}
+    },
+    {
+      "id": "hm.sigma_spin",
+      "symbol": "sigma_{s,HM}",
+      "si_unit": "S/m",
+      "value": 5000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive scalar spin conductivity in HM.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[hm].material.sigma_s_Spm",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "unpolarized metallic benchmark with sigma_spin equal to sigma_charge"}
+    },
+    {
+      "id": "hm.theta_SH",
+      "symbol": "theta_{SH,HM}",
+      "si_unit": "1",
+      "value": 0.2,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed direct-SHE coefficient under transport_constitutive.one_way.fullmag.v1.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[hm].material.theta_sh",
+      "motivation": {"source_ids": ["abert2015"], "claim": "large but bounded sign-sensitive SHE benchmark; not a fitted Pt value"}
+    },
+    {
+      "id": "hm.lambda_sf",
+      "symbol": "lambda_{sf,HM}",
+      "si_unit": "m",
+      "value": 1.5e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive spin-flip length, resolved relative to the 1 nm z spacing.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[hm].material.lambda_sf_m",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015", "benchmark_grid"], "claim": "short metallic spin-diffusion benchmark scale"}
+    },
+    {
+      "id": "fm.sigma_charge",
+      "symbol": "sigma_{FM}",
+      "si_unit": "S/m",
+      "value": 1000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive scalar charge conductivity in FM.",
+      "problem_ir_path": "current_modules[charge].materials[fm].material.sigma_Spm",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "conductivity-contrast benchmark selected to exercise HM/FM current continuity"}
+    },
+    {
+      "id": "fm.sigma_spin",
+      "symbol": "sigma_{s,FM}",
+      "si_unit": "S/m",
+      "value": 1000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive scalar spin conductivity in FM.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.sigma_s_Spm",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "ferromagnetic spin-transport benchmark scale"}
+    },
+    {
+      "id": "fm.P",
+      "symbol": "P_{FM}",
+      "si_unit": "1",
+      "value": 0.4,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed polarization in the closed interval [-1, 1].",
+      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.polarization_p",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "moderate ferromagnetic polarization benchmark"}
+    },
+    {
+      "id": "fm.lambda_sf",
+      "symbol": "lambda_{sf,FM}",
+      "si_unit": "m",
+      "value": 5e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive FM spin-flip length.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.lambda_sf_m",
+      "motivation": {"source_ids": ["valet_fert1993", "abert2015"], "claim": "finite longitudinal spin-relaxation benchmark"}
+    },
+    {
+      "id": "fm.lambda_J",
+      "symbol": "lambda_{J,FM}",
+      "si_unit": "m",
+      "value": 1e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive transverse exchange length.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.lambda_j_m",
+      "motivation": {"source_ids": ["abert2015", "benchmark_grid"], "claim": "one-cell transverse-exchange branch coverage"}
+    },
+    {
+      "id": "fm.lambda_phi",
+      "symbol": "lambda_{phi,FM}",
+      "si_unit": "m",
+      "value": 1e-9,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and strictly positive transverse dephasing length.",
+      "problem_ir_path": "spin_transport_modules[spin].materials[fm].material.lambda_phi_m",
+      "motivation": {"source_ids": ["abert2015", "benchmark_grid"], "claim": "one-cell transverse-dephasing branch coverage"}
+    },
+    {
+      "id": "interface.G_up",
+      "symbol": "G_{up}",
+      "si_unit": "S/m^2",
+      "value": 250000000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and nonnegative majority-channel interface conductance.",
+      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_up_Spm2",
+      "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "symmetric longitudinal channel benchmark"}
+    },
+    {
+      "id": "interface.G_down",
+      "symbol": "G_{down}",
+      "si_unit": "S/m^2",
+      "value": 250000000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and nonnegative minority-channel interface conductance.",
+      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_down_Spm2",
+      "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "symmetric longitudinal channel benchmark"}
+    },
+    {
+      "id": "interface.G_r",
+      "symbol": "G_r",
+      "si_unit": "S/m^2",
+      "value": 500000000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite and nonnegative real spin-mixing conductance.",
+      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_r_Spm2",
+      "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "nonzero damping-like absorption branch"}
+    },
+    {
+      "id": "interface.G_i",
+      "symbol": "G_i",
+      "si_unit": "S/m^2",
+      "value": 50000000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed imaginary spin-mixing conductance.",
+      "problem_ir_path": "spin_transport_modules[spin].interfaces[hm_fm].g_i_Spm2",
+      "motivation": {"source_ids": ["brataas2000", "interface_branch_coverage"], "claim": "nonzero field-like absorption branch at one tenth of the real coefficient"}
+    },
+    {
+      "id": "drive.J_minus_1_5",
+      "symbol": "J_x^{(-1.5)}",
+      "si_unit": "A/m^2",
+      "value": -1500000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
+      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "largest negative sign/amplitude validation point"}
+    },
+    {
+      "id": "drive.J_minus_1_0",
+      "symbol": "J_x^{(-1.0)}",
+      "si_unit": "A/m^2",
+      "value": -1000000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
+      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "middle negative sign/amplitude validation point"}
+    },
+    {
+      "id": "drive.J_minus_0_5",
+      "symbol": "J_x^{(-0.5)}",
+      "si_unit": "A/m^2",
+      "value": -500000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
+      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "smallest negative sign/amplitude validation point"}
+    },
+    {
+      "id": "drive.J_plus_0_5",
+      "symbol": "J_x^{(+0.5)}",
+      "si_unit": "A/m^2",
+      "value": 500000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
+      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "smallest positive sign/amplitude validation point"}
+    },
+    {
+      "id": "drive.J_plus_1_0",
+      "symbol": "J_x^{(+1.0)}",
+      "si_unit": "A/m^2",
+      "value": 1000000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
+      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "middle positive sign/amplitude validation point"}
+    },
+    {
+      "id": "drive.J_plus_1_5",
+      "symbol": "J_x^{(+1.5)}",
+      "si_unit": "A/m^2",
+      "value": 1500000000000.0,
+      "value_kind": "numerical_validation_fixture",
+      "validity": "Finite signed mean conventional current along x; represented by balanced oriented electrode fluxes.",
+      "problem_ir_path": "current_modules[charge].boundaries[current_sweep].outward_current_density_Apm2",
+      "motivation": {"source_ids": ["sampaio2013", "symmetric_drive_sweep"], "claim": "largest positive sign/amplitude validation point"}
+    }
+  ]
+}

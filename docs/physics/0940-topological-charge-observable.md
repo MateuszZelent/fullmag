@@ -7,6 +7,7 @@
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/03-api-integration-layer.md`, `docs/specs/frontend-v2/13-inspector-and-property-editing.md`
 - Supersedes: the physical and numerical sections of `docs/plans/active/object-extensions-topological-charge-implementation-plan-2026-06-26-pl.md`
 
+(problem-statement)=
 ## 1. Problem statement
 
 Fullmag exposes an object-scoped observable for the planar skyrmion charge of
@@ -38,6 +39,7 @@ qualification gates pass.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations
 
 Let `Sigma` be an oriented planar support with an ordered orthonormal frame
@@ -112,6 +114,7 @@ Exact or tolerance-level ties resolve in the fixed order `xy`, then `xz`, then
 `yz`; the response always echoes `requested_plane=auto` and the concrete
 resolved plane.
 
+(symbols-and-si-units)=
 ### 2.3 Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -143,6 +146,7 @@ must not expose a field named `polarity` unless a separate, documented
 classifier actually evaluates the core magnetization. The production v2
 resource therefore removes the current derived `polarity` field.
 
+(assumptions-and-validity)=
 ### 2.5 Assumptions and validity limits
 
 The production observable requires all of the following:
@@ -172,6 +176,7 @@ The following are explicit unsupported cases for this resource:
 Unsupported input returns a typed status. It must never fall back to a global
 domain, a surface preview, a raster preview, or a different quantity.
 
+(discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 Shared oriented-triangle kernel
@@ -374,16 +379,104 @@ It must not average FDM and FEM charges implicitly.
 
 ## 4. Runtime, API, IR, and planner impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 No authoring class is added. This is an on-demand analysis over an existing
 object and materialized magnetization field. Python analysis helpers may be
 added later, but they must call the same versioned resource contract.
 
+The following executable cell freezes the analysis-request shape without
+claiming that a dedicated Python SDK helper already exists:
+
+```python
+# %%
+request = {
+    "method": "skyrmion_hall_angle_v1",
+    "object_id": "racetrack",
+    "quantity": "m",
+    "plane": "xy",
+    "support": "midplane",
+}
+assert request["method"] == "skyrmion_hall_angle_v1"
+assert request["quantity"] == "m"
+```
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 No `ProblemIR` field is added. Plane, support mode, profile sampling, snapshot,
 and method version are analysis-query state, not physical problem definition.
+
+(round-trip-and-failure-semantics)=
+### 4.2.1 Requested intent, resolved execution, and failure semantics
+
+The resource preserves requested intent separately from resolved execution.
+Requested object, plane, support, snapshot, method version, weighting rule, and
+steady-window policy are echoed alongside the resolved support frame, field
+revision, mesh/domain revisions, accepted sample interval, and algorithm
+version. Validation errors identify the failed physical gate.
+Unsupported combinations fail closed; they never substitute a renderer trajectory, a
+different object, a different plane, or a fixed frame interval.
+
+(skyrmion-hall-angle-v1-contract)=
+### 4.2.2 Planned trajectory and Hall-angle contract
+
+`skyrmion_hall_angle_v1` is a planned analysis over an accepted sequence of
+signed topological-density samples. It is not implemented or qualified by this
+note. Each sample first passes the existing support, topology, boundary,
+resolution, and provenance gates. Its centre is the signed first moment of
+`q`; the signed charge in the denominator must retain one nonzero sign
+throughout the candidate interval. A renderer centroid, an unsigned density
+centre, or a maximum-amplitude pixel is not an admissible substitute.
+
+The steady interval is selected from speed stability, not from a hard-coded
+number of final frames. Candidate windows require finite monotone times,
+nonzero displacement, stable charge, qualified boundary distance, and a
+coefficient of speed variation below the versioned threshold. Within the
+accepted window, weighted least squares estimates both velocity components:
+
+```{math}
+:label: skyrmion-hall-weighted-regression
+\bar t_w=\frac{\sum_n w_nt_n}{\sum_nw_n},\qquad
+v_x=\frac{\sum_nw_n(t_n-\bar t_w)(x_n-\bar x_w)}
+{\sum_nw_n(t_n-\bar t_w)^2},\qquad
+v_y=\frac{\sum_nw_n(t_n-\bar t_w)(y_n-\bar y_w)}
+{\sum_nw_n(t_n-\bar t_w)^2}.
+```
+
+Weights `w_n` are inverse trajectory-position variances after a positive
+finite floor; the same accepted sample mask is used for both regressions. The
+reported covariance comes from the weighted residuals and the regression
+normal matrix. The signed Hall angle is
+
+```{math}
+:label: skyrmion-hall-angle
+\Theta_H=\operatorname{atan2}(v_y,v_x).
+```
+
+| id | latex | meaning | si_unit |
+|---|---|---|---|
+| t_n | t_n | accepted trajectory time sample | \mathrm{s} |
+| w_n | w_n | inverse position-variance regression weight | \mathrm{m^{-2}} |
+| x_n | x_n | signed-density centre coordinate along the track | \mathrm{m} |
+| y_n | y_n | signed-density centre coordinate along the transverse axis | \mathrm{m} |
+| v_x | v_x | fitted longitudinal velocity | \mathrm{m\,s^{-1}} |
+| v_y | v_y | fitted transverse velocity | \mathrm{m\,s^{-1}} |
+| Theta_H | \Theta_H | signed skyrmion Hall angle in the reported frame | \mathrm{rad} |
+
+The method returns no angle and one stable reason code when qualification
+fails: `no_motion`, `topology_lost`, `edge_contaminated`,
+`no_stationary_window`, or `insufficient_samples`. `reverse_transverse_axis`
+is a reporting-frame transformation: it maps `(v_x,v_y)` to `(v_x,-v_y)` and
+therefore maps the principal-branch `Theta_H` to `-Theta_H`; it does not alter
+the solver frame or physical trajectory.
+
+The current CPU topological-charge resource and its managed FDM/FEM checks are
+prerequisites only. They do not prove `SkyrmionTrajectoryV1`,
+`SkyrmionHallAngleV1`, GPU execution, uncertainty calibration, or the
+`racetrack_m1_v1` production workload. Those symbols remain planned and
+unqualified until their own managed evidence gates pass.
 
 ### 4.3 Planner and capability impact
 
@@ -404,6 +497,7 @@ The endpoint must preserve:
 - FEM order and resolved discretization;
 - exact cache-key digest.
 
+(implementation-mapping)=
 ### 4.4 Resource status and trust
 
 Computation status and trust are separate fields.
@@ -521,6 +615,7 @@ The extension is offered only for committed magnetic objects. Unsupported
 objects remain visible only when explaining a typed reason is useful; they do
 not appear as apparently runnable analyses.
 
+(validation)=
 ## 6. Validation strategy
 
 Convergence error is measured against an independent continuum reference on
@@ -630,6 +725,7 @@ host-only build.
 - [ ] Inspector and Explorer conform to this note
 - [x] Managed FDM/FEM runtime evidence passes (`just verify-topological-charge-cross-backend`)
 
+(limitations)=
 ## 8. Known limits and deferred work
 
 - Curved-surface degree requires a separate oriented-surface note and resource.
@@ -643,6 +739,7 @@ host-only build.
 - Component-wise charge for disconnected objects is deferred until component
   identity is stable in mesh provenance.
 
+(scientific-bibliography)=
 ## 9. References
 
 1. B. Berg and M. Luescher, "Definition and statistical distributions of a
@@ -655,3 +752,19 @@ host-only build.
 4. Fullmag production implementation target:
    `crates/fullmag-api/src/analysis/topological_charge.rs` and the dedicated
    support-builder modules defined by the implementation plan.
+
+(source-code-index)=
+## 10. Source-code index
+
+The first six rows identify current source. The final row is a documentation
+anchor for the planned Hall-angle contract and is not implementation evidence.
+
+| Claim | Path | Symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Oriented charge kernel | crates/fullmag-api/src/analysis/topological_charge.rs | compute_oriented_charge | integrate signed solid angles over an oriented triangle support | current CPU source and focused unit tests |
+| Support topology gate | crates/fullmag-api/src/analysis/topological_charge.rs | qualify_support_topology | reject duplicate, nonmanifold, or disconnected supports | current CPU source and focused unit tests |
+| Boundary trust gate | crates/fullmag-api/src/analysis/topological_charge.rs | qualify_boundary | qualify boundary uniformity separately from the charge value | current CPU source and focused unit tests |
+| FDM profile weighting | crates/fullmag-api/src/analysis/topological_charge.rs | fdm_weighted_mean | compute thickness-weighted FDM layer summaries | current CPU source and focused unit tests |
+| Cache identity | crates/fullmag-api/src/quantity_data_plane.rs | topological_charge_cache_key | bind object, field, support, method, mesh, domain, and snapshot identity | router cache-key regression |
+| Managed evidence validator | scripts/validate_topological_charge_runtime.py | validate_evidence | reject incomplete FDM/FEM managed-runtime evidence | managed cross-backend recipes |
+| Planned trajectory and Hall angle | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-angle-v1-contract | freeze signed-density centre, steady-window, regression, covariance, angle, and reason-code semantics | planned contract only; not implemented or qualified |
