@@ -500,3 +500,28 @@
   font-size: var(--fm-font-size-xs);
   margin: var(--fm-space-1) 0;
 }
+.fm-mode-phase-control {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mode-phase-control__value,
+.fm-mode-phase-control__transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mode-phase-control__slider {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.fm-mode-visualization__presentation-note {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: var(--fm-line-height-normal);
+}

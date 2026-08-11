@@ -18,15 +18,21 @@ export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
 interface AnalysisFieldOverlayAnimationState {
   animatePhase: boolean;
   animationRateHz: number;
+  direction?: -1 | 1;
 }
 
 export interface AnalysisFieldOverlayAppearanceState {
+  colorRangeMax?: number;
+  colorRangeMin?: number;
+  colorRangeMode?: "auto" | "manual" | "symmetric";
+  displayGain?: number;
   geometryScope?: VisualizationGeometryScope;
   scalarColorPalette?: string;
   shaderMonoColor?: string;
   shaderVisible?: boolean;
   surfaceColorSource?: SurfaceColorSource;
   vectorBudget?: number;
+  vectorScale?: number;
   vectorsVisible?: boolean;
 }
 
@@ -148,11 +154,16 @@ function analysisFieldOverlayAppearanceEquals(
   if (!left || !right) return false;
   return (
     (left.geometryScope ?? null) === (right.geometryScope ?? null) &&
+    (left.colorRangeMax ?? null) === (right.colorRangeMax ?? null) &&
+    (left.colorRangeMin ?? null) === (right.colorRangeMin ?? null) &&
+    (left.colorRangeMode ?? null) === (right.colorRangeMode ?? null) &&
+    (left.displayGain ?? null) === (right.displayGain ?? null) &&
     (left.scalarColorPalette ?? null) === (right.scalarColorPalette ?? null) &&
     (left.shaderMonoColor ?? null) === (right.shaderMonoColor ?? null) &&
     (left.shaderVisible ?? null) === (right.shaderVisible ?? null) &&
     (left.surfaceColorSource ?? null) === (right.surfaceColorSource ?? null) &&
     (left.vectorBudget ?? null) === (right.vectorBudget ?? null) &&
+    (left.vectorScale ?? null) === (right.vectorScale ?? null) &&
     (left.vectorsVisible ?? null) === (right.vectorsVisible ?? null)
   );
 }
@@ -165,7 +176,8 @@ function analysisFieldOverlayAnimationEquals(
   if (!left || !right) return false;
   return (
     left.animatePhase === right.animatePhase &&
-    left.animationRateHz === right.animationRateHz
+    left.animationRateHz === right.animationRateHz &&
+    (left.direction ?? 1) === (right.direction ?? 1)
   );
 }
 

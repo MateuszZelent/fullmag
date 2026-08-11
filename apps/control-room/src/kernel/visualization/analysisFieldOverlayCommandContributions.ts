@@ -16,10 +16,14 @@ interface AnalysisFieldOverlayCommandInput {
   animatePhase?: boolean | null;
   animationRateHz?: number | null;
   colorSource?: string | null;
+  colorRangeMax?: number | null;
+  colorRangeMin?: number | null;
+  colorRangeMode?: string | null;
   colormap?: string | null;
   componentBasis?: string | null;
   componentCount?: number | null;
   fieldId?: string | null;
+  displayGain?: number | null;
   geometryScope?: string | null;
   label?: string | null;
   phaseRad?: number | null;
@@ -28,6 +32,7 @@ interface AnalysisFieldOverlayCommandInput {
   solidColor?: string | null;
   valueKind?: string | null;
   vectorBudget?: number | null;
+  vectorScale?: number | null;
   vectorsVisible?: boolean | null;
   view?: string | null;
 }
@@ -114,6 +119,11 @@ function overlayAppearanceFromInput(
   const shaderVisible = booleanValue(input.shaderVisible);
   const vectorBudget = numberValue(input.vectorBudget);
   const vectorsVisible = booleanValue(input.vectorsVisible);
+  const colorRangeMode = stringValue(input.colorRangeMode);
+  const colorRangeMin = numberValue(input.colorRangeMin);
+  const colorRangeMax = numberValue(input.colorRangeMax);
+  const displayGain = numberValue(input.displayGain);
+  const vectorScale = numberValue(input.vectorScale);
   if (
     !surfaceColorSource &&
     !geometryScope &&
@@ -121,17 +131,33 @@ function overlayAppearanceFromInput(
     !shaderMonoColor &&
     shaderVisible === null &&
     vectorBudget === null &&
-    vectorsVisible === null
+    vectorsVisible === null &&
+    colorRangeMode !== "auto" &&
+    colorRangeMode !== "manual" &&
+    colorRangeMode !== "symmetric" &&
+    colorRangeMin === null &&
+    colorRangeMax === null &&
+    displayGain === null &&
+    vectorScale === null
   ) {
     return undefined;
   }
   return {
+    ...(colorRangeMode === "auto" ||
+    colorRangeMode === "manual" ||
+    colorRangeMode === "symmetric"
+      ? { colorRangeMode }
+      : {}),
+    ...(colorRangeMin === null ? {} : { colorRangeMin }),
+    ...(colorRangeMax === null ? {} : { colorRangeMax }),
+    ...(displayGain === null ? {} : { displayGain: Math.max(0, displayGain) }),
     ...(geometryScope ? { geometryScope } : {}),
     ...(scalarColorPalette ? { scalarColorPalette } : {}),
     ...(shaderMonoColor ? { shaderMonoColor } : {}),
     ...(shaderVisible === null ? {} : { shaderVisible }),
     ...(surfaceColorSource ? { surfaceColorSource } : {}),
     ...(vectorBudget === null ? {} : { vectorBudget: Math.max(0, Math.floor(vectorBudget)) }),
+    ...(vectorScale === null ? {} : { vectorScale: Math.max(0, vectorScale) }),
     ...(vectorsVisible === null ? {} : { vectorsVisible }),
   };
 }

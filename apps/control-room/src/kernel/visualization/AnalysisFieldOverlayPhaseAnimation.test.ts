@@ -134,4 +134,30 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     handle.stop();
   });
+
+  it("uses frame timestamps for smooth browser animation and cancels the owned frame", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller);
+    callbacks.shift()?.(1000);
+    callbacks.shift()?.(1016);
+
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(
+      2 * Math.PI * 0.016,
+    );
+    expect(requestFrame).toHaveBeenCalledTimes(3);
+
+    handle.stop();
+    expect(cancelFrame).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
 });

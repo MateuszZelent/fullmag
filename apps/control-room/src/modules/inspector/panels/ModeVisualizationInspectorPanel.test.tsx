@@ -259,7 +259,24 @@ describe("ModeVisualizationInspectorPanel", () => {
     const html = renderModeOwner("object.mode_visualization.view");
 
     expect(html).toContain('aria-label="Mode visualization phase"');
+    expect(html).toContain('aria-label="Mode visualization phase slider"');
+    expect(html).toContain('type="range"');
+    expect(html).toContain('aria-label="Play mode phase animation"');
+    expect(html).toContain('aria-label="Mode phase animation speed"');
+    expect(html).toContain('aria-label="Reverse mode phase animation"');
+    expect(html).toContain('aria-label="Reset mode phase"');
     expect(html).not.toContain("0 rad command default");
+  });
+
+  it("exposes presentation-only color, amplitude, and glyph scaling", () => {
+    const html = renderModeOwner("object.mode_visualization.view");
+
+    expect(html).toContain('aria-label="Mode visualization color range mode"');
+    expect(html).toContain('aria-label="Mode visualization color minimum"');
+    expect(html).toContain('aria-label="Mode visualization color maximum"');
+    expect(html).toContain('aria-label="Mode visualization display gain"');
+    expect(html).toContain('aria-label="Mode visualization vector scale"');
+    expect(html).toContain("Visualization only");
   });
 
   it.each([

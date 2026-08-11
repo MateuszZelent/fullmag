@@ -452,6 +452,14 @@ function resolveViewport3DScalarRangeModeFlags(
   };
 }
 
+function enabledScalarRangeModes(
+  flags: Viewport3DScalarRangeModeFlags,
+): Array<"magnitude" | "x" | "y" | "z"> {
+  return (["magnitude", "x", "y", "z"] as const).filter(
+    (mode) => flags[mode],
+  );
+}
+
 function resolveViewport3DFieldMetaScalarRange(
   fieldMeta: FieldMetaResource | null | undefined,
 ): ScalarRange | null {
@@ -2158,6 +2166,12 @@ function applyAnalysisOverlayAppearance(
     ...(appearance.vectorBudget === undefined
       ? {}
       : { vectorBudget: appearance.vectorBudget }),
+    ...(appearance.vectorScale === undefined && appearance.displayGain === undefined
+      ? {}
+      : {
+          vectorLengthScale:
+            (appearance.vectorScale ?? 1) * (appearance.displayGain ?? 1),
+        }),
     ...(appearance.vectorsVisible === undefined
       ? {}
       : { vectorsVisible: appearance.vectorsVisible }),
@@ -4111,12 +4125,36 @@ export function useViewport3DSceneModel({
     if (xRange) entries.push(["x", xRange]);
     if (yRange) entries.push(["y", yRange]);
     if (zRange) entries.push(["z", zRange]);
+    const mode = analysisOverlay?.appearance?.colorRangeMode;
+    const gain = Math.max(0, analysisOverlay?.appearance?.displayGain ?? 1);
+    const configuredMax = analysisOverlay?.appearance?.colorRangeMax;
+    const configuredMin = analysisOverlay?.appearance?.colorRangeMin;
+    if (mode === "manual" && configuredMin != null && configuredMax != null) {
+      const denominator = Math.max(gain, Number.EPSILON);
+      const range = {
+        max: configuredMax / denominator,
+        min: configuredMin / denominator,
+      };
+      for (const scalarMode of enabledScalarRangeModes(scalarRangeModeFlags)) {
+        entries.push([scalarMode, range]);
+      }
+    } else if (mode === "symmetric" && configuredMax != null) {
+      const extent = Math.abs(configuredMax) / Math.max(gain, Number.EPSILON);
+      for (const scalarMode of enabledScalarRangeModes(scalarRangeModeFlags)) {
+        entries.push([scalarMode, { max: extent, min: -extent }]);
+      }
+    }
     return entries.length > 0 ? new Map(entries) : undefined;
   }, [
+    analysisOverlay?.appearance?.colorRangeMax,
+    analysisOverlay?.appearance?.colorRangeMin,
+    analysisOverlay?.appearance?.colorRangeMode,
+    analysisOverlay?.appearance?.displayGain,
     primaryMagnitudeFieldMeta.data,
     primaryXFieldMeta.data,
     primaryYFieldMeta.data,
     primaryZFieldMeta.data,
+    scalarRangeModeFlags,
   ]);
   const fieldVector = useViewport3DFieldVectorRequest(
     primaryFieldRequest,
