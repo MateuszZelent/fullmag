@@ -535,6 +535,7 @@ class MagnetHandle:
         self._m_proxy = MagnetizationHandle(self)
         self._field_states: dict[str, object] = {}
         self._mesh_spec = _MeshSpecState()
+        self._fdm_cell_size: tuple[float, float, float] | None = None
         self._last_mesh_quality: object | None = None
         self.mesh = GeometryMeshHandle(self)
         self._visualization: dict[str, object] | None = None
@@ -1417,6 +1418,7 @@ class GeometryMeshHandle:
     def __call__(
         self,
         *,
+        cell_size: Sequence[float] | None = None,
         hmax: float | str | None = None,
         hmin: float | None = None,
         maximum_element_size: float | str | None = None,
@@ -1478,6 +1480,7 @@ class GeometryMeshHandle:
         exact_layer_count: bool | None = None,
     ) -> "GeometryMeshHandle":
         return self.configure(
+            cell_size=cell_size,
             hmax=hmax, hmin=hmin,
             maximum_element_size=maximum_element_size,
             minimum_element_size=minimum_element_size,
@@ -1530,6 +1533,7 @@ class GeometryMeshHandle:
     def configure(
         self,
         *,
+        cell_size: Sequence[float] | None = None,
         hmax: float | str | None = None,
         hmin: float | None = None,
         maximum_element_size: float | str | None = None,
@@ -1651,6 +1655,25 @@ class GeometryMeshHandle:
             Require the requested through-thickness element count exactly.
         """
         spec = copy.deepcopy(self._owner._mesh_spec)
+        if cell_size is not None:
+            if any(
+                value is not None
+                for value in (hmax, hmin, maximum_element_size, minimum_element_size)
+            ) or spec.is_configured():
+                raise ValueError(
+                    "cell_size cannot be combined with maximum_element_size, "
+                    "minimum_element_size, hmax, hmin, or other FEM mesh controls"
+                )
+            vector = as_vector3(cell_size, f"{self._owner._name}.mesh.cell_size")
+            for index, component in enumerate(vector):
+                require_positive(component, f"{self._owner._name}.mesh.cell_size[{index}]")
+            self._owner._fdm_cell_size = vector
+            return self
+        if self._owner._fdm_cell_size is not None:
+            raise ValueError(
+                "maximum_element_size and other FEM mesh controls cannot be combined "
+                "with cell_size"
+            )
         resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
             hmax=hmax,
             hmin=hmin,
@@ -2357,6 +2380,8 @@ class _WorldState:
     # Grid
     _cell: tuple[float, float, float] | None = None
     _fdm: FDM | None = None
+    _default_fdm_cell_size: tuple[float, float, float] | None = None
+    _common_fdm_cell_size: tuple[float, float, float] | None = None
     _hmax: float | str | None = None
     _fem_order: int = 1
     _mesh_source: str | None = None
@@ -4601,6 +4626,7 @@ class StudyUniverseHandle:
     def mesh(
         self,
         *,
+        cell_size: Sequence[float] | None = None,
         hmax: float | None = None,
         hmin: float | None = None,
         maximum_element_size: float | None = None,
@@ -4616,6 +4642,33 @@ class StudyUniverseHandle:
             if maximum_element_growth_rate is not None
             else growth_rate
         )
+        if cell_size is not None and any(
+            value is not None
+            for value in (
+                hmax,
+                hmin,
+                maximum_element_size,
+                minimum_element_size,
+                growth_rate,
+                maximum_element_growth_rate,
+                grading,
+            )
+        ):
+            raise ValueError(
+                "cell_size cannot be combined with maximum_element_size, "
+                "minimum_element_size, growth_rate, or grading"
+            )
+        if cell_size is not None:
+            vector = as_vector3(cell_size, "study.universe.mesh.cell_size")
+            for index, component in enumerate(vector):
+                require_positive(component, f"study.universe.mesh.cell_size[{index}]")
+            _state._common_fdm_cell_size = vector
+            return self._owner
+        if _state._common_fdm_cell_size is not None:
+            raise ValueError(
+                "maximum_element_size and other FEM universe mesh controls cannot be "
+                "combined with cell_size"
+            )
         _validate_mesh_control_values(
             maximum_element_size=resolved_hmax,
             minimum_element_size=resolved_hmin,
@@ -5800,6 +5853,13 @@ def fdm(
     boundary_delta_min: float | None = None,
 ) -> FDM:
     """Set complete FDM hints, including native per-magnet grids."""
+    warnings.warn(
+        "study.fdm()/fm.fdm() is deprecated for ordinary FDM authoring; use "
+        "body.mesh(cell_size=(dx, dy, dz)), "
+        "study.universe.mesh(cell_size=(dx, dy, dz)), and study.demag()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     policy = FDM(
         default_cell=default_cell,
         per_magnet=dict(per_magnet) if per_magnet is not None else None,
@@ -5885,6 +5945,7 @@ def pbc(
 
 def _configure_object_mesh_defaults(
     *,
+    cell_size: Sequence[float] | None = None,
     hmax: float | str | None = None,
     hmin: float | None = None,
     maximum_element_size: float | str | None = None,
@@ -5922,6 +5983,28 @@ def _configure_object_mesh_defaults(
     periodic_pair_ids: Sequence[str] | None = None,
 ) -> None:
     """Configure shared default mesher settings for magnetic objects in the flat API."""
+    if cell_size is not None:
+        if any(
+            value is not None
+            for value in (hmax, hmin, maximum_element_size, minimum_element_size)
+        ) or _state._default_mesh_spec.is_configured():
+            raise ValueError(
+                "cell_size cannot be combined with maximum_element_size, "
+                "minimum_element_size, hmax, hmin, or other FEM mesh controls"
+            )
+        vector = as_vector3(cell_size, "study.objects.mesh.defaults.cell_size")
+        for index, component in enumerate(vector):
+            require_positive(
+                component,
+                f"study.objects.mesh.defaults.cell_size[{index}]",
+            )
+        _state._default_fdm_cell_size = vector
+        return
+    if _state._default_fdm_cell_size is not None:
+        raise ValueError(
+            "maximum_element_size and other FEM mesh controls cannot be combined "
+            "with cell_size"
+        )
     resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
         hmax=hmax,
         hmin=hmin,
@@ -8016,7 +8099,41 @@ def _build_problem(
 
     # Discretization
     disc_kwargs: dict[str, Any] = {}
-    if s._fdm is not None:
+    authored_fdm_cells = {
+        handle._name: FDMGrid(cell=handle._fdm_cell_size)
+        for handle in s._magnets
+        if handle._fdm_cell_size is not None
+    }
+    if authored_fdm_cells or s._default_fdm_cell_size is not None:
+        missing = [
+            handle._name
+            for handle in s._magnets
+            if handle._fdm_cell_size is None and s._default_fdm_cell_size is None
+        ]
+        if missing:
+            raise ValueError(
+                "FDM mesh cell_size is missing for magnetic object(s): "
+                + ", ".join(missing)
+            )
+        effective_cells = {
+            handle._fdm_cell_size or s._default_fdm_cell_size
+            for handle in s._magnets
+        }
+        if len(effective_cells) > 1 and s._common_fdm_cell_size is None:
+            raise ValueError(
+                "unequal FDM native cell sizes require "
+                "study.universe.mesh(cell_size=(dx, dy, dz))"
+            )
+        demag_policy = None
+        if s._common_fdm_cell_size is not None:
+            demag_policy = FDMDemag(common_cell_size=s._common_fdm_cell_size)
+        disc_kwargs["fdm"] = FDM(
+            default_cell=s._default_fdm_cell_size,
+            per_magnet=authored_fdm_cells or None,
+            demag=demag_policy,
+            boundary_correction=s._boundary_correction,
+        )
+    elif s._fdm is not None:
         disc_kwargs["fdm"] = s._fdm
     elif s._cell is not None:
         fdm_kwargs: dict[str, Any] = {"cell": s._cell}
