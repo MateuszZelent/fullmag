@@ -82,5 +82,20 @@ przeliczenie lockfile, a nie dodawać sztuczną zależność.
 |---|---|---|---|
 | Inwentaryzacja | zakończona | grafy pnpm i Cargo odtworzone | 50 otwartych |
 | npm | naprawialne wersje zaktualizowane; image-size pozostaje dev-only bez poprawki | pnpm audit prod: 0; Control Room typecheck i webpack build: pass; pełne testy odtwarzają 18 bazowych failures, jeden niestabilny test przeszedł w izolacji; lint odtwarza identyczne 4 błędy i 7 ostrzeżeń bazowych; legacy blokują brakujące moduły debug obecne w bazie | nieprzeliczone |
-| Rust | nie rozpoczęta | nie rozpoczęta | nieprzeliczone |
+| Rust | PyO3 0.29.2, quinn-proto 0.11.15 i serde_with 3.21.0; glib 0.18.5 pozostaje upstream blocker Tauri/GTK3 | fullmag-py-core cargo check: pass; test compile potwierdza migrację Python::initialize i zatrzymuje się wyłącznie na bazowym fixture MeshIR; cargo-audit niedostępny | nieprzeliczone |
 | Końcowa kwalifikacja | nie rozpoczęta | nie rozpoczęta | nieprzeliczone |
+
+## Ograniczenia po etapie Rust
+
+PyO3 0.29.2 kompiluje produkcyjny crate fullmag-py-core bez zmian publicznego
+API. Jedyna wymagana migracja testowa to oficjalna zmiana nazwy inicjalizacji z
+prepare_freethreaded_python na Python::initialize. Kompilacja testów przechodzi
+przez tę zmianę i zatrzymuje się na dwóch istniejących polach starego fixture
+MeshIR: elements i boundary_faces, które nie należą do remediacji zależności.
+
+Próba punktowej aktualizacji glib do 0.20.0 została poprawnie odrzucona przez
+resolver: gtk 0.18.2 wymagany przez Tauri 2.11.2 deklaruje glib z linii 0.18.
+Naprawa wymaga skoordynowanej migracji całego linuxowego backendu GTK/Tauri;
+override pojedynczego crate'a byłby niezgodny ABI. Alert pozostaje otwarty z
+właścicielem fullmag-desktop i warunkiem zamknięcia: wydanie Tauri/Wry zgodne z
+GTK-rs 0.20 lub migracja backendu desktopowego.
