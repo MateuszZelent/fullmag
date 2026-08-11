@@ -1,5 +1,111 @@
 #!/usr/bin/env bash
 
+readonly MANAGED_FEM_CANONICAL_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
+readonly MANAGED_FEM_CANONICAL_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
+
+resolve_managed_fem_runtime_storage_layout() {
+  local requested_root="${FULLMAG_MANAGED_FEM_STORAGE_ROOT:-${MANAGED_FEM_CANONICAL_STORAGE_ROOT}}"
+  local allow_unqualified_test_root="${1:-0}"
+  local resolved_root
+
+  case "${allow_unqualified_test_root}" in
+    0|1) ;;
+    *)
+      echo "[managed_fem_runtime_storage] invalid internal storage qualification mode" >&2
+      return 2
+      ;;
+  esac
+
+  FULLMAG_MANAGED_FEM_STORAGE_ROOT_EXPLICIT=0
+  if [ "${FULLMAG_MANAGED_FEM_STORAGE_ROOT+x}" = "x" ] &&
+     [ -n "${FULLMAG_MANAGED_FEM_STORAGE_ROOT}" ]; then
+    FULLMAG_MANAGED_FEM_STORAGE_ROOT_EXPLICIT=1
+  fi
+
+  case "${requested_root}" in
+    /*) ;;
+    *)
+      echo "[managed_fem_runtime_storage] FULLMAG_MANAGED_FEM_STORAGE_ROOT must be an absolute path: ${requested_root}" >&2
+      return 2
+      ;;
+  esac
+  if [ "${requested_root}" = "/" ]; then
+    echo "[managed_fem_runtime_storage] FULLMAG_MANAGED_FEM_STORAGE_ROOT must not be the filesystem root" >&2
+    return 2
+  fi
+  if [ -L "${requested_root}" ]; then
+    echo "[managed_fem_runtime_storage] FULLMAG_MANAGED_FEM_STORAGE_ROOT must not be a symbolic link: ${requested_root}" >&2
+    return 2
+  fi
+  if [ ! -d "${requested_root}" ]; then
+    echo "[managed_fem_runtime_storage] FULLMAG_MANAGED_FEM_STORAGE_ROOT must be an existing directory: ${requested_root}" >&2
+    return 2
+  fi
+  if ! resolved_root="$(realpath -e -- "${requested_root}")" || [ ! -d "${resolved_root}" ]; then
+    echo "[managed_fem_runtime_storage] cannot resolve FULLMAG_MANAGED_FEM_STORAGE_ROOT: ${requested_root}" >&2
+    return 2
+  fi
+
+  if [ "${resolved_root}" != "${MANAGED_FEM_CANONICAL_STORAGE_ROOT}" ] &&
+     [ "${allow_unqualified_test_root}" != "1" ]; then
+    case "${resolved_root}" in
+      /mnt/?*/*) ;;
+      *)
+        echo "[managed_fem_runtime_storage] alternate storage must be a qualified host mount under /mnt/<mount>/...: ${resolved_root}" >&2
+        return 2
+        ;;
+    esac
+    local host_mount_target host_filesystem_type host_mount_options
+    host_mount_target="$(findmnt -n -o TARGET --target "${resolved_root}" 2>/dev/null || true)"
+    host_filesystem_type="$(findmnt -n -o FSTYPE --target "${resolved_root}" 2>/dev/null || true)"
+    host_mount_options="$(findmnt -n -o OPTIONS --target "${resolved_root}" 2>/dev/null || true)"
+    case "${host_mount_target}" in
+      /mnt/?*) ;;
+      *) host_mount_target="" ;;
+    esac
+    if [ -z "${host_mount_target}" ] ||
+       [[ "${host_mount_target#/mnt/}" == */* ]] ||
+       [ "${resolved_root}" = "${host_mount_target}" ] ||
+       [[ "${resolved_root}" != "${host_mount_target}/"* ]]; then
+      echo "[managed_fem_runtime_storage] unsupported durable host mount for alternate storage: ${resolved_root} (observed target ${host_mount_target:-unknown})" >&2
+      return 2
+    fi
+    case "${host_filesystem_type}" in
+      9p|drvfs) ;;
+      *)
+        echo "[managed_fem_runtime_storage] unsupported durable host mount for alternate storage: ${resolved_root} (observed filesystem ${host_filesystem_type:-unknown})" >&2
+        return 2
+        ;;
+    esac
+    case ",${host_mount_options}," in
+      *,rw,*) ;;
+      *)
+        echo "[managed_fem_runtime_storage] unsupported durable host mount for alternate storage: ${resolved_root} (mount must be read-write; observed ${host_mount_options:-unknown})" >&2
+        return 2
+        ;;
+    esac
+  fi
+
+  FULLMAG_NATIVE_BUILD_STORAGE_ROOT="${resolved_root}"
+  FULLMAG_NATIVE_BUILD_IMAGE="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}/build-volumes/fullmag-native.ext4"
+  if [ "${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" = "${MANAGED_FEM_CANONICAL_STORAGE_ROOT}" ]; then
+    FULLMAG_NATIVE_MOUNT_VIEW="${MANAGED_FEM_CANONICAL_MOUNT_VIEW}"
+  else
+    FULLMAG_NATIVE_MOUNT_VIEW="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}/build-volumes/fullmag-native.mount"
+  fi
+  FULLMAG_PERSISTENT_RUNTIME_PARENT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}/runtimes"
+}
+
+validate_managed_fem_runtime_storage_layout() {
+  local guidance_function="${1:-}"
+
+  if [ ! -f "${FULLMAG_NATIVE_BUILD_IMAGE}" ] || [ -L "${FULLMAG_NATIVE_BUILD_IMAGE}" ]; then
+    echo "[managed_fem_runtime_storage] expected a regular ext4 backing image: ${FULLMAG_NATIVE_BUILD_IMAGE}" >&2
+    [ -z "${guidance_function}" ] || "${guidance_function}"
+    return 2
+  fi
+}
+
 validate_managed_fem_runtime_storage_target() {
   local target_dir="$1"
   local expected_backing_image="$2"
@@ -98,6 +204,34 @@ require_regular_contained_durable_variant() {
   esac
 }
 
+select_managed_fem_runtime_variants_alias() {
+  local variants_alias="$1"
+  local durable_variants_root="$2"
+  local allowed_retarget_from="${3:-}"
+  local next_alias="${variants_alias}.next.$$"
+
+  if [ ! -d "${durable_variants_root}" ] || [ -L "${durable_variants_root}" ]; then
+    echo "durable managed FEM variants root is not a regular directory: ${durable_variants_root}" >&2
+    return 2
+  fi
+  mkdir -p "$(dirname "${variants_alias}")"
+  if [ -L "${variants_alias}" ]; then
+    if [ "$(readlink -f "${variants_alias}")" = "$(readlink -f "${durable_variants_root}")" ]; then
+      return 0
+    fi
+    if [ -z "${allowed_retarget_from}" ] ||
+       [ "$(readlink "${variants_alias}")" != "${allowed_retarget_from}" ]; then
+      echo "managed FEM variants alias points to unexpected storage: ${variants_alias}" >&2
+      return 2
+    fi
+  elif [ -e "${variants_alias}" ]; then
+    echo "managed FEM variants alias selection requires a symlink or missing path: ${variants_alias}" >&2
+    return 2
+  fi
+  ln -sfn "${durable_variants_root}" "${next_alias}"
+  mv -Tf "${next_alias}" "${variants_alias}"
+}
+
 migrate_managed_fem_runtime_variants() {
   local variants_alias="$1"
   local durable_variants_root="$2"
@@ -110,15 +244,13 @@ migrate_managed_fem_runtime_variants() {
     return 2
   fi
   if [ -L "${variants_alias}" ]; then
-    if [ "$(readlink -f "${variants_alias}")" != "$(readlink -f "${durable_variants_root}")" ]; then
-      echo "managed FEM variants alias points to unexpected storage: ${variants_alias}" >&2
-      return 2
-    fi
+    select_managed_fem_runtime_variants_alias \
+      "${variants_alias}" "${durable_variants_root}" "${allowed_retarget_from}"
     return 0
   fi
   if [ ! -e "${variants_alias}" ]; then
-    ln -sfn "${durable_variants_root}" "${next_alias}"
-    mv -Tf "${next_alias}" "${variants_alias}"
+    select_managed_fem_runtime_variants_alias \
+      "${variants_alias}" "${durable_variants_root}" "${allowed_retarget_from}"
     return 0
   fi
   if [ ! -d "${variants_alias}" ]; then

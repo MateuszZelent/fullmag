@@ -5,6 +5,9 @@ SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="${FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT:-${SOURCE_ROOT}}"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_image_identity.sh"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
+resolve_managed_fem_runtime_storage_layout
+readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT FULLMAG_NATIVE_BUILD_IMAGE
+readonly FULLMAG_NATIVE_MOUNT_VIEW FULLMAG_PERSISTENT_RUNTIME_PARENT
 RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
 VARIANTS_ROOT=""
@@ -135,9 +138,6 @@ validate_container_target_dir() {
 cd "${SOURCE_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
-readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
-readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
-readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
 readonly FULLMAG_CONTAINER_TARGET_ROOT="${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"
 readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"
 readonly PERSISTENT_RUNTIME_PARENT="${FULLMAG_BUILD_ROOT}/runtimes"

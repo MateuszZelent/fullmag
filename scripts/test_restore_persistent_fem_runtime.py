@@ -51,6 +51,20 @@ if args.compare_exact is not None and identity(args.runtime_root) != identity(ar
     path.chmod(0o755)
 
 
+def _copy_restore_script_for_test(scripts: Path) -> None:
+    copied = scripts / RESTORE_SCRIPT.name
+    shutil.copy2(RESTORE_SCRIPT, copied)
+    source = copied.read_text(encoding="utf-8")
+    copied.write_text(
+        source.replace(
+            "resolve_managed_fem_runtime_storage_layout",
+            "resolve_managed_fem_runtime_storage_layout 1",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_latest_archive(build_root: Path, bundle: Path) -> Path:
     archive = build_root / "runtimes/fem-gpu-host-latest.tar"
     archive.parent.mkdir(parents=True)
@@ -105,7 +119,7 @@ def test_restore_rejects_invalid_mount_metadata_before_extraction(
     fake_repo = tmp_path / "repo"
     scripts = fake_repo / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
+    _copy_restore_script_for_test(scripts)
     (scripts / "lib").mkdir()
     shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
@@ -150,7 +164,7 @@ def test_restore_rejects_wrong_loop_backing_image_before_extraction(
     fake_repo = tmp_path / "repo"
     scripts = fake_repo / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
+    _copy_restore_script_for_test(scripts)
     (scripts / "lib").mkdir()
     shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
@@ -190,7 +204,7 @@ def test_restore_repairs_corrupt_same_name_variant_from_latest_archive(
     fake_repo = tmp_path / "repo"
     scripts = fake_repo / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
+    _copy_restore_script_for_test(scripts)
     (scripts / "lib").mkdir()
     shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")

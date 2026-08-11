@@ -492,6 +492,18 @@ def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None
     assert 'if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then' in ensure_recipe
 
 
+def test_explicit_storage_preflight_runs_before_current_runtime_validation() -> None:
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    ensure_recipe = justfile.split("ensure-managed-fem-runtime:", 1)[1].split(
+        "\ninspect-managed-fem-frequency-domain-deps:", 1
+    )[0]
+
+    preflight = "bash scripts/prepare_managed_fem_runtime_storage.sh"
+    assert preflight in ensure_recipe
+    assert ensure_recipe.index(preflight) < ensure_recipe.index("identity_file=")
+    assert ensure_recipe.index(preflight) < ensure_recipe.index("validate_current()")
+
+
 def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
 

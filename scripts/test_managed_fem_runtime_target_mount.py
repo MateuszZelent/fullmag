@@ -30,6 +30,141 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
         digest = hashlib.sha256(str(repo_root).encode()).hexdigest()
         return f"{TARGET_ROOT}/{slug}-{digest}"
 
+    @staticmethod
+    def _resolved_layout(
+        storage_root: Path | None = None,
+        *,
+        filesystem_type: str = "9p",
+        mount_options: str = "rw,nosuid,nodev,aname=drvfs",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as raw_root:
+            fake_bin = Path(raw_root) / "bin"
+            fake_bin.mkdir()
+            findmnt = fake_bin / "findmnt"
+            findmnt.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *"-o TARGET"*) echo /mnt/g ;;\n'
+                f'  *"-o FSTYPE"*) echo {filesystem_type} ;;\n'
+                f'  *"-o OPTIONS"*) echo {mount_options} ;;\n'
+                "  *) exit 3 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            findmnt.chmod(0o755)
+            environment = os.environ.copy()
+            if storage_root is not None:
+                environment[STORAGE_ROOT_ENV] = str(storage_root)
+                environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            return subprocess.run(
+                [
+                    "bash",
+                    "-euo",
+                    "pipefail",
+                    "-c",
+                    'source "$1"; resolve_managed_fem_runtime_storage_layout; '
+                    "printf '%s\\n' \"$FULLMAG_NATIVE_BUILD_STORAGE_ROOT\" "
+                    '"$FULLMAG_NATIVE_BUILD_IMAGE" "$FULLMAG_NATIVE_MOUNT_VIEW" '
+                    '"$FULLMAG_PERSISTENT_RUNTIME_PARENT"',
+                    "bash",
+                    str(STORAGE_HELPER),
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+    def test_default_storage_layout_uses_canonical_paths(self) -> None:
+        result = self._resolved_layout()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                CANONICAL_STORAGE_ROOT,
+                CANONICAL_IMAGE,
+                MOUNT_VIEW,
+                f"{CANONICAL_STORAGE_ROOT}/runtimes",
+            ],
+        )
+
+    def test_alternate_storage_root_derives_isolated_image_mount_and_archive_paths(
+        self,
+    ) -> None:
+        storage_root = Path("/mnt/g/git/fullmag")
+
+        result = self._resolved_layout(storage_root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                str(storage_root),
+                str(storage_root / "build-volumes/fullmag-native.ext4"),
+                str(storage_root / "build-volumes/fullmag-native.mount"),
+                str(storage_root / "runtimes"),
+            ],
+        )
+
+    def test_storage_layout_rejects_tmp_and_checkout_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            for unsafe_root in (Path(raw_root), REPO_ROOT):
+                result = self._resolved_layout(unsafe_root)
+
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("qualified host mount under /mnt", result.stderr)
+
+    def test_storage_layout_rejects_unsupported_or_read_only_host_mounts(self) -> None:
+        storage_root = Path("/mnt/g/git/fullmag")
+        cases = (("xfs", "rw,nosuid"), ("9p", "ro,nosuid,aname=drvfs"))
+        for filesystem_type, mount_options in cases:
+            result = self._resolved_layout(
+                storage_root,
+                filesystem_type=filesystem_type,
+                mount_options=mount_options,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("unsupported durable host mount", result.stderr)
+
+    def test_storage_layout_rejects_relative_and_root_targets(self) -> None:
+        for unsafe_root in ("relative/fullmag", "/"):
+            environment = {**os.environ, STORAGE_ROOT_ENV: unsafe_root}
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-euo",
+                    "pipefail",
+                    "-c",
+                    'source "$1"; resolve_managed_fem_runtime_storage_layout',
+                    "bash",
+                    str(STORAGE_HELPER),
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn(STORAGE_ROOT_ENV, result.stderr)
+
+    def test_storage_layout_rejects_symlink_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            durable = root / "durable"
+            durable.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(durable, target_is_directory=True)
+
+            result = self._resolved_layout(alias)
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("must not be a symbolic link", result.stderr)
+
     def test_exporter_requires_ext4_bind_target_before_image_build(self) -> None:
         source = EXPORTER.read_text(encoding="utf-8")
         storage_source = STORAGE_HELPER.read_text(encoding="utf-8")
@@ -50,17 +185,10 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             'FULLMAG_CONTAINER_TARGET_DIR:=${FULLMAG_NATIVE_MOUNT_VIEW}/cargo-targets/',
             source,
         )
-        self.assertIn(
-            f'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="{CANONICAL_STORAGE_ROOT}"',
-            source,
-        )
-        self.assertIn(
-            f'readonly FULLMAG_NATIVE_BUILD_IMAGE="{CANONICAL_IMAGE}"',
-            source,
-        )
-        self.assertIn(
-            f'readonly FULLMAG_NATIVE_MOUNT_VIEW="{MOUNT_VIEW}"',
-            source,
+        self.assertIn("resolve_managed_fem_runtime_storage_layout", source)
+        self.assertLess(
+            source.index("resolve_managed_fem_runtime_storage_layout"),
+            source.index('mkdir -p "${RUNTIME_PARENT}"'),
         )
         for variable in (
             "FULLMAG_NATIVE_BUILD_STORAGE_ROOT",
@@ -83,6 +211,68 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             source.index("validate_container_target_dir"),
             source.index('build_managed_fem_image "${docker_build_ref}"'),
         )
+
+    def test_alternate_9p_root_requires_an_ext4_staging_mount_before_docker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repo_root = root / "repo"
+            scripts = repo_root / "scripts"
+            library = scripts / "lib"
+            library.mkdir(parents=True)
+            shutil.copy2(EXPORTER, scripts / EXPORTER.name)
+            shutil.copy2(
+                REPO_ROOT / "scripts/lib/managed_fem_image_identity.sh",
+                library / "managed_fem_image_identity.sh",
+            )
+            shutil.copy2(STORAGE_HELPER, library / STORAGE_HELPER.name)
+            storage_root = Path("/mnt/g/git")
+            image = storage_root / "build-volumes/fullmag-native.ext4"
+            mount_view = str(storage_root / "build-volumes/fullmag-native.mount")
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            findmnt = fake_bin / "findmnt"
+            findmnt.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *"-o TARGET"*) echo /mnt/g ;;\n'
+                '  *"-o FSTYPE"*) echo 9p ;;\n'
+                '  *"-o OPTIONS"*) echo rw,nosuid,nodev,aname=drvfs ;;\n'
+                "  *) exit 3 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            findmnt.chmod(0o755)
+            docker_marker = root / "docker-called"
+            docker = fake_bin / "docker"
+            docker.write_text(
+                '#!/bin/sh\ntouch "$DOCKER_MARKER"\nexit 99\n',
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            environment = {
+                **os.environ,
+                STORAGE_ROOT_ENV: str(storage_root),
+                "DOCKER_MARKER": str(docker_marker),
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "TMPDIR": str(root),
+            }
+
+            result = subprocess.run(
+                ["bash", str(scripts / EXPORTER.name)],
+                cwd=repo_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("expected a regular ext4 backing image", result.stderr)
+            self.assertIn(str(image), result.stderr)
+            self.assertIn(mount_view, result.stderr)
+            self.assertFalse(docker_marker.exists(), "Docker ran before ext4 staging validation")
 
     def test_non_ext4_target_fails_before_any_docker_command(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

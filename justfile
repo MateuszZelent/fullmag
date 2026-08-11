@@ -4679,6 +4679,7 @@ run-nanoflower-interactive-quadro-gpu:
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev -i examples/nanoflower_fem_quadro.py
 
 ensure-managed-fem-runtime:
+    bash scripts/prepare_managed_fem_runtime_storage.sh
     bash -euo pipefail -c '\
       identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
       trap '\''rm -f -- "$identity_file"'\'' EXIT; \
