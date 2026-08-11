@@ -63,6 +63,8 @@ pub struct FdmDemagHintsIR {
     pub common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_cells_xy: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_cell_size: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +76,8 @@ struct FdmDemagHintsWireIR {
     common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     common_cells_xy: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    common_cell_size: Option<[f64; 3]>,
 }
 
 impl<'de> Deserialize<'de> for FdmDemagHintsIR {
@@ -87,6 +91,7 @@ impl<'de> Deserialize<'de> for FdmDemagHintsIR {
             mode: wire.mode,
             common_cells: wire.common_cells,
             common_cells_xy: wire.common_cells_xy,
+            common_cell_size: wire.common_cell_size,
         };
         hints
             .validate()
@@ -118,6 +123,31 @@ impl FdmDemagHintsIR {
             errors.push(
                 "fdm.demag.common_cells and common_cells_xy are mutually exclusive".to_string(),
             );
+        }
+        if self.common_cell_size.is_some()
+            && (self.common_cells.is_some() || self.common_cells_xy.is_some())
+        {
+            errors.push(
+                "fdm.demag.common_cell_size is mutually exclusive with common_cells and common_cells_xy"
+                    .to_string(),
+            );
+        }
+        if let Some(cell_size) = self.common_cell_size {
+            if cell_size
+                .iter()
+                .any(|component| !component.is_finite() || *component <= 0.0)
+            {
+                errors.push(
+                    "fdm.demag.common_cell_size components must be finite and positive"
+                        .to_string(),
+                );
+            }
+            if self.mode == "two_d_stack" {
+                errors.push(
+                    "fdm.demag.common_cell_size is incompatible with explicit mode='two_d_stack'"
+                        .to_string(),
+                );
+            }
         }
         if let Some(cells) = self.common_cells {
             if cells.contains(&0) {
@@ -160,6 +190,9 @@ impl FdmDemagHintsIR {
             return Ok(self.mode.clone());
         }
         if self.common_cells.is_some() {
+            return Ok("three_d".to_string());
+        }
+        if self.common_cell_size.is_some() {
             return Ok("three_d".to_string());
         }
         if self.common_cells_xy.is_some() {
