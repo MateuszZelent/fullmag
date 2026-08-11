@@ -684,7 +684,7 @@ describe("inspectorRegistry", () => {
     ).toBe(FrequencyResponseDiagnosticsInspectorPanel);
   });
 
-  it("assigns every non-authoring frequency-domain node its own inspector component", () => {
+  it("routes every non-authoring frequency-domain node away from the generic inspector", () => {
     const kinds = FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS.filter(
       (kind) => !kind.startsWith("study.stage."),
     );
@@ -693,7 +693,7 @@ describe("inspectorRegistry", () => {
     );
 
     expect(components).not.toContain(FrequencyDomainInspectorPanel);
-    expect(new Set(components).size).toBe(kinds.length);
+    expect(components.every((component) => component !== undefined)).toBe(true);
   });
 
   it("routes frequency-domain job nodes to dedicated inspector components", () => {

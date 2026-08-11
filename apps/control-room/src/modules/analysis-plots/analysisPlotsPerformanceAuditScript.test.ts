@@ -41,8 +41,8 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("useAnalysisDatasetData.ts");
     expect(auditScript).toContain("analysis plots dataset resource owner");
     expect(auditScript).toContain('activeSurface === "dynamics" || activeSurface === "comparison"');
-    expect(auditScript).toContain('activeSurface === "frequency-response" || activeSurface === "eigenmodes"');
-    expect(auditScript).toContain('useSpinWaveGammaResource(activeSurface === "spectrum")');
+    expect(auditScript).toContain('activeSurface === "resonance-fmr" || activeSurface === "dispersion"');
+    expect(auditScript).toContain('useSpinWaveGammaResource(activeSurface === "dynamics")');
     expect(auditScript).toContain('useDynamicStructureFactorResource(activeSurface === "dispersion")');
     expect(auditScript).toContain("targetPoints: 1_600");
     expect(auditScript).toContain("limit: 5_000");
