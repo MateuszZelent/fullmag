@@ -38,7 +38,7 @@ export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelPr
         execution: ref ? "completed" : "unknown",
         resource: ref ? "ready" : "unavailable",
       }}
-      title={model.title}
+      title={selection.label || model.title}
     />
   );
 }

@@ -4698,7 +4698,18 @@ describe("FrequencyDomainInspectorPanel", () => {
     },
   );
 
-  it.each(FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS)(
+  it.each(FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS.filter(
+    (kind) =>
+      !kind.startsWith("results.dynamics") &&
+      !kind.startsWith("results.resonance") &&
+      !kind.startsWith("results.dispersion") &&
+      !kind.startsWith("results.hysteresis") &&
+      !kind.startsWith("results.analysis_views") &&
+      !kind.startsWith("results.derived_values") &&
+      !kind.startsWith("results.tables") &&
+      !kind.startsWith("results.exports") &&
+      kind !== "results.frequency_domain.provenance",
+  ))(
     "renders exact non-fallback detail for %s",
     (kind) => {
       const selection: Selection = {

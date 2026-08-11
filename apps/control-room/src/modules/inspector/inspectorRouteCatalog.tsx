@@ -407,10 +407,10 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.resonance.root": PhysicsFirstResultInspectorPanel,
   "results.resonance.modal.stage": EigenStudyInspectorPanel,
   "results.resonance.driven.stage": FrequencyResponseStudyInspectorPanel,
-  "results.resonance.modal.spectrum": FmrModalSpectrumInspectorPanel,
+  "results.resonance.modal.spectrum": EigenSpectrumInspectorPanel,
   "results.resonance.modal.modes": EigenModesInspectorPanel,
   "results.resonance.modal.coupling": PhysicsFirstResultInspectorPanel,
-  "results.resonance.driven.spectrum": FmrResponseSweepInspectorPanel,
+  "results.resonance.driven.spectrum": PhysicsFirstResultInspectorPanel,
   "results.resonance.driven.peaks": FmrPeaksInspectorPanel,
   "results.resonance.driven.frequency_points":
     FrequencyResponseFrequencyPointsInspectorPanel,

@@ -9,6 +9,7 @@ const models: Readonly<Record<string, PhysicsFirstResultInspectorModel>> = {
   "results.dynamics.root": model("Dynamics", "Time-domain results and spectral analysis", "Dynamics", "Runtime observables"),
   "results.resonance.root": model("Resonance & FMR", "Modal and driven resonance results", "Resonance", "Mixed products"),
   "results.resonance.modal.coupling": model("RF Coupling / FMR Activity", "Published modal coupling evidence", "FMR activity", "Modal eigensolve"),
+  "results.resonance.driven.spectrum": model("Harmonic Response Spectrum", "Driven response; the selected result label states whether the RF observable qualifies as FMR", "Resonance response", "Frequency-driven"),
   "results.dispersion.root": model("Dispersion & k-resolved response", "Wavevector-resolved modal and driven products", "Wavevector-resolved", "Mixed products"),
   "results.dispersion.driven.response_map": model("Spectral Response Map · A(k,f)", "Driven k-frequency response; not a modal dispersion relation", "k-resolved response", "Frequency-driven"),
   "results.hysteresis.root": model("Hysteresis", "Field-sweep branches and loops", "Hysteresis", "Field sweep"),
