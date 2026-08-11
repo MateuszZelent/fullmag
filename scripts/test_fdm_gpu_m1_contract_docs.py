@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import struct
 import sys
 import unicodedata
@@ -29,6 +30,9 @@ PLAN = (
     / "docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm"
     / "PLAN_WDROZENIA_I_SPECYFIKACJA_FIZYKI.md"
 )
+RACETRACK_PLAN = (
+    ROOT / "docs/superpowers/plans/2026-08-11-solved-current-skyrmion-racetrack.md"
+)
 
 
 def _normalise(value: str) -> str:
@@ -47,6 +51,35 @@ def _anchored_section(document: str, start: str, end: str) -> str:
     return document[section_start:section_end]
 
 
+def _resolve_problem_ir_path(problem_ir: object, path: str) -> object:
+    value = problem_ir
+    for segment in path.split("."):
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)(.*)", segment)
+        if match is None:
+            raise AssertionError(f"invalid ProblemIR path segment: {segment!r}")
+        field, indexes = match.groups()
+        if not isinstance(value, dict) or field not in value:
+            raise AssertionError(f"ProblemIR path {path!r} cannot resolve field {field!r}")
+        value = value[field]
+        offset = 0
+        for index_match in re.finditer(r"\[(\d+)\]", indexes):
+            if index_match.start() != offset:
+                raise AssertionError(
+                    f"ProblemIR path {path!r} uses a non-numeric or malformed selector"
+                )
+            if not isinstance(value, list):
+                raise AssertionError(
+                    f"ProblemIR path {path!r} indexes a non-array value"
+                )
+            value = value[int(index_match.group(1))]
+            offset = index_match.end()
+        if offset != len(indexes):
+            raise AssertionError(
+                f"ProblemIR path {path!r} uses a non-numeric or malformed selector"
+            )
+    return value
+
+
 def _racetrack_public_lowering() -> dict[str, object]:
     python_src = ROOT / "packages/fullmag-py/src"
     if str(python_src) not in sys.path:
@@ -55,6 +88,16 @@ def _racetrack_public_lowering() -> dict[str, object]:
     import fullmag as fm
 
     fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+    hm_geometry = fm.Translate(
+        fm.Box(size=(512.0e-9, 128.0e-9, 3.0e-9), name="hm_base"),
+        offset=(256.0e-9, 64.0e-9, 1.5e-9),
+        name="hm",
+    )
+    fm_geometry = fm.Translate(
+        fm.Box(size=(512.0e-9, 128.0e-9, 1.0e-9), name="fm_base"),
+        offset=(256.0e-9, 64.0e-9, 3.5e-9),
+        name="fm",
+    )
     hm = fm.RegionRef("hm")
     ferromagnet = fm.RegionRef("fm")
 
@@ -169,48 +212,65 @@ def _racetrack_public_lowering() -> dict[str, object]:
     discretization = fm.DiscretizationHints(
         fdm=fm.FDM(cell=(2.0e-9, 2.0e-9, 1.0e-9))
     )
-    return {
-        "current_transport": current_transport.to_ir(),
-        "spin_transport": spin_transport.to_ir(coupling="one_way"),
-        "spin_torque": fm.DriftDiffusionSpinTorque(
-            id="transport_torque", solve_id="spin", target=ferromagnet
-        ).to_ir_module(),
-        "magnetic_material": fm.Material(
-            name="fm_material",
-            Ms=580.0e3,
-            A=15.0e-12,
-            alpha=0.3,
-            Ku1=0.8e6,
-            anisU=(0.0, 0.0, 1.0),
-        ).to_ir(),
-        "energy_terms": [
-            fm.Exchange().to_ir(),
-            fm.Demag().to_ir(),
+    material = fm.Material(
+        name="fm_material",
+        Ms=580.0e3,
+        A=15.0e-12,
+        alpha=0.3,
+        Ku1=0.8e6,
+        anisU=(0.0, 0.0, 1.0),
+    )
+    problem = fm.Problem(
+        name="racetrack_m1_v1_base_drive",
+        magnets=(
+            fm.Ferromagnet(
+                name="fm",
+                geometry=fm_geometry,
+                material=material,
+            ),
+        ),
+        auxiliary_geometries=(hm_geometry,),
+        energy=(
+            fm.Exchange(),
+            fm.Demag(),
             fm.InterfacialDMI(
                 D=3.0e-3, interface_normal=(0.0, 0.0, 1.0)
-            ).to_ir(),
-        ],
-        "relax_study": fm.Relaxation(
-            outputs=(),
-            algorithm="llg_overdamped",
-            stop=fm.RelaxStop(
-                torque_tolerance_apm=0.7957747154594767,
-                max_steps=50_000,
             ),
-            dynamics=fm.LLG(integrator="rk4", fixed_timestep=1.0e-13),
-        ).to_ir(),
-        "drive_study": fm.TimeEvolution(
+        ),
+        study=fm.TimeEvolution(
             dynamics=fm.LLG(integrator="rk4", fixed_timestep=1.0e-13),
             outputs=(fm.SaveField("m", every=5.0e-12),),
-        ).to_ir(),
-        "backend_policy": {
-            "requested_backend": runtime.backend_target.value,
-            "execution_precision": runtime.execution_precision.value,
-            "discretization_hints": discretization.to_ir(),
-        },
-        "validation_profile": {"execution_mode": runtime.execution_mode.value},
-        "runtime_selection": runtime.to_runtime_metadata(),
+        ),
+        runtime=runtime,
+        discretization=discretization,
+        current_modules=(current_transport,),
+        spin_transports=(spin_transport,),
+        spin_torques=(
+            fm.DriftDiffusionSpinTorque(
+                id="transport_torque", solve_id="spin", target=ferromagnet
+            ),
+        ),
+    )
+    lowered = problem.to_ir(include_geometry_assets=False, entrypoint_kind="flat_run")
+    lowered["problem_meta"]["runtime_metadata"] = {
+        "runtime_selection": runtime.to_runtime_metadata()
     }
+    typed_problem_ir_keys = (
+        "ir_version",
+        "problem_meta",
+        "geometry",
+        "regions",
+        "materials",
+        "magnets",
+        "energy_terms",
+        "study",
+        "backend_policy",
+        "validation_profile",
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+    )
+    return {key: lowered[key] for key in typed_problem_ir_keys}
 
 
 REQUIRED_QUALIFICATION_GATES = {
@@ -1721,6 +1781,62 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                 for field in ("path", "symbol", "owner_task", "evidence_gate"):
                     self.assertTrue(row[field])
 
+        planned_by_owner_and_symbol = {
+            (row["owner_task"], row["symbol"]): row["path"]
+            for source_map in (transport_source_map, topological_source_map)
+            for row in source_map["planned_symbols"]
+        }
+        self.assertEqual(
+            {
+                (
+                    "Task 2",
+                    "ResolvedFdmSpinTransportIR.transport_active_mask",
+                ): "crates/fullmag-ir/src/spin_transport.rs",
+                (
+                    "Task 3",
+                    "ResolvedSpinTransportPlanIR.fdm_gpu_double",
+                ): "crates/fullmag-plan/src/spin_transport.rs",
+                (
+                    "Task 4",
+                    "GpuM1TransportSession::prepare",
+                ): "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
+                (
+                    "Task 5",
+                    "fullmag_fdm_context_bind_gpu_transport_v1",
+                ): "native/include/fullmag_fdm.h",
+                (
+                    "Task 6",
+                    "TransportStageCheckpointV1",
+                ): "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
+                (
+                    "Task 7",
+                    "execution_provenance.transport_m1_v1",
+                ): "crates/fullmag-runner/src/artifacts.rs",
+                (
+                    "Task 8",
+                    "SkyrmionTrajectoryV1",
+                ): "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
+                (
+                    "Task 8",
+                    "SkyrmionHallAngleV1",
+                ): "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
+            },
+            planned_by_owner_and_symbol,
+        )
+        plan = RACETRACK_PLAN.read_text(encoding="utf-8")
+        for (owner_task, symbol), path in planned_by_owner_and_symbol.items():
+            with self.subTest(owner_task=owner_task, symbol=symbol):
+                owner_start = plan.index(f"### {owner_task}:")
+                next_task = plan.find("\n### Task ", owner_start + 1)
+                owner_section = plan[owner_start : next_task if next_task >= 0 else None]
+                self.assertIn(path, plan)
+                for symbol_token in re.split(r"\.|::", symbol):
+                    self.assertIn(symbol_token, owner_section)
+                self.assertTrue(
+                    (ROOT / path).exists() or f"Create: `{path}`" in plan,
+                    f"planned path {path} must exist or be declared Create in the plan",
+                )
+
         for required in (
             "racetrack_m1_v1",
             "syntetyczny fixture walidacyjny",
@@ -1918,11 +2034,11 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             self.assertEqual(5e-12, case["sample_interval_s"])
 
         normalized = fixture["normalized_problem_ir_contract"]
-        self.assertEqual(["hm", "fm"], normalized["geometry_entry_order"])
+        self.assertEqual(["fm", "hm"], normalized["geometry_entry_order"])
         self.assertEqual(
             [
-                "geometry.entries[fm].size[0] == geometry.entries[hm].size[0]",
-                "geometry.entries[fm].size[1] == geometry.entries[hm].size[1]",
+                "geometry.entries[0].base.size[0] == geometry.entries[1].base.size[0]",
+                "geometry.entries[0].base.size[1] == geometry.entries[1].base.size[1]",
             ],
             normalized["geometry_equalities"],
         )
@@ -1965,14 +2081,51 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             normalized["public_lowering_boundary"],
         )
 
-        charge = normalized["expected_lowering"]["current_transport"]
+        expected_lowering = normalized["expected_lowering"]
+        self.assertEqual("translate", expected_lowering["geometry"]["entries"][0]["kind"])
+        self.assertEqual("box", expected_lowering["geometry"]["entries"][0]["base"]["kind"])
+        self.assertEqual("translate", expected_lowering["geometry"]["entries"][1]["kind"])
+        self.assertEqual("box", expected_lowering["geometry"]["entries"][1]["base"]["kind"])
+        self.assertEqual(
+            [256.0e-9, 64.0e-9, 3.5e-9],
+            expected_lowering["geometry"]["entries"][0]["by"],
+        )
+        self.assertEqual(
+            [256.0e-9, 64.0e-9, 1.5e-9],
+            expected_lowering["geometry"]["entries"][1]["by"],
+        )
+        self.assertEqual("fm_material", expected_lowering["materials"][0]["name"])
+
+        parameters = {row["id"]: row for row in fixture["parameters"]}
+        expected_paths = {
+            "track.length": "geometry.entries[1].base.size[0]",
+            "track.width": "geometry.entries[1].base.size[1]",
+            "hm.thickness": "geometry.entries[1].base.size[2]",
+            "fm.thickness": "geometry.entries[0].base.size[2]",
+            "fm.Ms": "materials[0].saturation_magnetisation",
+            "fm.A": "materials[0].exchange_stiffness",
+            "fm.alpha": "materials[0].damping",
+            "fm.Ku": "materials[0].uniaxial_anisotropy",
+        }
+        for parameter_id, expected_path in expected_paths.items():
+            self.assertEqual(expected_path, parameters[parameter_id]["problem_ir_path"])
+        for parameter_id, parameter in parameters.items():
+            with self.subTest(parameter_id=parameter_id):
+                resolved = _resolve_problem_ir_path(
+                    expected_lowering,
+                    parameter["problem_ir_path"],
+                )
+                if not parameter_id.startswith("drive."):
+                    self.assertEqual(parameter["value"], resolved)
+
+        charge = expected_lowering["current_modules"][0]
         self.assertEqual("current_transport", charge["kind"])
         self.assertEqual("ohmic_poisson", charge["model"])
         self.assertEqual("one_way", charge["coupling"])
         self.assertEqual("charge_balance_integrated_l2.v1", charge["solver"]["physical_residual_version"])
         self.assertEqual("fv_charge_harmonic_v1", charge["solver"]["operator_version"])
 
-        spin = normalized["expected_lowering"]["spin_transport"]
+        spin = expected_lowering["spin_transport_modules"][0]
         self.assertEqual("charge", spin["current_source_id"])
         self.assertEqual("steady", spin["mode"])
         self.assertEqual("transport_constitutive.one_way.fullmag.v1", spin["constitutive_version"])
@@ -1994,19 +2147,31 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                 "target": {"object_id": "fm"},
                 "formula_version": "transport_torque_angular_momentum.fullmag.v1",
             },
-            normalized["expected_lowering"]["spin_torque"],
+            expected_lowering["spin_torque_modules"][0],
         )
         self.assertEqual(
             ["exchange", "demag", "interfacial_dmi"],
-            [term["kind"] for term in normalized["expected_lowering"]["energy_terms"]],
+            [term["kind"] for term in expected_lowering["energy_terms"]],
         )
         self.assertEqual(
             "rk4",
-            normalized["expected_lowering"]["relax_study"]["dynamics"]["integrator"],
+            expected_lowering["study"]["dynamics"]["integrator"],
         )
         self.assertEqual(
-            "rk4",
-            normalized["expected_lowering"]["drive_study"]["dynamics"]["integrator"],
+            {"execution_mode": "strict"},
+            expected_lowering["validation_profile"],
+        )
+        self.assertEqual(
+            {
+                "backend": "fdm",
+                "device": "gpu",
+                "gpu_count": 1,
+                "device_index": 0,
+                "cpu_threads": None,
+                "execution_mode": "strict",
+                "execution_precision": "double",
+            },
+            expected_lowering["problem_meta"]["runtime_metadata"]["runtime_selection"],
         )
 
     def test_racetrack_schedule_targets_existing_problem_ir_fields(self) -> None:

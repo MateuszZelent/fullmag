@@ -45,14 +45,19 @@ używa kroku `1e-13 s` i próbkowania `5e-12 s`. JSON zapisuje konkretne
 outward densities obu terminali dla każdej z sześciu amplitud, więc pełny
 harmonogram i znaki nie zależą od późniejszych defaultów.
 
-`normalized_problem_ir_contract.expected_lowering` zawiera kompletne bieżące
-rekordy `CurrentTransport`, steady `SpinDriftDiffusion`,
-`DriftDiffusionSpinTorque`, materiał, energy terms, oba `StudyIR`,
-`BackendPolicyIR`, validation profile i runtime selection. Test Python porównuje
-je z publicznymi konstruktorami `to_ir()`, a test Rust parsuje bieżącymi typami
-`fullmag-ir`. Konkretne mutacje drive celują w istniejące indeksy terminali
-`current_modules[0].boundaries[0]` i `[1]`; `boundaries[current_sweep]` nie jest
-polem ProblemIR.
+`normalized_problem_ir_contract.expected_lowering` jest kompletną, parsowalną
+projekcją bieżącego `ProblemIR`, zbudowaną publicznymi konstruktorami
+`Box`, `Translate`, `Material`, `Ferromagnet` i `Problem`. Zamraża rzeczywistą
+kolejność `geometry.entries=[fm,hm]`, rozmiary obu przetłumaczonych warstw pod
+`geometry.entries[*].base.size`, translacje do bounds fixture zaczynających się
+w `[0,0,0]`, materiał pod `materials[0]`, moduły transportu,
+energy terms, bazowy `TimeEvolution`, `BackendPolicyIR` i
+`ValidationProfileIR`. Test Python porównuje całą projekcję i dereferencjonuje
+każdy `problem_ir_path`. Test Rust parsuje cały `ProblemIR`, profil walidacji
+oraz sprawdza selection dokładnie pod
+`problem_meta.runtime_metadata.runtime_selection`. Konkretne mutacje drive
+celują w istniejące indeksy terminali `current_modules[0].boundaries[0]` i
+`[1]`; `boundaries[current_sweep]` nie jest polem ProblemIR.
 
 Pełny sześcioprzebiegowy workload nie jest jeszcze lowerowalny jako jeden
 publiczny `Problem`: obiekt HM i jego materiały charge/spin są reprezentowalne,

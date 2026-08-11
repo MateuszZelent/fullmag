@@ -283,3 +283,105 @@ lowering Python oraz parser Rust. Nie dowodzi publicznej wykonywalności pełneg
 workflow, materializacji masek, mutacji etapów, restartu, działania GPU ani
 kwalifikacji fizycznej. Status pozostaje kontraktowy do przejścia dalszych
 bramek Tasks 2--12.
+
+## Końcowa korekta prawdziwości Task 1
+
+### Zamknięte findingi
+
+1. Każdy `problem_ir_path` używa wyłącznie rzeczywistych nazw pól i liczbowych
+   indeksów tablic. Publiczny lowering buduje kompletną, parsowalną projekcję
+   `ProblemIR` przez `Box`, `Translate`, `Material`, `Ferromagnet` i `Problem`.
+   Kolejność geometrii jest rzeczywistą kolejnością serializacji `[fm, hm]`;
+   oba boksy są przetłumaczone do fixture bounds zaczynających się w
+   `[0,0,0]`, a rozmiary są pod `geometry.entries[*].base.size`. Materiał FM
+   ma indeks `materials[0]`. Resolver testu dereferencjonuje wszystkie 32
+   ścieżki; dla 26 parametrów nie-workflow wymaga też dokładnej wartości.
+   Sześć amplitud drive pozostaje jawnymi override tego samego istniejącego
+   pola terminala, nie sześcioma jednoczesnymi wartościami bazowego ProblemIR.
+
+2. Planned source map odpowiada planowi path+owner Task: Task 2 wskazuje
+   `crates/fullmag-ir/src/spin_transport.rs`, Task 7
+   `crates/fullmag-runner/src/artifacts.rs`, a oba symbole Task 8 planowany
+   `crates/fullmag-api/src/analysis/skyrmion_trajectory.rs`. Test wymaga całej
+   dokładnej mapy Tasks 2--8 i dopuszcza nieistniejącą ścieżkę wyłącznie wtedy,
+   gdy plan deklaruje ją dosłownie jako `Create`.
+
+3. Rust fixture deserializuje cały `expected_lowering` jako `ProblemIR`, parsuje
+   osobno `GeometryIR` i `ValidationProfileIR`, a requested runtime sprawdza w
+   rzeczywistym miejscu `ProblemMeta.runtime_metadata["runtime_selection"]`.
+   README i nota 0970 opisują dokładnie tę granicę. Jeden bazowy
+   `TimeEvolution` jest bieżącym `StudyIR`; relaksacja i sześć restartowanych
+   drive nadal są zewnętrznym kontraktem workflow, nie fikcyjną tablicą etapów
+   ProblemIR.
+
+### Kontrolowany RED
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests
+Ran 10 tests
+FAILED (failures=2, errors=1)
+
+KeyError: 'geometry'
+geometry_entry_order: ['hm', 'fm'] != ['fm', 'hm']
+planned path/owner mapping: Task 2/7/8 mismatch
+
+cargo test -p fullmag-ir --test racetrack_m1_fixture
+1 failed
+ProblemIR.ir_version must be a string
+```
+
+Oba testy skompilowały się lub załadowały fixture i zatrzymały dokładnie na
+niepełnym typowanym lowering oraz błędnych mapowaniach. Dodatkowy RED z
+self-review wymusił rzeczywiste placementy obu centrowanych `Box`:
+
+```text
+test_racetrack_expected_lowering_matches_public_python_dsl
+FAILED: expected HM kind 'translate', got 'box'
+```
+
+### Świeże GREEN i bramki przed commitem
+
+```text
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+22 passed, 151 subtests passed in 0.71s
+
+cargo test -p fullmag-ir --test racetrack_m1_fixture
+1 passed; 0 failed
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0940-topological-charge-observable.source-map.json --repo-root .
+PASS
+
+python3 -m unittest discover \
+  -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+Ran 22 tests; OK
+
+python3 -m pytest scripts/test_validate_topological_charge_runtime.py -q
+4 passed in 0.04s
+
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+Public documentation Python examples passed: public_docs/site
+
+git diff --check
+PASS
+```
+
+```text
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py \
+  --base 1b981ecd36447aaf6766c41a649da10fd8f7cd25 --head HEAD --repo-root .
+PASS
+
+git show --check --oneline --no-renames HEAD
+PASS
+```
+
+### Granica dowodu
+
+Ta korekta dowodzi istnienia i typu ścieżek, zgodności publicznego loweringu z
+fixture oraz zgodności future-owner mapy z zaakceptowanym planem. Nie dowodzi
+wykonania transportu, materializacji masek, etapowego restartu, działania CUDA
+ani kwalifikacji fizycznej. Nie zmieniono równań ani statusu capability.

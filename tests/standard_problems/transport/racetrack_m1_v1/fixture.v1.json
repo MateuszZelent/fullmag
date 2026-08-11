@@ -333,10 +333,10 @@
   "normalized_problem_ir_contract": {
     "schema_version": "problem_ir.racetrack_m1_v1",
     "contract_kind": "typed_expected_lowering_map",
-    "geometry_entry_order": ["hm", "fm"],
+    "geometry_entry_order": ["fm", "hm"],
     "geometry_equalities": [
-      "geometry.entries[fm].size[0] == geometry.entries[hm].size[0]",
-      "geometry.entries[fm].size[1] == geometry.entries[hm].size[1]"
+      "geometry.entries[0].base.size[0] == geometry.entries[1].base.size[0]",
+      "geometry.entries[0].base.size[1] == geometry.entries[1].base.size[1]"
     ],
     "current_module_order": ["charge"],
     "spin_transport_module_order": ["spin"],
@@ -349,7 +349,94 @@
       "torque_target": {"object_id": "fm"}
     },
     "expected_lowering": {
-      "current_transport": {
+      "ir_version": "0.3.0",
+      "problem_meta": {
+        "name": "racetrack_m1_v1_base_drive",
+        "description": null,
+        "script_language": "python",
+        "script_source": null,
+        "script_api_version": "0.3.0",
+        "serializer_version": "0.3.0",
+        "entrypoint_kind": "flat_run",
+        "source_hash": null,
+        "runtime_metadata": {
+          "runtime_selection": {
+            "backend": "fdm",
+            "device": "gpu",
+            "gpu_count": 1,
+            "device_index": 0,
+            "cpu_threads": null,
+            "execution_mode": "strict",
+            "execution_precision": "double"
+          }
+        },
+        "backend_revision": null,
+        "seeds": []
+      },
+      "geometry": {
+        "entries": [
+          {
+            "name": "fm",
+            "kind": "translate",
+            "base": {
+              "name": "fm_base",
+              "kind": "box",
+              "size": [5.12e-7, 1.28e-7, 1e-9]
+            },
+            "by": [2.56e-7, 6.4e-8, 3.5e-9]
+          },
+          {
+            "name": "hm",
+            "kind": "translate",
+            "base": {
+              "name": "hm_base",
+              "kind": "box",
+              "size": [5.12e-7, 1.28e-7, 3e-9]
+            },
+            "by": [2.56e-7, 6.4e-8, 1.5e-9]
+          }
+        ]
+      },
+      "regions": [{"name": "fm", "geometry": "fm"}],
+      "materials": [
+        {
+          "name": "fm_material",
+          "saturation_magnetisation": 580000.0,
+          "exchange_stiffness": 1.5e-11,
+          "damping": 0.3,
+          "uniaxial_anisotropy": 800000.0,
+          "uniaxial_anisotropy_k2": null,
+          "anisotropy_axis": [0.0, 0.0, 1.0],
+          "cubic_anisotropy_kc1": null,
+          "cubic_anisotropy_kc2": null,
+          "cubic_anisotropy_kc3": null,
+          "cubic_anisotropy_axis1": null,
+          "cubic_anisotropy_axis2": null,
+          "interfacial_dmi": null,
+          "bulk_dmi": null,
+          "ms_field": null,
+          "a_field": null,
+          "alpha_field": null,
+          "ku_field": null,
+          "ku2_field": null,
+          "kc1_field": null,
+          "kc2_field": null,
+          "kc3_field": null,
+          "dind_field": null,
+          "dbulk_field": null
+        }
+      ],
+      "magnets": [
+        {
+          "name": "fm",
+          "region": "fm",
+          "material": "fm_material",
+          "initial_magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]},
+          "mesh_recipe": null,
+          "absorbing_boundary": null
+        }
+      ],
+      "current_modules": [{
         "kind": "current_transport",
         "name": "charge",
         "model": "ohmic_poisson",
@@ -408,8 +495,8 @@
           "physical_residual_version": "charge_balance_integrated_l2.v1",
           "operator_version": "fv_charge_harmonic_v1"
         }
-      },
-      "spin_transport": {
+      }],
+      "spin_transport_modules": [{
         "schema_version": "spin_transport.v1",
         "id": "spin",
         "current_source_id": "charge",
@@ -490,41 +577,15 @@
           "execution_mode": "strict"
         },
         "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
-      },
-      "spin_torque": {
+      }],
+      "spin_torque_modules": [{
         "kind": "drift_diffusion_spin_torque",
         "schema_version": "drift_diffusion_spin_torque.v1",
         "id": "transport_torque",
         "solve_id": "spin",
         "target": {"object_id": "fm"},
         "formula_version": "transport_torque_angular_momentum.fullmag.v1"
-      },
-      "magnetic_material": {
-        "name": "fm_material",
-        "saturation_magnetisation": 580000.0,
-        "exchange_stiffness": 1.5e-11,
-        "damping": 0.3,
-        "uniaxial_anisotropy": 800000.0,
-        "uniaxial_anisotropy_k2": null,
-        "anisotropy_axis": [0.0, 0.0, 1.0],
-        "cubic_anisotropy_kc1": null,
-        "cubic_anisotropy_kc2": null,
-        "cubic_anisotropy_kc3": null,
-        "cubic_anisotropy_axis1": null,
-        "cubic_anisotropy_axis2": null,
-        "interfacial_dmi": null,
-        "bulk_dmi": null,
-        "ms_field": null,
-        "a_field": null,
-        "alpha_field": null,
-        "ku_field": null,
-        "ku2_field": null,
-        "kc1_field": null,
-        "kc2_field": null,
-        "kc3_field": null,
-        "dind_field": null,
-        "dbulk_field": null
-      },
+      }],
       "energy_terms": [
         {"kind": "exchange"},
         {"kind": "demag", "realization": "auto"},
@@ -534,22 +595,7 @@
           "interface_normal": [0.0, 0.0, 1.0]
         }
       ],
-      "relax_study": {
-        "kind": "relaxation",
-        "algorithm": "llg_overdamped",
-        "stop": {
-          "torque_tolerance_apm": 0.7957747154594766,
-          "max_steps": 50000
-        },
-        "sampling": {"outputs": []},
-        "dynamics": {
-          "kind": "llg",
-          "gyromagnetic_ratio": 221100.0,
-          "integrator": "rk4",
-          "fixed_timestep": 1e-13
-        }
-      },
-      "drive_study": {
+      "study": {
         "kind": "time_evolution",
         "dynamics": {
           "kind": "llg",
@@ -573,16 +619,7 @@
           "hybrid": null
         }
       },
-      "validation_profile": {"execution_mode": "strict"},
-      "runtime_selection": {
-        "backend": "fdm",
-        "device": "gpu",
-        "gpu_count": 1,
-        "device_index": 0,
-        "cpu_threads": null,
-        "execution_mode": "strict",
-        "execution_precision": "double"
-      }
+      "validation_profile": {"execution_mode": "strict"}
     },
     "public_lowering_boundary": {
       "status": "not_publicly_lowerable_as_one_problem",
@@ -647,7 +684,7 @@
       "value": 5.12e-7,
       "value_kind": "numerical_validation_fixture",
       "validity": "Exact positive FDM domain length; 256 cells at the frozen cell.x.",
-      "problem_ir_path": "geometry.entries[hm].size[0]",
+      "problem_ir_path": "geometry.entries[1].base.size[0]",
       "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "nanotrack-scale benchmark extent"}
     },
     {
@@ -657,7 +694,7 @@
       "value": 1.28e-7,
       "value_kind": "numerical_validation_fixture",
       "validity": "Exact positive FDM domain width; 64 cells at the frozen cell.y.",
-      "problem_ir_path": "geometry.entries[hm].size[1]",
+      "problem_ir_path": "geometry.entries[1].base.size[1]",
       "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "bounded racetrack width with edge-distance margin"}
     },
     {
@@ -667,7 +704,7 @@
       "value": 3e-9,
       "value_kind": "numerical_validation_fixture",
       "validity": "Exact positive HM thickness; three cell.z layers below the oriented HM-to-FM interface.",
-      "problem_ir_path": "geometry.entries[hm].size[2]",
+      "problem_ir_path": "geometry.entries[1].base.size[2]",
       "motivation": {"source_ids": ["abert2015", "benchmark_grid"], "claim": "thin heavy-metal transport layer resolved by three cells"}
     },
     {
@@ -677,7 +714,7 @@
       "value": 1e-9,
       "value_kind": "numerical_validation_fixture",
       "validity": "Exact positive FM thickness; one cell.z layer above the oriented HM-to-FM interface.",
-      "problem_ir_path": "geometry.entries[fm].size[2]",
+      "problem_ir_path": "geometry.entries[0].base.size[2]",
       "motivation": {"source_ids": ["sampaio2013", "benchmark_grid"], "claim": "ultrathin interfacial-DMI ferromagnet represented without thickness averaging ambiguity"}
     },
     {
@@ -717,7 +754,7 @@
       "value": 580000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive on FM; zero outside the magnetic mask.",
-      "problem_ir_path": "materials[fm].saturation_magnetisation",
+      "problem_ir_path": "materials[0].saturation_magnetisation",
       "motivation": {"source_ids": ["sampaio2013"], "claim": "published skyrmion benchmark scale, not a stack identification"}
     },
     {
@@ -727,7 +764,7 @@
       "value": 1.5e-11,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite and strictly positive exchange stiffness on FM.",
-      "problem_ir_path": "materials[fm].exchange_stiffness",
+      "problem_ir_path": "materials[0].exchange_stiffness",
       "motivation": {"source_ids": ["sampaio2013"], "claim": "published skyrmion benchmark scale, not a stack identification"}
     },
     {
@@ -737,7 +774,7 @@
       "value": 0.3,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite dimensionless Gilbert damping with alpha >= 0.",
-      "problem_ir_path": "materials[fm].damping",
+      "problem_ir_path": "materials[0].damping",
       "motivation": {"source_ids": ["sampaio2013"], "claim": "high-damping deterministic validation choice"}
     },
     {
@@ -747,7 +784,7 @@
       "value": 800000.0,
       "value_kind": "numerical_validation_fixture",
       "validity": "Finite perpendicular uniaxial anisotropy with axis +z.",
-      "problem_ir_path": "materials[fm].uniaxial_anisotropy",
+      "problem_ir_path": "materials[0].uniaxial_anisotropy",
       "motivation": {"source_ids": ["sampaio2013"], "claim": "published interfacial-DMI skyrmion benchmark scale"}
     },
     {

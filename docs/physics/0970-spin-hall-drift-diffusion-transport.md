@@ -710,15 +710,19 @@ aktualizuje transport przy każdej ewaluacji RHS LLG. Dla każdego $J_x$ JSON
 zapisuje obie konkretne outward densities, więc znak terminali nie jest
 wyprowadzany później z nazwy powierzchni.
 
-`normalized_problem_ir_contract` jest typowanym `expected_lowering` dla pól,
-które istnieją dzisiaj: pełnego `CurrentTransport`, steady
-`SpinDriftDiffusion`, `DriftDiffusionSpinTorque`, materiału magnetycznego,
-energy terms `Exchange`, `Demag` i `InterfacialDMI(D=3e-3,
-interface_normal=(0,0,1))`, obu wariantów `StudyIR`, `BackendPolicyIR`, profilu
-walidacji i runtime selection. Test Python porównuje te rekordy z rzeczywistym
-wynikiem publicznych `to_ir()`, a test Rust parsuje je bieżącymi typami
-`fullmag-ir`. Kolejność BC jest normatywna: terminale mają indeksy `0` i `1`,
-a zewnętrzny charge-insulating boundary indeks `2`.
+`normalized_problem_ir_contract.expected_lowering` jest kompletną, typowaną
+projekcją bieżącego `ProblemIR`, zbudowaną przez publiczne konstruktory
+`Box`, `Translate`, `Material`, `Ferromagnet` i `Problem`. Zawiera rzeczywiste
+tablice `geometry.entries` i `materials`, pełny `CurrentTransport`, steady
+`SpinDriftDiffusion`, `DriftDiffusionSpinTorque`, energy terms `Exchange`,
+`Demag` i `InterfacialDMI(D=3e-3, interface_normal=(0,0,1))`, jeden bazowy
+`TimeEvolution`, `BackendPolicyIR` oraz `ValidationProfileIR`. Test Python
+porównuje całą projekcję z publicznym loweringiem i dereferencjonuje każdą
+ścieżkę parametru. Test Rust deserializuje cały `ProblemIR`, osobno parsuje
+`ValidationProfileIR` i sprawdza selection w jego rzeczywistym położeniu
+`problem_meta.runtime_metadata.runtime_selection`. Kolejność BC jest
+normatywna: terminale mają indeksy `0` i `1`, a zewnętrzny
+charge-insulating boundary indeks `2`.
 
 Pełny workload nie jest jeszcze publicznie lowerowalny jako jeden `Problem`.
 Obiekt HM i jego charge/spin material assignments są reprezentowalne, ale
@@ -739,17 +743,17 @@ oznacza przypisania zestawu jednemu materiałowi.
 
 | id | symbol | si_unit | value | validity | problem_ir_path | motivation |
 |---|---|---|---:|---|---|---|
-| `track.length` | $L_x$ | $\mathrm m$ | `512e-9` | 256 cells; FM must equal HM | `geometry.entries[hm].size[0]` | Sampaio scale + bounded grid |
-| `track.width` | $L_y$ | $\mathrm m$ | `128e-9` | 64 cells; FM must equal HM | `geometry.entries[hm].size[1]` | Sampaio scale + edge margin |
-| `hm.thickness` | $t_{HM}$ | $\mathrm m$ | `3e-9` | 3 z cells | `geometry.entries[hm].size[2]` | diffusive HM benchmark |
-| `fm.thickness` | $t_{FM}$ | $\mathrm m$ | `1e-9` | 1 z cell | `geometry.entries[fm].size[2]` | ultrathin DMI benchmark |
+| `track.length` | $L_x$ | $\mathrm m$ | `512e-9` | 256 cells; FM must equal HM | `geometry.entries[1].base.size[0]` | Sampaio scale + bounded grid |
+| `track.width` | $L_y$ | $\mathrm m$ | `128e-9` | 64 cells; FM must equal HM | `geometry.entries[1].base.size[1]` | Sampaio scale + edge margin |
+| `hm.thickness` | $t_{HM}$ | $\mathrm m$ | `3e-9` | 3 z cells | `geometry.entries[1].base.size[2]` | diffusive HM benchmark |
+| `fm.thickness` | $t_{FM}$ | $\mathrm m$ | `1e-9` | 1 z cell | `geometry.entries[0].base.size[2]` | ultrathin DMI benchmark |
 | `cell.x` | $h_x$ | $\mathrm m$ | `2e-9` | exact divisor of $L_x$ | `backend_policy.discretization_hints.fdm.cell[0]` | bounded in-plane resolution |
 | `cell.y` | $h_y$ | $\mathrm m$ | `2e-9` | exact divisor of $L_y$ | `backend_policy.discretization_hints.fdm.cell[1]` | bounded in-plane resolution |
 | `cell.z` | $h_z$ | $\mathrm m$ | `1e-9` | exact 3+1 layer ownership | `backend_policy.discretization_hints.fdm.cell[2]` | interface ownership |
-| `fm.Ms` | $M_s$ | $\mathrm{A\,m^{-1}}$ | `580e3` | finite, $>0$ in FM | `materials[fm].saturation_magnetisation` | Sampaio paper-scale |
-| `fm.A` | $A$ | $\mathrm{J\,m^{-1}}$ | `15e-12` | finite, $>0$ | `materials[fm].exchange_stiffness` | Sampaio paper-scale |
-| `fm.alpha` | $\alpha$ | $1$ | `0.3` | finite, $\ge0$ | `materials[fm].damping` | deterministic relaxation scale |
-| `fm.Ku` | $K_u$ | $\mathrm{J\,m^{-3}}$ | `0.8e6` | finite, axis $+z$ | `materials[fm].uniaxial_anisotropy` | Sampaio paper-scale |
+| `fm.Ms` | $M_s$ | $\mathrm{A\,m^{-1}}$ | `580e3` | finite, $>0$ in FM | `materials[0].saturation_magnetisation` | Sampaio paper-scale |
+| `fm.A` | $A$ | $\mathrm{J\,m^{-1}}$ | `15e-12` | finite, $>0$ | `materials[0].exchange_stiffness` | Sampaio paper-scale |
+| `fm.alpha` | $\alpha$ | $1$ | `0.3` | finite, $\ge0$ | `materials[0].damping` | deterministic relaxation scale |
+| `fm.Ku` | $K_u$ | $\mathrm{J\,m^{-3}}$ | `0.8e6` | finite, axis $+z$ | `materials[0].uniaxial_anisotropy` | Sampaio paper-scale |
 | `fm.D` | $D$ | $\mathrm{J\,m^{-2}}$ | `3e-3` | finite, Fullmag DMI sign, interface normal $+z$ | `energy_terms[2].D` | Sampaio paper-scale |
 | `hm.sigma_charge` | $\sigma_{HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `current_modules[0].materials[0].material.sigma_Spm` | metallic benchmark |
 | `hm.sigma_spin` | $\sigma_{s,HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `spin_transport_modules[0].materials[0].material.sigma_s_Spm` | unpolarized HM benchmark |
@@ -766,11 +770,11 @@ oznacza przypisania zestawu jednemu materiałowi.
 | `interface.G_r` | $G_r$ | $\mathrm{S\,m^{-2}}$ | `5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_r_Spm2` | damping-like branch coverage |
 | `interface.G_i` | $G_i$ | $\mathrm{S\,m^{-2}}$ | `5e13` | finite, signed | `spin_transport_modules[0].interfaces[0].g_i_Spm2` | field-like branch coverage |
 | `drive.J_minus_1_5` | $J_x^{(-1.5)}$ | $\mathrm{A\,m^{-2}}$ | `-1.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep; paired x-minus override is explicit in `current_schedule` |
-| `drive.J_minus_1_0` | $J_x^{(-1.0)}$ | $\mathrm{A\,m^{-2}}$ | `-1.0e12` | balanced signed terminals | same as above | symmetric sweep |
-| `drive.J_minus_0_5` | $J_x^{(-0.5)}$ | $\mathrm{A\,m^{-2}}$ | `-0.5e12` | balanced signed terminals | same as above | symmetric sweep |
-| `drive.J_plus_0_5` | $J_x^{(+0.5)}$ | $\mathrm{A\,m^{-2}}$ | `0.5e12` | balanced signed terminals | same as above | symmetric sweep |
-| `drive.J_plus_1_0` | $J_x^{(+1.0)}$ | $\mathrm{A\,m^{-2}}$ | `1.0e12` | balanced signed terminals | same as above | symmetric sweep |
-| `drive.J_plus_1_5` | $J_x^{(+1.5)}$ | $\mathrm{A\,m^{-2}}$ | `1.5e12` | balanced signed terminals | same as above | symmetric sweep |
+| `drive.J_minus_1_0` | $J_x^{(-1.0)}$ | $\mathrm{A\,m^{-2}}$ | `-1.0e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_minus_0_5` | $J_x^{(-0.5)}$ | $\mathrm{A\,m^{-2}}$ | `-0.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_plus_0_5` | $J_x^{(+0.5)}$ | $\mathrm{A\,m^{-2}}$ | `0.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_plus_1_0` | $J_x^{(+1.0)}$ | $\mathrm{A\,m^{-2}}$ | `1.0e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_plus_1_5` | $J_x^{(+1.5)}$ | $\mathrm{A\,m^{-2}}$ | `1.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
 
 #### 2.9.5 Kryteria kwalifikacji fixture
 

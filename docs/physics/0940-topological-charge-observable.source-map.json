@@ -265,14 +265,14 @@
   ],
   "planned_symbols": [
     {
-      "path": "crates/fullmag-api/src/schemas/analysis_extensions.rs",
+      "path": "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
       "symbol": "SkyrmionTrajectoryV1",
       "status": "planned_not_implemented",
       "owner_task": "Task 8",
       "evidence_gate": "managed racetrack trajectory and fail-closed reason-code tests"
     },
     {
-      "path": "crates/fullmag-api/src/schemas/analysis_extensions.rs",
+      "path": "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
       "symbol": "SkyrmionHallAngleV1",
       "status": "planned_not_implemented",
       "owner_task": "Task 8",

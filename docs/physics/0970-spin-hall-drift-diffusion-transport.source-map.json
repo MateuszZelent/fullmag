@@ -209,7 +209,7 @@
   ],
   "planned_symbols": [
     {
-      "path": "crates/fullmag-problem-ir/src/ir.rs",
+      "path": "crates/fullmag-ir/src/spin_transport.rs",
       "symbol": "ResolvedFdmSpinTransportIR.transport_active_mask",
       "status": "planned_not_implemented",
       "owner_task": "Task 2",
@@ -244,7 +244,7 @@
       "evidence_gate": "bitwise no-resolve restart plus invalid-digest rollback tests"
     },
     {
-      "path": "crates/fullmag-runner/src/provenance.rs",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
       "symbol": "execution_provenance.transport_m1_v1",
       "status": "planned_not_implemented",
       "owner_task": "Task 7",
