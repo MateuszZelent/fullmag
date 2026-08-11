@@ -104,7 +104,7 @@ describe("pinned Quick Chart ownership", () => {
 
   it("disables and explicitly rejects frequency-domain Quick Pin", () => {
     const command = analysisPlotsManifest.contributes?.commands?.find((candidate) => candidate.id === "quick-chart.pin");
-    analysisWorkspaceStore.setActiveSurface("frequency-response");
+    analysisWorkspaceStore.setActiveSurface("resonance-fmr");
     analysisWorkspaceStore.setSelectedDatasetRef("stale-table");
     analysisWorkspaceStore.setChartState("step", ["data.table:stale-table:step:mx"]);
     expect(command?.isEnabled?.({ layout: { get: () => ({ activeViewportMainModuleId: "analysis-plots" }) } } as never)).toBe(false);

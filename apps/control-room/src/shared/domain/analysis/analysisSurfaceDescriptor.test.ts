@@ -8,7 +8,7 @@ import {
 describe("analysis surface descriptors", () => {
   it("describes modal spectrum axes and mode handoff", () => {
     expect(descriptorForFrequencyTable("frequency-domain:eigen-spectrum")).toMatchObject({
-      surface: "eigenmodes",
+      surface: "resonance-fmr",
       selectionKind: "analysis.chart",
       xAxis: { label: "mode index", unit: "1" },
       yAxes: [{ label: "frequency", unit: "Hz" }],
@@ -28,20 +28,16 @@ describe("analysis surface descriptors", () => {
 
   it("describes driven response as a frequency-axis handoff", () => {
     expect(descriptorForFrequencyTable("frequency-domain:response-sweep")).toMatchObject({
-      surface: "frequency-response",
+      surface: "resonance-fmr",
       xAxis: { label: "frequency", unit: "Hz" },
       handoff: "response-overlay",
     });
   });
 
   it("provides stable titles for the public analysis surfaces", () => {
-    expect(descriptorForSurface("eigenmodes")).toMatchObject({
-      title: "Eigenmodes",
-      surface: "eigenmodes",
-    });
-    expect(descriptorForSurface("frequency-response")).toMatchObject({
-      title: "Frequency response",
-      surface: "frequency-response",
+    expect(descriptorForSurface("resonance-fmr")).toMatchObject({
+      title: "Resonance & FMR",
+      surface: "resonance-fmr",
     });
   });
 });

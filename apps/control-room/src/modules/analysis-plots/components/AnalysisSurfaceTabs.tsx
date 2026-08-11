@@ -2,8 +2,8 @@ import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 const SURFACES: readonly { id: AnalysisSurface; label: string }[] = [
-  { id: "dynamics", label: "Dynamics" }, { id: "spectrum", label: "Spectrum" },
-  { id: "frequency-response", label: "Frequency Response" }, { id: "eigenmodes", label: "Eigenmodes" },
+  { id: "dynamics", label: "Dynamics" },
+  { id: "resonance-fmr", label: "Resonance & FMR" },
   { id: "dispersion", label: "Dispersion" }, { id: "hysteresis", label: "Hysteresis" }, { id: "comparison", label: "Comparison" },
 ];
 

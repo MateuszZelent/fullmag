@@ -37,7 +37,7 @@ const modalSpectrumDescriptor: AnalysisSurfaceDescriptor = Object.freeze({
   handoff: "mode-overlay",
   inspectorRouteId: chartRoute,
   selectionKind: "analysis.chart",
-  surface: "eigenmodes",
+  surface: "resonance-fmr",
   title: "Eigenmode spectrum",
   xAxis: { label: "mode index", unit: "1" },
   yAxes: [{ label: "frequency", unit: "Hz" }],
@@ -57,7 +57,7 @@ const responseSweepDescriptor: AnalysisSurfaceDescriptor = Object.freeze({
   handoff: "response-overlay",
   inspectorRouteId: chartRoute,
   selectionKind: "analysis.chart",
-  surface: "frequency-response",
+  surface: "resonance-fmr",
   title: "Frequency response",
   xAxis: { label: "frequency", unit: "Hz" },
   yAxes: [{ label: "observable", unit: "series-defined" }],
@@ -79,23 +79,16 @@ const surfaceDescriptors: Readonly<Record<AnalysisSurface, AnalysisSurfaceDescri
     ...dispersionDescriptor,
     title: "Spin-wave dispersion",
   },
-  eigenmodes: {
+  "resonance-fmr": {
     ...modalSpectrumDescriptor,
-    title: "Eigenmodes",
+    title: "Resonance & FMR",
   },
-  "frequency-response": responseSweepDescriptor,
   hysteresis: {
     ...frequencyDomainDescriptor,
     surface: "hysteresis",
     title: "Hysteresis",
     xAxis: { label: "field", unit: "A/m" },
     yAxes: [{ label: "magnetization", unit: "A/m" }],
-  },
-  spectrum: {
-    ...frequencyDomainDescriptor,
-    surface: "spectrum",
-    title: "Spectrum",
-    xAxis: { label: "wavevector", unit: "rad/m" },
   },
 };
 

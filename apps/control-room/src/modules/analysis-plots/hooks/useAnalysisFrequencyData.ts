@@ -78,7 +78,7 @@ export interface AnalysisFrequencyDataResult {
  * Only the resource for the active route loads — others remain disabled.
  */
 export function useAnalysisFrequencyData(
-  activeSurface: "frequency-response" | "eigenmodes" | "idle",
+  activeSurface: "dispersion" | "resonance-fmr" | "idle",
 ): AnalysisFrequencyDataResult {
   const loadFrequency = activeSurface !== "idle";
 
@@ -93,15 +93,17 @@ export function useAnalysisFrequencyData(
     ...frequencyDomainManifestRoute,
     ...frequencyDomainRouteOverride,
   };
-  const expectedChart = activeSurface === "frequency-response"
-    ? "response-sweep"
-    : activeSurface === "eigenmodes"
-      ? "modal-spectrum"
-      : null;
+  const expectedChart = activeSurface === "dispersion" ? "dispersion" : null;
+  const resonanceChart =
+    frequencyDomainRoute.primaryChart === "modal-spectrum" ||
+    frequencyDomainRoute.primaryChart === "response-sweep";
   const manifestReady = frequencyDomainManifest.status === "ready" &&
     frequencyDomainRoute.status === "available";
-  const surfaceMismatch = manifestReady && expectedChart !== null &&
-    frequencyDomainRoute.primaryChart !== expectedChart;
+  const surfaceMismatch = manifestReady && (
+    expectedChart !== null
+      ? frequencyDomainRoute.primaryChart !== expectedChart
+      : activeSurface === "resonance-fmr" && !resonanceChart
+  );
   const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
 
   // Load only the sub-resource required by the active route
@@ -198,7 +200,7 @@ export function useAnalysisFrequencyData(
 
   const frequencyDomainUnavailableReason =
     surfaceMismatch
-      ? `This artifact does not publish the ${activeSurface === "frequency-response" ? "frequency-response" : "eigenmode"} resource required by this surface.`
+      ? `This artifact does not publish a result compatible with the ${activeSurface} surface.`
       : frequencyDomainRoute.primaryChart === "response-map"
       ? "response-map chart adapter is not available yet"
       : frequencyDomainRoute.unavailableReason ??
