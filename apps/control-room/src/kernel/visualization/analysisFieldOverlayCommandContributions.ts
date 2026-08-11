@@ -11,6 +11,7 @@ import type {
   SurfaceColorSource,
   VisualizationGeometryScope,
 } from "./ObjectVisualizationController";
+import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 interface AnalysisFieldOverlayCommandInput {
   animatePhase?: boolean | null;
@@ -269,10 +270,15 @@ function overlayStateFromContext(
     activeOverlay?.visualizationPhaseRad ??
     activeOverlay?.query.phase_rad ??
     0;
+  const modeIntent =
+    resolvedSource === "eigen-mode"
+      ? createModeFieldOverlayIntent(selectedFrequencyDomainRef(context))
+      : null;
   return {
     ...(appearance ? { appearance } : {}),
     fieldId,
     label: overlayLabelFromContext(context, resolvedSource),
+    ...(modeIntent?.fieldId === fieldId ? { modeIntent } : {}),
     query: defaultView == null
       ? overlayQueryFromContext(context, phaseRad)
       : overlayQueryWithDefaultViewFromContext(context, defaultView, phaseRad),

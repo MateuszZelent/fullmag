@@ -3413,6 +3413,9 @@ describe("useViewport3DSceneModel", () => {
     );
     expect(source).toContain("useViewport3DFieldVectorRequest(");
     expect(source).toContain("primaryFieldRequest,");
+    expect(source).toContain("useModeFieldOverlayIntentResource({");
+    expect(source).toContain("modeFieldOverlay?.binary ?? fieldVector.data ?? null");
+    expect(source).not.toContain("const analysisComplexFieldVector = useViewport3DFieldVector(");
   });
 
   it("keeps vector-only magnetic parts on scoped sampled field requests", () => {

@@ -12,6 +12,7 @@ import type {
   SurfaceColorSource,
   VisualizationGeometryScope,
 } from "./ObjectVisualizationController";
+import type { ModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
 
@@ -35,6 +36,8 @@ export interface AnalysisFieldOverlayState {
   animation?: AnalysisFieldOverlayAnimationState;
   fieldId: string;
   label: string;
+  /** Stable eigenmode identity awaiting resource-first metadata verification. */
+  modeIntent?: ModeFieldOverlayIntent;
   query: FieldVectorQuery;
   source: AnalysisFieldOverlaySource;
   visualizationPhaseRad?: number;
@@ -128,6 +131,7 @@ function analysisFieldOverlayStateEquals(
     left.fieldId === right.fieldId &&
     left.label === right.label &&
     left.source === right.source &&
+    modeFieldOverlayIntentEquals(left.modeIntent, right.modeIntent) &&
     (left.visualizationPhaseRad ?? null) ===
       (right.visualizationPhaseRad ?? null) &&
     analysisFieldOverlayAppearanceEquals(left.appearance, right.appearance) &&
@@ -137,6 +141,24 @@ function analysisFieldOverlayStateEquals(
     numberArrayEquals(left.cellOrigin, right.cellOrigin) &&
     left.floquetSpatialConvention === right.floquetSpatialConvention &&
     left.phasorConvention === right.phasorConvention
+  );
+}
+
+function modeFieldOverlayIntentEquals(
+  left: ModeFieldOverlayIntent | undefined,
+  right: ModeFieldOverlayIntent | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.analysisRunId === right.analysisRunId &&
+    left.analysisStageId === right.analysisStageId &&
+    left.artifactRevision === right.artifactRevision &&
+    left.fieldId === right.fieldId &&
+    left.metadataResourceKey === right.metadataResourceKey &&
+    left.modeId === right.modeId &&
+    left.nodeId === right.nodeId &&
+    left.sampleId === right.sampleId
   );
 }
 

@@ -143,6 +143,7 @@ export interface Viewport3DFieldRenderModel {
   derivedWorkItems: Viewport3DDerivedWorkItem[];
   fullVectorBuild: Viewport3DVectorBuildReference | null;
   fullVectorSegments: Float32Array | null;
+  modeOverlay: Viewport3DModeFieldOverlayRenderState | null;
   partVectorBuilds: Map<string, Viewport3DVectorBuildReference | null>;
   partVectorSegments: Map<string, Float32Array | null>;
   scalarColors: ScalarColorBuffer | null;
@@ -151,6 +152,12 @@ export interface Viewport3DFieldRenderModel {
   targetDiagnostics: Viewport3DTargetDiagnosticSummary[];
   targetPasses: Map<string, Viewport3DTargetRenderPassModel>;
   visualizationPhaseRad: number | null;
+}
+
+export interface Viewport3DModeFieldOverlayRenderState {
+  phasorAmplitudeMax: number;
+  phasorPhaseRad: number;
+  representation: string;
 }
 
 export type Viewport3DTargetFieldBufferState =
@@ -234,6 +241,10 @@ export interface Viewport3DFieldRenderOptions {
   fullVectorSurfaceOffsetEnabled?: boolean;
   fullVectorSurfaceOffsetScale?: number;
   complexFieldVector?: DecodedComplexFieldVector | null;
+  modeOverlay?: {
+    phasorAmplitudeMax: number;
+    representation: string;
+  } | null;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
   partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
   partQuantityIds?: ReadonlyMap<string, string>;
@@ -700,6 +711,10 @@ export function buildViewport3DFieldRenderModel(
 ): Viewport3DFieldRenderModel | null {
   if (!topology) return null;
   const visualizationPhaseRad = finitePhaseRad(options.visualizationPhaseRad);
+  const modeOverlay = resolveViewport3DModeFieldOverlayRenderState(
+    options.modeOverlay,
+    visualizationPhaseRad,
+  );
   const renderFieldVector =
     buildCachedComplexPhaseProjection(
       options.complexFieldVector,
@@ -1174,6 +1189,7 @@ export function buildViewport3DFieldRenderModel(
     derivedWorkItems,
     fullVectorBuild,
     fullVectorSegments,
+    modeOverlay,
     partVectorBuilds,
     partVectorSegments,
     scalarColors,
@@ -1182,6 +1198,26 @@ export function buildViewport3DFieldRenderModel(
     targetDiagnostics,
     targetPasses,
     visualizationPhaseRad,
+  };
+}
+
+function resolveViewport3DModeFieldOverlayRenderState(
+  modeOverlay: Viewport3DFieldRenderOptions["modeOverlay"],
+  phaseRad: number | null,
+): Viewport3DModeFieldOverlayRenderState | null {
+  if (
+    !modeOverlay ||
+    phaseRad === null ||
+    !Number.isFinite(modeOverlay.phasorAmplitudeMax) ||
+    modeOverlay.phasorAmplitudeMax < 0 ||
+    modeOverlay.representation.length === 0
+  ) {
+    return null;
+  }
+  return {
+    phasorAmplitudeMax: modeOverlay.phasorAmplitudeMax,
+    phasorPhaseRad: phaseRad,
+    representation: modeOverlay.representation,
   };
 }
 

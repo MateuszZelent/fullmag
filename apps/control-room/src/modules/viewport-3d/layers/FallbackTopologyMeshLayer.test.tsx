@@ -53,6 +53,7 @@ function vectorFieldModel(): Viewport3DFieldRenderModel {
     derivedWorkItems: [],
     fullVectorBuild: null,
     fullVectorSegments: new Float32Array([0, 0, 0, 1, 0, 0, 1]),
+    modeOverlay: null,
     partVectorBuilds: new Map(),
     partVectorSegments: new Map(),
     scalarColors: null,
