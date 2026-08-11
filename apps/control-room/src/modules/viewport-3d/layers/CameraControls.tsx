@@ -1114,6 +1114,7 @@ function useOrbitCameraControlsModel({
     }
     if (cameraGestureEndedRef.current) {
       settleViewport3DCameraGesture(cameraGestureRef, epoch);
+      recordCameraTrajectory("settle", epoch);
       onCameraInteractionEnd?.(epoch);
       activeGestureEpochRef.current = null;
     }

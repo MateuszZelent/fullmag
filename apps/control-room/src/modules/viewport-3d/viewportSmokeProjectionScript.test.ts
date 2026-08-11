@@ -145,9 +145,14 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('"long-animation-frame"');
     expect(smokeScript).toContain('"startup-to-canvas"');
     expect(smokeScript).not.toContain('"viewport-focus"');
-    expect(smokeScript).toContain('"camera-orbit-rotate"');
-    expect(smokeScript).toContain('"camera-wheel-zoom"');
-    expect(smokeScript).toContain('"camera-right-pan"');
+    expect(smokeScript).toContain('"camera-orbit-continuity"');
+    expect(smokeScript).toContain('"camera-wheel-perspective"');
+    expect(smokeScript).toContain('"camera-wheel-orthographic"');
+    expect(smokeScript).toContain('"camera-pan-continuity"');
+    expect(smokeScript).toContain("__FULLMAG_VIEWPORT3D_CAMERA_AUDIT__");
+    expect(smokeScript).toContain("assertCameraTrajectory");
+    expect(smokeScript).toContain("maximumBackwardStep > 0.15");
+    expect(smokeScript).toContain("committedVersions.size !== 1");
     expect(smokeScript).toContain("assertSmoothCameraWheelZoomPhase");
     expect(smokeScript).toContain("viewportFrameDelta < 2");
     expect(smokeScript).toContain("assertResponsiveCameraRightPanPhase");
