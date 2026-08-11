@@ -1876,9 +1876,13 @@ pub const FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED: &str =
 /// Return stable reason codes for multilayer operator classes which the
 /// current CUDA runner cannot execute with the canonical CPU semantics.
 pub fn fdm_multilayer_cuda_containment_reason_codes(
+    enable_demag: bool,
     mode: &str,
     layers: &[FdmLayerPlanIR],
 ) -> Vec<&'static str> {
+    if !enable_demag {
+        return Vec::new();
+    }
     let mut reasons = Vec::new();
     if mode == "two_d_stack" {
         reasons.push(FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED);
@@ -1910,6 +1914,9 @@ pub fn fdm_multilayer_cuda_containment_reason_codes(
 }
 
 fn fdm_layer_xy_center(layer: &FdmLayerPlanIR) -> [f64; 2] {
+    // Exact equality is intentional for fail-closed runtime validation of
+    // planner-resolved or deserialized grid descriptors. Introducing a
+    // tolerance here could silently admit a real physical XY displacement.
     [
         layer.native_origin[0] + 0.5 * layer.native_grid[0] as f64 * layer.native_cell_size[0],
         layer.native_origin[1] + 0.5 * layer.native_grid[1] as f64 * layer.native_cell_size[1],
@@ -2742,7 +2749,7 @@ pub(crate) fn plan_fdm_multilayer(
         fullmag_ir::fdm_multilayer_topology_tokens(&selected_mode, &layers);
     if runtime_requests_cuda(problem) {
         errors.extend(
-            fdm_multilayer_cuda_containment_reason_codes(&selected_mode, &layers)
+            fdm_multilayer_cuda_containment_reason_codes(enable_demag, &selected_mode, &layers)
                 .into_iter()
                 .map(|reason_code| {
                     format!(

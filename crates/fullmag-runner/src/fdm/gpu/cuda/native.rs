@@ -55,10 +55,12 @@ pub(crate) fn is_cuda_available() -> bool {
 
 #[cfg(any(feature = "cuda", test))]
 pub(crate) fn reject_cuda_multilayer_containment(
+    enable_demag: bool,
     mode: &str,
     layers: &[fullmag_ir::FdmLayerPlanIR],
 ) -> Result<(), RunError> {
-    let reason_codes = fullmag_plan::fdm_multilayer_cuda_containment_reason_codes(mode, layers);
+    let reason_codes =
+        fullmag_plan::fdm_multilayer_cuda_containment_reason_codes(enable_demag, mode, layers);
     if reason_codes.is_empty() {
         return Ok(());
     }
@@ -460,7 +462,7 @@ impl NativeFdmBackend {
     }
 
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
-        reject_cuda_multilayer_containment(&plan.mode, &plan.layers)?;
+        reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
         validate_multilayer_grid_budget(plan)?;
         for layer in &plan.layers {
             if layer.material.ms_field.is_some()
@@ -4351,10 +4353,12 @@ mod exact_metric_contract_tests {
             containment_layer("free", 0.0),
             containment_layer("ref", 3e-9),
         ];
-        reject_cuda_multilayer_containment("three_d", &legal)
+        reject_cuda_multilayer_containment(false, "two_d_stack", &legal)
+            .expect("inactive demag does not activate containment");
+        reject_cuda_multilayer_containment(true, "three_d", &legal)
             .expect("three_d identity stack remains legal");
 
-        let two_d = reject_cuda_multilayer_containment("two_d_stack", &legal)
+        let two_d = reject_cuda_multilayer_containment(true, "two_d_stack", &legal)
             .expect_err("two_d_stack must fail before CUDA interaction");
         assert!(two_d
             .message
@@ -4362,7 +4366,7 @@ mod exact_metric_contract_tests {
 
         let mut push_pull = legal.clone();
         push_pull[1].transfer_kind = "push_pull".to_string();
-        let push_pull = reject_cuda_multilayer_containment("three_d", &push_pull)
+        let push_pull = reject_cuda_multilayer_containment(true, "three_d", &push_pull)
             .expect_err("push_pull must fail before CUDA interaction");
         assert!(push_pull
             .message
@@ -4370,15 +4374,16 @@ mod exact_metric_contract_tests {
 
         let mut heterogeneous_hz = legal.clone();
         heterogeneous_hz[1].native_cell_size[2] = 2e-9;
-        let heterogeneous_hz = reject_cuda_multilayer_containment("three_d", &heterogeneous_hz)
-            .expect_err("heterogeneous native h_z must fail before CUDA interaction");
+        let heterogeneous_hz =
+            reject_cuda_multilayer_containment(true, "three_d", &heterogeneous_hz)
+                .expect_err("heterogeneous native h_z must fail before CUDA interaction");
         assert!(heterogeneous_hz
             .message
             .contains("fdm_cuda_multilayer_heterogeneous_native_hz_unqualified"));
 
         let mut xy_offset = legal;
         xy_offset[1].native_origin[0] += 2e-9;
-        let xy_offset = reject_cuda_multilayer_containment("three_d", &xy_offset)
+        let xy_offset = reject_cuda_multilayer_containment(true, "three_d", &xy_offset)
             .expect_err("XY offset must fail before CUDA interaction");
         assert!(xy_offset
             .message

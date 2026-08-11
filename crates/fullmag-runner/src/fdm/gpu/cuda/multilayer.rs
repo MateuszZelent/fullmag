@@ -221,7 +221,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
-    reject_cuda_multilayer_containment(&plan.mode, &plan.layers)?;
+    reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
     validate_multilayer_grid_budget(plan)?;
     validate_cuda_multilayer_execution_contract(plan)?;
     if !is_cuda_available() {
@@ -328,8 +328,10 @@ fn resolve_cuda_multilayer_execution_shape(
 /// operator. Unqualified assisted operators fail before certificate checks,
 /// device probing, allocation, or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
-    reject_cuda_multilayer_containment(&plan.mode, &plan.layers)?;
-    if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
+    reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+    if plan.enable_demag
+        && (plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d")
+    {
         return Err(RunError {
             message: format!(
                 "unsupported_gpu_multilayer_mode: native CUDA multilayer currently requires resolved_mode='three_d', got plan.mode='{}' resolved_mode='{}'",
@@ -3531,19 +3533,19 @@ mod tests {
     fn cuda_multilayer_containment_rejects_before_cuda_probe() {
         let cases = [
             {
-                let mut plan = make_plan(false, ExecutionPrecision::Double);
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
                 plan.mode = "two_d_stack".to_string();
                 plan.planner_summary.requested_mode = "two_d_stack".to_string();
                 plan.planner_summary.resolved_mode = "two_d_stack".to_string();
                 (plan, "fdm_cuda_multilayer_two_d_stack_unqualified")
             },
             {
-                let mut plan = make_plan(false, ExecutionPrecision::Double);
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
                 plan.layers[0].transfer_kind = "push_pull".to_string();
                 (plan, "fdm_cuda_multilayer_push_pull_unqualified")
             },
             {
-                let mut plan = make_plan(false, ExecutionPrecision::Double);
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
                 plan.layers[1].native_cell_size[2] = 2e-9;
                 plan.layers[1].convolution_cell_size[2] = 2e-9;
                 (
@@ -3552,7 +3554,7 @@ mod tests {
                 )
             },
             {
-                let mut plan = make_plan(false, ExecutionPrecision::Double);
+                let mut plan = make_plan(true, ExecutionPrecision::Double);
                 plan.layers[1].native_origin[0] += 2e-9;
                 plan.layers[1].convolution_origin[0] += 2e-9;
                 (plan, "fdm_cuda_multilayer_xy_offset_unqualified")
@@ -3570,6 +3572,35 @@ mod tests {
             assert!(
                 !error.message.contains("CUDA backend is not available"),
                 "containment must run before CUDA availability probing"
+            );
+        }
+    }
+
+    #[test]
+    fn cuda_multilayer_containment_is_inactive_without_demag() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.mode = "two_d_stack".to_string();
+        plan.planner_summary.requested_mode = "two_d_stack".to_string();
+        plan.planner_summary.resolved_mode = "two_d_stack".to_string();
+        plan.layers[0].transfer_kind = "push_pull".to_string();
+        plan.layers[1].native_cell_size[2] = 2e-9;
+        plan.layers[1].convolution_cell_size[2] = 2e-9;
+        plan.layers[1].native_origin[0] += 2e-9;
+        plan.layers[1].convolution_origin[0] += 2e-9;
+
+        let error = validate_cuda_multilayer_execution_contract(&plan)
+            .expect_err("test plan still lacks the required grid certificate");
+        assert!(error.message.contains("fingerprint"), "{}", error.message);
+        for reason_code in [
+            "fdm_cuda_multilayer_two_d_stack_unqualified",
+            "fdm_cuda_multilayer_push_pull_unqualified",
+            "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified",
+            "fdm_cuda_multilayer_xy_offset_unqualified",
+        ] {
+            assert!(
+                !error.message.contains(reason_code),
+                "inactive demag must not emit {reason_code}: {}",
+                error.message
             );
         }
     }
@@ -3663,14 +3694,14 @@ mod tests {
 
     #[test]
     fn native_cuda_push_pull_fails_containment_before_assisted_execution() {
-        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        let mut plan = make_plan(true, ExecutionPrecision::Double);
         plan.layers[0].transfer_kind = "push_pull".to_string();
         assert_eq!(
             native_cuda_identity_descriptor_eligible(&plan)
                 .expect("push_pull is a known non-native descriptor"),
             false
         );
-        let error = reject_cuda_multilayer_containment(&plan.mode, &plan.layers)
+        let error = reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)
             .expect_err("push_pull must not enter CUDA-assisted execution");
         assert!(error
             .message

@@ -6703,8 +6703,9 @@ fn assert_cuda_multilayer_rejects_reason(ir: &ProblemIR, reason_code: &str) {
     );
 }
 
-#[test]
-fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
+fn cuda_unqualified_multilayer_operator_cases() -> Vec<(ProblemIR, &'static str)> {
+    let mut cases = Vec::new();
+
     let mut two_d_stack = cuda_three_d_identity_multilayer_problem();
     two_d_stack
         .backend_policy
@@ -6723,10 +6724,7 @@ fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
         .expect("CUDA fixture must provide demag hints");
     demag.common_cells = None;
     demag.common_cells_xy = Some([20, 10]);
-    assert_cuda_multilayer_rejects_reason(
-        &two_d_stack,
-        "fdm_cuda_multilayer_two_d_stack_unqualified",
-    );
+    cases.push((two_d_stack, "fdm_cuda_multilayer_two_d_stack_unqualified"));
 
     let mut push_pull = cuda_three_d_identity_multilayer_problem();
     let GeometryEntryIR::Translate { base, .. } = &mut push_pull.geometry.entries[1] else {
@@ -6736,7 +6734,7 @@ fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
         panic!("stacked fixture reference geometry must be a box");
     };
     size[0] = 20e-9;
-    assert_cuda_multilayer_rejects_reason(&push_pull, "fdm_cuda_multilayer_push_pull_unqualified");
+    cases.push((push_pull, "fdm_cuda_multilayer_push_pull_unqualified"));
 
     let mut heterogeneous_hz = cuda_three_d_identity_multilayer_problem();
     let fdm = heterogeneous_hz
@@ -6759,17 +6757,88 @@ fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
             },
         ),
     ]));
-    assert_cuda_multilayer_rejects_reason(
-        &heterogeneous_hz,
+    cases.push((
+        heterogeneous_hz,
         "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified",
-    );
+    ));
 
     let mut xy_offset = cuda_three_d_identity_multilayer_problem();
     let GeometryEntryIR::Translate { by, .. } = &mut xy_offset.geometry.entries[1] else {
         panic!("stacked fixture reference geometry must be translated");
     };
     by[0] = 10e-9;
-    assert_cuda_multilayer_rejects_reason(&xy_offset, "fdm_cuda_multilayer_xy_offset_unqualified");
+    cases.push((xy_offset, "fdm_cuda_multilayer_xy_offset_unqualified"));
+
+    cases
+}
+
+#[test]
+fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
+    for (ir, reason_code) in cuda_unqualified_multilayer_operator_cases() {
+        assert_cuda_multilayer_rejects_reason(&ir, reason_code);
+    }
+}
+
+#[test]
+fn forced_cuda_multilayer_without_demag_allows_unqualified_demag_operator_classes() {
+    for (mut ir, reason_code) in cuda_unqualified_multilayer_operator_cases() {
+        ir.energy_terms
+            .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Demag { .. }));
+        let planned = plan(&ir).unwrap_or_else(|error| {
+            panic!(
+                "inactive demag must not reject CUDA multilayer class {reason_code}: {:?}",
+                error.reasons
+            )
+        });
+        let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+            panic!("forced CUDA multi-body fixture must remain a multilayer plan");
+        };
+        assert!(!multilayer.enable_demag);
+    }
+}
+
+#[test]
+fn cuda_multilayer_containment_reason_codes_have_stable_order_when_classes_overlap() {
+    let planned = plan(&cuda_three_d_identity_multilayer_problem())
+        .expect("qualified CUDA fixture must produce multilayer layers");
+    let BackendPlanIR::FdmMultilayer(mut multilayer) = planned.backend_plan else {
+        panic!("qualified CUDA fixture must produce a multilayer plan");
+    };
+    multilayer.layers[0].transfer_kind = "push_pull".to_string();
+    multilayer.layers[1].native_cell_size[2] = 1e-9;
+    multilayer.layers[1].native_origin[0] += 2e-9;
+
+    assert_eq!(
+        fdm_multilayer_cuda_containment_reason_codes(true, "two_d_stack", &multilayer.layers),
+        vec![
+            FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED,
+            FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED,
+            FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
+            FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
+        ]
+    );
+}
+
+#[test]
+fn cuda_multilayer_containment_exact_center_accepts_canonical_centered_extents() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    ir.problem_meta.runtime_metadata.remove("runtime_selection");
+    let GeometryEntryIR::Translate { base, .. } = &mut ir.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    size[0] = 20e-9;
+
+    let planned = plan(&ir).expect("CPU fixture must expose planner-resolved layer descriptors");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("multi-body fixture must produce a multilayer plan");
+    };
+    assert_eq!(
+        fdm_multilayer_cuda_containment_reason_codes(true, "three_d", &multilayer.layers),
+        vec![FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED]
+    );
 }
 
 #[test]
