@@ -410,10 +410,10 @@ async function verifyCameraGesturesStayLocal({ page }) {
     await page.mouse.down({ button: "left" });
     // Keep the pointer held across several damping/commit windows. A single
     // instantaneous drag cannot expose the old ~180 ms camera rewind race.
-    for (let step = 1; step <= 12; step += 1) {
+    for (let step = 1; step <= 18; step += 1) {
       await page.mouse.move(
-        x + (120 * step) / 12,
-        y + (42 * step) / 12,
+        x + (120 * step) / 18,
+        y + (42 * step) / 18,
         { steps: 1 },
       );
       await page.waitForTimeout(120);
@@ -866,6 +866,7 @@ function assertCameraTrajectory(samples, label, metric) {
   if (settled?.reason !== "settle" || settled.active !== false) {
     throw new Error(`${label} did not end with an inactive settle sample.`);
   }
+  assertSettledCameraSnapshotsAgree(samples, settled, label);
 
   const committedVersions = new Set(
     samples
@@ -898,6 +899,49 @@ function assertCameraTrajectory(samples, label, metric) {
       `${label} camera trajectory rewound by ${maximumBackwardStep.toFixed(4)} of its final displacement.`,
     );
   }
+}
+
+function assertSettledCameraSnapshotsAgree(samples, settledSample, label) {
+  const commitSample = samples.findLast(
+    (sample) =>
+      sample.reason === "commit" &&
+      sample.epoch === settledSample.epoch &&
+      sample.committedCamera,
+  );
+  const live = settledSample.liveCamera;
+  const committed = commitSample?.committedCamera;
+  const store = commitSample?.storeCamera;
+  if (!live || !committed || !store) {
+    throw new Error(
+      `${label} trajectory is missing camera state: ` +
+        `live=${Boolean(live)} registry=${Boolean(committed)} store=${Boolean(store)}.`,
+    );
+  }
+  const tolerance = cameraSnapshotTolerance(live, committed, store);
+  for (const key of ["position", "target", "up"]) {
+    assertCameraSnapshotVectorNear(live[key], committed[key], tolerance, label, `registry.${key}`);
+    assertCameraSnapshotVectorNear(live[key], store[key], tolerance, label, `store.${key}`);
+  }
+}
+
+function cameraSnapshotTolerance(...snapshots) {
+  const scale = Math.max(
+    ...snapshots.flatMap((snapshot) => [
+      vectorDistance(snapshot.position, snapshot.target),
+      Math.hypot(...snapshot.position),
+      Math.hypot(...snapshot.target),
+    ]),
+    1e-12,
+  );
+  return Math.max(scale * 1e-7, 1e-12);
+}
+
+function assertCameraSnapshotVectorNear(actual, expected, tolerance, label, field) {
+  if (vectorDistance(actual, expected) <= tolerance) return;
+  throw new Error(
+    `${label} settled live camera disagrees with ${field}: ` +
+      `actual=${JSON.stringify(actual)} expected=${JSON.stringify(expected)} tolerance=${tolerance}.`,
+  );
 }
 
 function cameraTrajectoryMetric(sample, metric) {

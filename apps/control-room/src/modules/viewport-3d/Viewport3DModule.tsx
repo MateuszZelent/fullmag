@@ -1348,11 +1348,22 @@ export default function Viewport3DModule({
   );
   const saveCameraState = useCallback(
     (camera: Viewport3DCameraChange, epoch?: number) => {
-      kernel.cameraRegistry.patchCamera(
+      const accepted = kernel.cameraRegistry.patchCamera(
         buildViewport3DCameraRegistryPatch(camera),
         epoch,
       );
       const registry = kernel.cameraRegistry.getSnapshot();
+      if (accepted) {
+        viewport3dStore.setCameraView({
+          camera: {
+            position: toCameraTuple(registry.camera.position),
+            target: toCameraTuple(registry.camera.target),
+            up: toCameraTuple(registry.camera.up),
+          },
+          orthographicScale: registry.camera.orthographic_scale,
+          projection: registry.camera.projection,
+        });
+      }
       recordViewport3DCameraTrajectorySample({
         active: epoch !== undefined,
         committedCamera: registry.camera,

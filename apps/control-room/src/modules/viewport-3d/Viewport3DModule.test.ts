@@ -1671,8 +1671,9 @@ describe("Viewport3DModule scene wiring", () => {
       "kernel.cameraRegistry.patchCamera(patch);",
     );
     expect(patchCameraStateSource).not.toContain("visualizationSync.queuePatch");
-    expect(saveCameraStateSource).not.toContain("viewport3dStore.setCamera(");
-    expect(saveCameraStateSource).not.toContain("viewport3dStore.setCameraView(");
+    expect(saveCameraStateSource).toContain("const accepted =");
+    expect(saveCameraStateSource).toContain("if (accepted) {");
+    expect(saveCameraStateSource).toContain("viewport3dStore.setCameraView(");
     expect(saveCameraStateSource).toContain("kernel.cameraRegistry.patchCamera(");
     expect(saveCameraStateSource).toContain(
       "buildViewport3DCameraRegistryPatch(camera),",

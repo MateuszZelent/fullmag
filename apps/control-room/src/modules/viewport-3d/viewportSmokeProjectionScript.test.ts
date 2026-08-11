@@ -177,6 +177,9 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("assertCameraTrajectory");
     expect(smokeScript).toContain("maximumBackwardStep > 0.15");
     expect(smokeScript).toContain("committedVersions.size !== 1");
+    expect(smokeScript).toContain("step <= 18");
+    expect(smokeScript).toContain("assertSettledCameraSnapshotsAgree");
+    expect(smokeScript).toContain("cameraSnapshotTolerance");
     expect(smokeScript).toContain("assertSmoothCameraWheelZoomPhase");
     expect(smokeScript).toContain("viewportFrameDelta < 2");
     expect(smokeScript).toContain("assertResponsiveCameraRightPanPhase");
@@ -336,7 +339,7 @@ describe("viewport smoke projection round-trip", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
     expect(smokeScript).toContain(
-      "for (let step = 1; step <= 12; step += 1)",
+      "for (let step = 1; step <= 18; step += 1)",
     );
     expect(smokeScript).toContain("await page.waitForTimeout(120);");
   });
