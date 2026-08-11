@@ -39,6 +39,7 @@ import {
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import {
   useFdmRegionMembershipBinaryResource,
+  useFdmMultilayerLayerActiveMasksResource,
   useFdmMultilayerLayoutResource,
   useFdmRegionMembershipResource,
   useMeshRegionMembershipsResource,
@@ -2628,6 +2629,10 @@ export function useViewport3DSceneModel({
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
     enabled: Boolean(fdmLaneActive),
   });
+  const fdmMultilayerLayerActiveMasks =
+    useFdmMultilayerLayerActiveMasksResource(fdmMultilayerLayout.data, {
+      enabled: Boolean(fdmLaneActive && fdmMultilayerLayout.data?.available),
+    });
   const fdmNativeLayerDomains = useMemo(
     () =>
       adaptFdmMultilayerNativeLayerDomains(
@@ -3315,13 +3320,18 @@ export function useViewport3DSceneModel({
         domain.layerId,
         resolveFdmViewportVisualizationSettings(
           resolved,
-          !domain.activeMaskPresent || domain.activeCellCount === domain.totalCells,
+          !domain.activeMaskPresent ||
+            domain.activeCellCount === domain.totalCells ||
+            Boolean(
+              fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId),
+            ),
         ),
       );
     }
     return settingsById;
   }, [
     fdmNativeLayerDomains,
+    fdmMultilayerLayerActiveMasks.data,
     objectVisualizationSnapshot,
     renderingState,
   ]);
@@ -4682,6 +4692,18 @@ export function useViewport3DSceneModel({
     if (!fdmMultilayerLayout.data?.available || !layoutGenerationId) return [];
     const entries: FdmCuboidAsyncBuildEntry[] = fdmNativeLayerDomains.map(
       (domain) => {
+        const layerLayout = fdmMultilayerLayout.data?.layers.find(
+          (layer) => layer.layer_id === domain.layerId,
+        );
+        const activeMask = domain.activeMaskPresent
+          ? fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId) ?? null
+          : null;
+        const activeMaskRequired =
+          domain.activeMaskPresent &&
+          domain.activeCellCount !== domain.totalCells;
+        const maskRevision = domain.activeMaskPresent
+          ? layerLayout?.active_mask_hash ?? "missing"
+          : "dense";
         const settings =
           fdmNativeLayerSettingsById.get(domain.layerId) ?? fdmSettings;
         const request = nativeLayerFieldRequests.get(domain.layerId);
@@ -4727,25 +4749,24 @@ export function useViewport3DSceneModel({
           quantityId: vectorsVisible
             ? resolveCanonicalQuantityId(settings.activeQuantityId)
             : "geometry",
-          samplingRevision: `shape=${domain.shape.join("x")}|display=${domain.displayCellCount}|total=${domain.totalCells}`,
+          samplingRevision: `shape=${domain.shape.join("x")}|display=${domain.displayCellCount}|total=${domain.totalCells}|mask=${maskRevision}`,
           scopeId: domain.layerId,
           scopeKind: "fdm_native_layer",
           sessionId: "current",
           styleRevision: `fill=${fdmMultilayerVoxelFillRatio}|vectors=${vectorsVisible}:${maxVectors}:${vectorScale * settings.vectorLengthScale}:${settings.vectorCenteringEnabled}`,
           targetVisualizationRevision: targetStyleRevision,
-          topologyRevision: domain.gridFingerprint,
+          topologyRevision: `${domain.gridFingerprint ?? "missing"}|layout=${fdmMultilayerLayout.data?.layout_revision ?? "missing"}|mask=${maskRevision}`,
         });
         return {
           buildKey,
           cellSelection: "dense",
           domain: { ...domain, kind: "fdm-grid" as const },
-          enabled:
-            settings.visible &&
-            (!domain.activeMaskPresent || domain.activeCellCount === domain.totalCells),
+          enabled: settings.visible && (!activeMaskRequired || Boolean(activeMask)),
           groupKey: `fdm-cuboid:session=current:native-layer:${domain.layerId}`,
           id: `native:${domain.layerId}`,
           maxVectorGlyphs: maxVectors,
           modelFieldVector: null,
+          nativeActiveMask: activeMask?.activeMask ?? null,
           realizedRegionIds: null,
           revisionSummary: `carrier=${domain.gridFingerprint ?? "none"} target=${targetStyleRevision} field=${fieldRevision}`,
           vectorAnchorMode: settings.vectorCenteringEnabled ? "center" : "tail",
@@ -4818,6 +4839,7 @@ export function useViewport3DSceneModel({
     fdmMultilayerAirboxField.data,
     fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerLayout.data,
+    fdmMultilayerLayerActiveMasks.data,
     fdmNativeLayerDomains,
     fdmNativeLayerSettingsById,
     fdmSettings,
@@ -4846,9 +4868,6 @@ export function useViewport3DSceneModel({
         );
         const settings =
           fdmNativeLayerSettingsById.get(domain.layerId) ?? fdmSettings;
-        const nativeLayerIsDense =
-          !domain.activeMaskPresent ||
-          domain.activeCellCount === domain.totalCells;
         const request = nativeLayerFieldRequests.get(domain.layerId);
         const requestedField = request
           ? nativeLayerFieldVectors.data?.get(request.requestId) ?? null
@@ -4869,9 +4888,7 @@ export function useViewport3DSceneModel({
         const buildResult = fdmMultilayerCuboidBuildResults.get(
           `native:${domain.layerId}`,
         )?.result;
-        const model = nativeLayerIsDense
-          ? buildResult?.model ?? null
-          : null;
+        const model = buildResult?.model ?? null;
         const surfaceMode =
           model && fieldVector
             ? surfaceColorSourceToColorMode(settings.surfaceColorSource)

@@ -156,7 +156,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-rect-collection",
       "evidence_status": "planned_contract",
-      "line_anchor": "L98-L179",
+      "line_anchor": "L141-L146",
       "responsibility": "BORIS traceability for per-mesh/per-layer convolution rectangles and scratch alignment."
     },
     {
@@ -164,7 +164,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-common-n",
       "evidence_status": "planned_contract",
-      "line_anchor": "L56-L96",
+      "line_anchor": "L147-L152",
       "responsibility": "BORIS traceability for n_common defaults and the forced two-dimensional Z count."
     },
     {
@@ -172,7 +172,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-header-force-mode",
       "evidence_status": "planned_contract",
-      "line_anchor": "L81-L103",
+      "line_anchor": "L153-L159",
       "responsibility": "BORIS header traceability for force_2d_convolution values 0, 1, and 2."
     },
     {
@@ -180,7 +180,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-set-n-common",
       "evidence_status": "planned_contract",
-      "line_anchor": "L206-L227",
+      "line_anchor": "L160-L165",
       "responsibility": "BORIS traceability for explicit common convolution counts."
     },
     {
@@ -188,7 +188,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-convolution-rect",
       "evidence_status": "planned_contract",
-      "line_anchor": "L194-L204",
+      "line_anchor": "L166-L171",
       "responsibility": "BORIS traceability for the adjusted convolution rectangle returned to scratch modules."
     },
     {
@@ -196,7 +196,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-mconv-init",
       "evidence_status": "planned_contract",
-      "line_anchor": "L128-L166",
+      "line_anchor": "L172-L177",
       "responsibility": "BORIS traceability for multilayer scratch-space and convolution initialization."
     },
     {
@@ -204,7 +204,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-mconv-update",
       "evidence_status": "planned_contract",
-      "line_anchor": "L197-L337",
+      "line_anchor": "L178-L183",
       "responsibility": "BORIS traceability for forward FFT, pair multiplication, and inverse FFT stages."
     },
     {
@@ -212,7 +212,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-2d-mode",
       "evidence_status": "planned_contract",
-      "line_anchor": "L1203-L1223",
+      "line_anchor": "L184-L189",
       "responsibility": "BORIS traceability for the force_2d_convolution switch."
     },
     {
@@ -220,7 +220,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-multilayer-toggle",
       "evidence_status": "planned_contract",
-      "line_anchor": "L1195-L1202",
+      "line_anchor": "L190-L195",
       "responsibility": "BORIS traceability for the multilayer-versus-supermesh switch."
     },
     {
@@ -228,7 +228,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-kernel-catalog",
       "evidence_status": "planned_contract",
-      "line_anchor": "L108-L131",
+      "line_anchor": "L196-L201",
       "responsibility": "BORIS traceability for the self, shifted, and full-complex kernel catalog declarations."
     },
     {
@@ -236,7 +236,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-kernel-reuse",
       "evidence_status": "planned_contract",
-      "line_anchor": "L130-L131",
+      "line_anchor": "L202-L207",
       "responsibility": "BORIS traceability for source/destination-cell and shift based kernel reuse."
     },
     {
@@ -244,7 +244,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-kernel-storage",
       "evidence_status": "planned_contract",
-      "line_anchor": "L35-L62",
+      "line_anchor": "L208-L213",
       "responsibility": "BORIS traceability for KerType real/complex, shift flags, source/destination cell sizes, and FFT dimensions."
     },
     {
@@ -252,7 +252,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-kernel-multiply",
       "evidence_status": "planned_contract",
-      "line_anchor": "L635-L735",
+      "line_anchor": "L214-L219",
       "responsibility": "BORIS traceability for full ordered-input 2-D and 3-D pair multiplication."
     },
     {
@@ -260,7 +260,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-kernel-multiply-3d",
       "evidence_status": "planned_contract",
-      "line_anchor": "L685-L735",
+      "line_anchor": "L220-L225",
       "responsibility": "BORIS traceability for full ordered-input 3-D pair multiplication."
     },
     {
@@ -268,7 +268,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-irregular-thickness",
       "evidence_status": "planned_contract",
-      "line_anchor": "L5-L119",
+      "line_anchor": "L226-L231",
       "responsibility": "BORIS traceability for unequal source/destination Z thickness with common XY."
     },
     {
@@ -276,7 +276,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-weighted-transfer",
       "evidence_status": "planned_contract",
-      "line_anchor": "L63-L87",
+      "line_anchor": "L232-L237",
       "responsibility": "BORIS traceability for weighted mesh-transfer initialization."
     },
     {
@@ -284,7 +284,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-cuda-update",
       "evidence_status": "planned_contract",
-      "line_anchor": "L114-L277",
+      "line_anchor": "L238-L243",
       "responsibility": "BORIS CUDA traceability for multilayer update staging."
     },
     {
@@ -292,7 +292,7 @@
       "path": "docs/physics/multilayer_convolution/boris-behavioral-spec.v1.md",
       "symbol": "DOC-ANCHOR:boris-cuda-init",
       "evidence_status": "planned_contract",
-      "line_anchor": "L14-L100",
+      "line_anchor": "L244-L249",
       "responsibility": "BORIS CUDA traceability for multilayer scratch initialization."
     },
     {

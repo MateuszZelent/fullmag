@@ -244,7 +244,7 @@ export async function validateFdmRegionMembershipContract(
     if (expectedFingerprint === null) {
       return { reason: "legend-fingerprint-invalid", status: "incompatible" };
     }
-    const actualFingerprint = await sha256Hex(canonicalLegendBytes(descriptor));
+    const actualFingerprint = await sha256HexBytes(canonicalLegendBytes(descriptor));
     if (actualFingerprint !== expectedFingerprint) {
       return { reason: "legend-fingerprint-mismatch", status: "incompatible" };
     }
@@ -284,7 +284,7 @@ function normalizeSha256Fingerprint(value: string): string | null {
   return match?.[1]?.toLowerCase() ?? null;
 }
 
-async function sha256Hex(payload: Uint8Array): Promise<string> {
+export async function sha256HexBytes(payload: Uint8Array): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) return sha256FallbackHex(payload);
   const digest = await subtle.digest("SHA-256", payload);

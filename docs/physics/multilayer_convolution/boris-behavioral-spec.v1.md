@@ -30,13 +30,13 @@ uporządkowane iloczyny tensorowe i odwrotne transformacje celów:
 
 ```{math}
 :label: boris-fft-decomposition
-\widehat{\mathbf H}_d=\sum_{s=1}^{L}
+\widehat{\mathbf H}_d=-\sum_{s=1}^{L}
 \widehat{\mathsf N}_{d\leftarrow s}\,\widehat{\mathbf M}_s,
 \qquad d=1,\ldots,L .
 ```
 
-Równania opisują obserwowalny kontrakt wejść i wyjść. Nie stanowią dowodu
-zgodności konkretnej wersji BORIS z żadnym backendem Fullmag.
+Minus pozostaje częścią iloczynu widmowego i jest stosowany dokładnie raz.
+Równania opisują obserwowalny kontrakt wejść i wyjść; nie są dowodem zgodności BORIS z Fullmag.
 
 (symbols-and-si-units)=
 ## Symbole i jednostki SI
@@ -72,8 +72,8 @@ Nota BORIS nie dodaje publicznego API. Pokazuje jedynie, jak żądanie
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `FDMDemag.strategy` | `Literal[str]` | `auto` | $1$ | `auto`, `single_grid`, `multilayer_convolution` | żądana realizacja demag | FDM CPU/GPU; lane gated | `backend_policy.discretization_hints.fdm.demag.strategy` |
-| `FDMDemag.mode` | `Literal[str]` | `three_d` | $1$ | `two_d_stack` lub `three_d` | model wymiaru native warstw | FDM CPU/GPU; z ograniczeniami | `backend_policy.discretization_hints.fdm.demag.mode` |
-| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | dodatnie $N_x,N_y$; tylko `two_d_stack` | hint liczby komórek scratch XY | FDM; nie jest meshem fizycznym | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
+| `FDMDemag.mode` | `Literal["auto", "two_d_stack", "three_d"]` | `auto` | $1$ | `auto`, `two_d_stack` lub `three_d`; explicite `two_d_stack` odrzuca `common_cells`, a explicite `three_d` odrzuca `common_cells_xy` | żądany model wymiaru native warstw; `auto` jest rozwiązywane przez planner | FDM CPU/GPU; z ograniczeniami | `backend_policy.discretization_hints.fdm.demag.mode` |
+| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | dodatnie $N_x,N_y$; dozwolone z `auto` lub `two_d_stack`, wzajemnie wyłączne z `common_cells` | hint liczby komórek scratch XY; przy `auto` rozwiązuje `two_d_stack` | FDM; nie jest meshem fizycznym | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
 
 ```python
 # %% Import i study
@@ -120,11 +120,11 @@ study.stages.add_run(until=1e-12, stage_id="traceability_run")
 (problem-ir)=
 ## ProblemIR i provenance
 
-Python zapisuje żądany `strategy`, `mode` i hinty `common_cells_xy`; planner
-normalizuje je do `FdmLayerPlanIR` i osobnego `CommonTransformLayout`. Native
-cell, origin, maska, transfer, `fft_shape`, crop i provenance resolved runtime
-nie mogą zostać zastąpione liczbą `n_common`. Round-trip zachowuje requested
-intent, a resolved execution jest raportowane osobno.
+Python zapisuje żądany `strategy`, `mode` i hinty common-layout. Domyślne
+`mode="auto"` pozostaje w `ProblemIR` i rozwiązuje się do `two_d_stack` dla
+`common_cells_xy` lub warstw o jednym Z, w przeciwnym razie do `three_d`.
+Planner normalizuje wynik do `FdmLayerPlanIR` i `CommonTransformLayout`; native
+cell, origin, maska, transfer, `fft_shape`, crop i provenance nie są `n_common`; round-trip zachowuje requested intent i resolved execution.
 
 (round-trip-and-failure-semantics)=
 ## Round-trip i semantyka błędów

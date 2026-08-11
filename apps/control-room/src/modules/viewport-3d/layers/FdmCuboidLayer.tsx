@@ -556,6 +556,7 @@ export interface FdmCuboidAsyncBuildInput {
   groupKey: string | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
+  nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
   revisionSummary: string;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
@@ -699,6 +700,7 @@ export function createFdmCuboidBatchBuildController(
         domain: entry.domain,
         maxVectorGlyphs: entry.maxVectorGlyphs,
         modelFieldVector: entry.modelFieldVector,
+        nativeActiveMask: entry.nativeActiveMask,
         realizedRegionIds: entry.realizedRegionIds,
         vectorAnchorMode: entry.vectorAnchorMode,
         vectorField: entry.vectorField,

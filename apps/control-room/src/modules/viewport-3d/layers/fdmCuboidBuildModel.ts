@@ -100,6 +100,7 @@ export interface FdmCuboidBuildRequest {
   domain: FdmGridRenderDomain | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
+  nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
@@ -121,8 +122,9 @@ export function buildViewport3DFdmCuboid(
   request: FdmCuboidBuildRequest,
 ): FdmCuboidBuildResult {
   const model = request.cellSelection === "dense"
-    ? buildFdmDenseNativeLayerInstanceModel(
+    ? buildFdmMaskedNativeLayerInstanceModel(
         request.domain,
+        request.nativeActiveMask ?? null,
         request.voxelFillRatio,
       )
     : buildFdmCuboidInstanceModel(request.domain, {
@@ -285,6 +287,23 @@ export function buildFdmDenseNativeLayerInstanceModel(
   domain: FdmGridRenderDomain | null,
   voxelFillRatio = CELL_VISUAL_FILL,
 ): FdmCuboidInstanceModel | null {
+  return buildFdmMaskedNativeLayerInstanceModel(
+    domain,
+    null,
+    voxelFillRatio,
+  );
+}
+
+/**
+ * Builds one physical native-layer carrier. A supplied FMBM mask is the only
+ * source of active-cell membership; absent masks are accepted only for layers
+ * whose layout declares a dense native grid.
+ */
+export function buildFdmMaskedNativeLayerInstanceModel(
+  domain: FdmGridRenderDomain | null,
+  activeMask: Uint8Array | null,
+  voxelFillRatio = CELL_VISUAL_FILL,
+): FdmCuboidInstanceModel | null {
   if (!domain || domain.displayCellCount <= 0 || domain.totalCells <= 0) {
     return null;
   }
@@ -297,9 +316,11 @@ export function buildFdmDenseNativeLayerInstanceModel(
   ) {
     return null;
   }
-  const displayCellIndices = sampleFdmDisplayCellIndices(
+  if (activeMask && activeMask.length !== totalCells) return null;
+  const displayCellIndices = sampleNativeLayerCellIndices(
     totalCells,
     domain.displayCellCount,
+    activeMask,
   );
   if (displayCellIndices.length === 0) return null;
   const centers = new Float32Array(displayCellIndices.length * 3);
@@ -342,6 +363,36 @@ export function buildFdmDenseNativeLayerInstanceModel(
     membershipRevision: resolveFdmCuboidMembershipRevision(cellIndices),
     regionIds,
   };
+}
+
+function sampleNativeLayerCellIndices(
+  totalCells: number,
+  displayCellCount: number,
+  activeMask: Uint8Array | null,
+): Uint32Array {
+  if (!activeMask) {
+    return sampleFdmDisplayCellIndices(totalCells, displayCellCount);
+  }
+  const activeCellIndices: number[] = [];
+  for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+    if (activeMask[cellIndex] === 1) activeCellIndices.push(cellIndex);
+  }
+  if (activeCellIndices.length <= displayCellCount) {
+    return new Uint32Array(activeCellIndices);
+  }
+  const stride = Math.max(
+    1,
+    Math.ceil(activeCellIndices.length / displayCellCount),
+  );
+  const sampled: number[] = [];
+  for (
+    let ordinal = 0;
+    ordinal < activeCellIndices.length && sampled.length < displayCellCount;
+    ordinal += stride
+  ) {
+    sampled.push(activeCellIndices[ordinal] ?? 0);
+  }
+  return new Uint32Array(sampled);
 }
 
 function sampleFdmDisplayCellIndicesWithMinimumMembership({
@@ -783,6 +834,7 @@ export function estimateFdmCuboidBuildInputBytes(
   return (
     estimateFieldVectorBytes(request.modelFieldVector) +
     estimateFieldVectorBytes(request.vectorField) +
+    (request.nativeActiveMask?.byteLength ?? 0) +
     (request.realizedRegionIds?.byteLength ?? 0)
   );
 }

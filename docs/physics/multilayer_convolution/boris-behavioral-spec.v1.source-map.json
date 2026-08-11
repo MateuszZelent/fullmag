@@ -232,11 +232,11 @@
       },
       {
         "python": "FDMDemag.mode",
-        "type": "Literal[str]",
-        "default": "three_d",
-        "si_unit": "$1$",
-        "validation": "`two_d_stack` lub `three_d`",
-        "meaning": "model wymiaru native warstw",
+      "type": "Literal[\"auto\", \"two_d_stack\", \"three_d\"]",
+      "default": "auto",
+      "si_unit": "$1$",
+      "validation": "`auto`, `two_d_stack` lub `three_d`; explicite `two_d_stack` odrzuca `common_cells`, a explicite `three_d` odrzuca `common_cells_xy`",
+      "meaning": "żądany model wymiaru native warstw; `auto` jest rozwiązywane przez planner",
         "backend_support": "FDM CPU/GPU; z ograniczeniami",
         "problem_ir": "backend_policy.discretization_hints.fdm.demag.mode"
       },
@@ -245,8 +245,8 @@
         "type": "tuple[int,int] | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "dodatnie $N_x,N_y$; tylko `two_d_stack`",
-        "meaning": "hint liczby komórek scratch XY",
+      "validation": "dodatnie $N_x,N_y$; dozwolone z `auto` lub `two_d_stack`, wzajemnie wyłączne z `common_cells`",
+      "meaning": "hint liczby komórek scratch XY; przy `auto` rozwiązuje `two_d_stack`",
         "backend_support": "FDM; nie jest meshem fizycznym",
         "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cells_xy"
       }

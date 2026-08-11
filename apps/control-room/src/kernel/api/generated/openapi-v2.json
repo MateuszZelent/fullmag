@@ -3659,6 +3659,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "active_mask_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "active_mask_present": {
             "type": "boolean"
           },
@@ -3689,6 +3695,12 @@
             "type": "string"
           },
           "mask_provenance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mask_ref": {
             "type": [
               "string",
               "null"
@@ -29071,6 +29083,95 @@
           },
           "404": {
             "description": "Artifact not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_active_mask",
+        "parameters": [
+          {
+            "description": "Stable native multilayer layer identity",
+            "in": "path",
+            "name": "layer_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous FMBM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMBM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Bit-packed native-layer active mask (FMBM v1)",
+            "headers": {
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact native grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-layout-revision": {
+                "description": "Current multilayer layout revision",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mask-hash": {
+                "description": "SHA-256 identity of the packed active mask",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMBM payload"
+          },
+          "304": {
+            "description": "FMBM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Layer or materialized native active mask is not applicable"
+          },
+          "409": {
+            "description": "Native active mask disagrees with the published layer layout"
+          },
+          "416": {
+            "description": "Requested FMBM byte range is not satisfiable"
           }
         },
         "tags": [

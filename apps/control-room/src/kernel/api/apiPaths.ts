@@ -275,6 +275,10 @@ export const DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/fdm-multilayer-layout",
 );
 
+export const DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH = openApiV2Path(
+  "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask",
+);
+
 export const DATA_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/topology",
 );

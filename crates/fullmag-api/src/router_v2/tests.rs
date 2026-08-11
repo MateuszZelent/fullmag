@@ -3096,6 +3096,96 @@ async fn fdm_multilayer_layout_exposes_common_and_native_layer_metadata() {
 }
 
 #[tokio::test]
+async fn fdm_multilayer_native_active_mask_is_served_as_revisioned_fmbm() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": {
+                "layers": [{
+                    "layer_id": "layer:bottom",
+                    "object_id": "object:bottom",
+                    "magnet_name": "bottom",
+                    "native_grid": [4, 3, 1],
+                    "native_cell_size": [1.0e-9, 1.0e-9, 2.0e-9],
+                    "native_origin": [-2.0e-9, -1.5e-9, -1.0e-9],
+                    "native_active_mask": [
+                        true, false, true, false,
+                        true, true, false, false,
+                        true, false, true, true
+                    ]
+                }],
+                "common_cells": [4, 3, 1]
+            }}
+        }));
+    }
+
+    let layout_response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(layout_response.status(), StatusCode::OK);
+    let layout = body_json(layout_response).await;
+    let layer = &layout["layers"][0];
+    assert_eq!(layer["active_mask_present"], true);
+    assert_eq!(layer["active_cell_count"], 7);
+    assert_eq!(
+        layer["mask_ref"],
+        "/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/active-mask"
+    );
+    assert!(layer["active_mask_hash"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/active-mask")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .expect("FMBM response must be revisioned by a strong ETag")
+        .clone();
+    assert!(response.headers().contains_key("x-fullmag-layout-revision"));
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMBM");
+    assert_eq!(bytes[4], 1);
+    assert_eq!(bytes[5], 1);
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 4);
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 12);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 2);
+    assert_eq!(&bytes[104..], &[0b0011_0101, 0b0000_1101]);
+
+    let not_modified = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/active-mask")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(not_modified).await.is_empty());
+}
+
+#[tokio::test]
 async fn fdm_multilayer_layout_correlates_reordered_artifact_layers_by_identity() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

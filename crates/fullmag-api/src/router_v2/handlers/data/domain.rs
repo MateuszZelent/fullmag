@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
@@ -23,6 +23,8 @@ use crate::router_v2::handlers::sessions::status::{
 };
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
+
+const FMBM_HEADER_LEN: usize = 104;
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -161,6 +163,138 @@ pub async fn get_fdm_multilayer_layout(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     Ok(Json(fdm_multilayer_layout_resource(snapshot)?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask",
+    params(
+        ("layer_id" = String, Path, description = "Stable native multilayer layer identity"),
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous FMBM response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for the FMBM payload")
+    ),
+    responses(
+        (status = 200, description = "Bit-packed native-layer active mask (FMBM v1)", content_type = "application/octet-stream", headers(
+            ("x-fullmag-grid-fingerprint" = String, description = "Exact native grid fingerprint"),
+            ("x-fullmag-mask-hash" = String, description = "SHA-256 identity of the packed active mask"),
+            ("x-fullmag-layout-revision" = String, description = "Current multilayer layout revision")
+        )),
+        (status = 206, description = "Partial FMBM payload", content_type = "application/octet-stream"),
+        (status = 304, description = "FMBM payload not modified for the supplied ETag"),
+        (status = 404, description = "Layer or materialized native active mask is not applicable"),
+        (status = 409, description = "Native active mask disagrees with the published layer layout"),
+        (status = 416, description = "Requested FMBM byte range is not satisfiable")
+    ),
+    tag = "data"
+)]
+pub async fn get_fdm_multilayer_layer_active_mask(
+    State(state): State<Arc<AppState>>,
+    Path(layer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let layout = fdm_multilayer_layout_resource(snapshot)?;
+    if !layout.available {
+        return Err(ApiError::not_found(
+            "FDM multilayer active mask is not applicable to the active backend",
+        ));
+    }
+    let descriptor = layout
+        .layers
+        .iter()
+        .find(|layer| layer.layer_id == layer_id)
+        .ok_or_else(|| {
+            ApiError::not_found(format!("FDM multilayer layer '{layer_id}' not found"))
+        })?;
+    if !descriptor.active_mask_present {
+        return Err(ApiError::not_found(format!(
+            "FDM multilayer layer '{layer_id}' has no materialized native active mask"
+        )));
+    }
+    let mask = planned_native_active_mask(snapshot, &layer_id)?.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "FDM multilayer layer '{layer_id}' has no materialized native active mask"
+        ))
+    })?;
+    let total_cells = descriptor
+        .native_grid
+        .iter()
+        .map(|value| u64::from(*value))
+        .product::<u64>();
+    if mask.len() as u64 != total_cells {
+        return Err(ApiError::conflict(format!(
+            "FDM multilayer layer '{layer_id}' active mask length does not match its native grid"
+        )));
+    }
+    let grid_fingerprint = descriptor
+        .native_grid_fingerprint
+        .as_deref()
+        .and_then(canonical_sha256_hex)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "FDM multilayer layer '{layer_id}' has no canonical native grid fingerprint"
+            ))
+        })?;
+    let packed = pack_native_active_mask(&mask);
+    let mask_hash = format!("{:x}", Sha256::digest(&packed));
+    let expected_hash = descriptor
+        .active_mask_hash
+        .as_deref()
+        .and_then(canonical_sha256_hex)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "FDM multilayer layer '{layer_id}' has no canonical active mask hash"
+            ))
+        })?;
+    if expected_hash != mask_hash {
+        return Err(ApiError::conflict(format!(
+            "FDM multilayer layer '{layer_id}' active mask hash does not match its layout"
+        )));
+    }
+    let cell_count = u32::try_from(total_cells)
+        .map_err(|_| ApiError::conflict("FDM multilayer native active mask exceeds FMBM u32"))?;
+    let packed_len = u32::try_from(packed.len())
+        .map_err(|_| ApiError::conflict("FDM multilayer native active mask exceeds FMBM u32"))?;
+    let mut payload = vec![0u8; FMBM_HEADER_LEN];
+    payload[..4].copy_from_slice(b"FMBM");
+    payload[4] = 1;
+    payload[5] = 1;
+    for (axis, count) in descriptor.native_grid.into_iter().enumerate() {
+        let offset = 8 + axis * 4;
+        payload[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
+    }
+    payload[20..24].copy_from_slice(&cell_count.to_le_bytes());
+    payload[24..28].copy_from_slice(&packed_len.to_le_bytes());
+    payload[28..36].copy_from_slice(&layout.layout_revision.to_le_bytes());
+    payload[36..68].copy_from_slice(&decode_sha256_hex(&grid_fingerprint)?);
+    payload[68..100].copy_from_slice(&decode_sha256_hex(&mask_hash)?);
+    payload.extend_from_slice(&packed);
+
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "fdm-multilayer-active-mask:{}:{}:{}:{}",
+        layer_id, layout.layout_revision, grid_fingerprint, mask_hash,
+    ));
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, payload);
+    insert_response_header(
+        &mut response,
+        "x-fullmag-grid-fingerprint",
+        &format!("sha256:{grid_fingerprint}"),
+    );
+    insert_response_header(
+        &mut response,
+        "x-fullmag-mask-hash",
+        &format!("sha256:{mask_hash}"),
+    );
+    insert_response_header(
+        &mut response,
+        "x-fullmag-layout-revision",
+        &layout.layout_revision.to_string(),
+    );
+    Ok(response)
 }
 
 fn fdm_multilayer_layout_resource(
@@ -331,19 +465,17 @@ fn fdm_multilayer_layout_resource(
                 .unwrap_or_else(|| format!("layer:{index}:{magnet_name}"));
             let object_id = value_string(source, "object_id")
                 .unwrap_or_else(|| format!("object:{magnet_name}"));
-            let active_mask = plan_layer
+            let active_mask_values = plan_layer
                 .and_then(|value| value.get("native_active_mask"))
                 .and_then(Value::as_array);
+            let active_mask = active_mask_values.and_then(|values| value_bool_mask(values));
             let total_cells = native_grid
                 .iter()
                 .map(|value| u64::from(*value))
                 .product::<u64>();
             let active_cell_count = active_mask
-                .map(|mask| {
-                    mask.iter()
-                        .filter(|value| value.as_bool() == Some(true))
-                        .count() as u64
-                })
+                .as_ref()
+                .map(|mask| mask.iter().filter(|value| **value).count() as u64)
                 .or_else(|| {
                     artifact_layer
                         .and_then(|value| value.get("active_cell_count"))
@@ -379,7 +511,7 @@ fn fdm_multilayer_layout_resource(
                     }
                 });
             Some(FdmLayerLayoutResource {
-                layer_id,
+                layer_id: layer_id.clone(),
                 object_id,
                 magnet_name,
                 native_grid,
@@ -397,6 +529,15 @@ fn fdm_multilayer_layout_resource(
                         .unwrap_or(false),
                 active_cell_count,
                 inactive_cell_count: total_cells.saturating_sub(active_cell_count),
+                active_mask_hash: active_mask.as_ref().map(|mask| {
+                    format!("sha256:{:x}", Sha256::digest(pack_native_active_mask(mask)))
+                }),
+                mask_ref: active_mask.as_ref().map(|_| {
+                    format!(
+                        "/v2/sessions/current/data/domain/fdm-multilayer-layers/{}/active-mask",
+                        percent_encode_path_segment(&layer_id),
+                    )
+                }),
                 mask_provenance: active_mask
                     .is_some()
                     .then(|| "execution_plan.layers.native_active_mask".into()),
@@ -516,6 +657,96 @@ fn value_array3_f64(value: &Value) -> Option<[f64; 3]> {
         values.get(1)?.as_f64()?,
         values.get(2)?.as_f64()?,
     ])
+}
+
+fn value_bool_mask(values: &[Value]) -> Option<Vec<bool>> {
+    values.iter().map(Value::as_bool).collect()
+}
+
+fn planned_native_active_mask(
+    snapshot: &SessionStateResponse,
+    requested_layer_id: &str,
+) -> Result<Option<Vec<bool>>, ApiError> {
+    let layers = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("backend_plan"))
+        .and_then(|value| value.get("layers"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::not_found("FDM multilayer execution plan has no native layer masks")
+        })?;
+    for (index, layer) in layers.iter().enumerate() {
+        let magnet_name =
+            value_string(layer, "magnet_name").unwrap_or_else(|| format!("layer-{index}"));
+        let layer_id = value_string(layer, "layer_id")
+            .or_else(|| value_string(layer, "object_id").map(|id| format!("layer:{id}")))
+            .unwrap_or_else(|| format!("layer:{index}:{magnet_name}"));
+        if layer_id != requested_layer_id {
+            continue;
+        }
+        let Some(values) = layer.get("native_active_mask").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        return value_bool_mask(values).map(Some).ok_or_else(|| {
+            ApiError::conflict(format!(
+                "FDM multilayer layer '{requested_layer_id}' active mask contains non-boolean values"
+            ))
+        });
+    }
+    Ok(None)
+}
+
+fn pack_native_active_mask(mask: &[bool]) -> Vec<u8> {
+    let mut packed = vec![0u8; mask.len().div_ceil(8)];
+    for (cell_index, active) in mask.iter().copied().enumerate() {
+        if active {
+            packed[cell_index / 8] |= 1 << (cell_index % 8);
+        }
+    }
+    packed
+}
+
+fn canonical_sha256_hex(value: &str) -> Option<String> {
+    let hex = value.strip_prefix("sha256:").unwrap_or(value);
+    (hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| hex.to_ascii_lowercase())
+}
+
+fn decode_sha256_hex(value: &str) -> Result<[u8; 32], ApiError> {
+    let canonical = canonical_sha256_hex(value)
+        .ok_or_else(|| ApiError::conflict("invalid SHA-256 fingerprint in FMBM identity"))?;
+    let mut decoded = [0u8; 32];
+    for (index, target) in decoded.iter_mut().enumerate() {
+        *target = u8::from_str_radix(&canonical[index * 2..index * 2 + 2], 16)
+            .map_err(|_| ApiError::conflict("invalid SHA-256 fingerprint in FMBM identity"))?;
+    }
+    Ok(decoded)
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn insert_response_header(
+    response: &mut axum::response::Response,
+    name: &'static str,
+    value: &str,
+) {
+    if let Ok(value) = HeaderValue::from_str(value) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static(name), value);
+    }
 }
 
 fn fem_element_type(mesh: &fullmag_runner::FemMeshPayload) -> Option<String> {

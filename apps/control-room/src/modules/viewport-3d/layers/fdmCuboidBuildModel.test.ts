@@ -7,6 +7,7 @@ import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
 import {
   buildFdmCuboidInstanceModel,
   buildFdmDenseNativeLayerInstanceModel,
+  buildFdmMaskedNativeLayerInstanceModel,
   buildViewport3DFdmCuboid,
   estimateFdmCuboidBuildOutputBytes,
   resolveFdmCuboidMembershipRevision,
@@ -36,6 +37,47 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("builds a native layer model from only active FMBM cells", () => {
+    const domain = {
+      bounds: null,
+      displayCellBudget: 8,
+      displayCellCount: 8,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [4, 2, 1] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 1,
+      totalCells: 8,
+    };
+    const model = buildFdmMaskedNativeLayerInstanceModel(
+      domain,
+      new Uint8Array([1, 0, 1, 0, 0, 1, 0, 1]),
+    );
+
+    expect(model?.count).toBe(4);
+    expect([...model!.cellIndices]).toEqual([0, 2, 5, 7]);
+    expect([...model!.regionIds]).toEqual([0, 0, 0, 0]);
+  });
+
+  it("fails closed when a native layer mask does not match its grid", () => {
+    expect(
+      buildFdmMaskedNativeLayerInstanceModel(
+        {
+          bounds: null,
+          displayCellBudget: 8,
+          displayCellCount: 8,
+          kind: "fdm-grid",
+          origin: [0, 0, 0],
+          shape: [4, 2, 1],
+          spacing: [1, 1, 1],
+          stride: 1,
+          totalCells: 8,
+        },
+        new Uint8Array([1, 0]),
+      ),
+    ).toBeNull();
+  });
+
   it("keeps membership revision stable across geometry-only changes", () => {
     const domain = {
       bounds: null,

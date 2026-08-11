@@ -104,6 +104,10 @@ pub struct FdmLayerLayoutResource {
     pub active_cell_count: u64,
     pub inactive_cell_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_mask_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mask_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mask_provenance: Option<String>,
 }
 
