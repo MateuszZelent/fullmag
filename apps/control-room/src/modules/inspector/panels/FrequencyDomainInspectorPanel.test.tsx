@@ -73,7 +73,6 @@ import {
   FmrComparisonInspectorPanel,
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
-  FmrResponseSweepInspectorPanel,
   FrequencyResponsePointInspectorPanel,
   FrequencyResponseFrequencyJobInspectorPanel,
   FrequencyResponseProvenanceInspectorPanel,
@@ -84,6 +83,7 @@ import {
   frequencyDomainVisualizationReadiness,
 } from "./frequency-domain/FrequencyDomainResultInspectors";
 import { FmrModalSpectrumInspectorPanel } from "./frequency-domain/FmrModalSpectrumInspectorPanel";
+import { FmrResponseSweepInspectorPanel } from "./frequency-domain/FmrResponseSweepInspectorPanel";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 
 const emptyResource = {
@@ -2510,6 +2510,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("Identity");
+    expect(html).toContain(
+      'data-inspector-owner="frequency-domain.fmr-peak"',
+    );
     expect(html).toContain("Physical Quantities");
     expect(html).toContain("Provenance");
     expect(html).toContain("Visualization");
@@ -3252,6 +3255,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     );
 
     expect(html).toContain("FMR Response Sweep Control");
+    expect(html).toContain(
+      'data-inspector-owner="frequency-domain.fmr-response"',
+    );
     expect(html).toContain("Sweep workflow");
     expect(html).toContain(
       "driven FMR sweep -&gt; frequency point -&gt; 3D response field",
