@@ -1,6 +1,7 @@
 #include "device_solver.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -718,11 +719,33 @@ __device__ void device_galerkin_amg_vcycle(
     }
 }
 
+__device__ void project_free_component_means(
+    double *values, const uint64_t *labels, const uint8_t *component_anchored,
+    uint32_t component_count, uint64_t cells) {
+    for (uint32_t component = 0; component < component_count; ++component) {
+        if (component_anchored[component] != 0) continue;
+        double sum = 0.0;
+        uint64_t count = 0;
+        for (uint64_t i = 0; i < cells; ++i) {
+            if (labels[i] == component) {
+                sum += values[i];
+                ++count;
+            }
+        }
+        if (count == 0) continue;
+        const double mean = sum / static_cast<double>(count);
+        for (uint64_t i = 0; i < cells; ++i)
+            if (labels[i] == component) values[i] -= mean;
+    }
+}
+
 __global__ void charge_pcg_device_amg_kernel(
     const uint8_t *active, const double *diag, const double *rhs, const double *gx,
     const double *gy,
     const double *gz, uint64_t nx, uint64_t ny, uint64_t nz, double tolerance,
     uint64_t max_iterations, const double *warm_potential, uint32_t warm_start_used,
+    uint32_t gauge_policy, const uint64_t *component_labels,
+    const uint8_t *component_anchored, const uint32_t *component_count_device,
     double *potential, double *r, double *z, double *p,
     double *ap, double *fine_tmp, double *coarse_rhs, double *coarse_x,
     double *coarse_tmp, const uint64_t *aggregate, const double *coarse_diag,
@@ -739,13 +762,35 @@ __global__ void charge_pcg_device_amg_kernel(
     __shared__ uint32_t reason;
     __shared__ uint64_t active_tree[256];
     const uint64_t cells = nx * ny * nz;
+    const bool zero_mean = gauge_policy ==
+        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
+    const uint32_t component_count = *component_count_device;
     for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
         const double initial = warm_start_used != 0 ? warm_potential[i] : 0.0;
         potential[i] = initial;
-        r[i] = rhs[i] - (warm_start_used != 0
-            ? apply_row(i, warm_potential, diag, gx, gy, gz, nx, ny, nz)
-            : 0.0);
     }
+    __syncthreads();
+    if (zero_mean && threadIdx.x == 0)
+        project_free_component_means(
+            potential, component_labels, component_anchored, component_count, cells);
+    __syncthreads();
+    if (zero_mean) {
+        for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) fine_tmp[i] = rhs[i];
+        __syncthreads();
+        if (threadIdx.x == 0)
+            project_free_component_means(
+                fine_tmp, component_labels, component_anchored, component_count, cells);
+        __syncthreads();
+    }
+    for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
+        r[i] = (zero_mean ? fine_tmp[i] : rhs[i]) -
+            (warm_start_used != 0 || zero_mean
+                ? apply_row(i, potential, diag, gx, gy, gz, nx, ny, nz)
+                : 0.0);
+    __syncthreads();
+    if (zero_mean && threadIdx.x == 0)
+        project_free_component_means(
+            r, component_labels, component_anchored, component_count, cells);
     __syncthreads();
     uint64_t active_local = 0;
     for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
@@ -759,7 +804,9 @@ __global__ void charge_pcg_device_amg_kernel(
     }
     if (threadIdx.x == 0)
         metrics->fine_unknown_count = active_tree[0];
-    const double rhs_norm_squared = fixed_tree_dot(rhs, rhs, cells, tree);
+    const double rhs_norm_squared = fixed_tree_dot(zero_mean ? fine_tmp : rhs,
+                                                  zero_mean ? fine_tmp : rhs,
+                                                  cells, tree);
     const double initial_residual_squared = fixed_tree_dot(r, r, cells, tree);
     if (threadIdx.x == 0) {
         norm_b = sqrt(rhs_norm_squared);
@@ -779,6 +826,10 @@ __global__ void charge_pcg_device_amg_kernel(
                                    diag, gx, gy, gz, aggregate, coarse_diag,
                                    coarse_edge_a, coarse_edge_b, coarse_edge_weight,
                                    hierarchy->coarse_cells, hierarchy->edge_count, nx, ny, nz);
+        if (zero_mean && threadIdx.x == 0)
+            project_free_component_means(
+                z, component_labels, component_anchored, component_count, cells);
+        __syncthreads();
         const double initial_rho = fixed_tree_dot(r, z, cells, tree);
         if (threadIdx.x == 0) rho = initial_rho;
         for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) p[i] = z[i];
@@ -786,6 +837,10 @@ __global__ void charge_pcg_device_amg_kernel(
         for (uint64_t iteration = 0; iteration < max_iterations; ++iteration) {
             for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
                 ap[i] = apply_row(i, p, diag, gx, gy, gz, nx, ny, nz);
+            __syncthreads();
+            if (zero_mean && threadIdx.x == 0)
+                project_free_component_means(
+                    ap, component_labels, component_anchored, component_count, cells);
             __syncthreads();
             const double denominator = fixed_tree_dot(p, ap, cells, tree);
             if (threadIdx.x == 0) {
@@ -800,6 +855,13 @@ __global__ void charge_pcg_device_amg_kernel(
             for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
                 potential[i] += alpha * p[i];
                 r[i] -= alpha * ap[i];
+            }
+            __syncthreads();
+            if (zero_mean && threadIdx.x == 0) {
+                project_free_component_means(
+                    potential, component_labels, component_anchored, component_count, cells);
+                project_free_component_means(
+                    r, component_labels, component_anchored, component_count, cells);
             }
             __syncthreads();
             const double residual_squared = fixed_tree_dot(r, r, cells, tree);
@@ -817,6 +879,10 @@ __global__ void charge_pcg_device_amg_kernel(
                                        diag, gx, gy, gz, aggregate, coarse_diag,
                                        coarse_edge_a, coarse_edge_b, coarse_edge_weight,
                                        hierarchy->coarse_cells, hierarchy->edge_count, nx, ny, nz);
+            if (zero_mean && threadIdx.x == 0)
+                project_free_component_means(
+                    z, component_labels, component_anchored, component_count, cells);
+            __syncthreads();
             const double next_rho = fixed_tree_dot(r, z, cells, tree);
             if (threadIdx.x == 0) {
                 beta = next_rho / rho;
@@ -825,6 +891,10 @@ __global__ void charge_pcg_device_amg_kernel(
             __syncthreads();
             for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x)
                 p[i] = z[i] + beta * p[i];
+            __syncthreads();
+            if (zero_mean && threadIdx.x == 0)
+                project_free_component_means(
+                    p, component_labels, component_anchored, component_count, cells);
             __syncthreads();
         }
     }
@@ -998,11 +1068,14 @@ __global__ void validate_candidate_finite_kernel(
 __global__ void label_reference_components_kernel(
     uint64_t nx, uint64_t ny, uint64_t nz, const uint8_t *active,
     const void *face_payload, uint64_t face_count, uint64_t face_stride,
-    const double *gx, const double *gy, const double *gz,
-    uint64_t *labels, uint32_t *invalid) {
+    const double *gx, const double *gy, const double *gz, const double *rhs,
+    uint32_t gauge_policy, uint64_t *labels, uint8_t *component_anchored,
+    uint32_t *component_count, uint32_t *invalid) {
     if (blockIdx.x != 0 || threadIdx.x != 0) return;
     const uint64_t cells = nx * ny * nz;
     const uint64_t plane = nx * ny;
+    *component_count = 0;
+    *invalid = 0;
     for (uint64_t i = 0; i < cells; ++i) labels[i] = UINT64_MAX;
     uint64_t component = 0;
     for (uint64_t seed = 0; seed < cells; ++seed) {
@@ -1027,18 +1100,38 @@ __global__ void label_reference_components_kernel(
                 if (linked) { labels[i] = component; changed = true; }
             }
         }
-        bool anchored = false;
+        bool is_anchored = false;
         for (uint64_t f = 0; f < face_count; ++f) {
             uint32_t kind = 0, axis = 0; int32_t side = 0; uint64_t cell = 0;
             double area = 0.0, value = 0.0;
             load_charge_face(face_payload, face_stride, f, &kind, &axis, &side,
                              &cell, &area, &value);
             if (kind == FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE &&
-                cell < cells && labels[cell] == component) anchored = true;
+                cell < cells && labels[cell] == component) is_anchored = true;
         }
-        if (!anchored) *invalid = 1;
+        component_anchored[component] = is_anchored ? 1 : 0;
+        double rhs_sum = 0.0, rhs_l1 = 0.0;
+        if (!is_anchored) {
+            for (uint64_t i = 0; i < cells; ++i) {
+                if (labels[i] != component) continue;
+                rhs_sum += rhs[i];
+                rhs_l1 += fabs(rhs[i]);
+            }
+            const double tolerance = 64.0 * DBL_EPSILON * rhs_l1;
+            if (gauge_policy ==
+                    FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT)
+                *invalid = 1;
+            else if (gauge_policy ==
+                     FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT &&
+                     fabs(rhs_sum) > tolerance)
+                *invalid = 2;
+            else if (gauge_policy !=
+                     FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT)
+                *invalid = 1;
+        }
         ++component;
     }
+    *component_count = static_cast<uint32_t>(component);
 }
 
 __device__ double integrated_cell_flux(
@@ -1295,6 +1388,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     double *r = nullptr, *z = nullptr, *p = nullptr, *ap = nullptr;
     double *fine_tmp = nullptr, *coarse_rhs = nullptr, *coarse_x = nullptr, *coarse_tmp = nullptr;
     uint64_t *component_labels = nullptr;
+    uint8_t *component_anchored = nullptr;
+    uint32_t *device_component_count = nullptr;
     uint32_t *device_gauge_invalid = nullptr;
     DeviceSolveMetrics *device_metrics = nullptr;
     auto cleanup = [&]() {
@@ -1307,6 +1402,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         if (coarse_x) (void)cudaFree(coarse_x);
         if (coarse_tmp) (void)cudaFree(coarse_tmp);
         if (component_labels) (void)cudaFree(component_labels);
+        if (component_anchored) (void)cudaFree(component_anchored);
+        if (device_component_count) (void)cudaFree(device_component_count);
         if (device_gauge_invalid) (void)cudaFree(device_gauge_invalid);
         if (device_metrics) (void)cudaFree(device_metrics);
     };
@@ -1330,6 +1427,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
              total_peak_bytes = 0;
     const bool sizes_valid =
         checked_scaled(fine_bytes, 9, &workspace_bytes) &&
+        checked_add(workspace_bytes, cells, &workspace_bytes) &&
+        checked_add(workspace_bytes, sizeof(uint32_t), &workspace_bytes) &&
         checked_add(workspace_bytes, sizeof(DeviceSolveMetrics) + sizeof(uint32_t),
                     &workspace_bytes) &&
         checked_scaled(max_coarse_edges, 3 * sizeof(uint64_t), &edge_bytes) &&
@@ -1415,6 +1514,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         alloc(reinterpret_cast<void **>(&coarse_x), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&coarse_tmp), fine_bytes) &&
         alloc(reinterpret_cast<void **>(&component_labels), cells * sizeof(uint64_t)) &&
+        alloc(reinterpret_cast<void **>(&component_anchored), cells) &&
+        alloc(reinterpret_cast<void **>(&device_component_count), sizeof(uint32_t)) &&
         alloc(reinterpret_cast<void **>(&device_gauge_invalid), sizeof(uint32_t)) &&
         alloc(reinterpret_cast<void **>(&device_metrics), sizeof(DeviceSolveMetrics));
     if (!allocated) {
@@ -1424,6 +1525,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_MEMORY;
     }
     if (cudaMemsetAsync(device_metrics, 0, sizeof(DeviceSolveMetrics), input.stream) != cudaSuccess ||
+        cudaMemsetAsync(device_component_count, 0, sizeof(uint32_t), input.stream) != cudaSuccess ||
         cudaMemsetAsync(device_gauge_invalid, 0, sizeof(uint32_t), input.stream) != cudaSuccess) {
         cleanup();
         release(candidate);
@@ -1466,8 +1568,9 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     }
     label_reference_components_kernel<<<1, 1, 0, input.stream>>>(
         nx, ny, nz, cache.active, input.payloads[3], face_view.element_count,
-        face_view.byte_stride, cache.gx, cache.gy, cache.gz, component_labels,
-        device_gauge_invalid);
+        face_view.byte_stride, cache.gx, cache.gy, cache.gz, cache.rhs,
+        input.gauge_policy, component_labels, component_anchored,
+        device_component_count, device_gauge_invalid);
     uint32_t gauge_invalid = 0;
     const cudaError_t gauge_launch = cudaGetLastError();
     if (gauge_launch == cudaSuccess && inject_cuda_failure(
@@ -1493,8 +1596,11 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         cleanup();
         release(candidate);
         if (!cache_hit) release(cache);
-        return gauge_invalid != 0 ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR
-                                  : FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+        return gauge_invalid == 2
+            ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_BALANCE_FAILURE
+            : gauge_invalid != 0
+                ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR
+                : FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
     if (inject_cuda_failure(input.failure_policy, 12) ||
         cudaMemcpyAsync(candidate.active, cache.active, cells, cudaMemcpyDeviceToDevice,
@@ -1516,6 +1622,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         cache.active, cache.diag, cache.rhs, cache.gx, cache.gy, cache.gz, nx, ny, nz,
         0.1 * input.relative_tolerance,
         input.max_iterations, cache.warm_potential, warm_start_used ? 1u : 0u,
+        input.gauge_policy, component_labels, component_anchored, device_component_count,
         candidate.potential, r, z, p, ap, fine_tmp,
         coarse_rhs, coarse_x, coarse_tmp, cache.aggregate, cache.coarse_diag,
         cache.coarse_edge_a, cache.coarse_edge_b, cache.coarse_edge_weight,

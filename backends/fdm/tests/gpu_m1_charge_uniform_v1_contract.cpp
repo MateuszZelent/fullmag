@@ -181,7 +181,7 @@ int main() {
     if (solve_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
         (void)fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle);
         std::fprintf(stderr,
-                     "FAIL: charge_uniform_v1 expected solve=OK, got status=%u (Phase1 RED expects UNSUPPORTED=1)\n",
+                     "FAIL: charge_uniform_v1 expected solve=OK, got status=%u\n",
                      solve_status);
         return 1;
     }
@@ -358,6 +358,11 @@ int main() {
                 created.context_handle, accepted_warm.data(), accepted_warm.size()) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "accepted warm vector readback failed");
+    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_charge_snapshot_destroy_v1(warm_snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "initial accepted charge snapshots were not retired before opening new contexts");
 
     require(fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
                 created.context_handle, 13) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
@@ -507,7 +512,7 @@ int main() {
                 created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
                 &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
-                warm_promotions == 3 && warm_uses == 2 && warm_valid == 1,
+                warm_promotions == 4 && warm_uses == 3 && warm_valid == 1,
             "incompatible descriptor consumed or replaced the warm state");
     fullmag_fdm_gpu_transport_context_create_result_v1 changed_created{};
     init_record(changed_created);
@@ -540,12 +545,291 @@ int main() {
                     FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "changed static identity did not invalidate hierarchy reuse exactly");
 
-    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
+    std::vector<ChargeFaceV1> pure_faces = faces;
+    for (uint64_t i = 0; i < 2 * ny * nz; i += 2) {
+        pure_faces[i].kind = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY;
+        pure_faces[i].value = expected_jx;
+        pure_faces[i + 1].kind = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY;
+        pure_faces[i + 1].value = -expected_jx;
+    }
+    auto pure_views = views;
+    pure_views[3] = view(pure_faces.data(), pure_faces.size(), sizeof(ChargeFaceV1),
+                         FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    auto pure_descriptor = descriptor;
+    pure_descriptor.descriptor_revision = 3;
+    pure_descriptor.source_revision = 3;
+    std::fill(std::begin(pure_descriptor.descriptor_digest),
+              std::end(pure_descriptor.descriptor_digest), 0x7c);
+    pure_descriptor.charge_faces_view_ptr = reinterpret_cast<uint64_t>(&pure_views[3]);
+    fullmag_fdm_gpu_transport_context_create_result_v1 pure_created{};
+    init_record(pure_created);
+    require(fullmag_fdm_gpu_transport_context_create_v1(&create, &pure_created) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                    pure_created.context_handle, &pure_descriptor) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
-            "snapshot destroy failed");
-    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(warm_snapshot.snapshot_handle) ==
+            "zero-mean pure-Neumann descriptor setup failed");
+    auto pure_solve = solve;
+    pure_solve.context_handle = pure_created.context_handle;
+    pure_solve.gauge_policy = FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
+    pure_solve.attempt_id = 1;
+    pure_solve.source_revision = 3;
+    pure_solve.static_revision = 3;
+    fullmag_fdm_gpu_charge_solve_result_v1 pure_solved{};
+    init_record(pure_solved);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(&pure_solve, &pure_solved) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                pure_solved.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
+            "zero-mean pure-Neumann charge solve did not converge");
+    fullmag_fdm_gpu_charge_snapshot_info_v1 pure_snapshot{};
+    init_record(pure_snapshot);
+    require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                pure_created.context_handle, pure_solved.provisional_generation,
+                &pure_snapshot) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "zero-mean pure-Neumann candidate was not accepted");
+    std::vector<double> pure_potential(cells);
+    auto pure_destination_view = view(
+        pure_potential.data(), pure_potential.size(), sizeof(double),
+        FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64);
+    pure_destination_view.pointer_space = FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY;
+    fullmag_fdm_gpu_transport_artifact_request_v1 pure_artifact{};
+    init_record(pure_artifact, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                               FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
+    pure_artifact.context_handle = pure_created.context_handle;
+    pure_artifact.snapshot_handle = pure_snapshot.snapshot_handle;
+    pure_artifact.field_id = FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V;
+    pure_artifact.cadence = FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_EXPLICIT_REQUEST;
+    pure_artifact.range_count = pure_potential.size();
+    pure_artifact.destination_view_ptr = reinterpret_cast<uint64_t>(&pure_destination_view);
+    pure_artifact.expected_bytes = pure_potential.size() * sizeof(double);
+    pure_artifact.accepted_sequence = pure_snapshot.accepted_sequence;
+    require(fullmag_fdm_gpu_transport_readback_artifact_v1(&pure_artifact) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
-            "warm snapshot destroy failed");
+            "zero-mean pure-Neumann potential readback failed");
+    double pure_mean = 0.0, pure_max_abs = 0.0;
+    for (double value : pure_potential) {
+        pure_mean += value;
+        pure_max_abs = std::max(pure_max_abs, std::abs(value));
+    }
+    pure_mean /= static_cast<double>(pure_potential.size());
+    require(pure_max_abs > 1.0e-12 &&
+                std::abs(pure_mean) <= 1.0e-12 * pure_max_abs + 1.0e-15,
+            "zero-mean pure-Neumann potential retained a gauge offset");
+    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(pure_snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_transport_context_destroy_v1(pure_created.context_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "zero-mean pure-Neumann snapshot/context cleanup failed");
+
+    auto unbalanced_faces = pure_faces;
+    for (uint64_t i = 1; i < 2 * ny * nz; i += 2)
+        unbalanced_faces[i].value = -0.5 * expected_jx;
+    auto unbalanced_views = views;
+    unbalanced_views[3] = view(unbalanced_faces.data(), unbalanced_faces.size(),
+                               sizeof(ChargeFaceV1),
+                               FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    auto unbalanced_descriptor = pure_descriptor;
+    unbalanced_descriptor.descriptor_revision = 4;
+    unbalanced_descriptor.source_revision = 4;
+    std::fill(std::begin(unbalanced_descriptor.descriptor_digest),
+              std::end(unbalanced_descriptor.descriptor_digest), 0x8d);
+    unbalanced_descriptor.charge_faces_view_ptr =
+        reinterpret_cast<uint64_t>(&unbalanced_views[3]);
+    fullmag_fdm_gpu_transport_context_create_result_v1 unbalanced_created{};
+    init_record(unbalanced_created);
+    require(fullmag_fdm_gpu_transport_context_create_v1(&create, &unbalanced_created) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                    unbalanced_created.context_handle, &unbalanced_descriptor) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "unbalanced pure-Neumann descriptor setup failed");
+    auto unbalanced_solve = pure_solve;
+    unbalanced_solve.context_handle = unbalanced_created.context_handle;
+    unbalanced_solve.attempt_id = 1;
+    unbalanced_solve.source_revision = 4;
+    unbalanced_solve.static_revision = 4;
+    fullmag_fdm_gpu_charge_solve_result_v1 unbalanced_result{};
+    init_record(unbalanced_result);
+    const uint32_t unbalanced_status =
+        fullmag_fdm_gpu_transport_solve_charge_v1(&unbalanced_solve, &unbalanced_result);
+    require(unbalanced_status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_BALANCE_FAILURE &&
+                fullmag_fdm_gpu_transport_context_destroy_v1(
+                    unbalanced_created.context_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "unbalanced pure-Neumann source did not fail closed");
+
+    std::vector<fullmag_fdm_gpu_transport_charge_cell_v1> mixed_cells(cells);
+    for (uint64_t i = 0; i < cells; ++i) {
+        init_record(mixed_cells[i], FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+        mixed_cells[i].active = 1;
+        mixed_cells[i].conductor = 1;
+        mixed_cells[i].material_index = 0;
+    }
+    fullmag_fdm_gpu_transport_charge_material_v1 mixed_material{};
+    init_record(mixed_material, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+    mixed_material.material_index = 0;
+    mixed_material.conductivity = sigma;
+    mixed_material.material_revision = 1;
+    std::vector<fullmag_fdm_gpu_transport_charge_face_v1> mixed_faces;
+    mixed_faces.reserve(2 * (ny * nz + nx * nz + nx * ny));
+    auto add_mixed_face = [&](uint32_t kind, uint32_t axis, int32_t side,
+                              uint64_t cell, uint64_t canonical, double value) {
+        fullmag_fdm_gpu_transport_charge_face_v1 face{};
+        init_record(face, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+        face.kind = kind;
+        face.axis = axis;
+        face.side = side;
+        face.outward_sign = side;
+        face.adjacent_cell = cell;
+        face.canonical_face_index = canonical;
+        face.area = h * h;
+        face.value = value;
+        face.source_id = 1 + mixed_faces.size();
+        mixed_faces.push_back(face);
+    };
+    for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y) {
+        const uint64_t row = y + ny * z;
+        add_mixed_face(FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_VOLTAGE, 0, -1,
+                       nx * row, (nx + 1) * row, 0.125);
+        add_mixed_face(FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING, 0, +1,
+                       nx - 1 + nx * row, nx + (nx + 1) * row, 0.0);
+    }
+    for (uint64_t z = 0; z < nz; ++z) for (uint64_t x = 0; x < nx; ++x) {
+        add_mixed_face(FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY, 1, -1,
+                       x + nx * ny * z, x + nx * (ny + 1) * z, expected_jx);
+        add_mixed_face(FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_EXACT_DENSITY, 1, +1,
+                       x + nx * (ny - 1 + ny * z), x + nx * (ny + (ny + 1) * z),
+                       -expected_jx);
+    }
+    for (uint64_t y = 0; y < ny; ++y) for (uint64_t x = 0; x < nx; ++x) {
+        const uint64_t row = x + nx * y;
+        add_mixed_face(FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING, 2, -1,
+                       row, row, 0.0);
+        add_mixed_face(FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INSULATING, 2, +1,
+                       row + nx * ny * (nz - 1), row + nx * ny * nz, 0.0);
+    }
+    std::vector<fullmag_fdm_gpu_transport_spin_interface_v1> mixed_interfaces;
+    for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y) {
+        const uint64_t negative = 31 + nx * (y + ny * z);
+        const uint64_t positive = negative + 1;
+        fullmag_fdm_gpu_transport_spin_interface_v1 interface{};
+        init_record(interface, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+        interface.kind = FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2;
+        interface.axis = 0;
+        interface.orientation = 1;
+        interface.negative_cell = negative;
+        interface.positive_cell = positive;
+        interface.from_cell = negative;
+        interface.to_cell = positive;
+        interface.canonical_face_index = 32 + (nx + 1) * (y + ny * z);
+        interface.area = h * h;
+        interface.magnetization_xyz[2] = 1.0;
+        interface.G_up = interface.G_down = interface.G_r = interface.G_i = 0.0;
+        interface.source_id = 1 + mixed_interfaces.size();
+        interface.topology_id = 1001 + mixed_interfaces.size();
+        interface.charge_edge_enabled = 0;
+        mixed_interfaces.push_back(interface);
+    }
+    fullmag_fdm_gpu_transport_charge_formula_ids_v1 mixed_formula{};
+    init_record(mixed_formula, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE);
+    mixed_formula.formula_id = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_FORMULA_OHMIC_FV_V1;
+    mixed_formula.operator_id = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_OPERATOR_CONSERVATIVE_FV_V1;
+    mixed_formula.engine_id = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_ENGINE_CG_DEVICE_AMG_V1;
+    mixed_formula.residual_id = FULLMAG_FDM_GPU_TRANSPORT_CHARGE_RESIDUAL_FIXED_TREE_FP64_V1;
+    mixed_formula.operator_revision = 1;
+    auto mixed_views = views;
+    mixed_views[0] = view(mixed_cells.data(), mixed_cells.size(), sizeof(mixed_cells[0]),
+                          FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    mixed_views[1] = view(&mixed_material, 1, sizeof(mixed_material),
+                          FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    mixed_views[2] = view(mixed_interfaces.data(), mixed_interfaces.size(),
+                          sizeof(mixed_interfaces[0]),
+                          FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    mixed_views[3] = view(mixed_faces.data(), mixed_faces.size(), sizeof(mixed_faces[0]),
+                          FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    mixed_views[5] = view(&mixed_formula, 1, sizeof(mixed_formula),
+                          FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES);
+    auto mixed_descriptor = descriptor;
+    mixed_descriptor.descriptor_revision = 5;
+    mixed_descriptor.source_revision = 5;
+    std::fill(std::begin(mixed_descriptor.descriptor_digest),
+              std::end(mixed_descriptor.descriptor_digest), 0x9e);
+    mixed_descriptor.masks_view_ptr = reinterpret_cast<uint64_t>(&mixed_views[0]);
+    mixed_descriptor.materials_view_ptr = reinterpret_cast<uint64_t>(&mixed_views[1]);
+    mixed_descriptor.interfaces_view_ptr = reinterpret_cast<uint64_t>(&mixed_views[2]);
+    mixed_descriptor.charge_faces_view_ptr = reinterpret_cast<uint64_t>(&mixed_views[3]);
+    mixed_descriptor.formula_ids_view_ptr = reinterpret_cast<uint64_t>(&mixed_views[5]);
+    fullmag_fdm_gpu_transport_context_create_result_v1 mixed_created{};
+    init_record(mixed_created);
+    require(fullmag_fdm_gpu_transport_context_create_v1(&create, &mixed_created) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_transport_static_descriptor_upload_v1(
+                    mixed_created.context_handle, &mixed_descriptor) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "mixed anchored/free component descriptor setup failed");
+    auto mixed_solve = solve;
+    mixed_solve.context_handle = mixed_created.context_handle;
+    mixed_solve.gauge_policy = FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT;
+    mixed_solve.attempt_id = 1;
+    mixed_solve.source_revision = 5;
+    mixed_solve.static_revision = 5;
+    fullmag_fdm_gpu_charge_solve_result_v1 mixed_solved{};
+    init_record(mixed_solved);
+    require(fullmag_fdm_gpu_transport_solve_charge_v1(&mixed_solve, &mixed_solved) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                mixed_solved.reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
+            "mixed anchored/free component solve did not converge");
+    fullmag_fdm_gpu_charge_snapshot_info_v1 mixed_snapshot{};
+    init_record(mixed_snapshot);
+    require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                mixed_created.context_handle, mixed_solved.provisional_generation,
+                &mixed_snapshot) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "mixed anchored/free component candidate was not accepted");
+    std::vector<double> mixed_potential(cells);
+    auto mixed_destination_view = view(mixed_potential.data(), mixed_potential.size(),
+                                       sizeof(double),
+                                       FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64);
+    mixed_destination_view.pointer_space = FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY;
+    fullmag_fdm_gpu_transport_artifact_request_v1 mixed_artifact{};
+    init_record(mixed_artifact, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+                               FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
+    mixed_artifact.context_handle = mixed_created.context_handle;
+    mixed_artifact.snapshot_handle = mixed_snapshot.snapshot_handle;
+    mixed_artifact.field_id = FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V;
+    mixed_artifact.cadence = FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_EXPLICIT_REQUEST;
+    mixed_artifact.range_count = mixed_potential.size();
+    mixed_artifact.destination_view_ptr = reinterpret_cast<uint64_t>(&mixed_destination_view);
+    mixed_artifact.expected_bytes = mixed_potential.size() * sizeof(double);
+    mixed_artifact.accepted_sequence = mixed_snapshot.accepted_sequence;
+    require(fullmag_fdm_gpu_transport_readback_artifact_v1(&mixed_artifact) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "mixed anchored/free component potential readback failed");
+    double anchored_sum = 0.0, free_sum = 0.0, free_max_abs = 0.0;
+    uint64_t anchored_count = 0, free_count = 0;
+    for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y)
+        for (uint64_t x = 0; x < nx; ++x) {
+            const uint64_t i = x + nx * (y + ny * z);
+            if (x < 32) {
+                anchored_sum += mixed_potential[i];
+                ++anchored_count;
+            } else {
+                free_sum += mixed_potential[i];
+                free_max_abs = std::max(free_max_abs, std::abs(mixed_potential[i]));
+                ++free_count;
+            }
+        }
+    require(std::abs(anchored_sum / anchored_count - 0.125) <= 1.0e-10 &&
+                std::abs(free_sum / free_count) <= 1.0e-12 * free_max_abs + 1.0e-15 &&
+                free_max_abs > 1.0e-12,
+            "component-wise gauge changed anchored datum or free-component mean");
+    const double mixed_anchored_mean = anchored_sum / anchored_count;
+    const double mixed_free_mean = free_sum / free_count;
+    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(mixed_snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                fullmag_fdm_gpu_transport_context_destroy_v1(mixed_created.context_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "mixed anchored/free component snapshot/context cleanup failed");
+
     require(fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             "context destroy failed");
@@ -580,7 +864,15 @@ int main() {
              << "  \"amg_apply_count\": " << amg_apply_count << ",\n"
              << "  \"scalar_transfer_record_count\": " << scalar_transfer_count << ",\n"
              << "  \"synchronization_record_count\": " << synchronization_count << ",\n"
-             << "  \"host_fallback_count\": " << host_fallback_count << "\n}\n";
+             << "  \"host_fallback_count\": " << host_fallback_count << ",\n"
+             << std::setprecision(17)
+             << "  \"zero_mean_pure_mean\": " << pure_mean << ",\n"
+             << "  \"zero_mean_pure_max_abs\": " << pure_max_abs << ",\n"
+             << "  \"zero_mean_unbalanced_status\": " << unbalanced_status << ",\n"
+             << "  \"zero_mean_mixed_anchored_mean\": " << mixed_anchored_mean << ",\n"
+             << "  \"zero_mean_mixed_free_mean\": " << mixed_free_mean << ",\n"
+             << "  \"zero_mean_mixed_free_max_abs\": " << free_max_abs << ",\n"
+             << "  \"zero_mean_mixed_component_count\": 2\n}\n";
     require(evidence.good(), "failed to commit charge evidence JSON");
     return 0;
 }

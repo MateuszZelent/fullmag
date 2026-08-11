@@ -1773,10 +1773,6 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
         !std::isfinite(request->relative_tolerance) || request->relative_tolerance <= 0.0 ||
         request->relative_tolerance >= 1.0 || request->max_iterations == 0)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
-    if (request->gauge_policy !=
-        FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_BOUNDARY_REFERENCE_PER_COMPONENT)
-        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED;
-
     std::lock_guard<std::mutex> lock(registry_mutex);
     const auto &context = request->context_handle;
     if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
@@ -1814,6 +1810,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_charge_v1(
     device_input.max_iterations = request->max_iterations;
     device_input.descriptor_revision = slot.descriptor_revision;
     device_input.source_revision = slot.source_revision;
+    device_input.gauge_policy = request->gauge_policy;
     device_input.hierarchy_cache = &slot.hierarchy_cache;
     CudaFailurePolicy failure_policy{slot.test_failure_boundary, 0};
     device_input.failure_policy = &failure_policy;

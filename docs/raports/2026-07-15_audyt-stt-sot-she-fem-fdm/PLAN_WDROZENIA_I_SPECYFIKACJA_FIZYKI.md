@@ -12868,3 +12868,134 @@ poziomie źródło/kontrakt. `git diff --check` oraz testy dokumentacyjne
 `scripts.test_fdm_gpu_m1_charge_scalability_contract` (16/16) przechodzą.
 Managed CUDA dla tej wersji nadal nie został uruchomiony, dlatego poprawka nie
 awansuje `validated_workloads` ani statusu produkcyjnego.
+
+## 32.175. Zero-mean gauge dla swobodnych komponentów Neumanna FDM GPU (2026-08-11)
+
+Poniższy wpis opisuje stan implementacji przed świeżą bramką managed zamkniętą
+w §32.176; jego historyczna granica „proof pending” została zaktualizowana
+przez ten kolejny wpis.
+
+Zrealizowano kolejny bounded slice planu: solver charge CUDA rozróżnia teraz
+komponenty przewodzące zakotwiczone przez voltage BC od komponentów swobodnych.
+Zmiana nie tworzy jeszcze publicznego węzła `CurrentTransport` ani ścieżki
+ProblemIR--planner--runner; rozszerza istniejący natywny ABI M1 wyłącznie o
+wykonalną politykę `ZERO_MEAN_PER_FREE_COMPONENT`.
+
+### Zakres fizyczny
+
+Dla każdego komponentu $C$ bez voltage datum układ Neumanna ma stałą w jądrze.
+Solver wymaga zgodności
+
+$$
+\left|\sum_{K\in C} b_K\right|
+\le 64\,\epsilon_{\mathrm{mach}}\,\|b_C\|_1,
+\qquad
+\bar V_C=|C|^{-1}\sum_{K\in C}V_K=0.
+$$
+
+`label_reference_components_kernel` buduje graf z dodatnich przewodności
+wewnętrznych, wykrywa voltage datum i dla wolnych komponentów sprawdza pierwszy
+warunek. Niezbilansowany przypadek kończy się jawnie
+`FULLMAG_FDM_GPU_TRANSPORT_ERROR_BALANCE_FAILURE`; nie ma pivotowania jednego
+węzła ani cichego przełączenia na CPU. Dla komponentów zakotwiczonych działa
+dotychczasowa polityka `BOUNDARY_REFERENCE_PER_COMPONENT`.
+
+### Implementacja numeryczna
+
+- `backends/fdm/gpu/cuda/transport/charge/device_solver.cu` przechowuje etykiety
+  komponentów, flagi zakotwiczenia i licznik komponentów w pamięci urządzenia;
+  ich rozmiar jest uwzględniony w preflight/workspace accounting.
+- `project_free_component_means` wykonuje deterministyczną ortogonalną
+  projekcję każdego wolnego komponentu. PCG stosuje ją po inicjalizacji $V$ i
+  $r$, po każdym device AMG, na $Ap$, po aktualizacji $V/r$ i na kierunku $p$.
+  Jest to równoważne rozwiązaniu $PAPV=Pb$ na podprzestrzeni zerowej średniej.
+- `backends/fdm/gpu/cuda/transport/context.cu` przekazuje politykę gauge do
+  solvera i przestaje odrzucać legalną politykę zero-mean jako `UNSUPPORTED`.
+- `backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp` zawiera niezerowy,
+  zbilansowany pure-Neumann fixture z readbackiem $V$ i kontrolą średniej,
+  niezbilansowany fixture oczekujący `BALANCE_FAILURE` oraz typed mixed
+  anchored/free fixture z charge-insulating interfejsem i osobną kontrolą
+  średniej komponentu swobodnego.
+
+### Weryfikacja i granica kwalifikacji
+
+Przeszły lokalne bramy źródłowe:
+
+```text
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs scripts.test_fdm_gpu_m1_charge_scalability_contract
+16 tests, OK
+g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -fsyntax-only backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp ...
+git diff --check
+```
+
+Nie ma jeszcze świeżego managed CUDA GREEN dla tego rozszerzenia. Wymagane
+następne uruchomienie to `just verify-fdm-gpu-m1-charge-native-contract` na
+rzeczywistym urządzeniu, a następnie osobna brama dla `component_gauge_v1` z
+logiem UUID/build digest i dowodem `host_fallback_count=0`. Do tego czasu
+`component_gauge_v1` pozostaje `implementation_state=partial`,
+`validation_state=unvalidated`, `validated_workloads=[]`; nie wolno używać
+tego wyniku jako dowodu produkcyjnego publicznego GPU solvera.
+
+## 32.176. Managed closure zero-mean gauge i obserwabli komponentowych (2026-08-11)
+
+### Zakres wykonany
+
+Po korekcie cyklu życia snapshotów w kontrakcie uniform uruchomiono ponownie
+`just verify-fdm-gpu-m1-charge-native-contract` przez container-backed runtime.
+Test nie zwiększa limitów pamięci i nie zmienia polityki błędów: wcześniejszy
+`OUT_OF_RESOURCES` wynikał z czterech aktywnych slotów rejestru (dwa stare
+accepted snapshoty, kontekst bazowy i nowy kontekst), a nie z braku pamięci
+solvera. Snapshoty bazowe są teraz jawnie zwalniane przed otwarciem nowych
+kontekstów. Artefakt uniform JSON zapisuje także liczby gauge, a nie tylko kod
+`PASS`.
+
+### Dowód urządzenia
+
+Managed gate zakończył się kodem 0 w tym samym kontrolowanym obrazie CUDA na:
+
+- NVIDIA GeForce RTX 4080 SUPER, UUID
+  `fcb9fbf1828437c7af5b76bcbf2d2937`, CC 8.9;
+- CUDA runtime `12040`, driver `13010`;
+- build digest `d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`;
+- `host_fallback_count=0` dla uniform, layered, snapshot, mutation i
+  strict-residency/transfer audit.
+
+### Wyniki gauge
+
+Artefakt `fdm-gpu-m1-charge-uniform-v1.json` zawiera:
+
+| obserwabla | wartość | znaczenie |
+|---|---:|---|
+| `zero_mean_pure_mean` | `-8.131516293641283e-19 V` | średnia zbilansowanego pure-Neumann |
+| `zero_mean_pure_max_abs` | `0.03149999999999938 V` | niezerowe pole po projekcji |
+| `zero_mean_unbalanced_status` | `8` | `ERROR_BALANCE_FAILURE`, fail-closed |
+| `zero_mean_mixed_anchored_mean` | `0.12499999999999592 V` | datum komponentu zakotwiczonego |
+| `zero_mean_mixed_free_mean` | `-2.710505431213761e-20 V` | średnia komponentu swobodnego |
+| `zero_mean_mixed_free_max_abs` | `0.0015000000000000352 V` | niezerowy profil komponentu swobodnego |
+| `zero_mean_mixed_component_count` | `2` | rozdzielenie grafu przez charge-insulating interface |
+
+Uniform nadal osiąga 26 iteracji, residual algebraiczny
+`4.4700700269648826e-15`, fizyczny `3.6043853964842183e-14`, poziomy
+hierarchii `512 -> 64`, jeden build, jeden cache hit i zero fallbacku. Layered
+ma interface flux jump `5.46875e-14`; transfer audit potwierdza 19 zdarzeń
+źródłowych, 14 restore i dokładną kolejność. Jedyny komunikat o przerwanym
+PCG pochodzi z zamierzonej fault-injection w teście transferowym.
+
+### Ocena planu po zamknięciu
+
+`component_gauge_v1` ma teraz wykonawczy bounded native CUDA proof oraz
+obserwable zapisane w artefakcie; §32.175 nie pozostaje już aktualnym
+blockerem. Nadal nie wykonano:
+
+1. publicznego Python → ProblemIR → planner → runner → ABI → artifact path,
+   z wymuszonym GPU i bez fallbacku CPU;
+2. publicznego persistent Krylov warm start, compute-sanitizer i skalowalności
+   zero-mean dla dużych rozłącznych domen;
+3. steady spin/SHE, mixing, torque, reciprocal SHE/iSHE oraz pełnego M2/M3;
+4. FEM RT0/H(div)/airbox, cross-backend FEM↔FDM convergence, browser smoke i
+   standard problem 5.
+
+Wobec tego capability `transport.charge.ohmic` pozostaje
+`semantic_only`, `implementation_state=partial`,
+`validation_state=unvalidated`, `validated_workloads=[]`. Zamknięty jest
+bounded native/device contract, nie produkcyjny publiczny solver.

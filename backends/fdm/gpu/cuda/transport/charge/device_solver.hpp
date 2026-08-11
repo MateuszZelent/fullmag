@@ -71,6 +71,7 @@ struct SolveInput {
     uint64_t max_iterations = 0;
     uint64_t descriptor_revision = 0;
     uint64_t source_revision = 0;
+    uint32_t gauge_policy = FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_INVALID;
     HierarchyCache *hierarchy_cache = nullptr;
     CudaFailurePolicy *failure_policy = nullptr;
 };
