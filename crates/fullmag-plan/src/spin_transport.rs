@@ -73,21 +73,120 @@ pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub gamma0_m_per_a_s: f64,
 }
 
-pub(crate) fn resolve_spin_transport(
+#[derive(Debug, Default)]
+pub(crate) struct ActiveFdmTransportGraph {
+    pub spin_module_ids: BTreeSet<String>,
+    pub torque_module_ids: BTreeSet<String>,
+    pub coupled_current_source_ids: BTreeSet<String>,
+    pub has_active_torque_modules: bool,
+}
+
+pub(crate) fn resolve_active_fdm_transport_graph(
     problem: &ProblemIR,
-    resolved_backend: BackendTarget,
-    context: &FdmSpinTransportResolutionContext<'_>,
-) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
-    let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
+) -> Result<ActiveFdmTransportGraph, PlanError> {
+    let mut graph = ActiveFdmTransportGraph {
+        has_active_torque_modules: crate::spin_torque::has_active_spin_torque_modules(problem)?,
+        ..ActiveFdmTransportGraph::default()
+    };
     let mut errors = Vec::new();
-    for module in &problem.spin_transport_modules {
-        match physics_module_execution_enabled(problem, "spin_transport", &module.id) {
+
+    for spin in &problem.spin_transport_modules {
+        match physics_module_execution_enabled(problem, "spin_transport", &spin.id) {
             Ok(Some(false)) => continue,
             Ok(Some(true) | None) => {}
             Err(mut reasons) => {
                 errors.append(&mut reasons);
                 continue;
             }
+        }
+        let source = problem.current_modules.iter().find(|module| {
+            matches!(
+                module,
+                fullmag_ir::CurrentModuleIR::CurrentTransport { name, .. }
+                    if name == &spin.current_source_id
+            )
+        });
+        let Some(_) = source else {
+            errors.push(format!(
+                "active spin transport '{}' references missing current source '{}'",
+                spin.id, spin.current_source_id
+            ));
+            continue;
+        };
+        match physics_module_execution_enabled(
+            problem,
+            "current_transport",
+            &spin.current_source_id,
+        ) {
+            Ok(Some(false)) => {
+                errors.push(format!(
+                    "active spin transport '{}' references inactive current source '{}'",
+                    spin.id, spin.current_source_id
+                ));
+                continue;
+            }
+            Ok(Some(true) | None) => {}
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                continue;
+            }
+        }
+        graph.spin_module_ids.insert(spin.id.clone());
+        graph
+            .coupled_current_source_ids
+            .insert(spin.current_source_id.clone());
+    }
+
+    for torque in &problem.spin_torque_modules {
+        let SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, solve_id, .. } = torque else {
+            continue;
+        };
+        match physics_module_execution_enabled(problem, "spin_torque", id) {
+            Ok(Some(false)) => continue,
+            Ok(Some(true) | None) => {}
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                continue;
+            }
+        }
+        if !graph.spin_module_ids.contains(solve_id) {
+            errors.push(format!(
+                "active spin torque '{}' references inactive spin transport '{}'",
+                id, solve_id
+            ));
+            continue;
+        }
+        graph.torque_module_ids.insert(id.clone());
+    }
+
+    if errors.is_empty() {
+        Ok(graph)
+    } else {
+        Err(PlanError { reasons: errors })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_spin_transport(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+    context: &FdmSpinTransportResolutionContext<'_>,
+) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
+    let active_graph = resolve_active_fdm_transport_graph(problem)?;
+    resolve_spin_transport_with_active_graph(problem, resolved_backend, context, &active_graph)
+}
+
+pub(crate) fn resolve_spin_transport_with_active_graph(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+    context: &FdmSpinTransportResolutionContext<'_>,
+    active_graph: &ActiveFdmTransportGraph,
+) -> Result<Vec<ResolvedSpinTransportPlanIR>, PlanError> {
+    let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
+    let mut errors = Vec::new();
+    for module in &problem.spin_transport_modules {
+        if !active_graph.spin_module_ids.contains(&module.id) {
+            continue;
         }
         let transient = module.mode == fullmag_ir::SpinTransportModeIR::Transient;
         let native_m1 = module.solver.engine == "native_m1_v1";
@@ -279,8 +378,14 @@ pub(crate) fn resolve_spin_transport(
             ));
             continue;
         };
-        let descriptor =
-            materialize_fdm_descriptor(problem, module, charge_definition, context, time_envelope);
+        let descriptor = materialize_fdm_descriptor(
+            problem,
+            module,
+            charge_definition,
+            context,
+            time_envelope,
+            active_graph,
+        );
         let (fdm_cpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) = match descriptor
         {
             Ok(_descriptor) if transient && reciprocal => {
@@ -1952,6 +2057,7 @@ fn materialize_fdm_descriptor(
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     context: &FdmSpinTransportResolutionContext<'_>,
     time_envelope: Option<&fullmag_ir::TimeEnvelopeIR>,
+    active_graph: &ActiveFdmTransportGraph,
 ) -> Result<ResolvedFdmSpinTransportIR, Vec<String>> {
     let count = context.region_mask.len();
     if count == 0
@@ -2047,12 +2153,11 @@ fn materialize_fdm_descriptor(
     }
     require_complete_assignment(&spin_active_cells, &spin_assigned, "spin material")?;
 
-    let charge_boundaries = resolve_charge_boundaries(&charge.boundaries, context)?;
-    let specified_current_faces = resolve_specified_current_faces(
-        &charge_boundaries,
+    let (charge_boundaries, specified_current_faces) = resolve_charge_boundaries(
+        &charge.boundaries,
         &charge_active_cells,
-        context.grid_cells,
-        context.cell_size_m,
+        context,
+        module.solver.engine == "native_m1_v1",
     )?;
     let structured_current_closure = materialize_structured_current_closure(
         problem,
@@ -2061,7 +2166,7 @@ fn materialize_fdm_descriptor(
         context,
     )?;
     let (spin_boundaries, inserted_default_spin_boundaries) =
-        resolve_spin_boundaries(&module.boundaries, context)?;
+        resolve_spin_boundaries(&module.boundaries, &spin_active_cells, context)?;
     let interfaces = resolve_interfaces(module, context)?;
 
     let mut matching_torques = Vec::new();
@@ -2079,9 +2184,8 @@ fn materialize_fdm_descriptor(
         let Some((id, target, formula_version)) = candidate else {
             continue;
         };
-        match physics_module_execution_enabled(problem, "spin_torque", id)? {
-            Some(false) => {}
-            Some(true) | None => matching_torques.push((id, target, formula_version)),
+        if active_graph.torque_module_ids.contains(id) {
+            matching_torques.push((id, target, formula_version));
         }
     }
     if matching_torques.len() > 1 {
@@ -2232,7 +2336,8 @@ pub(crate) fn materialize_fdm_gpu_charge_descriptor(
     let descriptor_revision = 1_u64;
     let source_revision = 1_u64;
     let implementation_version = "fullmag_fdm_gpu_charge_abi_v1".to_string();
-    let charge_boundaries = resolve_charge_boundaries(&charge.boundaries, context)?;
+    let (charge_boundaries, _) =
+        resolve_charge_boundaries(&charge.boundaries, &charge_active_cells, context, false)?;
     let descriptor_payload = serde_json::to_vec(&(
         descriptor_schema.as_str(),
         descriptor_revision,
@@ -2726,13 +2831,177 @@ fn structured_boundary_face(
     Ok(expected.0)
 }
 
+#[derive(Clone)]
+struct ExternalBoundaryCell {
+    axis: u8,
+    face_index: u64,
+    adjacent_cell: usize,
+    outward_normal_sign: i8,
+    area_m2: f64,
+}
+
+fn external_boundary_cells(
+    face: StructuredBoundaryFaceIR,
+    grid_cells: [u32; 3],
+    cell_size_m: [f64; 3],
+) -> Result<Vec<ExternalBoundaryCell>, Vec<String>> {
+    let [nx, ny, nz] = grid_cells.map(|value| value as usize);
+    let cell_count = nx
+        .checked_mul(ny)
+        .and_then(|value| value.checked_mul(nz))
+        .ok_or_else(|| vec!["structured FDM boundary cell count overflows usize".into()])?;
+    if cell_count == 0
+        || cell_size_m
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(vec![
+            "structured FDM boundary grid or cell-size contract is invalid".into(),
+        ]);
+    }
+    let cell_index = |x: usize, y: usize, z: usize| x + nx * (y + ny * z);
+    let (axis, outward_normal_sign, area_m2) = match face {
+        StructuredBoundaryFaceIR::XMin | StructuredBoundaryFaceIR::XMax => (
+            0,
+            if face == StructuredBoundaryFaceIR::XMin {
+                -1
+            } else {
+                1
+            },
+            cell_size_m[1] * cell_size_m[2],
+        ),
+        StructuredBoundaryFaceIR::YMin | StructuredBoundaryFaceIR::YMax => (
+            1,
+            if face == StructuredBoundaryFaceIR::YMin {
+                -1
+            } else {
+                1
+            },
+            cell_size_m[0] * cell_size_m[2],
+        ),
+        StructuredBoundaryFaceIR::ZMin | StructuredBoundaryFaceIR::ZMax => (
+            2,
+            if face == StructuredBoundaryFaceIR::ZMin {
+                -1
+            } else {
+                1
+            },
+            cell_size_m[0] * cell_size_m[1],
+        ),
+    };
+    let mut cells = Vec::new();
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let selected = match face {
+                    StructuredBoundaryFaceIR::XMin => x == 0,
+                    StructuredBoundaryFaceIR::XMax => x + 1 == nx,
+                    StructuredBoundaryFaceIR::YMin => y == 0,
+                    StructuredBoundaryFaceIR::YMax => y + 1 == ny,
+                    StructuredBoundaryFaceIR::ZMin => z == 0,
+                    StructuredBoundaryFaceIR::ZMax => z + 1 == nz,
+                };
+                if !selected {
+                    continue;
+                }
+                let face_index = match face {
+                    StructuredBoundaryFaceIR::XMin => (nx + 1) * (y + ny * z),
+                    StructuredBoundaryFaceIR::XMax => nx + (nx + 1) * (y + ny * z),
+                    StructuredBoundaryFaceIR::YMin => x + nx * ((ny + 1) * z),
+                    StructuredBoundaryFaceIR::YMax => x + nx * (ny + (ny + 1) * z),
+                    StructuredBoundaryFaceIR::ZMin => x + nx * y,
+                    StructuredBoundaryFaceIR::ZMax => x + nx * (y + ny * nz),
+                };
+                cells.push(ExternalBoundaryCell {
+                    axis,
+                    face_index: face_index as u64,
+                    adjacent_cell: cell_index(x, y, z),
+                    outward_normal_sign,
+                    area_m2,
+                });
+            }
+        }
+    }
+    Ok(cells)
+}
+
+fn owned_active_boundary_cells(
+    context: &FdmSpinTransportResolutionContext<'_>,
+    object_id: &str,
+    active_cells: &[bool],
+    face: StructuredBoundaryFaceIR,
+) -> Result<Vec<ExternalBoundaryCell>, Vec<String>> {
+    if active_cells.len() != context.region_mask.len() {
+        return Err(vec![
+            "structured FDM boundary active mask does not match the resolved grid".into(),
+        ]);
+    }
+    let object_mask = context
+        .object_masks_by_id
+        .and_then(|masks| masks.get(object_id));
+    if object_mask.is_some_and(|mask| mask.len() != active_cells.len()) {
+        return Err(vec![format!(
+            "structured FDM object mask '{}' does not match the resolved grid",
+            object_id
+        )]);
+    }
+    Ok(
+        external_boundary_cells(face, context.grid_cells, context.cell_size_m)?
+            .into_iter()
+            .filter(|cell| {
+                active_cells[cell.adjacent_cell]
+                    && object_mask.is_none_or(|mask| mask[cell.adjacent_cell])
+            })
+            .collect(),
+    )
+}
+
+#[derive(Clone)]
+struct ChargeSurfaceClaim {
+    source_id: String,
+    condition: ResolvedChargeBoundaryConditionIR,
+    cells: Vec<ExternalBoundaryCell>,
+}
+
+fn charge_condition_is_neutral(condition: &ResolvedChargeBoundaryConditionIR) -> bool {
+    match condition {
+        ResolvedChargeBoundaryConditionIR::Voltage { potential_v } => *potential_v == 0.0,
+        ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
+            current_density_apm2,
+        } => *current_density_apm2 == 0.0,
+        ResolvedChargeBoundaryConditionIR::Insulating => true,
+    }
+}
+
 fn resolve_charge_boundaries(
     boundaries: &[ChargeBoundaryIR],
+    charge_active_cells: &[bool],
     context: &FdmSpinTransportResolutionContext<'_>,
-) -> Result<Vec<ResolvedChargeBoundaryFaceIR>, Vec<String>> {
-    let mut resolved = Vec::new();
-    let mut faces = BTreeSet::new();
+    allow_partial_current_faces: bool,
+) -> Result<
+    (
+        Vec<ResolvedChargeBoundaryFaceIR>,
+        Vec<ResolvedSpecifiedCurrentFaceIR>,
+    ),
+    Vec<String>,
+> {
+    let mut claims = BTreeMap::<StructuredBoundaryFaceIR, Vec<ChargeSurfaceClaim>>::new();
+    let mut exact_surfaces = BTreeMap::<(String, StructuredBoundaryFaceIR), String>::new();
     for boundary in boundaries {
+        let condition = match boundary {
+            ChargeBoundaryIR::VoltageElectrode { potential_v, .. } => {
+                ResolvedChargeBoundaryConditionIR::Voltage {
+                    potential_v: *potential_v,
+                }
+            }
+            ChargeBoundaryIR::NormalCurrentElectrode {
+                outward_current_density_apm2,
+                ..
+            } => ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
+                current_density_apm2: *outward_current_density_apm2,
+            },
+            ChargeBoundaryIR::Insulating { .. } => ResolvedChargeBoundaryConditionIR::Insulating,
+        };
         for surface in boundary.surfaces() {
             if !object_is_on_grid(context, &surface.object_id) {
                 return Err(vec![format!(
@@ -2742,48 +3011,149 @@ fn resolve_charge_boundaries(
                 )]);
             }
             let face = structured_boundary_face(surface)?;
-            if !faces.insert(face) {
-                if resolved.iter().any(|entry: &ResolvedChargeBoundaryFaceIR| {
-                    entry.source_id == boundary.id() && entry.face == face
-                }) {
+            let exact_key = (surface.object_id.clone(), face);
+            if let Some(existing) = exact_surfaces.get(&exact_key) {
+                if existing == boundary.id() {
                     continue;
                 }
                 return Err(vec![format!(
-                    "charge boundary face {face:?} is assigned more than once"
+                    "charge boundary surface '{}:{face:?}' is assigned by both '{}' and '{}'",
+                    surface.object_id,
+                    existing,
+                    boundary.id()
                 )]);
             }
-            let condition = match boundary {
-                ChargeBoundaryIR::VoltageElectrode { potential_v, .. } => {
-                    ResolvedChargeBoundaryConditionIR::Voltage {
-                        potential_v: *potential_v,
-                    }
-                }
-                ChargeBoundaryIR::NormalCurrentElectrode {
-                    outward_current_density_apm2,
-                    ..
-                } => ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
-                    current_density_apm2: *outward_current_density_apm2,
-                },
-                ChargeBoundaryIR::Insulating { .. } => {
-                    ResolvedChargeBoundaryConditionIR::Insulating
-                }
-            };
-            resolved.push(ResolvedChargeBoundaryFaceIR {
-                source_id: boundary.id().to_string(),
+            let cells = owned_active_boundary_cells(
+                context,
+                &surface.object_id,
+                charge_active_cells,
                 face,
-                condition,
+            )?;
+            if cells.is_empty() {
+                if charge_condition_is_neutral(&condition) {
+                    continue;
+                }
+                return Err(vec![format!(
+                    "charge boundary '{}' resolves to no active owned FDM face cells for '{}:{:?}'",
+                    boundary.id(),
+                    surface.object_id,
+                    face
+                )]);
+            }
+            exact_surfaces.insert(exact_key, boundary.id().to_string());
+            claims.entry(face).or_default().push(ChargeSurfaceClaim {
+                source_id: boundary.id().to_string(),
+                condition: condition.clone(),
+                cells,
             });
         }
     }
-    if faces.len() != 6 {
-        return Err(vec![
-            "complete structured FDM charge contract must assign each of x_min/x_max/y_min/y_max/z_min/z_max exactly once"
-                .to_string(),
-        ]);
+    let mut resolved = Vec::with_capacity(6);
+    let mut specified = Vec::new();
+    for face in all_boundary_faces() {
+        let external = external_boundary_cells(face, context.grid_cells, context.cell_size_m)?;
+        let active = external
+            .iter()
+            .filter(|cell| charge_active_cells[cell.adjacent_cell])
+            .collect::<Vec<_>>();
+        if active.is_empty() {
+            resolved.push(ResolvedChargeBoundaryFaceIR {
+                source_id: "default:insulating".to_string(),
+                face,
+                condition: ResolvedChargeBoundaryConditionIR::Insulating,
+            });
+            continue;
+        }
+        let face_claims = claims.get(&face).map(Vec::as_slice).unwrap_or_default();
+        let mut assigned = BTreeMap::<usize, usize>::new();
+        for (claim_index, claim) in face_claims.iter().enumerate() {
+            for cell in &claim.cells {
+                if assigned.insert(cell.adjacent_cell, claim_index).is_some() {
+                    return Err(vec![format!(
+                        "charge boundary face {face:?} has overlapping object-owned cell assignments"
+                    )]);
+                }
+            }
+        }
+        let Some(first_claim) = face_claims.first() else {
+            return Err(vec![format!(
+                "complete structured FDM charge contract does not assign {face:?}"
+            )]);
+        };
+        let uniform = face_claims
+            .iter()
+            .all(|claim| claim.condition == first_claim.condition);
+        let current_or_insulating = face_claims.iter().all(|claim| {
+            matches!(
+                claim.condition,
+                ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity { .. }
+                    | ResolvedChargeBoundaryConditionIR::Insulating
+            )
+        });
+        let has_unassigned_active_cells = active
+            .iter()
+            .any(|cell| !assigned.contains_key(&cell.adjacent_cell));
+        if has_unassigned_active_cells && !(allow_partial_current_faces && current_or_insulating) {
+            return Err(vec![format!(
+                "charge boundary '{}' is partially owned on structured face {face:?}, but this FDM realization cannot express the unassigned per-cell boundary condition",
+                first_claim.source_id
+            )]);
+        }
+        if !uniform && !(allow_partial_current_faces && current_or_insulating) {
+            let source_id = face_claims
+                .iter()
+                .find(|claim| {
+                    !matches!(
+                        claim.condition,
+                        ResolvedChargeBoundaryConditionIR::Insulating
+                            | ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
+                                current_density_apm2: 0.0
+                            }
+                    )
+                })
+                .unwrap_or(first_claim)
+                .source_id
+                .as_str();
+            return Err(vec![format!(
+                "charge boundary '{}' is partially owned on structured face {face:?}, but this FDM realization cannot express per-cell voltage/current boundary kinds",
+                source_id
+            )]);
+        }
+        for claim in face_claims {
+            let ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
+                current_density_apm2,
+            } = claim.condition
+            else {
+                continue;
+            };
+            for cell in &claim.cells {
+                specified.push(ResolvedSpecifiedCurrentFaceIR {
+                    source_id: claim.source_id.clone(),
+                    axis: cell.axis,
+                    face_index: cell.face_index,
+                    adjacent_cell: cell.adjacent_cell as u64,
+                    outward_normal_sign: cell.outward_normal_sign,
+                    area_m2: cell.area_m2,
+                    outward_current_density_apm2: current_density_apm2,
+                });
+            }
+        }
+        resolved.push(ResolvedChargeBoundaryFaceIR {
+            source_id: first_claim.source_id.clone(),
+            face,
+            condition: if uniform {
+                first_claim.condition.clone()
+            } else {
+                ResolvedChargeBoundaryConditionIR::OutwardNormalCurrentDensity {
+                    current_density_apm2: 0.0,
+                }
+            },
+        });
     }
-    Ok(resolved)
+    Ok((resolved, specified))
 }
 
+#[cfg(test)]
 fn resolve_specified_current_faces(
     boundaries: &[ResolvedChargeBoundaryFaceIR],
     charge_active_cells: &[bool],
@@ -2897,8 +3267,28 @@ fn resolve_specified_current_faces(
     Ok(resolved)
 }
 
+#[derive(Clone)]
+struct SpinSurfaceClaim {
+    source_id: String,
+    condition: ResolvedSpinBoundaryConditionIR,
+    cells: Vec<ExternalBoundaryCell>,
+}
+
+fn spin_condition_is_neutral(condition: &ResolvedSpinBoundaryConditionIR) -> bool {
+    match condition {
+        ResolvedSpinBoundaryConditionIR::SpinInsulating => true,
+        ResolvedSpinBoundaryConditionIR::SpecifiedPotential { value_v } => *value_v == [0.0; 3],
+        ResolvedSpinBoundaryConditionIR::SpecifiedOutwardFlux { value_apm2 } => {
+            *value_apm2 == [0.0; 3]
+        }
+        ResolvedSpinBoundaryConditionIR::SpinSink
+        | ResolvedSpinBoundaryConditionIR::PeriodicSpin => false,
+    }
+}
+
 fn resolve_spin_boundaries(
     boundaries: &[SpinBoundaryIR],
+    spin_active_cells: &[bool],
     context: &FdmSpinTransportResolutionContext<'_>,
 ) -> Result<(Vec<ResolvedSpinBoundaryFaceIR>, bool), Vec<String>> {
     if boundaries.is_empty() {
@@ -2914,105 +3304,151 @@ fn resolve_spin_boundaries(
             true,
         ));
     }
-    let mut resolved = Vec::new();
-    let mut faces = BTreeSet::new();
+
+    let mut claims = BTreeMap::<StructuredBoundaryFaceIR, Vec<SpinSurfaceClaim>>::new();
+    let mut exact_surfaces = BTreeMap::<(String, StructuredBoundaryFaceIR), String>::new();
     for boundary in boundaries {
-        match boundary {
+        let (id, surfaces, condition): (&str, Vec<_>, _) = match boundary {
+            SpinBoundaryIR::SpinInsulating { id, surfaces } => (
+                id,
+                surfaces.iter().collect(),
+                ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            SpinBoundaryIR::SpinSink { id, surfaces } => (
+                id,
+                surfaces.iter().collect(),
+                ResolvedSpinBoundaryConditionIR::SpinSink,
+            ),
+            SpinBoundaryIR::SpecifiedSpinPotential {
+                id,
+                surfaces,
+                spin_potential_v,
+            } => (
+                id,
+                surfaces.iter().collect(),
+                ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
+                    value_v: *spin_potential_v,
+                },
+            ),
+            SpinBoundaryIR::SpecifiedSpinFlux {
+                id,
+                surfaces,
+                normal_spin_flux_apm2,
+            } => (
+                id,
+                surfaces.iter().collect(),
+                ResolvedSpinBoundaryConditionIR::SpecifiedOutwardFlux {
+                    value_apm2: *normal_spin_flux_apm2,
+                },
+            ),
             SpinBoundaryIR::PeriodicSpin {
                 id,
                 minus_surface,
                 plus_surface,
                 ..
-            } => {
-                for surface in [minus_surface, plus_surface] {
-                    if !object_is_on_grid(context, &surface.object_id) {
-                        return Err(vec![format!(
-                            "spin boundary '{id}' references an object outside the FDM grid"
-                        )]);
-                    }
-                    let face = structured_boundary_face(surface)?;
-                    if !faces.insert(face) {
-                        if resolved.iter().any(|entry: &ResolvedSpinBoundaryFaceIR| {
-                            entry.source_id == *id && entry.face == face
-                        }) {
-                            continue;
-                        }
-                        return Err(vec![format!(
-                            "spin boundary face {face:?} is assigned more than once"
-                        )]);
-                    }
-                    resolved.push(ResolvedSpinBoundaryFaceIR {
-                        source_id: id.clone(),
-                        face,
-                        condition: ResolvedSpinBoundaryConditionIR::PeriodicSpin,
-                    });
-                }
+            } => (
+                id,
+                vec![minus_surface, plus_surface],
+                ResolvedSpinBoundaryConditionIR::PeriodicSpin,
+            ),
+        };
+        for surface in surfaces {
+            if !object_is_on_grid(context, &surface.object_id) {
+                return Err(vec![format!(
+                    "spin boundary '{id}' references object '{}' outside the FDM grid",
+                    surface.object_id
+                )]);
             }
-            _ => {
-                let (id, surfaces, condition) = match boundary {
-                    SpinBoundaryIR::SpinInsulating { id, surfaces } => (
-                        id,
-                        surfaces,
-                        ResolvedSpinBoundaryConditionIR::SpinInsulating,
-                    ),
-                    SpinBoundaryIR::SpinSink { id, surfaces } => {
-                        (id, surfaces, ResolvedSpinBoundaryConditionIR::SpinSink)
-                    }
-                    SpinBoundaryIR::SpecifiedSpinPotential {
-                        id,
-                        surfaces,
-                        spin_potential_v,
-                    } => (
-                        id,
-                        surfaces,
-                        ResolvedSpinBoundaryConditionIR::SpecifiedPotential {
-                            value_v: *spin_potential_v,
-                        },
-                    ),
-                    SpinBoundaryIR::SpecifiedSpinFlux {
-                        id,
-                        surfaces,
-                        normal_spin_flux_apm2,
-                    } => (
-                        id,
-                        surfaces,
-                        ResolvedSpinBoundaryConditionIR::SpecifiedOutwardFlux {
-                            value_apm2: *normal_spin_flux_apm2,
-                        },
-                    ),
-                    SpinBoundaryIR::PeriodicSpin { .. } => unreachable!(),
-                };
-                for surface in surfaces {
-                    if !object_is_on_grid(context, &surface.object_id) {
-                        return Err(vec![format!(
-                            "spin boundary '{id}' references an object outside the FDM grid"
-                        )]);
-                    }
-                    let face = structured_boundary_face(surface)?;
-                    if !faces.insert(face) {
-                        if resolved.iter().any(|entry: &ResolvedSpinBoundaryFaceIR| {
-                            entry.source_id == *id && entry.face == face
-                        }) {
-                            continue;
-                        }
-                        return Err(vec![format!(
-                            "spin boundary face {face:?} is assigned more than once"
-                        )]);
-                    }
-                    resolved.push(ResolvedSpinBoundaryFaceIR {
-                        source_id: id.clone(),
-                        face,
-                        condition: condition.clone(),
-                    });
+            let face = structured_boundary_face(surface)?;
+            let exact_key = (surface.object_id.clone(), face);
+            if let Some(existing) = exact_surfaces.get(&exact_key) {
+                if existing == id {
+                    continue;
+                }
+                return Err(vec![format!(
+                    "spin boundary surface '{}:{face:?}' is assigned by both '{}' and '{}'",
+                    surface.object_id, existing, id
+                )]);
+            }
+            let cells =
+                owned_active_boundary_cells(context, &surface.object_id, spin_active_cells, face)?;
+            if cells.is_empty() {
+                if spin_condition_is_neutral(&condition) {
+                    continue;
+                }
+                return Err(vec![format!(
+                    "spin boundary '{}' resolves to no active owned FDM face cells for '{}:{:?}'",
+                    id, surface.object_id, face
+                )]);
+            }
+            exact_surfaces.insert(exact_key, id.to_string());
+            claims.entry(face).or_default().push(SpinSurfaceClaim {
+                source_id: id.to_string(),
+                condition: condition.clone(),
+                cells,
+            });
+        }
+    }
+
+    let mut resolved = Vec::with_capacity(6);
+    for face in all_boundary_faces() {
+        let external = external_boundary_cells(face, context.grid_cells, context.cell_size_m)?;
+        let active = external
+            .iter()
+            .filter(|cell| spin_active_cells[cell.adjacent_cell])
+            .collect::<Vec<_>>();
+        if active.is_empty() {
+            resolved.push(ResolvedSpinBoundaryFaceIR {
+                source_id: "default:spin_insulating".to_string(),
+                face,
+                condition: ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            });
+            continue;
+        }
+        let face_claims = claims.get(&face).map(Vec::as_slice).unwrap_or_default();
+        let mut assigned = BTreeMap::<usize, usize>::new();
+        for (claim_index, claim) in face_claims.iter().enumerate() {
+            for cell in &claim.cells {
+                if assigned.insert(cell.adjacent_cell, claim_index).is_some() {
+                    return Err(vec![format!(
+                        "spin boundary face {face:?} has overlapping object-owned cell assignments"
+                    )]);
                 }
             }
         }
-    }
-    if faces.len() != 6 {
-        return Err(vec![
-            "when any spin boundary is authored, structured FDM requires all six external faces to be assigned explicitly"
-                .to_string(),
-        ]);
+        if active
+            .iter()
+            .any(|cell| !assigned.contains_key(&cell.adjacent_cell))
+        {
+            return Err(vec![format!(
+                "when any spin boundary is authored, structured FDM requires every active owned cell on {face:?} to be assigned explicitly"
+            )]);
+        }
+        let Some(first_claim) = face_claims.first() else {
+            return Err(vec![format!(
+                "when any spin boundary is authored, structured FDM requires {face:?} to be assigned explicitly"
+            )]);
+        };
+        if face_claims
+            .iter()
+            .any(|claim| claim.condition != first_claim.condition)
+        {
+            let source_id = face_claims
+                .iter()
+                .find(|claim| !spin_condition_is_neutral(&claim.condition))
+                .unwrap_or(first_claim)
+                .source_id
+                .as_str();
+            return Err(vec![format!(
+                "spin boundary '{}' is partially owned on structured face {face:?}, but the FDM ABI cannot express per-cell spin boundary conditions",
+                source_id
+            )]);
+        }
+        resolved.push(ResolvedSpinBoundaryFaceIR {
+            source_id: first_claim.source_id.clone(),
+            face,
+            condition: first_claim.condition.clone(),
+        });
     }
     Ok((resolved, false))
 }

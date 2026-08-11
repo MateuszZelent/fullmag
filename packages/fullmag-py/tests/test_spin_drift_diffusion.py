@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import json
 import unittest
+from dataclasses import replace
 
 import fullmag as fm
+from fullmag._core import validate_ir
 
 
 class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
@@ -482,6 +484,12 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
     def test_python_and_ir_preserve_separate_transport_and_magnetic_domains(self) -> None:
         geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="fm_geometry")
         hm_geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="hm")
+        hm_transport_region = fm.ObjectRegion(
+            owner_object="hm",
+            name="transport",
+            region_id="hm:transport",
+            shape=fm.Box(size=(10e-9, 10e-9, 2e-9), name="hm_transport_shape"),
+        )
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
         magnet = fm.Ferromagnet(
             name="fm",
@@ -489,6 +497,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             region=fm.Region(name="fm_magnetic", geometry=geometry),
             material=material,
             object_regions=(
+                hm_transport_region,
                 fm.ObjectRegion(
                     owner_object="fm",
                     name="transport",
@@ -506,6 +515,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         hm_transport = fm.RegionRef("hm", "hm:transport")
         fm_transport = fm.RegionRef("fm", "fm:transport")
         fm_torque = fm.RegionRef("fm", "fm:torque")
+        hm_left = fm.SurfaceRef("hm", "x-", (-1.0, 0.0, 0.0))
         charge = fm.CurrentTransport(
             name="charge",
             model="ohmic_poisson",
@@ -519,7 +529,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
                     fm_transport, fm.ChargeTransportMaterial(4.0e6)
                 ),
             ],
-            boundaries=[fm.VoltageElectrode("ground", [self.top], potential_V=0.0)],
+            boundaries=[fm.VoltageElectrode("ground", [hm_left], potential_V=0.0)],
             gauge=fm.ChargePotentialGauge("dirichlet_reference"),
             solver=fm.ChargeSolverPolicy(),
         )
@@ -549,6 +559,10 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             spin_torques=[fm.DriftDiffusionSpinTorque("tr", "spin_solve", fm_torque)],
         )
         ir = problem.to_ir(include_geometry_assets=False)
+        canonical_ir = json.loads(json.dumps(ir, sort_keys=True, allow_nan=False))
+        native_validation = validate_ir(canonical_ir)
+        self.assertIsNot(native_validation, False)
+        ir = canonical_ir
         self.assertEqual(ir["spin_transport_modules"], [solve.to_ir()])
         self.assertEqual(ir["spin_torque_modules"][0]["solve_id"], "spin_solve")
         self.assertEqual(ir["magnets"][0]["region"], "fm_magnetic")
@@ -557,7 +571,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         )
         self.assertEqual(
             [(region["owner_object"], region["region_id"]) for region in ir["object_regions"]],
-            [("fm", "fm:transport"), ("fm", "fm:torque")],
+            [("hm", "hm:transport"), ("fm", "fm:transport"), ("fm", "fm:torque")],
         )
         self.assertIn("hm", [geometry["name"] for geometry in ir["geometry"]["entries"]])
         self.assertEqual(
@@ -577,6 +591,16 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         self.assertEqual(
             ir["spin_torque_modules"][0]["target"],
             {"object_id": "fm", "region_id": "fm:torque"},
+        )
+        self.assertEqual(
+            ir["current_modules"][0]["boundaries"][0]["surfaces"],
+            [
+                {
+                    "object_id": "hm",
+                    "surface_id": "x-",
+                    "orientation": [-1.0, 0.0, 0.0],
+                }
+            ],
         )
         self.assertNotEqual(
             ir["current_modules"][0]["domain"][1],

@@ -119,3 +119,53 @@ fn racetrack_expected_lowering_parses_with_current_problem_ir_types() {
         })
     );
 }
+
+#[test]
+fn python_style_hm_object_region_and_boundary_deserialize_and_validate() {
+    let fixture = fixture();
+    let mut lowering = fixture["normalized_problem_ir_contract"]["expected_lowering"].clone();
+    lowering["object_regions"] = serde_json::json!([{
+        "region_id": "hm:transport",
+        "owner_object": "hm",
+        "name": "transport",
+        "shape": {
+            "kind": "box",
+            "size": [512.0e-9, 128.0e-9, 3.0e-9],
+            "center": [0.0, 0.0, 0.0]
+        },
+        "frame": "object",
+        "enabled": true,
+        "priority": 0,
+        "material_overrides": [],
+        "realization_policy": "inherit"
+    }]);
+    lowering["current_modules"][0]["domain"][0]["region_id"] = serde_json::json!("hm:transport");
+    lowering["current_modules"][0]["materials"][0]["region"]["region_id"] =
+        serde_json::json!("hm:transport");
+    lowering["spin_transport_modules"][0]["domain"][0]["region_id"] =
+        serde_json::json!("hm:transport");
+    lowering["spin_transport_modules"][0]["materials"][0]["region"]["region_id"] =
+        serde_json::json!("hm:transport");
+
+    let problem: ProblemIR = serde_json::from_value(lowering)
+        .expect("canonical Python-shaped HM payload must deserialize as ProblemIR");
+    problem
+        .validate()
+        .expect("canonical Python-shaped HM payload must pass ProblemIR validation");
+    assert!(problem
+        .object_regions
+        .iter()
+        .any(|region| { region.owner_object == "hm" && region.region_id == "hm:transport" }));
+    let fullmag_ir::CurrentModuleIR::CurrentTransport {
+        definition: Some(charge),
+        ..
+    } = &problem.current_modules[0]
+    else {
+        panic!("expected typed current transport definition")
+    };
+    assert!(charge
+        .boundaries
+        .iter()
+        .flat_map(|boundary| boundary.surfaces())
+        .any(|surface| surface.object_id == "hm" && surface.surface_id == "x-"));
+}

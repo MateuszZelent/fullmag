@@ -1,6 +1,7 @@
 use fullmag_ir::{
-    BackendPlanIR, CurrentModuleIR, ExecutionDevice, GeometryEntryIR, ObjectRegionIR, ProblemIR,
-    RegionFrameIR, RegionIR, RegionRefIR, RegionShapeIR, SpinInterfaceIR, SpinTransportModuleIR,
+    BackendPlanIR, ChargeBoundaryIR, CurrentModuleIR, ExecutionDevice, GeometryEntryIR,
+    InitialMagnetizationIR, ObjectRegionIR, ProblemIR, RegionFrameIR, RegionIR, RegionRefIR,
+    RegionShapeIR, SpinBoundaryIR, SpinInterfaceIR, SpinTransportModuleIR, SurfaceRefIR,
 };
 use serde_json::{json, Value};
 
@@ -39,6 +40,31 @@ fn fdm_plan(problem: &ProblemIR) -> fullmag_ir::FdmPlanIR {
         BackendPlanIR::Fdm(plan) => plan,
         other => panic!("expected FDM plan, got {other:?}"),
     }
+}
+
+fn surface(object_id: &str, surface_id: &str, orientation: [f64; 3]) -> SurfaceRefIR {
+    SurfaceRefIR {
+        object_id: object_id.into(),
+        surface_id: surface_id.into(),
+        orientation,
+    }
+}
+
+fn set_native_m1(problem: &mut ProblemIR) {
+    problem.spin_transport_modules[0].solver.engine = "native_m1_v1".into();
+    problem.spin_transport_modules[0]
+        .requested_execution
+        .execution_mode = fullmag_ir::ExecutionMode::Strict;
+    problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+}
+
+fn set_module_graph(problem: &mut ProblemIR, modules: Value) {
+    problem.physics_graph = Some(json!({
+        "schema_version": "physics_graph.v1",
+        "scene_revision": 1,
+        "modules": modules,
+        "edges": []
+    }));
 }
 
 #[test]
@@ -341,4 +367,404 @@ fn independent_charge_solve_is_not_suppressed_by_spin_transport() {
         "the spin-bound charge source must not be counted as standalone: {:?}",
         error.reasons
     );
+}
+
+#[test]
+fn hm_and_fm_current_surfaces_materialize_only_their_owned_face_cells() {
+    let mut problem = racetrack_problem();
+    set_native_m1(&mut problem);
+    let CurrentModuleIR::CurrentTransport { definition, .. } = &mut problem.current_modules[0]
+    else {
+        panic!("expected current transport")
+    };
+    let definition = definition.as_mut().expect("charge definition");
+    definition.boundaries[0] = ChargeBoundaryIR::NormalCurrentElectrode {
+        id: "hm_x_minus".into(),
+        surfaces: vec![surface("hm", "x-", [-1.0, 0.0, 0.0])],
+        outward_current_density_apm2: 1.0e12,
+    };
+    definition.boundaries[1] = ChargeBoundaryIR::NormalCurrentElectrode {
+        id: "hm_x_plus".into(),
+        surfaces: vec![surface("hm", "x+", [1.0, 0.0, 0.0])],
+        outward_current_density_apm2: -1.0e12,
+    };
+
+    let plan = fdm_plan(&problem);
+    let descriptor = plan.spin_transport_plans[0]
+        .fdm_cpu_double
+        .as_ref()
+        .expect("native M1 descriptor");
+    assert_eq!(descriptor.specified_current_faces.len(), 2 * 64 * 3);
+    let plane = 256_u64 * 64;
+    assert!(descriptor
+        .specified_current_faces
+        .iter()
+        .all(|face| face.adjacent_cell < 3 * plane));
+}
+
+#[test]
+fn hm_only_nonzero_voltage_on_shared_global_face_fails_closed() {
+    let mut problem = racetrack_problem();
+    let CurrentModuleIR::CurrentTransport { definition, .. } = &mut problem.current_modules[0]
+    else {
+        panic!("expected current transport")
+    };
+    let definition = definition.as_mut().expect("charge definition");
+    definition.gauge = fullmag_ir::ChargePotentialGaugeIR::DirichletReference;
+    definition.boundaries[0] = ChargeBoundaryIR::VoltageElectrode {
+        id: "hm_voltage".into(),
+        surfaces: vec![surface("hm", "x-", [-1.0, 0.0, 0.0])],
+        potential_v: 0.1,
+    };
+
+    let error = fullmag_plan::plan(&problem).expect_err("partial voltage face must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("hm_voltage")
+                && reason.contains("partially owned")
+                && reason.contains("x")
+        }),
+        "unexpected errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn hm_only_nonzero_spin_flux_on_shared_global_face_fails_closed() {
+    let mut problem = racetrack_problem();
+    let SpinBoundaryIR::SpinInsulating { surfaces, .. } =
+        &mut problem.spin_transport_modules[0].boundaries[0]
+    else {
+        panic!("expected fixture insulating boundary")
+    };
+    surfaces.retain(|surface| !(surface.object_id == "hm" && surface.surface_id == "x-"));
+    problem.spin_transport_modules[0]
+        .boundaries
+        .push(SpinBoundaryIR::SpecifiedSpinFlux {
+            id: "hm_spin_flux".into(),
+            surfaces: vec![surface("hm", "x-", [-1.0, 0.0, 0.0])],
+            normal_spin_flux_apm2: [1.0, 0.0, 0.0],
+        });
+
+    let error = fullmag_plan::plan(&problem).expect_err("partial spin face must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("hm_spin_flux")
+                && reason.contains("partially owned")
+                && reason.contains("x")
+        }),
+        "unexpected errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn zero_boundary_on_owner_without_face_cells_is_a_noop_but_nonzero_fails() {
+    let mut zero = racetrack_problem();
+    let CurrentModuleIR::CurrentTransport { definition, .. } = &mut zero.current_modules[0] else {
+        panic!("expected current transport")
+    };
+    definition
+        .as_mut()
+        .expect("charge definition")
+        .boundaries
+        .push(ChargeBoundaryIR::NormalCurrentElectrode {
+            id: "fm_bottom_zero".into(),
+            surfaces: vec![surface("fm", "z-", [0.0, 0.0, -1.0])],
+            outward_current_density_apm2: 0.0,
+        });
+    fdm_plan(&zero);
+
+    let mut nonzero = zero;
+    let CurrentModuleIR::CurrentTransport { definition, .. } = &mut nonzero.current_modules[0]
+    else {
+        panic!("expected current transport")
+    };
+    let ChargeBoundaryIR::NormalCurrentElectrode {
+        outward_current_density_apm2,
+        ..
+    } = definition
+        .as_mut()
+        .expect("charge definition")
+        .boundaries
+        .last_mut()
+        .expect("extra boundary")
+    else {
+        panic!("expected current boundary")
+    };
+    *outward_current_density_apm2 = 1.0;
+    let error = fullmag_plan::plan(&nonzero)
+        .expect_err("nonzero boundary without owned face cells must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("fm_bottom_zero") && reason.contains("no active owned FDM face cells")
+        }),
+        "unexpected errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn inactive_transport_graph_does_not_expand_the_magnetic_grid() {
+    let mut problem = racetrack_problem();
+    set_module_graph(
+        &mut problem,
+        json!([
+            {
+                "id": "charge", "kind": "current_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            },
+            {
+                "id": "spin", "kind": "spin_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            },
+            {
+                "id": "transport_torque", "kind": "spin_torque", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            }
+        ]),
+    );
+
+    let plan = fdm_plan(&problem);
+    assert_eq!(plan.grid.cells, [256, 64, 1]);
+    assert!(plan.spin_transport_plans.is_empty());
+    assert!(plan.fdm_gpu_charge_transports.is_empty());
+    assert_eq!(
+        plan.grid_certificate.as_ref().unwrap().object_ids,
+        vec!["fm".to_string()]
+    );
+}
+
+#[test]
+fn inactive_unrelated_charge_does_not_enter_the_reachable_common_grid() {
+    let mut problem = racetrack_problem();
+    let mut inactive = problem.current_modules[0].clone();
+    let CurrentModuleIR::CurrentTransport {
+        name, definition, ..
+    } = &mut inactive
+    else {
+        panic!("expected current transport")
+    };
+    *name = "inactive-charge".into();
+    let definition = definition.as_mut().expect("charge definition");
+    definition.domain = vec![RegionRefIR {
+        object_id: "unrelated-sphere".into(),
+        region_id: None,
+    }];
+    definition.materials.truncate(1);
+    definition.materials[0].region = definition.domain[0].clone();
+    problem.current_modules.push(inactive);
+    problem.geometry.entries.push(GeometryEntryIR::Sphere {
+        name: "unrelated-sphere".into(),
+        radius: 10.0e-9,
+    });
+    set_module_graph(
+        &mut problem,
+        json!([
+            {
+                "id": "charge", "kind": "current_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "active"
+            },
+            {
+                "id": "spin", "kind": "spin_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": ["charge"], "activation": "active"
+            },
+            {
+                "id": "transport_torque", "kind": "spin_torque", "applies_to": [],
+                "solve_domain": [], "depends_on": ["spin"], "activation": "active"
+            },
+            {
+                "id": "inactive-charge", "kind": "current_transport", "applies_to": [],
+                "solve_domain": [], "depends_on": [], "activation": "inactive"
+            }
+        ]),
+    );
+
+    let plan = fdm_plan(&problem);
+    assert_eq!(plan.grid.cells, [256, 64, 4]);
+    assert_eq!(
+        plan.grid_certificate.as_ref().unwrap().object_ids,
+        vec!["fm".to_string(), "hm".to_string()]
+    );
+}
+
+#[test]
+fn two_active_spin_sources_are_both_coupled_and_not_dropped_as_standalone_charge() {
+    let mut problem = racetrack_problem();
+    let mut charge_two = problem.current_modules[0].clone();
+    let CurrentModuleIR::CurrentTransport { name, .. } = &mut charge_two else {
+        panic!("expected current transport")
+    };
+    *name = "charge-two".into();
+    problem.current_modules.push(charge_two);
+
+    let mut spin_two = problem.spin_transport_modules[0].clone();
+    spin_two.id = "spin-two".into();
+    spin_two.current_source_id = "charge-two".into();
+    spin_two.interfaces.clear();
+    for assignment in &mut spin_two.materials {
+        assignment.material.lambda_j_m =
+            fullmag_ir::ReactionLengthIR::Disabled(fullmag_ir::DisabledReactionIR::Disabled);
+        assignment.material.lambda_phi_m =
+            fullmag_ir::ReactionLengthIR::Disabled(fullmag_ir::DisabledReactionIR::Disabled);
+    }
+    problem.spin_transport_modules.push(spin_two);
+
+    let plan = fdm_plan(&problem);
+    assert_eq!(plan.spin_transport_plans.len(), 2);
+    assert!(plan.fdm_gpu_charge_transports.is_empty());
+}
+
+#[test]
+fn standalone_region_scoped_fdm_gpu_charge_uses_the_legacy_region_lut_without_spin() {
+    let mut problem = racetrack_problem();
+    problem.spin_transport_modules.clear();
+    problem.spin_torque_modules.clear();
+    problem
+        .geometry
+        .entries
+        .retain(|entry| entry.name() == "fm");
+    problem.object_regions = vec![ObjectRegionIR {
+        region_id: "fm:charge".into(),
+        owner_object: "fm".into(),
+        name: "charge".into(),
+        shape: RegionShapeIR::Box {
+            size: [512.0e-9, 128.0e-9, 1.0e-9],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+        material_transition: None,
+    }];
+    let region = RegionRefIR {
+        object_id: "fm".into(),
+        region_id: Some("fm:charge".into()),
+    };
+    let CurrentModuleIR::CurrentTransport { definition, .. } = &mut problem.current_modules[0]
+    else {
+        panic!("expected current transport")
+    };
+    let definition = definition.as_mut().expect("charge definition");
+    definition.gauge = fullmag_ir::ChargePotentialGaugeIR::DirichletReference;
+    definition.domain = vec![region.clone()];
+    definition.materials.truncate(1);
+    definition.materials[0].region = region;
+    definition.boundaries = vec![
+        ChargeBoundaryIR::VoltageElectrode {
+            id: "left".into(),
+            surfaces: vec![surface("fm", "x-", [-1.0, 0.0, 0.0])],
+            potential_v: 0.0,
+        },
+        ChargeBoundaryIR::VoltageElectrode {
+            id: "right".into(),
+            surfaces: vec![surface("fm", "x+", [1.0, 0.0, 0.0])],
+            potential_v: 0.1,
+        },
+        ChargeBoundaryIR::Insulating {
+            id: "walls".into(),
+            surfaces: vec![
+                surface("fm", "y-", [0.0, -1.0, 0.0]),
+                surface("fm", "y+", [0.0, 1.0, 0.0]),
+                surface("fm", "z-", [0.0, 0.0, -1.0]),
+                surface("fm", "z+", [0.0, 0.0, 1.0]),
+            ],
+        },
+    ];
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        json!({"device": "cuda", "device_index": 0}),
+    );
+
+    let plan = fdm_plan(&problem);
+    assert_eq!(plan.spin_transport_plans.len(), 0);
+    assert_eq!(plan.fdm_gpu_charge_transports.len(), 1);
+    assert!(plan.fdm_gpu_charge_transports[0]
+        .charge_active_cells
+        .iter()
+        .all(|active| *active));
+}
+
+#[test]
+fn magnet_alias_collision_with_a_different_geometry_fails_closed() {
+    let mut problem = racetrack_problem();
+    let magnetic = problem
+        .geometry
+        .entries
+        .iter_mut()
+        .find(|entry| entry.name() == "fm")
+        .expect("FM geometry");
+    match magnetic {
+        GeometryEntryIR::Translate { name, .. } => *name = "fm-body".into(),
+        other => panic!("expected translated FM geometry, got {other:?}"),
+    }
+    problem.regions[0].geometry = "fm-body".into();
+    problem.geometry.entries.push(GeometryEntryIR::Box {
+        name: "fm".into(),
+        size: [1.0e-9; 3],
+    });
+
+    let error = fullmag_plan::plan(&problem).expect_err("ambiguous magnet alias must fail");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("ambiguous FDM object-to-geometry mapping")
+                && reason.contains("fm")
+                && reason.contains("fm-body")
+        }),
+        "unexpected errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn magnet_alias_without_a_direct_geometry_id_resolves_to_its_region_geometry() {
+    let mut problem = racetrack_problem();
+    let magnetic = problem
+        .geometry
+        .entries
+        .iter_mut()
+        .find(|entry| entry.name() == "fm")
+        .expect("FM geometry");
+    match magnetic {
+        GeometryEntryIR::Translate { name, .. } => *name = "fm-body".into(),
+        other => panic!("expected translated FM geometry, got {other:?}"),
+    }
+    problem.regions[0].geometry = "fm-body".into();
+
+    let plan = fdm_plan(&problem);
+    assert_eq!(plan.grid.cells, [256, 64, 4]);
+    assert_eq!(
+        plan.grid_certificate.as_ref().unwrap().object_ids,
+        vec!["fm".to_string(), "hm".to_string()]
+    );
+}
+
+#[test]
+fn sampled_field_must_match_the_expanded_common_grid_exactly() {
+    let mut wrong = racetrack_problem();
+    wrong.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::SampledField {
+        values: vec![[1.0, 0.0, 0.0]; 256 * 64],
+    });
+    let error = fullmag_plan::plan(&wrong)
+        .expect_err("magnet-only sampled field must not be padded onto the common grid");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("sampled field length mismatch")
+                && reason.contains("expected 65536")
+                && reason.contains("actual 16384")
+        }),
+        "unexpected errors: {:?}",
+        error.reasons
+    );
+
+    let mut exact = racetrack_problem();
+    exact.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::SampledField {
+        values: vec![[1.0, 0.0, 0.0]; 256 * 64 * 4],
+    });
+    let plan = fdm_plan(&exact);
+    assert_eq!(plan.initial_magnetization.len(), 65_536);
 }

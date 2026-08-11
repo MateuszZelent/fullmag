@@ -183,6 +183,10 @@ fn executable_spin_torque_modules<'a>(
     }
 }
 
+pub(crate) fn has_active_spin_torque_modules(problem: &ProblemIR) -> Result<bool, PlanError> {
+    executable_spin_torque_modules(problem).map(|modules| !modules.is_empty())
+}
+
 pub(crate) fn resolve_legacy_spin_torque(
     problem: &ProblemIR,
     lane: SpinTorqueExecutableLane,

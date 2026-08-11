@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
 use crate::current_transport::{
-    resolve_current_transports, resolve_fdm_gpu_charge_transports, CurrentTransportExecutableLane,
+    resolve_current_transports, resolve_fdm_gpu_charge_transports_with_active_graph,
+    CurrentTransportExecutableLane,
 };
 use crate::error::PlanError;
 use crate::geometry::{
@@ -622,25 +623,16 @@ impl TransportGridRefs {
     }
 }
 
-fn active_transport_grid_refs(problem: &ProblemIR) -> Result<TransportGridRefs, PlanError> {
+fn active_transport_grid_refs(
+    problem: &ProblemIR,
+    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
+) -> Result<TransportGridRefs, PlanError> {
     let mut refs = TransportGridRefs::default();
-    let mut errors = Vec::new();
-    let mut active_spin_ids = BTreeSet::new();
 
     for spin in &problem.spin_transport_modules {
-        match crate::physics_graph::physics_module_execution_enabled(
-            problem,
-            "spin_transport",
-            &spin.id,
-        ) {
-            Ok(Some(false)) => continue,
-            Ok(Some(true) | None) => {}
-            Err(mut reasons) => {
-                errors.append(&mut reasons);
-                continue;
-            }
+        if !active_graph.spin_module_ids.contains(&spin.id) {
+            continue;
         }
-        active_spin_ids.insert(spin.id.as_str());
         for region in &spin.domain {
             refs.add_region(region);
         }
@@ -694,17 +686,8 @@ fn active_transport_grid_refs(problem: &ProblemIR) -> Result<TransportGridRefs, 
         else {
             continue;
         };
-        match crate::physics_graph::physics_module_execution_enabled(
-            problem,
-            "current_transport",
-            name,
-        ) {
-            Ok(Some(false)) => continue,
-            Ok(Some(true) | None) => {}
-            Err(mut reasons) => {
-                errors.append(&mut reasons);
-                continue;
-            }
+        if !active_graph.coupled_current_source_ids.contains(name) {
+            continue;
         }
         for region in &definition.domain {
             refs.charge_domains.push(region.clone());
@@ -738,21 +721,15 @@ fn active_transport_grid_refs(problem: &ProblemIR) -> Result<TransportGridRefs, 
         else {
             continue;
         };
-        if !active_spin_ids.contains(solve_id.as_str()) {
+        if !active_graph.spin_module_ids.contains(solve_id)
+            || !active_graph.torque_module_ids.contains(id)
+        {
             continue;
         }
-        match crate::physics_graph::physics_module_execution_enabled(problem, "spin_torque", id) {
-            Ok(Some(false)) => continue,
-            Ok(Some(true) | None) => refs.add_region(target),
-            Err(mut reasons) => errors.append(&mut reasons),
-        }
+        refs.add_region(target);
     }
 
-    if errors.is_empty() {
-        Ok(refs)
-    } else {
-        Err(PlanError { reasons: errors })
-    }
+    Ok(refs)
 }
 
 fn region_shape_bounds(shape: &RegionShapeIR) -> Result<([f64; 3], [f64; 3]), String> {
@@ -808,6 +785,7 @@ fn transport_common_grid(
     magnetic_geometry: &GeometryEntryIR,
     magnetic_shape: &GeometryShape,
     cell_size: [f64; 3],
+    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
 ) -> Result<
     (
         [f64; 3],
@@ -819,11 +797,8 @@ fn transport_common_grid(
     ),
     PlanError,
 > {
-    let mut transport_refs = active_transport_grid_refs(problem)?;
+    let mut transport_refs = active_transport_grid_refs(problem, active_graph)?;
     transport_refs.object_ids.insert(magnet.name.clone());
-    transport_refs
-        .object_ids
-        .insert(magnetic_geometry.name().to_string());
     let geometry_by_name = problem
         .geometry
         .entries
@@ -835,23 +810,47 @@ fn transport_common_grid(
         .iter()
         .map(|region| (region.name.as_str(), region.geometry.as_str()))
         .collect::<BTreeMap<_, _>>();
+    let mut object_to_geometry = BTreeMap::<String, String>::new();
+    for object_id in &transport_refs.object_ids {
+        let mut candidates = BTreeSet::new();
+        if geometry_by_name.contains_key(object_id.as_str()) {
+            candidates.insert(object_id.as_str());
+        }
+        if let Some(geometry_id) = region_to_geometry.get(object_id.as_str()) {
+            candidates.insert(*geometry_id);
+        }
+        for candidate in problem
+            .magnets
+            .iter()
+            .filter(|candidate| candidate.name == *object_id)
+        {
+            let geometry_id = region_to_geometry
+                .get(candidate.region.as_str())
+                .ok_or_else(|| PlanError {
+                    reasons: vec![format!(
+                        "magnet '{}' region '{}' has no FDM geometry binding",
+                        candidate.name, candidate.region
+                    )],
+                })?;
+            candidates.insert(*geometry_id);
+        }
+        if candidates.len() > 1 {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "ambiguous FDM object-to-geometry mapping for '{}': {}",
+                    object_id,
+                    candidates.into_iter().collect::<Vec<_>>().join(", ")
+                )],
+            });
+        }
+        if let Some(geometry_id) = candidates.into_iter().next() {
+            object_to_geometry.insert(object_id.clone(), geometry_id.to_string());
+        }
+    }
     let resolve_geometry = |object_id: &str| {
-        geometry_by_name
+        object_to_geometry
             .get(object_id)
-            .copied()
-            .or_else(|| {
-                problem
-                    .magnets
-                    .iter()
-                    .find(|candidate| candidate.name == object_id)
-                    .and_then(|candidate| region_to_geometry.get(candidate.region.as_str()))
-                    .and_then(|name| geometry_by_name.get(name).copied())
-            })
-            .or_else(|| {
-                region_to_geometry
-                    .get(object_id)
-                    .and_then(|name| geometry_by_name.get(name).copied())
-            })
+            .and_then(|name| geometry_by_name.get(name.as_str()).copied())
     };
 
     let resolve_object_region = |region: &fullmag_ir::RegionRefIR| {
@@ -1067,6 +1066,8 @@ pub(crate) fn plan_fdm(
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
+    let active_transport_graph =
+        crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
 
     let mut enable_exchange = false;
     let mut enable_demag = false;
@@ -1337,7 +1338,7 @@ pub(crate) fn plan_fdm(
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
         !problem.field_drives.is_empty(),
-        !problem.spin_transport_modules.is_empty(),
+        !active_transport_graph.spin_module_ids.is_empty(),
         &mut errors,
     );
     if problem.study.sampling().outputs.iter().any(|output| {
@@ -1414,7 +1415,7 @@ pub(crate) fn plan_fdm(
 
     let mut transport_object_masks = BTreeMap::new();
     let mut transport_region_masks = BTreeMap::new();
-    if !problem.spin_transport_modules.is_empty() {
+    if !active_transport_graph.spin_module_ids.is_empty() {
         if provided_grid_asset.is_some() {
             return Err(PlanError {
                 reasons: vec![
@@ -1423,7 +1424,14 @@ pub(crate) fn plan_fdm(
                 ],
             });
         }
-        let resolved = transport_common_grid(problem, magnet, geometry, &shape, cell_size)?;
+        let resolved = transport_common_grid(
+            problem,
+            magnet,
+            geometry,
+            &shape,
+            cell_size,
+            &active_transport_graph,
+        )?;
         bounding_size = resolved.0;
         active_mask = Some(resolved.1);
         grid_cells = resolved.2;
@@ -1501,7 +1509,19 @@ pub(crate) fn plan_fdm(
             }
             vectors
         }
-        Some(InitialMagnetizationIR::SampledField { values }) => values.clone(),
+        Some(InitialMagnetizationIR::SampledField { values }) => {
+            if values.len() != n_cells {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "magnet '{}' sampled field length mismatch on resolved FDM grid: expected {}, actual {}",
+                        magnet.name,
+                        n_cells,
+                        values.len()
+                    )],
+                });
+            }
+            values.clone()
+        }
         Some(InitialMagnetizationIR::PresetTexture {
             preset_kind,
             preset_params,
@@ -1864,8 +1884,9 @@ pub(crate) fn plan_fdm(
     }
     let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
         owner_names: &owner_names,
-        object_masks_by_id: Some(&transport_object_masks),
-        region_masks_by_ref: Some(&transport_region_masks),
+        object_masks_by_id: (!transport_object_masks.is_empty()).then_some(&transport_object_masks),
+        region_masks_by_ref: (!transport_region_masks.is_empty())
+            .then_some(&transport_region_masks),
         grid_cells,
         origin_m: native_origin,
         cell_size_m: cell_size,
@@ -1876,13 +1897,18 @@ pub(crate) fn plan_fdm(
         saturation_magnetization_apm: &resolved_ms_for_transport,
         gamma0_m_per_a_s: gyromagnetic_ratio,
     };
-    let spin_transport_plans = crate::spin_transport::resolve_spin_transport(
+    let spin_transport_plans = crate::spin_transport::resolve_spin_transport_with_active_graph(
         problem,
         resolved_backend,
         &spin_transport_context,
+        &active_transport_graph,
     )?;
-    let fdm_gpu_charge_transports =
-        resolve_fdm_gpu_charge_transports(problem, resolved_backend, &spin_transport_context)?;
+    let fdm_gpu_charge_transports = resolve_fdm_gpu_charge_transports_with_active_graph(
+        problem,
+        resolved_backend,
+        &spin_transport_context,
+        &active_transport_graph,
+    )?;
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
@@ -2506,6 +2532,8 @@ pub(crate) fn plan_fdm_multilayer(
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
+    let active_transport_graph =
+        crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
 
     let fdm_hints = match &problem.backend_policy.discretization_hints {
         Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => fdm,
@@ -2554,7 +2582,7 @@ pub(crate) fn plan_fdm_multilayer(
         || problem.stt_epsilon_prime.is_some()
         || problem.stt_thickness.is_some()
         || problem.stt_fixed_layer_position.is_some()
-        || !problem.spin_torque_modules.is_empty()
+        || active_transport_graph.has_active_torque_modules
     {
         errors.push(
             "spin_torque is not executable in the current public multilayer FDM path; staged CPU/GPU multilayer RHS coverage is not implemented yet"
@@ -2681,7 +2709,7 @@ pub(crate) fn plan_fdm_multilayer(
         false,
         false,
         !problem.field_drives.is_empty(),
-        !problem.spin_transport_modules.is_empty(),
+        !active_transport_graph.spin_module_ids.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double

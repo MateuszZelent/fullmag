@@ -110,29 +110,39 @@ pub(crate) fn resolve_current_transports(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_fdm_gpu_charge_transports(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
-    let mut coupled_source_ids = std::collections::BTreeSet::new();
+    let active_graph = crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
+    resolve_fdm_gpu_charge_transports_with_active_graph(
+        problem,
+        resolved_backend,
+        context,
+        &active_graph,
+    )
+}
+
+pub(crate) fn resolve_fdm_gpu_charge_transports_with_active_graph(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
+) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
     let mut graph_reasons = Vec::new();
-    for spin in &problem.spin_transport_modules {
-        match physics_module_execution_enabled(problem, "spin_transport", &spin.id) {
-            Ok(Some(false)) => {}
-            Ok(Some(true) | None) => {
-                coupled_source_ids.insert(spin.current_source_id.as_str());
-            }
-            Err(mut reasons) => graph_reasons.append(&mut reasons),
-        }
-    }
     let mut active_modules = Vec::new();
     for module in &problem.current_modules {
         let (kind, name) = match module {
             CurrentModuleIR::AntennaFieldSource { name, .. } => ("antenna_field_source", name),
             CurrentModuleIR::CurrentTransport { name, .. } => ("current_transport", name),
         };
-        if kind == "current_transport" && coupled_source_ids.contains(name.as_str()) {
+        if kind == "current_transport"
+            && active_graph
+                .coupled_current_source_ids
+                .contains(name.as_str())
+        {
             continue;
         }
         match physics_module_execution_enabled(problem, kind, name) {
@@ -197,7 +207,7 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
     {
         scope_reasons.push("periodic_charge_boundary=unsupported".into());
     }
-    if !problem.spin_transport_modules.is_empty() || !problem.spin_torque_modules.is_empty() {
+    if !active_graph.spin_module_ids.is_empty() || active_graph.has_active_torque_modules {
         scope_reasons.push("charge_only_requires_no_spin_transport_or_torque_modules".into());
     }
     if problem.energy_terms.iter().any(|term| {
