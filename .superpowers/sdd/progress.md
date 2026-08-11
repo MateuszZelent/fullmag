@@ -89,3 +89,6 @@ Control Room Thin Film authoring slice: complete (commits 087a7411..bc6290a4, re
 Task 1: complete (commits `5d8d18a8..fdfe1037`, review clean; focused RED
 confirmed 2 intended failures and 52 passing tests; fixture coverage includes
 model, resources, results, jobs, and diagnostics).
+Task 2: complete (commit `ebd02bc3`, review clean; 54 focused route-coverage
+tests and typecheck pass; exact route map, explicit unknown fallback, and
+frequency-kind coverage are present).
