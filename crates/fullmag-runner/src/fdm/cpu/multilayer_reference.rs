@@ -1376,6 +1376,53 @@ mod tests {
     }
 
     #[test]
+    fn multilayer_reference_run_executes_heterogeneous_xy_native_cells() {
+        let mut plan = make_plan(true);
+        plan.mode = "three_d".to_string();
+        plan.common_cells = [5, 5, 4];
+        plan.planner_summary.requested_mode = "auto".to_string();
+        plan.planner_summary.resolved_mode = "three_d".to_string();
+        plan.planner_summary.estimated_kernel_bytes =
+            fullmag_plan::checked_multilayer_pair_kernel_footprint([5, 5, 4], 2)
+                .expect("heterogeneous test kernel footprint should be representable");
+        plan.layers[0].native_grid = [5, 5, 1];
+        plan.layers[0].native_cell_size = [2e-9, 2e-9, 10e-9];
+        plan.layers[0].native_origin = [-5e-9, -5e-9, 0.0];
+        plan.layers[0].initial_magnetization = vec![[1.0, 0.0, 0.0]; 25];
+        plan.layers[1].native_grid = [2, 2, 1];
+        plan.layers[1].native_cell_size = [5e-9, 5e-9, 10e-9];
+        plan.layers[1].native_origin = [-5e-9, -5e-9, 20e-9];
+        plan.layers[1].initial_magnetization = vec![[0.0, 1.0, 0.0]; 4];
+        for layer in &mut plan.layers {
+            layer.convolution_grid = [5, 5, 4];
+            layer.convolution_cell_size = [2e-9, 2e-9, 2.5e-9];
+            layer.convolution_origin = [-5e-9, -5e-9, layer.native_origin[2]];
+            layer.transfer_kind = "push_pull".to_string();
+        }
+        let topology_tokens =
+            fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+                [-5e-9, -5e-9, 0.0],
+                [5, 5, 4],
+                [2e-9, 2e-9, 2.5e-9],
+                100,
+                100 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                None,
+                &topology_tokens,
+            )
+            .expect("heterogeneous test certificate should be valid"),
+        );
+
+        let executed = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
+            .expect("heterogeneous 2 nm/5 nm transfer should execute");
+
+        assert_eq!(executed.result.status, RunStatus::Completed);
+        assert_eq!(executed.result.final_magnetization.len(), 29);
+        assert!(executed.result.steps.last().unwrap().e_demag.is_finite());
+    }
+
+    #[test]
     fn multilayer_runtime_builds_unequal_two_d_layer_thickness_kernel() {
         let mut plan = make_plan(true);
         plan.layers[1].native_cell_size[2] = 2.0e-9;
