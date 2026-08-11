@@ -4143,8 +4143,6 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
       $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
 
 run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
-    just ensure-python
-    just build fullmag
     bash -euo pipefail -c '\
       report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; \
       mkdir -p "$report_parent"; \
@@ -4152,7 +4150,25 @@ run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
       scenario="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario.py"; \
       evidence="$run_root/fdm-multilayer-webgl-matrix.json"; \
       manifest="$run_root/manifest.json"; \
+      build_log="$run_root/fullmag-build.log"; \
+      cargo_target_root="/tmp/fullmag-zfn2-build/cargo-targets"; \
+      cargo_target_dir="$cargo_target_root/fdm-multilayer-webgl-matrix-cpu-$(basename "$run_root")"; \
       sim_pid=""; \
+      web_port=""; api_port=""; \
+      finish() { \
+        status=$?; trap - EXIT INT TERM; \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; \
+        outcome=failed; if [ "$status" -eq 0 ]; then outcome=passed; fi; \
+        if [ ! -e "$evidence" ]; then printf "{\"schema_version\":\"fdm_multilayer_webgl_matrix_recipe.v1\",\"qualification_status\":\"blocked\",\"exit_code\":%s,\"artifact_root\":\"%s\"}\\n" "$status" "$run_root" > "$evidence"; fi; \
+        web_port_json=null; if [ -n "$web_port" ]; then web_port_json="$web_port"; fi; \
+        api_port_json=null; if [ -n "$api_port" ]; then api_port_json="$api_port"; fi; \
+        printf "{\"schema_version\":\"fdm_multilayer_webgl_matrix_recipe.v1\",\"status\":\"%s\",\"exit_code\":%s,\"web_port\":%s,\"api_port\":%s,\"artifact_root\":\"%s\",\"evidence\":\"%s\"}\\n" "$outcome" "$status" "$web_port_json" "$api_port_json" "$run_root" "$evidence" > "$manifest"; \
+        exit "$status"; \
+      }; \
+      trap finish EXIT INT TERM; \
+      mkdir -p "$cargo_target_dir" > "$build_log" 2>&1; \
+      just ensure-python >> "$build_log" 2>&1; \
+      FULLMAG_CARGO_TARGET_DIR="$cargo_target_dir" just build fullmag 1 >> "$build_log" 2>&1; \
       select_free_port() { python3 -c "import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); sock.bind(('127.0.0.1', 0)); print(sock.getsockname()[1]); sock.close()"; }; \
       web_port="{{web_port}}"; api_port="{{api_port}}"; \
       case "$web_port" in web_port=*) web_port="$(printf "%s" "$web_port" | cut -d= -f2-)" ;; esac; \
@@ -4170,15 +4186,6 @@ run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
           if [ -z "$listener_sid" ] || [ "$listener_sid" != "$sim_sid" ]; then echo "refusing $label listener pid=$listener_pid sid=$listener_sid; expected owned sid=$sim_sid" >&2; return 1; fi; \
         done; \
       }; \
-      finish() { \
-        status=$?; trap - EXIT INT TERM; \
-        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; \
-        outcome=failed; if [ "$status" -eq 0 ]; then outcome=passed; fi; \
-        if [ ! -e "$evidence" ]; then printf "{\"schema_version\":\"fdm_multilayer_webgl_matrix_recipe.v1\",\"qualification_status\":\"blocked\",\"exit_code\":%s,\"artifact_root\":\"%s\"}\\n" "$status" "$run_root" > "$evidence"; fi; \
-        printf "{\"schema_version\":\"fdm_multilayer_webgl_matrix_recipe.v1\",\"status\":\"%s\",\"exit_code\":%s,\"web_port\":%s,\"api_port\":%s,\"artifact_root\":\"%s\",\"evidence\":\"%s\"}\\n" "$outcome" "$status" "$web_port" "$api_port" "$run_root" "$evidence" > "$manifest"; \
-        exit "$status"; \
-      }; \
-      trap finish EXIT INT TERM; \
       if ! command -v pnpm >/dev/null 2>&1 || ! command -v lsof >/dev/null 2>&1 || ! command -v setsid >/dev/null 2>&1; then echo "pnpm, lsof, and setsid are required for owned WebGL qualification" >&2; exit 127; fi; \
       setsid env \
       PATH="{{local_bin}}:$PATH" \

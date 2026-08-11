@@ -155,3 +155,26 @@ def test_webgl_matrix_recipe_normalizes_named_port_overrides() -> None:
     recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
     assert 'case "$web_port" in web_port=*) web_port="$(printf "%s" "$web_port" | cut -d= -f2-)" ;; esac' in recipe
     assert 'case "$api_port" in api_port=*) api_port="$(printf "%s" "$api_port" | cut -d= -f2-)" ;; esac' in recipe
+
+
+def test_webgl_matrix_recipe_isolates_the_cpu_only_launcher_build() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+
+    for required in (
+        'cargo_target_root="/tmp/fullmag-zfn2-build/cargo-targets"',
+        'cargo_target_dir="$cargo_target_root/fdm-multilayer-webgl-matrix-cpu-$(basename "$run_root")"',
+        'build_log="$run_root/fullmag-build.log"',
+        'mkdir -p "$cargo_target_dir" > "$build_log" 2>&1',
+        'just ensure-python >> "$build_log" 2>&1',
+        'FULLMAG_CARGO_TARGET_DIR="$cargo_target_dir" just build fullmag 1 >> "$build_log" 2>&1',
+    ):
+        assert required in recipe
+
+    assert recipe.index('run_root="$(mktemp -d') < recipe.index('build_log="$run_root/fullmag-build.log"')
+    assert recipe.index("trap finish EXIT INT TERM") < recipe.index(
+        'FULLMAG_CARGO_TARGET_DIR="$cargo_target_dir" just build fullmag 1 >> "$build_log" 2>&1'
+    )
+    assert recipe.index('FULLMAG_CARGO_TARGET_DIR="$cargo_target_dir" just build fullmag 1 >> "$build_log" 2>&1') < recipe.index(
+        "setsid env"
+    )
+    assert recipe.count("just build fullmag") == 1
