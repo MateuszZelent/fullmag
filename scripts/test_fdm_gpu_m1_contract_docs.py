@@ -192,7 +192,7 @@ def _racetrack_public_lowering() -> dict[str, object]:
                 tuple(surface(value) for value in spin_boundary["surfaces"]),
             ),
         ),
-        solver=fm.SpinSolverPolicy(),
+        solver=fm.SpinSolverPolicy(engine="native_m1_v1"),
         requested_execution=fm.TransportExecution(
             discretization="fdm",
             device="gpu",
@@ -227,6 +227,17 @@ def _racetrack_public_lowering() -> dict[str, object]:
                 name="fm",
                 geometry=fm_geometry,
                 material=material,
+                m0=(
+                    fm.texture.neel_skyrmion(
+                        radius=30.0e-9,
+                        wall_width=5.0e-9,
+                        chirality=1,
+                        core_polarity=1,
+                        plane="xy",
+                    )
+                    .with_mapping(space="world")
+                    .translate(256.0e-9, 64.0e-9, 3.5e-9)
+                ),
             ),
         ),
         auxiliary_geometries=(hm_geometry,),
@@ -1871,6 +1882,7 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                 "periodic_boundaries",
                 "thermal_noise",
                 "multi_gpu",
+                "adaptive_geometry",
             ],
             fixture["execution_intent"]["forbidden_fallbacks"],
         )
@@ -2174,6 +2186,112 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             expected_lowering["problem_meta"]["runtime_metadata"]["runtime_selection"],
         )
 
+    def test_racetrack_native_engine_and_neel_seed_are_exact_public_lowering(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        page = PAGE.read_text(encoding="utf-8")
+        readme = RACETRACK_README.read_text(encoding="utf-8")
+        expected_lowering = fixture["normalized_problem_ir_contract"]["expected_lowering"]
+        public_lowering = _racetrack_public_lowering()
+
+        expected_solver = expected_lowering["spin_transport_modules"][0]["solver"]
+        public_solver = public_lowering["spin_transport_modules"][0]["solver"]
+        self.assertEqual("native_m1_v1", expected_solver["engine"])
+        self.assertEqual("native_m1_v1", public_solver["engine"])
+        self.assertNotIn(expected_solver["engine"], {"auto", "gmres"})
+        self.assertNotIn("fallback", expected_solver)
+        self.assertEqual("forbidden", fixture["execution_intent"]["spin_solver_fallback"])
+
+        seed = fixture["initial_state"]
+        self.assertEqual(
+            {
+                "kind": "canonical_neel_skyrmion_seed",
+                "target": "fm",
+                "public_constructor": "fm.texture.neel_skyrmion",
+                "problem_ir_path": "magnets[0].initial_magnetization",
+                "mapping_space": "world",
+                "plane": "xy",
+                "center_m": [256.0e-9, 64.0e-9, 3.5e-9],
+                "radius_m": 30.0e-9,
+                "wall_width_m": 5.0e-9,
+                "chirality": 1,
+                "helicity_rad": 0.0,
+                "polarity_parameter": 1,
+                "core_axis_sign": -1,
+                "background_axis_sign": 1,
+                "wall_direction": "radially_outward",
+                "profile": {
+                    "rho": "hypot(x-x_c,y-y_c)",
+                    "phi": "atan2(y-y_c,x-x_c)",
+                    "theta": "2*atan(exp((radius-rho)/wall_width))",
+                    "phase": "phi for chirality=+1 and Neel helicity=0",
+                    "raw_vector": "[sin(theta)*cos(phase),sin(theta)*sin(phase),polarity_parameter*cos(theta)]",
+                },
+                "normalization": {
+                    "rule": "per_sample_euclidean_l2_to_unit_vector",
+                    "zero_norm_fallback": [0.0, 0.0, 1.0],
+                },
+                "qualification_rule": "The zero-current relaxation stage, not the seed alone, must establish stable signed topological charge, center, radius, and energy on three grids.",
+            },
+            seed,
+        )
+        seed_ir = expected_lowering["magnets"][0]["initial_magnetization"]
+        self.assertEqual(seed_ir, public_lowering["magnets"][0]["initial_magnetization"])
+        self.assertEqual(
+            {
+                "kind": "preset_texture",
+                "preset_kind": "neel_skyrmion",
+                "preset_params": {
+                    "radius": 30.0e-9,
+                    "wall_width": 5.0e-9,
+                    "chirality": 1,
+                    "core_polarity": 1,
+                    "plane": "xy",
+                },
+                "mapping": {
+                    "space": "world",
+                    "projection": "object_local",
+                    "clamp_mode": "none",
+                },
+                "texture_transform": {
+                    "translation": [256.0e-9, 64.0e-9, 3.5e-9],
+                    "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                    "pivot": [0.0, 0.0, 0.0],
+                },
+                "ui_label": None,
+                "preview_proxy": "disc",
+            },
+            seed_ir,
+        )
+
+        python_src = ROOT / "packages/fullmag-py/src"
+        if str(python_src) not in sys.path:
+            sys.path.insert(0, str(python_src))
+        import fullmag as fm
+
+        samples = fm.evaluate_preset_texture(
+            "neel_skyrmion",
+            seed_ir["preset_params"],
+            ([0.0, 0.0, 0.0], [30.0e-9, 0.0, 0.0], [300.0e-9, 0.0, 0.0]),
+        ).values
+        self.assertLess(samples[0][2], 0.0)
+        self.assertGreater(samples[1][0], 0.999999)
+        self.assertAlmostEqual(0.0, samples[1][2], places=12)
+        self.assertGreater(samples[2][2], 0.999999)
+        for sample in samples:
+            self.assertAlmostEqual(1.0, sum(component * component for component in sample), places=12)
+        for fragment in (
+            "native_m1_v1",
+            "[256e-9,64e-9,3.5e-9]",
+            "R=30e-9",
+            "Delta=5e-9",
+            "helicity=0",
+            "core m_z<0",
+            "background m_z->+1",
+            "adaptive_geometry",
+        ):
+            self.assertIn(fragment, page + readme)
+
     def test_racetrack_schedule_targets_existing_problem_ir_fields(self) -> None:
         fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
         schedule = fixture["current_schedule"]
@@ -2327,12 +2445,48 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             windows["selection_tie_break"],
         )
         regression = contract["regression"]
-        self.assertEqual(1e-18, regression["position_variance_floor_m2"])
+        self.assertEqual("equal_weight_v1", regression["weight_policy"])
+        self.assertEqual(1.0, regression["sample_weight"])
         self.assertEqual(
-            "1/max(sigma_x_m2+sigma_y_m2,position_variance_floor_m2)",
-            regression["common_weight"],
+            ["time_s", "centre_m[0]", "centre_m[1]"],
+            regression["fit_inputs"],
+        )
+        self.assertEqual(
+            "sum(r_a_n*r_b_n)/(N-2)",
+            regression["residual_cross_covariance"],
+        )
+        self.assertEqual(
+            "residual_cross_covariance/S_tt",
+            regression["velocity_covariance"],
         )
         self.assertEqual("N-2", regression["residual_degrees_of_freedom"])
+        trajectory = contract["trajectory_input"]
+        self.assertEqual("signed_topological_density_first_moment", trajectory["producer"])
+        self.assertEqual(
+            [
+                "accepted_sequence",
+                "time_s",
+                "topological_charge",
+                "centre_m",
+                "minimum_edge_distance_m",
+            ],
+            trajectory["required_sample_fields"],
+        )
+        self.assertEqual("not_produced", trajectory["position_variance"])
+        self.assertEqual(
+            [
+                "scene_revision",
+                "field_revision",
+                "mesh_revision",
+                "mesh_generation_id",
+                "domain_generation_id",
+                "global_node_mapping_id",
+                "snapshot_id",
+                "stage_id",
+                "cache_key_digest",
+            ],
+            trajectory["required_provenance"],
+        )
         self.assertEqual(
             [
                 "topology_lost",
@@ -2356,8 +2510,13 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             r"\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi}",
             r"\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}",
             r"c_v=\frac{\sqrt{\frac{1}{N-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}",
-            r"\chi_{ab}=\frac{1}{N-2}\sum_nw_nr_{a,n}r_{b,n}",
+            r"w_n=1",
+            r"\chi_{ab}=\frac{1}{N-2}\sum_nr_{a,n}r_{b,n}",
             r"\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}",
+            "position variances are not produced",
+            "equal_weight_v1",
+            "accepted_sequence",
+            "cache_key_digest",
         ):
             self.assertIn(fragment, page)
         self.assertIn(
@@ -2433,9 +2592,9 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
         for row in (
             r"| $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |",
-            r"| $w_n$ | $w_n$ | inverse position-variance regression weight | $\mathrm{m^{-2}}$ |",
+            r"| $w_n$ | $w_n$ | deterministic equal sample weight, exactly one | $1$ |",
             r"| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |",
-            r"| $\sigma_{r,n}^2$ | $\sigma_{r,n}^2$ | summed centre-coordinate variance before flooring | $\mathrm{m^2}$ |",
+            r"| $\chi_{ab}$ | $\chi_{ab}$ | equal-weight residual cross-covariance of centre coordinates | $\mathrm{m^2}$ |",
         ):
             self.assertIn(row, page)
         self.assertNotIn("| t_n | t_n | accepted trajectory time sample | \\mathrm{s} |", page)

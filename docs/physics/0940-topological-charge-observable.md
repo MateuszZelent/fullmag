@@ -490,16 +490,17 @@ index. Among passing candidates select maximum duration; an exact duration tie
 selects the minimum start index, then the minimum end index. This is the only
 candidate-window selection and tie-break rule.
 
-Each sample supplies finite nonnegative centre-coordinate variances
-$\sigma_{x,n}^2$ and $\sigma_{y,n}^2$. Both regressions use the same sample
-mask. Define $\sigma_{r,n}^2=\sigma_{x,n}^2+\sigma_{y,n}^2$ and use the same
-weight $w_n=1/\max(\sigma_{r,n}^2,10^{-18}\,\mathrm{m^2})$.
-Define $W=\sum_nw_n$, the weighted means, and the centred normal-matrix entry
-$S_{tt}$. Weighted least squares with an intercept is exactly
+The v1 trajectory producer does not estimate centre-coordinate uncertainty:
+position variances are not produced by the signed triangle-density moment.
+Inventing $\sigma_{x,n}^2$ or $\sigma_{y,n}^2$ from grid spacing would attach
+an uncalibrated statistical meaning to a deterministic discretization error.
+Therefore `equal_weight_v1` is mandatory: every accepted sample has exactly
+$w_n=1$. This is the equal-weight special case of weighted least squares, with
+one common sample mask and an intercept:
 
 ```{math}
 :label: skyrmion-hall-weighted-regression
-W=\sum_nw_n,\quad
+w_n=1,\quad W=\sum_nw_n=N,\quad
 \bar t_w=\frac{\sum_nw_nt_n}{W},\quad
 \bar x_w=\frac{\sum_nw_nx_n}{W},\quad
 \bar y_w=\frac{\sum_nw_ny_n}{W},\quad
@@ -511,16 +512,25 @@ b_x=\bar x_w-v_x\bar t_w,\quad b_y=\bar y_w-v_y\bar t_w.
 ```
 
 The fit is invalid when $S_{tt}\le0$ or $N-2\le0$. For $a,b\in\{x,y\}$,
-$r_{a,n}=a_n-(b_a+v_at_n)$ and the cross-coordinate weighted residual scale
+$r_{a,n}=a_n-(b_a+v_at_n)$ and the equal-weight residual cross-covariance
 uses exactly $N-2$ degrees of freedom. The complete reported two-coordinate
 velocity covariance is
 
 ```{math}
 :label: skyrmion-hall-weighted-covariance
 r_{a,n}=a_n-(b_a+v_at_n),\qquad
-\chi_{ab}=\frac{1}{N-2}\sum_nw_nr_{a,n}r_{b,n},\qquad
+\chi_{ab}=\frac{1}{N-2}\sum_nr_{a,n}r_{b,n},\qquad
 \operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}.
 ```
+
+Every trajectory sample must provide `accepted_sequence`, finite strictly
+increasing `time_s`, finite `topological_charge`, finite two-component
+`centre_m`, and finite nonnegative `minimum_edge_distance_m`. These fields
+supply every numeric input used by window selection and the fit. The accepted
+trajectory also preserves `scene_revision`, `field_revision`, `mesh_revision`,
+`mesh_generation_id`, `domain_generation_id`, `global_node_mapping_id`,
+`snapshot_id`, `stage_id`, and `cache_key_digest`; samples with mixed or
+missing provenance are rejected before regression.
 
 The signed Hall angle uses the principal branch
 
@@ -544,7 +554,7 @@ off-diagonal term:
 | id | latex | meaning | si_unit |
 |---|---|---|---|
 | $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |
-| $w_n$ | $w_n$ | inverse position-variance regression weight | $\mathrm{m^{-2}}$ |
+| $w_n$ | $w_n$ | deterministic equal sample weight, exactly one | $1$ |
 | $x_n$ | $x_n$ | signed-density centre coordinate along the track | $\mathrm{m}$ |
 | $y_n$ | $y_n$ | signed-density centre coordinate along the transverse axis | $\mathrm{m}$ |
 | $v_x$ | $v_x$ | fitted longitudinal velocity | $\mathrm{m\,s^{-1}}$ |
@@ -561,18 +571,15 @@ off-diagonal term:
 | $\bar s$ | $\bar s$ | arithmetic mean of adjacent secant speeds | $\mathrm{m\,s^{-1}}$ |
 | $c_v$ | $c_v$ | coefficient of variation of adjacent speeds | $1$ |
 | $N$ | $N$ | number of samples in a candidate window | $1$ |
-| $W$ | $W$ | sum of common inverse-position-variance weights | $\mathrm{m^{-2}}$ |
-| $S_{tt}$ | $S_{tt}$ | centred weighted time normal-matrix entry | $\mathrm{m^{-2}\,s^2}$ |
+| $W$ | $W$ | sum of equal sample weights, exactly $N$ | $1$ |
+| $S_{tt}$ | $S_{tt}$ | centred equal-weight time normal-matrix entry | $\mathrm{s^2}$ |
 | $\bar t_w$ | $\bar t_w$ | weighted mean trajectory time | $\mathrm{s}$ |
 | $\bar x_w,\bar y_w$ | $\bar x_w,\bar y_w$ | weighted mean centre coordinates | $\mathrm{m}$ |
 | $b_x$ | $b_x$ | fitted longitudinal intercept | $\mathrm{m}$ |
 | $b_y$ | $b_y$ | fitted transverse intercept | $\mathrm{m}$ |
 | $r_{a,n}$ | $r_{a,n}$ | coordinate-$a$ regression residual | $\mathrm{m}$ |
 | $a,b$ | $a,b$ | coordinate indices taking values $x$ or $y$ | $1$ |
-| $\chi_{ab}$ | $\chi_{ab}$ | weighted residual cross-coordinate scale | $1$ |
-| $\sigma_{x,n}^2,\sigma_{y,n}^2$ | $\sigma_{x,n}^2,\sigma_{y,n}^2$ | supplied centre-coordinate variances | $\mathrm{m^2}$ |
-| $\sigma_{r,n}^2$ | $\sigma_{r,n}^2$ | summed centre-coordinate variance before flooring | $\mathrm{m^2}$ |
-| $\sigma_{\mathrm{floor}}^2$ | $\sigma_{\mathrm{floor}}^2$ | fixed common-weight variance floor | $\mathrm{m^2}$ |
+| $\chi_{ab}$ | $\chi_{ab}$ | equal-weight residual cross-covariance of centre coordinates | $\mathrm{m^2}$ |
 | $\operatorname{Cov}(v_a,v_b)$ | $\operatorname{Cov}(v_a,v_b)$ | fitted velocity covariance entry | $\mathrm{m^2\,s^{-2}}$ |
 | $\operatorname{Var}(\Theta_H)$ | $\operatorname{Var}(\Theta_H)$ | delta-method Hall-angle variance | $\mathrm{rad^2}$ |
 

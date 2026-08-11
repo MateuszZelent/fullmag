@@ -438,6 +438,16 @@ The machine-readable symbol contract used by the source map is:
 | B_eff | $B_{\mathrm{eff}}$ | effective magnetic induction | $\mathrm{T}$ |
 | T_P | $T_P$ | polarization-driven contribution to transport torque | $\mathrm{s^{-1}}$ |
 | T_SHE | $T_{\mathrm{SHE}}$ | direct-SHE contribution to transport torque | $\mathrm{s^{-1}}$ |
+| seed_xy | $x,y$ | world-space coordinates in the racetrack plane | $\mathrm{m}$ |
+| seed_center | $x_c,y_c$ | frozen world-space skyrmion centre | $\mathrm{m}$ |
+| seed_rho | $\rho$ | radial distance from the frozen centre | $\mathrm{m}$ |
+| seed_phi | $\phi$ | polar angle about the frozen centre | $\mathrm{rad}$ |
+| seed_theta | $\theta$ | skyrmion polar profile angle | $\mathrm{rad}$ |
+| seed_phase | $\chi$ | in-plane phase; equals $\phi$ for the frozen outward Néel wall | $\mathrm{rad}$ |
+| seed_radius | $R$ | frozen seed radius | $\mathrm{m}$ |
+| seed_wall_width | $\Delta$ | frozen seed wall width | $\mathrm{m}$ |
+| seed_polarity | $p$ | serialized polarity multiplier in the repository profile | $1$ |
+| seed_m_raw | $\mathbf m_{\mathrm{raw}}$ | pre-normalization seed vector | $1$ |
 
 ```{math}
 :label: m1-constitutive-block
@@ -700,6 +710,34 @@ Deskryptor `cell_bounds` wraz z `shape` i `cell_order` wyznacza każdy bit maski
 runtime nie może rekonstruować maski z $M_s$, z amplitudy prądu ani z samej
 obecności materiału.
 
+Kanoniczny stan początkowy nie jest jednorodnym $m$. Publiczny konstruktor
+`fm.texture.neel_skyrmion` zapisuje `preset_texture` w
+`magnets[0].initial_magnetization`, z mapowaniem `world`, płaszczyzną `xy`,
+centrum `[256e-9,64e-9,3.5e-9]`, `R=30e-9`, `Delta=5e-9`,
+`chirality=+1`, Néel `helicity=0` i serializowanym
+`core_polarity=+1`. Dla $\rho$ liczonego od tego centrum repozytoryjny profil
+jest dokładnie
+
+```{math}
+:label: racetrack-neel-seed
+\rho=\sqrt{(x-x_c)^2+(y-y_c)^2},\qquad
+\phi=\operatorname{atan2}(y-y_c,x-x_c),\qquad
+\theta(\rho)=2\operatorname{atan}\!\left[\exp\!\left(\frac{R-\rho}{\Delta}\right)\right],
+\qquad
+\chi=\phi,
+\qquad
+\mathbf m_{\mathrm{raw}}=
+(\sin\theta\cos\chi,\sin\theta\sin\chi,p\cos\theta),\quad p=+1,
+\qquad
+\mathbf m=\frac{\mathbf m_{\mathrm{raw}}}{\lVert\mathbf m_{\mathrm{raw}}\rVert_2}.
+```
+
+Zatem ściana przy $\rho=R$ jest radialnie skierowana na zewnątrz,
+`core m_z<0`, a `background m_z->+1`. Normalizacja jest wykonywana osobno dla
+każdej próbki; tylko hipotetyczna zerowa norma używa deterministycznego
+fallbacku `[0,0,1]`. Seed jest wejściem do relaksacji, nie dowodem stabilności
+ani kwalifikacji skyrmionu.
+
 Etap `relax_zero_current` zachowuje moduł transportu, ustawia $J_x=0$, wyłącza
 transportowy torque i publikuje checkpoint `relaxed_zero_current`. Etap
 `drive_solved_current` wykonuje sześć niezależnych przebiegów w porządku
@@ -709,6 +747,13 @@ używa stałego kroku $0.1\,\mathrm{ps}$, zapisuje próbkę co $5\,\mathrm{ps}$ 
 aktualizuje transport przy każdej ewaluacji RHS LLG. Dla każdego $J_x$ JSON
 zapisuje obie konkretne outward densities, więc znak terminali nie jest
 wyprowadzany później z nazwy powierzchni.
+
+Spin solver fixture jest jawnie i dokładnie `native_m1_v1`. Wartości `auto`,
+`gmres` i każdy fallback są zabronione. Pełny zamrożony zakres zabroniony to
+CPU, FP32, prescribed torque, prescribed current density, Oersted, iSHE, M2,
+M3, MTJ, PBC, thermal noise, multi-GPU oraz `adaptive_geometry`. Ostatni zakaz
+oznacza, że geometria, siatka, maski i indeksowanie komórek pozostają identyczne
+we wszystkich przebiegach.
 
 `normalized_problem_ir_contract.expected_lowering` jest kompletną, typowaną
 projekcją bieżącego `ProblemIR`, zbudowaną przez publiczne konstruktory
@@ -2222,6 +2267,9 @@ a qualified workload without the validation gates above.
 | Public pure-Neumann managed recipe | justfile | verify-fdm-gpu-public-charge-zero-mean-runtime | compile through the container-backed runtime, execute the public fixture, and run the independent oracle | managed actual-device gate |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
 | Frozen solved-current racetrack contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:racetrack-m1-v1-contract | freeze the synthetic fixture, equations, signs, parameter provenance, and qualification boundary | planned contract only; not implemented or qualified |
+| Public racetrack Neel seed authoring | packages/fullmag-py/src/fullmag/init/textures.py | neel_skyrmion | serialize the exact public preset parameters, world mapping, and translation into current ProblemIR | public lowering and formula-sample contract test |
+| Python racetrack Neel seed evaluator | packages/fullmag-py/src/fullmag/init/preset_eval.py | _skyrmion | evaluate and normalize the repository-owned analytic skyrmion formula | centre, wall, far-field, direction, and norm contract samples |
+| Rust racetrack Neel seed evaluator | crates/fullmag-plan/src/magnetization_textures.rs | eval_skyrmion | evaluate the same analytic preset from typed ProblemIR | current typed fixture parser and formula source-map gate |
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |
 | FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with linear-cost geometric `2 x 2 x 2` aggregation and exact device RAP | uniform/layered/scalability actual-device gates |

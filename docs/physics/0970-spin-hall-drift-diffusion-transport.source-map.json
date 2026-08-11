@@ -101,6 +101,11 @@
       "id": "racetrack-theta-sh-torque-decomposition",
       "symbols": ["theta_SH", "T_P", "T_SHE"],
       "sources": ["racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-neel-seed",
+      "symbols": ["seed_xy", "seed_center", "seed_rho", "seed_phi", "seed_theta", "seed_phase", "seed_radius", "seed_wall_width", "seed_polarity", "seed_m_raw", "m"],
+      "sources": ["python-neel-skyrmion-authoring", "python-neel-skyrmion-evaluator", "rust-neel-skyrmion-evaluator", "racetrack-m1-v1-contract"]
     }
   ],
   "symbols": [
@@ -144,7 +149,17 @@
     {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "$1$"},
     {"id": "B_eff", "latex": "B_{\\mathrm{eff}}", "meaning": "effective magnetic induction", "si_unit": "\\mathrm{T}"},
     {"id": "T_P", "latex": "T_P", "meaning": "polarization-driven contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"},
-    {"id": "T_SHE", "latex": "T_{\\mathrm{SHE}}", "meaning": "direct-SHE contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"}
+    {"id": "T_SHE", "latex": "T_{\\mathrm{SHE}}", "meaning": "direct-SHE contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "seed_xy", "latex": "x,y", "meaning": "world-space coordinates in the racetrack plane", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_center", "latex": "x_c,y_c", "meaning": "frozen world-space skyrmion centre", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_rho", "latex": "\\rho", "meaning": "radial distance from the frozen centre", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_phi", "latex": "\\phi", "meaning": "polar angle about the frozen centre", "si_unit": "\\mathrm{rad}"},
+    {"id": "seed_theta", "latex": "\\theta", "meaning": "skyrmion polar profile angle", "si_unit": "\\mathrm{rad}"},
+    {"id": "seed_phase", "latex": "\\chi", "meaning": "in-plane phase; equals $\\phi$ for the frozen outward Néel wall", "si_unit": "\\mathrm{rad}"},
+    {"id": "seed_radius", "latex": "R", "meaning": "frozen seed radius", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_wall_width", "latex": "\\Delta", "meaning": "frozen seed wall width", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_polarity", "latex": "p", "meaning": "serialized polarity multiplier in the repository profile", "si_unit": "$1$"},
+    {"id": "seed_m_raw", "latex": "\\mathbf m_{\\mathrm{raw}}", "meaning": "pre-normalization seed vector", "si_unit": "$1$"}
   ],
   "sources": [
     {"id": "fem-m1-charge", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_charge", "responsibility": "Assemble and solve the bounded conforming H1/P1 charge equation for M1."},
@@ -205,6 +220,9 @@
     {"id": "fdm-gpu-m1-spin-observables-test", "path": "backends/fdm/tests/gpu_m1_spin_operator_parity_v1_contract.cpp", "symbol": "main", "responsibility": "Compare immutable GPU fields and observations against the CPU owner, including reversed interface orientation, deterministic identity order, and accepted charge traces on an actual GPU.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-spin-sparse-dispatch-test", "path": "backends/fdm/tests/gpu_m1_spin_sparse_dispatch_v1_contract.cpp", "symbol": "main", "responsibility": "Execute the public 1,048,576-cell spin path, enforce the 512 MiB external and 2 GiB total memory limits, and prove cache, digest invalidation, NaN rollback, and deterministic recovery.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-spin-sparse-performance-test", "path": "backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu", "symbol": "main", "responsibility": "Record identified-GPU setup, five warm solve timings, exact byte ledger, hierarchy levels, and forbidden transfers against frozen absolute limits.", "evidence_status": "actual_device_contract"},
+    {"id": "python-neel-skyrmion-authoring", "path": "packages/fullmag-py/src/fullmag/init/textures.py", "symbol": "neel_skyrmion", "responsibility": "Serialize the public Neel preset parameters, mapping, and texture transform into current ProblemIR."},
+    {"id": "python-neel-skyrmion-evaluator", "path": "packages/fullmag-py/src/fullmag/init/preset_eval.py", "symbol": "_skyrmion", "responsibility": "Evaluate and normalize the repository-owned analytic skyrmion formula for Python materialization."},
+    {"id": "rust-neel-skyrmion-evaluator", "path": "crates/fullmag-plan/src/magnetization_textures.rs", "symbol": "eval_skyrmion", "responsibility": "Evaluate the same analytic preset from current typed ProblemIR in the Rust planner."},
     {"id": "racetrack-m1-v1-contract", "path": "docs/physics/0970-spin-hall-drift-diffusion-transport.md", "symbol": "DOC-ANCHOR:racetrack-m1-v1-contract", "responsibility": "Freeze the synthetic solved-current racetrack fixture, complete M1 equations, sign operations, parameter provenance, and qualification boundary without claiming implementation.", "evidence_status": "planned_contract"}
   ],
   "planned_symbols": [

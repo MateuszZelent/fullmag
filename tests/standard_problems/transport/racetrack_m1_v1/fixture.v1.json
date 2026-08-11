@@ -23,6 +23,7 @@
       "execution_mode": "strict"
     },
     "qualification_status": "planned_not_implemented",
+    "spin_solver_fallback": "forbidden",
     "forbidden_fallbacks": [
       "cpu",
       "single",
@@ -35,7 +36,8 @@
       "mtj",
       "periodic_boundaries",
       "thermal_noise",
-      "multi_gpu"
+      "multi_gpu",
+      "adaptive_geometry"
     ]
   },
   "structured_grid": {
@@ -148,6 +150,30 @@
   "initial_state": {
     "kind": "canonical_neel_skyrmion_seed",
     "target": "fm",
+    "public_constructor": "fm.texture.neel_skyrmion",
+    "problem_ir_path": "magnets[0].initial_magnetization",
+    "mapping_space": "world",
+    "plane": "xy",
+    "center_m": [256e-9, 64e-9, 3.5e-9],
+    "radius_m": 30e-9,
+    "wall_width_m": 5e-9,
+    "chirality": 1,
+    "helicity_rad": 0.0,
+    "polarity_parameter": 1,
+    "core_axis_sign": -1,
+    "background_axis_sign": 1,
+    "wall_direction": "radially_outward",
+    "profile": {
+      "rho": "hypot(x-x_c,y-y_c)",
+      "phi": "atan2(y-y_c,x-x_c)",
+      "theta": "2*atan(exp((radius-rho)/wall_width))",
+      "phase": "phi for chirality=+1 and Neel helicity=0",
+      "raw_vector": "[sin(theta)*cos(phase),sin(theta)*sin(phase),polarity_parameter*cos(theta)]"
+    },
+    "normalization": {
+      "rule": "per_sample_euclidean_l2_to_unit_vector",
+      "zero_norm_fallback": [0.0, 0.0, 1.0]
+    },
     "qualification_rule": "The zero-current relaxation stage, not the seed alone, must establish stable signed topological charge, center, radius, and energy on three grids."
   },
   "stage_contract": [
@@ -304,6 +330,28 @@
       "minimum_abs_charge": 0.5,
       "required_sign": "one nonzero sign over the complete trajectory"
     },
+    "trajectory_input": {
+      "producer": "signed_topological_density_first_moment",
+      "required_sample_fields": [
+        "accepted_sequence",
+        "time_s",
+        "topological_charge",
+        "centre_m",
+        "minimum_edge_distance_m"
+      ],
+      "position_variance": "not_produced",
+      "required_provenance": [
+        "scene_revision",
+        "field_revision",
+        "mesh_revision",
+        "mesh_generation_id",
+        "domain_generation_id",
+        "global_node_mapping_id",
+        "snapshot_id",
+        "stage_id",
+        "cache_key_digest"
+      ]
+    },
     "candidate_windows": {
       "enumeration": "all_contiguous_intervals",
       "minimum_samples": 21,
@@ -316,9 +364,12 @@
       "selection_tie_break": ["maximum_duration", "minimum_start_index", "minimum_end_index"]
     },
     "regression": {
-      "position_variance_floor_m2": 1e-18,
-      "common_weight": "1/max(sigma_x_m2+sigma_y_m2,position_variance_floor_m2)",
-      "fit": "weighted_intercept_and_slope_for_x_and_y_with_one_common_sample_mask",
+      "weight_policy": "equal_weight_v1",
+      "sample_weight": 1.0,
+      "fit_inputs": ["time_s", "centre_m[0]", "centre_m[1]"],
+      "fit": "intercept_and_slope_for_x_and_y_with_one_common_sample_mask",
+      "residual_cross_covariance": "sum(r_a_n*r_b_n)/(N-2)",
+      "velocity_covariance": "residual_cross_covariance/S_tt",
       "residual_degrees_of_freedom": "N-2",
       "angle_branch": "atan2(v_y,v_x) in (-pi,pi]"
     },
@@ -431,7 +482,30 @@
           "name": "fm",
           "region": "fm",
           "material": "fm_material",
-          "initial_magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]},
+          "initial_magnetization": {
+            "kind": "preset_texture",
+            "preset_kind": "neel_skyrmion",
+            "preset_params": {
+              "radius": 30e-9,
+              "wall_width": 5e-9,
+              "chirality": 1,
+              "core_polarity": 1,
+              "plane": "xy"
+            },
+            "mapping": {
+              "space": "world",
+              "projection": "object_local",
+              "clamp_mode": "none"
+            },
+            "texture_transform": {
+              "translation": [256e-9, 64e-9, 3.5e-9],
+              "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+              "scale": [1.0, 1.0, 1.0],
+              "pivot": [0.0, 0.0, 0.0]
+            },
+            "ui_label": null,
+            "preview_proxy": "disc"
+          },
           "mesh_recipe": null,
           "absorbing_boundary": null
         }
@@ -560,7 +634,7 @@
           }
         ],
         "solver": {
-          "engine": "auto",
+          "engine": "native_m1_v1",
           "linear": {
             "relative_tolerance": 1e-8,
             "absolute_tolerance": 0.0,

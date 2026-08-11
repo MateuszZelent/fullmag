@@ -25,7 +25,8 @@ Fixture obejmuje siatkę `256 × 64 × 4`, osobne maski domeny transportowej,
 magnetycznej i targetu torque, zeroprądową relaksację istniejącego modułu oraz
 symetryczny sweep sześciu niezerowych prądów. Oersted, inverse SHE,
 prescribed SOT/STT, MTJ, FP32, PBC, termika, M2/M3, multi-GPU i fallback CPU
-są poza zakresem.
+są poza zakresem. Poza zakresem jest również `adaptive_geometry`: wszystkie
+sześć drive używa niezmiennej siatki, geometrii, masek i indeksowania komórek.
 
 HM zajmuje dokładnie warstwy komórek `z=[0,3)`, a FM `z=[3,4)`.
 `transport_active` obejmuje wszystkie `65536` komórek, natomiast
@@ -44,6 +45,18 @@ Każdy drive wraca do checkpointu `relaxed_zero_current`, trwa `2e-9 s`,
 używa kroku `1e-13 s` i próbkowania `5e-12 s`. JSON zapisuje konkretne
 outward densities obu terminali dla każdej z sześciu amplitud, więc pełny
 harmonogram i znaki nie zależą od późniejszych defaultów.
+
+Spin solver jest zamrożony dokładnie jako `native_m1_v1`; `auto`, `gmres` i
+każdy fallback są zabronione. Kanoniczny seed jest rzeczywistym publicznym
+loweringiem `fm.texture.neel_skyrmion`, nie uniform `m`. Używa world-space
+centrum `[256e-9,64e-9,3.5e-9]`, `R=30e-9`, `Delta=5e-9`,
+`chirality=+1`, Néel `helicity=0` oraz parametru polaryzacji `+1`. Dla
+rzeczywistej repozytoryjnej formuły oznacza to outward radial wall,
+`core m_z<0` i `background m_z->+1`. Każda próbka jest normalizowana normą
+euklidesową L2 do wektora jednostkowego; jedyny fallback dla zerowej normy to
+`[0,0,1]`. Dokładny JSON seeda jest częścią
+`magnets[0].initial_magnetization` i jest porównywany z aktualnym publicznym
+`Problem.to_ir()`.
 
 `normalized_problem_ir_contract.expected_lowering` jest kompletną, parsowalną
 projekcją bieżącego `ProblemIR`, zbudowaną publicznymi konstruktorami
