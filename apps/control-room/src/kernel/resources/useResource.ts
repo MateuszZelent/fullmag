@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   useSyncExternalStore,
@@ -59,11 +60,6 @@ export function useResource<TData>({
 }: UseResourceOptions<TData>): ResourceResult<TData> {
   const { bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
-  const loadRef = useRef(load);
-
-  useEffect(() => {
-    loadRef.current = load;
-  }, [load]);
 
   // Stabilize the subscribe callback so useSyncExternalStore doesn't
   // unsubscribe/resubscribe on every render.
@@ -114,7 +110,7 @@ export function useResource<TData>({
     enabled,
     errorCountRef,
     externalRevision,
-    loadRef,
+    load,
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
@@ -164,11 +160,6 @@ export function useResourceSelector<TData, TSelected>({
 }: UseResourceSelectorOptions<TData, TSelected>): TSelected {
   const { bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
-  const loadRef = useRef(load);
-
-  useEffect(() => {
-    loadRef.current = load;
-  }, [load]);
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
   const errorCountRef = useRef(0);
@@ -249,7 +240,7 @@ export function useResourceSelector<TData, TSelected>({
     enabled,
     errorCountRef,
     externalRevision,
-    loadRef,
+    load,
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
@@ -270,7 +261,7 @@ function useResourceLoader<TData>({
   enabled,
   errorCountRef,
   externalRevision,
-  loadRef,
+  load,
   loadedRefreshToken,
   minRefetchIntervalMs = 0,
   pauseLoad = false,
@@ -286,7 +277,7 @@ function useResourceLoader<TData>({
   enabled: boolean;
   errorCountRef: { current: number };
   externalRevision: ResourceRevision | null;
-  loadRef: { current: (context: LoadContext) => Promise<TData> };
+  load: (context: LoadContext) => Promise<TData>;
   loadedRefreshToken: number;
   minRefetchIntervalMs?: number;
   pauseLoad?: boolean;
@@ -296,6 +287,8 @@ function useResourceLoader<TData>({
   runtimeStore: ResourceRuntimeStore<TData>;
   setLoadedRefreshToken: (token: number) => void;
 }): void {
+  const loadLatest = useEffectEvent(load);
+
   useEffect(() => {
     if (!enabled) return;
     const hasManualRefresh = refreshToken !== loadedRefreshToken;
@@ -342,7 +335,7 @@ function useResourceLoader<TData>({
           abortStaleInflight,
           externalRevision,
           force: hasManualRefresh,
-          load: loadRef.current,
+          load: loadLatest,
           minRefetchIntervalMs,
           resolveRevision,
           resourceKey,
@@ -413,7 +406,6 @@ function useResourceLoader<TData>({
     enabled,
     errorCountRef,
     externalRevision,
-    loadRef,
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
