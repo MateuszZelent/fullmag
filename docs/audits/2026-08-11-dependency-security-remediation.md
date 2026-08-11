@@ -83,7 +83,22 @@ przeliczenie lockfile, a nie dodawać sztuczną zależność.
 | Inwentaryzacja | zakończona | grafy pnpm i Cargo odtworzone | 50 otwartych |
 | npm | naprawialne wersje zaktualizowane; image-size pozostaje dev-only bez poprawki | pnpm audit prod: 0; Control Room typecheck i webpack build: pass; pełne testy odtwarzają 18 bazowych failures, jeden niestabilny test przeszedł w izolacji; lint odtwarza identyczne 4 błędy i 7 ostrzeżeń bazowych; legacy blokują brakujące moduły debug obecne w bazie | nieprzeliczone |
 | Rust | PyO3 0.29.2, quinn-proto 0.11.15 i serde_with 3.21.0; glib 0.18.5 pozostaje upstream blocker Tauri/GTK3 | fullmag-py-core cargo check: pass; test compile potwierdza migrację Python::initialize i zatrzymuje się wyłącznie na bazowym fixture MeshIR; cargo-audit niedostępny | nieprzeliczone |
-| Końcowa kwalifikacja | nie rozpoczęta | nie rozpoczęta | nieprzeliczone |
+| Końcowa kwalifikacja | zakończona na gałęzi remediacyjnej | świeży `cargo check -p fullmag-py-core`: pass; `git diff --check`: pass; produkcyjny audyt npm: 0 znanych podatności | wymaga integracji z domyślną gałęzią i ponownego przeliczenia Dependabota |
+
+## Wynik końcowy gałęzi remediacyjnej
+
+Spośród 50 alertów wejściowych 47 ma wdrożoną aktualizację do wersji naprawionej.
+Trzy alerty nie mają obecnie uczciwej, bezpiecznej poprawki w używanym grafie:
+dwa dotyczą `image-size` 2.0.2, dla którego upstream nie opublikował wersji
+naprawionej, a jeden dotyczy `glib` 0.18.5 zablokowanego przez zgodność ABI
+GTK3/Tauri. `image-size` pozostaje wyłącznie w grafie developerskim Storybooka;
+`glib` pozostaje w linuxowym opcjonalnym kliencie desktopowym.
+
+Nie oznacza to jeszcze 47 zamkniętych alertów na GitHubie. Dependabot ocenia
+lockfile domyślnej gałęzi, dlatego stan serwera można potwierdzić dopiero po
+integracji tej gałęzi i zakończeniu ponownego skanowania. Kryterium produkcyjne
+dla npm jest już spełnione lokalnie: `pnpm audit --prod` raportuje zero znanych
+podatności.
 
 ## Ograniczenia po etapie Rust
 
