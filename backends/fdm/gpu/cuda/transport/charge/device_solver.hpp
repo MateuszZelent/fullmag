@@ -46,8 +46,14 @@ struct HierarchyCache {
     uint64_t *coarse_edge_b = nullptr;
     double *coarse_edge_weight = nullptr;
     void *hierarchy_info = nullptr;
+    double *warm_potential = nullptr;
     uint64_t cells = 0;
     uint64_t coarse_cells = 0;
+    uint64_t warm_descriptor_revision = 0;
+    uint64_t warm_source_revision = 0;
+    uint64_t warm_promotion_count = 0;
+    uint64_t warm_use_count = 0;
+    bool warm_valid = false;
     bool valid = false;
 };
 
@@ -62,6 +68,8 @@ struct SolveInput {
     uint64_t workspace_limit = 0;
     double relative_tolerance = 0.0;
     uint64_t max_iterations = 0;
+    uint64_t descriptor_revision = 0;
+    uint64_t source_revision = 0;
     HierarchyCache *hierarchy_cache = nullptr;
     CudaFailurePolicy *failure_policy = nullptr;
 };
@@ -84,6 +92,7 @@ struct SolveOutput {
     uint64_t transfer_count = 0;
     uint64_t transfer_bytes = 0;
     uint64_t peak_bytes = 0;
+    bool warm_start_used = false;
 };
 
 // Bytes copied from the device-side solve metrics record for one charge

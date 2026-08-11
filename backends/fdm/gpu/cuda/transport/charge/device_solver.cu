@@ -722,7 +722,8 @@ __global__ void charge_pcg_device_amg_kernel(
     const uint8_t *active, const double *diag, const double *rhs, const double *gx,
     const double *gy,
     const double *gz, uint64_t nx, uint64_t ny, uint64_t nz, double tolerance,
-    uint64_t max_iterations, double *potential, double *r, double *z, double *p,
+    uint64_t max_iterations, const double *warm_potential, uint32_t warm_start_used,
+    double *potential, double *r, double *z, double *p,
     double *ap, double *fine_tmp, double *coarse_rhs, double *coarse_x,
     double *coarse_tmp, const uint64_t *aggregate, const double *coarse_diag,
     const uint64_t *coarse_edge_a, const uint64_t *coarse_edge_b,
@@ -739,8 +740,11 @@ __global__ void charge_pcg_device_amg_kernel(
     __shared__ uint64_t active_tree[256];
     const uint64_t cells = nx * ny * nz;
     for (uint64_t i = threadIdx.x; i < cells; i += blockDim.x) {
-        potential[i] = 0.0;
-        r[i] = rhs[i];
+        const double initial = warm_start_used != 0 ? warm_potential[i] : 0.0;
+        potential[i] = initial;
+        r[i] = rhs[i] - (warm_start_used != 0
+            ? apply_row(i, warm_potential, diag, gx, gy, gz, nx, ny, nz)
+            : 0.0);
     }
     __syncthreads();
     uint64_t active_local = 0;
@@ -756,15 +760,21 @@ __global__ void charge_pcg_device_amg_kernel(
     if (threadIdx.x == 0)
         metrics->fine_unknown_count = active_tree[0];
     const double rhs_norm_squared = fixed_tree_dot(rhs, rhs, cells, tree);
+    const double initial_residual_squared = fixed_tree_dot(r, r, cells, tree);
     if (threadIdx.x == 0) {
         norm_b = sqrt(rhs_norm_squared);
-        residual_norm = norm_b == 0.0 ? 0.0 : 1.0;
+        residual_norm = norm_b == 0.0
+            ? sqrt(initial_residual_squared)
+            : sqrt(initial_residual_squared) / norm_b;
         completed = 0;
-        reason = norm_b == 0.0 ? FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED
-                               : FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;
+        reason = residual_norm <= tolerance
+            ? FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED
+            : norm_b == 0.0
+                ? FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_ALGEBRAIC_FAILURE
+                : FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;
     }
     __syncthreads();
-    if (norm_b != 0.0) {
+    if (reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS) {
         device_galerkin_amg_vcycle(r, z, fine_tmp, coarse_rhs, coarse_x, coarse_tmp,
                                    diag, gx, gy, gz, aggregate, coarse_diag,
                                    coarse_edge_a, coarse_edge_b, coarse_edge_weight,
@@ -820,7 +830,7 @@ __global__ void charge_pcg_device_amg_kernel(
     }
     if (threadIdx.x == 0) {
         metrics->iterations = completed;
-        metrics->amg_apply_count = norm_b == 0.0 ? 0 : completed +
+        metrics->amg_apply_count = completed +
             (reason == FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS ? 1 : 0);
         metrics->reason = reason;
         metrics->hierarchy_levels = hierarchy->coarse_cells < cells ? 2 : 1;
@@ -1172,6 +1182,7 @@ void release(HierarchyCache &cache) noexcept {
     if (cache.coarse_edge_b) (void)cudaFree(cache.coarse_edge_b);
     if (cache.coarse_edge_weight) (void)cudaFree(cache.coarse_edge_weight);
     if (cache.hierarchy_info) (void)cudaFree(cache.hierarchy_info);
+    if (cache.warm_potential) (void)cudaFree(cache.warm_potential);
     cache = {};
 }
 
@@ -1321,7 +1332,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         checked_add(workspace_bytes, sizeof(DeviceSolveMetrics) + sizeof(uint32_t),
                     &workspace_bytes) &&
         checked_scaled(max_coarse_edges, 3 * sizeof(uint64_t), &edge_bytes) &&
-        checked_scaled(fine_bytes, 8, &cache_bytes) &&
+        checked_scaled(fine_bytes, 9, &cache_bytes) &&
         checked_add(cache_bytes, cells, &cache_bytes) &&
         checked_add(cache_bytes, edge_bytes, &cache_bytes) &&
         checked_add(cache_bytes, sizeof(DeviceHierarchyInfo), &cache_bytes) &&
@@ -1374,7 +1385,8 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
                   max_coarse_edges * sizeof(uint64_t)) &&
             alloc(reinterpret_cast<void **>(&cache.coarse_edge_weight),
                   max_coarse_edges * sizeof(double)) &&
-            alloc(&cache.hierarchy_info, sizeof(DeviceHierarchyInfo));
+            alloc(&cache.hierarchy_info, sizeof(DeviceHierarchyInfo)) &&
+            alloc(reinterpret_cast<void **>(&cache.warm_potential), fine_bytes);
     }
     const bool allocated = cache_allocated &&
         alloc(reinterpret_cast<void **>(&candidate.potential), fine_bytes) &&
@@ -1492,10 +1504,17 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
         if (!cache_hit) release(cache);
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
+    const bool warm_start_used = cache.warm_valid &&
+        cache.warm_potential != nullptr && cache.cells == cells &&
+        cache.warm_descriptor_revision == input.descriptor_revision &&
+        cache.warm_source_revision == input.source_revision;
+    if (cache.warm_valid && !warm_start_used)
+        cache.warm_valid = false;
     charge_pcg_device_amg_kernel<<<1, threads, 0, input.stream>>>(
         cache.active, cache.diag, cache.rhs, cache.gx, cache.gy, cache.gz, nx, ny, nz,
         0.1 * input.relative_tolerance,
-        input.max_iterations, candidate.potential, r, z, p, ap, fine_tmp,
+        input.max_iterations, cache.warm_potential, warm_start_used ? 1u : 0u,
+        candidate.potential, r, z, p, ap, fine_tmp,
         coarse_rhs, coarse_x, coarse_tmp, cache.aggregate, cache.coarse_diag,
         cache.coarse_edge_a, cache.coarse_edge_b, cache.coarse_edge_weight,
         reinterpret_cast<const DeviceHierarchyInfo *>(cache.hierarchy_info), device_metrics);
@@ -1567,6 +1586,7 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     output->transfer_count = 2;
     output->transfer_bytes = sizeof(DeviceSolveMetrics) + sizeof(gauge_invalid);
     output->peak_bytes = total_peak_bytes;
+    output->warm_start_used = warm_start_used;
     if (metrics.reason != FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED) {
         std::fprintf(stderr,
                      "charge device PCG failed: reason=%u iterations=%llu residual=%.17g amg_applies=%llu levels=%u rho=%.17g denominator=%.17g\\n",
