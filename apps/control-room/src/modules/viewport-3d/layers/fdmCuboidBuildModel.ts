@@ -373,26 +373,38 @@ function sampleNativeLayerCellIndices(
   if (!activeMask) {
     return sampleFdmDisplayCellIndices(totalCells, displayCellCount);
   }
-  const activeCellIndices: number[] = [];
+  const activeCellCount = activeMask.reduce(
+    (count, active) => count + (active === 1 ? 1 : 0),
+    0,
+  );
+  if (activeCellCount === 0) return new Uint32Array();
+  const activeCellIndices = new Uint32Array(activeCellCount);
+  let activeOrdinal = 0;
   for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
-    if (activeMask[cellIndex] === 1) activeCellIndices.push(cellIndex);
+    if (activeMask[cellIndex] === 1) {
+      activeCellIndices[activeOrdinal] = cellIndex;
+      activeOrdinal += 1;
+    }
   }
-  if (activeCellIndices.length <= displayCellCount) {
-    return new Uint32Array(activeCellIndices);
+  const budget = Math.max(1, Math.floor(displayCellCount));
+  if (activeCellCount <= budget) {
+    return activeCellIndices;
   }
   const stride = Math.max(
     1,
-    Math.ceil(activeCellIndices.length / displayCellCount),
+    Math.ceil(activeCellCount / budget),
   );
-  const sampled: number[] = [];
+  const sampled = new Uint32Array(Math.ceil(activeCellCount / stride));
+  let sampledCount = 0;
   for (
     let ordinal = 0;
-    ordinal < activeCellIndices.length && sampled.length < displayCellCount;
+    ordinal < activeCellCount && sampledCount < sampled.length;
     ordinal += stride
   ) {
-    sampled.push(activeCellIndices[ordinal] ?? 0);
+    sampled[sampledCount] = activeCellIndices[ordinal] ?? 0;
+    sampledCount += 1;
   }
-  return new Uint32Array(sampled);
+  return sampled;
 }
 
 function sampleFdmDisplayCellIndicesWithMinimumMembership({
