@@ -73,6 +73,8 @@ async function main() {
   }
   const browser = await playwright.chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page.setDefaultTimeout(timeoutMs);
+  page.setDefaultNavigationTimeout(timeoutMs);
   const cdp = diagnosticTracePath ? await page.context().newCDPSession(page) : null;
   const traceEvents = [];
   if (cdp) {
