@@ -2373,7 +2373,17 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         pages_and_rows = (
             (
                 PAGE.read_text(encoding="utf-8"),
-                ("m", "alpha", "B_eff", "T_P", "T_SHE"),
+                (
+                    "m",
+                    "alpha",
+                    "B_eff",
+                    "T_P",
+                    "T_SHE",
+                    "b_K",
+                    "K",
+                    "C",
+                    "V_bar_C",
+                ),
             ),
             (
                 TOPOLOGICAL_PAGE.read_text(encoding="utf-8"),

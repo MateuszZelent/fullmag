@@ -398,10 +398,10 @@ The machine-readable symbol contract used by the source map is:
 | id | latex | meaning | si_unit |
 |---|---|---|---|
 | V | V | charge electrochemical potential | \mathrm{V} |
-| b_K | b_K | assembled finite-volume charge right-hand side for cell $K$ | \mathrm{A} |
-| K | K | deterministic finite-volume cell index | $1$ |
-| C | C | one numerically connected conducting-cell component | $1$ |
-| V_bar_C | \bar V_C | arithmetic mean charge potential on component $C$ | \mathrm{V} |
+| b_K | $b_K$ | assembled finite-volume charge right-hand side for cell $K$ | $\mathrm{A}$ |
+| K | $K$ | deterministic finite-volume cell index | $1$ |
+| C | $C$ | one numerically connected conducting-cell component | $1$ |
+| V_bar_C | $\bar V_C$ | arithmetic mean charge potential on component $C$ | $\mathrm{V}$ |
 | mu_s | \mu_s | full spin-channel splitting | \mathrm{V} |
 | E | E_i | electric field, negative charge-potential gradient | \mathrm{V\,m^{-1}} |
 | G | G_{ia} | spin-voltage gradient | \mathrm{V\,m^{-1}} |
