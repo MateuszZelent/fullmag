@@ -184,6 +184,7 @@ vi.mock("./ObjectVisualizationTargetSection", () => {
 });
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { resolveInspectorPanel } from "../inspectorRegistry";
 import { ObjectVisualizationPanel } from "./ObjectVisualizationPanel";
 
 const selection: Selection = {
@@ -201,7 +202,71 @@ const selection: Selection = {
   },
 };
 
+const airboxSelection: Selection = {
+  kind: "airbox.visualization",
+  label: "Airbox visualization",
+  moduleSource: "inspector",
+  nodeId: "model:universe:airbox:visualization",
+  objectId: null,
+  ref: {
+    kind: "airbox.visualization",
+    nodeId: "model:universe:airbox:visualization",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+};
+
+const meshPartSelection: Selection = {
+  kind: "mesh-part",
+  label: "Film volume",
+  moduleSource: "inspector",
+  nodeId: "resources:mesh:part:film-volume",
+  objectId: "film",
+  ref: {
+    carrierPartId: "film-volume",
+    kind: "mesh-part",
+    nodeId: "resources:mesh:part:film-volume",
+    objectId: "film",
+    type: "mesh-part",
+    visualizationTargetId: "part:film-volume",
+  },
+};
+
+function renderResolvedInspector(selectionValue: Selection): string {
+  const contribution = resolveInspectorPanel({ kind: selectionValue.kind });
+  if (!contribution) throw new Error(`Missing route for ${selectionValue.kind}`);
+  const Component = contribution.component;
+  return renderToStaticMarkup(<Component selection={selectionValue} />);
+}
+
 describe("ObjectVisualizationPanel lane routing", () => {
+  it("gives object, Airbox, and mesh-part routes distinct owner identities", () => {
+    testState.discretization = "fdm";
+
+    expect(renderResolvedInspector(selection)).toContain(
+      'data-inspector-owner="object.visualization"',
+    );
+    expect(renderResolvedInspector(airboxSelection)).toContain(
+      'data-inspector-owner="airbox.visualization"',
+    );
+    expect(renderResolvedInspector(meshPartSelection)).toContain(
+      'data-inspector-owner="mesh-part.visualization"',
+    );
+  });
+
+  it("gives every visualization debug route its own owner component", () => {
+    const debugKinds = [
+      "airbox.visualization.debug",
+      "object.visualization.debug",
+      "object.region.visualization.debug",
+    ] as const;
+    const owners = debugKinds.map((kind) => resolveInspectorPanel({ kind }));
+
+    expect(new Set(owners.map((owner) => owner?.component)).size).toBe(
+      debugKinds.length,
+    );
+  });
+
   it("keeps a normal explicit-FDM object visualization route on the object target", () => {
     testState.discretization = "fdm";
     testState.resourceCalls.length = 0;

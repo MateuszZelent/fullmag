@@ -7,6 +7,7 @@ import {
   AirboxMeshTopologyLanePanel,
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
+import { AirboxVisualizationPanel } from "./panels/airbox/AirboxVisualizationPanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
@@ -91,8 +92,12 @@ import {
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
+import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
-import { ModeVisualizationInspectorPanel } from "./panels/ModeVisualizationInspectorPanel";
+import { ModeVisualizationFieldPanel } from "./panels/mode-visualization/ModeVisualizationFieldPanel";
+import { ModeVisualizationGroupPanel } from "./panels/mode-visualization/ModeVisualizationGroupPanel";
+import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
+import { ModeVisualizationViewPanel } from "./panels/mode-visualization/ModeVisualizationViewPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
@@ -153,7 +158,10 @@ import {
   StudyStageInspectorRouter,
 } from "./panels/StudyStageInspectorRouter";
 import { resolveFrequencyDomainNodeDetail } from "./panels/frequencyDomainNodeDetails";
-import type { InspectorPanelContribution } from "./inspectorTypes";
+import type {
+  InspectorPanelContribution,
+  InspectorPanelProps,
+} from "./inspectorTypes";
 
 export type InspectorRouteId = string & {
   readonly __brand: "InspectorRouteId";
@@ -467,6 +475,39 @@ const frequencyDomainPanels: InspectorPanelContribution[] =
     component: FREQUENCY_DOMAIN_DEDICATED_PANELS[kind] ?? requireFrequencyDomainNamedPanel(kind),
   }));
 
+function AirboxVisualizationDebugOwner(props: InspectorPanelProps) {
+  return (
+    <div
+      className="fm-inspector-panel"
+      data-inspector-owner="airbox.visualization.debug"
+    >
+      <VisualizationDebugPanel {...props} />
+    </div>
+  );
+}
+
+function ObjectVisualizationDebugOwner(props: InspectorPanelProps) {
+  return (
+    <div
+      className="fm-inspector-panel"
+      data-inspector-owner="object.visualization.debug"
+    >
+      <VisualizationDebugPanel {...props} />
+    </div>
+  );
+}
+
+function ObjectRegionVisualizationDebugOwner(props: InspectorPanelProps) {
+  return (
+    <div
+      className="fm-inspector-panel"
+      data-inspector-owner="object.region.visualization.debug"
+    >
+      <VisualizationDebugPanel {...props} />
+    </div>
+  );
+}
+
 const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "planar-monitor-draft",
@@ -560,9 +601,9 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   },
   {
     id: "airbox-visualization",
-    title: "Visualization",
+    title: "Airbox Visualization",
     selectionKinds: ["airbox.visualization", "mesh-part-airbox"],
-    component: ObjectVisualizationPanel,
+    component: AirboxVisualizationPanel,
   },
   {
     id: "object-visualization",
@@ -572,38 +613,51 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   },
   {
     id: "mesh-part-visualization",
-    title: "Visualization",
+    title: "Mesh-part Visualization",
     selectionKinds: ["mesh-part"],
-    component: ObjectVisualizationPanel,
+    component: MeshPartVisualizationPanel,
   },
   {
     id: "airbox-visualization-debug",
-    title: "Visualization Debug",
+    title: "Airbox Visualization Debug",
     selectionKinds: ["airbox.visualization.debug"],
-    component: VisualizationDebugPanel,
+    component: AirboxVisualizationDebugOwner,
   },
   {
     id: "object-visualization-debug",
-    title: "Visualization Debug",
+    title: "Object Visualization Debug",
     selectionKinds: ["object.visualization.debug"],
-    component: VisualizationDebugPanel,
+    component: ObjectVisualizationDebugOwner,
   },
   {
     id: "object-region-visualization-debug",
-    title: "Visualization Debug",
+    title: "Region Visualization Debug",
     selectionKinds: ["object.region.visualization.debug"],
-    component: VisualizationDebugPanel,
+    component: ObjectRegionVisualizationDebugOwner,
   },
   {
-    id: "object-mode-visualization",
-    title: "Mode Visualization",
-    selectionKinds: [
-      "object.mode_visualization",
-      "object.mode_visualization.group",
-      "object.mode_visualization.field",
-      "object.mode_visualization.view",
-    ],
-    component: ModeVisualizationInspectorPanel,
+    id: "object-mode-visualization-overview",
+    title: "Mode Visualization Overview",
+    selectionKinds: ["object.mode_visualization"],
+    component: ModeVisualizationOverviewPanel,
+  },
+  {
+    id: "object-mode-visualization-group",
+    title: "Mode Visualization Group",
+    selectionKinds: ["object.mode_visualization.group"],
+    component: ModeVisualizationGroupPanel,
+  },
+  {
+    id: "object-mode-visualization-field",
+    title: "Mode Visualization Field",
+    selectionKinds: ["object.mode_visualization.field"],
+    component: ModeVisualizationFieldPanel,
+  },
+  {
+    id: "object-mode-visualization-view",
+    title: "Mode Visualization View",
+    selectionKinds: ["object.mode_visualization.view"],
+    component: ModeVisualizationViewPanel,
   },
   {
     id: "physics-interaction",

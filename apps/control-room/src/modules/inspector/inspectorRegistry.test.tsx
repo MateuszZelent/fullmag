@@ -22,7 +22,6 @@ import {
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
-import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import {
   EigenModeInspectorPanel,
@@ -195,13 +194,13 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves object mode visualization selections to the mode visualization panel", () => {
+  it("resolves mode visualization levels to distinct owner panels", () => {
     expect(resolveInspectorPanel({ kind: "object.mode_visualization" })?.id).toBe(
-      "object-mode-visualization",
+      "object-mode-visualization-overview",
     );
     expect(
       resolveInspectorPanel({ kind: "object.mode_visualization.view" })?.id,
-    ).toBe("object-mode-visualization");
+    ).toBe("object-mode-visualization-view");
   });
 
   it("resolves object region and magnetic texture groups", () => {
@@ -389,7 +388,7 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("uses distinct Debug routes with the shared production panel body", () => {
+  it("uses distinct Debug routes and owner components", () => {
     const kinds = [
       "airbox.visualization.debug",
       "object.visualization.debug",
@@ -403,9 +402,7 @@ describe("inspectorRegistry", () => {
       "object-visualization-debug",
       "object-region-visualization-debug",
     ]);
-    expect(
-      panels.every((panel) => panel?.component === VisualizationDebugPanel),
-    ).toBe(true);
+    expect(new Set(panels.map((panel) => panel?.component)).size).toBe(3);
     expect(new Set(kinds).size).toBe(3);
   });
 

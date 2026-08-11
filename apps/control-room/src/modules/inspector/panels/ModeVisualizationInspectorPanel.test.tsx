@@ -7,9 +7,9 @@ import { VisualizationDebugController } from "@/kernel/visualization/Visualizati
 import type { FrequencyDomainFieldResource } from "@/kernel/api/apiTypes";
 
 import {
-  ModeVisualizationInspectorPanel,
   buildModeFieldDiagnosticRows,
 } from "./ModeVisualizationInspectorPanel";
+import { resolveInspectorPanel } from "../inspectorRegistry";
 
 const executeMock = vi.fn(() => Promise.resolve());
 const queuePatchMock = vi.fn();
@@ -77,10 +77,86 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 }));
 
 describe("ModeVisualizationInspectorPanel", () => {
+  function renderModeOwner(
+    kind:
+      | "object.mode_visualization"
+      | "object.mode_visualization.group"
+      | "object.mode_visualization.field"
+      | "object.mode_visualization.view",
+    overrides: Record<string, unknown> = {},
+  ): string {
+    const contribution = resolveInspectorPanel({ kind });
+    if (!contribution) throw new Error(`Missing route for ${kind}`);
+    const Component = contribution.component;
+    const ref = {
+      type: "mode-visualization",
+      objectId: "object-123",
+      source: "eigen-mode",
+      fieldId: "field-eigen-456",
+      sampleIndex: 2,
+      modeIndex: 5,
+      view: "phase_rotated_real",
+      kind,
+      nodeId: `test-node:${kind}`,
+      visualizationTargetId: "mode:object-123:eigen-mode:field-eigen-456",
+      ...overrides,
+    };
+
+    return renderToStaticMarkup(
+      <KernelContext.Provider value={mockKernel}>
+        <Component
+          selection={{
+            kind,
+            label: kind.endsWith(".group") ? "Eigenmodes" : "Eigenmode 5",
+            nodeId: `test-node:${kind}`,
+            objectId: "object-123",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ref: ref as any,
+            moduleSource: "study",
+          }}
+        />
+      </KernelContext.Provider>,
+    );
+  }
+
+  it("routes overview, group, field, and view to distinct semantic owners", () => {
+    const overview = renderModeOwner("object.mode_visualization");
+    const group = renderModeOwner("object.mode_visualization.group");
+    const field = renderModeOwner("object.mode_visualization.field");
+    const view = renderModeOwner("object.mode_visualization.view");
+
+    expect(overview).toContain(
+      'data-inspector-owner="mode-visualization.overview"',
+    );
+    expect(overview).toContain("Mode family");
+    expect(overview).not.toContain("Mode field view");
+
+    expect(group).toContain(
+      'data-inspector-owner="mode-visualization.group"',
+    );
+    expect(group).toContain("Available fields");
+    expect(group).not.toContain("Mode field view");
+
+    expect(field).toContain(
+      'data-inspector-owner="mode-visualization.field"',
+    );
+    expect(field).toContain("Resource key");
+    expect(field).not.toContain("Mode field view");
+
+    expect(view).toContain(
+      'data-inspector-owner="mode-visualization.view"',
+    );
+    expect(view).toContain("Mode field view");
+    expect(view).toContain("Display passes");
+  });
+
   it("renders empty state when no target is selected", () => {
+    const contribution = resolveInspectorPanel({ kind: "object.mode_visualization" });
+    if (!contribution) throw new Error("Missing mode visualization overview route");
+    const Component = contribution.component;
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={mockKernel}>
-        <ModeVisualizationInspectorPanel
+        <Component
           selection={{
             kind: "object.mode_visualization",
             label: "Mode Vis",
@@ -106,23 +182,29 @@ describe("ModeVisualizationInspectorPanel", () => {
       sampleIndex: 2,
       modeIndex: 5,
       view: "phase_rotated_real",
-      kind: "object.mode_visualization",
+      kind: "object.mode_visualization.view",
       nodeId: "test-node",
       visualizationTargetId: "mode:object-123:eigen-mode:field-eigen-456",
     };
 
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={mockKernel}>
-        <ModeVisualizationInspectorPanel
+        {(() => {
+          const Component = resolveInspectorPanel({
+            kind: "object.mode_visualization.view",
+          })?.component;
+          if (!Component) throw new Error("Missing mode visualization view route");
+          return <Component
           selection={{
-            kind: "object.mode_visualization",
+            kind: "object.mode_visualization.view",
             label: "Eigenmode 5",
             nodeId: "test-node",
             objectId: "object-123",
             ref,
             moduleSource: "study",
           }}
-        />
+          />;
+        })()}
       </KernelContext.Provider>
     );
 
@@ -144,23 +226,29 @@ describe("ModeVisualizationInspectorPanel", () => {
       fieldId: "field-resp-999",
       frequencyIndex: 4,
       view: "amplitude",
-      kind: "object.mode_visualization",
+      kind: "object.mode_visualization.view",
       nodeId: "test-node",
       visualizationTargetId: "mode:object-789:frequency-response:field-resp-999",
     };
 
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={mockKernel}>
-        <ModeVisualizationInspectorPanel
+        {(() => {
+          const Component = resolveInspectorPanel({
+            kind: "object.mode_visualization.view",
+          })?.component;
+          if (!Component) throw new Error("Missing mode visualization view route");
+          return <Component
           selection={{
-            kind: "object.mode_visualization",
+            kind: "object.mode_visualization.view",
             label: "Driven Point 4",
             nodeId: "test-node",
             objectId: "object-789",
             ref,
             moduleSource: "study",
           }}
-        />
+          />;
+        })()}
       </KernelContext.Provider>
     );
 
