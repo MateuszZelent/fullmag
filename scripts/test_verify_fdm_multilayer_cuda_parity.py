@@ -244,6 +244,18 @@ def test_rejects_missing_source_hashes_even_when_both_artifacts_match(tmp_path: 
         verify(reference, candidate, thresholds, "cuda-fp64")
 
 
+def test_rejects_missing_candidate_source_hash_when_reference_is_valid(
+    tmp_path: Path,
+) -> None:
+    reference, candidate, thresholds = _artifacts(tmp_path)
+    metadata = json.loads((candidate / "metadata.json").read_text(encoding="utf-8"))
+    metadata.pop("source_hash")
+    _write_json(candidate / "metadata.json", metadata)
+
+    with pytest.raises(ValueError, match="artifact_source_hash_invalid:candidate"):
+        verify(reference, candidate, thresholds, "cuda-fp64")
+
+
 def test_rejects_equal_malformed_source_hashes(tmp_path: Path) -> None:
     reference, candidate, thresholds = _artifacts(tmp_path)
     for root in (reference, candidate):
@@ -252,6 +264,18 @@ def test_rejects_equal_malformed_source_hashes(tmp_path: Path) -> None:
         _write_json(root / "metadata.json", metadata)
 
     with pytest.raises(ValueError, match="artifact_source_hash_invalid:reference"):
+        verify(reference, candidate, thresholds, "cuda-fp64")
+
+
+def test_rejects_malformed_candidate_source_hash_when_reference_is_valid(
+    tmp_path: Path,
+) -> None:
+    reference, candidate, thresholds = _artifacts(tmp_path)
+    metadata = json.loads((candidate / "metadata.json").read_text(encoding="utf-8"))
+    metadata["source_hash"] = "not-a-sha256-digest"
+    _write_json(candidate / "metadata.json", metadata)
+
+    with pytest.raises(ValueError, match="artifact_source_hash_invalid:candidate"):
         verify(reference, candidate, thresholds, "cuda-fp64")
 
 
