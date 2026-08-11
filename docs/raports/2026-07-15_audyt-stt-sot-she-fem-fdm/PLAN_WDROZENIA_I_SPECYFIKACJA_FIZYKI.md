@@ -12938,6 +12938,11 @@ tego wyniku jako dowodu produkcyjnego publicznego GPU solvera.
 
 ## 32.176. Managed closure zero-mean gauge i obserwabli komponentowych (2026-08-11)
 
+Uwaga historyczna: poniższa ocena została zapisana przed implementacją i
+zarządzanym E2E opisanymi w §32.177. Nie należy jej czytać jako aktualnego
+stanu publicznej ścieżki charge-only; aktualną granicę kwalifikacji definiuje
+§32.177.
+
 ### Zakres wykonany
 
 Po korekcie cyklu życia snapshotów w kontrakcie uniform uruchomiono ponownie
@@ -12999,3 +13004,87 @@ Wobec tego capability `transport.charge.ohmic` pozostaje
 `semantic_only`, `implementation_state=partial`,
 `validation_state=unvalidated`, `validated_workloads=[]`. Zamknięty jest
 bounded native/device contract, nie produkcyjny publiczny solver.
+
+## 32.177. Publiczna ścieżka CurrentTransport -> FDM GPU charge (2026-08-11)
+
+### Zakres zrealizowany
+
+Zamknięto kolejny, jawnie ograniczony wycinek planu: moduł
+`CurrentTransport` z `OhmicPoisson` i `coupling=one_way` może przejść pełną
+ścieżkę Python -> ProblemIR -> planner -> runner -> natywny CUDA ABI ->
+artefakty. Wycinek jest dostępny wyłącznie dla FDM, urządzenia GPU CUDA,
+FP64, `execution_mode=strict`, bez fallbacku i dla pełnego prostokątnego
+maskowanego obszaru. Nie obejmuje jeszcze spin drift-diffusion, SHE/iSHE,
+STT/SOT, Oersteda, FEM ani ogólnego solvera prądu.
+
+Planner materializuje deskryptor
+`ResolvedFdmGpuChargeTransportIR` z niezmiennymi wersjami operatora
+`fv_charge_harmonic_v1`, solvera `cg_device_amg_v1`, gauge
+`boundary_reference_per_component`, fizycznego residualu
+`charge_balance_integrated_l2.v1` i SHA-256 deskryptora. Dopuszczone są
+dokładnie dwie przeciwległe powierzchnie `Voltage` oraz cztery powierzchnie
+`Insulating`; `CurrentDensity`, zero-mean w publicznym deskryptorze, częściowa
+siatka, PBC, wielomodułowość i ustawienia niejawnego urządzenia są odrzucane.
+Runner wymaga `requested_device=gpu`, `resolved_device=CudaFdm` i
+`fallback_policy=forbidden`. Brak CUDA, `auto`, CPU lub próba ukrytego
+przełączenia kończy się błędem przed wykonaniem.
+
+### Korekta ABI i istotna własność indeksowania
+
+W trakcie pierwszego E2E wykryto błąd w mapowaniu powierzchni bocznych. ABI
+FDM definiuje `canonical_face_index` lokalnie dla każdej osi, a nie jako jeden
+globalny strumień `Jx || Jy || Jz`. Adapter Rust został poprawiony tak, aby
+indeksy dla `x`, `y` i `z` były liczone w odpowiednich lokalnych układach;
+walidacja unikalności używa teraz pary `(axis, canonical_face_index)`. Test
+regresyjny `expanded_boundary_faces_use_axis_local_canonical_indices` wymusza
+ten przypadek dla siatki `2 x 1 x 1` i zapobiega powrotowi do błędnego offsetu.
+
+### Zarządzany dowód wykonania
+
+Wykonano:
+
+```text
+just verify-fdm-gpu-public-charge-runtime
+```
+
+Jest to recepta container-backed `just`; kompilacja natywna i artefakty są
+prowadzone przez zarządzany runtime z trwałym magazynem `/zfn2/mateuszz/git/fullmag`
+i widokiem `/mnt/fullmag-zfn2-native`. Gate zakończył się kodem 0 na
+rzeczywistym NVIDIA RTX 4080 SUPER (UUID
+`fcb9fbf1828437c7af5b76bcbf2d2937`, compute capability 8.9, CUDA runtime
+12040, driver 13010). Build digest runtime'u to
+`d396670cc86f5b79b208d812b7a1aca52a73ead18ab48b6c00141dd3c558c96a`.
+
+Fixture `examples/fdm_gpu_charge_public.py` ma rozmiar fizyczny
+`20 x 10 x 10 nm`, komórkę `10 x 10 x 10 nm`, więc dokładnie `2 x 1 x 1`
+komórek, przewodność `4e6 S/m`, `V(x_min)=0 V` i `V(x_max)=0.1 V`.
+Niezależny skrypt `scripts/verify_fdm_gpu_public_charge_output.py` sprawdza
+metadata, provenance, pola i artefakt transportu. Wynik analityczny dla
+środków komórek jest zgodny bitowo w granicy zapisu:
+
+| obserwabla | wynik | oracle |
+|---|---:|---:|
+| `V_electric` [V] | `[0.025, 0.075]` | `0.025`, `0.075` |
+| `J_charge.x` [A/m²] | `[-2.0e13, -2.0e13]` | `-sigma*dV/dx = -2.0e13` |
+| `J_charge.y`, `J_charge.z` [A/m²] | `0`, `0` | `0`, `0` |
+| algebraic residual | `8.201001214742106e-21` | gate `< 1e-12` |
+| physical residual | `1.3810679320049756e-16` | gate `< 1e-12` |
+| component/electrode balance | `9.765625e-17` / `1.953125e-16` | fail-closed gate |
+
+Provenance potwierdza `execution_engine=cuda_fdm_charge_only`, brak fallbacku,
+`iterations=2`, pięć transferów, `transfer_bytes=190` i `peak_bytes=2550`.
+Wykonanie nie zmieniło magnetyzacji i nie wykonało kroków LLG; komunikat o
+zerowym momencie jest oczekiwanym skutkiem fixture charge-only, a nie brakiem
+rozwiązania pola elektrycznego.
+
+### Granica kwalifikacji i następne bramy
+
+Ten wynik zamyka bounded executable reference slice oraz rzeczywisty dowód
+urządzenia dla opisanej siatki i BC. Nie awansuje ogólnego
+`transport.charge.ohmic` do `validated` ani do statusu produkcyjnego i nie
+dodaje wpisu do `validated_workloads`. Pozostają otwarte: zero-mean gauge w
+publicznym ProblemIR, elektrody `CurrentDensity`, częściowe maski i domeny
+nieprostokątne, skalowanie dużych siatek, compute-sanitizer, mesh convergence,
+FDM CPU/GPU parity, pełne M1 spin/SHE, M2/M3, Oersted, publiczna ścieżka FEM,
+Standard Problem 5, cross-backend FEM/FDM oraz browser/UI proof. Do czasu tych
+bram capability pozostaje jawnie ograniczone i fail-closed.

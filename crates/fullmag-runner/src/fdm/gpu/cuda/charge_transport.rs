@@ -257,7 +257,7 @@ fn validate_boundary_faces(
             || !face.area_m2.is_finite()
             || face.area_m2 <= 0.0
             || !face.value.is_finite()
-            || !canonical_faces.insert(face.canonical_face_index)
+            || !canonical_faces.insert((face.axis, face.canonical_face_index))
         {
             return Err(GpuChargeTransportError::validation(
                 "boundary faces require valid orientation, adjacent cell, unique canonical index, finite area, and finite value",
@@ -502,17 +502,6 @@ fn expand_resolved_boundaries(
             "resolved charge active mask does not match the FDM grid",
         ));
     }
-    let x_face_count = nx
-        .checked_add(1)
-        .and_then(|value| value.checked_mul(ny))
-        .and_then(|value| value.checked_mul(nz))
-        .ok_or_else(|| GpuChargeTransportError::validation("x-face count overflows u64"))?;
-    let y_face_count =
-        nx.checked_mul(ny.checked_add(1).ok_or_else(|| {
-            GpuChargeTransportError::validation("y-face dimension overflows u64")
-        })?)
-        .and_then(|value| value.checked_mul(nz))
-        .ok_or_else(|| GpuChargeTransportError::validation("y-face count overflows u64"))?;
     let mut expanded = Vec::new();
 
     for boundary in boundaries {
@@ -565,14 +554,10 @@ fn expand_resolved_boundaries(
                     let canonical_face_index = match boundary.face {
                         StructuredBoundaryFaceIR::XMin => (nx + 1) * (y + ny * z),
                         StructuredBoundaryFaceIR::XMax => nx + (nx + 1) * (y + ny * z),
-                        StructuredBoundaryFaceIR::YMin => x_face_count + x + nx * ((ny + 1) * z),
-                        StructuredBoundaryFaceIR::YMax => {
-                            x_face_count + x + nx * (ny + (ny + 1) * z)
-                        }
-                        StructuredBoundaryFaceIR::ZMin => x_face_count + y_face_count + x + nx * y,
-                        StructuredBoundaryFaceIR::ZMax => {
-                            x_face_count + y_face_count + x + nx * (y + ny * nz)
-                        }
+                        StructuredBoundaryFaceIR::YMin => x + nx * ((ny + 1) * z),
+                        StructuredBoundaryFaceIR::YMax => x + nx * (ny + (ny + 1) * z),
+                        StructuredBoundaryFaceIR::ZMin => x + nx * y,
+                        StructuredBoundaryFaceIR::ZMax => x + nx * (y + ny * nz),
                     };
                     let area_m2 = match axis {
                         0 => cell_size[1] * cell_size[2],
@@ -1559,6 +1544,64 @@ mod tests {
         assert!(parse_sha256("").is_err());
         assert!(parse_sha256("sha256:ab").is_err());
         assert!(parse_sha256(&format!("sha256:{}g", "00".repeat(31))).is_err());
+    }
+
+    #[test]
+    fn expanded_boundary_faces_use_axis_local_canonical_indices() {
+        use fullmag_ir::{
+            ResolvedChargeBoundaryConditionIR as Condition, ResolvedChargeBoundaryFaceIR,
+            StructuredBoundaryFaceIR,
+        };
+
+        let boundaries = [
+            ("x-min", StructuredBoundaryFaceIR::XMin, 0.0),
+            ("x-max", StructuredBoundaryFaceIR::XMax, 0.1),
+            ("y-min", StructuredBoundaryFaceIR::YMin, 0.0),
+            ("y-max", StructuredBoundaryFaceIR::YMax, 0.0),
+            ("z-min", StructuredBoundaryFaceIR::ZMin, 0.0),
+            ("z-max", StructuredBoundaryFaceIR::ZMax, 0.0),
+        ]
+        .into_iter()
+        .map(
+            |(source_id, face, potential_v)| ResolvedChargeBoundaryFaceIR {
+                source_id: source_id.to_string(),
+                face,
+                condition: if matches!(
+                    face,
+                    StructuredBoundaryFaceIR::XMin | StructuredBoundaryFaceIR::XMax
+                ) {
+                    Condition::Voltage { potential_v }
+                } else {
+                    Condition::Insulating
+                },
+            },
+        )
+        .collect::<Vec<_>>();
+        let faces = expand_resolved_boundaries(&boundaries, &[true, true], [2, 1, 1], [1.0e-9; 3])
+            .expect("all external faces should materialize");
+        assert_eq!(faces.len(), 10);
+        let canonical = faces
+            .iter()
+            .map(|face| (face.axis, face.canonical_face_index))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            canonical,
+            BTreeSet::from([
+                (0, 0),
+                (0, 2),
+                (1, 0),
+                (1, 1),
+                (1, 2),
+                (1, 3),
+                (2, 0),
+                (2, 1),
+                (2, 2),
+                (2, 3),
+            ])
+        );
+        let mut input = bounded_input();
+        input.boundary_faces = faces;
+        validate_boundary_faces(&input, 2).expect("canonical indices are local per axis");
     }
 
     fn bounded_input() -> GpuChargeTransportInput {
