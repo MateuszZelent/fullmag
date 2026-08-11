@@ -17,6 +17,7 @@ use fullmag_ir::{
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use sha2::{Digest, Sha256};
 
+use crate::physics_graph::physics_module_execution_enabled;
 use crate::surface_selectors::resolve_fem_surface_selector;
 use crate::PlanError;
 
@@ -59,6 +60,7 @@ fn resolve_fem_stage_coupling_for_stage(
 pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub owner_names: &'a [&'a str],
     pub object_masks_by_id: Option<&'a BTreeMap<String, Vec<bool>>>,
+    pub region_masks_by_ref: Option<&'a BTreeMap<(String, String), Vec<bool>>>,
     pub grid_cells: [u32; 3],
     pub origin_m: [f64; 3],
     pub cell_size_m: [f64; 3],
@@ -79,6 +81,14 @@ pub(crate) fn resolve_spin_transport(
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
     for module in &problem.spin_transport_modules {
+        match physics_module_execution_enabled(problem, "spin_transport", &module.id) {
+            Ok(Some(false)) => continue,
+            Ok(Some(true) | None) => {}
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                continue;
+            }
+        }
         let transient = module.mode == fullmag_ir::SpinTransportModeIR::Transient;
         let native_m1 = module.solver.engine == "native_m1_v1";
         if !matches!(
@@ -2054,10 +2064,9 @@ fn materialize_fdm_descriptor(
         resolve_spin_boundaries(&module.boundaries, context)?;
     let interfaces = resolve_interfaces(module, context)?;
 
-    let matching_torques = problem
-        .spin_torque_modules
-        .iter()
-        .filter_map(|torque| match torque {
+    let mut matching_torques = Vec::new();
+    for torque in &problem.spin_torque_modules {
+        let candidate = match torque {
             SpinTorqueModuleIR::DriftDiffusionSpinTorque {
                 id,
                 solve_id,
@@ -2066,8 +2075,15 @@ fn materialize_fdm_descriptor(
                 ..
             } if solve_id == &module.id => Some((id, target, formula_version)),
             _ => None,
-        })
-        .collect::<Vec<_>>();
+        };
+        let Some((id, target, formula_version)) = candidate else {
+            continue;
+        };
+        match physics_module_execution_enabled(problem, "spin_torque", id)? {
+            Some(false) => {}
+            Some(true) | None => matching_torques.push((id, target, formula_version)),
+        }
+    }
     if matching_torques.len() > 1 {
         return Err(vec![format!(
             "spin transport '{}' has more than one DriftDiffusionSpinTorque consumer",
@@ -2580,14 +2596,29 @@ fn resolve_region_mask(
             region.object_id
         )]);
     }
-    let selected = match region.region_id.as_deref() {
-        Some(region_id) => Some(*context.region_index_by_id.get(region_id).ok_or_else(|| {
-            vec![format!(
-                "{label} region_id '{}' was not materialized in the FDM region mask",
-                region_id
-            )]
-        })?),
-        None => None,
+    let selected_region_mask = match (region.region_id.as_deref(), context.region_masks_by_ref) {
+        (Some(region_id), Some(masks)) => Some(
+            masks
+                .get(&(region.object_id.clone(), region_id.to_string()))
+                .ok_or_else(|| {
+                    vec![format!(
+                        "{label} region '{}:{}' was not materialized on the FDM transport grid",
+                        region.object_id, region_id
+                    )]
+                })?,
+        ),
+        _ => None,
+    };
+    let selected_region_id = match (region.region_id.as_deref(), context.region_masks_by_ref) {
+        (Some(region_id), None) => {
+            Some(*context.region_index_by_id.get(region_id).ok_or_else(|| {
+                vec![format!(
+                    "{label} region_id '{}' was not materialized in the FDM region mask",
+                    region_id
+                )]
+            })?)
+        }
+        _ => None,
     };
     let object_mask = context
         .object_masks_by_id
@@ -2600,7 +2631,8 @@ fn resolve_region_mask(
             object_mask.map_or_else(
                 || is_grid_active(context, cell),
                 |mask| mask.get(cell).copied().unwrap_or(false),
-            ) && selected.is_none_or(|id| *numeric == id)
+            ) && selected_region_mask.is_none_or(|mask| mask[cell])
+                && selected_region_id.is_none_or(|id| *numeric == id)
         })
         .collect::<Vec<_>>();
     if !mask.iter().any(|active| *active) {
@@ -2835,6 +2867,9 @@ fn resolve_specified_current_faces(
                         StructuredBoundaryFaceIR::ZMax => x + nx * (y + ny * nz),
                     };
                     if !charge_active_cells[adjacent_cell] {
+                        if current_density_apm2 == 0.0 {
+                            continue;
+                        }
                         return Err(vec![format!(
                             "charge boundary '{}' selects external face index {} whose adjacent cell {} is inactive",
                             boundary.source_id, face_index, adjacent_cell
@@ -3308,6 +3343,7 @@ mod tests {
         FdmSpinTransportResolutionContext {
             owner_names,
             object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [1, 1, 1],
             origin_m: [0.0, 0.0, 0.0],
             cell_size_m: [1.0, 1.0, 1.0],
@@ -3390,6 +3426,7 @@ mod tests {
         let context = FdmSpinTransportResolutionContext {
             owner_names: &owners,
             object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [3, 3, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -3443,6 +3480,7 @@ mod tests {
             let context = FdmSpinTransportResolutionContext {
                 owner_names: &owners,
                 object_masks_by_id: None,
+                region_masks_by_ref: None,
                 grid_cells: [3, 3, 1],
                 origin_m: [0.0; 3],
                 cell_size_m: [1.0; 3],
@@ -3481,6 +3519,7 @@ mod tests {
         let multi_arm_context = FdmSpinTransportResolutionContext {
             owner_names: &owners,
             object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [3, 3, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -3512,6 +3551,7 @@ mod tests {
         let open_context = FdmSpinTransportResolutionContext {
             owner_names: &owners,
             object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [3, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],

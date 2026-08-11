@@ -480,35 +480,107 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             )
 
     def test_python_and_ir_preserve_separate_transport_and_magnetic_domains(self) -> None:
-        geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="stack")
+        geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="fm_geometry")
+        hm_geometry = fm.Box(size=(10e-9, 10e-9, 2e-9), name="hm")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
-        magnet = fm.Ferromagnet(name="stack", geometry=geometry, material=material)
+        magnet = fm.Ferromagnet(
+            name="fm",
+            geometry=geometry,
+            region=fm.Region(name="fm_magnetic", geometry=geometry),
+            material=material,
+            object_regions=(
+                fm.ObjectRegion(
+                    owner_object="fm",
+                    name="transport",
+                    region_id="fm:transport",
+                    shape=fm.Box(size=(10e-9, 10e-9, 2e-9), name="fm_transport_shape"),
+                ),
+                fm.ObjectRegion(
+                    owner_object="fm",
+                    name="torque",
+                    region_id="fm:torque",
+                    shape=fm.Box(size=(5e-9, 5e-9, 2e-9), name="fm_torque_shape"),
+                ),
+            ),
+        )
+        hm_transport = fm.RegionRef("hm", "hm:transport")
+        fm_transport = fm.RegionRef("fm", "fm:transport")
+        fm_torque = fm.RegionRef("fm", "fm:torque")
+        charge = fm.CurrentTransport(
+            name="charge",
+            model="ohmic_poisson",
+            coupling="one_way",
+            domain=[hm_transport, fm_transport],
+            materials=[
+                fm.ChargeTransportMaterialAssignment(
+                    hm_transport, fm.ChargeTransportMaterial(5.0e6)
+                ),
+                fm.ChargeTransportMaterialAssignment(
+                    fm_transport, fm.ChargeTransportMaterial(4.0e6)
+                ),
+            ],
+            boundaries=[fm.VoltageElectrode("ground", [self.top], potential_V=0.0)],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(),
+        )
         solve = fm.SpinDriftDiffusion(
-            id="spin_solve", current_source_id="charge", domain=[self.fm],
-            materials=[fm.SpinTransportMaterialAssignment(self.fm,
-                fm.SpinTransportMaterial(5e6, 0.4, 0.1, 5e-9))],
+            id="spin_solve",
+            current_source_id="charge",
+            domain=[hm_transport, fm_transport],
+            materials=[
+                fm.SpinTransportMaterialAssignment(
+                    hm_transport, fm.SpinTransportMaterial(5e6, 0.0, 0.1, 5e-9)
+                ),
+                fm.SpinTransportMaterialAssignment(
+                    fm_transport, fm.SpinTransportMaterial(4e6, 0.4, 0.0, 5e-9)
+                ),
+            ],
         )
         problem = fm.Problem(
-            name="m1", magnets=[magnet], energy=[fm.Exchange()],
-            study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
-            current_modules=[self.complete_charge_transport()],
+            name="m1",
+            magnets=[magnet],
+            auxiliary_geometries=[hm_geometry],
+            energy=[fm.Exchange()],
+            study=fm.TimeEvolution(
+                dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]
+            ),
+            current_modules=[charge],
             spin_transports=[solve],
-            spin_torques=[fm.DriftDiffusionSpinTorque("tr", "spin_solve", self.fm)],
+            spin_torques=[fm.DriftDiffusionSpinTorque("tr", "spin_solve", fm_torque)],
         )
         ir = problem.to_ir(include_geometry_assets=False)
         self.assertEqual(ir["spin_transport_modules"], [solve.to_ir()])
         self.assertEqual(ir["spin_torque_modules"][0]["solve_id"], "spin_solve")
+        self.assertEqual(ir["magnets"][0]["region"], "fm_magnetic")
+        self.assertEqual(
+            ir["regions"], [{"name": "fm_magnetic", "geometry": "fm_geometry"}]
+        )
+        self.assertEqual(
+            [(region["owner_object"], region["region_id"]) for region in ir["object_regions"]],
+            [("fm", "fm:transport"), ("fm", "fm:torque")],
+        )
+        self.assertIn("hm", [geometry["name"] for geometry in ir["geometry"]["entries"]])
         self.assertEqual(
             ir["current_modules"][0]["domain"],
-            [{"object_id": "stack", "region_id": "ferromagnet"}],
+            [
+                {"object_id": "hm", "region_id": "hm:transport"},
+                {"object_id": "fm", "region_id": "fm:transport"},
+            ],
         )
         self.assertEqual(
             ir["spin_transport_modules"][0]["domain"],
-            [{"object_id": "stack", "region_id": "ferromagnet"}],
+            [
+                {"object_id": "hm", "region_id": "hm:transport"},
+                {"object_id": "fm", "region_id": "fm:transport"},
+            ],
         )
         self.assertEqual(
             ir["spin_torque_modules"][0]["target"],
-            {"object_id": "stack", "region_id": "ferromagnet"},
+            {"object_id": "fm", "region_id": "fm:torque"},
+        )
+        self.assertNotEqual(
+            ir["current_modules"][0]["domain"][1],
+            ir["spin_torque_modules"][0]["target"],
         )
         self.assertNotIn("transport_active_mask", ir["spin_transport_modules"][0])
         self.assertNotIn("magnetic_active_mask", ir["spin_transport_modules"][0])

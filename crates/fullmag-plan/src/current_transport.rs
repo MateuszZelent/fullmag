@@ -115,19 +115,26 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
     resolved_backend: BackendTarget,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
-    // A spin-transport module owns its coupled charge solve and descriptor.
-    // The standalone GPU charge-only resolver must not reinterpret that same
-    // authored current module as a second, incompatible execution request.
-    if !problem.spin_transport_modules.is_empty() {
-        return Ok(Vec::new());
+    let mut coupled_source_ids = std::collections::BTreeSet::new();
+    let mut graph_reasons = Vec::new();
+    for spin in &problem.spin_transport_modules {
+        match physics_module_execution_enabled(problem, "spin_transport", &spin.id) {
+            Ok(Some(false)) => {}
+            Ok(Some(true) | None) => {
+                coupled_source_ids.insert(spin.current_source_id.as_str());
+            }
+            Err(mut reasons) => graph_reasons.append(&mut reasons),
+        }
     }
     let mut active_modules = Vec::new();
-    let mut graph_reasons = Vec::new();
     for module in &problem.current_modules {
         let (kind, name) = match module {
             CurrentModuleIR::AntennaFieldSource { name, .. } => ("antenna_field_source", name),
             CurrentModuleIR::CurrentTransport { name, .. } => ("current_transport", name),
         };
+        if kind == "current_transport" && coupled_source_ids.contains(name.as_str()) {
+            continue;
+        }
         match physics_module_execution_enabled(problem, kind, name) {
             Ok(Some(false)) => {}
             Ok(Some(true) | None) => active_modules.push(module),
@@ -714,6 +721,7 @@ mod tests {
         let context = crate::spin_transport::FdmSpinTransportResolutionContext {
             owner_names: &owner_names,
             object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [1, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -758,6 +766,7 @@ mod tests {
         let context = crate::spin_transport::FdmSpinTransportResolutionContext {
             owner_names: &owner_names,
             object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [2, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],

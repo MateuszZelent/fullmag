@@ -25,8 +25,7 @@ use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
 use crate::util::{
-    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
-    PLACEMENT_TOLERANCE,
+    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0, PLACEMENT_TOLERANCE,
 };
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
@@ -600,33 +599,207 @@ fn sample_shape_mask(
     mask
 }
 
-fn transport_charge_domains<'a>(
-    problem: &'a ProblemIR,
-) -> Result<Vec<&'a fullmag_ir::RegionRefIR>, PlanError> {
-    let mut domains = Vec::new();
-    for spin in &problem.spin_transport_modules {
-        let definition = problem
-            .current_modules
-            .iter()
-            .find_map(|current| match current {
-                fullmag_ir::CurrentModuleIR::CurrentTransport {
-                    name,
-                    definition: Some(definition),
-                    ..
-                } if name == &spin.current_source_id => Some(definition),
-                _ => None,
-            });
-        let Some(definition) = definition else {
-            return Err(PlanError {
-                reasons: vec![format!(
-                    "spin transport '{}' requires current source '{}' with an explicit charge definition",
-                    spin.id, spin.current_source_id
-                )],
-            });
-        };
-        domains.extend(definition.domain.iter());
+#[derive(Default)]
+struct TransportGridRefs {
+    charge_domains: Vec<fullmag_ir::RegionRefIR>,
+    regions: BTreeMap<(String, String), fullmag_ir::RegionRefIR>,
+    object_ids: BTreeSet<String>,
+}
+
+impl TransportGridRefs {
+    fn add_region(&mut self, region: &fullmag_ir::RegionRefIR) {
+        self.object_ids.insert(region.object_id.clone());
+        if let Some(region_id) = &region.region_id {
+            self.regions.insert(
+                (region.object_id.clone(), region_id.clone()),
+                region.clone(),
+            );
+        }
     }
-    Ok(domains)
+
+    fn add_surface(&mut self, surface: &fullmag_ir::SurfaceRefIR) {
+        self.object_ids.insert(surface.object_id.clone());
+    }
+}
+
+fn active_transport_grid_refs(problem: &ProblemIR) -> Result<TransportGridRefs, PlanError> {
+    let mut refs = TransportGridRefs::default();
+    let mut errors = Vec::new();
+    let mut active_spin_ids = BTreeSet::new();
+
+    for spin in &problem.spin_transport_modules {
+        match crate::physics_graph::physics_module_execution_enabled(
+            problem,
+            "spin_transport",
+            &spin.id,
+        ) {
+            Ok(Some(false)) => continue,
+            Ok(Some(true) | None) => {}
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                continue;
+            }
+        }
+        active_spin_ids.insert(spin.id.as_str());
+        for region in &spin.domain {
+            refs.add_region(region);
+        }
+        for assignment in &spin.materials {
+            refs.add_region(&assignment.region);
+        }
+        for interface in &spin.interfaces {
+            match interface {
+                fullmag_ir::SpinInterfaceIR::Transparent { side_a, side_b, .. } => {
+                    refs.add_region(side_a);
+                    refs.add_region(side_b);
+                }
+                fullmag_ir::SpinInterfaceIR::MixingConductance {
+                    normal_side,
+                    ferromagnet_side,
+                    ..
+                } => {
+                    refs.add_region(normal_side);
+                    refs.add_region(ferromagnet_side);
+                }
+            }
+        }
+        for boundary in &spin.boundaries {
+            match boundary {
+                fullmag_ir::SpinBoundaryIR::SpinInsulating { surfaces, .. }
+                | fullmag_ir::SpinBoundaryIR::SpinSink { surfaces, .. }
+                | fullmag_ir::SpinBoundaryIR::SpecifiedSpinPotential { surfaces, .. }
+                | fullmag_ir::SpinBoundaryIR::SpecifiedSpinFlux { surfaces, .. } => {
+                    for surface in surfaces {
+                        refs.add_surface(surface);
+                    }
+                }
+                fullmag_ir::SpinBoundaryIR::PeriodicSpin {
+                    minus_surface,
+                    plus_surface,
+                    ..
+                } => {
+                    refs.add_surface(minus_surface);
+                    refs.add_surface(plus_surface);
+                }
+            }
+        }
+    }
+
+    for current in &problem.current_modules {
+        let fullmag_ir::CurrentModuleIR::CurrentTransport {
+            name,
+            definition: Some(definition),
+            ..
+        } = current
+        else {
+            continue;
+        };
+        match crate::physics_graph::physics_module_execution_enabled(
+            problem,
+            "current_transport",
+            name,
+        ) {
+            Ok(Some(false)) => continue,
+            Ok(Some(true) | None) => {}
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                continue;
+            }
+        }
+        for region in &definition.domain {
+            refs.charge_domains.push(region.clone());
+            refs.add_region(region);
+        }
+        for assignment in &definition.materials {
+            refs.add_region(&assignment.region);
+        }
+        for boundary in &definition.boundaries {
+            for surface in boundary.surfaces() {
+                refs.add_surface(surface);
+            }
+        }
+        if let Some(fullmag_ir::StructuredCurrentClosureIR::ClosedGeometry {
+            source_cuts, ..
+        }) = &definition.structured_current_closure
+        {
+            for cut in source_cuts {
+                refs.add_region(&cut.region);
+            }
+        }
+    }
+
+    for torque in &problem.spin_torque_modules {
+        let fullmag_ir::SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+            id,
+            solve_id,
+            target,
+            ..
+        } = torque
+        else {
+            continue;
+        };
+        if !active_spin_ids.contains(solve_id.as_str()) {
+            continue;
+        }
+        match crate::physics_graph::physics_module_execution_enabled(problem, "spin_torque", id) {
+            Ok(Some(false)) => continue,
+            Ok(Some(true) | None) => refs.add_region(target),
+            Err(mut reasons) => errors.append(&mut reasons),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(refs)
+    } else {
+        Err(PlanError { reasons: errors })
+    }
+}
+
+fn region_shape_bounds(shape: &RegionShapeIR) -> Result<([f64; 3], [f64; 3]), String> {
+    match shape {
+        RegionShapeIR::Box { size, center } => Ok((
+            std::array::from_fn(|axis| center[axis] - size[axis] * 0.5),
+            std::array::from_fn(|axis| center[axis] + size[axis] * 0.5),
+        )),
+        RegionShapeIR::Sphere { radius, center } => Ok((
+            std::array::from_fn(|axis| center[axis] - radius),
+            std::array::from_fn(|axis| center[axis] + radius),
+        )),
+        RegionShapeIR::Cylinder {
+            radius,
+            height,
+            center,
+            axis,
+        } => {
+            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if !norm.is_finite() || norm <= 0.0 {
+                return Err("cylinder region axis must be finite and non-zero".to_string());
+            }
+            let unit = axis.map(|component| component / norm);
+            let half_height = height * 0.5;
+            let extents: [f64; 3] = std::array::from_fn(|index| {
+                half_height * unit[index].abs()
+                    + radius * (1.0 - unit[index] * unit[index]).max(0.0).sqrt()
+            });
+            Ok((
+                std::array::from_fn(|index| center[index] - extents[index]),
+                std::array::from_fn(|index| center[index] + extents[index]),
+            ))
+        }
+        RegionShapeIR::Csg { .. } => {
+            Err("FDM transport object regions do not yet support CSG shapes".to_string())
+        }
+    }
+}
+
+fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
+    match entry {
+        GeometryEntryIR::Translate { base, by, .. } => {
+            let nested = top_level_geometry_translation(base);
+            std::array::from_fn(|axis| nested[axis] + by[axis])
+        }
+        _ => [0.0; 3],
+    }
 }
 
 fn transport_common_grid(
@@ -642,10 +815,15 @@ fn transport_common_grid(
         [u32; 3],
         [f64; 3],
         BTreeMap<String, Vec<bool>>,
+        BTreeMap<(String, String), Vec<bool>>,
     ),
     PlanError,
 > {
-    let charge_domains = transport_charge_domains(problem)?;
+    let mut transport_refs = active_transport_grid_refs(problem)?;
+    transport_refs.object_ids.insert(magnet.name.clone());
+    transport_refs
+        .object_ids
+        .insert(magnetic_geometry.name().to_string());
     let geometry_by_name = problem
         .geometry
         .entries
@@ -676,30 +854,78 @@ fn transport_common_grid(
             })
     };
 
+    let resolve_object_region = |region: &fullmag_ir::RegionRefIR| {
+        let region_id = region.region_id.as_deref()?;
+        problem.object_regions.iter().find(|candidate| {
+            candidate.enabled
+                && candidate.owner_object == region.object_id
+                && candidate.region_id == region_id
+        })
+    };
+
     let mut bounds_min = [f64::INFINITY; 3];
     let mut bounds_max = [f64::NEG_INFINITY; 3];
-    for region in &charge_domains {
+    for region in &transport_refs.charge_domains {
         let geometry = resolve_geometry(&region.object_id).ok_or_else(|| PlanError {
             reasons: vec![format!(
                 "charge transport domain object '{}' has no FDM geometry binding",
                 region.object_id
             )],
         })?;
-        let shape = ir_to_shape(geometry).map_err(|reason| PlanError {
+        let object_shape = ir_to_shape(geometry).map_err(|reason| PlanError {
             reasons: vec![reason],
         })?;
-        let (lower, upper) = shape_local_bounds(&shape).ok_or_else(|| PlanError {
-            reasons: vec![format!(
-                "charge transport geometry '{}' has no analytic FDM bounds",
-                geometry.name()
-            )],
-        })?;
+        let (object_lower, object_upper) =
+            shape_local_bounds(&object_shape).ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "charge transport geometry '{}' has no analytic FDM bounds",
+                    geometry.name()
+                )],
+            })?;
+        let (lower, upper) = if region.region_id.is_some() {
+            let object_region = resolve_object_region(region).ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "charge transport domain region '{}:{}' is not an enabled object region",
+                    region.object_id,
+                    region.region_id.as_deref().unwrap_or_default()
+                )],
+            })?;
+            let (mut lower, mut upper) =
+                region_shape_bounds(&object_region.shape).map_err(|reason| PlanError {
+                    reasons: vec![format!(
+                        "object_region '{}': {reason}",
+                        object_region.region_id
+                    )],
+                })?;
+            if object_region.frame == RegionFrameIR::Object {
+                let translation = top_level_geometry_translation(geometry);
+                for axis in 0..3 {
+                    lower[axis] += translation[axis];
+                    upper[axis] += translation[axis];
+                }
+            }
+            for axis in 0..3 {
+                lower[axis] = lower[axis].max(object_lower[axis]);
+                upper[axis] = upper[axis].min(object_upper[axis]);
+            }
+            if (0..3).any(|axis| upper[axis] <= lower[axis]) {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "charge transport domain region '{}:{}' does not intersect its owner geometry",
+                        region.object_id, object_region.region_id
+                    )],
+                });
+            }
+            (lower, upper)
+        } else {
+            (object_lower, object_upper)
+        };
         for axis in 0..3 {
             bounds_min[axis] = bounds_min[axis].min(lower[axis]);
             bounds_max[axis] = bounds_max[axis].max(upper[axis]);
         }
     }
-    if charge_domains.is_empty() {
+    if transport_refs.charge_domains.is_empty() {
         return Err(PlanError {
             reasons: vec!["charge transport domain must not be empty".to_string()],
         });
@@ -751,21 +977,80 @@ fn transport_common_grid(
         });
     }
     let mut object_masks = BTreeMap::new();
-    for entry in &problem.geometry.entries {
+    for object_id in &transport_refs.object_ids {
+        let entry = resolve_geometry(object_id).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "transport object '{}' has no FDM geometry binding",
+                object_id
+            )],
+        })?;
         let shape = ir_to_shape(entry).map_err(|reason| PlanError {
             reasons: vec![reason],
         })?;
         object_masks.insert(
-            entry.name().to_string(),
+            object_id.clone(),
             sample_shape_mask(&shape, grid_cells, cell_size, bounds_min),
         );
     }
-    for region in &problem.regions {
-        if let Some(mask) = object_masks.get(&region.geometry).cloned() {
-            object_masks.insert(region.name.clone(), mask);
-        }
-    }
     object_masks.insert(magnet.name.clone(), magnetic_mask.clone());
+
+    let mut region_masks = BTreeMap::new();
+    for ((object_id, region_id), region_ref) in &transport_refs.regions {
+        let object_region = resolve_object_region(region_ref).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "transport region '{}:{}' is not an enabled object region",
+                object_id, region_id
+            )],
+        })?;
+        let geometry = resolve_geometry(object_id).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "transport region owner '{}' has no FDM geometry binding",
+                object_id
+            )],
+        })?;
+        let translation = top_level_geometry_translation(geometry);
+        let object_mask = object_masks.get(object_id).expect("reachable object mask");
+        let [nx, ny, nz] = grid_cells.map(|value| value as usize);
+        let mut mask = vec![false; nx * ny * nz];
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    let cell = x + nx * (y + ny * z);
+                    if !object_mask[cell] {
+                        continue;
+                    }
+                    let world = [
+                        bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                        bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                        bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                    ];
+                    let point = if object_region.frame == RegionFrameIR::Object {
+                        std::array::from_fn(|axis| world[axis] - translation[axis])
+                    } else {
+                        world
+                    };
+                    mask[cell] =
+                        point_in_region_shape(point, &object_region.shape).map_err(|reason| {
+                            PlanError {
+                                reasons: vec![format!(
+                                    "object_region '{}': {reason}",
+                                    object_region.region_id
+                                )],
+                            }
+                        })?;
+                }
+            }
+        }
+        if !mask.iter().any(|selected| *selected) {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "transport region '{}:{}' selects no cells on the common grid",
+                    object_id, region_id
+                )],
+            });
+        }
+        region_masks.insert((object_id.clone(), region_id.clone()), mask);
+    }
 
     Ok((
         bounding_size,
@@ -773,6 +1058,7 @@ fn transport_common_grid(
         grid_cells,
         bounds_min,
         object_masks,
+        region_masks,
     ))
 }
 
@@ -1127,6 +1413,7 @@ pub(crate) fn plan_fdm(
     };
 
     let mut transport_object_masks = BTreeMap::new();
+    let mut transport_region_masks = BTreeMap::new();
     if !problem.spin_transport_modules.is_empty() {
         if provided_grid_asset.is_some() {
             return Err(PlanError {
@@ -1142,6 +1429,7 @@ pub(crate) fn plan_fdm(
         grid_cells = resolved.2;
         native_origin = resolved.3;
         transport_object_masks = resolved.4;
+        transport_region_masks = resolved.5;
         used_precomputed_asset = false;
     }
 
@@ -1577,6 +1865,7 @@ pub(crate) fn plan_fdm(
     let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
         owner_names: &owner_names,
         object_masks_by_id: Some(&transport_object_masks),
+        region_masks_by_ref: Some(&transport_region_masks),
         grid_cells,
         origin_m: native_origin,
         cell_size_m: cell_size,
