@@ -18,10 +18,6 @@ namespace {
 
 constexpr uint32_t kChargeFaceVoltage = 1;
 
-extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
-    fullmag_fdm_gpu_transport_context_handle_v1 context, uint64_t *promotion_count,
-    uint64_t *use_count, uint64_t *cells, uint64_t *descriptor_revision,
-    uint64_t *source_revision, uint32_t *valid);
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
     fullmag_fdm_gpu_transport_context_handle_v1 context, uint32_t boundary);
 
@@ -207,7 +203,8 @@ int main() {
     const uint64_t jy_count = nx * (ny + 1) * nz;
     const uint64_t jz_count = nx * ny * (nz + 1);
     std::vector<double> current(jx_count + jy_count + jz_count);
-    auto readback = [&](uint32_t field, std::vector<double> &destination) {
+    auto readback = [&](const fullmag_fdm_gpu_charge_snapshot_info_v1 &accepted,
+                        uint32_t field, std::vector<double> &destination) {
         auto destination_view = view(destination.data(), destination.size(), sizeof(double),
                                      FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64,
                                      field == FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C
@@ -218,19 +215,19 @@ int main() {
         init_record(request, FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
                                  FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK);
         request.context_handle = created.context_handle;
-        request.snapshot_handle = snapshot.snapshot_handle;
+        request.snapshot_handle = accepted.snapshot_handle;
         request.field_id = field;
         request.cadence = FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_EXPLICIT_REQUEST;
         request.range_count = destination.size();
         request.destination_view_ptr = reinterpret_cast<uint64_t>(&destination_view);
         request.expected_bytes = destination.size() * sizeof(double);
-        request.accepted_sequence = snapshot.accepted_sequence;
+        request.accepted_sequence = accepted.accepted_sequence;
         require(fullmag_fdm_gpu_transport_readback_artifact_v1(&request) ==
                     FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
                 "accepted charge artifact readback failed");
     };
-    readback(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V, potential);
-    readback(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C, current);
+    readback(snapshot, FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V, potential);
+    readback(snapshot, FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C, current);
 
     for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y)
         for (uint64_t x = 0; x < nx; ++x) {
@@ -264,10 +261,10 @@ int main() {
     uint64_t telemetry_count = 0;
     const uint32_t telemetry_status = fullmag_fdm_gpu_transport_query_telemetry_v1(
         created.context_handle, 0, telemetry.data(), telemetry.size(), &telemetry_count);
-    if (telemetry_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK || telemetry_count != 22)
+    if (telemetry_status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK || telemetry_count != 24)
         std::fprintf(stderr, "uniform telemetry diagnostics: status=%u count=%llu\n",
                      telemetry_status, static_cast<unsigned long long>(telemetry_count));
-    require(telemetry_status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK && telemetry_count == 22,
+    require(telemetry_status == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK && telemetry_count == 24,
             "bounded charge telemetry query did not publish upload, readback and two complete solve audits");
     uint64_t scalar_transfer_count = 0, synchronization_count = 0;
     uint64_t static_upload_count = 0, d2d_count = 0, artifact_readback_count = 0;
@@ -301,7 +298,7 @@ int main() {
                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D) {
             ++d2d_count;
             require(record.direction == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D &&
-                        record.bytes > 0 && record.count == 2,
+                        record.bytes > 0 && (record.count == 1 || record.count == 2),
                     "solve-state D2D telemetry is incomplete");
         } else if (record.reason ==
                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H) {
@@ -324,8 +321,8 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 hierarchy_builds == 1 && hierarchy_cache_hits == 1 &&
                 amg_apply_count == solved.iterations + cached_solved.iterations &&
-                scalar_transfer_count == 7 && synchronization_count == 10 &&
-                static_upload_count == 1 && d2d_count == 2 &&
+                scalar_transfer_count == 7 && synchronization_count == 11 &&
+                static_upload_count == 1 && d2d_count == 3 &&
                 artifact_readback_count == 2 &&
                 host_fallback_count == 0 &&
                 hierarchy_levels >= 2 && coarse_unknowns > 0 && coarse_unknowns < fine_unknowns &&
@@ -356,6 +353,11 @@ int main() {
                 warm_descriptor_revision == 1 && warm_source_revision == 1 &&
                 warm_valid == 1,
             "accepted FP64 charge state was not retained and used as the warm start");
+    std::vector<double> accepted_warm(cells);
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1(
+                created.context_handle, accepted_warm.data(), accepted_warm.size()) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "accepted warm vector readback failed");
 
     require(fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
                 created.context_handle, 13) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
@@ -373,6 +375,13 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 warm_promotions == 2 && warm_uses == 1 && warm_valid == 1,
             "rejected candidate overwrote the last accepted warm state");
+    std::vector<double> rejected_warm(cells);
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1(
+                created.context_handle, rejected_warm.data(), rejected_warm.size()) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                std::memcmp(rejected_warm.data(), accepted_warm.data(),
+                            cells * sizeof(double)) == 0,
+            "rejected candidate changed the accepted warm potential bytes");
 
     auto incompatible_source = solve;
     incompatible_source.attempt_id = 4;
@@ -407,6 +416,40 @@ int main() {
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
                 warm_promotions == 2 && warm_uses == 2 && warm_valid == 1,
             "recovered solve did not report use of the accepted warm state");
+    fullmag_fdm_gpu_charge_snapshot_info_v1 recovered_snapshot{};
+    init_record(recovered_snapshot);
+    require(fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
+                created.context_handle, recovered.provisional_generation,
+                &recovered_snapshot) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "recovered warm candidate was not atomically accepted");
+    std::vector<double> recovered_potential(cells);
+    std::vector<double> recovered_current(current.size());
+    readback(recovered_snapshot, FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V,
+             recovered_potential);
+    readback(recovered_snapshot, FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C,
+             recovered_current);
+    for (uint64_t z = 0; z < nz; ++z) for (uint64_t y = 0; y < ny; ++y)
+        for (uint64_t x = 0; x < nx; ++x) {
+            const uint64_t i = x + nx * (y + ny * z);
+            const double expected = left_v - (static_cast<double>(x) + 0.5) * 1.0e-3;
+            require(close(recovered_potential[i], expected, 1.0e-12),
+                    "recovered warm V profile differs from the analytic reference");
+        }
+    for (uint64_t i = 0; i < jx_count; ++i)
+        require(close(recovered_current[i], expected_jx, 1.0e-12),
+                "recovered warm Jx differs from the analytic reference");
+    for (uint64_t i = jx_count; i < recovered_current.size(); ++i)
+        require(std::abs(recovered_current[i]) / expected_jx <= 1.0e-12,
+                "recovered warm transverse current exceeds the analytic reference");
+    require(fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
+                created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
+                &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                warm_promotions == 3 && warm_uses == 2 && warm_valid == 1,
+            "recovered accepted state did not promote the verified warm vector");
+    require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(recovered_snapshot.snapshot_handle) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "recovered snapshot destroy failed");
 
     auto changed_descriptor = descriptor;
     changed_descriptor.descriptor_revision = 2;
@@ -420,7 +463,7 @@ int main() {
                 created.context_handle, &warm_promotions, &warm_uses, &warm_cells,
                 &warm_descriptor_revision, &warm_source_revision, &warm_valid) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
-                warm_promotions == 2 && warm_uses == 2 && warm_valid == 1,
+                warm_promotions == 3 && warm_uses == 2 && warm_valid == 1,
             "incompatible descriptor consumed or replaced the warm state");
     fullmag_fdm_gpu_transport_context_create_result_v1 changed_created{};
     init_record(changed_created);

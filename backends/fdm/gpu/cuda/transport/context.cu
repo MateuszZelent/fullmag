@@ -2035,17 +2035,64 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
     if (!parent.hierarchy_cache.valid ||
         parent.hierarchy_cache.warm_potential == nullptr ||
         parent.hierarchy_cache.cells != parent.provisional.cells ||
-        cudaSetDevice(parent.device) != cudaSuccess) {
+        parent.provisional.cells > UINT64_MAX / sizeof(double)) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
     }
+    if (cudaSetDevice(parent.device) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (!reserve_telemetry_sequences(parent, 2))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    const uint64_t warm_copy_bytes = parent.provisional.cells * sizeof(double);
+    const bool inject_copy_failure = parent.test_failure_boundary == 70;
+    const bool inject_sync_failure = parent.test_failure_boundary == 71;
+    if (inject_copy_failure || inject_sync_failure)
+        parent.test_failure_boundary = 0;
     parent.hierarchy_cache.warm_valid = false;
-    if (cudaMemcpyAsync(parent.hierarchy_cache.warm_potential,
-                        parent.provisional.potential,
-                        parent.provisional.cells * sizeof(double),
-                        cudaMemcpyDeviceToDevice, parent.stream) != cudaSuccess ||
-        cudaStreamSynchronize(parent.stream) != cudaSuccess) {
+    if (inject_copy_failure ||
+        cudaMemcpyAsync(parent.hierarchy_cache.warm_potential,
+                        parent.provisional.potential, warm_copy_bytes,
+                        cudaMemcpyDeviceToDevice, parent.stream) != cudaSuccess) {
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_FAILED,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_FAILED,
+            0, 0, 0, 0, parent.iterations, parent.candidate_digest.data());
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
+    const cudaError_t warm_sync = cudaStreamSynchronize(parent.stream);
+    if (inject_sync_failure || warm_sync != cudaSuccess) {
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER,
+            warm_copy_bytes, 1, 0, 0, parent.iterations,
+            parent.candidate_digest.data());
+        append_charge_telemetry(
+            parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_FAILED,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_FAILED,
+            0, 0, 0, 0, parent.iterations, parent.candidate_digest.data());
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    }
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SCIENTIFIC_COMMIT,
+        warm_copy_bytes, 1, 0, 0, parent.iterations, parent.candidate_digest.data());
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SCIENTIFIC_COMMIT,
+        0, 1, 0, 0, parent.iterations, parent.candidate_digest.data());
     parent.hierarchy_cache.warm_descriptor_revision = parent.descriptor_revision;
     parent.hierarchy_cache.warm_source_revision = parent.source_revision;
     parent.hierarchy_cache.warm_valid = true;
@@ -3469,7 +3516,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_failure_boundary_v1(
         (boundary >= 10 && boundary <= 16) ||
         (boundary >= 20 && boundary <= 21) ||
         (boundary >= 30 && boundary <= 33) ||
-        (boundary >= 40 && boundary <= 44) || boundary == 60;
+        (boundary >= 40 && boundary <= 44) || boundary == 60 ||
+        (boundary >= 70 && boundary <= 71);
     if (!legal) return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
     std::lock_guard<std::mutex> lock(registry_mutex);
     if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
@@ -3793,6 +3841,29 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
     *source_revision = cache.warm_source_revision;
     *valid = cache.warm_valid ? 1u : 0u;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, double *potential,
+    uint64_t count) {
+    if (potential == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const Slot &slot = slots[context.slot];
+    const ChargeHierarchyCache &cache = slot.hierarchy_cache;
+    if (!same(context, context.slot, slot.generation) || !slot.active ||
+        !cache.warm_valid || cache.warm_potential == nullptr || count != cache.cells ||
+        count > UINT64_MAX / sizeof(double))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    if (cudaSetDevice(slot.device) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    return cudaMemcpy(potential, cache.warm_potential, count * sizeof(double),
+                      cudaMemcpyDeviceToHost) == cudaSuccess
+        ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK
+        : FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
 }
 
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_audit_v1(

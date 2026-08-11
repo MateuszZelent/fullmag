@@ -391,6 +391,9 @@ uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_audit_v1(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
     uint64_t *promotion_count, uint64_t *use_count, uint64_t *cells,
     uint64_t *descriptor_revision, uint64_t *source_revision, uint32_t *valid);
+uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, double *potential,
+    uint64_t count);
 #ifdef __cplusplus
 }
 #endif
