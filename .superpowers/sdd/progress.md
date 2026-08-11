@@ -92,3 +92,9 @@ model, resources, results, jobs, and diagnostics).
 Task 2: complete (commit `ebd02bc3`, review clean; 54 focused route-coverage
 tests and typecheck pass; exact route map, explicit unknown fallback, and
 frequency-kind coverage are present).
+Task 3: complete (commit `737eeafe`, review clean; 154 focused tree tests,
+typecheck, focused lint, and API hygiene pass; builder domains are split while
+public node IDs, kinds, order, and selection refs remain stable).
+Resource loader stabilization: complete (commits `46e769390..e12b03224`,
+fresh review clean; 2 focused timer/source-contract tests and typecheck pass;
+the base variant produced the intended RED result).
