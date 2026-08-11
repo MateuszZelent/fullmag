@@ -463,6 +463,31 @@
   font-size: var(--fm-font-size-xs);
 }
 
+@media (max-width: 380px) {
+  .fm-frequency-domain-chart__header,
+  .fm-frequency-domain-peak-card__header,
+  .fm-frequency-domain-resonance-card__header,
+  .fm-frequency-domain-response-card__header,
+  .fm-frequency-domain-comparison-card__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fm-frequency-domain-chart__header,
+  .fm-frequency-domain-chart__header small,
+  .fm-frequency-domain-chart__mode span,
+  .fm-frequency-domain-chart__mode small {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .fm-frequency-domain-chart__controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 
 /* ── Frequency domain alert cards ── */
 .fm-fd-alert__title {

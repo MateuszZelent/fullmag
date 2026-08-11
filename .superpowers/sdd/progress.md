@@ -149,3 +149,25 @@ Explorer zachowuje istniejące ID, a dodatkowo publikuje artifact/resource
 provenance. Workbench używa descriptorów i explicit calculation mode; znane
 ścieżki nie rozpoznają FMR przez tytuł wykresu. Przeszły `461/461` testów
 fokusowych, typecheck, zero-warning targeted ESLint i `git diff --check`.
+
+Task 6 qualification checkpoint: responsywność Analysis jest sprawdzana przy
+360/640/900/1280 px wraz z osiami i jednostkami, legendą, kursorem/tabelą,
+eksportem oraz brakiem poziomego overflow. Klawiatura pokrywa toggles serii,
+wybór punktu z tabeli, driven-response point, wiersz eigen branch i modalny
+Plot 3D. Właściciel ECharts zachowuje ten sam canvas podczas retained refresh,
+a cleanup obejmuje renderer, listenery, ResizeObserver, MutationObserver i
+oczekujący RAF. `396/396` szerokich testów Analysis/chart/frequency Inspector,
+typecheck, targeted ESLint, API hygiene, React Doctor `90/100` bez uwag,
+`smoke:analysis-plots`, `smoke:inspector` oraz izolowany
+`CONTROL_ROOM_TARGET_SMOKE_PHASE=analysis-handoff` przechodzą. Produkcyjny
+build Next 16 przechodzi. Pełna macierz target smoke nadal zatrzymuje się na
+niezmienionym progu FDM pixel delta `13 < 18`.
+
+Audyt chart performance został naprawiony tak, aby zawsze wybierał Dynamics,
+mierzył ustalony heap po trzech cyklach GC i nie przypisywał globalnego RAF
+aktywnego viewportu 3D właścicielowi chartu. Produkcyjny przebieg 10 000 wierszy
+i 100 remountów przeszedł wcześniejszy limit heap oraz zerowy wzrost canvasów,
+listenerów, observerów, workerów, URL-i i aktywnych RAF. Pozostaje otwarta
+bramka Quick Chart + 3D: `/v2/sessions/current/data/fields` jest odpytywane co
+około 110 ms, dlatego session requests nie osiągają idle. Progu ani liczby
+cykli nie obniżono.

@@ -336,6 +336,7 @@ function FmrResponsePointBrowser({
           </div>
           <div className="fm-frequency-domain-response-card__actions">
             <Button
+              aria-label={`Inspect response point ${point.frequencyIndex ?? index}`}
               className="fm-inspector-action-button"
               size="sm"
               title="Open this response frequency point inspector"
@@ -347,6 +348,7 @@ function FmrResponsePointBrowser({
               <span>Inspect</span>
             </Button>
             <Button
+              aria-label={`Plot response point ${point.frequencyIndex ?? index} in 3D`}
               className="fm-inspector-action-button"
               disabled={!point.fieldId}
               size="sm"

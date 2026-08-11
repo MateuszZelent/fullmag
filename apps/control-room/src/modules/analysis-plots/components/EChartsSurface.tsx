@@ -62,6 +62,9 @@ export function EChartsSurface({
 }: EChartsSurfaceProps) {
   const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
+  const surfaceStatus = presentation?.kind === "refreshing" && series.some((entry) => entry.points.length > 0)
+    ? "refreshing"
+    : undefined;
   const surface = useMemo(
     () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits, descriptorId),
     [chartId, dataStatus, descriptorId, displayUnits, presentation, series, xAxisLabel],
@@ -102,6 +105,7 @@ export function EChartsSurface({
       requestedExportFormat={requestedExportFormat}
       series={series}
       surface={surface}
+      ownerStatus={surfaceStatus}
       xAxisLabel={xAxisLabel}
       onPointSelected={(seriesId, pointIndex) => {
         const point = chartCursorPointFromEChartsClick(

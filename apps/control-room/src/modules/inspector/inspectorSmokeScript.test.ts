@@ -21,6 +21,10 @@ describe("explorer Inspector browser smoke script", () => {
     );
     expect(smokeScript).toContain("data-inspector-owner");
     expect(smokeScript).toContain("ArrowRight");
+    expect(smokeScript).toContain("Inspect response point 7");
+    expect(smokeScript).toContain("Open sample 0 mode 2");
+    expect(smokeScript).toContain('press("Space")');
+    expect(smokeScript).toContain('press("Enter")');
     expect(smokeScript).toContain("isContextLost");
     expect(smokeScript).toContain("drawingBufferWidth");
     expect(smokeScript).toContain("drawingBufferHeight");

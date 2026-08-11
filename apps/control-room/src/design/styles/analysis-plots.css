@@ -774,6 +774,33 @@
 
 }
 
+@media (max-width: 380px) {
+  .fm-chart-section__header,
+  .fm-chart-section__status-group,
+  .fm-chart-section__toolbar,
+  .fm-analysis-chart-export {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .fm-chart-section__title,
+  .fm-chart-section__subtitle,
+  .fm-chart-section__point-count,
+  .fm-chart-section__revision,
+  .fm-analysis-plots__header > span {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .fm-analysis-chart-export > * {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
 .fm-chart-control-bar__fit-btn {
   flex-shrink: 0;
 }
@@ -952,6 +979,26 @@
   font-family: var(--fm-font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.fm-points-table-dialog__select-point {
+  min-height: 28px;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-surface);
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  font: inherit;
+}
+
+.fm-points-table-dialog__select-point:hover {
+  background: var(--fm-surface-hover);
+}
+
+.fm-points-table-dialog__select-point:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
 }
 
 .fm-points-table-dialog__footer {

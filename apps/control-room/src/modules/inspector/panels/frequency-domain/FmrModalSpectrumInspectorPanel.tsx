@@ -287,14 +287,16 @@ function FmrResonanceBrowser({
   );
 }
 
+const FMR_MODAL_CHART_ROUTE = {
+  mode: "fmr_modal",
+  primaryChart: "eigen-spectrum",
+} as const;
+
 function useFmrModalSpectrumSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const chartRoute = {
-    mode: "fmr_modal",
-    primaryChart: "eigen-spectrum",
-  };
+  const chartRoute = FMR_MODAL_CHART_ROUTE;
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const modalCapabilities = record(capabilities?.modal);
   const responseCapabilities = record(capabilities?.response);

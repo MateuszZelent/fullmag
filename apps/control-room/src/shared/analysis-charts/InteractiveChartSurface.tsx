@@ -47,6 +47,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
   requestedExportFormat?: "csv" | "tsv" | "png" | null;
   series: readonly ChartSeries[];
   surface: InteractiveChartSurfaceIdentity;
+  ownerStatus?: string;
   xAxisLabel?: string;
   onRequestedExportHandled?: () => void;
 }
@@ -65,6 +66,7 @@ export function InteractiveChartSurface({
   requestedExportFormat = null,
   series,
   surface,
+  ownerStatus,
   xAxisLabel,
 }: InteractiveChartSurfaceProps) {
   const [isTableOpen, setIsTableOpen] = useState(false);
@@ -96,6 +98,7 @@ export function InteractiveChartSurface({
         initialRange={initialRange}
         model={model}
         presentation={presentation}
+        ownerStatus={ownerStatus}
         onClick={(event) => {
           const point = chartPointFromEChartsClick(event, series);
           if (point) onPointSelected?.(point.seriesId, point.pointIndex);
@@ -115,6 +118,7 @@ export function InteractiveChartSurface({
         model={model}
         open={isTableOpen}
         onClose={() => setIsTableOpen(false)}
+        onPointSelected={onPointSelected}
       />
     </div>
   );

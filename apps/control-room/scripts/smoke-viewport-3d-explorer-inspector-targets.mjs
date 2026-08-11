@@ -84,8 +84,10 @@ try {
   });
   removeMutationProcessGuards = mutationGuard.installProcessGuards();
   browser = await playwright.chromium.launch();
-  const fdmOnly = process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE === "fdm";
-  const femOnly = process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE === "fem";
+  const targetSmokePhase = process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE;
+  const analysisHandoffOnly = targetSmokePhase === "analysis-handoff";
+  const fdmOnly = targetSmokePhase === "fdm" || analysisHandoffOnly;
+  const femOnly = targetSmokePhase === "fem";
   const fdm = femOnly ? null : await verifyFdmObjectAndAirboxTargets(browser, url);
   const fieldFailures = fdmOnly || femOnly ? null : await verifyFdmFieldFailureRecovery(browser, url);
   const fem = fdmOnly ? null : await verifyFemObjectTargetAndFallback(browser, url);
@@ -182,13 +184,18 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await assertHealthyCanvas(page, "FDM initial");
+    const analysisViewportHandoff = await verifyAnalysisViewportHandoff(page, "FDM");
+    if (process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE === "analysis-handoff") {
+      assertNoBrowserErrors(errors);
+      return { analysisViewportHandoff };
+    }
 
     if (process.env.CONTROL_ROOM_TARGET_SMOKE_AIRBOX_ONLY === "1") {
       await selectAirboxVisualization(page);
       const geometry = await verifyAirboxGeometryModes(page, "fdm");
       await setAirboxGeometryOff(page);
       const vectorDeltas = await verifyAirboxVectorQuantities(page, fixture, "fdm");
-      return { airboxDebug: true, fieldRequests: fixture.fieldRequests, geometry, vectorDeltas };
+      return { airboxDebug: true, analysisViewportHandoff, fieldRequests: fixture.fieldRequests, geometry, vectorDeltas };
     }
 
     const a = await selectVisualizationNode(page, "fdm-left", null);
@@ -253,7 +260,7 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
     assertNoBrowserErrors(errors);
     assertFieldRequest(fixture, { component: "full", quantityId: "m", scopeId: null, scopeKind: "full" });
     await captureBrowserAuditScreenshot(page, "target-smoke-fdm-success.png");
-    return { aDelta, aRenderModeDeltas, airboxDelta, bDelta, fieldRequests: fixture.fieldRequests, geometry, leftRegionDelta, objectTargets: [a, b], regionTargets: [leftRegionTarget, rightRegionTarget], rightRegionDelta };
+    return { aDelta, aRenderModeDeltas, airboxDelta, analysisViewportHandoff, bDelta, fieldRequests: fixture.fieldRequests, geometry, leftRegionDelta, objectTargets: [a, b], regionTargets: [leftRegionTarget, rightRegionTarget], rightRegionDelta };
   } finally {
     await page.close();
   }
@@ -713,13 +720,54 @@ async function assertHealthyCanvas(page, label) {
   await canvas.waitFor({ state: "visible", timeout: timeoutMs });
   const state = await canvas.evaluate((node) => {
     const gl = node.getContext("webgl2") ?? node.getContext("webgl");
-    return { height: gl?.drawingBufferHeight ?? 0, lost: gl?.isContextLost() ?? true, width: gl?.drawingBufferWidth ?? 0 };
+    return {
+      contextLost: gl?.isContextLost() ?? true,
+      drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+      drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+    };
   });
-  if (state.lost || state.width <= 0 || state.height <= 0) throw new Error(`${label}: WebGL failed closed: ${JSON.stringify(state)}.`);
+  if (state.contextLost || state.drawingBufferWidth <= 0 || state.drawingBufferHeight <= 0) throw new Error(`${label}: WebGL failed closed: ${JSON.stringify(state)}.`);
   const screenshot = await canvas.screenshot();
   if (screenshot.length < 64 || screenshot.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
     throw new Error(`${label}: viewport did not produce a PNG screenshot.`);
   }
+}
+
+async function verifyAnalysisViewportHandoff(page, lane) {
+  const analysis = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^Analysis$/ }).first();
+  await analysis.click({ timeout: timeoutMs });
+  await page.locator("[data-slot-id='viewport-main'][data-active-module-id='analysis-plots']").waitFor({
+    state: "attached",
+    timeout: timeoutMs,
+  });
+  for (const surface of ["Frequency Response", "Eigenmodes", "Dispersion"]) {
+    const tab = page.locator(".fm-analysis-plots__tab").filter({ hasText: new RegExp(`^${surface}$`) }).first();
+    await tab.click({ timeout: timeoutMs });
+    await page.waitForFunction(
+      (label) => {
+        const tabs = Array.from(document.querySelectorAll(".fm-analysis-plots__tab"));
+        const activeTab = tabs.find((candidate) => candidate.textContent?.trim() === label);
+        const panel = document.querySelector(".fm-analysis-plots__panel--primary");
+        return (
+          activeTab?.getAttribute("data-state") === "active" &&
+          panel instanceof HTMLElement &&
+          panel.offsetWidth > 0 &&
+          panel.offsetHeight > 0 &&
+          Boolean(panel.querySelector(".fm-chart-section, .fm-analysis-plots__empty, [role='status']"))
+        );
+      },
+      surface,
+      { timeout: timeoutMs },
+    );
+  }
+  const viewport = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^3D Viewport$/ }).first();
+  await viewport.click({ timeout: timeoutMs });
+  await page.locator("[data-slot-id='viewport-main'][data-active-module-id='viewport-3d']").waitFor({
+    state: "attached",
+    timeout: timeoutMs,
+  });
+  await assertHealthyCanvas(page, `${lane} Analysis to 3D handoff`);
+  return { surfaces: ["Frequency Response", "Eigenmodes", "Dispersion"] };
 }
 
 async function sampleViewportPixels(page, explicitStride = null) {

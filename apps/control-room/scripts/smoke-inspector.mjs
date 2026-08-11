@@ -555,6 +555,45 @@ async function qualifyInspectorRoutingMatrix(page, inspector) {
   await expandInspectorNode(page, "results:root");
   await expandInspectorNode(page, "results:frequency-domain");
   await expandInspectorNode(page, "results:frequency-domain:fmr");
+
+  const responseSweepNode = page.locator(
+    '[data-node-id="results:frequency-domain:fmr:response-sweep"]',
+  );
+  await responseSweepNode.waitFor({ state: "visible", timeout: 60_000 });
+  await responseSweepNode.click();
+  const responseOwner = await inspector.getAttribute("data-inspector-owner");
+  const inspectResponseButton = inspector.getByRole("button", {
+    name: "Inspect response point 7",
+  });
+  await inspectResponseButton.focus();
+  await inspectResponseButton.press("Space");
+  await page.waitForFunction(
+    (previousOwner) =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") !== previousOwner,
+    responseOwner,
+    { timeout: 60_000 },
+  );
+
+  await expandInspectorNode(page, "results:eigen");
+  await expandInspectorNode(page, "results:eigen:branches");
+  const branchNode = page.locator(
+    '[data-node-id="results:eigen:branches:branch:branch-0"]',
+  );
+  await branchNode.waitFor({ state: "visible", timeout: 60_000 });
+  await branchNode.click();
+  const branchOwner = await inspector.getAttribute("data-inspector-owner");
+  const openBranchModeButton = inspector.getByRole("button", {
+    name: "Open sample 0 mode 2",
+  });
+  await openBranchModeButton.focus();
+  await openBranchModeButton.press("Enter");
+  await page.waitForFunction(
+    (previousOwner) =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") !== previousOwner,
+    branchOwner,
+    { timeout: 60_000 },
+  );
+
   const modalSpectrumNode = page.locator(
     '[data-node-id="results:frequency-domain:fmr:modal-spectrum"]',
   );
@@ -563,7 +602,8 @@ async function qualifyInspectorRoutingMatrix(page, inspector) {
   const plotButton = inspector.getByRole("button", { name: /Plot .*3D/ }).first();
   await plotButton.waitFor({ state: "visible", timeout: 60_000 });
   assert(await plotButton.isEnabled(), "Mode visualization Plot 3D action is disabled.");
-  await plotButton.click();
+  await plotButton.focus();
+  await plotButton.press("Enter");
 
   const modelTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
@@ -1191,7 +1231,25 @@ function inspectorFrequencyBranches() {
   return {
     artifact_path: "eigen/branches.v2.json",
     missing_reason: null,
-    payload: { branches: [], schema_version: "eigen_branches.v2", solver_model: "linearized_llg_reference" },
+    payload: {
+      branches: [{
+        branch_id: "branch-0",
+        label: "Acoustic branch",
+        points: [{
+          frequency_imag_hz: -12e6,
+          frequency_real_hz: 12.5e9,
+          mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+          mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+          overlap_prev: 0.99,
+          raw_mode_index: 2,
+          residual_norm: 1e-8,
+          sample_index: 0,
+          tracking_confidence: 0.995,
+        }],
+      }],
+      schema_version: "eigen_branches.v2",
+      solver_model: "linearized_llg_reference",
+    },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
     schema_version: "frequency_domain_eigen_branches.v2",
     status: "ready",
@@ -1225,7 +1283,20 @@ function inspectorFrequencyResponseSweep() {
   return {
     artifact_path: "response/magnetic_response_sweep.v2.json",
     missing_reason: null,
-    payload: { points: [], schema_version: "magnetic_response_sweep.v2" },
+    payload: {
+      points: [{
+        absorbed_power_density: 4.5,
+        amplitude: 0.75,
+        field_id: "response-field-7",
+        frequency_hz: 12.5e9,
+        frequency_index: 7,
+        observable_id: "mx",
+        phase_rad: 1.25,
+        residual_norm: 1e-5,
+        susceptibility_tensor: [[1, 2], [3, 4]],
+      }],
+      schema_version: "magnetic_response_sweep.v2",
+    },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
     schema_version: "frequency_domain_response_sweep.v2",
     status: "ready",
