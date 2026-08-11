@@ -110,6 +110,11 @@ export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH =
     "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
   );
 
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_COMPAT_V1_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+  );
+
 export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH =
   openApiV2Path(
     "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{frequency_index}",

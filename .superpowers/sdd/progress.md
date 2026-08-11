@@ -143,3 +143,22 @@ independent spec/quality review approved with no Critical/Important findings;
 focused MFEM container contract exit 0; authoritative `just` route remains
 blocked before build by `/mnt/fullmag-zfn2-native` ENOSPC and no public runtime
 qualification is claimed).
+
+Branch synchronization: complete at merge commit `cd132a96c`; local `master`
+(`603234926`) is an ancestor of the branch, merge had no conflicts, and the
+four uncommitted A2-RI files plus unrelated `native-debug/` were preserved.
+`origin/master` still points to `397fc12be` because the two local master
+commits have not been pushed in this environment.
+
+Task A2-RI (canonical realtime invalidation for frequency-domain resources):
+complete source-level (four frontend files, no solver/API schema changes),
+independent review `APPROVE` with no Critical/Important/Minor findings. The
+canonical key catalog now covers eigen branches/dispersion/diagnostics,
+response sweep/progress/cancel/diagnostics/frequency-point/field-meta and
+existing manifest/spectrum/field-sweep/FMR/mode-field resources. Indexed paths
+are strict non-negative `u32`, artifact aliases converge to hook keys, and
+`resource.updated`/`resource.batch_changed` tests cover sibling isolation and
+compatibility diagnostics routing. Fresh verification on merge HEAD: Vitest
+93/93 and Control Room typecheck pass; targeted ESLint and diff-check were
+already green in the independent review. Managed/native/browser qualification
+is not claimed.

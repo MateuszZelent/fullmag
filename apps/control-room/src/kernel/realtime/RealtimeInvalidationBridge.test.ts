@@ -7,10 +7,19 @@ import {
   serializeCanonicalFieldVectorResourceKey,
 } from "../api/fieldQueryIdentity";
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
 } from "../api/apiPaths";
 import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyDomainResourceKeys";
 import {
@@ -86,6 +95,36 @@ describe("RealtimeInvalidationBridge", () => {
       "field sweep",
       ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
     ],
+    ["eigen branches", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH],
+    ["eigen dispersion", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH],
+    ["eigen diagnostics", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH],
+    [
+      "response magnetic sweep",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    ],
+    ["response progress", ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH],
+    [
+      "response cancellation",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+    ],
+    [
+      "response diagnostics",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+    ],
+    [
+      "response frequency point",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH.replace(
+        "{frequency_index}",
+        "7",
+      ),
+    ],
+    [
+      "response field metadata",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH.replace(
+        "{frequency_index}",
+        "8",
+      ),
+    ],
     ["FMR peaks", ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH],
     [
       "FMR resonance fits",
@@ -104,6 +143,21 @@ describe("RealtimeInvalidationBridge", () => {
       const bridge = new RealtimeInvalidationBridge(resources);
       const siblingKeys = [
         ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH.replace(
+          "{frequency_index}",
+          "7",
+        ),
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH.replace(
+          "{frequency_index}",
+          "8",
+        ),
         ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
         ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
         ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
@@ -153,6 +207,58 @@ describe("RealtimeInvalidationBridge", () => {
       digest,
     );
   });
+
+  it.each([
+    [
+      "eigen branches",
+      "eigen/branches.v2.json",
+      ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+    ],
+    [
+      "eigen diagnostics",
+      "eigen/diagnostics.v2.json",
+      ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+    ],
+    [
+      "response sweep",
+      "response/magnetic_response_sweep.v2.json",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+    ],
+    [
+      "response frequency point",
+      "response/frequency_points/frequency_0007.json",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH.replace(
+        "{frequency_index}",
+        "7",
+      ),
+    ],
+    [
+      "response field metadata",
+      "response/field_payloads/frequency_0008/vector.bin",
+      ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH.replace(
+        "{frequency_index}",
+        "8",
+      ),
+    ],
+  ])(
+    "normalizes a direct %s artifact update to the resource hook key",
+    (_label, artifactPath, resourceKey) => {
+      const bus = new EventBus<KernelEventMap>();
+      const resources = new ResourceInvalidationController(bus);
+      const bridge = new RealtimeInvalidationBridge(resources);
+      const digest = `sha256:${_label}`;
+
+      expect(
+        bridge.handleEvent({
+          artifact_path: artifactPath,
+          content_digest: digest,
+          type: "resource.updated",
+        }),
+      ).toBe(true);
+
+      expect(resources.getRevision(resourceKey)).toBe(digest);
+    },
+  );
 
   it("invalidates preparation from the exact backend revision-only change", () => {
     const bus = new EventBus<KernelEventMap>();
