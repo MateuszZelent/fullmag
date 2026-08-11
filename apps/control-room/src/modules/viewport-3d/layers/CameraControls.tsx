@@ -24,12 +24,18 @@ import {
   settleViewport3DCameraGesture,
   viewport3DCameraGestureActive,
   viewport3DCameraGestureEpoch,
+  viewport3DCameraGestureSource,
   type Viewport3DCameraGestureRef,
 } from "./viewport3DCameraGesture";
 import {
   viewport3DCameraSnapshotsEqual,
   type Viewport3DLiveCameraSnapshot,
 } from "./viewport3DCameraState";
+import {
+  installViewport3DCameraTrajectoryProbeForBrowser,
+  recordViewport3DCameraTrajectorySample,
+  type Viewport3DCameraTrajectoryReason,
+} from "./viewport3DCameraTrajectoryProbe";
 
 interface Viewport3DCameraFit {
   far: number;
@@ -789,11 +795,58 @@ function useOrbitCameraControlsModel({
   const controlsSyncingRef = useRef(false);
   const cameraGestureEndedRef = useRef(false);
   const activeGestureEpochRef = useRef<number | null>(null);
+  const trajectoryFrameRef = useRef(0);
   const previousHudControlsEnabledRef = useRef<boolean | null>(null);
   const suppressNextRestCommitRef = useRef(false);
   const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+
+  const recordCameraTrajectory = useCallback((
+    reason: Viewport3DCameraTrajectoryReason,
+    epoch: number,
+  ) => {
+    const controls = controlsRef.current;
+    const controlTarget = controls?.target?.toArray();
+    const target = controlTarget ? tuple3(controlTarget) : cameraState.target;
+    recordViewport3DCameraTrajectorySample({
+      active: viewport3DCameraGestureActive(cameraGestureRef),
+      committedCamera: null,
+      epoch,
+      frame: trajectoryFrameRef.current,
+      liveCamera: {
+        orthographicScale:
+          cameraProjection === "orthographic"
+            ? resolveViewport3DCurrentOrthographicScale({
+                camera,
+                fallbackScale: cameraOrthographicScale,
+                viewportHeightPixels: size.height,
+              })
+            : null,
+        position: tuple3(camera.position.toArray()),
+        projection: cameraProjection,
+        target,
+        up: tuple3(camera.up.toArray()),
+      },
+      reason,
+      registry: null,
+      source: viewport3DCameraGestureSource(cameraGestureRef),
+      storeCamera: viewport3dStore.getSnapshot().camera,
+      timestamp: performance.now(),
+    });
+    trajectoryFrameRef.current += 1;
+  }, [
+    camera,
+    cameraGestureRef,
+    cameraOrthographicScale,
+    cameraProjection,
+    cameraState.target,
+    size.height,
+  ]);
+
+  useEffect(() => {
+    installViewport3DCameraTrajectoryProbeForBrowser();
+  }, []);
 
   useEffect(() => {
     if (viewport3DCameraGestureActive(cameraGestureRef)) return;
@@ -1003,6 +1056,10 @@ function useOrbitCameraControlsModel({
         projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
         syncStore: false,
       });
+      recordCameraTrajectory(
+        "commit",
+        viewport3DCameraGestureEpoch(cameraGestureRef),
+      );
       endViewport3DCameraGesture(cameraGestureRef);
     } else if (settled) {
       endViewport3DCameraGesture(cameraGestureRef);
@@ -1050,6 +1107,7 @@ function useOrbitCameraControlsModel({
       projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
       syncStore: false,
     });
+    recordCameraTrajectory("commit", epoch);
     const currentAngles = readViewport3DOrbitDebugAngles(controls, camera);
     if (currentAngles) {
       onOrbitDebugAnglesChange?.(currentAngles);
@@ -1067,6 +1125,7 @@ function useOrbitCameraControlsModel({
     onCameraChange,
     onCameraInteractionEnd,
     onOrbitDebugAnglesChange,
+    recordCameraTrajectory,
     size.height,
   ]);
 
@@ -1122,10 +1181,16 @@ function useOrbitCameraControlsModel({
     const epoch = activeGestureEpochRef.current;
     if (epoch === null) return;
     markViewport3DCameraGestureChanged(cameraGestureRef, epoch);
+    recordCameraTrajectory("change", epoch);
     if (cameraGestureEndedRef.current) {
       scheduleCameraControlsPoseCommit(epoch, { restart: true });
     }
-  }, [cameraGestureRef, scheduleCameraControlsPoseCommit, tracker]);
+  }, [
+    cameraGestureRef,
+    recordCameraTrajectory,
+    scheduleCameraControlsPoseCommit,
+    tracker,
+  ]);
 
   const handleTransitionStart = useCallback(() => {
     if (controlsSyncingRef.current) return;
@@ -1140,11 +1205,13 @@ function useOrbitCameraControlsModel({
     if (epoch < 0) return;
     activeGestureEpochRef.current = epoch;
     onCameraInteractionStart?.(epoch);
+    recordCameraTrajectory("start", epoch);
   }, [
     cameraGestureRef,
     clearCameraControlsPoseCommit,
     onCameraInteractionEnd,
     onCameraInteractionStart,
+    recordCameraTrajectory,
   ]);
 
   const handleEnd = useCallback(() => {

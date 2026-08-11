@@ -101,6 +101,7 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
 import {
@@ -1351,6 +1352,24 @@ export default function Viewport3DModule({
         buildViewport3DCameraRegistryPatch(camera),
         epoch,
       );
+      const registry = kernel.cameraRegistry.getSnapshot();
+      recordViewport3DCameraTrajectorySample({
+        active: epoch !== undefined,
+        committedCamera: registry.camera,
+        epoch: epoch ?? -1,
+        frame: registry.localVersion,
+        liveCamera: null,
+        reason: "commit",
+        registry: {
+          dirty: registry.dirty,
+          lastRemoteRevision: registry.lastRemoteRevision,
+          localVersion: registry.localVersion,
+          persistedShadow: registry.persistedShadow,
+        },
+        source: null,
+        storeCamera: viewport3dStore.getSnapshot().camera,
+        timestamp: performance.now(),
+      });
     },
     [kernel.cameraRegistry],
   );
