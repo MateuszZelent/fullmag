@@ -15,6 +15,71 @@ from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_
 
 
 class FdmUiRoundTripTests(unittest.TestCase):
+    def test_cell_size_authoring_rewrites_without_legacy_fdm_wrappers(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "cell_size_source.py"
+            source.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("heterogeneous_cells")
+                    study.engine("fdm")
+                    study.mode("strict")
+                    bottom = study.geometry(fm.Box(size=(100e-9, 50e-9, 10e-9)), name="bottom")
+                    top = study.geometry(
+                        fm.Box(size=(100e-9, 50e-9, 10e-9)).translate((0.0, 0.0, 20e-9)),
+                        name="top",
+                    )
+                    bottom.Ms = top.Ms = 800e3
+                    bottom.Aex = top.Aex = 13e-12
+                    bottom.mesh(cell_size=(2e-9, 2e-9, 10e-9))
+                    top.mesh(cell_size=(5e-9, 5e-9, 10e-9))
+                    study.universe.mesh(cell_size=(2e-9, 2e-9, 2.5e-9))
+                    study.demag()
+                    study.stages.add_relax(
+                        stage_id="relax",
+                        algorithm="llg_overdamped",
+                        max_steps=10,
+                        dt=1e-13,
+                    )
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = load_problem_from_script(source, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = root / "cell_size_rewritten.py"
+            rewritten.write_text(rendered, encoding="utf-8")
+            round_tripped = load_problem_from_script(
+                rewritten,
+                lightweight_assets=True,
+            )
+
+        self.assertIn(
+            "bottom.mesh(cell_size=(2e-09, 2e-09, 1e-08))",
+            rendered,
+        )
+        self.assertIn(
+            "top.mesh(cell_size=(5e-09, 5e-09, 1e-08))",
+            rendered,
+        )
+        self.assertIn(
+            "study.universe.mesh(cell_size=(2e-09, 2e-09, 2.5e-09))",
+            rendered,
+        )
+        self.assertIn("study.demag()", rendered)
+        self.assertNotIn("study.fdm(", rendered)
+        self.assertNotIn("fm.fdm(", rendered)
+        self.assertNotIn("FDMGrid", rendered)
+        self.assertNotIn("FDMDemag", rendered)
+        self.assertEqual(
+            round_tripped.problem.discretization.fdm.to_ir(),
+            loaded.problem.discretization.fdm.to_ir(),
+        )
+
     def test_scene_fdm_policy_exports_to_public_python_and_problem_ir(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
