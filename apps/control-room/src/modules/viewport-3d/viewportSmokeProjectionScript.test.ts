@@ -76,9 +76,11 @@ describe("viewport smoke projection round-trip", () => {
   it("uses an explicit timestep policy in the disposable FDM smoke fixture", () => {
     const fixture = readFileSync(fdmCpuRelaxSmokeUrl, "utf8");
 
-    expect(fixture).toContain(
-      'study.stages.add_relax(algorithm="llg_overdamped", dt=1e-13, tolA=1e-4, max_steps=4)',
-    );
+    expect(fixture).toContain('algorithm="llg_overdamped"');
+    expect(fixture).toContain("dt=1e-13");
+    expect(fixture).toContain(".tableautosave(");
+    expect(fixture).toContain("every_steps=1");
+    expect(fixture).not.toContain("study.tableautosave(");
   });
 
   it("toggles relative to the initial projection state", () => {
