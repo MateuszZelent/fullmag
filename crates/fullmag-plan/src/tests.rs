@@ -7033,6 +7033,78 @@ fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
 }
 
 #[test]
+fn multilayer_planner_accepts_exactly_neutral_boundary_intent() {
+    for boundary_correction in [None, Some("none".to_string())] {
+        let mut ir = stacked_two_body_multilayer_problem();
+        let fdm = ir
+            .backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("stacked fixture must provide FDM hints");
+        fdm.boundary_correction = boundary_correction;
+        fdm.boundary_phi_floor = None;
+        fdm.boundary_delta_min = None;
+
+        plan(&ir).expect("neutral boundary intent must remain executable for multilayer FDM");
+    }
+}
+
+#[test]
+fn multilayer_planner_rejects_every_non_neutral_boundary_intent() {
+    let cases = [
+        ("boundary_correction=volume", Some("volume"), None, None),
+        ("boundary_correction=full", Some("full"), None, None),
+        ("boundary_phi_floor=0", None, Some(0.0), None),
+        ("boundary_phi_floor=positive", None, Some(0.1), None),
+        ("boundary_delta_min=0", None, None, Some(0.0)),
+        ("boundary_delta_min=positive", None, None, Some(1.0e-12)),
+    ];
+
+    for (case_name, boundary_correction, boundary_phi_floor, boundary_delta_min) in cases {
+        for explicit_single_layer in [false, true] {
+            let mut ir = if explicit_single_layer {
+                let mut ir = ProblemIR::bootstrap_example();
+                ir.backend_policy
+                    .discretization_hints
+                    .as_mut()
+                    .and_then(|hints| hints.fdm.as_mut())
+                    .expect("bootstrap example must provide FDM hints")
+                    .demag = Some(fullmag_ir::FdmDemagHintsIR {
+                    strategy: "multilayer_convolution".to_string(),
+                    mode: "auto".to_string(),
+                    common_cells: None,
+                    common_cells_xy: None,
+                });
+                ir
+            } else {
+                stacked_two_body_multilayer_problem()
+            };
+            let fdm = ir
+                .backend_policy
+                .discretization_hints
+                .as_mut()
+                .and_then(|hints| hints.fdm.as_mut())
+                .expect("multilayer fixture must provide FDM hints");
+            fdm.boundary_correction = boundary_correction.map(str::to_string);
+            fdm.boundary_phi_floor = boundary_phi_floor;
+            fdm.boundary_delta_min = boundary_delta_min;
+
+            let error = plan(&ir).expect_err(
+                "multilayer FDM must reject boundary intent that its plan cannot preserve",
+            );
+            assert!(
+                error.reasons.iter().any(|reason| {
+                    reason.contains("boundary intent") && reason.contains("FdmMultilayerPlanIR")
+                }),
+                "case={case_name} explicit_single_layer={explicit_single_layer} errors={:?}",
+                error.reasons
+            );
+        }
+    }
+}
+
+#[test]
 fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode() {
     let mut common_cells_auto = stacked_two_body_multilayer_problem();
     let fdm = common_cells_auto

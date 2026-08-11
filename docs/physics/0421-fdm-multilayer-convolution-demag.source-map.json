@@ -351,6 +351,13 @@
       "responsibility": "full public FDM wrapper"
     },
     {
+      "id": "multilayerPlanner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "validates that multilayer boundary intent is exactly neutral before constructing layer plans",
+      "evidence_status": "source-tested fail-closed planner contract only; no runtime or device proof"
+    },
+    {
       "id": "cpuCatalog",
       "path": "crates/fullmag-engine/src/multilayer.rs",
       "symbol": "build_kernel_catalog",
@@ -404,6 +411,36 @@
         "meaning": "demagnetization policy wrapper",
         "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
+      },
+      {
+        "python": "FDM.boundary_correction",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Python accepts none, volume, full; multilayer accepts exactly None or none and rejects volume/full before layer construction",
+        "meaning": "sub-cell boundary-correction tier",
+        "backend_support": "FDM single-grid authoring; multilayer neutral intent only",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
+      },
+      {
+        "python": "FDM.boundary_phi_floor",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Python requires $0<\\phi_{\\min}<1$; multilayer requires None and rejects every explicit value, including direct-IR 0.0",
+        "meaning": "minimum volume fraction for boundary correction",
+        "backend_support": "FDM single-grid authoring; unsupported for multilayer",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
+      },
+      {
+        "python": "FDM.boundary_delta_min",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "Python requires $\\delta_{\\min}\\geq0$; multilayer requires None and rejects every explicit value, including 0.0",
+        "meaning": "minimum intersection distance for T1 stability",
+        "backend_support": "FDM single-grid authoring; unsupported for multilayer",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
       },
       {
         "python": "FDMGrid.cell",
@@ -476,10 +513,6 @@
         "problem_ir": "not serialized"
       }
     ],
-    "excluded_parameters": [
-      "FDM.boundary_correction",
-      "FDM.boundary_phi_floor",
-      "FDM.boundary_delta_min"
-    ]
+    "excluded_parameters": []
   }
 }

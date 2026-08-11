@@ -303,6 +303,9 @@ ulepszeniami.
 | FDM.default_cell | Sequence[float] or None | None | $\mathrm m$ | three positive values when present; needed when per_magnet is incomplete and for the current common-scratch policy | default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.default_cell | implemented authoring |
 | FDM.per_magnet | dict[str, FDMGrid] or None | None | $1$ | non-empty names and FDMGrid values | per-object native grid overrides | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.per_magnet | implemented authoring |
 | FDM.demag | FDMDemag or None | None | $1$ | no explicit type check in FDM.__init__; a valid FDMDemag is required during lowering | demagnetization policy wrapper | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.demag | implemented authoring |
+| FDM.boundary_correction | str or None | None | $1$ | Python accepts none, volume, full; multilayer accepts exactly None or none and rejects volume/full before layer construction | sub-cell boundary-correction tier | FDM single-grid authoring; multilayer neutral intent only | backend_policy.discretization_hints.fdm.boundary_correction | authoring implemented; multilayer containment source-tested only |
+| FDM.boundary_phi_floor | float or None | None | $1$ | Python requires $0<\phi_{\min}<1$; multilayer requires None and rejects every explicit value, including direct-IR 0.0 | minimum volume fraction for boundary correction | FDM single-grid authoring; unsupported for multilayer | backend_policy.discretization_hints.fdm.boundary_phi_floor | authoring implemented; multilayer containment source-tested only |
+| FDM.boundary_delta_min | float or None | None | $\mathrm m$ | Python requires $\delta_{\min}\geq0$; multilayer requires None and rejects every explicit value, including 0.0 | minimum intersection distance for T1 stability | FDM single-grid authoring; unsupported for multilayer | backend_policy.discretization_hints.fdm.boundary_delta_min | authoring implemented; multilayer containment source-tested only |
 | FDMGrid.cell | Sequence[float] | required | $\mathrm m$ | three positive values | native cell size | FDM CPU/GPU | backend_policy.discretization_hints.fdm.per_magnet.*.cell | implemented authoring |
 | FDMDemag.strategy | Literal[str] | auto | $1$ | auto, single_grid, multilayer_convolution | requested demag realization | FDM CPU/GPU | backend_policy.discretization_hints.fdm.demag.strategy | implemented; multilayer runtime gated |
 | FDMDemag.mode | Literal[str] | auto | $1$ | auto, two_d_stack, three_d | requested multilayer mode | FDM CPU/GPU | backend_policy.discretization_hints.fdm.demag.mode | implemented; runtime not qualified |
@@ -312,10 +315,13 @@ ulepszeniami.
 | FDMDemag.allow_single_grid_fallback | bool or None | None | $1$ | every non-None value raises ValueError | removed compatibility input; silent fallback is forbidden | unsupported | not serialized |
 
 Parametry FDM.boundary_correction, FDM.boundary_phi_floor i
-FDM.boundary_delta_min są publicznie obniżane do FDM hints, lecz bieżący
-FdmMultilayerPlanIR ich nie przenosi ani nie odrzuca. Jest to otwarty błąd
-round-trip; do czasu zdefiniowania per-layer wpływu planner powinien fail-close
-dla wartości innych niż neutralne.
+FDM.boundary_delta_min są publicznie obniżane do FDM hints. Ponieważ
+FdmMultilayerPlanIR nie ma pól zachowujących tę intencję, planner przed budową
+warstw akceptuje dokładnie boundary_correction równe None albo none przy obu
+parametrach tuningowych równych None. Odrzuca volume/full oraz każde jawne
+boundary_phi_floor lub boundary_delta_min, także 0.0. Ta sama reguła obejmuje
+jawne strategy=multilayer_convolution dla jednej warstwy. Jest to wyłącznie
+dowód containment planera; nie stanowi dowodu wykonania runtime ani urządzenia.
 
 ```python
 # %% Imports
@@ -342,7 +348,10 @@ FDMGrid.to_ir obniża cell do listy SI. FDMDemag.to_ir obniża strategy, mode,
 common_cells i common_cells_xy do
 backend_policy.discretization_hints.fdm.demag. Planner materializuje
 FdmMultilayerPlanIR, FdmLayerPlanIR i FdmMultilayerSummaryIR z requested oraz
-selected strategy, eligibility i oszacowaniem kerneli.
+selected strategy, eligibility i oszacowaniem kerneli. FDM.to_ir zachowuje też
+trzy publiczne parametry boundary w FDM hints, lecz planner multilayer nie
+materializuje ich w FdmMultilayerPlanIR: przepuszcza wyłącznie neutralną
+kombinację i odrzuca pozostałe przed budową FdmLayerPlanIR.
 
 (round-trip-and-failure-semantics)=
 ## Round-trip i semantyka błędów
@@ -355,7 +364,9 @@ transferu. Różne XY extents/centers są zachowywane jako native geometrie i
 materializowane przez union computational scratch oraz `push_pull`; nie są
 automatycznie odrzucane ani rysowane jako jeden fizyczny supermesh.
 Unsupported combinations nie mogą potajemnie spaść do single_grid ani innej
-precyzji.
+precyzji. Jawny multilayer_convolution z jedną warstwą podlega identycznej
+walidacji boundary: None/none bez tuningów przechodzi, natomiast volume/full i
+każde jawne phi_floor/delta_min kończą planowanie błędem.
 
 (discrete-realization)=
 ## Realizacje backendowe
@@ -393,7 +404,10 @@ compute_newell_kernels i compute_newell_kernels_shifted budują 2D exact corner
 tensor, a dla 3D jawnie ograniczony shifted tensor; accumulate_tensor_convolution
 wykonuje mnożenie spektralne; negate_field umieszcza konwencyjny znak pola.
 Transfery są push_m_with_boundary_policy oraz pull_h_with_boundary_policy, a
-plannerem jest plan_fdm_multilayer. `build_kernel_catalog` deduplikuje kernel
+plannerem jest plan_fdm_multilayer. Zanim planner zbuduje warstwy, sprawdza on,
+czy boundary_correction jest pominięte lub równe none oraz czy oba tuningi są
+pominięte; nieneutralny intent kończy planowanie, ponieważ
+FdmMultilayerPlanIR nie potrafi go zachować. `build_kernel_catalog` deduplikuje kernel
 per pełny `KernelReuseKey`, `pair_bindings` zachowują orientację d←s, a
 `compute_demag_fields_checked` uruchamia forward/pair/inverse z jednym
 współdzielonym workspace i guardami długości. Nie jest to dowód kompletności
@@ -422,6 +436,11 @@ ani kwalifikacji SP4. Airbox jest
 target-only observation carrier: pierwsza promocja publikuje H_demag; H_eff
 poza domeną magnetyczną ma versioned unavailable reason. CPU FP64, CUDA FP64 i
 CUDA FP32 wymagają osobnych artefaktów runtime, urządzenia i tolerancji.
+Plannerowe testy multilayer_planner_accepts_exactly_neutral_boundary_intent i
+multilayer_planner_rejects_every_non_neutral_boundary_intent sprawdzają
+neutralne None/none, volume/full, jawne tuningi zerowe i dodatnie oraz jawny
+single-layer multilayer_convolution. Są dowodem fail-closed source contract,
+nie runtime/device proof.
 
 (limitations)=
 ## Ograniczenia
@@ -478,6 +497,6 @@ kwalifikacji.
 | Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel_pair | current unequal-cell pair-kernel owner; `newell.rs::newell_g` remains the publication-formula anchor | FDM CPU kernel plus theory/oracle boundary | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | implemented and oracle-tested in scoped CPU cases; not production-qualified | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
 | Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | local/source-unbound verifier: field, energy, and adjoint checks for different extents and $V_{native}\ne V_{scratch}$ with equal native $h_z$ | physically validated in the stated local scope; no unequal-native-cell-thickness continuum oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
 | Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | local/source-unbound verifier: field, energy, and adjoint checks for different extents and $V_{native}\ne V_{scratch}$ with equal native $h_z$ | physically validated in the stated local scope; no unequal-native-cell-thickness continuum oracle | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
-| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | [master@15ab7482b](https://github.com/MateuszZelent/fullmag/commit/15ab7482b0b6f5735684fb3bf7a51f155c778860) |
+| Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan and rejects non-neutral boundary intent before layer construction | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_accepts_exactly_neutral_boundary_intent; crates/fullmag-plan/src/tests.rs::multilayer_planner_rejects_every_non_neutral_boundary_intent | executable fail-closed planner contract only; no runtime/device proof | pending task commit; source/test evidence only |
 | CPU catalog and workspace | crates/fullmag-engine/src/multilayer.rs | build_kernel_catalog | deduplicates kernels and binds ordered layer pairs to one descriptor | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace | runtime-verified CPU, not production-qualified | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |
 | CPU checked refresh | crates/fullmag-engine/src/multilayer.rs | compute_demag_fields_checked | validates native/scratch geometry and executes catalog/workspace refresh | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::identity_path_rejects_native_scratch_cell_count_mismatch_without_panicking | fail-closed contract; no managed production artifact | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |

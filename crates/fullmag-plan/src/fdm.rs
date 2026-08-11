@@ -2115,6 +2115,19 @@ pub(crate) fn plan_fdm_multilayer(
             })
         }
     };
+    if !matches!(
+        fdm_hints.boundary_correction.as_deref(),
+        None | Some("none")
+    ) || fdm_hints.boundary_phi_floor.is_some()
+        || fdm_hints.boundary_delta_min.is_some()
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "multilayer FDM boundary intent is not representable by FdmMultilayerPlanIR; use boundary_correction='none' or omit it, and omit boundary_phi_floor and boundary_delta_min"
+                    .to_string(),
+            ],
+        });
+    }
     let demag_hints = fdm_hints.demag.as_ref();
     if let Some(policy) = demag_hints {
         if let Err(reasons) = policy.validate() {
