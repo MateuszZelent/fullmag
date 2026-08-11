@@ -555,13 +555,9 @@ fn expand_resolved_boundaries(
                         StructuredBoundaryFaceIR::XMin => (nx + 1) * (y + ny * z),
                         StructuredBoundaryFaceIR::XMax => nx + (nx + 1) * (y + ny * z),
                         StructuredBoundaryFaceIR::YMin => x + nx * ((ny + 1) * z),
-                        StructuredBoundaryFaceIR::YMax => {
-                            x + nx * (ny + (ny + 1) * z)
-                        }
+                        StructuredBoundaryFaceIR::YMax => x + nx * (ny + (ny + 1) * z),
                         StructuredBoundaryFaceIR::ZMin => x + nx * y,
-                        StructuredBoundaryFaceIR::ZMax => {
-                            x + nx * (y + ny * nz)
-                        }
+                        StructuredBoundaryFaceIR::ZMax => x + nx * (y + ny * nz),
                     };
                     let area_m2 = match axis {
                         0 => cell_size[1] * cell_size[2],
@@ -1566,23 +1562,23 @@ mod tests {
             ("z-max", StructuredBoundaryFaceIR::ZMax, 0.0),
         ]
         .into_iter()
-        .map(|(source_id, face, potential_v)| ResolvedChargeBoundaryFaceIR {
-            source_id: source_id.to_string(),
-            face,
-            condition: if matches!(face, StructuredBoundaryFaceIR::XMin | StructuredBoundaryFaceIR::XMax) {
-                Condition::Voltage { potential_v }
-            } else {
-                Condition::Insulating
+        .map(
+            |(source_id, face, potential_v)| ResolvedChargeBoundaryFaceIR {
+                source_id: source_id.to_string(),
+                face,
+                condition: if matches!(
+                    face,
+                    StructuredBoundaryFaceIR::XMin | StructuredBoundaryFaceIR::XMax
+                ) {
+                    Condition::Voltage { potential_v }
+                } else {
+                    Condition::Insulating
+                },
             },
-        })
-        .collect::<Vec<_>>();
-        let faces = expand_resolved_boundaries(
-            &boundaries,
-            &[true, true],
-            [2, 1, 1],
-            [1.0e-9; 3],
         )
-        .expect("all external faces should materialize");
+        .collect::<Vec<_>>();
+        let faces = expand_resolved_boundaries(&boundaries, &[true, true], [2, 1, 1], [1.0e-9; 3])
+            .expect("all external faces should materialize");
         assert_eq!(faces.len(), 10);
         let canonical = faces
             .iter()

@@ -705,14 +705,15 @@ model. CPU and GPU use the same signs, SI units, formula and operator IDs,
 face orientation, interface observations, and balance identities. They do not
 share mutable solver state or implementation workspaces.
 
-Capability pozostaje `semantic_only`, ponieważ publiczna ścieżka
-`ProblemIR`--planner--runner nie uruchamia tego ABI. Agregat FDM GPU M1 ma
-`implementation_state=partial`: zaimplementowany jest wyłącznie ograniczony
-charge-only FP64 slice, natomiast steady spin, direct SHE, mixing i torque z
-tego kontraktu nadal nie mają realizacji CUDA. Stan walidacji pozostaje
-`validation_state=unvalidated`, z `validated_workloads=[]`. Świeży managed
-device proof poniżej jest dowodem wykonania testów kontraktowych, nie promocją
-capability ani kwalifikacją produkcyjną.
+Ogólny agregat pozostaje `semantic_only`, ponieważ poza bounded
+`CurrentTransport` charge-only nie ma jeszcze publicznej ścieżki dla tego ABI.
+Agregat FDM GPU M1 ma `implementation_state=partial`: zaimplementowany jest
+wyłącznie ograniczony charge-only FP64 slice, natomiast steady spin, direct
+SHE, mixing i torque z tego kontraktu nadal nie mają realizacji CUDA. Stan
+walidacji pozostaje `validation_state=unvalidated`, z
+`validated_workloads=[]`. Świeży managed device proof poniżej jest dowodem
+wykonania testów kontraktowych, nie promocją capability ani kwalifikacją
+produkcyjną.
 
 #### Stan ograniczonej implementacji M1 charge z 2026-08-11
 
@@ -862,11 +863,11 @@ przerwanym po jednej iteracji pochodzi z celowej fault-injection w transfer-audi
 i nie jest błędem bramki.
 
 Ten wynik zamyka managed proof bounded zero-mean realization, ale nie zmienia
-granic publicznej kwalifikacji: nie ma jeszcze publicznego
-ProblemIR--planner--runner, persistent Krylov warm start w publicznym przepływie,
-CUDA steady spin/SHE/mixing/torque, compute-sanitizer, mesh convergence,
-cross-backend parity ani produkcyjnego statusu. Capability pozostaje
-`semantic_only` dla publicznej ścieżki.
+granic publicznej kwalifikacji: publiczny przepływ charge-only jest opisany
+osobno w sekcji 7.3, natomiast nie ma jeszcze publicznego zero-mean gauge,
+persistent Krylov warm start w tym przepływie, CUDA steady spin/SHE/mixing/
+torque, compute-sanitizer, mesh convergence, cross-backend parity ani
+produkcyjnego statusu. Ogólna capability pozostaje `semantic_only`.
 
 #### Ownership, lifecycle, and immutable charge state
 
