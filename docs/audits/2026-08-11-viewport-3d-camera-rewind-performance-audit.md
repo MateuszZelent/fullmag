@@ -60,6 +60,11 @@ stanowisku i urządzeniu wejściowym.
 Końcowy zestaw regresyjny:
 
 ```text
+Pełny Control Room:
+Test Files  516 passed (516)
+Tests       4974 passed (4974)
+
+Zawężona regresja kamery:
 Test Files  10 passed (10)
 Tests       318 passed (318)
 ```
