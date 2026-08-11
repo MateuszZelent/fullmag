@@ -250,12 +250,61 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
             "charge_domain=not_full_rectangular_active_grid".into(),
         ]));
     }
+    if !bounded_fdm_gpu_charge_has_single_numerically_connected_component(&descriptor, context) {
+        return Err(fdm_gpu_charge_scope_error(vec![
+            "charge_domain=not_single_numerically_connected_component".into(),
+        ]));
+    }
     if let Err(boundary_contract) = bounded_fdm_gpu_charge_boundary_profile(&descriptor, context) {
         return Err(fdm_gpu_charge_scope_error(vec![format!(
             "boundary_contract={boundary_contract}"
         )]));
     }
     Ok(vec![descriptor])
+}
+
+fn bounded_fdm_gpu_charge_has_single_numerically_connected_component(
+    descriptor: &ResolvedFdmGpuChargeTransportIR,
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+) -> bool {
+    let [nx_u32, ny_u32, nz_u32] = context.grid_cells;
+    let nx = nx_u32 as usize;
+    let ny = ny_u32 as usize;
+    let nz = nz_u32 as usize;
+    let Some(cell_count) = nx.checked_mul(ny).and_then(|count| count.checked_mul(nz)) else {
+        return false;
+    };
+    if cell_count == 0 || descriptor.charge_conductivity_spm.len() != cell_count {
+        return false;
+    }
+    let [hx, hy, hz] = context.cell_size_m;
+    let face_area_m2 = [hy * hz, hx * hz, hx * hy];
+    let spacing_m = [hx, hy, hz];
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let cell = x + nx * (y + ny * z);
+                let neighbors = [
+                    (x + 1 < nx, cell + 1, 0_usize),
+                    (y + 1 < ny, cell + nx, 1_usize),
+                    (z + 1 < nz, cell + nx * ny, 2_usize),
+                ];
+                for (present, neighbor, axis) in neighbors {
+                    if !present {
+                        continue;
+                    }
+                    let sigma_a = descriptor.charge_conductivity_spm[cell];
+                    let sigma_b = descriptor.charge_conductivity_spm[neighbor];
+                    let harmonic = 2.0 / (1.0 / sigma_a + 1.0 / sigma_b);
+                    let conductance = harmonic * face_area_m2[axis] / spacing_m[axis];
+                    if !conductance.is_finite() || conductance <= 0.0 {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
 }
 
 fn bounded_fdm_gpu_charge_boundary_profile(
@@ -677,6 +726,53 @@ mod tests {
         bounded_fdm_gpu_charge_boundary_profile(&descriptor, &context)
     }
 
+    fn two_cell_zero_mean_boundary_profile(conductivity_s_per_m: f64) -> Result<(), &'static str> {
+        let mut problem = bounded_gpu_charge_problem();
+        let charge = charge_definition_mut(&mut problem);
+        charge.gauge = ChargePotentialGaugeIR::ZeroMean;
+        charge.materials[0].material.sigma_spm = conductivity_s_per_m;
+        for boundary in &mut charge.boundaries {
+            let ChargeBoundaryIR::VoltageElectrode { id, surfaces, .. } = boundary else {
+                continue;
+            };
+            let outward_current_density_apm2 = if id == "x_min" { 1.0 } else { -1.0 };
+            *boundary = ChargeBoundaryIR::NormalCurrentElectrode {
+                id: std::mem::take(id),
+                surfaces: std::mem::take(surfaces),
+                outward_current_density_apm2,
+            };
+        }
+
+        let owner_names = ["strip"];
+        let region_mask = [0_u32, 0_u32];
+        let magnetization = [[1.0, 0.0, 0.0]; 2];
+        let saturation_magnetization_apm = [800e3; 2];
+        let region_index_by_id = BTreeMap::from([("strip".to_string(), 0_u32)]);
+        let context = crate::spin_transport::FdmSpinTransportResolutionContext {
+            owner_names: &owner_names,
+            grid_cells: [2, 1, 1],
+            origin_m: [0.0; 3],
+            cell_size_m: [1.0; 3],
+            active_mask: None,
+            region_mask: &region_mask,
+            region_index_by_id: &region_index_by_id,
+            initial_magnetization: &magnetization,
+            saturation_magnetization_apm: &saturation_magnetization_apm,
+            gamma0_m_per_a_s: 2.211e5,
+        };
+        match resolve_fdm_gpu_charge_transports(&problem, BackendTarget::Fdm, &context) {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error.reasons.iter().any(|reason| {
+                    reason.contains("charge_domain=not_single_numerically_connected_component")
+                }) =>
+            {
+                Err("charge_domain=not_single_numerically_connected_component")
+            }
+            Err(error) => panic!("unexpected bounded public charge rejection: {error:?}"),
+        }
+    }
+
     #[test]
     fn bounded_public_fdm_gpu_zero_mean_rejects_one_cell_native_rhs_imbalance() {
         assert_eq!(
@@ -688,6 +784,19 @@ mod tests {
     #[test]
     fn bounded_public_fdm_gpu_zero_mean_accepts_exactly_balanced_one_cell_rhs() {
         assert_eq!(one_cell_zero_mean_boundary_profile(-1.0), Ok(()));
+    }
+
+    #[test]
+    fn bounded_public_fdm_gpu_zero_mean_rejects_underflowed_internal_conductance() {
+        assert_eq!(
+            two_cell_zero_mean_boundary_profile(5.0e-324),
+            Err("charge_domain=not_single_numerically_connected_component"),
+        );
+    }
+
+    #[test]
+    fn bounded_public_fdm_gpu_zero_mean_accepts_positive_internal_conductance() {
+        assert_eq!(two_cell_zero_mean_boundary_profile(4.0e6), Ok(()));
     }
 
     #[test]

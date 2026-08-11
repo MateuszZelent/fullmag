@@ -186,6 +186,7 @@ pub(crate) fn validate_input(
         ));
     }
     validate_materials_and_cells(input)?;
+    validate_single_numerically_connected_domain(input)?;
     validate_boundary_faces(input, cell_count)?;
     checked_face_count(input.grid)?;
     Ok(())
@@ -228,6 +229,59 @@ fn validate_materials_and_cells(
             return Err(GpuChargeTransportError::validation(
                 "non-conducting cells must use material index zero",
             ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_single_numerically_connected_domain(
+    input: &GpuChargeTransportInput,
+) -> Result<(), GpuChargeTransportError> {
+    let conductivities = input
+        .materials
+        .iter()
+        .map(|material| (material.material_index, material.conductivity_s_per_m))
+        .collect::<BTreeMap<_, _>>();
+    let [nx, ny, nz] = input.grid;
+    let [hx, hy, hz] = input.cell_size;
+    let face_area_m2 = [hy * hz, hx * hz, hx * hy];
+    let spacing_m = [hx, hy, hz];
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let cell = (x + nx * (y + ny * z)) as usize;
+                let neighbors = [
+                    (x + 1 < nx, cell + 1, 0_usize),
+                    (y + 1 < ny, cell + nx as usize, 1_usize),
+                    (z + 1 < nz, cell + (nx * ny) as usize, 2_usize),
+                ];
+                for (present, neighbor, axis) in neighbors {
+                    if !present {
+                        continue;
+                    }
+                    let sigma_a = conductivities
+                        .get(&input.cells[cell].material_index)
+                        .ok_or_else(|| {
+                            GpuChargeTransportError::validation(
+                                "conducting cell references unknown material during conductance validation",
+                            )
+                        })?;
+                    let sigma_b = conductivities
+                        .get(&input.cells[neighbor].material_index)
+                        .ok_or_else(|| {
+                            GpuChargeTransportError::validation(
+                                "conducting cell references unknown material during conductance validation",
+                            )
+                        })?;
+                    let harmonic = 2.0 / (1.0 / sigma_a + 1.0 / sigma_b);
+                    let conductance = harmonic * face_area_m2[axis] / spacing_m[axis];
+                    if !conductance.is_finite() || conductance <= 0.0 {
+                        return Err(GpuChargeTransportError::validation(
+                            "charge_domain=not_single_numerically_connected_component",
+                        ));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -1810,6 +1864,25 @@ mod tests {
     fn bounded_public_zero_mean_contract_accepts_exactly_balanced_one_cell_rhs() {
         validate_input(&one_cell_zero_mean_input())
             .expect("exactly balanced one-cell RHS must remain a legal public profile");
+    }
+
+    #[test]
+    fn bounded_public_zero_mean_contract_rejects_underflowed_internal_conductance_before_abi() {
+        let mut input = bounded_zero_mean_input();
+        input.cell_size = [1.0; 3];
+        input.materials[0].conductivity_s_per_m = 5.0e-324;
+        for face in &mut input.boundary_faces {
+            face.area_m2 = 1.0;
+        }
+        let mut abi = MockAbi::default();
+
+        let error = execute_with_abi(&mut abi, &input)
+            .expect_err("numerically disconnected public domain must fail before the ABI");
+
+        assert!(error
+            .message
+            .contains("charge_domain=not_single_numerically_connected_component"));
+        assert!(abi.calls.is_empty());
     }
 
     #[test]

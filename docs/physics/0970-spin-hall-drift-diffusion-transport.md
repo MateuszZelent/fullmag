@@ -1834,7 +1834,19 @@ faces and `boundary_reference_per_component`. The second uses exactly two
 opposite, single-surface `NormalCurrentElectrode` faces on one axis, four
 insulating faces, `zero_mean_per_free_component`, and the native-equivalent
 compatibility condition obtained after assembling every exterior
-$-A_fJ_{n,f}$ term into its adjacent-cell RHS. The runner adapter
+$-A_fJ_{n,f}$ term into its adjacent-cell RHS. Before either profile reaches
+the ABI, the planner and runner reproduce the native scalar internal-face
+conductance in finite precision,
+$g_a=[2/(1/\sigma_i+1/\sigma_j)]A_a/h_a$, for every adjacent cell pair. The
+bounded full-grid profile is admitted only when every such $g_a$ is finite and
+strictly positive. Together with the already-required full active rectangle,
+this proves exactly one numerically connected component; zero, NaN, or infinite
+conductance fails closed with
+`charge_domain=not_single_numerically_connected_component`. The component rule
+in the CUDA owner is therefore normative: the public single-component slice may
+use one global assembled RHS compatibility reduction, but it does not silently
+reinterpret a numerically disconnected grid as a multi-component transport
+problem. The runner adapter
 `execute_public_gpu_charge_only` maps both profiles to the append-only CUDA M1
 charge ABI and publishes `V_electric`, `J_charge`, and a transport provenance
 artifact. CPU, `auto`, unknown execution values, partial masks, PBC,
@@ -1947,8 +1959,10 @@ a qualified workload without the validation gates above.
 | Public FDM GPU charge runner | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_public_gpu_charge_only | map the resolved descriptor to the CUDA M1 charge ABI, read back V/J, and publish provenance without fallback | `just verify-fdm-gpu-public-charge-runtime`; bounded actual-device E2E |
 | Public charge fixture and analytic oracle | examples/fdm_gpu_charge_public.py; scripts/verify_fdm_gpu_public_charge_output.py | study; main | define the 2 x 1 x 1 affine voltage fixture and independently verify V/J, residuals, and provenance | managed public charge gate |
 | Public charge managed recipe | justfile | verify-fdm-gpu-public-charge-runtime | compile the CUDA runtime and CLI through the container-backed managed path, run the fixture, and execute the oracle | actual RTX 4080 SUPER; unvalidated |
+| `fdm-gpu-public-charge-planner`: public numerical-domain proof | crates/fullmag-plan/src/current_transport.rs | bounded_fdm_gpu_charge_has_single_numerically_connected_component | reproduce native harmonic internal conductance and reject a full grid unless every adjacent pair has finite strictly positive conductance | planner regression |
+| `fdm-gpu-public-charge-runner`: public numerical-domain preflight | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | validate_single_numerically_connected_domain | repeat the native harmonic conductance proof before ABI entry and reject zero, NaN, or infinite internal conductance without a fallback | runner ABI regression |
 | `fdm-gpu-public-charge-planner`: public pure-Neumann planner profile | crates/fullmag-plan/src/current_transport.rs | bounded_fdm_gpu_charge_boundary_profile | require two opposite balanced current-density faces, zero-mean gauge, and four insulating faces without relaxing the FDM/CUDA/FP64/strict scope | planner regression |
-| `fdm-gpu-public-charge-runner`: public pure-Neumann preflight | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | validate_boundary_faces | reconstruct and exactly cover all external FDM faces; reject noncanonical geometry, nonfinite terminal currents, unbalanced, mixed, or gauge-incompatible profiles before native execution | runner ABI regression |
+| `fdm-gpu-public-charge-runner`: public pure-Neumann boundary preflight | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | validate_boundary_faces | reconstruct and exactly cover all external FDM faces; reject noncanonical geometry, nonfinite terminal currents, unbalanced, mixed, or gauge-incompatible profiles before native execution | runner ABI regression |
 | `fdm-gpu-public-charge-runner`: public CUDA ABI lifecycle | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_with_abi | map the selected gauge policy to the frozen CUDA ABI and execute the bounded context/snapshot lifecycle | runner ABI regression |
 | `fdm-gpu-public-charge-runner`: public fields and provenance | crates/fullmag-runner/src/fdm/gpu/cuda/charge_transport.rs | execute_public_gpu_charge_only | publish accepted V/J fields and the resolved zero-mean provenance without fallback | managed public charge gates |
 | `fdm-gpu-public-zero-mean-fixture` and `fdm-gpu-public-zero-mean-verifier`: public pure-Neumann fixture and analytic oracle | examples/fdm_gpu_charge_zero_mean_public.py; scripts/verify_fdm_gpu_public_charge_zero_mean_output.py | build_study; main | define the balanced 2 x 1 x 1 current-density fixture and verify sign, gauge, balances, and provenance | managed pure-Neumann gate |
