@@ -4,7 +4,7 @@
 **Repozytorium:** `/home/kkingstoun/git/fullmag/fullmag`  
 **Audytowany commit:** `15ab7482b0b6f5735684fb3bf7a51f155c778860`  
 **Zakres:** frontend Control Room, R3F/Drei/Three.js, obrót, panorama, zoom, tłumienie, auto-fit, projekcja, synchronizacja lokalna i zdalna, demand rendering oraz testy wydajnościowe.  
-**Status:** poprawki zaimplementowane i zakwalifikowane automatycznie; wszystkie P0/P1/P2 z tego audytu są zamknięte w kodzie i testach. Repozytoryjne smoke Chromium potwierdza ciągłość orbit/pan/zoom oraz zgodność końcowych snapshotów. Pozostaje niezależna ręczna obserwacja użytkownika, ponieważ most Codex Browser nadal nie inicjalizuje sesji.
+**Status:** zamknięty. Wszystkie P0/P1/P2 z tego audytu są naprawione, automatyczne bramki przechodzą, a użytkownik potwierdził ręcznie brak cofania kamery podczas orbitowania, panoramy i zoomu.
 
 ## 0. Reaudyt po wdrożeniu naprawy
 
@@ -48,12 +48,11 @@ snapshot przyjęty przez registry; nie steruje trajektorią pośrednią.
 | 7 | zero klatek po wyciszeniu | PASS runtime | `audit:viewport-3d-memory-churn`: 5 s idle, wymagane `frames +0`, `drawCalls +0`, zero resource requests; przebieg PASS |
 | 8 | widoczny canvas, zdrowy WebGL i niezerowy drawing buffer | PASS runtime | smoke: `contextLost=false`, drawing buffer `617×478`; canvas przeszedł kontrolę niepustego obrazu |
 | 9 | remote revision i bounds update w środku gestu | PASS automatyczny, dowód warstwowy | registry zachowuje finalną lokalną pozycję mimo nowszej remote revision; osobny test efektu auto-fit wymaga guardu aktywnego gestu i braku zapisu store/registry; oba przypadki współdzielą tę samą epokę/guard |
-| 10 | ręczna próba bez cofnięcia | oczekuje niezależnej obserwacji | automatyczny Chromium smoke powtarzalnie PASS; Codex Browser nie rozpoczyna nawigacji z powodu `sandboxCwd is not a local file URI`, więc nie przedstawiono ręcznego dowodu narzędziowego |
+| 10 | ręczna próba bez cofnięcia | PASS operatorski | użytkownik potwierdził 2026-08-11, że orbitowanie, panorama i zoom działają bez cofania kamery |
 
-Kryterium 10 jest granicą kwalifikacji, nie znanym defektem implementacji. Wszystkie
-automatycznie egzekwowalne kryteria 1–9 przechodzą. Ręczna obserwacja nadal jest
-wymagana przed uznaniem poprawki za zweryfikowaną operatorsko na konkretnym
-stanowisku i urządzeniu wejściowym.
+Wszystkie kryteria 1–10 są spełnione: 1–9 mają dowód automatyczny, a kryterium 10
+ma niezależne potwierdzenie operatorskie na docelowym stanowisku i urządzeniu
+wejściowym.
 
 ### 0.4. Świeże dowody wykonawcze
 
