@@ -294,7 +294,7 @@ describe("ModeVisualizationInspectorPanel", () => {
     expect(html).not.toContain("0 rad command default");
   });
 
-  it("keeps a numeric phase draft stable while external animation updates the slider", async () => {
+  it("discards a numeric phase draft when Tab moves focus to another control", async () => {
     const dom = installSimulationPreparationTestDom();
     const createElement = dom.document.createElement.bind(dom.document);
     dom.document.createElement = ((tagName: string) => {
@@ -331,6 +331,12 @@ describe("ModeVisualizationInspectorPanel", () => {
           element.getAttribute("aria-label") === "Mode visualization phase slider",
         "Mode visualization phase slider",
       ) as TestElement & { value: string };
+      const animationSpeed = findElement(
+        container,
+        (element) =>
+          element.getAttribute("aria-label") === "Mode phase animation speed",
+        "Mode phase animation speed select",
+      );
       Object.assign(phaseInput, {
         attachEvent: () => undefined,
         detachEvent: () => undefined,
@@ -345,7 +351,10 @@ describe("ModeVisualizationInspectorPanel", () => {
       expect(phaseSlider.value).toBe("2");
 
       await act(async () => {
-        phaseInput.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+        phaseInput.dispatchEvent(Object.assign(
+          new TestEvent("focusout", { bubbles: true }),
+          { relatedTarget: animationSpeed },
+        ));
       });
       expect(phaseInput.value).toBe("2");
 
@@ -358,14 +367,14 @@ describe("ModeVisualizationInspectorPanel", () => {
       await act(async () => {
         setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
-      expect(onSetPhase).toHaveBeenLastCalledWith("1");
+      expect(onSetPhase).toHaveBeenCalledExactlyOnceWith("2");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
     }
   });
 
-  it("commits the numeric draft after blur from clicking Set phase, then resumes the external phase", async () => {
+  it("commits the numeric draft exactly once when pointer activation moves focus to Set phase", async () => {
     const dom = installSimulationPreparationTestDom();
     const createElement = dom.document.createElement.bind(dom.document);
     dom.document.createElement = ((tagName: string) => {
@@ -414,8 +423,13 @@ describe("ModeVisualizationInspectorPanel", () => {
         changeControlledInput(phaseInput, "2.5");
       });
       await act(async () => {
-        phaseInput.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+        setPhaseButton.dispatchEvent(new TestEvent("pointerdown", { bubbles: true }));
+        phaseInput.dispatchEvent(Object.assign(
+          new TestEvent("focusout", { bubbles: true }),
+          { relatedTarget: setPhaseButton },
+        ));
       });
+      expect(onSetPhase).not.toHaveBeenCalled();
       await act(async () => {
         setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });

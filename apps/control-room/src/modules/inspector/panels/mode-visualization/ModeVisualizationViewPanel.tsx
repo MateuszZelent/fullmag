@@ -72,6 +72,12 @@ export function ModeVisualizationPhaseControl({
   const [isPhaseEditing, setIsPhaseEditing] = useState(false);
   const committedPhaseValue = normalizedPhaseValue(phaseRad) ?? String(PHASE_MIN_RAD);
   const numericPhaseValue = isPhaseEditing ? phaseDraft : committedPhaseValue;
+  const isSetPhaseControl = (target: EventTarget | null) =>
+    typeof target === "object" &&
+    target !== null &&
+    "getAttribute" in target &&
+    typeof target.getAttribute === "function" &&
+    target.getAttribute("aria-label") === "Set mode visualization phase";
   const commitPhase = (draft: string) => {
     const normalized = normalizedPhaseValue(draft);
     if (normalized !== null) onSetPhase(normalized);
@@ -108,7 +114,12 @@ export function ModeVisualizationPhaseControl({
             step="any"
             type="number"
             value={numericPhaseValue}
-            onBlur={() => setIsPhaseEditing(false)}
+            onBlur={(event) => {
+              if (!isSetPhaseControl(event.relatedTarget)) {
+                setPhaseDraft(committedPhaseValue);
+              }
+              setIsPhaseEditing(false);
+            }}
             onChange={(event) => {
               setPhaseDraft(event.currentTarget.value);
             }}
