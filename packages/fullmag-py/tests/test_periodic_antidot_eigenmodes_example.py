@@ -84,7 +84,7 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 2)
         relax = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(relax["kind"], "relaxation")
-        self.assertEqual(relax["algorithm"], "projected_gradient_bb")
+        self.assertEqual(relax["algorithm"], "nonlinear_cg")
         self.assertEqual(relax["stop"]["max_steps"], 4000)
         self.assertGreater(relax["stop"]["torque_tolerance_apm"], 0.0)
 
@@ -114,7 +114,7 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
             {"kind": "periodic", "pair_ids": ["x_faces", "y_faces"]},
         )
         self.assertEqual(eigen["magnetostatic_bc"], "periodic_airbox_k0")
-        self.assertEqual(eigen["dynamics"]["fixed_timestep"], 1e-13)
+        self.assertEqual(eigen["dynamics"]["fixed_timestep"], 1e-11)
 
         self.assertEqual(
             eigen["sampling"]["outputs"],
@@ -341,7 +341,7 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
         ]
         self.assertEqual(deprecations, [])
         eigen = loaded.stages[-1].problem.study.to_ir()
-        self.assertEqual(eigen["dynamics"]["fixed_timestep"], 1e-13)
+        self.assertEqual(eigen["dynamics"]["fixed_timestep"], 1e-11)
 
     def test_eigenmodes_example_rejects_invalid_environment(self) -> None:
         invalid_cases = [

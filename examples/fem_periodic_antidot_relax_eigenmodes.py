@@ -17,6 +17,16 @@ device = os.environ.get("FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE", "cpu")
 if device not in {"cpu", "gpu"}:
     raise ValueError("FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE must be 'cpu' or 'gpu'")
 
+domain_mesh_override = os.environ.get("FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH")
+equilibrium_state_override = os.environ.get(
+    "FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE"
+)
+if bool(domain_mesh_override) != bool(equilibrium_state_override):
+    raise ValueError(
+        "FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH and "
+        "FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE must be provided together"
+    )
+
 mode_count_raw = os.environ.get("FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT", "8")
 save_mode_count_raw = os.environ.get(
     "FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT", "4"
@@ -92,7 +102,10 @@ if frequency_max_hz <= frequency_min_hz:
     )
 
 mu0_t_m_per_a = 4.0e-7 * math.pi
-equilibrium_torque_tolerance_t = 5.0e-3
+# The native modal gate checks a relative torque <= 1e-6.  A 1e-9 T
+# absolute stop is several orders tighter for this geometry while staying
+# above the direct-minimizer energy round-off floor.
+equilibrium_torque_tolerance_t = 1.0e-9
 equilibrium_torque_tolerance_a_per_m = (
     equilibrium_torque_tolerance_t / mu0_t_m_per_a
 )
@@ -120,7 +133,11 @@ body = study.geometry(film - hole, name="periodic_antidot_film")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
-body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.m = (
+    fm.init.load_magnetization(equilibrium_state_override)
+    if equilibrium_state_override
+    else fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+)
 body.mesh.thin_film(
     minimum_element_size=10e-9,
     maximum_element_size=20e-9,
@@ -170,8 +187,9 @@ study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
-    rtol=1e-4,
-    max_iterations=1000,
+    rtol=1e-12,
+    atol=1e-20,
+    max_iterations=2000,
 )
 study.objects.mesh.defaults(
     periodic_pair_ids=["x_faces", "y_faces"],
@@ -182,15 +200,26 @@ study.objects.mesh.defaults(
     size_from_curvature=8,
     narrow_regions=1,
 )
-study.build_domain_mesh()
-study.solver(fix_dt=1e-13, g=2.115)
+if domain_mesh_override:
+    study.domain_mesh(
+        domain_mesh_override,
+        region_markers=[
+            {"geometry_name": "periodic_antidot_film_geom", "marker": 1}
+        ],
+        object_region_markers=[
+            {"geometry_name": "periodic_antidot_film:r1", "marker": 2}
+        ],
+    )
+else:
+    study.build_domain_mesh()
+study.solver(fix_dt=1e-11, g=2.115)
 
 study.save("spectrum")
 study.save("dispersion")
 study.save("mode", indices=tuple(range(save_mode_count)))
 
-study.stages.add_minimize(
-    method="bb",
+study.stages.add_relax(
+    algorithm="nonlinear_cg",
     max_steps=4000,
     tolA=equilibrium_torque_tolerance_a_per_m,
 )
@@ -203,6 +232,10 @@ study.stages.add_eigenmodes(
     frequency_max=frequency_max_hz,
     operator="full_2x2",
     include_demag=True,
+    # Materialize and certify the accepted equilibrium at the first modal
+    # sample.  The runner binds it to the continued stage state and exact mesh
+    # identity; subsequent samples may reuse it as Provided only through that
+    # immutable handoff, without another mesh build or independent relaxation.
     equilibrium_source="relax",
     normalization="unit_l2",
     damping_policy="ignore",
