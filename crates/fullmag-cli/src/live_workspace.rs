@@ -4959,11 +4959,17 @@ pub(crate) fn ingest_preview_fields_from_update(
 }
 
 fn terminal_authoritative_field_update(update: &fullmag_runner::StepUpdate) -> bool {
-    update.finished
-        && update
-            .cached_preview_fields
-            .as_ref()
-            .is_some_and(|fields| !fields.is_empty())
+    let Some(fields) = update.cached_preview_fields.as_ref() else {
+        return false;
+    };
+    if fields.is_empty() {
+        return false;
+    }
+    // Interactive stages deliberately leave the session in awaiting_command,
+    // so orchestration clears `finished` before publishing the runner's final
+    // atomic field snapshot. That snapshot is distinguished from cadence
+    // previews by the finalizer's materialization timestamp.
+    update.finished || fields.iter().all(|field| field.materialized_at_unix_ms > 0)
 }
 
 fn should_ingest_preview_fields_from_update(

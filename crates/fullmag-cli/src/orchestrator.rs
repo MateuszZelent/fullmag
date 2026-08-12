@@ -13204,6 +13204,40 @@ mod tests {
     }
 
     #[test]
+    fn interactive_terminal_field_snapshot_keeps_generation_while_run_awaits_command() {
+        let mut state = test_workspace_state();
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 1];
+        terminal.finished = false;
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 1];
+        eden_demag.original_grid = [2, 1, 1];
+        eden_demag.vector_field_values = vec![3.0, 4.0];
+        eden_demag.materialized_at_unix_ms = 17;
+        terminal.cached_preview_fields = Some(vec![eden_demag]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert_eq!(state.session.status, "running");
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_step"],
+            serde_json::json!(12)
+        );
+        assert!(state.field_generation.is_some());
+        assert!(state.replace_latest_fields);
+    }
+
+    #[test]
     fn publish_live_step_update_preserves_previous_magnetization_when_payload_is_thin() {
         let mut state = test_workspace_state();
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
