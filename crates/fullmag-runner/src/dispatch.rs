@@ -2053,7 +2053,37 @@ pub(crate) fn execute_fdm<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    if !plan.fdm_gpu_charge_transports.is_empty() {
+    use crate::fdm::gpu::cuda::route::{public_gpu_transport_route, PublicGpuTransportRoute};
+
+    let transport_route = public_gpu_transport_route(plan, matches!(engine, FdmEngine::CudaFdm));
+    if matches!(transport_route, PublicGpuTransportRoute::InvalidGpuSpinPlan) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin execution requires exactly one requested/resolved GPU plan with exactly one fdm_gpu_double descriptor; fallback and partial execution are forbidden"
+                .to_string(),
+        });
+    }
+    if matches!(
+        transport_route,
+        PublicGpuTransportRoute::SpinOnNonCudaForbidden
+    ) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin plan resolved to a non-CUDA engine; hidden fallback is forbidden"
+                .to_string(),
+        });
+    }
+    if matches!(
+        transport_route,
+        PublicGpuTransportRoute::SpinRequiresDeviceBinding
+    ) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin execution requires the native device-view binding owned by Task 5; execution stopped before charge solve and no partial result was published"
+                .to_string(),
+        });
+    }
+    if matches!(transport_route, PublicGpuTransportRoute::ChargeOnly) {
         if !matches!(engine, FdmEngine::CudaFdm) {
             return Err(RunError {
                 message: "public FDM GPU charge-only plan resolved to a non-CUDA engine; fallback is forbidden"
@@ -6330,6 +6360,75 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn public_gpu_m1_dispatch_plan() -> FdmPlanIR {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
+        ))
+        .expect("racetrack fixture must be valid JSON");
+        let lowering = fixture
+            .get("normalized_problem_ir_contract")
+            .and_then(|value| value.get("expected_lowering"))
+            .expect("racetrack fixture lowering");
+        let mut problem: ProblemIR =
+            serde_json::from_value(lowering.clone()).expect("fixture ProblemIR");
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        problem.backend_policy.execution_precision = ExecutionPrecision::Double;
+        problem.validation_profile.execution_mode = ExecutionMode::Strict;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({
+                "backend": "fdm",
+                "device": "gpu",
+                "gpu_count": 1,
+                "device_index": 0,
+                "cpu_threads": null,
+                "execution_mode": "strict",
+                "execution_precision": "double"
+            }),
+        );
+        let module = &mut problem.spin_transport_modules[0];
+        module.requested_execution.discretization = BackendTarget::Fdm;
+        module.requested_execution.device = ExecutionDevice::Gpu;
+        module.requested_execution.precision = ExecutionPrecision::Double;
+        module.requested_execution.execution_mode = ExecutionMode::Strict;
+        module.solver.engine = "native_m1_v1".into();
+        match fullmag_plan::plan(&problem)
+            .expect("public GPU M1 fixture must plan")
+            .backend_plan
+        {
+            fullmag_ir::BackendPlanIR::Fdm(plan) => plan,
+            other => panic!("expected FDM plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn public_gpu_m1_dispatch_fails_before_partial_charge_until_device_binding_exists() {
+        let plan = public_gpu_m1_dispatch_plan();
+        let error = execute_fdm(FdmEngine::CudaFdm, &plan, 0.0, &[], None, None)
+            .expect_err("Task 4 must not publish charge-only output for a spin plan");
+        assert!(error.message.contains("device-view binding"));
+        assert!(error.message.contains("before charge solve"));
+        assert!(error.message.contains("no partial result"));
+    }
+
+    #[test]
+    fn public_gpu_m1_dispatch_rejects_non_cuda_and_missing_descriptor() {
+        let plan = public_gpu_m1_dispatch_plan();
+        let error = execute_fdm(FdmEngine::CpuReference, &plan, 0.0, &[], None, None)
+            .expect_err("GPU M1 must reject hidden CPU fallback");
+        assert!(error.message.contains("non-CUDA engine"));
+        assert!(error.message.contains("hidden fallback is forbidden"));
+
+        let mut malformed = plan;
+        malformed.spin_transport_plans[0].fdm_gpu_double = None;
+        let error = execute_fdm(FdmEngine::CudaFdm, &malformed, 0.0, &[], None, None)
+            .expect_err("GPU intent without descriptor must fail closed");
+        assert!(error
+            .message
+            .contains("exactly one fdm_gpu_double descriptor"));
+        assert!(error.message.contains("partial execution are forbidden"));
     }
 
     #[test]
