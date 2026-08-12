@@ -728,6 +728,187 @@ describe("analysis field overlay commands", () => {
     ).toBe(false);
   });
 
+  it("preserves typed run, stage, equilibrium, resource, k, f, and provenance identity", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    overlay.setResultContext("run-1");
+    selection.set(
+      {
+        kind: "results.frequency_response.frequency_point",
+        label: "1.5 GHz",
+        nodeId: "results:run-1:response:frequency:3",
+        objectId: null,
+        ref: {
+          analysisRunId: "run-1",
+          analysisStageId: "response-stage",
+          artifactRevision: 11,
+          equilibriumId: "eq-4",
+          fieldId: "analysis:frequency-response:frequency-0003",
+          frequencyIndex: 3,
+          kContextKind: "gamma",
+          kind: "results.frequency_response.frequency_point",
+          nodeId: "results:run-1:response:frequency:3",
+          observableId: "mx",
+          resourceRef: "data/fields/analysis:frequency-response:frequency-0003",
+          studyProduct: "driven_response",
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.frequency-response.plot-response-field-3d",
+      { analysisFieldOverlay: overlay, selection, source: "test" },
+      {
+        cellOrigin: [1, 2, 3],
+        floquetSpatialConvention:
+          "dst_equals_src_exp_minus_i_k_dot_delta_r",
+        normalization: "unit_l2",
+        phaseRad: 0.75,
+        phasorConvention: "exp_minus_i_omega_t",
+        view: "imag",
+        wavevectorKf: [0.1, 0.2, 0.3],
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      fieldId: "analysis:frequency-response:frequency-0003",
+      frequencyIndex: 3,
+      cellOrigin: [1, 2, 3],
+      floquetSpatialConvention:
+        "dst_equals_src_exp_minus_i_k_dot_delta_r",
+      phasorConvention: "exp_minus_i_omega_t",
+      provenance: {
+        artifactRevision: 11,
+        equilibriumId: "eq-4",
+        kContextKind: "gamma",
+        normalization: "unit_l2",
+        observableId: "mx",
+        resourceRef: "data/fields/analysis:frequency-response:frequency-0003",
+        runId: "run-1",
+        stageId: "response-stage",
+        studyProduct: "driven_response",
+      },
+      query: { phase_rad: 0.75, view: "imag" },
+      source: "frequency-response",
+      visualizationPhaseRad: 0.75,
+      wavevectorKf: [0.1, 0.2, 0.3],
+    });
+    expect(overlay.getContextSnapshot().status).toBe("compatible");
+  });
+
+  it("rebinds a foreign overlay only to a compatible typed target", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    overlay.set({
+      appearance: { scalarColorPalette: "viridis", vectorBudget: 512 },
+      fieldId: "analysis:eigen:old-mode",
+      label: "Old mode",
+      modeIndex: 1,
+      provenance: {
+        artifactRevision: 4,
+        equilibriumId: "eq-old",
+        kContextKind: "gamma",
+        resourceRef: "data/fields/analysis:eigen:old-mode",
+        runId: "run-old",
+        stageId: "eigen-old",
+        studyProduct: "modal_eigen",
+      },
+      query: { phase_rad: 0.5, view: "phase_rotated_real" },
+      sampleIndex: 0,
+      source: "eigen-mode",
+      visualizationPhaseRad: 0.5,
+    });
+    overlay.setResultContext("run-new");
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "New mode",
+        nodeId: "results:run-new:eigen:mode:2",
+        objectId: null,
+        ref: {
+          analysisRunId: "run-new",
+          analysisStageId: "eigen-new",
+          artifactRevision: 8,
+          equilibriumId: "eq-new",
+          fieldId: "analysis:eigen:new-mode",
+          kContextKind: "gamma",
+          kind: "results.eigen.mode",
+          modeIndex: 2,
+          nodeId: "results:run-new:eigen:mode:2",
+          resourceRef: "data/fields/analysis:eigen:new-mode",
+          sampleIndex: 0,
+          studyProduct: "modal_eigen",
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+
+    expect(
+      commands.isEnabled("analysis.frequency-domain.rebind-3d-overlay", context),
+    ).toBe(true);
+    const result = await commands.execute(
+      "analysis.frequency-domain.rebind-3d-overlay",
+      context,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      appearance: { scalarColorPalette: "viridis", vectorBudget: 512 },
+      fieldId: "analysis:eigen:new-mode",
+      modeIndex: 2,
+      provenance: { runId: "run-new", stageId: "eigen-new" },
+      visualizationPhaseRad: 0.5,
+    });
+    expect(overlay.getContextSnapshot().status).toBe("compatible");
+  });
+
+  it("disables rebind with a reason when the selected target lacks owner identity", () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    overlay.set({
+      fieldId: "analysis:eigen:old-mode",
+      label: "Old mode",
+      query: { phase_rad: 0, view: "phase_rotated_real" },
+      source: "eigen-mode",
+    });
+    overlay.setResultContext("run-new");
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Unowned mode",
+        nodeId: "results:eigen:mode:2",
+        objectId: null,
+        ref: {
+          fieldId: "analysis:eigen:new-mode",
+          kind: "results.eigen.mode",
+          modeIndex: 2,
+          nodeId: "results:eigen:mode:2",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+
+    expect(
+      commands.isEnabled("analysis.frequency-domain.rebind-3d-overlay", context),
+    ).toBe(false);
+    expect(
+      commands
+        .get("analysis.frequency-domain.rebind-3d-overlay")
+        ?.disabledReason?.(context),
+    ).toContain("owner identity");
+  });
+
   it("clears the active analysis field", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();

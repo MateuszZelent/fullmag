@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
@@ -60,7 +61,8 @@ import {
   isUniverseOuterBoundaryCarrier,
   semanticRenderTargetCarriersFromManifest,
 } from "@/kernel/selection/semanticRenderTargetCatalog";
-import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { useAnalysisFieldOverlayContext } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { AnalysisFieldOverlayContextNotice } from "@/kernel/visualization/AnalysisFieldOverlayContextNotice";
 import {
   resolveActiveObjectExtensionExplorerItems,
 } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
@@ -100,9 +102,11 @@ import {
   collapseExplorerNodes,
   expandExplorerNodes,
   ensureExplorerModelObjectDefaults,
+  reconcileResultContextRunId,
   revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
+  setExplorerResultContextRunId,
   shouldAutoRevealModelTab,
   useExplorerStoreSelector,
 } from "./explorerStore";
@@ -205,7 +209,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
   const pinnedQuickChart = useQuickChartWorkspaceSelector((state) => state.pinned);
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+  const selectedRef = useSelectionSelector((selection) => selection.ref);
+  const resultContextRunId = useExplorerStoreSelector(
+    (explorer) => explorer.resultContextRunId,
+  );
   const previousSelectedNodeId = useRef<string | null>(null);
+  const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
     { isEqual: explorerCrossSectionsEqual },
@@ -228,9 +237,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
   const planarMonitors = usePlanarMonitorsResource({ enabled: modelTabActive });
-  const activeAnalysisFieldOverlay = useAnalysisFieldOverlay(
+  const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
   );
+  const activeAnalysisFieldOverlay = analysisFieldOverlayContext.overlay;
   const modeVisualizationResourceActive =
     modelTabActive && Boolean(activeAnalysisFieldOverlay);
   const frequencyDomainTabActive =
@@ -312,8 +322,31 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: frequencyDomainTabActive || modeVisualizationResourceActive,
   });
   const currentRun = useCurrentRunResource({
-    enabled: frequencyDomainTabActive,
+    enabled: frequencyDomainTabActive || Boolean(activeAnalysisFieldOverlay),
   });
+  const currentRunId = currentRun.data?.run_id ?? null;
+  const selectedResultRunId =
+    selectedRef?.type === "frequency-domain" ? selectedRef.analysisRunId ?? null : null;
+  const reconciledResultContextRunId = reconcileResultContextRunId({
+    currentRunId,
+    previousCurrentRunId: previousCurrentRunId.current,
+    selectedRunId: resultContextRunId,
+  });
+  const resolvedResultContextRunId =
+    selectedResultRunId ?? reconciledResultContextRunId;
+  const knownResultContextRunIds = [
+    resultContextRunId,
+    selectedResultRunId,
+  ].filter((runId): runId is string => Boolean(runId));
+  const overlayCommandContext = createCommandContext("explorer", kernel, {
+    sourceDetail: "active-analysis-overlay-context",
+  });
+  const rebindCommand = kernel.commands.get(
+    "analysis.frequency-domain.rebind-3d-overlay",
+  );
+  const rebindDisabledReason = rebindCommand
+    ? rebindCommand.disabledReason?.(overlayCommandContext) ?? null
+    : "Analysis overlay rebind command is unavailable.";
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
     enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
@@ -550,6 +583,20 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   ]);
 
   useEffect(() => {
+    previousCurrentRunId.current = currentRunId;
+    if (
+      resolvedResultContextRunId &&
+      resultContextRunId !== resolvedResultContextRunId
+    ) {
+      setExplorerResultContextRunId(resolvedResultContextRunId);
+    }
+  }, [currentRunId, resolvedResultContextRunId, resultContextRunId]);
+
+  useEffect(() => {
+    kernel.analysisFieldOverlay.setResultContext(resolvedResultContextRunId);
+  }, [kernel.analysisFieldOverlay, resolvedResultContextRunId]);
+
+  useEffect(() => {
     if (activeTab !== "model") return;
     ensureExplorerModelObjectDefaults(
       nodes
@@ -619,12 +666,28 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         />
         {activeTab === "results" ? (
           <ResultContextSelector
-            currentRunId={currentRun.data?.run_id ?? null}
-            knownRunIds={[]}
-            onChange={() => undefined}
-            selectedRunId={currentRun.data?.run_id ?? null}
+            currentRunId={currentRunId}
+            knownRunIds={knownResultContextRunIds}
+            onChange={setExplorerResultContextRunId}
+            selectedRunId={resolvedResultContextRunId}
           />
         ) : null}
+        <AnalysisFieldOverlayContextNotice
+          context={analysisFieldOverlayContext}
+          onClear={() => {
+            void kernel.commands.execute(
+              "analysis.frequency-domain.clear-3d-overlay",
+              overlayCommandContext,
+            );
+          }}
+          onRebind={() => {
+            void kernel.commands.execute(
+              "analysis.frequency-domain.rebind-3d-overlay",
+              overlayCommandContext,
+            );
+          }}
+          rebindDisabledReason={rebindDisabledReason}
+        />
         <label className="fm-explorer-filter">
           <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
           <input

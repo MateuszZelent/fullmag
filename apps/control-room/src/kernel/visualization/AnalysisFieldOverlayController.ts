@@ -14,6 +14,12 @@ import type {
 } from "./ObjectVisualizationController";
 
 export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
+export type AnalysisFieldOverlayKContextKind =
+  | "finite_open"
+  | "fixed_k"
+  | "gamma"
+  | "k_grid"
+  | "k_path";
 
 interface AnalysisFieldOverlayAnimationState {
   animatePhase: boolean;
@@ -41,8 +47,11 @@ export interface AnalysisFieldOverlayState {
   appearance?: AnalysisFieldOverlayAppearanceState;
   animation?: AnalysisFieldOverlayAnimationState;
   fieldId: string;
+  frequencyIndex?: number;
   label: string;
+  modeIndex?: number;
   query: FieldVectorQuery;
+  sampleIndex?: number;
   source: AnalysisFieldOverlaySource;
   visualizationPhaseRad?: number;
   wavevectorKf?: [number, number, number];
@@ -52,21 +61,48 @@ export interface AnalysisFieldOverlayState {
   provenance?: {
     artifactRevision?: number | string;
     equilibriumId?: string;
-    kContextKind?: string;
+    kContextKind?: AnalysisFieldOverlayKContextKind;
     normalization?: string;
+    observableId?: string;
+    resourceRef?: string;
     runId?: string;
     stageId?: string;
+    studyProduct?: string;
   };
+}
+
+export type AnalysisFieldOverlayContextStatus =
+  | "compatible"
+  | "foreign"
+  | "inactive"
+  | "unverified";
+
+export interface AnalysisFieldOverlayContextSnapshot {
+  overlay: AnalysisFieldOverlayState | null;
+  reason: string | null;
+  resultRunId: string | null;
+  status: AnalysisFieldOverlayContextStatus;
 }
 
 type AnalysisFieldOverlayListener = () => void;
 
 export class AnalysisFieldOverlayController {
   private snapshot: AnalysisFieldOverlayState | null = null;
+  private resultRunId: string | null = null;
+  private contextSnapshot: AnalysisFieldOverlayContextSnapshot =
+    analysisFieldOverlayContextSnapshot(null, null);
   private readonly listeners = new Set<AnalysisFieldOverlayListener>();
 
   getSnapshot(): AnalysisFieldOverlayState | null {
     return this.snapshot;
+  }
+
+  getContextSnapshot(): AnalysisFieldOverlayContextSnapshot {
+    return this.contextSnapshot;
+  }
+
+  getRenderableSnapshot(): AnalysisFieldOverlayState | null {
+    return this.contextSnapshot.status === "compatible" ? this.snapshot : null;
   }
 
   set(next: AnalysisFieldOverlayState): void {
@@ -78,7 +114,9 @@ export class AnalysisFieldOverlayController {
       ...(next.appearance ? { appearance: { ...next.appearance } } : {}),
       ...(next.animation ? { animation: { ...next.animation } } : {}),
       ...(next.provenance ? { provenance: { ...next.provenance } } : {}),
+      ...(next.cellOrigin ? { cellOrigin: [...next.cellOrigin] } : {}),
       query: { ...next.query },
+      ...(next.wavevectorKf ? { wavevectorKf: [...next.wavevectorKf] } : {}),
     };
     this.notify();
   }
@@ -117,9 +155,65 @@ export class AnalysisFieldOverlayController {
     this.notify();
   }
 
+  setResultContext(runId: string | null | undefined): void {
+    const nextRunId = nonEmptyString(runId);
+    if (this.resultRunId === nextRunId) {
+      return;
+    }
+    this.resultRunId = nextRunId;
+    this.notify();
+  }
+
+  rebindDisabledReason(next: AnalysisFieldOverlayState | null): string | null {
+    if (!this.snapshot) {
+      return "No active analysis overlay is available to rebind.";
+    }
+    if (this.contextSnapshot.status === "compatible") {
+      return "Active analysis overlay already belongs to the selected result context.";
+    }
+    if (!next) {
+      return "Select a typed analysis field in the selected result context to rebind.";
+    }
+    const targetContext = analysisFieldOverlayContextSnapshot(
+      next,
+      this.resultRunId,
+    );
+    if (targetContext.status === "unverified") {
+      return "Selected analysis target owner identity is incomplete and cannot be rebound.";
+    }
+    if (targetContext.status === "foreign") {
+      return targetContext.reason;
+    }
+    return targetContext.status === "compatible" ? null : "Selected analysis target is unavailable.";
+  }
+
+  rebind(next: AnalysisFieldOverlayState): boolean {
+    if (this.rebindDisabledReason(next) !== null || !this.snapshot) {
+      return false;
+    }
+    const previous = this.snapshot;
+    const visualizationPhaseRad =
+      previous.visualizationPhaseRad ?? previous.query.phase_rad ?? 0;
+    this.set({
+      ...next,
+      ...(previous.appearance ? { appearance: { ...previous.appearance } } : {}),
+      ...(previous.animation ? { animation: { ...previous.animation } } : {}),
+      query: {
+        ...next.query,
+        phase_rad: visualizationPhaseRad,
+        view: previous.query.view ?? next.query.view,
+      },
+      visualizationPhaseRad,
+    });
+    return true;
+  }
+
   belongsToResultContext(runId: string | null | undefined): boolean {
-    const ownerRunId = this.snapshot?.provenance?.runId;
-    return !this.snapshot || !ownerRunId || ownerRunId === runId;
+    if (!this.snapshot) return true;
+    return analysisFieldOverlayContextSnapshot(
+      this.snapshot,
+      nonEmptyString(runId),
+    ).status === "compatible";
   }
 
   subscribe(listener: AnalysisFieldOverlayListener): () => void {
@@ -128,10 +222,81 @@ export class AnalysisFieldOverlayController {
   }
 
   private notify(): void {
+    this.contextSnapshot = analysisFieldOverlayContextSnapshot(
+      this.snapshot,
+      this.resultRunId,
+    );
     for (const listener of this.listeners) {
       listener();
     }
   }
+}
+
+function nonEmptyString(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function hasRequiredOverlayOwnerIdentity(
+  overlay: AnalysisFieldOverlayState,
+): boolean {
+  const provenance = overlay.provenance;
+  const hasArtifactRevision =
+    typeof provenance?.artifactRevision === "number" ||
+    nonEmptyString(provenance?.artifactRevision) !== null;
+  const hasSampleIdentity =
+    overlay.source === "eigen-mode"
+      ? Number.isInteger(overlay.sampleIndex) && Number.isInteger(overlay.modeIndex)
+      : Number.isInteger(overlay.frequencyIndex);
+  const phaseRad = overlay.visualizationPhaseRad ?? overlay.query.phase_rad;
+  return Boolean(
+    nonEmptyString(overlay.fieldId) &&
+      nonEmptyString(overlay.query.view) &&
+      Number.isFinite(phaseRad) &&
+      hasArtifactRevision &&
+      nonEmptyString(provenance?.equilibriumId) &&
+      nonEmptyString(provenance?.kContextKind) &&
+      nonEmptyString(provenance?.resourceRef) &&
+      nonEmptyString(provenance?.runId) &&
+      nonEmptyString(provenance?.stageId) &&
+      nonEmptyString(provenance?.studyProduct) &&
+      hasSampleIdentity,
+  );
+}
+
+function analysisFieldOverlayContextSnapshot(
+  overlay: AnalysisFieldOverlayState | null,
+  resultRunId: string | null,
+): AnalysisFieldOverlayContextSnapshot {
+  if (!overlay) {
+    return { overlay: null, reason: null, resultRunId, status: "inactive" };
+  }
+  if (!hasRequiredOverlayOwnerIdentity(overlay)) {
+    return {
+      overlay,
+      reason: "Active analysis overlay owner identity is incomplete and cannot be verified.",
+      resultRunId,
+      status: "unverified",
+    };
+  }
+  if (!resultRunId) {
+    return {
+      overlay,
+      reason: "Result context is unavailable, so the active analysis overlay cannot be verified.",
+      resultRunId,
+      status: "unverified",
+    };
+  }
+  if (overlay.provenance?.runId !== resultRunId) {
+    return {
+      overlay,
+      reason: `Active analysis overlay belongs to run ${overlay.provenance?.runId}, not selected run ${resultRunId}.`,
+      resultRunId,
+      status: "foreign",
+    };
+  }
+  return { overlay, reason: null, resultRunId, status: "compatible" };
 }
 
 function numberArrayEquals(
@@ -152,7 +317,10 @@ function analysisFieldOverlayStateEquals(
   if (!left || !right) return false;
   return (
     left.fieldId === right.fieldId &&
+    (left.frequencyIndex ?? null) === (right.frequencyIndex ?? null) &&
     left.label === right.label &&
+    (left.modeIndex ?? null) === (right.modeIndex ?? null) &&
+    (left.sampleIndex ?? null) === (right.sampleIndex ?? null) &&
     left.source === right.source &&
     (left.visualizationPhaseRad ?? null) ===
       (right.visualizationPhaseRad ?? null) &&
@@ -178,8 +346,11 @@ function analysisFieldOverlayProvenanceEquals(
     (left.equilibriumId ?? null) === (right.equilibriumId ?? null) &&
     (left.kContextKind ?? null) === (right.kContextKind ?? null) &&
     (left.normalization ?? null) === (right.normalization ?? null) &&
+    (left.observableId ?? null) === (right.observableId ?? null) &&
+    (left.resourceRef ?? null) === (right.resourceRef ?? null) &&
     (left.runId ?? null) === (right.runId ?? null) &&
-    (left.stageId ?? null) === (right.stageId ?? null)
+    (left.stageId ?? null) === (right.stageId ?? null) &&
+    (left.studyProduct ?? null) === (right.studyProduct ?? null)
   );
 }
 
@@ -240,6 +411,33 @@ export function useAnalysisFieldOverlay(
   return useSyncExternalStore(
     (listener) => controller.subscribe(listener),
     () => controller.getSnapshot(),
+    () => null,
+  );
+}
+
+const EMPTY_ANALYSIS_FIELD_OVERLAY_CONTEXT: AnalysisFieldOverlayContextSnapshot = {
+  overlay: null,
+  reason: null,
+  resultRunId: null,
+  status: "inactive",
+};
+
+export function useAnalysisFieldOverlayContext(
+  controller: AnalysisFieldOverlayController,
+): AnalysisFieldOverlayContextSnapshot {
+  return useSyncExternalStore(
+    (listener) => controller.subscribe(listener),
+    () => controller.getContextSnapshot(),
+    () => EMPTY_ANALYSIS_FIELD_OVERLAY_CONTEXT,
+  );
+}
+
+export function useRenderableAnalysisFieldOverlay(
+  controller: AnalysisFieldOverlayController,
+): AnalysisFieldOverlayState | null {
+  return useSyncExternalStore(
+    (listener) => controller.subscribe(listener),
+    () => controller.getRenderableSnapshot(),
     () => null,
   );
 }

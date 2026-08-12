@@ -2037,7 +2037,17 @@ describe("buildModelTree", () => {
         {
           activeAnalysisFieldOverlay: {
             fieldId: "analysis:frequency-response:field-0001",
+            frequencyIndex: 1,
             label: "Response field 1",
+            provenance: {
+              artifactRevision: 9,
+              equilibriumId: "equilibrium-2",
+              kContextKind: "gamma",
+              resourceRef: "data/fields/analysis:frequency-response:field-0001",
+              runId: "run-response-2",
+              stageId: "response-stage",
+              studyProduct: "driven_response",
+            },
             query: {
               component: "full",
               phase_rad: 0,
@@ -2063,32 +2073,25 @@ describe("buildModelTree", () => {
       objectId: "film",
       parentId: "model:object:film:visualization",
       status: "ready",
+      analysisRunId: "run-response-2",
+      analysisStageId: "response-stage",
+      artifactRevision: 9,
+      equilibriumId: "equilibrium-2",
+      frequencyIndex: 1,
+      kContextKind: "gamma",
+      resourceRef: "data/fields/analysis:frequency-response:field-0001",
+      studyProduct: "driven_response",
     });
     expect(
-      flattened.find(
-        (node) =>
-          node.id === "model:object:film:visualization:mode-visualization:active",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      fieldId: "analysis:frequency-response:field-0001",
-      kind: "object.mode_visualization.field",
-      label: "Response field 1",
-      objectId: "film",
-    });
+      flattened.filter((node) => node.label === "Active Analysis Overlay"),
+    ).toHaveLength(1);
     expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:visualization:mode-visualization:active:view:real",
+      flattened.some((node) =>
+        node.id.startsWith(
+          "model:object:film:visualization:mode-visualization:",
+        ),
       ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      analysisFieldView: "real",
-      fieldId: "analysis:frequency-response:field-0001",
-      kind: "object.mode_visualization.view",
-      label: "Real",
-    });
+    ).toBe(false);
   });
   it("marks the active frequency-domain resource from the visualization field", () => {
     const activeResources = flattenExplorerNodes(

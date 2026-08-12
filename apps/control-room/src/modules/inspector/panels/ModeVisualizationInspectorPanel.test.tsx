@@ -49,6 +49,7 @@ function changeControlledInput(
 const mockKernel = {
   commands: {
     execute: executeMock,
+    get: () => undefined,
     register: () => () => {},
   },
   bus: {
@@ -152,7 +153,7 @@ describe("ModeVisualizationInspectorPanel", () => {
     );
   }
 
-  it("routes overview, group, field, and view to distinct semantic owners", () => {
+  it("keeps legacy owners distinct while the active overlay owns its controls", () => {
     const overview = renderModeOwner("object.mode_visualization");
     const group = renderModeOwner("object.mode_visualization.group");
     const field = renderModeOwner("object.mode_visualization.field");
@@ -162,7 +163,8 @@ describe("ModeVisualizationInspectorPanel", () => {
       'data-inspector-owner="mode-visualization.overview"',
     );
     expect(overview).toContain("Mode family");
-    expect(overview).not.toContain("Mode field view");
+    expect(overview).toContain("Mode field view");
+    expect(overview).toContain("Display passes");
 
     expect(group).toContain(
       'data-inspector-owner="mode-visualization.group"',

@@ -1,6 +1,9 @@
 import type { ModuleId } from "../types";
 import type { CrossSectionQualityMetric } from "../api/apiTypes";
-import type { AnalysisFieldOverlaySource } from "../visualization/AnalysisFieldOverlayController";
+import type {
+  AnalysisFieldOverlayKContextKind,
+  AnalysisFieldOverlaySource,
+} from "../visualization/AnalysisFieldOverlayController";
 
 type ObjectSelectionKind =
   | "object.root"
@@ -571,7 +574,7 @@ export type SelectionRef =
       analysisStageId?: string;
       artifactRevision?: number | string;
       equilibriumId?: string;
-      kContextKind?: string;
+      kContextKind?: AnalysisFieldOverlayKContextKind;
       artifactPath?: string;
       branchId?: string;
       calculationMode?: string;
@@ -588,9 +591,14 @@ export type SelectionRef =
       type: "frequency-domain";
     }
   | {
+      analysisRunId?: string;
+      analysisStageId?: string;
+      artifactRevision?: number | string;
+      equilibriumId?: string;
       fieldId: string;
       fieldIds?: readonly string[];
       frequencyIndex?: number;
+      kContextKind?: AnalysisFieldOverlayKContextKind;
       kind:
         | "object.mode_visualization"
         | "object.mode_visualization.group"
@@ -601,8 +609,10 @@ export type SelectionRef =
       modeVisualizationRootSource?: AnalysisFieldOverlaySource;
       nodeId: string;
       objectId: string;
+      resourceRef?: string;
       sampleIndex?: number;
       source: AnalysisFieldOverlaySource;
+      studyProduct?: string;
       type: "mode-visualization";
       view?: string;
       visualizationTargetId: `mode:${string}:${AnalysisFieldOverlaySource}:${string}`;
@@ -1001,12 +1011,17 @@ export function selectionRefEquals(
         nullableStringEquals(left.artifactPath, right.artifactPath) &&
         nullableStringEquals(left.branchId, right.branchId) &&
         nullableStringEquals(left.calculationMode, right.calculationMode) &&
+        (left.artifactRevision ?? null) === (right.artifactRevision ?? null) &&
+        nullableStringEquals(left.equilibriumId, right.equilibriumId) &&
         nullableStringEquals(left.fieldId, right.fieldId) &&
+        (left.fmrPeakIndex ?? null) === (right.fmrPeakIndex ?? null) &&
         left.frequencyIndex === right.frequencyIndex &&
+        nullableStringEquals(left.kContextKind, right.kContextKind) &&
         left.modeIndex === right.modeIndex &&
         nullableStringEquals(left.observableId, right.observableId) &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
-        left.sampleIndex === right.sampleIndex
+        left.sampleIndex === right.sampleIndex &&
+        nullableStringEquals(left.studyProduct, right.studyProduct)
       );
     case "mode-visualization":
       return (
@@ -1014,6 +1029,10 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.objectId === right.objectId &&
+        nullableStringEquals(left.analysisRunId, right.analysisRunId) &&
+        nullableStringEquals(left.analysisStageId, right.analysisStageId) &&
+        (left.artifactRevision ?? null) === (right.artifactRevision ?? null) &&
+        nullableStringEquals(left.equilibriumId, right.equilibriumId) &&
         left.fieldId === right.fieldId &&
         arrayEquals(left.fieldIds, right.fieldIds) &&
         nullableStringEquals(
@@ -1026,8 +1045,11 @@ export function selectionRefEquals(
         ) &&
         left.source === right.source &&
         left.frequencyIndex === right.frequencyIndex &&
+        nullableStringEquals(left.kContextKind, right.kContextKind) &&
         left.modeIndex === right.modeIndex &&
+        nullableStringEquals(left.resourceRef, right.resourceRef) &&
         left.sampleIndex === right.sampleIndex &&
+        nullableStringEquals(left.studyProduct, right.studyProduct) &&
         nullableStringEquals(left.view, right.view) &&
         left.visualizationTargetId === right.visualizationTargetId
       );

@@ -1,9 +1,15 @@
+import type {
+  FloquetSpatialConvention,
+  PhasorConvention,
+} from "@/shared/domain/analysis/phasorConventionAdapter";
+
 import type { FieldVectorQuery } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { SelectionRef } from "../selection/selectionTypes";
 
 import type {
   AnalysisFieldOverlayAppearanceState,
+  AnalysisFieldOverlayKContextKind,
   AnalysisFieldOverlaySource,
   AnalysisFieldOverlayState,
 } from "./AnalysisFieldOverlayController";
@@ -15,6 +21,7 @@ import type {
 interface AnalysisFieldOverlayCommandInput {
   animatePhase?: boolean | null;
   animationRateHz?: number | null;
+  cellOrigin?: unknown;
   colorSource?: string | null;
   colorRangeMax?: number | null;
   colorRangeMin?: number | null;
@@ -22,19 +29,34 @@ interface AnalysisFieldOverlayCommandInput {
   colormap?: string | null;
   componentBasis?: string | null;
   componentCount?: number | null;
+  artifactRevision?: number | string | null;
+  equilibriumId?: string | null;
   fieldId?: string | null;
+  floquetSpatialConvention?: string | null;
+  frequencyIndex?: number | null;
   displayGain?: number | null;
   geometryScope?: string | null;
   label?: string | null;
+  kContextKind?: string | null;
+  modeIndex?: number | null;
+  normalization?: string | null;
+  observableId?: string | null;
   phaseRad?: number | null;
+  phasorConvention?: string | null;
   shaderVisible?: boolean | null;
+  resourceRef?: string | null;
+  runId?: string | null;
+  sampleIndex?: number | null;
   source?: AnalysisFieldOverlaySource | null;
+  stageId?: string | null;
   solidColor?: string | null;
   valueKind?: string | null;
   vectorBudget?: number | null;
   vectorScale?: number | null;
   vectorsVisible?: boolean | null;
   view?: string | null;
+  wavevectorKf?: unknown;
+  studyProduct?: string | null;
 }
 
 const DEFAULT_ANALYSIS_FIELD_VIEW = "phase_rotated_real";
@@ -72,6 +94,41 @@ function numberValue(value: unknown): number | null {
 
 function booleanValue(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function vector3Value(value: unknown): [number, number, number] | null {
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((component) => numberValue(component) !== null)
+    ? [value[0] as number, value[1] as number, value[2] as number]
+    : null;
+}
+
+function floquetSpatialConventionValue(
+  value: unknown,
+): FloquetSpatialConvention | null {
+  return value === "dst_equals_src_exp_minus_i_k_dot_delta_r" ||
+    value === "dst_equals_src_exp_plus_i_k_dot_delta_r"
+    ? value
+    : null;
+}
+
+function phasorConventionValue(value: unknown): PhasorConvention | null {
+  return value === "exp_i_omega_t" || value === "exp_minus_i_omega_t"
+    ? value
+    : null;
+}
+
+function kContextKindValue(
+  value: unknown,
+): AnalysisFieldOverlayKContextKind | null {
+  return value === "finite_open" ||
+    value === "fixed_k" ||
+    value === "gamma" ||
+    value === "k_grid" ||
+    value === "k_path"
+    ? value
+    : null;
 }
 
 function clampAnimationRateHz(value: number | null): number {
@@ -168,6 +225,16 @@ function selectedFrequencyDomainRef(context: CommandContext): Extract<
 > | null {
   const ref = context.selection?.get().ref;
   return ref?.type === "frequency-domain" ? ref : null;
+}
+
+function selectedOverlayIdentityRef(context: CommandContext): Extract<
+  SelectionRef,
+  { type: "frequency-domain" | "mode-visualization" }
+> | null {
+  const ref = context.selection?.get().ref;
+  return ref?.type === "frequency-domain" || ref?.type === "mode-visualization"
+    ? ref
+    : null;
 }
 
 function fieldIdFromContext(context: CommandContext): string | null {
@@ -296,27 +363,90 @@ function overlayStateFromContext(
     activeOverlay?.query.phase_rad ??
     0;
   const selectedRef = selectedFrequencyDomainRef(context);
+  const identityRef = selectedOverlayIdentityRef(context);
+  const activeIdentityOverlay =
+    identityRef?.type === "mode-visualization" &&
+    activeOverlay?.fieldId === fieldId
+      ? activeOverlay
+      : null;
+  const cellOrigin =
+    vector3Value(input.cellOrigin) ?? activeIdentityOverlay?.cellOrigin;
+  const floquetSpatialConvention =
+    floquetSpatialConventionValue(input.floquetSpatialConvention) ??
+    activeIdentityOverlay?.floquetSpatialConvention;
+  const phasorConvention =
+    phasorConventionValue(input.phasorConvention) ??
+    activeIdentityOverlay?.phasorConvention;
+  const wavevectorKf =
+    vector3Value(input.wavevectorKf) ?? activeIdentityOverlay?.wavevectorKf;
+  const artifactRevision =
+    identityRef?.artifactRevision ?? input.artifactRevision ?? undefined;
+  const equilibriumId =
+    identityRef?.equilibriumId ?? stringValue(input.equilibriumId) ?? undefined;
+  const kContextKind =
+    identityRef?.kContextKind ?? kContextKindValue(input.kContextKind) ?? undefined;
+  const resourceRef =
+    identityRef?.resourceRef ?? stringValue(input.resourceRef) ?? undefined;
+  const runId =
+    identityRef?.analysisRunId ?? stringValue(input.runId) ?? undefined;
+  const stageId =
+    identityRef?.analysisStageId ?? stringValue(input.stageId) ?? undefined;
+  const studyProduct =
+    identityRef?.studyProduct ?? stringValue(input.studyProduct) ?? undefined;
   return {
     ...(appearance ? { appearance } : {}),
+    ...(cellOrigin ? { cellOrigin } : {}),
     fieldId,
+    ...(floquetSpatialConvention ? { floquetSpatialConvention } : {}),
+    ...((numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex) !== undefined
+      ? {
+          frequencyIndex:
+            numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex,
+        }
+      : {}),
     label: overlayLabelFromContext(context, resolvedSource),
+    ...((numberValue(input.modeIndex) ?? identityRef?.modeIndex) !== undefined
+      ? { modeIndex: numberValue(input.modeIndex) ?? identityRef?.modeIndex }
+      : {}),
+    ...(phasorConvention ? { phasorConvention } : {}),
     query: defaultView == null
       ? overlayQueryFromContext(context, phaseRad)
       : overlayQueryWithDefaultViewFromContext(context, defaultView, phaseRad),
     source: resolvedSource,
+    ...((numberValue(input.sampleIndex) ?? identityRef?.sampleIndex) !== undefined
+      ? { sampleIndex: numberValue(input.sampleIndex) ?? identityRef?.sampleIndex }
+      : {}),
     visualizationPhaseRad: phaseRad,
-    ...(selectedRef
+    ...(identityRef || artifactRevision !== undefined || runId
       ? {
           provenance: {
-            artifactRevision: selectedRef.artifactRevision,
-            equilibriumId: selectedRef.equilibriumId,
-            kContextKind: selectedRef.kContextKind,
-            runId: selectedRef.analysisRunId,
-            stageId: selectedRef.analysisStageId,
+            artifactRevision,
+            equilibriumId,
+            kContextKind,
+            normalization:
+              stringValue(input.normalization) ??
+              activeIdentityOverlay?.provenance?.normalization,
+            observableId:
+              selectedRef?.observableId ??
+              stringValue(input.observableId) ??
+              activeIdentityOverlay?.provenance?.observableId,
+            resourceRef,
+            runId,
+            stageId,
+            studyProduct,
           },
         }
       : {}),
+    ...(wavevectorKf ? { wavevectorKf } : {}),
   };
+}
+
+function rebindTargetFromContext(
+  context: CommandContext,
+): AnalysisFieldOverlayState | null {
+  const ref = selectedFrequencyDomainRef(context);
+  const source = sourceFromSelectionRef(ref);
+  return source ? overlayStateFromContext(context, source) : null;
 }
 
 function activateViewport3D(context: CommandContext): void {
@@ -764,6 +894,49 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
     "frequency-response",
     DEFAULT_ANALYSIS_FIELD_VIEW,
   ),
+  {
+    id: "analysis.frequency-domain.rebind-3d-overlay",
+    title: "Rebind analysis overlay to selected result",
+    category: "analysis",
+    disabledReason: (context) => {
+      if (!context.analysisFieldOverlay) {
+        return "Analysis field controller is unavailable.";
+      }
+      return context.analysisFieldOverlay.rebindDisabledReason(
+        rebindTargetFromContext(context),
+      );
+    },
+    group: "analysis.frequency-domain",
+    isEnabled: (context) =>
+      Boolean(
+        context.analysisFieldOverlay &&
+          context.analysisFieldOverlay.rebindDisabledReason(
+            rebindTargetFromContext(context),
+          ) === null,
+      ),
+    run: (context) => {
+      const controller = context.analysisFieldOverlay;
+      const target = rebindTargetFromContext(context);
+      const disabledReason = controller
+        ? controller.rebindDisabledReason(target)
+        : "Analysis field controller is unavailable.";
+      if (!controller || !target || disabledReason) {
+        return {
+          status: "failed",
+          message: disabledReason ?? "Analysis overlay rebind is unavailable.",
+        };
+      }
+      if (!controller.rebind(target)) {
+        return { status: "failed", message: "Analysis overlay rebind was rejected." };
+      }
+      activateViewport3D(context);
+      return {
+        status: "completed",
+        message: `Analysis overlay rebound to ${target.label}.`,
+      };
+    },
+    scope: "selection",
+  },
   {
     id: "analysis.frequency-domain.clear-3d-overlay",
     title: "Clear frequency-domain 3D field",

@@ -16,6 +16,7 @@ export interface ExplorerStoreState {
   filterText: string;
   textureLoadObjectIds: ReadonlySet<string>;
   keyboardRow: string | null;
+  resultContextRunId: string | null;
 }
 
 type ExplorerStoreListener = () => void;
@@ -40,6 +41,7 @@ const INITIAL_STATE: ExplorerStoreState = {
   filterText: "",
   textureLoadObjectIds: new Set(),
   keyboardRow: null,
+  resultContextRunId: null,
 };
 
 class ExplorerStore {
@@ -139,6 +141,28 @@ export function shouldAutoRevealModelTab(
 
 export function setExplorerFilterText(filterText: string): void {
   explorerStore.setState({ filterText });
+}
+
+export function setExplorerResultContextRunId(
+  resultContextRunId: string | null,
+): void {
+  explorerStore.setState({ resultContextRunId });
+}
+
+export function reconcileResultContextRunId({
+  currentRunId,
+  previousCurrentRunId,
+  selectedRunId,
+}: {
+  currentRunId: string | null;
+  previousCurrentRunId: string | null;
+  selectedRunId: string | null;
+}): string | null {
+  if (!currentRunId) return selectedRunId;
+  if (!selectedRunId || selectedRunId === previousCurrentRunId) {
+    return currentRunId;
+  }
+  return selectedRunId;
 }
 
 export function setExplorerKeyboardRow(keyboardRow: string | null): void {

@@ -281,12 +281,19 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     const source = modeVisualizationSourceFromNode(node);
     if (!source) return null;
     return {
+      ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
+      ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
+      ...(node.artifactRevision !== undefined
+        ? { artifactRevision: node.artifactRevision }
+        : {}),
+      ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
       fieldId: node.fieldId,
       ...(node.fieldIds ? { fieldIds: node.fieldIds } : {}),
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),
       kind: node.kind,
+      ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
       ...(node.modeVisualizationRootFieldId
         ? { modeVisualizationRootFieldId: node.modeVisualizationRootFieldId }
@@ -296,8 +303,10 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         : {}),
       nodeId: node.id,
       objectId: node.objectId,
+      ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
       source,
+      ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "mode-visualization",
       ...(modeVisualizationViewFromNode(node)
         ? { view: modeVisualizationViewFromNode(node) }

@@ -1,10 +1,15 @@
 "use client";
 
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useKernel } from "@/kernel/KernelContext";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import { useAnalysisFieldOverlayContext } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { AnalysisFieldOverlayContextNotice } from "@/kernel/visualization/AnalysisFieldOverlayContextNotice";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { ModeVisualizationViewControls } from "../ModeVisualizationInspectorPanel";
 import { ModeVisualizationBreadcrumbs } from "./ModeVisualizationBreadcrumbs";
 
 export type ModeVisualizationSelectionRef = Extract<
@@ -27,7 +32,10 @@ export function modeVisualizationSourceLabel(
 export function modeVisualizationSelectionLabel(
   target: ModeVisualizationSelectionRef,
 ): string {
-  if (target.source === "frequency-response" && target.frequencyIndex !== undefined) {
+  if (
+    target.source === "frequency-response" &&
+    target.frequencyIndex !== undefined
+  ) {
     return `Frequency ${target.frequencyIndex}`;
   }
   if (target.sampleIndex !== undefined && target.modeIndex !== undefined) {
@@ -40,12 +48,41 @@ export function ModeVisualizationOverviewPanel({
   selection,
 }: InspectorPanelProps) {
   const target = modeVisualizationSelectionRef(selection);
+  const kernel = useKernel();
+  const overlayContext = useAnalysisFieldOverlayContext(
+    kernel.analysisFieldOverlay,
+  );
+  const commandContext = createCommandContext("inspector", kernel, {
+    sourceDetail: "active-analysis-overlay-context",
+  });
+  const rebindCommand = kernel.commands.get(
+    "analysis.frequency-domain.rebind-3d-overlay",
+  );
+  const rebindDisabledReason = rebindCommand
+    ? rebindCommand.disabledReason?.(commandContext) ?? null
+    : "Analysis overlay rebind command is unavailable.";
   return (
     <div
       className="fm-inspector-panel"
       data-inspector-owner="mode-visualization.overview"
     >
       <ModeVisualizationBreadcrumbs selection={selection} />
+      <AnalysisFieldOverlayContextNotice
+        context={overlayContext}
+        onClear={() => {
+          void kernel.commands.execute(
+            "analysis.frequency-domain.clear-3d-overlay",
+            commandContext,
+          );
+        }}
+        onRebind={() => {
+          void kernel.commands.execute(
+            "analysis.frequency-domain.rebind-3d-overlay",
+            commandContext,
+          );
+        }}
+        rebindDisabledReason={rebindDisabledReason}
+      />
       <InspectorGroup title="Mode visualization overview">
         {target ? (
           <>
@@ -60,6 +97,7 @@ export function ModeVisualizationOverviewPanel({
           </p>
         )}
       </InspectorGroup>
+      <ModeVisualizationViewControls selection={selection} />
     </div>
   );
 }

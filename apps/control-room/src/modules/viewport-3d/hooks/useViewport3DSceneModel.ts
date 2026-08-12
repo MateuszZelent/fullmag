@@ -99,7 +99,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import {
-  useAnalysisFieldOverlay,
+  useRenderableAnalysisFieldOverlay,
   type AnalysisFieldOverlayAppearanceState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
@@ -310,7 +310,6 @@ import {
   resolveViewport3DCameraOrthographicScale,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
-  viewport3dStore,
   type Viewport3DCommandState,
   type Viewport3DCameraProjection,
   type Viewport3DCameraState,
@@ -2505,7 +2504,6 @@ function pushViewportVisualizationTarget(
 
 export function resolveViewport3DSceneCameraView({
   cameraRegistryCamera,
-  commandState: _commandState,
 }: {
   cameraRegistryCamera: VisualizationStateResource["camera"];
   commandState: Pick<Viewport3DCommandState, "camera" | "widgets">;
@@ -2543,7 +2541,7 @@ export function useViewport3DSceneModel({
   selection: Selection;
 }) {
   const { analysisFieldOverlay } = useKernel();
-  const analysisOverlay = useAnalysisFieldOverlay(analysisFieldOverlay);
+  const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
