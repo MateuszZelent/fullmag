@@ -8,13 +8,13 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "science-gate-passed-browser-runtime-unqualified",
-      "reason": "Managed Task 0 science gates passed for their fixture at the audited source, but general multi-object object targeting is incorrect because it selects all active cells, include_air_as_zero pollutes metadata extrema, and the same recipe exited 1 after a 180000 ms visible-canvas timeout."
+      "reason": "Managed Task 0 science gates passed for their fixture at the audited source, but all FDM dynamic tags share bounds over the post-target mask and require explicit extents, general multi-object object targeting is incorrect because it selects all active cells, include_air_as_zero pollutes metadata extrema, and the same recipe exited 1 after a 180000 ms visible-canvas timeout."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "Compatible transported GPU fields may enter the CPU sampler with the same FDM target defects, but no fresh GPU source/device proof exists and native GPU sampling is absent."
+      "reason": "Compatible transported GPU fields may enter the CPU sampler with the same FDM target and shared dynamic-extent defects, but no fresh GPU source/device proof exists and native GPU sampling is absent."
     },
     {
       "solver": "FEM",
@@ -50,6 +50,28 @@
       "path": "crates/fullmag-api/src/schemas/planar_fields.rs",
       "symbols": ["PlanarFieldQuery", "PlanarFieldMetaResource"],
       "responsibility": "OpenAPI query and metadata schemas for sampled planar fields."
+    }
+  ],
+  "qualification_gates": [
+    {
+      "id": "PM-N05",
+      "status": "red",
+      "requirement": "Metadata extrema and automatic ranges exclude empty occupancy even when include_air_as_zero serializes zero."
+    },
+    {
+      "id": "PM-N10",
+      "status": "red",
+      "requirement": "FDM object target selects only the requested object on a multi-object grid."
+    },
+    {
+      "id": "PM-N12",
+      "status": "red",
+      "requirement": "FEM dynamic extents follow their named target and runtime scope rather than all mesh nodes."
+    },
+    {
+      "id": "PM-N13",
+      "status": "red",
+      "requirement": "FDM target_bounds, magnetic_domain, and universe bounds resolve as distinct policies across domain, magnetic_domain, object, and region targets; explicit extents are required until this passes."
     }
   ],
   "equations": [
@@ -175,6 +197,60 @@
       "responsibility": "Public monitor authoring object and canonical lowering."
     },
     {
+      "id": "python-target",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class MonitorTarget",
+      "responsibility": "Public direct target constructor and target factories."
+    },
+    {
+      "id": "python-extent",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class PlanarExtent",
+      "responsibility": "Public direct extent constructor and explicit/dynamic extent factories."
+    },
+    {
+      "id": "python-frame",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class PlanarFrame",
+      "responsibility": "Public direct frame constructor and axis-preset factories."
+    },
+    {
+      "id": "python-plane-operator",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class PlaneSample",
+      "responsibility": "Public parameterless plane-sample operator constructor."
+    },
+    {
+      "id": "python-slab-operator",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class SlabAverage",
+      "responsibility": "Public slab-average operator constructor."
+    },
+    {
+      "id": "python-depth-operator",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class DepthProjection",
+      "responsibility": "Public depth-projection operator constructor."
+    },
+    {
+      "id": "python-surface-boundary",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class SurfaceBoundary",
+      "responsibility": "Public direct surface-boundary constructor and selector factories."
+    },
+    {
+      "id": "python-surface-operator",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class SurfaceProjection",
+      "responsibility": "Public surface-projection operator constructor."
+    },
+    {
+      "id": "python-monitor-registry",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class StudyMonitorRegistry",
+      "responsibility": "Public model-module registry constructor and add_planar factory."
+    },
+    {
       "id": "python-export",
       "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
       "symbol": "_render_planar_monitors",
@@ -251,7 +327,7 @@
       "id": "api-build",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs",
       "symbol": "resolve_dynamic_extent",
-      "responsibility": "Resolve FDM bounds from the selected mask but currently resolve every FEM dynamic extent from all mesh nodes."
+      "responsibility": "Currently collapse all dynamic tags into one padding-only branch: FDM bounds use the post-target selected mask and FEM bounds use all mesh nodes."
     },
     {
       "id": "fem-field-carrier",
@@ -343,6 +419,96 @@
         "problem_ir": "planar_monitors[].operator"
       },
       {
+        "python": "fullmag.model.StudyMonitorRegistry.storage",
+        "type": "list[PlanarMonitor] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "existing list is retained by reference; no constructor type check",
+        "meaning": "Initial mutable registry storage",
+        "backend_support": "authoring helper; not a root `fm` export",
+        "problem_ir": "planar_monitors[]"
+      },
+      {
+        "python": "fm.PlanarMonitor.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty; constructor does not enforce cross-monitor uniqueness",
+        "meaning": "Direct monitor name",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].name"
+      },
+      {
+        "python": "fm.PlanarMonitor.target",
+        "type": "MonitorTarget",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "must be `MonitorTarget`",
+        "meaning": "Direct physical target",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target"
+      },
+      {
+        "python": "fm.PlanarMonitor.frame",
+        "type": "PlanarFrame",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "must be `PlanarFrame`",
+        "meaning": "Direct frame",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].frame"
+      },
+      {
+        "python": "fm.PlanarMonitor.operator",
+        "type": "PlanarOperator",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "must be one of the four public operator classes",
+        "meaning": "Direct operator",
+        "backend_support": "lane-dependent sampling",
+        "problem_ir": "planar_monitors[].operator"
+      },
+      {
+        "python": "fm.PlanarMonitor.monitor_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "generated when None; otherwise non-empty; constructor does not enforce cross-monitor uniqueness",
+        "meaning": "Direct stable monitor identity",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].id"
+      },
+      {
+        "python": "fm.MonitorTarget.kind",
+        "type": "Literal[\"magnetic_domain\", \"domain\", \"object\", \"region\"]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "supported tag; direct construction validates required IDs by presence, not non-empty text",
+        "meaning": "Direct target tag",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target.kind"
+      },
+      {
+        "python": "fm.MonitorTarget.object_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "required by presence for object/region; forbidden for domain tags; IR must resolve it",
+        "meaning": "Direct object identity",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target.object_id"
+      },
+      {
+        "python": "fm.MonitorTarget.region_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "required by presence for region; forbidden for domain tags; IR must resolve it",
+        "meaning": "Direct region identity",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target.region_id"
+      },
+      {
         "python": "fm.MonitorTarget.object.object_id",
         "type": "str",
         "default": "required",
@@ -371,6 +537,46 @@
         "meaning": "Region identity",
         "backend_support": "FDM/FEM CPU/GPU authoring",
         "problem_ir": "planar_monitors[].target.region_id"
+      },
+      {
+        "python": "fm.PlanarExtent.kind",
+        "type": "Literal[\"explicit\", \"target_bounds\", \"magnetic_domain\", \"universe\"]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "supported extent tag",
+        "meaning": "Direct extent policy tag",
+        "backend_support": "FDM/FEM CPU/GPU authoring; dynamic runtime unqualified",
+        "problem_ir": "planar_monitors[].frame.extent.kind"
+      },
+      {
+        "python": "fm.PlanarExtent.u",
+        "type": "tuple[float, float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "required and strictly increasing for explicit; forbidden for dynamic kinds",
+        "meaning": "Direct horizontal bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.u_min_m/u_max_m"
+      },
+      {
+        "python": "fm.PlanarExtent.v",
+        "type": "tuple[float, float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "required and strictly increasing for explicit; forbidden for dynamic kinds",
+        "meaning": "Direct vertical bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.v_min_m/v_max_m"
+      },
+      {
+        "python": "fm.PlanarExtent.padding_m",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and non-negative; serialized only for dynamic kinds",
+        "meaning": "Direct dynamic-extent padding",
+        "backend_support": "FDM/FEM CPU/GPU authoring; dynamic runtime unqualified",
+        "problem_ir": "planar_monitors[].frame.extent.padding_m"
       },
       {
         "python": "fm.PlanarFrame.origin",
@@ -411,6 +617,16 @@
         "meaning": "Authored extent policy",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "planar_monitors[].frame.extent"
+      },
+      {
+        "python": "fm.PlanarFrame.preset",
+        "type": "Literal[\"xy\", \"xz\", \"yz\"] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "valid tag or None; direct construction records provenance but does not replace supplied vectors",
+        "meaning": "Direct preset provenance",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.preset"
       },
       {
         "python": "fm.PlanarFrame.xy/xz/yz.position",
@@ -459,7 +675,7 @@
         "si_unit": "\\mathrm{m}",
         "validation": "finite and non-negative",
         "meaning": "Padding around resolved target bounds",
-        "backend_support": "FDM/FEM CPU/GPU",
+        "backend_support": "authoring implemented; FDM/FEM runtime unqualified",
         "problem_ir": "planar_monitors[].frame.extent.padding_m"
       },
       {
@@ -469,7 +685,7 @@
         "si_unit": "\\mathrm{m}",
         "validation": "finite and non-negative",
         "meaning": "Padding around magnetic-domain bounds",
-        "backend_support": "FDM/FEM CPU/GPU",
+        "backend_support": "authoring implemented; FDM/FEM runtime unqualified",
         "problem_ir": "planar_monitors[].frame.extent.padding_m"
       },
       {
@@ -479,7 +695,7 @@
         "si_unit": "\\mathrm{m}",
         "validation": "finite and non-negative",
         "meaning": "Padding around universe bounds",
-        "backend_support": "FDM/FEM CPU/GPU",
+        "backend_support": "authoring implemented; FDM/FEM runtime unqualified",
         "problem_ir": "planar_monitors[].frame.extent.padding_m"
       },
       {
@@ -511,6 +727,36 @@
         "meaning": "Empty-bin semantics",
         "backend_support": "FDM/FEM CPU sampler; GPU-source legal",
         "problem_ir": "planar_monitors[].operator.empty_policy"
+      },
+      {
+        "python": "fm.SurfaceBoundary.kind",
+        "type": "Literal[\"object_boundary\", \"region_boundary\", \"named_surface\"]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "no direct-constructor validation; tagged IR/OpenAPI decoding must accept it",
+        "meaning": "Direct surface selector tag",
+        "backend_support": "authoring; only object boundary samples",
+        "problem_ir": "planar_monitors[].operator.boundary.kind"
+      },
+      {
+        "python": "fm.SurfaceBoundary.region_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "no direct-constructor validation; required semantically for region boundary",
+        "meaning": "Direct region-boundary identity",
+        "backend_support": "authoring only; sampling unsupported",
+        "problem_ir": "planar_monitors[].operator.boundary.region_id"
+      },
+      {
+        "python": "fm.SurfaceBoundary.surface_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "no direct-constructor validation; required semantically for named surface",
+        "meaning": "Direct named-surface identity",
+        "backend_support": "authoring only; sampling unsupported",
+        "problem_ir": "planar_monitors[].operator.boundary.surface_id"
       },
       {
         "python": "fm.SurfaceBoundary.region_boundary.region_id",

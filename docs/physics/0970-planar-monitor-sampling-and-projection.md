@@ -265,6 +265,15 @@ buffer.
   for a single-object/all-active-cells-equivalent grid: the current code checks
   that the requested object ID exists but then selects every active cell, so
   multi-object FDM object targeting is semantically incorrect and unqualified.
+- FDM applies that target mask before resolving extent, then collapses
+  `target_bounds`, `magnetic_domain`, and `universe` into one bounds algorithm
+  over the already-selected mask. Consequently `target_bounds + object` is
+  wrong on a multi-object grid; `magnetic_domain + domain` can include inactive
+  carrier cells; `magnetic_domain + region` is too narrow; and `universe` with
+  `magnetic_domain`, `object`, or `region` is too narrow. An object mask fixed
+  in isolation would also make `magnetic_domain + object` too narrow. No FDM
+  dynamic tag is qualified as a distinct semantic policy; use an explicit
+  extent until the three policies are resolved independently of target scope.
 - FEM target and runtime scopes select elements from mesh-part ranges, but only
   after the full-nodal P1 carrier has loaded. `mesh_part` and `airbox` therefore
   require a published intersecting part and a compatible full-mesh nodal
@@ -345,37 +354,56 @@ parameter itself, not the sampled quantity.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | `ProblemIR` destination |
 |---|---|---|---|---|---|---|---|
-| `fm.StudyMonitorRegistry.add_planar.name` | `str` | `required` | `1` | non-empty and unique in the study | Authored monitor name | FDM/FEM CPU/GPU authoring | `planar_monitors[].name` |
-| `fm.StudyMonitorRegistry.add_planar.monitor_id` | `str \| None` | `None` | `1` | non-empty and unique when supplied; generated otherwise | Stable monitor identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].id` |
-| `fm.StudyMonitorRegistry.add_planar.target` | `MonitorTarget` | `required` | `1` | physical target object required | Physical support owner | FDM/FEM CPU/GPU authoring | `planar_monitors[].target` |
-| `fm.StudyMonitorRegistry.add_planar.frame` | `PlanarFrame` | `required` | `1` | finite right-handed orthonormal frame | Plane orientation and extent policy | FDM/FEM CPU/GPU authoring | `planar_monitors[].frame` |
-| `fm.StudyMonitorRegistry.add_planar.operator` | `PlanarOperator` | `required` | `1` | one supported tagged operator object | Support and reduction semantics | lane-dependent sampling | `planar_monitors[].operator` |
-| `fm.MonitorTarget.object.object_id` | `str` | `required` | `1` | non-empty; must resolve to a magnet in IR validation | Select one object | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.object_id` |
-| `fm.MonitorTarget.region.object_id` | `str` | `required` | `1` | non-empty; owner-region pair must exist | Region owner | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.object_id` |
-| `fm.MonitorTarget.region.region_id` | `str` | `required` | `1` | non-empty; owner-region pair must exist | Region identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.region_id` |
-| `fm.PlanarExtent.explicit.u` | `Sequence[float]` | `required` | `\mathrm{m}` | exactly two finite values with minimum less than maximum | Explicit horizontal bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.u_min_m/u_max_m` |
-| `fm.PlanarExtent.explicit.v` | `Sequence[float]` | `required` | `\mathrm{m}` | exactly two finite values with minimum less than maximum | Explicit vertical bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.v_min_m/v_max_m` |
-| `fm.PlanarExtent.target_bounds.padding` | `float` | `0.0` | `\mathrm{m}` | finite and non-negative | Padding around resolved target bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.padding_m` |
-| `fm.PlanarExtent.magnetic_domain.padding` | `float` | `0.0` | `\mathrm{m}` | finite and non-negative | Padding around magnetic-domain bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.padding_m` |
-| `fm.PlanarExtent.universe.padding` | `float` | `0.0` | `\mathrm{m}` | finite and non-negative | Padding around universe bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.padding_m` |
-| `fm.PlanarFrame.origin` | `Sequence[float]` | `required` | `\mathrm{m}` | exactly three finite values | Frame origin | FDM/FEM CPU/GPU | `planar_monitors[].frame.origin_m` |
-| `fm.PlanarFrame.normal` | `Sequence[float]` | `required` | `1` | finite non-zero vector | Normal, normalized during lowering | FDM/FEM CPU/GPU | `planar_monitors[].frame.normal` |
-| `fm.PlanarFrame.u_axis` | `Sequence[float]` | `required` | `1` | finite and not collinear with normal | First axis, Gram-Schmidt normalized | FDM/FEM CPU/GPU | `planar_monitors[].frame.u_axis` |
-| `fm.PlanarFrame.extent` | `PlanarExtent` | `required` | `1` | valid extent object | Authored extent policy | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent` |
-| `fm.PlanarFrame.xy/xz/yz.position` | `float` | `required` | `\mathrm{m}` | finite | Axis-preset plane position | FDM/FEM CPU/GPU | `planar_monitors[].frame.origin_m` |
-| `fm.PlanarFrame.xy/xz/yz.extent` | `PlanarExtent` | `required` | `1` | valid extent object | Extent attached to preset frame | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent` |
-| `fm.SlabAverage.thickness` | `float` | `required` | `\mathrm{m}` | finite and strictly positive | Full slab thickness | FDM/FEM CPU sampler; GPU-source legal | `planar_monitors[].operator.thickness_m` |
-| `fm.DepthProjection.reduction` | `PlanarReduction` | `"mean_occupied"` | `1` | mean_occupied, thickness_integral, rms, min, max, or abs_max | Depth reduction | FDM/FEM CPU sampler; GPU-source legal | `planar_monitors[].operator.reduction` |
-| `fm.DepthProjection.empty_policy` | `EmptyPolicy` | `"exclude_empty"` | `1` | exclude_empty or include_air_as_zero; latter only with mean_occupied | Empty-bin semantics | FDM/FEM CPU sampler; GPU-source legal | `planar_monitors[].operator.empty_policy` |
-| `fm.SurfaceBoundary.region_boundary.region_id` | `str` | `required` | `1` | non-empty; sampling currently rejects unpublished topology | Region boundary selector | authoring only; sampling unsupported | `planar_monitors[].operator.boundary.region_id` |
-| `fm.SurfaceBoundary.named.surface_id` | `str` | `required` | `1` | non-empty; sampling currently rejects unpublished topology | Named boundary selector | authoring only; sampling unsupported | `planar_monitors[].operator.boundary.surface_id` |
-| `fm.SurfaceProjection.boundary` | `SurfaceBoundary` | `required` | `1` | boundary object required | Surface support selector | FEM P1 object boundary only | `planar_monitors[].operator.boundary` |
-| `fm.SurfaceProjection.visibility_policy` | `SurfaceVisibilityPolicy` | `"frontmost"` | `1` | frontmost, backmost, nearest_to_origin, or area_weighted_overlap | Fold/overlap selection | FEM P1 object boundary only | `planar_monitors[].operator.visibility_policy` |
+| `fm.StudyMonitorRegistry.add_planar.name` | `str` | `required` | $1$ | non-empty and unique in the study | Authored monitor name | FDM/FEM CPU/GPU authoring | `planar_monitors[].name` |
+| `fm.StudyMonitorRegistry.add_planar.monitor_id` | `str \| None` | `None` | $1$ | non-empty and unique when supplied; generated otherwise | Stable monitor identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].id` |
+| `fm.StudyMonitorRegistry.add_planar.target` | `MonitorTarget` | `required` | $1$ | physical target object required | Physical support owner | FDM/FEM CPU/GPU authoring | `planar_monitors[].target` |
+| `fm.StudyMonitorRegistry.add_planar.frame` | `PlanarFrame` | `required` | $1$ | finite right-handed orthonormal frame | Plane orientation and extent policy | FDM/FEM CPU/GPU authoring | `planar_monitors[].frame` |
+| `fm.StudyMonitorRegistry.add_planar.operator` | `PlanarOperator` | `required` | $1$ | one supported tagged operator object | Support and reduction semantics | lane-dependent sampling | `planar_monitors[].operator` |
+| `fullmag.model.StudyMonitorRegistry.storage` | `list[PlanarMonitor] \| None` | `None` | $1$ | existing list is retained by reference; no constructor type check | Initial mutable registry storage | authoring helper; not a root `fm` export | `planar_monitors[]` |
+| `fm.PlanarMonitor.name` | `str` | `required` | $1$ | non-empty; constructor does not enforce cross-monitor uniqueness | Direct monitor name | FDM/FEM CPU/GPU authoring | `planar_monitors[].name` |
+| `fm.PlanarMonitor.target` | `MonitorTarget` | `required` | $1$ | must be `MonitorTarget` | Direct physical target | FDM/FEM CPU/GPU authoring | `planar_monitors[].target` |
+| `fm.PlanarMonitor.frame` | `PlanarFrame` | `required` | $1$ | must be `PlanarFrame` | Direct frame | FDM/FEM CPU/GPU authoring | `planar_monitors[].frame` |
+| `fm.PlanarMonitor.operator` | `PlanarOperator` | `required` | $1$ | must be one of the four public operator classes | Direct operator | lane-dependent sampling | `planar_monitors[].operator` |
+| `fm.PlanarMonitor.monitor_id` | `str \| None` | `None` | $1$ | generated when None; otherwise non-empty; constructor does not enforce cross-monitor uniqueness | Direct stable monitor identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].id` |
+| `fm.MonitorTarget.kind` | `Literal["magnetic_domain", "domain", "object", "region"]` | `required` | $1$ | supported tag; direct construction validates required IDs by presence, not non-empty text | Direct target tag | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.kind` |
+| `fm.MonitorTarget.object_id` | `str \| None` | `None` | $1$ | required by presence for object/region; forbidden for domain tags; IR must resolve it | Direct object identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.object_id` |
+| `fm.MonitorTarget.region_id` | `str \| None` | `None` | $1$ | required by presence for region; forbidden for domain tags; IR must resolve it | Direct region identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.region_id` |
+| `fm.MonitorTarget.object.object_id` | `str` | `required` | $1$ | non-empty; must resolve to a magnet in IR validation | Select one object | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.object_id` |
+| `fm.MonitorTarget.region.object_id` | `str` | `required` | $1$ | non-empty; owner-region pair must exist | Region owner | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.object_id` |
+| `fm.MonitorTarget.region.region_id` | `str` | `required` | $1$ | non-empty; owner-region pair must exist | Region identity | FDM/FEM CPU/GPU authoring | `planar_monitors[].target.region_id` |
+| `fm.PlanarExtent.kind` | `Literal["explicit", "target_bounds", "magnetic_domain", "universe"]` | `required` | $1$ | supported extent tag | Direct extent policy tag | FDM/FEM CPU/GPU authoring; dynamic runtime unqualified | `planar_monitors[].frame.extent.kind` |
+| `fm.PlanarExtent.u` | `tuple[float, float] \| None` | `None` | $\mathrm{m}$ | required and strictly increasing for explicit; forbidden for dynamic kinds | Direct horizontal bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.u_min_m/u_max_m` |
+| `fm.PlanarExtent.v` | `tuple[float, float] \| None` | `None` | $\mathrm{m}$ | required and strictly increasing for explicit; forbidden for dynamic kinds | Direct vertical bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.v_min_m/v_max_m` |
+| `fm.PlanarExtent.padding_m` | `float` | `0.0` | $\mathrm{m}$ | finite and non-negative; serialized only for dynamic kinds | Direct dynamic-extent padding | FDM/FEM CPU/GPU authoring; dynamic runtime unqualified | `planar_monitors[].frame.extent.padding_m` |
+| `fm.PlanarExtent.explicit.u` | `Sequence[float]` | `required` | $\mathrm{m}$ | exactly two finite values with minimum less than maximum | Explicit horizontal bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.u_min_m/u_max_m` |
+| `fm.PlanarExtent.explicit.v` | `Sequence[float]` | `required` | $\mathrm{m}$ | exactly two finite values with minimum less than maximum | Explicit vertical bounds | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent.v_min_m/v_max_m` |
+| `fm.PlanarExtent.target_bounds.padding` | `float` | `0.0` | $\mathrm{m}$ | finite and non-negative | Padding around resolved target bounds | authoring implemented; FDM/FEM runtime unqualified | `planar_monitors[].frame.extent.padding_m` |
+| `fm.PlanarExtent.magnetic_domain.padding` | `float` | `0.0` | $\mathrm{m}$ | finite and non-negative | Padding around magnetic-domain bounds | authoring implemented; FDM/FEM runtime unqualified | `planar_monitors[].frame.extent.padding_m` |
+| `fm.PlanarExtent.universe.padding` | `float` | `0.0` | $\mathrm{m}$ | finite and non-negative | Padding around universe bounds | authoring implemented; FDM/FEM runtime unqualified | `planar_monitors[].frame.extent.padding_m` |
+| `fm.PlanarFrame.origin` | `Sequence[float]` | `required` | $\mathrm{m}$ | exactly three finite values | Frame origin | FDM/FEM CPU/GPU | `planar_monitors[].frame.origin_m` |
+| `fm.PlanarFrame.normal` | `Sequence[float]` | `required` | $1$ | finite non-zero vector | Normal, normalized during lowering | FDM/FEM CPU/GPU | `planar_monitors[].frame.normal` |
+| `fm.PlanarFrame.u_axis` | `Sequence[float]` | `required` | $1$ | finite and not collinear with normal | First axis, Gram-Schmidt normalized | FDM/FEM CPU/GPU | `planar_monitors[].frame.u_axis` |
+| `fm.PlanarFrame.extent` | `PlanarExtent` | `required` | $1$ | valid extent object | Authored extent policy | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent` |
+| `fm.PlanarFrame.preset` | `Literal["xy", "xz", "yz"] \| None` | `None` | $1$ | valid tag or None; direct construction records provenance but does not replace supplied vectors | Direct preset provenance | FDM/FEM CPU/GPU | `planar_monitors[].frame.preset` |
+| `fm.PlanarFrame.xy/xz/yz.position` | `float` | `required` | $\mathrm{m}$ | finite | Axis-preset plane position | FDM/FEM CPU/GPU | `planar_monitors[].frame.origin_m` |
+| `fm.PlanarFrame.xy/xz/yz.extent` | `PlanarExtent` | `required` | $1$ | valid extent object | Extent attached to preset frame | FDM/FEM CPU/GPU | `planar_monitors[].frame.extent` |
+| `fm.SlabAverage.thickness` | `float` | `required` | $\mathrm{m}$ | finite and strictly positive | Full slab thickness | FDM/FEM CPU sampler; GPU-source legal | `planar_monitors[].operator.thickness_m` |
+| `fm.DepthProjection.reduction` | `PlanarReduction` | `"mean_occupied"` | $1$ | mean_occupied, thickness_integral, rms, min, max, or abs_max | Depth reduction | FDM/FEM CPU sampler; GPU-source legal | `planar_monitors[].operator.reduction` |
+| `fm.DepthProjection.empty_policy` | `EmptyPolicy` | `"exclude_empty"` | $1$ | exclude_empty or include_air_as_zero; latter only with mean_occupied | Empty-bin semantics | FDM/FEM CPU sampler; GPU-source legal | `planar_monitors[].operator.empty_policy` |
+| `fm.SurfaceBoundary.kind` | `Literal["object_boundary", "region_boundary", "named_surface"]` | `required` | $1$ | no direct-constructor validation; tagged IR/OpenAPI decoding must accept it | Direct surface selector tag | authoring; only object boundary samples | `planar_monitors[].operator.boundary.kind` |
+| `fm.SurfaceBoundary.region_id` | `str \| None` | `None` | $1$ | no direct-constructor validation; required semantically for region boundary | Direct region-boundary identity | authoring only; sampling unsupported | `planar_monitors[].operator.boundary.region_id` |
+| `fm.SurfaceBoundary.surface_id` | `str \| None` | `None` | $1$ | no direct-constructor validation; required semantically for named surface | Direct named-surface identity | authoring only; sampling unsupported | `planar_monitors[].operator.boundary.surface_id` |
+| `fm.SurfaceBoundary.region_boundary.region_id` | `str` | `required` | $1$ | non-empty; sampling currently rejects unpublished topology | Region boundary selector | authoring only; sampling unsupported | `planar_monitors[].operator.boundary.region_id` |
+| `fm.SurfaceBoundary.named.surface_id` | `str` | `required` | $1$ | non-empty; sampling currently rejects unpublished topology | Named boundary selector | authoring only; sampling unsupported | `planar_monitors[].operator.boundary.surface_id` |
+| `fm.SurfaceProjection.boundary` | `SurfaceBoundary` | `required` | $1$ | boundary object required | Surface support selector | FEM P1 object boundary only | `planar_monitors[].operator.boundary` |
+| `fm.SurfaceProjection.visibility_policy` | `SurfaceVisibilityPolicy` | `"frontmost"` | $1$ | frontmost, backmost, nearest_to_origin, or area_weighted_overlap | Fold/overlap selection | FEM P1 object boundary only | `planar_monitors[].operator.visibility_policy` |
 
 `MonitorTarget.magnetic_domain()` and `MonitorTarget.domain()` have no
 parameters. `PlaneSample()` and `SurfaceBoundary.object_boundary()` also have
-no parameters. Direct dataclass construction remains possible, but the factory
-methods above are the canonical script-export surface.
+no parameters. Direct dataclass constructors are public and are mapped above
+with their actual defaults and weaker validation where applicable; the factory
+methods remain the canonical script-export surface but do not erase those
+public constructor contracts.
 
 (planar-monitor-problem-ir)=
 ## ProblemIR
@@ -453,8 +481,8 @@ currently implemented sampling kernels execute on CPU.
 
 | Source lane | Target and runtime-scope legality | Required source carrier | Legal current operators | Sampler | Qualification at audited source |
 |---|---|---|---|---|---|
-| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported | Published cell-centred structured-grid field plus matching membership for non-domain targets | plane, slab, depth; surface unsupported | CPU binary64 | managed science artifact passed only for its fixture; object targeting on multi-object grids and end-to-end runtime/browser/production remain unqualified because the same recipe ended RED in the browser |
-| FDM GPU | Same target restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata | plane, slab, depth; surface unsupported | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no multi-object object-target proof, and no native GPU sampling |
+| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported; every dynamic extent tag is unqualified because all three reuse post-target selected-mask bounds | Published cell-centred structured-grid field plus matching membership for non-domain targets; explicit extent required | plane, slab, depth; surface unsupported | CPU binary64 | managed science artifact passed only for its explicit/fixture extent; multi-object object targeting, all dynamic extent policies, and end-to-end runtime/browser/production remain unqualified because the same recipe ended RED in the browser |
+| FDM GPU | Same target and dynamic-extent restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata; explicit extent required | plane, slab, depth; surface unsupported | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no correct distinct dynamic-policy proof, no multi-object object-target proof, and no native GPU sampling |
 | FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope; scoped dynamic extents are incorrect because all dynamic kinds use global mesh nodes | Complete published tetrahedral P1 nodal field over all mesh nodes; scoped/local and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; use explicit extent for scoped correctness | CPU binary64 | focused numerical/API tests exist; dynamic scoped extents, fresh managed FEM, browser, runtime, and production are unqualified |
 | FEM GPU | Same target, scope, dynamic-extent, and surface restrictions as FEM CPU after compatible field transport | Complete transported tetrahedral P1 nodal field over all mesh nodes; source device/precision is absent from planar metadata | same P1 operators as FEM CPU; use explicit extent for scoped correctness | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no scoped dynamic-extent proof, and no native GPU sampling |
 
@@ -480,6 +508,15 @@ Object targeting does not: after verifying that the object identity exists, it
 selects every active cell. It is therefore correct only when those active cells
 are exactly the requested object's cells and is incorrect for a general
 multi-object grid.
+
+`apply_resolved_scope` runs before `resolve_dynamic_extent`. The latter extracts
+only `padding_m` from all three dynamic variants and calculates bounds from the
+same already-masked `active_mask`; it never branches on the authored dynamic
+kind. Coincidental combinations such as `target_bounds + region` do not
+qualify the three-tag contract. In particular, broader `magnetic_domain` and
+`universe` policies inherit a narrower target mask, while `magnetic_domain +
+domain` inherits the unmasked rectangular carrier. Explicit $(u,v)$ bounds are
+the only currently qualified FDM extent form.
 
 ### FEM P1 realization
 
@@ -557,6 +594,7 @@ source qualification.
 | PM-N10 | FDM target membership on a multi-object grid | `object` selects only the requested object's cells; current all-active-cell object mask fails this gate |
 | PM-N11 | geometry scale sweep | unchanged dimensionless result with scale-aware tolerances |
 | PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; current global-node resolution fails this gate |
+| PM-N13 | FDM target × dynamic-extent cross-product | `target_bounds`, `magnetic_domain`, and `universe` resolve independently of target masking for `domain`, `magnetic_domain`, `object`, and `region`; current shared post-mask resolver fails this gate |
 
 ### Task 0 evidence boundary
 
@@ -594,6 +632,9 @@ Structural validation does not prove scientific correctness.
 - FDM surface topology and FDM mesh-part/airbox scopes are absent.
 - General multi-object FDM `object` targeting is incorrect because all active
   cells are selected after object-existence validation.
+- All FDM dynamic extent tags share bounds over the post-target mask instead of
+  implementing distinct target, magnetic-domain, and universe policies;
+  explicit extents are required until PM-N13 passes.
 - FEM region-boundary and named-surface topology are absent.
 - FEM carriers must be complete full-mesh nodal Tet4/P1 fields; scoped/local,
   discontinuous, cell-centred, and higher-order carriers are absent.
@@ -633,7 +674,7 @@ stable symbols, not line-number claims.
 
 | Equation or claim | Path | Stable symbol | Responsibility | Lane | Tests/evidence | Status | Immutable link |
 |---|---|---|---|---|---|---|---|
-| Python monitor authoring and normalization | `packages/fullmag-py/src/fullmag/model/planar_monitor.py` | `class PlanarMonitor` | Public monitor object and lowering | all authoring lanes | `packages/fullmag-py/tests/test_planar_monitor.py::PlanarMonitorContractTests` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/packages/fullmag-py/src/fullmag/model/planar_monitor.py) |
+| Python monitor constructors, factories, and normalization | `packages/fullmag-py/src/fullmag/model/planar_monitor.py` | `class PlanarMonitor`; `class MonitorTarget`; `class PlanarExtent`; `class PlanarFrame`; `class PlaneSample`; `class SlabAverage`; `class DepthProjection`; `class SurfaceBoundary`; `class SurfaceProjection`; `class StudyMonitorRegistry` | Public direct constructors, canonical factories, registry, validation, and lowering | all authoring lanes | `packages/fullmag-py/tests/test_planar_monitor.py::PlanarMonitorContractTests`; signature-to-manifest completeness gate | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/packages/fullmag-py/src/fullmag/model/planar_monitor.py) |
 | Canonical Python export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_planar_monitors` | `SceneDocument`/IR to stage-first Python | all authoring lanes | `test_planar_monitors_roundtrip_through_scene_and_canonical_python` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/packages/fullmag-py/src/fullmag/runtime/script_builder.py) |
 | Canonical monitor IR | `crates/fullmag-ir/src/planar_monitor.rs` | `PlanarMonitorIR`, `MonitorTargetIR`, `PlanarFrameIR`, `PlanarExtentIR`, `PlanarOperatorIR`; `axis_preset` | Own canonical monitor, target, frame, extent, and operator serialization plus preset-frame construction | all authoring lanes | `crates/fullmag-ir/tests/ir_tests.rs::planar_monitor_validation_rejects_invalid_values_and_duplicates` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-ir/src/planar_monitor.rs) |
 | IR validation | `crates/fullmag-ir/src/validation.rs` | `validate_planar_monitors` | Identity, target, frame, extent, and operator validation | all authoring lanes | `crates/fullmag-ir/tests/ir_tests.rs::planar_monitor_validation_rejects_invalid_values_and_duplicates` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-ir/src/validation.rs) |
