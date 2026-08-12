@@ -4801,7 +4801,7 @@ ensure-managed-fem-runtime:
               --runtime-root .fullmag/runtimes/fem-gpu-host; \
             runtime_reused_for_non_runtime_changes=1; \
           else \
-            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime; \
             runtime_rebuilt=1; \
           fi; \
         fi; \
