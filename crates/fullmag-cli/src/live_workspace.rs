@@ -1294,6 +1294,7 @@ pub(crate) struct CurrentLivePublisher {
 struct PendingScalarRows {
     rows: VecDeque<PendingScalarRow>,
     latest_by_sequence: HashMap<ScalarSequenceKey, ScalarSequenceCursor>,
+    active_sequence: Option<ScalarSequenceKey>,
     next_row_id: u64,
 }
 
@@ -1338,6 +1339,8 @@ impl PendingScalarRows {
                 cursor.latest_terminal_step = Some(row.step);
             }
         }
+        self.active_sequence = Some(sequence.clone());
+        self.prune_superseded_cursors();
         if gate.should_publish_scalar(row.step, finished) {
             gate.last_scalar_publish_at = Some(Instant::now());
             if finished {
@@ -1356,6 +1359,16 @@ impl PendingScalarRows {
             self.next_row_id = self.next_row_id.wrapping_add(1);
             self.rows.push_back(PendingScalarRow { id, sequence, row });
         }
+    }
+
+    fn prune_superseded_cursors(&mut self) {
+        self.latest_by_sequence.retain(|sequence, _| {
+            self.active_sequence.as_ref() == Some(sequence)
+                || self
+                    .rows
+                    .iter()
+                    .any(|pending| &pending.sequence == sequence)
+        });
     }
 }
 
@@ -2392,6 +2405,35 @@ mod tests {
         assert_eq!(
             pending.rows.front().map(|entry| entry.row.time),
             Some(8.0e-13)
+        );
+    }
+
+    #[test]
+    fn superseded_scalar_sequence_cursors_are_bounded_after_publication() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let mut active = None;
+        for stage_index in 0..32 {
+            let sequence = ScalarSequenceKey {
+                run_id: "run-1".to_string(),
+                stage_index: Some(stage_index),
+                stage_id: Some(format!("stage-{stage_index}")),
+            };
+            pending.enqueue_if_new(sequence.clone(), scalar_row(6), true, &mut gate);
+            pending.rows.clear();
+            active = Some(sequence);
+        }
+
+        let active = active.expect("last sequence");
+        pending.enqueue_if_new(active.clone(), scalar_row(7), true, &mut gate);
+        pending.rows.clear();
+        pending.enqueue_if_new(active.clone(), scalar_row(6), true, &mut gate);
+
+        assert_eq!(pending.latest_by_sequence.len(), 1);
+        assert_eq!(
+            pending.latest_by_sequence[&active].latest_seen_step,
+            Some(7),
+            "the active sequence still rejects its stale row",
         );
     }
 
