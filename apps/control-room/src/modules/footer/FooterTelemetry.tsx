@@ -383,7 +383,7 @@ export function buildFooterTelemetryModel(
         detail: usesPseudoTime
           ? "Direct minimizer pseudotime"
           : "Physical simulation time",
-        icon: <Clock3 size={13} aria-hidden="true" />,
+        icon: <Clock3 size={14} aria-hidden="true" />,
         id: "time",
         label: usesPseudoTime ? "Pseudo time" : "Sim time",
         subdetail: timeSource,
@@ -393,7 +393,7 @@ export function buildFooterTelemetryModel(
         ? [
             {
               detail: "Physical simulation time",
-              icon: <Clock3 size={13} aria-hidden="true" />,
+              icon: <Clock3 size={14} aria-hidden="true" />,
               id: "sim-time",
               label: "Sim time",
               subdetail: timeSource,
@@ -405,7 +405,7 @@ export function buildFooterTelemetryModel(
         ? [
             {
               detail: "Active compute time",
-              icon: <Clock3 size={13} aria-hidden="true" />,
+              icon: <Clock3 size={14} aria-hidden="true" />,
               id: "active-runtime",
               label: "Runtime",
               subdetail: timeSource,
@@ -415,7 +415,7 @@ export function buildFooterTelemetryModel(
         : []),
       {
         detail: "Closed profiler span",
-        icon: <Radio size={13} aria-hidden="true" />,
+        icon: <Radio size={14} aria-hidden="true" />,
         id: "rate",
         label: "End-to-end rate",
         subdetail: `${formatInteger(totalSteps)} steps`,
@@ -425,7 +425,7 @@ export function buildFooterTelemetryModel(
         ? [
             {
               detail: status.run.selection_reason,
-              icon: <Gauge size={13} aria-hidden="true" />,
+              icon: <Gauge size={14} aria-hidden="true" />,
               id: "fem-device-selection",
               label: "Device",
               subdetail: status.run.calibration_id
@@ -437,7 +437,7 @@ export function buildFooterTelemetryModel(
         : []),
       {
         detail: "Latest step",
-        icon: <Hash size={13} aria-hidden="true" />,
+        icon: <Hash size={14} aria-hidden="true" />,
         id: "step",
         label: "Step",
         subdetail: `t=${formatScientific(
@@ -452,7 +452,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: usesPseudoTime ? "Minimizer pseudotime step" : "Solver timestep",
-        icon: <Clock3 size={13} aria-hidden="true" />,
+        icon: <Clock3 size={14} aria-hidden="true" />,
         id: "dt",
         label: usesPseudoTime ? "Pseudo dt" : "dt",
         subdetail: `State: ${runtimeStateLabel}`,
@@ -463,7 +463,7 @@ export function buildFooterTelemetryModel(
         ? [
             {
               detail: "Latest embedded vector error",
-              icon: <Gauge size={13} aria-hidden="true" />,
+              icon: <Gauge size={14} aria-hidden="true" />,
               id: "solver-error",
               label: "Error",
               subdetail: `${formatInteger(rejectedAttempts)} rejected; next dt ${formatScientific(dtSuggested, "0.000000e+0")} s`,
@@ -471,7 +471,7 @@ export function buildFooterTelemetryModel(
             },
             {
               detail: "Adaptive acceptance threshold",
-              icon: <Gauge size={13} aria-hidden="true" />,
+              icon: <Gauge size={14} aria-hidden="true" />,
               id: "solver-max-error",
               label: "MaxError",
               subdetail: errorEstimate !== null && maxError !== null
@@ -483,7 +483,7 @@ export function buildFooterTelemetryModel(
         : []),
       {
         detail: "Peak Load",
-        icon: <Gauge size={13} aria-hidden="true" />,
+        icon: <Gauge size={14} aria-hidden="true" />,
         id: "max-torque",
         label: "Max Torque",
         subdetail: `Converged: ${formatBoolean(converged)}`,
@@ -491,7 +491,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Average magnetization",
-        icon: <Magnet size={13} aria-hidden="true" />,
+        icon: <Magnet size={14} aria-hidden="true" />,
         id: "avg-mx",
         label: "avg mx",
         subdetail: magnetizationSource,
@@ -499,7 +499,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Average magnetization",
-        icon: <Magnet size={13} aria-hidden="true" />,
+        icon: <Magnet size={14} aria-hidden="true" />,
         id: "avg-my",
         label: "avg my",
         subdetail: magnetizationSource,
@@ -507,7 +507,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Average magnetization",
-        icon: <Magnet size={13} aria-hidden="true" />,
+        icon: <Magnet size={14} aria-hidden="true" />,
         id: "avg-mz",
         label: "avg mz",
         subdetail: magnetizationSource,
@@ -515,7 +515,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Average magnetization",
-        icon: <Magnet size={13} aria-hidden="true" />,
+        icon: <Magnet size={14} aria-hidden="true" />,
         id: "avg-m",
         label: "|avg m|",
         subdetail: liveRow
@@ -527,7 +527,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Total",
-        icon: <Zap size={13} aria-hidden="true" />,
+        icon: <Zap size={14} aria-hidden="true" />,
         id: "energy-total",
         label: "Energy",
         subdetail: energySource,
@@ -536,7 +536,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Exchange",
-        icon: <Zap size={13} aria-hidden="true" />,
+        icon: <Zap size={14} aria-hidden="true" />,
         id: "energy-exchange",
         label: "Exchange",
         subdetail: energySource,
@@ -550,7 +550,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Demag",
-        icon: <Zap size={13} aria-hidden="true" />,
+        icon: <Zap size={14} aria-hidden="true" />,
         id: "energy-demag",
         label: "Demag",
         subdetail: energySource,
@@ -564,7 +564,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Zeeman",
-        icon: <Zap size={13} aria-hidden="true" />,
+        icon: <Zap size={14} aria-hidden="true" />,
         id: "energy-zeeman",
         label: "Zeeman",
         subdetail: energySource,
@@ -578,7 +578,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "Anisotropy",
-        icon: <Zap size={13} aria-hidden="true" />,
+        icon: <Zap size={14} aria-hidden="true" />,
         id: "energy-anisotropy",
         label: "Anisotropy",
         subdetail: energySource,
@@ -592,7 +592,7 @@ export function buildFooterTelemetryModel(
       },
       {
         detail: "DMI",
-        icon: <Zap size={13} aria-hidden="true" />,
+        icon: <Zap size={14} aria-hidden="true" />,
         id: "energy-dmi",
         label: "DMI",
         subdetail: energySource,
@@ -1126,8 +1126,13 @@ function TelemetryMetric({
   unit?: string;
   value: string;
 }) {
+  const tooltip = `${label}: ${value}${unit ? ` ${unit}` : ""}\n${detail}\n${subdetail}`;
   return (
-    <div className="fm-footer-telemetry__metric" data-group={group}>
+    <div
+      className="fm-footer-telemetry__metric"
+      data-group={group}
+      title={tooltip}
+    >
       <div className="fm-footer-telemetry__metric-label">
         {icon}
         <span>{label}</span>

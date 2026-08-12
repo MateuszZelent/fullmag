@@ -181,3 +181,12 @@ listenerów, observerów, workerów, URL-i i aktywnych RAF. Pozostaje otwarta
 bramka Quick Chart + 3D: `/v2/sessions/current/data/fields` jest odpytywane co
 około 110 ms, dlatego session requests nie osiągają idle. Progu ani liczby
 cykli nie obniżono.
+
+FDM multilayer directed/symmetrized pair-energy: complete (commits
+`5feda8498..fd2c8bac1`, task and final reviews clean; CPU FP64 only, no API v2/CUDA
+capability promotion). Pair ledger, atomic snapshot publication, independent
+runtime/source fingerprints, durable validated artifact, FFT/memory telemetry,
+canonical directed wire order, Scene/Python identity evidence, equal/unequal
+push-pull reciprocity, finite-difference and documentation gates passed in the
+task scope. Full runner integration still has separately proven baseline
+source-layout and FEM physics-validation failures.
