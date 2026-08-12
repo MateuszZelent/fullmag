@@ -585,41 +585,61 @@ fn constant_field_is_invariant_under_frame_rotation_and_resolution() {
 }
 
 #[test]
-fn slab_mean_is_refinement_invariant_with_explicit_tolerance() {
+fn slab_average_is_measure_weighted_and_refinement_invariant() {
+    const TOLERANCE: f64 = 1.0e-10;
     let mut mesh = fem_mesh();
     mesh.nodes = vec![
         [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
         [2.0, 0.0, 0.0],
-        [0.0, 1.5, 0.0],
-        [0.2, 0.1, 1.2],
+        [4.0, 0.0, 0.0],
+        [2.0, 1.0, 0.0],
+        [2.0, 0.0, 1.0],
     ];
-    mesh.cells = FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]);
-    mesh.element_markers = vec![1];
+    mesh.cells = FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
+    mesh.element_markers = vec![1, 1];
     mesh.mesh_parts.truncate(1);
     mesh.mesh_parts[0].element_start = 0;
-    mesh.mesh_parts[0].element_count = 1;
-    mesh.mesh_parts[0].node_indices = vec![0, 1, 2, 3];
-    let value = |point: [f64; 3]| 5.0 + point[0] + 2.0 * point[1] + 3.0 * point[2];
+    mesh.mesh_parts[0].element_count = 2;
+    mesh.mesh_parts[0].node_indices = (0..8).collect();
+    let value = |point: [f64; 3]| 1.0 + point[0] + 2.0 * point[1] + 3.0 * point[2];
     let nodal_values = mesh.nodes.iter().copied().map(value).collect::<Vec<_>>();
-    let analytic_mean = nodal_values.iter().sum::<f64>() / 4.0;
+    let element_means = [
+        nodal_values[0..4].iter().sum::<f64>() / 4.0,
+        nodal_values[4..8].iter().sum::<f64>() / 4.0,
+    ];
+    let element_volumes = [1.0 / 6.0, 1.0 / 3.0];
+    let analytic_occupied_measure = element_volumes.iter().sum::<f64>();
+    let analytic_mean = element_means
+        .iter()
+        .zip(element_volumes)
+        .map(|(mean, volume)| mean * volume)
+        .sum::<f64>()
+        / analytic_occupied_measure;
+    let element_count_mean = element_means.iter().sum::<f64>() / element_means.len() as f64;
+    assert_ne!(element_volumes[0], element_volumes[1]);
+    assert_ne!(element_means[0], element_means[1]);
+    assert!((analytic_mean - element_count_mean).abs() > 0.1);
     let coarse = scalar_fem_field(mesh, nodal_values);
     let target = resolve_spatial_target(
         &coarse,
         &MonitorTargetIR::Domain,
         ResolvedSpatialScope::MonitorTarget,
-        &PlanarOperatorIR::SlabAverage { thickness_m: 2.0 },
+        &PlanarOperatorIR::SlabAverage { thickness_m: 1.0 },
     )
     .unwrap();
     let refined = target.refine_uniform_p1_for_test();
     let req = request(
         explicit_frame(
-            [0.0, 0.0, 0.6],
+            [0.0, 0.0, 0.5],
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
-            [0.0, 2.0, 0.0, 1.5],
+            [0.0, 4.0, 0.0, 1.0],
         ),
-        PlanarOperatorIR::SlabAverage { thickness_m: 2.0 },
+        PlanarOperatorIR::SlabAverage { thickness_m: 1.0 },
         [1, 1],
     );
     let coarse_sample = sample_resolved_target(&target, &req).unwrap();
@@ -633,10 +653,16 @@ fn slab_mean_is_refinement_invariant_with_explicit_tolerance() {
     assert_eq!(pairs.len(), 1, "slab must produce a non-empty sample pair");
     assert_ne!(coarse_sample.occupancy[0], super::Occupancy::Empty);
     assert_ne!(refined_sample.occupancy[0], super::Occupancy::Empty);
+    assert!((coarse_sample.meta.occupied_measure - analytic_occupied_measure).abs() <= TOLERANCE);
+    assert!((refined_sample.meta.occupied_measure - analytic_occupied_measure).abs() <= TOLERANCE);
+    assert!(
+        (coarse_sample.meta.occupied_measure - refined_sample.meta.occupied_measure).abs()
+            <= TOLERANCE
+    );
     for (coarse, refined) in pairs {
-        assert!((coarse - refined).abs() <= 1.0e-10);
-        assert!((coarse - analytic_mean).abs() <= 1.0e-10);
-        assert!((refined - analytic_mean).abs() <= 1.0e-10);
+        assert!((coarse - refined).abs() <= TOLERANCE);
+        assert!((coarse - analytic_mean).abs() <= TOLERANCE);
+        assert!((refined - analytic_mean).abs() <= TOLERANCE);
     }
 }
 
