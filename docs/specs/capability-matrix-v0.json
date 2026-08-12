@@ -563,12 +563,18 @@
       "lanes": {
         "fdm_cpu_reference": "semantic_only",
         "fdm_gpu_production": "semantic_only",
-        "fem_cpu_public": "semantic_only",
-        "fem_gpu_public": "semantic_only"
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "source_visible"
       },
+      "implementation_state": "source_visible",
+      "validation_state": "unvalidated",
       "validated_workloads": [],
       "study_product": "modal_eigen",
-    "notes": "Modal eigen product only. Eigenmodes uses tangent variables with explicit interval targets such as frequency_min_hz and frequency_max_hz. For the bounded strict P1/double periodic_airbox_k0 request, planner provenance preserves requested device/precision/engine and resolves exactly one CPU k0_poisson_airbox_cpu_schur_slepc or GPU gpu_modal_device_krylov engine. The GPU planner token names the device-resident modal lane; the native PETSc/SLEPc adapter identifier remains implementation provenance only. Explicit CPU/GPU requests never use a hidden override or fallback. The production code path now implements the managed real-frequency-rotated pencil with tau=omega_target, shared-domain assembly, Schur reduction, original-block residual certification, and explicit GPU residency diagnostics. This planner contract does not promote the lane beyond semantic_only/unvalidated: fresh managed CPU/GPU convergence, performance, DOD, and browser evidence remain required. This status does not promote driven response."
+      "future_production_scope_ids": [
+        "modal_cpu_k0_periodic_airbox_real_shared_domain.production",
+        "modal_gpu_k0_periodic_airbox_scalable.production"
+      ],
+      "notes": "Modal eigen product only. Eigenmodes uses tangent variables with explicit interval targets. BiasFieldSweep is a physical Python/ProblemIR/planner/runner request in A/m; Kittel metadata is postsolve-only. For the strict P1/double periodic_airbox_k0 request, planner provenance preserves requested device/precision/engine and resolves exactly one CPU or GPU engine without hidden fallback. ABI v18 imports a backend-neutral descriptor without preassembled A_qq; native MFEM owns bounded P1 tet4|prism6 exchange and parallel-field assembly, while anisotropy/DMI fail closed and dynamic demag remains in the mixed Schur blocks. CPU/GPU rotated-pencil, residual and two-pass window contracts are source-visible only. Materialized descriptor dimensions at or below 1024 are validation_only; future production uses matrix_free_schur_selected_spectrum and requires a measured operator_dimension greater than 1024. The exact future catalog bindings are modal_cpu_k0_periodic_airbox_real_shared_domain.production and modal_gpu_k0_periodic_airbox_scalable.production. The dirty snapshot has no matching fresh managed ABI-v18 execution, so implementation_state remains source_visible, validation_state remains unvalidated, validated_workloads remains empty, and no executable or validated scope is promoted. Fresh sweep convergence, parity, GPU residency/performance, DOD and browser evidence remain required. This status does not promote driven response."
     },
     {
       "id": "fem_driven_frequency_response",

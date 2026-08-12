@@ -6,475 +6,260 @@
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "executable-validation-blocked"
+      "status": "source_visible / unvalidated"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "executable-validation-blocked"
+      "status": "source_visible / unvalidated"
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "not-applicable",
-      "reason": "FDM demagnetization has a separate canonical interaction owner."
+      "reason": "FDM demagnetization has a separate canonical physics owner."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "not-applicable",
-      "reason": "FDM demagnetization has a separate canonical interaction owner."
+      "reason": "FDM demagnetization has a separate canonical physics owner."
     }
   ],
   "equations": [
     {
-      "id": "eq-poisson-airbox-modal-block",
-      "symbols": [
-        "P",
-        "q",
-        "lambda",
-        "Ablocks",
-        "Bqq"
-      ],
-      "sources": [
-        "source-cpu-schur",
-        "source-gpu-petsc"
-      ]
+      "id": "eq-poisson-airbox-modal-ansatz",
+      "symbols": ["position", "time", "magnetization", "tangent_map", "q", "demag_field", "potential", "omega", "complex_operators"],
+      "sources": ["source-native-aqq", "source-shared-assembly"]
+    },
+    {
+      "id": "eq-poisson-airbox-strong-form",
+      "symbols": ["dynamic_magnetization", "Ms", "potential", "domains", "gradient", "calculus_set_operators"],
+      "sources": ["source-shared-assembly"]
     },
     {
       "id": "eq-poisson-airbox-weak-form",
-      "symbols": [
-        "beta",
-        "Ms",
-        "delta_m",
-        "delta_phi"
-      ],
-      "sources": [
-        "source-cpu-schur",
-        "source-gpu-petsc"
-      ]
+      "symbols": ["potential", "test_function", "domains", "open_boundary", "measures", "gradient", "beta", "Ms", "calculus_set_operators", "tensor_operators"],
+      "sources": ["source-shared-payload", "source-shared-assembly"]
+    },
+    {
+      "id": "eq-poisson-airbox-modal-block",
+      "symbols": ["q", "potential", "P", "magnetic_to_potential", "potential_to_magnetic", "Aqq", "mass_blocks", "operators", "lambda"],
+      "sources": ["source-native-aqq", "source-shared-assembly", "source-cpu-schur", "source-gpu-petsc"]
+    },
+    {
+      "id": "eq-poisson-airbox-coupling-signs",
+      "symbols": ["q", "tangent_map", "test_function", "Ms", "mu0", "magnetic_to_potential", "potential_to_magnetic", "calculus_set_operators", "tensor_operators"],
+      "sources": ["source-shared-assembly"]
+    },
+    {
+      "id": "eq-poisson-airbox-full-residuals",
+      "symbols": ["q", "potential", "P", "magnetic_to_potential", "potential_to_magnetic", "Aqq", "mass_blocks", "lambda", "gauge", "residuals", "normalized_residuals", "residual_floors", "norm_operators"],
+      "sources": ["source-cpu-schur", "source-gpu-petsc"]
+    },
+    {
+      "id": "eq-poisson-airbox-rotated-pencil",
+      "symbols": ["operators", "mass_blocks", "lambda", "omega", "real_split", "complex_operators"],
+      "sources": ["source-cpu-schur", "source-gpu-petsc"]
+    },
+    {
+      "id": "eq-poisson-airbox-kittel-oracle",
+      "symbols": ["bias_and_effective_field", "gamma0", "kittel_frequency", "pi_constant"],
+      "sources": ["source-oracle-guard"]
     },
     {
       "id": "eq-poisson-airbox-window-refinement-schedule",
-      "symbols": [
-        "frequency_spacing",
-        "frequency_min",
-        "frequency_max"
-      ],
-      "sources": [
-        "source-cpu-schur",
-        "source-cpu-window-positive"
-      ]
+      "symbols": ["window_frequencies", "schedule_operators"],
+      "sources": ["source-cpu-schur", "source-gpu-petsc"]
     },
     {
       "id": "eq-poisson-airbox-window-subspace-overlap",
-      "symbols": [
-        "U",
-        "V",
-        "u_i",
-        "v_j",
-        "basis_index_i",
-        "basis_index_j",
-        "hermitian_inner_product",
-        "cluster_rank",
-        "subspace_overlap"
-      ],
-      "sources": [
-        "source-cpu-schur",
-        "source-cpu-window-degenerate"
-      ]
+      "symbols": ["cluster_bases", "cluster_indices", "cluster_overlap", "complex_operators", "norm_operators"],
+      "sources": ["source-cpu-schur", "source-gpu-petsc"]
     }
   ],
   "symbols": [
-    {
-      "id": "m0",
-      "latex": "$m_0$",
-      "meaning": "normalized equilibrium magnetization and tangent perturbation",
-      "si_unit": "$1$"
-    },
-    {
-     "id": "delta_m",
-     "latex": "$\\delta\\mathbf m$",
-     "meaning": "normalized equilibrium magnetization and tangent perturbation",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "Ms",
-      "latex": "$M_s$",
-      "meaning": "saturation magnetization",
-      "si_unit": "\\mathrm{A\\,m^{-1}}"
-    },
-    {
-      "id": "delta_H_demag",
-      "latex": "$\\delta\\mathbf H_{\\mathrm{demag}}$",
-      "meaning": "equilibrium effective field and dynamic demagnetizing field",
-      "si_unit": "\\mathrm{A\\,m^{-1}}"
-    },
-    {
-      "id": "delta_phi",
-      "latex": "$\\delta\\phi$",
-      "meaning": "scalar magnetic potential",
-      "si_unit": "\\mathrm{A}"
-    },
-    {
-     "id": "gamma0",
-     "latex": "$\\gamma_0$",
-      "meaning": "`$\\mu_0|\\gamma|$` gyromagnetic factor in the A/m convention",
-      "si_unit": "\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}"
-    },
-    {
-      "id": "omega",
-      "latex": "$\\omega$",
-      "meaning": "angular frequency",
-      "si_unit": "\\mathrm{rad\\,s^{-1}"
-    },
-    {
-      "id": "beta",
-      "latex": "$\\beta$",
-      "meaning": "Robin coefficient",
-      "si_unit": "\\mathrm{m^{-1}"
-    },
-    {
-      "id": "P",
-      "latex": "$P$",
-      "meaning": "scalar Poisson stiffness block",
-      "si_unit": "\\mathrm{m}"
-    },
-    {
-      "id": "q",
-      "latex": "$q$",
-      "meaning": "tangent-plane modal coefficients",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "frequency_spacing",
-      "latex": "$\\Delta f$",
-      "meaning": "refinement-pass frequency spacing",
-      "si_unit": "$\\mathrm{Hz}$"
-    },
-    {
-      "id": "frequency_min",
-      "latex": "$f_{\\min}$",
-      "meaning": "lower bound of the requested frequency window",
-      "si_unit": "$\\mathrm{Hz}$"
-    },
-    {
-      "id": "frequency_max",
-      "latex": "$f_{\\max}$",
-      "meaning": "upper bound of the requested frequency window",
-      "si_unit": "$\\mathrm{Hz}$"
-    },
-    {
-      "id": "cluster_frequency_a",
-      "latex": "$f_a$",
-      "meaning": "frequency of the first candidate in a cluster comparison",
-      "si_unit": "$\\mathrm{Hz}$"
-    },
-    {
-      "id": "cluster_frequency_b",
-      "latex": "$f_b$",
-      "meaning": "frequency of the second candidate in a cluster comparison",
-      "si_unit": "$\\mathrm{Hz}$"
-    },
-    {
-      "id": "U",
-      "latex": "$U$",
-      "meaning": "orthonormal basis matrix for a base-pass frequency cluster",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "V",
-      "latex": "$V$",
-      "meaning": "orthonormal basis matrix for the paired refinement-pass frequency cluster",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "u_i",
-      "latex": "$u_i$",
-      "meaning": "base-pass orthonormal magnetic cluster vector",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "v_j",
-      "latex": "$v_j$",
-      "meaning": "refinement-pass orthonormal magnetic cluster vector",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "basis_index_i",
-      "latex": "$i$",
-      "meaning": "base-pass cluster-basis index",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "basis_index_j",
-      "latex": "$j$",
-      "meaning": "refinement-pass cluster-basis index",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "hermitian_inner_product",
-      "latex": "$u_i^{\\ast}v_j$",
-      "meaning": "Hermitian inner product between paired magnetic cluster vectors",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "cluster_rank",
-      "latex": "$r$",
-      "meaning": "rank of a paired frequency cluster",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "subspace_overlap",
-      "latex": "$s(U,V)$",
-      "meaning": "normalized invariant-subspace overlap for paired clusters",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "lambda",
-      "latex": "$\\lambda$",
-      "meaning": "modal eigenvalue",
-      "si_unit": "\\mathrm{s^{-1}"
-    },
-    {
-      "id": "Bqq",
-      "latex": "$B_{qq}$",
-      "meaning": "gyrotropic tangent mass block",
-      "si_unit": "\\mathrm{m^3}"
-    },
-    {
-      "id": "Ablocks",
-      "latex": "$A_{qq},A_{q\\phi},A_{\\phi q}$",
-      "meaning": "magnetic and mixed descriptor blocks",
-      "si_unit": "\\mathrm{m^3\\,s^{-1}}"
-    }
+    {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "time", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "magnetization", "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$", "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation", "si_unit": "$1$"},
+    {"id": "tangent_map", "latex": "$T$", "meaning": "tangent-frame map from modal coefficients to $\\delta\\mathbf m$", "si_unit": "$1$"},
+    {"id": "q", "latex": "$q$", "meaning": "tangent-plane modal coefficients", "si_unit": "$1$"},
+    {"id": "dynamic_magnetization", "latex": "$\\delta\\mathbf M$", "meaning": "dynamic magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "demag_field", "latex": "$\\delta\\mathbf H_{\\mathrm{demag}}$", "meaning": "dynamic demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "potential", "latex": "$\\delta\\phi$, $\\phi$", "meaning": "dynamic scalar magnetic potential and its coefficient vector", "si_unit": "$\\mathrm{A}$"},
+    {"id": "test_function", "latex": "$\\psi$", "meaning": "scalar-potential test function", "si_unit": "$1$"},
+    {"id": "domains", "latex": "$D$, $\\Omega_m$, $\\Omega_{\\mathrm{air}}$", "meaning": "shared, magnetic and airbox domains", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "open_boundary", "latex": "$\\Gamma_{\\mathrm{open}}$", "meaning": "open exterior boundary", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "measures", "latex": "$\\mathrm{d}V$, $\\mathrm{d}S$", "meaning": "volume and surface measures", "si_unit": "$\\mathrm{m^3}$, $\\mathrm{m^2}$"},
+    {"id": "gradient", "latex": "$\\nabla$", "meaning": "spatial gradient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "complex_operators", "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $(\\cdot)^\\ast$", "meaning": "real-part map, exponential, imaginary unit and complex conjugation; the operators/constants are dimensionless and preserve or combine operand units as written", "si_unit": "$1$"},
+    {"id": "norm_operators", "latex": "$\\lVert\\cdot\\rVert_2$, $|\\cdot|$", "meaning": "Euclidean norm and absolute value; each result inherits the operand unit", "si_unit": "$1$"},
+    {"id": "tensor_operators", "latex": "$(\\cdot)^{\\mathsf T}$, $\\cdot$", "meaning": "transpose and Euclidean contraction; the operators are dimensionless", "si_unit": "$1$"},
+    {"id": "calculus_set_operators", "latex": "$\\int$, $\\cup$, $\\nabla\\cdot$", "meaning": "integration, set union and divergence operators; dimensional changes come from the measure or derivative shown in the equation", "si_unit": "$1$"},
+    {"id": "pi_constant", "latex": "$\\pi$", "meaning": "circle constant", "si_unit": "$1$"},
+    {"id": "schedule_operators", "latex": "$\\min$, $\\max$, $\\lfloor\\cdot\\rfloor$, $\\lceil\\cdot\\rceil$", "meaning": "selection and integer-rounding operators used by the deterministic window schedule", "si_unit": "$1$"},
+    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"},
+    {"id": "P", "latex": "$P$", "meaning": "scalar Poisson stiffness block", "si_unit": "$\\mathrm{m}$"},
+    {"id": "magnetic_to_potential", "latex": "$C_{\\phi q}$, $A_{\\phi q}$", "meaning": "magnetic-to-potential coupling blocks", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "potential_to_magnetic", "latex": "$A_{q\\phi}$", "meaning": "potential-to-magnetic coupling block", "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "Aqq", "latex": "$A_{qq}$", "meaning": "magnetic restoring block", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "mass_blocks", "latex": "$B_{qq}$, $B_\\alpha$", "meaning": "tangent mass and damped gyrotropic mass blocks", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "operators", "latex": "$L_{\\mathrm{eff}}$, $L$", "meaning": "Schur-reduced and full magnetic operators", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "lambda", "latex": "$\\lambda$", "meaning": "modal eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "omega", "latex": "$\\omega$, $\\omega_{\\mathrm{target}}$, $\\tau$", "meaning": "angular frequency, requested angular target and rotated-pencil target", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "real_split", "latex": "$\\mathcal R(\\cdot)$, $y$", "meaning": "real-split operator and real-split state", "si_unit": "$1$"},
+    {"id": "gauge", "latex": "$c$, $\\eta$", "meaning": "mean-zero gauge vector and Lagrange multiplier", "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"},
+    {"id": "residuals", "latex": "$r_q$, $r_\\phi$, $r_g$", "meaning": "magnetic, scalar and gauge residuals", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"},
+    {"id": "normalized_residuals", "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_g$", "meaning": "normalized magnetic, scalar and gauge residuals", "si_unit": "$1$"},
+    {"id": "residual_floors", "latex": "$\\delta_q$, $\\delta_\\phi$, $\\delta_g$", "meaning": "positive magnetic, scalar and gauge denominator floors", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"},
+    {"id": "bias_and_effective_field", "latex": "$H_b$, $M_{\\mathrm{eff}}$", "meaning": "physical bias-field magnitude and effective magnetization used only by the Kittel oracle", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "gamma0", "latex": "$\\gamma_0$", "meaning": "$\\mu_0|\\gamma|$ gyromagnetic factor in the A/m convention", "si_unit": "$\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}}$"},
+    {"id": "kittel_frequency", "latex": "$f_{\\mathrm{Kittel}}$", "meaning": "Kittel oracle frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "window_frequencies", "latex": "$\\Delta f$, $f_{\\min}$, $f_{\\max}$, $f_a$, $f_b$", "meaning": "window width, bounds and candidate frequencies", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "cluster_bases", "latex": "$U$, $V$, $u_i$, $v_j$", "meaning": "orthonormal cluster bases and vectors", "si_unit": "$1$"},
+    {"id": "cluster_indices", "latex": "$i$, $j$, $r$", "meaning": "cluster-basis indices and paired cluster rank", "si_unit": "$1$"},
+    {"id": "cluster_overlap", "latex": "$u_i^\\ast v_j$, $s(U,V)$", "meaning": "Hermitian overlap and normalized invariant-subspace overlap", "si_unit": "$1$"}
   ],
   "sources": [
+    {
+      "id": "source-python-sweep",
+      "path": "packages/fullmag-py/src/fullmag/model/eigen.py",
+      "symbol": "class BiasFieldSweep",
+      "responsibility": "Validate physical SI bias samples and lower declared sweep ordering and equilibrium policy."
+    },
     {
       "id": "source-python-stage",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "eigenmodes_stage",
-      "responsibility": "Construct the stage-first public eigenmodes request."
+      "responsibility": "Lower stage-first modal authoring to the public Eigenmodes constructor."
+    },
+    {
+      "id": "source-runner-sweep",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "execute_bias_field_sweep",
+      "responsibility": "Execute the declared physical sample lifecycle with explicit equilibrium and continuation provenance."
+    },
+    {
+      "id": "source-oracle-guard",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "validate_bias_field_sweep_oracle_contract",
+      "responsibility": "Keep Kittel validation postsolve-only and fail closed on oracle influence."
+    },
+    {
+      "id": "source-native-aqq",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
+      "symbol": "assemble_native_magnetic_a_qq",
+      "responsibility": "Assemble the bounded native MFEM P1 exchange and parallel-field magnetic restoring block."
+    },
+    {
+      "id": "source-shared-payload",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain_payload",
+      "responsibility": "Import ABI-v18 shared-domain payloads and invoke backend-owned magnetic assembly."
+    },
+    {
+      "id": "source-shared-assembly",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain",
+      "responsibility": "Assemble the native MFEM scalar, mixed, mass, gauge and magnetic blocks."
     },
     {
       "id": "source-cpu-schur",
-      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
-      "symbol": "FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur",
-      "responsibility": "Assemble and solve the bounded CPU shared-domain Schur modal problem and certify frequency windows by two deterministic schedules, stable cluster rank, invariant-subspace overlap, and positive edge coverage."
-    },
-    {
-      "id": "source-cpu-window-positive",
-      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
-      "symbol": "void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture",
-      "responsibility": "Exercise the successful two-pass CPU window certificate and numerical nev refinement contract."
-    },
-    {
-      "id": "source-cpu-window-degenerate",
-      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
-      "symbol": "void FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace",
-      "responsibility": "Exercise stable rank-two clustering and invariant-subspace overlap."
-    },
-    {
-      "id": "source-cpu-window-disagreement",
-      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
-      "symbol": "void FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster",
-      "responsibility": "Exercise fail-closed disagreement when the requested count would split a degenerate cluster."
-    },
-    {
-      "id": "source-cpu-window-empty-failure",
-      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
-      "symbol": "void FrequencyWindowEmptyFailurePreservesFlagsAndCounts",
-      "responsibility": "Exercise failed-subwindow flags and planned/completed/failed count consistency when every subsolve fails."
-    },
-    {
-      "id": "source-cpu-window-cancellation",
-      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
-      "symbol": "void FrequencyWindowCancellationPreservesStopReason",
-      "responsibility": "Exercise interrupted status, cancellation flags, zero failure count, and the stable cancellation reason."
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Solve and certify the bounded CPU Schur modal problem and deterministic frequency window."
     },
     {
       "id": "source-gpu-petsc",
+      "path": "backends/fem/include/frequency_domain/modal_gpu_krylov.hpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_gpu_petsc_slepc",
+      "responsibility": "Implement the source-visible GPU PETSc/SLEPc shared-domain modal adapter."
+    },
+    {
+      "id": "source-gpu-solver-state",
       "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
-      "symbol": "FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc",
-      "responsibility": "Run the managed GPU PETSc/SLEPc device Schur modal problem."
+      "symbol": "create_gpu_solver_state",
+      "responsibility": "Construct the source-visible persistent PETSc/SLEPc GPU solver state without promoting unexecuted residency claims."
     },
     {
-      "id": "source-runner-ir",
+      "id": "source-gpu-schur-action",
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "symbol": "split_schur_matmult",
+      "entrypoint": "apply_schur",
+      "responsibility": "Apply the matrix-free Schur operator used by the future scalable selected-spectrum production scope."
+    },
+    {
+      "id": "source-runner-native-diagnostics",
       "path": "crates/fullmag-runner/src/fem_eigen.rs",
-      "symbol": "build_shared_domain_linearization_state",
-      "responsibility": "Lower canonical modal intent to the native shared-domain ProblemIR."
+      "symbol": "native_solver_diagnostics_json",
+      "responsibility": "Project native convergence, solver-state and residency diagnostics into the eigen artifact contract."
     },
     {
-      "id": "source-runner-single-k",
-      "path": "crates/fullmag-runner/src/dispatch.rs",
-      "symbol": "eigen_path_single_k_point_plan",
-      "responsibility": "Lower a path sample to a native single-k request without carrying or applying analytical validation inputs."
+      "id": "source-runner-eigen-v2-writer",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "write_eigen_v2_bundle",
+      "responsibility": "Write spectrum, diagnostics and mode-field resources with requested and resolved execution provenance."
     },
     {
-      "id": "source-sweep-validation",
-      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
-      "symbol": "validate_k0_kittel_field_sweep",
-      "responsibility": "Validate the K0 Kittel sweep, spectrum, residuals, and mode artifacts."
+      "id": "source-api-eigen-diagnostics",
+      "path": "crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs",
+      "symbol": "frequency_domain_artifact_content_digest",
+      "handler": "get_frequency_domain_eigen_diagnostics_v2",
+      "responsibility": "Serve typed session-scoped eigen diagnostics without changing scientific qualification state."
     },
     {
-      "id": "source-gpu-validation",
-      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
-      "symbol": "validate_gpu_modal_k0_periodic_airbox_provenance",
-      "responsibility": "Validate GPU adapter, device residency, transfer audit, and no-fallback provenance."
+      "id": "source-api-mode-field-meta",
+      "path": "crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs",
+      "symbol": "eigen_mode_field_metadata",
+      "handler": "get_frequency_domain_eigen_mode_field_meta",
+      "responsibility": "Serve mode-field metadata for the binary scientific data plane."
+    },
+    {
+      "id": "source-results-mode-field-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx",
+      "symbol": "EigenModeFieldResourceInspectorPanel",
+      "responsibility": "Inspect selected mode-field identity, availability and provenance in Results."
+    },
+    {
+      "id": "source-mode-field-overlay",
+      "path": "apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts",
+      "symbol": "activate",
+      "controller": "class ModeFieldOverlayIntentController",
+      "responsibility": "Bind selected eigen mode and phase to the unified viewport overlay intent."
+    },
+    {
+      "id": "source-field-sweep-axis",
+      "path": "crates/fullmag-runner/src/eigen/artifacts.rs",
+      "symbol": "field_sweep_axis",
+      "responsibility": "Emit the bias_field_a_per_m scan axis, A/m unit and mu0_H display conversion."
     }
   ],
   "public_api": {
     "parameters": [
-      {
-        "python": "eigenmodes.count",
-        "type": "int",
-        "default": "10",
-        "si_unit": "$1$",
-        "validation": "count > 0",
-        "meaning": "selected mode count",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_count"
-      },
-      {
-        "python": "eigenmodes.target",
-        "type": "str",
-        "default": "lowest",
-        "si_unit": "$1$",
-        "validation": "frequency_window",
-        "meaning": "spectral selection strategy",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_target"
-      },
-      {
-        "python": "eigenmodes.target_frequency",
-        "type": "float or None",
-        "default": "None",
-        "si_unit": "$\\mathrm{Hz}$",
-        "validation": "finite",
-        "meaning": "nearest target frequency",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_target_frequency"
-      },
-      {
-        "python": "eigenmodes.frequency_min",
-        "type": "float or None",
-        "default": "None",
-        "si_unit": "$\\mathrm{Hz}$",
-        "validation": "finite",
-        "meaning": "lower frequency-window bound",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_frequency_min"
-      },
-      {
-        "python": "eigenmodes.frequency_max",
-        "type": "float or None",
-        "default": "None",
-        "si_unit": "$\\mathrm{Hz}$",
-        "validation": "finite",
-        "meaning": "upper frequency-window bound",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_frequency_max"
-      },
-      {
-        "python": "eigenmodes.operator",
-        "type": "str",
-        "default": "linearized_llg",
-        "si_unit": "$1$",
-        "validation": "supported",
-        "meaning": "linearized dynamics operator",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_operator"
-      },
-      {
-        "python": "eigenmodes.include_demag",
-        "type": "bool",
-        "default": "True",
-        "si_unit": "$1$",
-        "validation": "K0 demag",
-        "meaning": "dynamic demagnetizing feedback",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_include_demag"
-      },
-      {
-        "python": "eigenmodes.equilibrium_source",
-        "type": "str",
-        "default": "relax",
-        "si_unit": "$1$",
-        "validation": "artifact",
-        "meaning": "source of accepted equilibrium",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_equilibrium_source"
-      },
-      {
-        "python": "eigenmodes.equilibrium_artifact",
-        "type": "str or None",
-        "default": "None",
-        "si_unit": "$1$",
-        "validation": "artifact",
-        "meaning": "equilibrium artifact path",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_equilibrium_artifact"
-      },
-      {
-        "python": "eigenmodes.normalization",
-        "type": "str",
-        "default": "unit_l2",
-        "si_unit": "$1$",
-        "validation": "unit_l2",
-        "meaning": "mode normalization convention",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_normalization"
-      },
-      {
-        "python": "eigenmodes.damping_policy",
-        "type": "str",
-        "default": "ignore",
-        "si_unit": "$1$",
-        "validation": "ignore",
-        "meaning": "damping treatment",
-        "backend_support": "FEM CPU and FEM GPU bounded K0 only with",
-        "problem_ir": "stages[].eigen_damping_policy"
-      },
-      {
-        "python": "eigenmodes.k_vector",
-        "type": "tuple[float, float, float] or None",
-        "default": "None",
-        "si_unit": "$\\mathrm{m^{-1}}$",
-        "validation": "K0",
-        "meaning": "Bloch wave vector",
-        "backend_support": "FEM CPU and FEM GPU at K0 only",
-        "problem_ir": "stages[].eigen_k_vector"
-      },
-      {
-        "python": "eigenmodes.k_sampling",
-        "type": "object or None",
-        "default": "None",
-        "si_unit": "$1$",
-        "validation": "planner",
-        "meaning": "dispersion sampling request",
-        "backend_support": "not qualified by this note",
-        "problem_ir": "stages[].eigen_k_sampling"
-      },
-      {
-        "python": "eigenmodes.bc",
-        "type": "str or dict",
-        "default": "free",
-        "si_unit": "$1$",
-        "validation": "supported",
-        "meaning": "exchange boundary policy",
-        "backend_support": "FEM CPU and FEM GPU bounded K0",
-        "problem_ir": "stages[].eigen_spin_wave_bc"
-      },
-      {
-        "python": "eigenmodes.magnetostatic_bc",
-        "type": "str",
-        "default": "open",
-        "si_unit": "$1$",
-        "validation": "poisson_robin",
-        "meaning": "scalar-potential boundary policy",
-        "backend_support": "FEM CPU and FEM GPU bounded K0 with open airbox",
-        "problem_ir": "stages[].eigen_magnetostatic_bc"
-      }
+      {"python": "study.device(spec, precision=...)", "type": "str", "default": "required, optional", "si_unit": "$1$", "validation": "requires explicit", "meaning": "requested execution intent", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "backend_policy"},
+      {"python": "study.mode(\"strict\")", "type": "str", "default": "required by this scope", "si_unit": "$1$", "validation": "rejects non-strict", "meaning": "fail-closed capability policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "validation_profile.execution_mode"},
+      {"python": "study.pbc(x, y, z, demag)", "type": "bool, bool, bool, str", "default": "False, False, False, \"open\"", "si_unit": "$1$", "validation": "requires x/y", "meaning": "problem periodicity and static demag policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "pbc.axes"},
+      {"python": "eigenmodes.count", "type": "int", "default": "10", "si_unit": "$1$", "validation": "count > 0", "meaning": "selected mode count", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.count"},
+      {"python": "eigenmodes.target", "type": "str", "default": "\"lowest\"", "si_unit": "$1$", "validation": "lowest", "meaning": "spectral selection strategy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target"},
+      {"python": "eigenmodes.target_frequency", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite and positive", "meaning": "nearest target frequency", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_hz"},
+      {"python": "eigenmodes.frequency_min", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite, positive and strictly ordered", "meaning": "requested interval", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_min_hz"},
+      {"python": "eigenmodes.frequency_max", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite, positive and strictly ordered", "meaning": "requested interval", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_max_hz"},
+      {"python": "eigenmodes.operator", "type": "str", "default": "\"linearized_llg\"", "si_unit": "$1$", "validation": "C1 scope requires", "meaning": "linearized dynamics operator", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.operator.kind"},
+      {"python": "eigenmodes.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "requires", "meaning": "dynamic demagnetizing feedback", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.operator.include_demag"},
+      {"python": "eigenmodes.equilibrium_source", "type": "str", "default": "\"relax\"", "si_unit": "$1$", "validation": "relax", "meaning": "source of accepted equilibrium", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.equilibrium"},
+      {"python": "eigenmodes.equilibrium_artifact", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "required for", "meaning": "accepted equilibrium path", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.equilibrium.path"},
+      {"python": "eigenmodes.normalization", "type": "str", "default": "\"unit_l2\"", "si_unit": "$1$", "validation": "unit_l2", "meaning": "mode normalization", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.normalization"},
+      {"python": "eigenmodes.damping_policy", "type": "str", "default": "\"ignore\"", "si_unit": "$1$", "validation": "requires", "meaning": "damping treatment", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.damping_policy"},
+      {"python": "eigenmodes.k_vector", "type": "3-vector / object", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "requires one exact Gamma sample", "meaning": "wave-vector request", "backend_support": "FEM CPU/GPU source contract at K0", "problem_ir": "study.k_sampling"},
+      {"python": "eigenmodes.k_sampling", "type": "3-vector / object", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "requires one exact Gamma sample", "meaning": "wave-vector request", "backend_support": "FEM CPU/GPU source contract at K0", "problem_ir": "study.k_sampling"},
+      {"python": "eigenmodes.bc", "type": "str or dict", "default": "\"free\"", "si_unit": "$1$", "validation": "requires periodic", "meaning": "exchange/spin-wave boundary policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.spin_wave_bc"},
+      {"python": "eigenmodes.magnetostatic_bc", "type": "str", "default": "\"open\"", "si_unit": "$1$", "validation": "requires", "meaning": "scalar-potential boundary policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.magnetostatic_bc"},
+      {"python": "BiasFieldSweep.samples_a_per_m", "type": "sequence of 3-vectors", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "non-empty", "meaning": "authored physical bias field per sample", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.samples_a_per_m"},
+      {"python": "BiasFieldSweep.equilibrium_policy", "type": "str", "default": "\"relax_each\"", "si_unit": "$1$", "validation": "relax_each", "meaning": "equilibrium policy per physical sample", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.equilibrium_policy"},
+      {"python": "BiasFieldSweep.continuation_seed", "type": "str", "default": "\"initial_state\"", "si_unit": "$1$", "validation": "previous_accepted_equilibrium", "meaning": "continuation seed provenance", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.continuation_seed"},
+      {"python": "generated sweep ordering", "type": "str", "default": "\"declared\"", "si_unit": "$1$", "validation": "any other value rejects", "meaning": "preserves authored sample order", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.bias_field_sweep.ordering"}
     ]
   }
 }

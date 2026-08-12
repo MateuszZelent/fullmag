@@ -11,14 +11,32 @@
 **Dokument nadrzędny DoD:** `24_production_definition_of_done.md`
 **Plan poprzedzający:** `docs/superpowers/plans/2026-07-12-fem-k0-demag-final-production.md`
 
+**Rewizja scope T1 2026-08-12:** zgodnie z zaakceptowanym projektem
+`docs/superpowers/specs/2026-08-11-fem-k0-eigensolve-full-gpu-design.md` i planem
+`docs/superpowers/plans/2026-08-11-fem-k0-eigensolve-full-gpu-implementation.md`
+zamrożono dwa niepromocyjne wiązania przyszłego zakresu produkcyjnego. Przypadki
+materializowane do wymiaru 1024 są wyłącznie `validation_only`; produkcja CPU i
+GPU używa `matrix_free_schur_selected_spectrum` i wymaga zmierzonego
+`operator_dimension > 1024`. Bieżący stan pozostaje
+`source_visible / unvalidated` bez scope runtime.
+
 **Rewizja wykonawcza 2026-08-09:** C3 publiczny ABI v18 z deskryptorem
 `FullmagFemModalLinearizationDescriptor` ma zaakceptowany source/ABI review
 (pełny caller-buffer gate v3, spójny v2 slot, digest binding i exact
 exchange `NULL/count`); managed native runtime pozostaje zablokowany. A2
 resource invalidation jest source-approved, a U1 ma osobne Results/Inspector
 węzły `resonance-fits` i `kittel-fit`, fail-closed `missing/partial/corrupt` i
-331/331 focused GREEN. N1 nadal nie dostarcza authoritative descriptor ani
-natywnego MFEM `A_qq`; CPU/GPU i UI nie są production-qualified. Szczegółowy
+331/331 focused GREEN.
+
+**Rewizja C1 2026-08-11:** publiczny `BiasFieldSweep`/`BiasFieldSweepIR`,
+per-sample runner, ABI v18 oraz natywny MFEM
+`assemble_native_magnetic_a_qq` są zaimplementowane w źródle. Natywny zakres
+`A_qq` jest ograniczony do P1 `tet4|prism6`, jednorodnego skalarnego `A_ex` i
+równoległego field restoring block; anisotropy/DMI są `unavailable`, a
+dynamiczny demag należy do bloków mieszanych/Schur. CPU/GPU window certificates
+pozostają source-level. Aktywny bundle nie odpowiada dirty ABI-v18 snapshotowi,
+więc CPU/GPU i UI nadal nie są production-qualified, a capability pozostaje
+`source_visible / unvalidated`. Szczegółowy
 stan, inwentaryzacja 39 worktree, zależności i komendy etapowe są w
 `docs/superpowers/plans/2026-08-09-fem-k0-eigensolve-current-audit-and-execution.md`.
 
@@ -310,41 +328,43 @@ od zera.
 
 ### 6.1 P0 — `k0_kittel_validation` nie może sterować fizycznym sweepem
 
-Kanoniczna nota 0830 mówi, że Kittel jest niezależnym oracle postsolve i nie
-może ustalać pola, równowagi, targetu ani podpisu operatora. Obecnie jednak:
-
-- `StudyBuilder.k0_kittel_validation` zapisuje próbki w `runtime_metadata`;
-- `dispatch.rs::eigen_path_single_k_point_plan` oraz
-  `fem_eigen.rs::execute_k0_kittel_field_sweep` używają tych próbek jako pól
-  bias i relaksują dla nich stany.
-
-To jest naruszenie kontraktu fizycznego, nawet jeśli obliczenia dają poprawne
-liczby. Należy dodać jawny, physics-owned kontrakt:
+Kanoniczna nota 0830 i ADR 0023 wymagają, by Kittel był niezależnym oracle
+postsolve i nie ustalał pola, równowagi, targetu ani podpisu operatora.
+Bieżące źródło ma jawny physics-owned kontrakt:
 
 ```text
 BiasFieldSweepIR {
   samples_a_per_m: Vec<[f64; 3]>,
   equilibrium_policy,
-  continuation_policy,
+  continuation_seed,
   ordering,
 }
 ```
 
-Pole powinno być częścią `StudyIR::Eigenmodes`, Python DSL, UI authoring i
-planera. `K0KittelFieldSweepValidation` ma konsumować wyniki po solve oraz
-niezależne `M_eff_reference`, nigdy produkować pola wejściowe. Istniejący
-`eigen_contract.rs::SweepIR { values_hz }` nie powinien być przeciążany
-innym wymiarem fizycznym.
+`BiasFieldSweep` jest częścią `StudyIR::Eigenmodes`, Python DSL, planera i
+per-sample runnera; `validate_bias_field_sweep_oracle_contract` fail-closed
+oddziela go od `K0KittelFieldSweepValidation`. To jest implementacja źródłowa,
+nie K0-3 runtime qualification. Managed negative-control i convergence evidence
+pozostają obowiązkową bramką.
 
-### 6.2 P0 — `A_qq` nie jest jeszcze własnością natywnego MFEM assemblera
+### 6.2 P0 — `A_qq` ma bounded natywnego MFEM ownera; runtime qualification pozostaje otwarta
 
-`build_native_shared_domain_modal_problem` wywołuje rustowe
-`assemble_full_2x2_operator_real` i przekazuje CSR do C++. Funkcja ma model
-MVP Hessianu oraz ograniczenia dla jednolitego equilibrium i wąskiej listy
-interakcji. Produkcyjny kontrakt wymaga, by pełne `A_qq`, `B_qq`, `A_qphi`,
-`A_phiq` i `P` powstały z tego samego natywnego mesh/quadrature/region map oraz
-tych samych certyfikatów. Runner ma orkiestrwać, nie posiadać numerycznego
-assembly.
+ABI v18 przekazuje `FullmagFemModalLinearizationDescriptor` bez preassembled
+`A_qq`. Importer wywołuje
+`backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp::
+assemble_native_magnetic_a_qq` na tym samym MFEM mesh/space, a następnie
+`assemble_poisson_airbox_shared_domain_payload` i
+`assemble_poisson_airbox_shared_domain` składają shared-domain blocks.
+Natywny zakres źródłowy obejmuje P1 `tet4|prism6`, jednorodne skalarne `A_ex`,
+accepted tangent frames, dodatnie `M_s` i field restoring równoległy do
+equilibrium. Anisotropy/DMI zwracają `unavailable`. Bit DEMAG wymaga provider
+signature związanej z operator-input digest, lecz dynamiczny feedback pozostaje
+w `A_qphi P^-1 A_phiq`. Runner opisuje stan/term provenance i orkiestruje ABI;
+nie jest właścicielem produkcyjnego `A_qq`.
+
+Ten stan jest `source_visible / unvalidated`. Brak zgodnego świeżego managed
+ABI-v18 runtime, K0-P1–P6 i K0-G1–G4 nie pozwala zamknąć DOD-06 ani promować
+CPU/GPU.
 
 ### 6.3 P0 — ABI i certyfikat nie są fail-closed
 
@@ -504,6 +524,25 @@ Q3 -> DoD writer/verifier -> final scientific manifest
   -> G2 governance-only promotion -> two-identity promotion attestation
 ```
 
+Wykonawczy kontrakt tych etapów jest doprecyzowany przez
+`docs/superpowers/specs/2026-08-11-fem-k0-eigensolve-full-gpu-design.md`:
+
+| Etap masterplanu | Wiążący fragment specyfikacji 2026-08-11 |
+|---|---|
+| N3 | sekcje 5–8: jeden adapter PETSc/SLEPc, lifecycle, HYPRE CUDA oraz mierzona rezydencja |
+| A1S/A1E | sekcje 9 i 11: natywna attestation, immutable artifacts i zamknięty przyczynowo release |
+| A2 | sekcje 10–11: typowane zasoby API i rozdzielenie JSON/binarnego data plane |
+| U2 | sekcja 10: Results Inspector i mode-field overlay w jednym viewport |
+| Q2 | sekcja 12, K0-G4–K0-G7: CPU/GPU/Kittel/antidot, parity i skalowanie |
+| Q3 | sekcja 12, K0-G8–K0-G9: artefakty, API/UI/browser i release proof |
+| G2-governance | sekcja 11.4: osobna promocja po przyjęciu immutable candidate manifestu |
+
+Wartość zero w telemetryce transferów jest dowodem wyłącznie wtedy, gdy jej
+stan pomiaru ma wartość `measured` i zgadza się z niezależnym trace. Zero
+zadeklarowane, wyzerowane domyślnie lub opublikowane przy
+`measurement_state=unavailable` nie jest dowodem rezydencji ani braku
+transferów.
+
 N2, N3 i A1S mogą powstawać równolegle po N1/C3, ale Q2 czeka na Q1 jako
 oracle. Prace nad fixtures UI mogą ruszyć po zamrożeniu schematów A1S/A2. Finalna
 kwalifikacja UI zależy od natywnych artefaktów N2/N3. GPU zależy od
@@ -660,17 +699,20 @@ ale nie z edycją tych samych dokumentów.
 
 1. Ustal dwa dokładne zakresy kwalifikacji:
 
-   - `fem_k0_periodic_airbox_cpu_double_v1`;
-   - `fem_k0_periodic_airbox_gpu_double_v1`.
+   - `modal_cpu_k0_periodic_airbox_real_shared_domain.production`;
+   - `modal_gpu_k0_periodic_airbox_scalable.production`.
 
    Oba obejmują dokładne `k=0`, periodic x/y, open z, dynamiczny Poisson-airbox,
    P1, jawne BC/gauge, `alpha=0`, double, real-frequency rotated target,
-   wybrane geometrie/materiały/rozmiary oraz bias-field scan.
+   wybrane geometrie/materiały/rozmiary oraz bias-field scan. Oba wymagają
+   `matrix_free_schur_selected_spectrum` i zmierzonego
+   `operator_dimension > 1024`. Materializowany deskryptor o wymiarze
+   `<= 1024` pozostaje wyłącznie `validation_only` i nie może zamknąć scope.
 2. Dodaj lub zaktualizuj publikacyjną notę tak, by:
 
    - rozdzielała physical bias-field input od Kittel oracle;
-   - nie twierdziła, że `A_qq` już powstaje w natywnym MFEM, dopóki N1 tego
-     nie implementuje;
+   - opisywała bounded natywnego producenta MFEM `A_qq` i nie utożsamiała
+     source state z managed runtime qualification;
    - precyzyjnie nazywała bounded CPU i GPU source state;
    - opisywała faktyczną granicę exact shifted PC oraz HYPRE;
    - usuwała duplikat anchor, poprawiała bloki math, jednostki source map,
@@ -687,6 +729,12 @@ ale nie z edycją tych samych dokumentów.
    po samym zakończeniu dokumentacji.
 6. Zaktualizuj source-map symbols do stabilnych nazw funkcji bez typów
    zwrotnych i z prawidłowymi jednostkami LaTeX.
+7. Powiąż source map i publikacyjną notę co najmniej z adapterem GPU
+   `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc`, stanem
+   `create_gpu_solver_state`, akcją `apply_schur`, runnerem
+   `native_solver_diagnostics_json`/`write_eigen_v2_bundle`, handlerami API
+   diagnostyki/pola modu oraz Results Inspector i kontrolerem overlay. Obecność
+   tych symboli jest dowodem source, nie wykonania ani kwalifikacji.
 
 ### Weryfikacja
 
@@ -1764,8 +1812,9 @@ są hash-bound; CPU DOD-13 ma zmierzoną envelope, a DOD-12 ma jedyne dozwolone
    mierzone z artefaktu, nie etykietowane arbitralnie `128/256/512`.
 6. Dla cold/reuse/invalidation runs zmierz time, GPU memory, allocations,
    transfer events/bytes, EPS/KSP iterations, applies, restarts i stop reason.
-7. Niezależny trace musi wykazać zero per-iteration full-vector H2D/D2H i brak
-   hidden host solve w hot loop.
+7. Niezależny trace oraz telemetryka o stanie `measured` muszą wspólnie wykazać
+   zero per-iteration full-vector H2D/D2H i brak hidden host solve w hot loop;
+   samo deklarowane zero nie jest dowodem.
 8. Wykonaj cancel przed solve, podczas EPS i między subwindows; partial bundle
    zachowuje wyłącznie certyfikowane modes.
 9. Wykonaj Compute Sanitizer co najmniej dla memory, race i sync coverage

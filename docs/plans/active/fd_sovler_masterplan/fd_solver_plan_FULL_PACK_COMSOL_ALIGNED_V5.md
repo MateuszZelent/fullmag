@@ -3880,6 +3880,16 @@ This file is a strict GPU-focused projection of
 archived under `old/` and must not be used as current status when it conflicts
 with the readiness matrix.
 
+### C1 source-state refresh (2026-08-11)
+
+The dirty recovery snapshot now contains the public physical
+`BiasFieldSweep`, ABI v18 native MFEM `A_qq` ownership and a source-level GPU
+two-pass window certificate. None is fresh managed GPU execution. The active
+bundle does not match the dirty ABI-v18 snapshot, so both periodic-airbox GPU
+cells remain `source_visible / unvalidated` with null `executable_scope` and
+`validated_scope`. The 2026-08-03 section below is historical evidence only;
+its device and parity numbers must not be used as current revalidation.
+
 ## Current GPU status
 
 All non-null `validated_scope` and `executable_scope` references use the
@@ -3896,7 +3906,7 @@ scope_catalog_path = docs/plans/active/fd_sovler_masterplan/25_frequency_domain_
 | `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `modal_gpu_k0_none_macrospin_larmor.validation` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Real narrow GPU modal slice exists through the current emitted GPU modal validation lane. |
 | `modal_gpu_k0_none_general_modal` | `source_visible` | `unvalidated` | `null` | Source evidence only. | The macrospin slice does not promote a general GPU modal eigensolver. |
 | `modal_gpu_k0_periodic_airbox_dense_probe` | `source_visible` | `unvalidated` | `null` | Bounded shared-domain lane: `k0_poisson_airbox_gpu_petsc_slepc`; the legacy `gpu_dense_contract_eigensolver` is validation-only. | Matrix status remains unvalidated; see the historical bounded evidence below. |
-| `modal_gpu_k0_periodic_airbox_scalable` | `source_visible` | `unvalidated` | `null` | Source and bounded managed GPU evidence only. | Matrix status remains unvalidated because matrix-free convergence, large-problem scaling, and the full DOD-01..DOD-14 release record remain open. |
+| `modal_gpu_k0_periodic_airbox_scalable` | `source_visible` | `unvalidated` | `null` | Source-visible PETSc/SLEPc CUDA and two-pass window contracts; historical managed evidence is stale for the current snapshot. | Matrix status remains unvalidated because ABI-matched managed execution, persistence/residency, matrix-free convergence, large-problem scaling, and the full DOD-01..DOD-14 release record remain open. |
 | `modal_gpu_nonzero_k_none` | `absent` | `unvalidated` | `null` | None. | Nonzero-k Floquet GPU modal remains unavailable. |
 | `modal_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | Dynamic demag-k GPU modal remains unavailable. |
 | `driven_gpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_k0_none.executable`: bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not `gpu_device_krylov`. | This is driven response, not modal eigensolve; no full device-resident Krylov loop is proven. |
@@ -4215,6 +4225,20 @@ precision = double
 initial modal qualification = alpha=0
 ```
 
+Dokładne przyszłe wiązania katalogowe tego kontraktu to:
+
+- `modal_cpu_k0_periodic_airbox_real_shared_domain.production` dla CPU;
+- `modal_gpu_k0_periodic_airbox_scalable.production` dla GPU.
+
+Są to wiązania docelowego zakresu, a nie bieżące promocje. Obie komórki
+readiness pozostają `implementation_state=source_visible` i
+`validation_state=unvalidated`, z `validated_scope=null` oraz
+`executable_scope=null`. Materializowany deskryptor o wymiarze nie większym niż
+1024 jest wyłącznie `validation_only`. Produkcyjny operator ma rodzaj
+`matrix_free_schur_selected_spectrum`, a kwalifikacja wymaga zmierzonego
+`operator_dimension > 1024`; nazwa przypadku lub oczekiwany rozmiar nie
+zastępuje pomiaru z artefaktu native.
+
 Nonzero-k dynamic demag, fully periodic three-dimensional K0 demag, arbitrary
 high-order FE, broad damped/nonconservative modal qualification and hidden CPU
 fallback for strict GPU are outside this contract and reject explicitly.
@@ -4228,13 +4252,14 @@ remain a validation-only result.
 | Current repository evidence | Honest current status | Target boundary |
 |---|---|---|
 | `dense_poisson_airbox_eigen_oracle.cpp` and PA-E1 fixtures construct tiny dense blocks. | `assembly_kind = synthetic_algebraic_oracle`; bounded algebra evidence only. | Never selected for physical K0 Poisson-airbox execution and never a production fallback. |
-| `PoissonAirboxEigenBlockProblem` accepts CSR blocks through ABI v3. | The validator now admits both explicit `synthetic_algebraic_oracle` fixtures and `mfem_weak_form_shared_domain` payloads; production requires certificate v6, Robin coercivity and exact shared-domain provenance. Fresh managed qualification is still open. | Keep the synthetic adapter validation-only and qualify only backend-owned shared-domain assembly. |
-| `poisson_airbox_modal_eigen.cpp` dispatches the shared-domain descriptor to the production CPU Schur and GPU PETSc/SLEPc adapters. | Source-visible/executable with the managed real-split `real_frequency_rotated` pencil and `tau=omega_target`; fresh current-snapshot execution is still pending. | Qualify selected interior spectra and preserve exact CPU/GPU parity. |
+| ABI v18 carries `FullmagFemModalLinearizationDescriptor` without preassembled `A_qq`. | `assemble_native_magnetic_a_qq` owns bounded P1 `tet4|prism6` exchange and parallel-field assembly on the native MFEM mesh. Anisotropy/DMI return `unavailable`; dynamic demag stays in mixed blocks. | Keep runner ownership to physical descriptor, ABI and provenance; qualify only backend-owned shared-domain assembly. |
+| `BiasFieldSweep`, `BiasFieldSweepIR` and `execute_bias_field_sweep` carry declared A/m samples, equilibrium policy and continuation seed. | Physical sweep is source-visible; `validate_bias_field_sweep_oracle_contract` keeps Kittel postsolve-only. No fresh managed sweep convergence exists. | Preserve physical input independently from analytical validation and per-sample requested/resolved execution. |
+| `poisson_airbox_modal_eigen.cpp` dispatches the shared-domain descriptor to CPU Schur and GPU PETSc/SLEPc adapters. | `source_visible / unvalidated` with real-split `real_frequency_rotated` pencil and `tau=omega_target`; no current-snapshot executable or validated scope. | Qualify selected interior spectra and preserve exact CPU/GPU parity. |
 | Native residual code reports SLEPc backward error plus reconstructed magnetic, scalar and gauge blocks. | Production CPU/GPU paths certify the original unscaled blocks and expose block residuals; synthetic and interrupted paths remain separately labelled. | Keep every accepted mode tied to the original BC-correct residual and finite/positive-branch policy. |
 | `poisson_airbox_schur_matshell.cpp` builds and certifies a persistent Schur MatShell. | Shared-domain assembly and Schur reduction are implemented and covered by native/independent quadrature contracts; promotion still requires fresh managed physics evidence. | Admit Schur only with an exact-signature certificate generated from real shared-domain blocks. |
 | Current driven periodic-airbox provider/Schur paths execute for bounded CPU/GPU slices. | They are not the target full coupled `MatNest/PCFIELDSPLIT` solve and do not qualify modal solving. | Cross-check full coupled and Schur driven results on the same P1 blocks and physical RHS. |
-| The CUDA frequency-domain source owns a persistent magnetic operator context and bounded dense/apply probes. | The separate `modal_krylov.cu` path remains validation-only with host-projected Ritz extraction; the production shared-domain lane is the PETSc/SLEPc CUDA adapter with device-resident vectors, residual certification and no CPU fallback. Fresh performance/residency qualification is still open. | Only `gpu_modal_device_krylov` is a scalable GPU solver claim. |
-| `operators/poisson_airbox_shared_domain.cpp` is the dedicated shared-domain modal assembler. | Real MFEM weak-form blocks, periodic magnetic/scalar reductions, Robin/Dirichlet handling, operator digest and independent P1 quadrature/sign oracles are implemented; managed production promotion remains evidence-gated. | Modal promotion requires K0-P1 through K0-P6 and K0-G1 through K0-G4. K0-P7 is a separate driven-response cross-check and does not gate modal promotion. |
+| The CUDA frequency-domain source owns PETSc/SLEPc adapter and bounded materialized/window contracts. | Materialized descriptor dimensions at or below 1024 are validation-only. Device residency, persistent EPS/ST/KSP/BV ownership, allocation/transfer bounds and no-fallback behavior are source claims until fresh managed GPU evidence exists. | Only `gpu_modal_device_krylov` with executed matrix-free evidence, including a measured `operator_dimension > 1024`, can satisfy `modal_gpu_k0_periodic_airbox_scalable.production`. |
+| `operators/poisson_airbox_shared_domain.cpp` is the dedicated shared-domain modal assembler. | Real MFEM weak-form scalar/mixed blocks and native bounded `A_qq` are implemented in source; managed production promotion remains evidence-gated. | Modal promotion requires K0-P1 through K0-P6 and K0-G1 through K0-G4. K0-P7 is a separate driven-response cross-check and does not gate modal promotion. |
 | Production runner construction supplies `target_frequency_hz` from the user target/window and leaves `expected_reference_frequency_hz=0` for shared-domain solves. | The production path no longer uses an analytical Kittel value for assembly or targeting. Historical/synthetic validation fixtures may carry an expected reference only for postsolve verification. | Keep analytical Kittel comparison postsolve-only and out of descriptor construction, targeting, preconditioning and solver acceptance. |
 | `poisson_airbox_modal_eigen.cpp` converts the user target into `tau=omega_target` on the rotated real pencil and reports reference error only when an explicit validation reference is present. | Production acceptance is based on finite positive-branch modes and original-block residual certification; Kittel pass/fail is owned by independent validation scripts. | Keep analytical-reference selection and pass/fail outside the production eigensolver. |
 
@@ -5161,17 +5186,26 @@ Any future capability-matrix change must preserve the same separation between
 source-visible implementation, executable scope, runtime verification and
 production qualification.
 
+### C1 source-state refresh (2026-08-11)
+
+The physical `BiasFieldSweep`, exact-Gamma legality, postsolve-only Kittel
+guard, ABI-v18 descriptor and native MFEM `assemble_native_magnetic_a_qq` are
+implemented in source. This updates code state for F-01, F-03 and F-11 but not
+their verification state: the dirty snapshot has no matching fresh managed
+CPU/GPU runtime, so periodic-airbox modal readiness remains
+`source_visible / unvalidated`.
+
 ## Finding register
 
 | ID | Severity | Affected scope | Finding | Required disposition | Documentation state | Code state | Verification state | Evidence paths |
 |---|---|---|---|---|---|---|---|---|
-| F-01 | BLOCKER | K0-3 CPU Poisson-airbox modal, Kittel demag, GPU promotion | PA-E4b/topology-shaped Kittel payload is not real shared-domain FEM Poisson-airbox assembly. | Keep synthetic/topology-shaped payload as algebra evidence only; require `production_periodic_airbox_claim=false`; build separate `mfem_weak_form_shared_domain` assembly with Kittel answer removed from operator inputs. The synthetic lane is identified explicitly as `assembly_kind = synthetic_algebraic_oracle`. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`; `crates/fullmag-runner/src/fem_eigen.rs`; `25_frequency_domain_readiness_matrix.json` |
+| F-01 | BLOCKER | K0-3 CPU Poisson-airbox modal, Kittel demag, GPU promotion | PA-E4b/topology-shaped Kittel payload is not real shared-domain FEM Poisson-airbox assembly. | Keep `assembly_kind = synthetic_algebraic_oracle` as algebra evidence only; require `production_periodic_airbox_claim=false`; use backend-owned `mfem_weak_form_shared_domain` assembly with analytical Kittel data removed from operator inputs. | resolved_in_docs | implemented | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp`; `crates/fullmag-runner/src/fem_eigen.rs`; `25_frequency_domain_readiness_matrix.json` |
 
 The field `production_periodic_airbox_claim` może mieć wartość `true` dopiero po
 wykazaniu rzeczywistej wspólnej domeny FEM, certyfikatu par okresowych, konwergencji
 siatkowej oraz niezależnej walidacji CPU/GPU.
 | F-02 | BLOCKER | K0 Poisson-airbox modal BC/gauge | Mean-zero gauge is invalid for Robin/Dirichlet coercive scalar blocks. | Enforce boundary/gauge tuple: Robin/Dirichlet use `gauge_policy=none`; pure Neumann uses mean-zero; keep unsupported combinations fail-closed until implemented. | resolved_in_docs | implemented | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
-| F-03 | BLOCKER | CPU SLEPc modal selected spectrum | `spectral_transform.cpp` converts the requested Hz target to a positive real `omega`; `slepc_modal_eigen.cpp` and `poisson_airbox_modal_eigen.cpp` then use `EPS_TARGET_MAGNITUDE` with that real target. This is not the canonical `sigma=i*omega` transform or a proven real-split equivalent. | Implement one explicit target realization: complex PETSc, real-split transformed pencil, or a rigorously derived real Hamiltonian/gyrotropic pencil; artifact must publish sigma components and scalar mode. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/spectral_transform.cpp`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
+| F-03 | BLOCKER | CPU SLEPc modal selected spectrum | A real target on the original `lambda=i*omega` pencil is invalid. | The source now uses the named `real_frequency_rotated` pencil with `tau=omega_target` and publishes scalar/target provenance; fresh managed selected-spectrum verification remains open. | resolved_in_docs | implemented | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` |
 | F-04 | BLOCKER | Modal descriptor residual certification | Full residual certification previously could hide bad reconstruction by taking the smaller SLEPc residual. | Certify only the reconstructed blockwise original-unscaled descriptor residual; publish SLEPc, scaled and transformed residuals separately as diagnostics; use `eps_full_original_unscaled=max(eps_q,eps_phi,eps_gauge)`. | resolved_in_docs | implemented | not_run | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp`; `docs/plans/active/fd_sovler_masterplan/11_runtime_telemetry_performance.md` |
 | F-05 | BLOCKER | K0-3 Kittel geometry | The K0-3 validation fixture must be x/y periodic and open-z; a one-axis PBC strip is not the ideal film oracle. | Require x/y periodic magnetic and airbox pair metadata or relabel the fixture as a finite strip with a different independent oracle. | resolved_in_docs | open | not_run | `docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md`; `examples/fem_eigen_k0_kittel_periodic_airbox.py`; `docs/plans/active/fd_sovler_masterplan/24_production_definition_of_done.md` |
 | F-06 | HIGH | K0-3 convergence and production validation | The old convergence gate did not require real mesh/airbox convergence. | Enforce at least three mesh levels and at least three airbox-padding levels with independent oracle, branch tracking, raw rows and separate budgets. | resolved_in_docs | open | not_run | `docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md`; `docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md`; `scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py` |
@@ -5179,7 +5213,7 @@ siatkowej oraz niezależnej walidacji CPU/GPU.
 | F-08 | HIGH | Equilibrium handoff for modal/driven sweeps | Native `EquilibriumArtifactDescriptor -> LinearizationStateNative` validation exists, including static-demag availability, but planner and runner do not materialize or consume the state; modal execution still passes equilibrium arrays independently. Relaxation step count is not evidence. | Connect accepted `EquilibriumArtifact -> LinearizationState` with mesh/material/physics hashes, torque residual, static demag and bias-field identity into every modal/driven sample, or require an explicit analytic proof. | resolved_in_docs | source_visible | not_run | `docs/plans/active/fd_sovler_masterplan/03_relaxed_texture_linearization.md`; `docs/plans/active/fd_sovler_masterplan/16_end_to_end_fem_frequency_domain_implementation.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/include/frequency_domain/linearization_state.hpp`; `backends/fem/src/frequency_domain/linearization_state.cpp` |
 | F-09 | HIGH | Demag block signs, reciprocity and energy | Nonzero coupling blocks alone do not prove the demag operator's weak-form reciprocity or energy sign. | Add directional-derivative, Hessian reciprocity and energy-sign gates independent of Kittel. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`; `docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md` |
 | F-10 | HIGH | Singular descriptor modal pencil | Singular `B` needs finite-mode policy, algebraic-mode rejection and full descriptor reconstruction. | Prefer certified Schur-reduced magnetic pencil; if monolithic descriptor remains, publish finite-mode filters, regularity, `q^H B q` and algebraic-mode rejection. | resolved_in_docs | open | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
-| F-11 | HIGH | Kittel demag oracle and `M_eff` | One scalar `M_eff` is not a general Kittel oracle and must not leak into operator construction. | Keep `H1`, `H2`, `N0`, `N1`, `N2` or fitted stiffnesses as verifier-only outputs; remove expected Kittel values from builder, targeting, selection and solver pass/fail. | resolved_in_docs | open | not_run | `docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md`; `crates/fullmag-runner/src/fem_eigen.rs`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
+| F-11 | HIGH | Kittel demag oracle and `M_eff` | One scalar `M_eff` is not a general Kittel oracle and must not leak into operator construction. | `BiasFieldSweepIR` now owns physical fields and `validate_bias_field_sweep_oracle_contract` keeps Kittel postsolve-only; managed negative-control and K0-3 convergence remain open. | resolved_in_docs | implemented | not_run | `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`; `crates/fullmag-runner/src/fem_eigen.rs`; `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
 | F-12 | HIGH | Status governance and capability labels | Historical status text mixed normative contract, implementation evidence, runtime capability and validated production status. | Use `25_frequency_domain_readiness_matrix.json` as the current active status source and let parallel remediation link capability rows to it. | resolved_in_docs | implemented | not_run | `docs/plans/active/fd_sovler_masterplan/10_patch_queue_current_status.md`; `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_matrix.json`; `docs/specs/capability-matrix-v0.md` |
 | F-13 | HIGH | Driven response absorbed-power sign | The emitted `absorbed_power_density` is explicitly a `drive_projected_absorption_proxy` with `physical_power_density=false`, not `absorbed_by_magnetization`. Its units and sign cannot certify the physical power law under `exp(+i*omega*t)`. | Add a separate physical observable `absorbed_by_magnetization` using `p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)` and damped-macrospin sign checks. Preserve the proxy under its existing explicit provenance. | resolved_in_docs | source_visible | not_run | `docs/physics/0700-frequency-domain-linearized-llg.md`; `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `docs/plans/active/fd_sovler_masterplan/02_physics_contract.md`; `backends/fem/src/frequency_domain/driven_response_solver.cpp` |
 | F-14 | HIGH | Modal/driven sign dictionary | Modal, driven and real-split paths need one operator dictionary for `L`, `B_alpha`, `A_omega`, `lambda`, `omega` and `b`. | Keep 0831 as the single dictionary; production code must use one canonical dynamic pencil and prove fused/apply parity before promotion. | resolved_in_docs | source_visible | not_run | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`; `docs/physics/0700-frequency-domain-linearized-llg.md`; `backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp`; `backends/fem/src/frequency_domain/linearized_dynamic_pencil.cpp`; `docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md` |
@@ -8642,9 +8676,9 @@ Current source and canonical physics/status documents identify blockers that
 prevent broad FEM frequency-domain production qualification, including:
 
 - real shared-domain Poisson-airbox modal assembly is not yet qualified;
-- the current Kittel path allows expected frequency and validation `M_eff` to
-  influence assembly, targeting, selection or solver certification as detailed
-  in chapter 15;
+- source now separates physical `BiasFieldSweepIR` from postsolve Kittel
+  metadata and fails closed on oracle influence, but fresh managed
+  negative-control and K0-3 convergence evidence is still missing;
 - real-PETSc imaginary-axis target representation is not yet broadly
   qualified;
 - general GPU modal device Krylov and device-resident driven Krylov are not
@@ -8673,14 +8707,32 @@ the corresponding tasks; this documentation change does not satisfy them.
 **Dokument nadrzędny DoD:** `24_production_definition_of_done.md`
 **Plan poprzedzający:** `docs/superpowers/plans/2026-07-12-fem-k0-demag-final-production.md`
 
+**Rewizja scope T1 2026-08-12:** zgodnie z zaakceptowanym projektem
+`docs/superpowers/specs/2026-08-11-fem-k0-eigensolve-full-gpu-design.md` i planem
+`docs/superpowers/plans/2026-08-11-fem-k0-eigensolve-full-gpu-implementation.md`
+zamrożono dwa niepromocyjne wiązania przyszłego zakresu produkcyjnego. Przypadki
+materializowane do wymiaru 1024 są wyłącznie `validation_only`; produkcja CPU i
+GPU używa `matrix_free_schur_selected_spectrum` i wymaga zmierzonego
+`operator_dimension > 1024`. Bieżący stan pozostaje
+`source_visible / unvalidated` bez scope runtime.
+
 **Rewizja wykonawcza 2026-08-09:** C3 publiczny ABI v18 z deskryptorem
 `FullmagFemModalLinearizationDescriptor` ma zaakceptowany source/ABI review
 (pełny caller-buffer gate v3, spójny v2 slot, digest binding i exact
 exchange `NULL/count`); managed native runtime pozostaje zablokowany. A2
 resource invalidation jest source-approved, a U1 ma osobne Results/Inspector
 węzły `resonance-fits` i `kittel-fit`, fail-closed `missing/partial/corrupt` i
-331/331 focused GREEN. N1 nadal nie dostarcza authoritative descriptor ani
-natywnego MFEM `A_qq`; CPU/GPU i UI nie są production-qualified. Szczegółowy
+331/331 focused GREEN.
+
+**Rewizja C1 2026-08-11:** publiczny `BiasFieldSweep`/`BiasFieldSweepIR`,
+per-sample runner, ABI v18 oraz natywny MFEM
+`assemble_native_magnetic_a_qq` są zaimplementowane w źródle. Natywny zakres
+`A_qq` jest ograniczony do P1 `tet4|prism6`, jednorodnego skalarnego `A_ex` i
+równoległego field restoring block; anisotropy/DMI są `unavailable`, a
+dynamiczny demag należy do bloków mieszanych/Schur. CPU/GPU window certificates
+pozostają source-level. Aktywny bundle nie odpowiada dirty ABI-v18 snapshotowi,
+więc CPU/GPU i UI nadal nie są production-qualified, a capability pozostaje
+`source_visible / unvalidated`. Szczegółowy
 stan, inwentaryzacja 39 worktree, zależności i komendy etapowe są w
 `docs/superpowers/plans/2026-08-09-fem-k0-eigensolve-current-audit-and-execution.md`.
 
@@ -8972,41 +9024,43 @@ od zera.
 
 ### 6.1 P0 — `k0_kittel_validation` nie może sterować fizycznym sweepem
 
-Kanoniczna nota 0830 mówi, że Kittel jest niezależnym oracle postsolve i nie
-może ustalać pola, równowagi, targetu ani podpisu operatora. Obecnie jednak:
-
-- `StudyBuilder.k0_kittel_validation` zapisuje próbki w `runtime_metadata`;
-- `dispatch.rs::eigen_path_single_k_point_plan` oraz
-  `fem_eigen.rs::execute_k0_kittel_field_sweep` używają tych próbek jako pól
-  bias i relaksują dla nich stany.
-
-To jest naruszenie kontraktu fizycznego, nawet jeśli obliczenia dają poprawne
-liczby. Należy dodać jawny, physics-owned kontrakt:
+Kanoniczna nota 0830 i ADR 0023 wymagają, by Kittel był niezależnym oracle
+postsolve i nie ustalał pola, równowagi, targetu ani podpisu operatora.
+Bieżące źródło ma jawny physics-owned kontrakt:
 
 ```text
 BiasFieldSweepIR {
   samples_a_per_m: Vec<[f64; 3]>,
   equilibrium_policy,
-  continuation_policy,
+  continuation_seed,
   ordering,
 }
 ```
 
-Pole powinno być częścią `StudyIR::Eigenmodes`, Python DSL, UI authoring i
-planera. `K0KittelFieldSweepValidation` ma konsumować wyniki po solve oraz
-niezależne `M_eff_reference`, nigdy produkować pola wejściowe. Istniejący
-`eigen_contract.rs::SweepIR { values_hz }` nie powinien być przeciążany
-innym wymiarem fizycznym.
+`BiasFieldSweep` jest częścią `StudyIR::Eigenmodes`, Python DSL, planera i
+per-sample runnera; `validate_bias_field_sweep_oracle_contract` fail-closed
+oddziela go od `K0KittelFieldSweepValidation`. To jest implementacja źródłowa,
+nie K0-3 runtime qualification. Managed negative-control i convergence evidence
+pozostają obowiązkową bramką.
 
-### 6.2 P0 — `A_qq` nie jest jeszcze własnością natywnego MFEM assemblera
+### 6.2 P0 — `A_qq` ma bounded natywnego MFEM ownera; runtime qualification pozostaje otwarta
 
-`build_native_shared_domain_modal_problem` wywołuje rustowe
-`assemble_full_2x2_operator_real` i przekazuje CSR do C++. Funkcja ma model
-MVP Hessianu oraz ograniczenia dla jednolitego equilibrium i wąskiej listy
-interakcji. Produkcyjny kontrakt wymaga, by pełne `A_qq`, `B_qq`, `A_qphi`,
-`A_phiq` i `P` powstały z tego samego natywnego mesh/quadrature/region map oraz
-tych samych certyfikatów. Runner ma orkiestrwać, nie posiadać numerycznego
-assembly.
+ABI v18 przekazuje `FullmagFemModalLinearizationDescriptor` bez preassembled
+`A_qq`. Importer wywołuje
+`backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp::
+assemble_native_magnetic_a_qq` na tym samym MFEM mesh/space, a następnie
+`assemble_poisson_airbox_shared_domain_payload` i
+`assemble_poisson_airbox_shared_domain` składają shared-domain blocks.
+Natywny zakres źródłowy obejmuje P1 `tet4|prism6`, jednorodne skalarne `A_ex`,
+accepted tangent frames, dodatnie `M_s` i field restoring równoległy do
+equilibrium. Anisotropy/DMI zwracają `unavailable`. Bit DEMAG wymaga provider
+signature związanej z operator-input digest, lecz dynamiczny feedback pozostaje
+w `A_qphi P^-1 A_phiq`. Runner opisuje stan/term provenance i orkiestruje ABI;
+nie jest właścicielem produkcyjnego `A_qq`.
+
+Ten stan jest `source_visible / unvalidated`. Brak zgodnego świeżego managed
+ABI-v18 runtime, K0-P1–P6 i K0-G1–G4 nie pozwala zamknąć DOD-06 ani promować
+CPU/GPU.
 
 ### 6.3 P0 — ABI i certyfikat nie są fail-closed
 
@@ -9166,6 +9220,25 @@ Q3 -> DoD writer/verifier -> final scientific manifest
   -> G2 governance-only promotion -> two-identity promotion attestation
 ```
 
+Wykonawczy kontrakt tych etapów jest doprecyzowany przez
+`docs/superpowers/specs/2026-08-11-fem-k0-eigensolve-full-gpu-design.md`:
+
+| Etap masterplanu | Wiążący fragment specyfikacji 2026-08-11 |
+|---|---|
+| N3 | sekcje 5–8: jeden adapter PETSc/SLEPc, lifecycle, HYPRE CUDA oraz mierzona rezydencja |
+| A1S/A1E | sekcje 9 i 11: natywna attestation, immutable artifacts i zamknięty przyczynowo release |
+| A2 | sekcje 10–11: typowane zasoby API i rozdzielenie JSON/binarnego data plane |
+| U2 | sekcja 10: Results Inspector i mode-field overlay w jednym viewport |
+| Q2 | sekcja 12, K0-G4–K0-G7: CPU/GPU/Kittel/antidot, parity i skalowanie |
+| Q3 | sekcja 12, K0-G8–K0-G9: artefakty, API/UI/browser i release proof |
+| G2-governance | sekcja 11.4: osobna promocja po przyjęciu immutable candidate manifestu |
+
+Wartość zero w telemetryce transferów jest dowodem wyłącznie wtedy, gdy jej
+stan pomiaru ma wartość `measured` i zgadza się z niezależnym trace. Zero
+zadeklarowane, wyzerowane domyślnie lub opublikowane przy
+`measurement_state=unavailable` nie jest dowodem rezydencji ani braku
+transferów.
+
 N2, N3 i A1S mogą powstawać równolegle po N1/C3, ale Q2 czeka na Q1 jako
 oracle. Prace nad fixtures UI mogą ruszyć po zamrożeniu schematów A1S/A2. Finalna
 kwalifikacja UI zależy od natywnych artefaktów N2/N3. GPU zależy od
@@ -9322,17 +9395,20 @@ ale nie z edycją tych samych dokumentów.
 
 1. Ustal dwa dokładne zakresy kwalifikacji:
 
-   - `fem_k0_periodic_airbox_cpu_double_v1`;
-   - `fem_k0_periodic_airbox_gpu_double_v1`.
+   - `modal_cpu_k0_periodic_airbox_real_shared_domain.production`;
+   - `modal_gpu_k0_periodic_airbox_scalable.production`.
 
    Oba obejmują dokładne `k=0`, periodic x/y, open z, dynamiczny Poisson-airbox,
    P1, jawne BC/gauge, `alpha=0`, double, real-frequency rotated target,
-   wybrane geometrie/materiały/rozmiary oraz bias-field scan.
+   wybrane geometrie/materiały/rozmiary oraz bias-field scan. Oba wymagają
+   `matrix_free_schur_selected_spectrum` i zmierzonego
+   `operator_dimension > 1024`. Materializowany deskryptor o wymiarze
+   `<= 1024` pozostaje wyłącznie `validation_only` i nie może zamknąć scope.
 2. Dodaj lub zaktualizuj publikacyjną notę tak, by:
 
    - rozdzielała physical bias-field input od Kittel oracle;
-   - nie twierdziła, że `A_qq` już powstaje w natywnym MFEM, dopóki N1 tego
-     nie implementuje;
+   - opisywała bounded natywnego producenta MFEM `A_qq` i nie utożsamiała
+     source state z managed runtime qualification;
    - precyzyjnie nazywała bounded CPU i GPU source state;
    - opisywała faktyczną granicę exact shifted PC oraz HYPRE;
    - usuwała duplikat anchor, poprawiała bloki math, jednostki source map,
@@ -9349,6 +9425,12 @@ ale nie z edycją tych samych dokumentów.
    po samym zakończeniu dokumentacji.
 6. Zaktualizuj source-map symbols do stabilnych nazw funkcji bez typów
    zwrotnych i z prawidłowymi jednostkami LaTeX.
+7. Powiąż source map i publikacyjną notę co najmniej z adapterem GPU
+   `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc`, stanem
+   `create_gpu_solver_state`, akcją `apply_schur`, runnerem
+   `native_solver_diagnostics_json`/`write_eigen_v2_bundle`, handlerami API
+   diagnostyki/pola modu oraz Results Inspector i kontrolerem overlay. Obecność
+   tych symboli jest dowodem source, nie wykonania ani kwalifikacji.
 
 ### Weryfikacja
 
@@ -10426,8 +10508,9 @@ są hash-bound; CPU DOD-13 ma zmierzoną envelope, a DOD-12 ma jedyne dozwolone
    mierzone z artefaktu, nie etykietowane arbitralnie `128/256/512`.
 6. Dla cold/reuse/invalidation runs zmierz time, GPU memory, allocations,
    transfer events/bytes, EPS/KSP iterations, applies, restarts i stop reason.
-7. Niezależny trace musi wykazać zero per-iteration full-vector H2D/D2H i brak
-   hidden host solve w hot loop.
+7. Niezależny trace oraz telemetryka o stanie `measured` muszą wspólnie wykazać
+   zero per-iteration full-vector H2D/D2H i brak hidden host solve w hot loop;
+   samo deklarowane zero nie jest dowodem.
 8. Wykonaj cancel przed solve, podczas EPS i między subwindows; partial bundle
    zachowuje wyłącznie certyfikowane modes.
 9. Wykonaj Compute Sanitizer co najmniej dla memory, race i sync coverage

@@ -17,7 +17,8 @@
       "production_qualified"
     ],
     "validated_scope": "null when validation_state is unvalidated; otherwise a readiness_scope_binding.v1 direct reference containing semantic scope_id, scope_catalog_uri and scope_catalog_sha256. The full scope resolves in 25_frequency_domain_readiness_scope_catalog.json.",
-    "executable_scope": "null unless a narrow executable slice exists while validated_scope is null; otherwise a readiness_scope_binding.v1 direct reference containing semantic scope_id, scope_catalog_uri and scope_catalog_sha256. The full scope resolves in 25_frequency_domain_readiness_scope_catalog.json."
+    "executable_scope": "null unless a narrow executable slice exists while validated_scope is null; otherwise a readiness_scope_binding.v1 direct reference containing semantic scope_id, scope_catalog_uri and scope_catalog_sha256. The full scope resolves in 25_frequency_domain_readiness_scope_catalog.json.",
+    "future_production_scope": "Optional non-promotional readiness_scope_binding.v1 direct reference to the exact production envelope. It does not change implementation_state, validation_state, validated_scope or executable_scope and cannot be used as runtime evidence."
   },
   "scope_reference_policy": {
     "scope_schema": "frequency_domain_readiness_scope.v1",
@@ -41,8 +42,8 @@
     ]
   },
   "scope_catalog_reference": {
-    "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-    "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
+    "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+    "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
     "scope_catalog_path": "docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_scope_catalog.json",
     "status": "readiness_projection_only"
   },
@@ -62,8 +63,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "modal_cpu_k0_none_macrospin_larmor.validation",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "executable_scope": null,
       "validation_evidence_scope": {
@@ -101,8 +102,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "modal_gpu_k0_none_macrospin_larmor.validation",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "executable_scope": null,
       "validation_evidence_scope": {
@@ -162,8 +163,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "modal_cpu_nonzero_k_none_selected_spectrum.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
@@ -212,8 +213,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "modal_cpu_k0_periodic_airbox_synthetic_oracle.validation",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "executable_scope": null,
       "validation_evidence_scope": {
@@ -247,14 +248,26 @@
       "validation_state": "unvalidated",
       "validated_scope": null,
       "executable_scope": null,
+      "future_production_scope": {
+        "schema": "readiness_scope_binding.v1",
+        "scope_schema": "frequency_domain_readiness_scope.v1",
+        "kind": "direct",
+        "scope_id": "modal_cpu_k0_periodic_airbox_real_shared_domain.production",
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
+      },
       "product_status": "source_visible",
       "evidence": [
         "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
         "docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md",
-        "crates/fullmag-runner/src/fem_eigen.rs"
+        "packages/fullmag-py/src/fullmag/model/eigen.py",
+        "crates/fullmag-runner/src/fem_eigen.rs",
+        "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp"
       ],
       "open_blockers": [
         "Real shared-domain MFEM weak-form modal assembly is not qualified.",
+        "Materialized descriptor dimensions at or below 1024 are validation-only and cannot satisfy the future production scope.",
+        "No measured operator_dimension greater than 1024 has qualified matrix_free_schur_selected_spectrum.",
         "Fresh managed CPU convergence, parity and production-DOD evidence is missing.",
         "The dirty current source snapshot has no matching fresh managed runtime export."
       ]
@@ -296,15 +309,26 @@
       "validation_state": "unvalidated",
       "validated_scope": null,
       "executable_scope": null,
+      "future_production_scope": {
+        "schema": "readiness_scope_binding.v1",
+        "scope_schema": "frequency_domain_readiness_scope.v1",
+        "kind": "direct",
+        "scope_id": "modal_gpu_k0_periodic_airbox_scalable.production",
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
+      },
       "product_status": "source_visible",
-    "evidence": [
-      "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
-      "backends/fem/gpu/cuda/frequency_domain/modal_krylov.cu",
-      "backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp",
-      "docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md"
+      "evidence": [
+        "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+        "backends/fem/gpu/cuda/frequency_domain/modal_krylov.cu",
+        "backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp",
+        "crates/fullmag-runner/src/fem_eigen.rs",
+        "docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md"
     ],
       "open_blockers": [
       "Fresh managed real shared-domain executed-device K0-3 evidence for the current dirty snapshot is missing.",
+      "Materialized descriptor dimensions at or below 1024 are validation-only and cannot satisfy the future production scope.",
+      "No measured operator_dimension greater than 1024 has qualified matrix_free_schur_selected_spectrum.",
       "CPU/GPU block, action, eigenvalue, residual and accepted/rejected parity are not production-qualified.",
       "Three-size scaling, Compute Sanitizer and immutable DOD-01 through DOD-14 release evidence are missing."
       ]
@@ -367,8 +391,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "driven_cpu_k0_none.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
@@ -395,8 +419,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "driven_gpu_k0_none.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
@@ -424,8 +448,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "driven_cpu_k0_periodic_airbox.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
@@ -452,8 +476,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "driven_gpu_k0_periodic_airbox_operator_host_krylov.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
@@ -504,8 +528,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "driven_cpu_nonzero_k_none_phase_projection.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
@@ -532,8 +556,8 @@
         "scope_schema": "frequency_domain_readiness_scope.v1",
         "kind": "direct",
         "scope_id": "driven_gpu_nonzero_k_none_phase_projection.executable",
-        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993",
-        "scope_catalog_sha256": "sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993"
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2",
+        "scope_catalog_sha256": "sha256:9aae0b02a4f192e44e3516ca7676d25f0dfdb2e19dca8d238e14b984c1ec95e2"
       },
       "product_status": "partial_production_executable",
       "evidence": [
