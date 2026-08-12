@@ -578,6 +578,10 @@ pub(crate) fn preview_field_source_precedence(field: &LivePreviewField) -> Field
     }
 }
 
+fn source_time_is_complete(source_time_seconds: Option<f64>) -> bool {
+    source_time_seconds.is_some_and(|time| time.is_finite() && time >= 0.0)
+}
+
 pub(crate) fn preview_cache_precedes_latest(
     snapshot: &SessionStateResponse,
     quantity: &str,
@@ -588,10 +592,20 @@ pub(crate) fn preview_cache_precedes_latest(
     let Some(latest) = snapshot.latest_fields.get(quantity) else {
         return true;
     };
-    // The preview cache is the explicit materialized-field channel. On equal
-    // provenance it is authoritative over the legacy latest_fields payload;
-    // genuinely newer latest_fields still wins by the ordered source tuple.
-    preview_field_source_precedence(preview) >= latest_field_source_precedence(snapshot, latest)
+    // The preview cache is the explicit materialized-field channel. A genuinely
+    // newer source wins first. On an otherwise equal generation, prefer the
+    // source with complete scientific time provenance; only an equal level of
+    // completeness keeps preview-cache authority.
+    match preview_field_source_precedence(preview)
+        .cmp(&latest_field_source_precedence(snapshot, latest))
+    {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => {
+            !source_time_is_complete(latest.get("source_time_seconds").and_then(Value::as_f64))
+                || source_time_is_complete(preview.source_time_seconds)
+        }
+    }
 }
 
 fn bump_field_sample_revision(
@@ -4347,6 +4361,122 @@ mod tests {
             Some(EffectiveFieldSourceKind::Latest)
         );
         assert!(current.field_quantity_revisions["H_demag"] > terminal_revision);
+    }
+
+    #[test]
+    fn equal_generation_source_time_completeness_selects_the_scientifically_complete_field() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "source_time_seconds": 4.0e-13,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = None;
+        current.preview_cache.insert(preview);
+
+        assert!(
+            !preview_cache_precedes_latest(&current, "H_demag"),
+            "an equal-generation preview without source time must not hide a complete latest field"
+        );
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Latest(value))
+                if value.get("source_time_seconds").and_then(Value::as_f64) == Some(4.0e-13)
+        ));
+    }
+
+    #[test]
+    fn equal_generation_preview_with_source_time_remains_authoritative_over_incomplete_latest() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = Some(4.0e-13);
+        current.preview_cache.insert(preview);
+
+        assert!(preview_cache_precedes_latest(&current, "H_demag"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Preview(field))
+                if field.source_time_seconds == Some(4.0e-13)
+        ));
+    }
+
+    #[test]
+    fn equal_generation_with_equally_complete_provenance_keeps_preview_authority() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "source_time_seconds": 4.0e-13,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = Some(4.0e-13);
+        current.preview_cache.insert(preview);
+
+        assert!(preview_cache_precedes_latest(&current, "H_demag"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Preview(_))
+        ));
+    }
+
+    #[test]
+    fn genuinely_newer_field_wins_before_source_time_completeness() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[5.0, 0.0, 0.0]],
+                "source_step": 5,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("newer latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = Some(4.0e-13);
+        current.preview_cache.insert(preview);
+
+        assert!(!preview_cache_precedes_latest(&current, "H_demag"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Latest(value))
+                if value.get("source_step").and_then(Value::as_u64) == Some(5)
+        ));
     }
 
     #[test]

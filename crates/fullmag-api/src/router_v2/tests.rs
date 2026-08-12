@@ -30910,6 +30910,94 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
 }
 
 #[tokio::test]
+async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_time_seconds": 4.0e-13,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("complete latest H_demag field should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 4,
+            source_step: 4,
+            source_time_seconds: None,
+            source_revision: 4,
+            materialized_at_unix_ms: 1_700_000_000_400,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "completed".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 4,
+                time: 4.0e-13,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: true,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_time_seconds"], 4.0e-13);
+}
+
+#[tokio::test]
 async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
