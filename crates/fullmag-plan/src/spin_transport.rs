@@ -468,6 +468,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                 ExecutionDevice::Cpu
             },
             resolved_precision: ExecutionPrecision::Double,
+            resolved_execution_mode: problem.validation_profile.execution_mode,
             constitutive_version: module.constitutive_version.clone(),
             operator_version: module.solver.operator_version.clone(),
             physical_residual_version: module.solver.physical_residual_version.clone(),
@@ -1007,6 +1008,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 resolved_discretization: BackendTarget::Fem,
                 resolved_device: ExecutionDevice::Cpu,
                 resolved_precision: ExecutionPrecision::Double,
+                resolved_execution_mode: problem.validation_profile.execution_mode,
                 constitutive_version: module.constitutive_version.clone(),
                 operator_version: module.solver.operator_version.clone(),
                 physical_residual_version: module.solver.physical_residual_version.clone(),

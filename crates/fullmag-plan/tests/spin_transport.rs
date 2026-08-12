@@ -2,8 +2,8 @@ use fullmag_ir::{
     AxisBoundary, BackendPlanIR, BackendTarget, ChargeBoundaryIR, CurrentModuleIR, ExecutionDevice,
     ExecutionMode, ExecutionPrecision, FdmCpuTransportRealizationIR, FdmDemagPeriodicityIR,
     FdmPeriodicityIR, GeometryEntryIR, InitialMagnetizationIR, ObjectRegionIR, ProblemIR,
-    RegionFrameIR, RegionIR, RegionRefIR, RegionShapeIR, SpinBoundaryIR, SpinInterfaceIR,
-    SpinTransportModuleIR, SurfaceRefIR,
+    RegionFrameIR, RegionIR, RegionRefIR, RegionShapeIR, ResolvedSpinTransportPlanIR,
+    SpinBoundaryIR, SpinInterfaceIR, SpinTransportModuleIR, SurfaceRefIR,
 };
 use serde_json::{json, Value};
 
@@ -149,9 +149,25 @@ fn resolves_bounded_public_fdm_gpu_m1_spin_transport() {
         resolved.requested_execution.execution_mode,
         ExecutionMode::Strict
     );
-    assert_eq!(resolved.resolved_discretization, BackendTarget::Fdm);
-    assert_eq!(resolved.resolved_device, ExecutionDevice::Gpu);
-    assert_eq!(resolved.resolved_precision, ExecutionPrecision::Double);
+    assert_eq!(
+        (
+            resolved.resolved_discretization,
+            resolved.resolved_device,
+            resolved.resolved_precision,
+            resolved.resolved_execution_mode,
+        ),
+        (
+            BackendTarget::Fdm,
+            ExecutionDevice::Gpu,
+            ExecutionPrecision::Double,
+            ExecutionMode::Strict,
+        )
+    );
+    let serialized = serde_json::to_value(resolved).expect("serialize bounded GPU M1 spin plan");
+    assert_eq!(serialized["resolved_execution_mode"], "strict");
+    let round_trip: ResolvedSpinTransportPlanIR = serde_json::from_value(serialized)
+        .expect("deserialize bounded GPU M1 spin plan");
+    assert_eq!(&round_trip, resolved);
     assert!(resolved.fdm_cpu_double.is_none());
     assert!(resolved.fdm_cpu_double_reciprocal.is_none());
     assert!(resolved.fdm_cpu_double_transient.is_none());

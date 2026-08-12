@@ -460,6 +460,7 @@ pub struct ResolvedSpinTransportPlanIR {
     pub resolved_discretization: crate::BackendTarget,
     pub resolved_device: ExecutionDevice,
     pub resolved_precision: ExecutionPrecision,
+    pub resolved_execution_mode: ExecutionMode,
     pub constitutive_version: String,
     pub operator_version: String,
     pub physical_residual_version: String,

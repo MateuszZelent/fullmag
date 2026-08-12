@@ -1476,6 +1476,25 @@ def _assert_page_contract(page: str) -> None:
 
 
 class FdmGpuM1ContractDocsTests(unittest.TestCase):
+    def test_task_3_resolved_execution_tuple_is_source_mapped(self) -> None:
+        page = PAGE.read_text(encoding="utf-8")
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        self.assertIn(
+            "resolved_discretization, resolved_device, resolved_precision, and "
+            "resolved_execution_mode",
+            _normalise(page),
+        )
+        sources = {source["id"]: source for source in source_map["sources"]}
+        resolved_tuple = sources["fdm-gpu-m1-resolved-execution-tuple"]
+        self.assertEqual(
+            "crates/fullmag-plan/src/spin_transport.rs", resolved_tuple["path"]
+        )
+        self.assertEqual(
+            "resolve_spin_transport_with_active_graph",
+            resolved_tuple["symbol"],
+        )
+        self.assertEqual("source_contract", resolved_tuple["evidence_status"])
+
     def test_capability_json_has_canonical_vocabulary_and_exact_task_3_rows(self) -> None:
         capability = json.loads(CAPABILITY_JSON.read_text(encoding="utf-8"))
         _assert_capability_matrix_schema(capability)

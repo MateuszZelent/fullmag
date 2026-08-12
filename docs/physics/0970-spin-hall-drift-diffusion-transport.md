@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-11
+- Last updated: 2026-08-12
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -1762,7 +1762,11 @@ Capabilities are separately scoped:
 `transport.spin.inverse_she`, `transport.spin.mixing_conductance`, and
 one-way/bidirectional coupling. Planner resolves one engine, enforces solver
 symmetry, positivity, validity, stage cadence, strict residency, and records
-requested/resolved lane. `validated` is workload/lane/precision/BC scoped.
+requested/resolved lane. `ResolvedSpinTransportPlanIR` retains authored intent
+in `requested_execution` and publishes the complete typed resolved tuple as
+`resolved_discretization`, `resolved_device`, `resolved_precision`, and
+`resolved_execution_mode`; the bounded GPU M1 lane resolves exactly to
+FDM/GPU/double/strict. `validated` is workload/lane/precision/BC scoped.
 
 (implementation-mapping)=
 ### 4.4 Runtime, quantities, provenance, OpenAPI, and UI
@@ -2230,6 +2234,7 @@ a qualified workload without the validation gates above.
 | M2 reciprocal realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_reciprocal | monolithic reciprocal FEM block solve | focused managed M2 runtime test |
 | M2 C ABI | native/include/fullmag_fem.h | fullmag_fem_solve_steady_transport_m2_v1 | stable request and result contract | native ABI contract |
 | Planner resolution | crates/fullmag-plan/src/spin_transport.rs | resolve_m1_fem_spin_transport | bounded M1/M2 descriptor and Schur checks | planner M2 test |
+| Resolved transport execution tuple | crates/fullmag-plan/src/spin_transport.rs | resolve_spin_transport_with_active_graph | complete typed requested/resolved discretization, device, precision, and execution-mode provenance | bounded FDM GPU M1 planner and serde round-trip test; unvalidated |
 | Descriptor materialization | crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs | materialize_native_fem_steady_transport_request | fail-closed descriptor-to-FFI mapping | runner materialization test |
 | Native dispatch | crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_steady_transport | explicit M1/M2 ABI selection and provenance | runner runtime test |
 | FDM reference | crates/fullmag-runner/src/fdm/cpu/spin_transport.rs | solve_coupled_module | CPU FDM coupled charge/spin realization | FDM reference/common-limit tests |
