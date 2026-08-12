@@ -2577,11 +2577,7 @@ fn resolve_fdm_field_scope(
         return Ok(scope);
     }
     let membership = load_resolved_fdm_membership(snapshot)?;
-    if membership.cell_membership.len() != raw_point_count {
-        return Err(ApiError::conflict(
-            "FDM field length does not match current membership cell count",
-        ));
-    }
+    let (field_membership, field_counts) = fdm_membership_for_field(&membership, raw_point_count)?;
     let scope_id = if scope_kind == "airbox" {
         query.scope_id.as_deref().unwrap_or("airbox")
     } else {
@@ -2620,8 +2616,7 @@ fn resolve_fdm_field_scope(
                 )));
             }
             canonical_scope_id = format!("region:{}:{}", entry.object_id, entry.region_id);
-            membership
-                .cell_membership
+            field_membership
                 .iter()
                 .enumerate()
                 .filter_map(|(index, numeric_id)| {
@@ -2629,8 +2624,7 @@ fn resolve_fdm_field_scope(
                 })
                 .collect::<Vec<_>>()
         }
-        "airbox" => membership
-            .cell_membership
+        "airbox" => field_membership
             .iter()
             .enumerate()
             .filter_map(|(index, numeric_id)| (*numeric_id == u32::MAX).then_some(index))
@@ -2642,7 +2636,7 @@ fn resolve_fdm_field_scope(
         }
     };
     if scope_kind == "airbox" && geometry_scope == "surface" {
-        selected.retain(|index| fdm_cell_is_domain_surface(*index, membership.counts));
+        selected.retain(|index| fdm_cell_is_domain_surface(*index, field_counts));
     }
     if selected.is_empty() {
         return Err(ApiError::not_found(format!(
@@ -2662,6 +2656,37 @@ fn resolve_fdm_field_scope(
         grid: None,
         carrier_hash: Some(format!("sha256:{}", membership.grid_fingerprint)),
     })
+}
+
+fn fdm_membership_for_field(
+    membership: &super::fdm_region_membership::ResolvedFdmMembership,
+    raw_point_count: usize,
+) -> Result<(Vec<u32>, [u32; 3]), ApiError> {
+    if membership.cell_membership.len() == raw_point_count {
+        return Ok((membership.cell_membership.clone(), membership.counts));
+    }
+    let [nx, ny, nz] = membership.counts;
+    let plane_count = usize::try_from(nx)
+        .ok()
+        .and_then(|x| usize::try_from(ny).ok().and_then(|y| x.checked_mul(y)));
+    if nz <= 1 || plane_count != Some(raw_point_count) {
+        return Err(ApiError::conflict(
+            "FDM field length does not match current membership cell count",
+        ));
+    }
+    let mut projected = Vec::with_capacity(raw_point_count);
+    for xy_index in 0..raw_point_count {
+        let first = membership.cell_membership[xy_index];
+        if (1..usize::try_from(nz).expect("u32 grid axes fit into usize"))
+            .any(|z| membership.cell_membership[z * raw_point_count + xy_index] != first)
+        {
+            return Err(ApiError::conflict(
+                "projected FDM field cannot resolve a unique object membership across layers",
+            ));
+        }
+        projected.push(first);
+    }
+    Ok((projected, [nx, ny, 1]))
 }
 
 fn resolve_multilayer_native_layer_scope(
@@ -6757,6 +6782,7 @@ mod tests {
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 31,
             source_step: 5,
+            source_time_seconds: None,
             source_revision: 43,
             materialized_at_unix_ms: 1,
             materialization_wall_time_ns: 0,

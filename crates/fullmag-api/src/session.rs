@@ -4,9 +4,9 @@ use crate::artifacts::collect_artifacts;
 use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::router_v2::handlers::data::field_resolution::{
-    field_value_count_matches_current_domain, field_values_hash, field_values_match_current_domain,
-    flatten_json_field_values, json_field_grid, json_field_payload_signature,
-    json_field_value_count, live_magnetization_values_ref,
+    field_values_hash, field_values_match_current_domain, flatten_json_field_values,
+    json_field_grid, json_field_matches_current_domain, json_field_payload_signature,
+    live_magnetization_values_ref,
 };
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
@@ -668,10 +668,10 @@ pub(crate) fn resolved_current_field_source<'a>(
     quantity: &str,
     n_comp: usize,
 ) -> Option<ResolvedCurrentFieldSource<'a>> {
-    let latest = snapshot.latest_fields.get(quantity).filter(|value| {
-        let value_count = json_field_value_count(value);
-        field_value_count_matches_current_domain(snapshot, quantity, n_comp, value_count)
-    });
+    let latest = snapshot
+        .latest_fields
+        .get(quantity)
+        .filter(|value| json_field_matches_current_domain(snapshot, quantity, n_comp, value));
     let preview = snapshot.preview_cache.get(quantity).filter(|field| {
         field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
     });

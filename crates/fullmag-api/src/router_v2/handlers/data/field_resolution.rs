@@ -5,7 +5,7 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
 use crate::router_v2::handlers::sessions::status::{fdm_grid_geometry, fdm_grid_shape};
 use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::SessionStateResponse;
-use fullmag_quantities::{quantity_spec, QuantityLocation};
+use fullmag_quantities::{quantity_spec, QuantityLocation, QuantityShape};
 use fullmag_runner::FemMeshPayload;
 
 pub(crate) fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
@@ -34,6 +34,49 @@ pub(crate) fn field_value_count_matches_current_domain(
     field_point_count_matches_current_domain(snapshot, quantity_id, point_count)
 }
 
+pub(crate) fn json_field_matches_current_domain(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+    raw: &serde_json::Value,
+) -> bool {
+    let value_count = json_field_value_count(raw);
+    if !field_value_count_matches_current_domain(snapshot, quantity_id, n_comp, value_count) {
+        return false;
+    }
+    if !is_fdm_snapshot(snapshot) || n_comp == 0 {
+        return true;
+    }
+    let point_count = value_count / n_comp;
+    let shape = fdm_grid_shape(
+        snapshot,
+        snapshot
+            .live_state
+            .as_ref()
+            .map(|state| state.latest_step.grid),
+    );
+    let full_count = shape.into_iter().try_fold(1usize, |count, axis| {
+        usize::try_from(axis).ok()?.checked_mul(count)
+    });
+    if full_count == Some(point_count) {
+        return true;
+    }
+    let is_spatial_scalar =
+        quantity_spec(quantity_id).is_some_and(|spec| spec.shape == QuantityShape::SpatialScalar);
+    is_spatial_scalar
+        && json_field_grid(raw) == Some([shape[0], shape[1], 1])
+        && raw
+            .get("layout")
+            .and_then(|layout| layout.get("original_grid_cells"))
+            .and_then(|grid| grid.as_array())
+            .is_some_and(|grid| {
+                grid.len() == 3
+                    && grid[0].as_u64() == Some(u64::from(shape[0]))
+                    && grid[1].as_u64() == Some(u64::from(shape[1]))
+                    && grid[2].as_u64() == Some(u64::from(shape[2]))
+            })
+}
+
 /// Return whether a serialized backend label belongs to an executable FDM
 /// structured-grid lane.  The multilayer lane is still FDM for field/domain
 /// routing even when a stale FEM mesh is retained in the session snapshot.
@@ -51,8 +94,27 @@ pub(super) fn field_point_count_matches_current_domain(
         if multilayer_native_point_count(snapshot) == Some(point_count) {
             return true;
         }
-        return fdm_grid_point_count(snapshot)
-            .is_some_and(|expected_count| point_count == expected_count);
+        if fdm_grid_point_count(snapshot)
+            .is_some_and(|expected_count| point_count == expected_count)
+        {
+            return true;
+        }
+        let is_spatial_scalar = quantity_spec(quantity_id)
+            .is_some_and(|spec| spec.shape == QuantityShape::SpatialScalar);
+        return is_spatial_scalar
+            && fdm_grid_shape(
+                snapshot,
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.latest_step.grid),
+            )
+            .into_iter()
+            .take(2)
+            .try_fold(1usize, |count, axis| {
+                usize::try_from(axis).ok()?.checked_mul(count)
+            })
+            .is_some_and(|projected_count| point_count == projected_count);
     }
 
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
